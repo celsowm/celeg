@@ -1,0 +1,44 @@
+v0.0.20 packaging-host CPU microkernel validation
+=================================================
+
+Environment
+-----------
+Architecture: x86_64
+Visible logical CPUs: 56
+NUMA nodes visible: 1
+Compiler: GCC 14.2.0
+Executable ISA selected: avx512-vnni
+Worker policy: compact, 8 total threads (7 workers pinned)
+
+Correctness
+-----------
+cpu_kernels_test: PASS
+- scalar Q4 reference executed
+- AVX2/FMA output compared with scalar
+- AVX-512 VNNI Q4xQ8 output compared with scalar
+- M=5 GEMM output compared with five independent GEMVs
+
+Machine-code inspection
+-----------------------
+objdump found VPDPBUSD in cpu_kernels.cpp.o:
+  vpdpbusd ymm0,ymm1,YMMWORD PTR [...]
+
+Synthetic benchmark
+-------------------
+Matrix: 4096 output rows x 1024 input columns
+Weight format: Q4 group-32 with BF16 scales
+Threads: 8
+
+AVX2/FMA M=1:
+  effective packed-weight bandwidth: approximately 2.5 GB/s
+
+AVX-512 VNNI M=1:
+  effective packed-weight bandwidth: approximately 12.0 GB/s
+
+AVX-512 VNNI M=8:
+  effective packed-weight bandwidth: approximately 25.1 GB/s
+
+Scope
+-----
+These are synthetic linear-kernel measurements on one virtualized host. They
+are not end-to-end model throughput, output-quality or latency claims.

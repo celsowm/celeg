@@ -1,0 +1,225 @@
+#include "lfm/safetensors.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cstring>
+#include <fcntl.h>
+#include <limits>
+#include <stdexcept>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+namespace lfm {
+namespace {
+
+TensorDType parse_dtype(const std::string& name) {
+    if (name == "BF16") return TensorDType::BF16;
+    if (name == "F16") return TensorDType::F16;
+    if (name == "F32") return TensorDType::F32;
+    if (name == "I8") return TensorDType::I8;
+    return TensorDType::Unknown;
+}
+
+size_t dtype_size(TensorDType dtype) {
+    switch (dtype) {
+        case TensorDType::BF16:
+        case TensorDType::F16:
+            return 2;
+        case TensorDType::F32:
+            return 4;
+        case TensorDType::I8:
+            return 1;
+        case TensorDType::Unknown:
+            return 0;
+    }
+    return 0;
+}
+
+uint64_t read_u64_le(const std::byte* data) {
+    uint64_t value = 0;
+    std::memcpy(&value, data, sizeof(value));
+    if constexpr (std::endian::native == std::endian::big) {
+        value = __builtin_bswap64(value);
+    }
+    return value;
+}
+
+size_t checked_element_count(const std::vector<int64_t>& shape,
+                             const std::string& name) {
+    size_t result = 1;
+    for (int64_t dimension : shape) {
+        if (dimension < 0) {
+            throw std::runtime_error("negative dimension for tensor: " + name);
+        }
+        if (dimension == 0) return 0;
+        const size_t value = static_cast<size_t>(dimension);
+        if (result > std::numeric_limits<size_t>::max() / value) {
+            throw std::runtime_error("shape overflow for tensor: " + name);
+        }
+        result *= value;
+    }
+    return result;
+}
+
+} // namespace
+
+SafeTensorFile::SafeTensorFile(const std::string& path) {
+    try {
+        fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd_ < 0) {
+            throw std::runtime_error("cannot open safetensors file: " + path);
+        }
+
+        struct stat st {};
+        if (::fstat(fd_, &st) != 0) {
+            throw std::runtime_error("cannot stat safetensors file: " + path);
+        }
+        if (st.st_size < 0 ||
+            static_cast<uint64_t>(st.st_size) >
+                std::numeric_limits<size_t>::max()) {
+            throw std::runtime_error("unsupported safetensors file size");
+        }
+        file_size_ = static_cast<size_t>(st.st_size);
+        if (file_size_ < 8) {
+            throw std::runtime_error("invalid safetensors file: too small");
+        }
+
+        mapping_ = ::mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+        if (mapping_ == MAP_FAILED) {
+            mapping_ = nullptr;
+            throw std::runtime_error("mmap failed for safetensors file");
+        }
+
+        const auto* bytes = static_cast<const std::byte*>(mapping_);
+        const uint64_t header_size_u64 = read_u64_le(bytes);
+        if (header_size_u64 > file_size_ - 8 ||
+            header_size_u64 > std::numeric_limits<size_t>::max()) {
+            throw std::runtime_error("invalid safetensors header length");
+        }
+        const size_t header_size = static_cast<size_t>(header_size_u64);
+        data_offset_ = 8 + header_size;
+
+        const std::string_view header(
+            reinterpret_cast<const char*>(bytes + 8), header_size);
+        const Json root = Json::parse(header);
+        if (!root.is_object()) {
+            throw std::runtime_error("safetensors header is not an object");
+        }
+
+        struct Range {
+            size_t begin;
+            size_t end;
+            std::string name;
+        };
+        std::vector<Range> ranges;
+
+        for (const auto& [name, descriptor] : root.as_object()) {
+            if (name == "__metadata__") continue;
+            if (!descriptor.is_object()) {
+                throw std::runtime_error("invalid descriptor for tensor: " + name);
+            }
+
+            const auto& offsets = descriptor["data_offsets"].as_array();
+            if (offsets.size() != 2) {
+                throw std::runtime_error("invalid offsets for tensor: " + name);
+            }
+            const int64_t begin_i64 = offsets[0].as_i64();
+            const int64_t end_i64 = offsets[1].as_i64();
+            if (begin_i64 < 0 || end_i64 < 0) {
+                throw std::runtime_error("negative offset for tensor: " + name);
+            }
+
+            Entry entry;
+            entry.dtype = parse_dtype(descriptor["dtype"].as_string());
+            if (entry.dtype == TensorDType::Unknown) {
+                throw std::runtime_error("unsupported dtype for tensor: " + name);
+            }
+            for (const Json& dimension : descriptor["shape"].as_array()) {
+                entry.shape.push_back(dimension.as_i64());
+            }
+            entry.begin = static_cast<size_t>(begin_i64);
+            entry.end = static_cast<size_t>(end_i64);
+
+            if (entry.begin > entry.end ||
+                entry.end > file_size_ - data_offset_) {
+                throw std::runtime_error("out-of-range tensor: " + name);
+            }
+
+            const size_t element_count = checked_element_count(entry.shape, name);
+            const size_t element_size = dtype_size(entry.dtype);
+            if (element_count >
+                std::numeric_limits<size_t>::max() / element_size) {
+                throw std::runtime_error("byte-size overflow for tensor: " + name);
+            }
+            const size_t expected_bytes = element_count * element_size;
+            if (entry.end - entry.begin != expected_bytes) {
+                throw std::runtime_error("byte count does not match shape for tensor: " + name);
+            }
+
+            auto [_, inserted] = entries_.emplace(name, entry);
+            if (!inserted) {
+                throw std::runtime_error("duplicate tensor name: " + name);
+            }
+            ranges.push_back({entry.begin, entry.end, name});
+        }
+
+        std::sort(ranges.begin(), ranges.end(),
+                  [](const Range& left, const Range& right) {
+                      if (left.begin != right.begin) return left.begin < right.begin;
+                      return left.end < right.end;
+                  });
+        for (size_t i = 1; i < ranges.size(); ++i) {
+            if (ranges[i].begin < ranges[i - 1].end) {
+                throw std::runtime_error(
+                    "overlapping tensor ranges: " + ranges[i - 1].name +
+                    " and " + ranges[i].name);
+            }
+        }
+    } catch (...) {
+        if (mapping_) {
+            ::munmap(mapping_, file_size_);
+            mapping_ = nullptr;
+        }
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+        throw;
+    }
+}
+
+SafeTensorFile::~SafeTensorFile() {
+    if (mapping_) ::munmap(mapping_, file_size_);
+    if (fd_ >= 0) ::close(fd_);
+}
+
+bool SafeTensorFile::contains(std::string_view name) const {
+    return entries_.find(std::string(name)) != entries_.end();
+}
+
+HostTensorView SafeTensorFile::tensor(std::string_view name) const {
+    const auto it = entries_.find(std::string(name));
+    if (it == entries_.end()) {
+        throw std::out_of_range("missing tensor: " + std::string(name));
+    }
+    const Entry& entry = it->second;
+    const auto* base =
+        static_cast<const std::byte*>(mapping_) + data_offset_;
+    return HostTensorView{
+        entry.dtype,
+        entry.shape,
+        base + entry.begin,
+        entry.end - entry.begin,
+    };
+}
+
+std::vector<std::string> SafeTensorFile::names() const {
+    std::vector<std::string> result;
+    result.reserve(entries_.size());
+    for (const auto& [name, _] : entries_) result.push_back(name);
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+} // namespace lfm

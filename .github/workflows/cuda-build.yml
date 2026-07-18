@@ -1,0 +1,56 @@
+name: Native CPU and CUDA build
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  cpu-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Configure CPU-only
+        run: |
+          cmake -S . -B build-cpu -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFM_ENABLE_CUDA=OFF \
+            -DLFM_BUILD_TESTS=ON
+      - name: Build CPU backend
+        run: cmake --build build-cpu --parallel 2
+      - name: Run CPU and host tests
+        run: ctest --test-dir build-cpu --output-on-failure
+      - name: Inspect VNNI code generation
+        run: BUILD_DIR=build-cpu ./scripts/cpu_vnni_check.sh
+      - name: Verify no CUDA dependency
+        run: |
+          if ldd build-cpu/liblfm25_cpu.so | grep -Ei 'cuda|cublas'; then
+            echo 'CPU ABI unexpectedly links CUDA' >&2
+            exit 1
+          fi
+      - name: Architecture checks
+        run: ./scripts/architecture_check.sh
+
+  nvcc-build:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake ninja-build g++
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CUDA_ARCHITECTURES=80 \
+            -DLFM_ENABLE_CUDA=ON \
+            -DLFM_BUILD_TESTS=ON \
+            -DLFM_RUN_CUDA_TESTS=OFF
+      - name: Compile with nvcc
+        run: cmake --build build --parallel 2
+      - name: Run non-GPU tests
+        run: ctest --test-dir build --output-on-failure

@@ -1,0 +1,11 @@
+build/
+model/*
+!model/.gitkeep
+*.o
+*.a
+*.so
+*.session
+*.f32
+build-*/
+*.lfmpack
+*.tmp
