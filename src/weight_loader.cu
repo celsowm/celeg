@@ -2,8 +2,8 @@
 #include "lfm/quantization.hpp"
 
 #include <cuda_runtime.h>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 
 namespace lfm {
 
@@ -21,6 +21,45 @@ size_t checked_element_count(const std::vector<int64_t>& shape) {
         count *= static_cast<size_t>(dim);
     }
     return count;
+}
+
+std::string layer_name(int index, const std::string& suffix) {
+    return "model.layers." + std::to_string(index) + "." + suffix;
+}
+
+const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
+                                 const SafeTensorRepository& repo,
+                                 const std::string& name,
+                                 const std::vector<int64_t>& expected,
+                                 const std::string& cache_key) {
+    if (const auto cached = weights.tensors.find(cache_key);
+        cached != weights.tensors.end()) {
+        if (!expected.empty() && cached->second.shape != expected) {
+            throw std::runtime_error("cached weight shape mismatch for " + cache_key);
+        }
+        return cached->second.bf16_storage.data();
+    }
+    const HostTensorView tensor = repo.tensor(name);
+    if (tensor.dtype != TensorDType::BF16) {
+        throw std::runtime_error(
+            "only BF16 source weights are supported; incompatible tensor: " + name);
+    }
+    if (!expected.empty() && tensor.shape != expected) {
+        throw std::runtime_error("unexpected shape for " + name);
+    }
+    const size_t count = checked_element_count(tensor.shape);
+    if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
+        throw std::runtime_error("invalid BF16 byte count for " + name);
+    }
+
+    DeviceWeight weight;
+    weight.shape = tensor.shape;
+    weight.bf16_storage.reset(count);
+    LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
+                        cudaMemcpyHostToDevice));
+    auto [it, inserted] = weights.tensors.emplace(cache_key, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate weight: " + cache_key);
+    return it->second.bf16_storage.data();
 }
 
 } // namespace
@@ -62,49 +101,24 @@ WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
 }
 
 const __nv_bfloat16* WeightLoader::load_weight(
-    const SafeTensorFile& file,
+    const SafeTensorRepository& repo,
     const std::string& name,
     std::vector<int64_t> expected) {
-    if (const auto cached = weights_->tensors.find(name); cached != weights_->tensors.end()) {
-        if (!expected.empty() && cached->second.shape != expected) {
-            throw std::runtime_error("cached weight shape mismatch for " + name);
-        }
-        return cached->second.bf16_storage.data();
-    }
-    const HostTensorView tensor = file.tensor(name);
-    if (tensor.dtype != TensorDType::BF16) {
-        throw std::runtime_error(
-            "only BF16 source weights are supported; incompatible tensor: " + name);
-    }
-    if (!expected.empty() && tensor.shape != expected) {
-        throw std::runtime_error("unexpected shape for " + name);
-    }
-    const size_t count = checked_element_count(tensor.shape);
-    if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
-        throw std::runtime_error("invalid BF16 byte count for " + name);
-    }
-
-    DeviceWeight weight;
-    weight.shape = tensor.shape;
-    weight.bf16_storage.reset(count);
-    LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
-                        cudaMemcpyHostToDevice));
-    auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-    if (!inserted) throw std::runtime_error("duplicate weight: " + name);
-    return it->second.bf16_storage.data();
+    return upload_bf16(*weights_, repo, name, expected, name);
 }
 
 const LinearWeight* WeightLoader::load_linear_weight(
-    const SafeTensorFile& file,
+    const SafeTensorRepository& repo,
     const std::string& name,
     std::vector<int64_t> expected) {
-    if (const auto cached = weights_->tensors.find(name); cached != weights_->tensors.end()) {
+    if (const auto cached = weights_->tensors.find(name);
+        cached != weights_->tensors.end()) {
         if (cached->second.shape != expected) {
             throw std::runtime_error("cached linear shape mismatch for " + name);
         }
         return &cached->second.linear;
     }
-    const HostTensorView tensor = file.tensor(name);
+    const HostTensorView tensor = repo.tensor(name);
     if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
         tensor.shape.size() != 2) {
         throw std::runtime_error("unexpected linear tensor: " + name);
@@ -165,7 +179,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
 }
 
 const LinearWeight* WeightLoader::load_concat_linear_weight(
-    const SafeTensorFile& file,
+    const SafeTensorRepository& repo,
     const std::string& synthetic_name,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
     if (const auto cached = weights_->tensors.find(synthetic_name);
@@ -179,7 +193,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     std::vector<HostTensorView> views;
     views.reserve(parts.size());
     for (const auto& [name, expected] : parts) {
-        const HostTensorView tensor = file.tensor(name);
+        const HostTensorView tensor = repo.tensor(name);
         if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
             tensor.shape.size() != 2) {
             throw std::runtime_error("unexpected concatenated tensor: " + name);
@@ -274,6 +288,196 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
     if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
     return &it->second.linear;
+}
+
+const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
+    const SafeTensorRepository& repo,
+    const std::string& name,
+    int experts, int rows_per_expert, int cols) {
+    const std::string cache_key = name;
+    if (const auto cached = expert_cache_.find(cache_key);
+        cached != expert_cache_.end()) {
+        return &cached->second;
+    }
+    if (experts <= 0 || rows_per_expert <= 0 || cols <= 0) {
+        throw std::runtime_error("invalid expert weight dimensions for " + name);
+    }
+    const std::vector<int64_t> expected = {
+        static_cast<int64_t>(experts) * rows_per_expert, cols};
+    const HostTensorView tensor = repo.tensor(name);
+    if (tensor.dtype != TensorDType::BF16) {
+        throw std::runtime_error("expert weights must be BF16: " + name);
+    }
+    if (tensor.shape != expected) {
+        throw std::runtime_error("unexpected packed expert shape for " + name);
+    }
+    const size_t count = checked_element_count(tensor.shape);
+    if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
+        throw std::runtime_error("invalid expert byte count for " + name);
+    }
+
+    DeviceWeight weight;
+    weight.shape = {experts, rows_per_expert, cols};
+    weight.bf16_storage.reset(count);
+    LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
+                        cudaMemcpyHostToDevice));
+
+    ExpertLinearWeight ew;
+    ew.kind = LinearStorageKind::Bf16;
+    ew.bf16 = weight.bf16_storage.data();
+    ew.experts = experts;
+    ew.rows_per_expert = rows_per_expert;
+    ew.cols = cols;
+
+    auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate expert weight: " + cache_key);
+    const ExpertLinearWeight& stored = expert_cache_.emplace(cache_key, ew).first->second;
+    return &stored;
+}
+
+// Packs per-expert gate (w1) and up (w3) tensors into one [experts,
+// 2*moe_inter, hidden] buffer. w1 occupies rows [0, moe_inter); w3 occupies
+// [moe_inter, 2*moe_inter).
+const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
+    const SafeTensorRepository& repo, int layer,
+    int num_experts, int moe_intermediate, int hidden) {
+    const std::string cache_key = layer_name(layer, "moe.gate_up");
+    if (const auto cached = expert_cache_.find(cache_key);
+        cached != expert_cache_.end()) {
+        return &cached->second;
+    }
+    if (num_experts <= 0 || moe_intermediate <= 0 || hidden <= 0) {
+        throw std::runtime_error("invalid MoE gate_up dimensions for layer " +
+                                 std::to_string(layer));
+    }
+    const size_t rows_per_expert = static_cast<size_t>(2 * moe_intermediate);
+    const size_t per_expert = rows_per_expert * static_cast<size_t>(hidden);
+    const size_t total = static_cast<size_t>(num_experts) * per_expert;
+
+    DeviceWeight weight;
+    weight.shape = {num_experts, static_cast<int>(rows_per_expert), hidden};
+    weight.bf16_storage.reset(total);
+    __nv_bfloat16* base = weight.bf16_storage.data();
+
+    const size_t moe_inter = static_cast<size_t>(moe_intermediate);
+    const size_t hidden_c = static_cast<size_t>(hidden);
+    const size_t w_bytes = moe_inter * hidden_c * sizeof(__nv_bfloat16);
+    for (int e = 0; e < num_experts; ++e) {
+        const std::string w1_name = layer_name(
+            layer, "feed_forward.experts." + std::to_string(e) + ".w1.weight");
+        const std::string w3_name = layer_name(
+            layer, "feed_forward.experts." + std::to_string(e) + ".w3.weight");
+        const HostTensorView w1 = repo.tensor(w1_name);
+        const HostTensorView w3 = repo.tensor(w3_name);
+        if (w1.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
+            w3.shape != std::vector<int64_t>{moe_intermediate, hidden}) {
+            throw std::runtime_error("unexpected MoE expert tensor shape for " + w1_name);
+        }
+        const size_t e_off = static_cast<size_t>(e) * per_expert;
+        LFM_CUDA(cudaMemcpy(base + e_off, w1.data, w_bytes, cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(base + e_off + moe_inter * hidden_c, w3.data,
+                            w_bytes, cudaMemcpyHostToDevice));
+    }
+
+    ExpertLinearWeight ew;
+    ew.kind = LinearStorageKind::Bf16;
+    ew.bf16 = weight.bf16_storage.data();
+    ew.experts = num_experts;
+    ew.rows_per_expert = static_cast<int>(rows_per_expert);
+    ew.cols = hidden;
+
+    auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate expert weight: " + cache_key);
+    const ExpertLinearWeight& stored = expert_cache_.emplace(cache_key, ew).first->second;
+    return &stored;
+}
+
+const ExpertLinearWeight* WeightLoader::load_moe_down(
+    const SafeTensorRepository& repo, int layer,
+    int num_experts, int moe_intermediate, int hidden) {
+    const std::string cache_key = layer_name(layer, "moe.down");
+    if (const auto cached = expert_cache_.find(cache_key);
+        cached != expert_cache_.end()) {
+        return &cached->second;
+    }
+    if (num_experts <= 0 || moe_intermediate <= 0 || hidden <= 0) {
+        throw std::runtime_error("invalid MoE down dimensions for layer " +
+                                 std::to_string(layer));
+    }
+    const size_t rows_per_expert = static_cast<size_t>(hidden);
+    const size_t per_expert = rows_per_expert * static_cast<size_t>(moe_intermediate);
+    const size_t total = static_cast<size_t>(num_experts) * per_expert;
+
+    DeviceWeight weight;
+    weight.shape = {num_experts, hidden, moe_intermediate};
+    weight.bf16_storage.reset(total);
+    __nv_bfloat16* base = weight.bf16_storage.data();
+
+    const size_t hidden_c = static_cast<size_t>(hidden);
+    const size_t moe_inter = static_cast<size_t>(moe_intermediate);
+    const size_t w_bytes = hidden_c * moe_inter * sizeof(__nv_bfloat16);
+    for (int e = 0; e < num_experts; ++e) {
+        const std::string w2_name = layer_name(
+            layer, "feed_forward.experts." + std::to_string(e) + ".w2.weight");
+        const HostTensorView w2 = repo.tensor(w2_name);
+        if (w2.shape != std::vector<int64_t>{hidden, moe_intermediate}) {
+            throw std::runtime_error("unexpected MoE expert tensor shape for " + w2_name);
+        }
+        const size_t e_off = static_cast<size_t>(e) * per_expert;
+        LFM_CUDA(cudaMemcpy(base + e_off, w2.data, w_bytes, cudaMemcpyHostToDevice));
+    }
+
+    ExpertLinearWeight ew;
+    ew.kind = LinearStorageKind::Bf16;
+    ew.bf16 = weight.bf16_storage.data();
+    ew.experts = num_experts;
+    ew.rows_per_expert = hidden;
+    ew.cols = moe_intermediate;
+
+    auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate expert weight: " + cache_key);
+    const ExpertLinearWeight& stored = expert_cache_.emplace(cache_key, ew).first->second;
+    return &stored;
+}
+
+const float* WeightLoader::load_f32_weight(
+    const SafeTensorRepository& repo,
+    const std::string& name,
+    std::vector<int64_t> expected) {
+    if (const auto cached = weights_->tensors.find(name);
+        cached != weights_->tensors.end()) {
+        if (cached->second.shape != expected) {
+            throw std::runtime_error("cached f32 shape mismatch for " + name);
+        }
+        return cached->second.scales_storage.data();
+    }
+    const HostTensorView tensor = repo.tensor(name);
+    if (tensor.dtype != TensorDType::F32) {
+        throw std::runtime_error("expected F32 tensor: " + name);
+    }
+    if (tensor.shape != expected) {
+        throw std::runtime_error("unexpected f32 shape for " + name);
+    }
+    const size_t count = checked_element_count(tensor.shape);
+    if (tensor.bytes != count * sizeof(float)) {
+        throw std::runtime_error("invalid f32 byte count for " + name);
+    }
+    DeviceWeight weight;
+    weight.shape = tensor.shape;
+    weight.scales_storage.reset(count);
+    LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), tensor.data, tensor.bytes,
+                        cudaMemcpyHostToDevice));
+    auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate f32 weight: " + name);
+    return it->second.scales_storage.data();
+}
+
+const LinearWeight* WeightLoader::load_router(
+    const SafeTensorRepository& repo, int layer,
+    int num_experts, int hidden) {
+    return load_linear_weight(
+        repo, layer_name(layer, "feed_forward.gate.weight"),
+        {num_experts, hidden});
 }
 
 } // namespace lfm

@@ -181,12 +181,12 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     // Only one constructor populates a shared checkpoint at a time. Other
     // sessions wait, then reuse the immutable device buffers.
     std::unique_lock<std::mutex> shared_weights_lock(weights_->mutex);
-    SafeTensorFile file(safetensors_path);
+    SafeTensorRepository repo(safetensors_path);
     embedding_ = weight_loader_->load_linear_weight(
-        file, "model.embed_tokens.weight",
+        repo, "model.embed_tokens.weight",
         {shape_.vocab_size, shape_.hidden});
     final_norm_ = weight_loader_->load_weight(
-        file, "model.embedding_norm.weight", {shape_.hidden});
+        repo, "model.embedding_norm.weight", {shape_.hidden});
     {
         const void* table = nullptr;
         if (options_.weight_mode == WeightMode::Int8) {
@@ -204,11 +204,11 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     for (int i = 0; i < shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
         common_layer.operator_norm = weight_loader_->load_weight(
-            file, layer_name(i, "operator_norm.weight"), {shape_.hidden});
+            repo, layer_name(i, "operator_norm.weight"), {shape_.hidden});
         common_layer.ffn_norm = weight_loader_->load_weight(
-            file, layer_name(i, "ffn_norm.weight"), {shape_.hidden});
+            repo, layer_name(i, "ffn_norm.weight"), {shape_.hidden});
         const LinearWeight* w13 = weight_loader_->load_concat_linear_weight(
-            file, layer_name(i, "feed_forward.w13.weight"),
+            repo, layer_name(i, "feed_forward.w13.weight"),
             {
                 {layer_name(i, "feed_forward.w1.weight"),
                  {shape_.intermediate, shape_.hidden}},
@@ -216,7 +216,7 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
                  {shape_.intermediate, shape_.hidden}},
             });
         const LinearWeight* w2 = weight_loader_->load_linear_weight(
-            file, layer_name(i, "feed_forward.w2.weight"),
+            repo, layer_name(i, "feed_forward.w2.weight"),
             {shape_.hidden, shape_.intermediate});
         common_layer.feed_forward = DenseFfnWeights{w13, w2};
 
@@ -226,7 +226,7 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
             attention_layer.qkv = weight_loader_->load_concat_linear_weight(
-                file, layer_name(i, "self_attn.qkv.weight"),
+                repo, layer_name(i, "self_attn.qkv.weight"),
                 {
                     {layer_name(i, "self_attn.q_proj.weight"),
                      {shape_.q_width, shape_.hidden}},
@@ -236,13 +236,13 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
                      {shape_.kv_width, shape_.hidden}},
                 });
             attention_layer.out = weight_loader_->load_linear_weight(
-                file, layer_name(i, "self_attn.out_proj.weight"),
+                repo, layer_name(i, "self_attn.out_proj.weight"),
                 {shape_.hidden, shape_.hidden});
             attention_layer.q_norm = weight_loader_->load_weight(
-                file, layer_name(i, "self_attn.q_layernorm.weight"),
+                repo, layer_name(i, "self_attn.q_layernorm.weight"),
                 {shape_.head_dim});
             attention_layer.k_norm = weight_loader_->load_weight(
-                file, layer_name(i, "self_attn.k_layernorm.weight"),
+                repo, layer_name(i, "self_attn.k_layernorm.weight"),
                 {shape_.head_dim});
 
             if (options_.allocate_local_kv_cache) {
@@ -265,13 +265,13 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
             ConvolutionLayer convolution_layer;
             convolution_layer.common = common_layer;
             convolution_layer.conv_in = weight_loader_->load_linear_weight(
-                file, layer_name(i, "conv.in_proj.weight"),
+                repo, layer_name(i, "conv.in_proj.weight"),
                 {3 * shape_.hidden, shape_.hidden});
             convolution_layer.conv_weight = weight_loader_->load_weight(
-                file, layer_name(i, "conv.conv.weight"),
+                repo, layer_name(i, "conv.conv.weight"),
                 {shape_.hidden, 1, shape_.conv_cache});
             convolution_layer.conv_out = weight_loader_->load_linear_weight(
-                file, layer_name(i, "conv.out_proj.weight"),
+                repo, layer_name(i, "conv.out_proj.weight"),
                 {shape_.hidden, shape_.hidden});
             convolution_layer.conv_state.reset(
                 static_cast<size_t>(shape_.conv_cache) * shape_.hidden);
