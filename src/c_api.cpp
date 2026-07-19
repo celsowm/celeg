@@ -224,13 +224,25 @@ lfm25_status lfm25_position(const lfm25_model* model, int32_t* position) {
     return LFM25_STATUS_OK;
 }
 
-int32_t lfm25_vocab_size(void) { return lfm::LfmConfig::vocab; }
+lfm25_status lfm25_model_vocab_size(const lfm25_model* model, int32_t* vocab_size) {
+    if (!model || !model->engine || !vocab_size) {
+        return fail(const_cast<lfm25_model*>(model),
+                    LFM25_STATUS_INVALID_ARGUMENT,
+                    "vocab_size requires a valid model and output pointer");
+    }
+    *vocab_size = model->engine->vocab_size();
+    return LFM25_STATUS_OK;
+}
 
 lfm25_status lfm25_copy_logits(
     lfm25_model* model, float* logits, size_t logits_count) {
-    if (!logits || logits_count < static_cast<size_t>(lfm::LfmConfig::vocab)) {
+    if (!model || !model->engine) {
+        return fail(model, LFM25_STATUS_INVALID_ARGUMENT, "model handle is null");
+    }
+    const int32_t vocab = model->engine->vocab_size();
+    if (!logits || logits_count < static_cast<size_t>(vocab)) {
         return fail(model, LFM25_STATUS_BUFFER_TOO_SMALL,
-                    "logits buffer must contain at least 65536 floats");
+                    "logits buffer must contain at least vocab_size floats");
     }
     return protect(model, [&] {
         const std::vector<float> values = model->engine->copy_logits();

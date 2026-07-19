@@ -37,7 +37,6 @@ struct ModelConfig {
 
     static ModelConfig load(const std::string& path);
     void validate() const;
-    void validate_compiled_backend() const;
     std::string summary() const;
 };
 

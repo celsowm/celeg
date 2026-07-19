@@ -1,4 +1,5 @@
 #include "lfm/paged_kv.hpp"
+#include "lfm/page_layout.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -20,18 +21,30 @@ size_t checked_mul(size_t a, size_t b, const char* what) {
 PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
                                            int page_tokens,
                                            int max_context,
-                                           KvCacheMode mode)
-    : page_tokens_(page_tokens), mode_(mode), allocator_(page_count, page_tokens) {
+                                           KvCacheMode mode,
+                                           const ModelShape& shape)
+    : page_tokens_(page_tokens),
+      mode_(mode),
+      attention_layer_count_(shape.attention_layer_count),
+      kv_width_(shape.kv_width),
+      kv_heads_(shape.num_key_value_heads),
+      head_dim_(shape.head_dim),
+      attention_slot_for_layer_(shape.attention_slot_for_layer),
+      layout_(page_tokens, shape),
+      allocator_(page_count, page_tokens) {
     if (max_context <= 0) throw std::invalid_argument("paged KV max_context must be positive");
+    if (attention_layer_count_ <= 0) {
+        throw std::invalid_argument("paged KV requires at least one attention layer");
+    }
     max_pages_per_request_ =
         (max_context + page_tokens_ - 1) / page_tokens_;
 
-    const size_t vectors = checked_mul(page_count, page_vector_elements(),
+    const size_t vectors = checked_mul(page_count, layout_.page_vector_elements(),
                                        "paged KV vector allocation overflow");
     if (mode_ == KvCacheMode::Int8) {
         key_int8_.reset(vectors);
         value_int8_.reset(vectors);
-        const size_t scales = checked_mul(page_count, page_scale_elements(),
+        const size_t scales = checked_mul(page_count, layout_.page_scale_elements(),
                                           "paged KV scale allocation overflow");
         key_scales_.reset(scales);
         value_scales_.reset(scales);
@@ -42,21 +55,11 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
 }
 
 size_t PhysicalPagedKvCache::page_vector_elements() const {
-    return checked_mul(
-        checked_mul(static_cast<size_t>(attention_layers),
-                    static_cast<size_t>(page_tokens_),
-                    "paged KV page layer/token overflow"),
-        static_cast<size_t>(LfmConfig::kv_width),
-        "paged KV page vector overflow");
+    return layout_.page_vector_elements();
 }
 
 size_t PhysicalPagedKvCache::page_scale_elements() const {
-    return checked_mul(
-        checked_mul(static_cast<size_t>(attention_layers),
-                    static_cast<size_t>(page_tokens_),
-                    "paged KV scale layer/token overflow"),
-        static_cast<size_t>(LfmConfig::kv_heads),
-        "paged KV page scale overflow");
+    return layout_.page_scale_elements();
 }
 
 std::optional<std::vector<uint32_t>>
@@ -92,33 +95,27 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
     if (!allocated || allocated->size() != 1) return std::nullopt;
     const uint32_t target = allocated->front();
     try {
-        const size_t full_vector_elements = page_vector_elements();
-        const size_t source_vector = static_cast<size_t>(source) * full_vector_elements;
-        const size_t target_vector = static_cast<size_t>(target) * full_vector_elements;
+        const size_t source_vector = layout_.page_vector_offset(source);
+        const size_t target_vector = layout_.page_vector_offset(target);
         // A page is laid out [layer][token][kv_width], so copying only a flat
         // prefix would skip later layers. Copy each layer's initialized token
         // region. The unused suffix is intentionally left untouched because
         // attention never reads beyond the request position and every future
         // slot is overwritten before it becomes visible.
         if (mode_ == KvCacheMode::Int8) {
-            const size_t full_scale_elements = page_scale_elements();
-            const size_t source_scale = static_cast<size_t>(source) * full_scale_elements;
-            const size_t target_scale = static_cast<size_t>(target) * full_scale_elements;
-            for (int layer = 0; layer < attention_layers; ++layer) {
-                const size_t layer_vector = static_cast<size_t>(layer) *
-                    page_tokens_ * LfmConfig::kv_width;
-                const size_t count = static_cast<size_t>(used_tokens) *
-                    LfmConfig::kv_width;
+            const size_t source_scale = layout_.page_scale_offset(source);
+            const size_t target_scale = layout_.page_scale_offset(target);
+            for (int layer = 0; layer < attention_layer_count_; ++layer) {
+                const size_t layer_vector = layout_.layer_vector_offset(layer);
+                const size_t count = layout_.layer_vector_count(used_tokens);
                 LFM_CUDA(cudaMemcpy(key_int8_.data() + target_vector + layer_vector,
                                     key_int8_.data() + source_vector + layer_vector,
                                     count * sizeof(int8_t), cudaMemcpyDeviceToDevice));
                 LFM_CUDA(cudaMemcpy(value_int8_.data() + target_vector + layer_vector,
                                     value_int8_.data() + source_vector + layer_vector,
                                     count * sizeof(int8_t), cudaMemcpyDeviceToDevice));
-                const size_t layer_scale = static_cast<size_t>(layer) *
-                    page_tokens_ * LfmConfig::kv_heads;
-                const size_t scale_count = static_cast<size_t>(used_tokens) *
-                    LfmConfig::kv_heads;
+                const size_t layer_scale = layout_.layer_scale_offset(layer);
+                const size_t scale_count = layout_.layer_scale_count(used_tokens);
                 LFM_CUDA(cudaMemcpy(key_scales_.data() + target_scale + layer_scale,
                                     key_scales_.data() + source_scale + layer_scale,
                                     scale_count * sizeof(float), cudaMemcpyDeviceToDevice));
@@ -127,11 +124,9 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
                                     scale_count * sizeof(float), cudaMemcpyDeviceToDevice));
             }
         } else {
-            for (int layer = 0; layer < attention_layers; ++layer) {
-                const size_t layer_vector = static_cast<size_t>(layer) *
-                    page_tokens_ * LfmConfig::kv_width;
-                const size_t count = static_cast<size_t>(used_tokens) *
-                    LfmConfig::kv_width;
+            for (int layer = 0; layer < attention_layer_count_; ++layer) {
+                const size_t layer_vector = layout_.layer_vector_offset(layer);
+                const size_t count = layout_.layer_vector_count(used_tokens);
                 LFM_CUDA(cudaMemcpy(key_bf16_.data() + target_vector + layer_vector,
                                     key_bf16_.data() + source_vector + layer_vector,
                                     count * sizeof(__nv_bfloat16), cudaMemcpyDeviceToDevice));
@@ -145,18 +140,6 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
         throw;
     }
     return target;
-}
-
-int PhysicalPagedKvCache::attention_slot(int model_layer) {
-    switch (model_layer) {
-        case 2: return 0;
-        case 4: return 1;
-        case 6: return 2;
-        case 8: return 3;
-        case 10: return 4;
-        case 12: return 5;
-        default: return -1;
-    }
 }
 
 size_t PhysicalPagedKvCache::memory_bytes() const {

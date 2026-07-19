@@ -2,12 +2,16 @@
 #include "lfm/kernels.cuh"
 #include "lfm/quantization.hpp"
 #include "lfm/paged_kv.hpp"
+#include "lfm/model_variant.hpp"
+#include "lfm/weight_layout.hpp"
+#include "lfm/weight_loader.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -38,17 +42,22 @@ std::string layer_name(int index, const std::string& suffix) {
     return "model.layers." + std::to_string(index) + "." + suffix;
 }
 
+// Layout for the new session-file header. The previous format is rejected;
+// there is no migration path because the on-disk layout now depends on the
+// variant fingerprint.
 struct SessionHeader {
-    std::array<char, 8> magic{{'L', 'F', 'M', 'S', 'E', 'S', 'S', '1'}};
-    uint32_t version = 1;
+    std::array<char, 8> magic{{'L', 'F', 'M', 'S', 'E', 'S', 'S', '2'}};
+    uint32_t version = 2;
     uint32_t kv_cache_mode = 0;
     int32_t position = 0;
     int32_t max_context = 0;
-    int32_t layers = LfmConfig::layers;
-    int32_t kv_width = LfmConfig::kv_width;
-    int32_t kv_heads = LfmConfig::kv_heads;
-    int32_t vocab = LfmConfig::vocab;
+    int32_t layers = 0;
+    int32_t kv_width = 0;
+    int32_t kv_heads = 0;
+    int32_t vocab = 0;
+    int32_t attention_layers = 0;
     uint64_t rng_state = 0;
+    char variant_id[32] = {};
 };
 
 template <typename T>
@@ -63,28 +72,16 @@ void read_scalar(std::ifstream& in, T& value) {
     if (!in) throw std::runtime_error("truncated session file");
 }
 
+std::filesystem::path config_path_for(const std::string& safetensors_path) {
+    const std::filesystem::path p(safetensors_path);
+    return p.parent_path() / "config.json";
+}
+
 } // namespace
 
-struct LfmModel::Impl::LtPlan {
-    cublasLtMatmulDesc_t operation = nullptr;
-    cublasLtMatrixLayout_t a = nullptr;
-    cublasLtMatrixLayout_t b = nullptr;
-    cublasLtMatrixLayout_t c = nullptr;
-    cublasLtMatrixLayout_t d = nullptr;
-    cublasLtMatmulAlgo_t algorithm{};
-    size_t workspace_size = 0;
-    bool available = false;
+struct LtPlan;  // defined in include/lfm/detail/model_types.hpp
 
-    ~LtPlan() {
-        if (d) cublasLtMatrixLayoutDestroy(d);
-        if (c) cublasLtMatrixLayoutDestroy(c);
-        if (b) cublasLtMatrixLayoutDestroy(b);
-        if (a) cublasLtMatrixLayoutDestroy(a);
-        if (operation) cublasLtMatmulDescDestroy(operation);
-    }
-};
-
-void LfmModel::Impl::LinearWeight::validate_storage() const {
+void LinearWeight::validate_storage() const {
     if (rows <= 0 || cols <= 0) {
         throw std::runtime_error("linear weight dimensions must be positive");
     }
@@ -107,7 +104,7 @@ void LfmModel::Impl::LinearWeight::validate_storage() const {
     }
 }
 
-size_t LfmModel::Impl::SharedModelWeights::memory_bytes() const {
+size_t SharedModelWeights::memory_bytes() const {
     size_t total = 0;
     for (const auto& [unused_name, weight] : tensors) {
         (void)unused_name;
@@ -127,111 +124,134 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
       options_(plan_.options()),
       generation_(generation),
       stream_(),
-      cublas_(stream_.get()),
       max_context_(max_context) {
     generation_.validate();
     if (max_context_ <= 0) {
         throw std::invalid_argument("max_context must be positive");
     }
+    // Load the model topology from config.json next to the safetensors file.
+    // The runtime no longer hard-codes the 230M shape.
+    const std::filesystem::path config_path = config_path_for(safetensors_path);
+    if (!std::filesystem::exists(config_path)) {
+        throw std::runtime_error("config.json not found alongside checkpoint: " + config_path.string());
+    }
+    ModelConfig config = ModelConfig::load(config_path.string());
+    shape_ = ModelShape::from_config(config);
+    const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_);
+    variant_ = &variant;
+    shape_ = variant.resolve_shape(shape_);
+    (void)variant_;  // retained for future per-variant dispatch
+
+    // Size all per-session device buffers from the runtime shape.
+    seen_tokens_.reset(static_cast<size_t>(shape_.vocab_size));
+    sampling_scores_.reset(static_cast<size_t>(shape_.vocab_size));
+    hidden_.reset(static_cast<size_t>(shape_.hidden));
+    residual_.reset(static_cast<size_t>(shape_.hidden));
+    normed_.reset(static_cast<size_t>(shape_.hidden));
+    op_output_.reset(static_cast<size_t>(shape_.hidden));
+    qkv_output_.reset(static_cast<size_t>(shape_.qkv_width));
+    conv_projected_.reset(static_cast<size_t>(3 * shape_.hidden));
+    gate_up_.reset(static_cast<size_t>(2 * shape_.intermediate));
+    activated_.reset(static_cast<size_t>(shape_.intermediate));
+    mlp_output_.reset(static_cast<size_t>(shape_.hidden));
+    logits_.reset(static_cast<size_t>(shape_.vocab_size));
+
     attention_chunks_ = plan_.attention_chunks();
     if (attention_chunks_ > 0) {
         const size_t partials =
-            static_cast<size_t>(LfmConfig::q_heads) * attention_chunks_;
+            static_cast<size_t>(shape_.num_attention_heads) * attention_chunks_;
         attention_partial_max_.reset(partials);
         attention_partial_denom_.reset(partials);
-        attention_partial_accum_.reset(partials * LfmConfig::head_dim);
+        attention_partial_accum_.reset(partials * shape_.head_dim);
     }
     if (options_.gemm_backend == GemmBackend::CublasLt &&
         options_.lt_workspace_bytes > 0) {
-        lt_workspace_.reset(options_.lt_workspace_bytes);
+        // GemmDispatcher owns the workspace internally.
     }
+    gemm_ = std::make_unique<GemmDispatcher>(stream_.get(), options_);
     initialize_rope_tables();
 
     // Immutable device weights are shared across all request lanes that use
-    // the same checkpoint, device and quantization mode. Session state remains
-    // private to each LfmModel instance.
-    static std::mutex weight_cache_mutex;
-    static std::unordered_map<std::string, std::weak_ptr<SharedModelWeights>> weight_cache;
-    int device_id = 0;
-    LFM_CUDA(cudaGetDevice(&device_id));
-    std::ostringstream key_builder;
-    key_builder << device_id << ':' << static_cast<int>(options_.weight_mode)
-                << ':' << safetensors_path;
-    const std::string weight_cache_key = key_builder.str();
-    {
-        std::lock_guard<std::mutex> lock(weight_cache_mutex);
-        const auto found = weight_cache.find(weight_cache_key);
-        if (found != weight_cache.end()) weights_ = found->second.lock();
-        if (!weights_) {
-            weights_ = std::make_shared<SharedModelWeights>();
-            weight_cache[weight_cache_key] = weights_;
-        }
-    }
+    // the same checkpoint, device and quantization mode. The WeightLoader
+    // owns the process-wide cache and the SafeTensor I/O + quantization;
+    // the Impl only retains the resulting shared_ptr + the layer views.
+    weights_ = WeightLoader::acquire(safetensors_path, options_.weight_mode);
+    weight_loader_ = std::make_unique<WeightLoader>(weights_, options_.weight_mode);
 
     // Only one constructor populates a shared checkpoint at a time. Other
     // sessions wait, then reuse the immutable device buffers.
     std::unique_lock<std::mutex> shared_weights_lock(weights_->mutex);
     SafeTensorFile file(safetensors_path);
-    embedding_ = load_linear_weight(
+    embedding_ = weight_loader_->load_linear_weight(
         file, "model.embed_tokens.weight",
-        {LfmConfig::vocab, LfmConfig::hidden});
-    final_norm_ = load_weight(
-        file, "model.embedding_norm.weight", {LfmConfig::hidden});
+        {shape_.vocab_size, shape_.hidden});
+    final_norm_ = weight_loader_->load_weight(
+        file, "model.embedding_norm.weight", {shape_.hidden});
+    {
+        const void* table = nullptr;
+        if (options_.weight_mode == WeightMode::Int8) {
+            table = embedding_->int8;
+        } else if (options_.weight_mode == WeightMode::Int4) {
+            table = embedding_->int4;
+        } else {
+            table = embedding_->bf16;
+        }
+        weight_layout_ = make_weight_layout(
+            options_.weight_mode, table, embedding_->scales);
+    }
 
-    static constexpr bool attention_map[LfmConfig::layers] = {
-        false, false, true, false, true, false, true,
-        false, true, false, true, false, true, false};
-
-    layers_.reserve(LfmConfig::layers);
-    for (int i = 0; i < LfmConfig::layers; ++i) {
+    layers_.reserve(static_cast<size_t>(shape_.num_hidden_layers));
+    for (int i = 0; i < shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
-        common_layer.operator_norm = load_weight(
-            file, layer_name(i, "operator_norm.weight"), {LfmConfig::hidden});
-        common_layer.ffn_norm = load_weight(
-            file, layer_name(i, "ffn_norm.weight"), {LfmConfig::hidden});
-        common_layer.w13 = load_concat_linear_weight(
+        common_layer.operator_norm = weight_loader_->load_weight(
+            file, layer_name(i, "operator_norm.weight"), {shape_.hidden});
+        common_layer.ffn_norm = weight_loader_->load_weight(
+            file, layer_name(i, "ffn_norm.weight"), {shape_.hidden});
+        common_layer.w13 = weight_loader_->load_concat_linear_weight(
             file, layer_name(i, "feed_forward.w13.weight"),
             {
                 {layer_name(i, "feed_forward.w1.weight"),
-                 {LfmConfig::intermediate, LfmConfig::hidden}},
+                 {shape_.intermediate, shape_.hidden}},
                 {layer_name(i, "feed_forward.w3.weight"),
-                 {LfmConfig::intermediate, LfmConfig::hidden}},
+                 {shape_.intermediate, shape_.hidden}},
             });
-        common_layer.w2 = load_linear_weight(
+        common_layer.w2 = weight_loader_->load_linear_weight(
             file, layer_name(i, "feed_forward.w2.weight"),
-            {LfmConfig::hidden, LfmConfig::intermediate});
+            {shape_.hidden, shape_.intermediate});
 
-        if (attention_map[i]) {
+        const LayerType layer_type =
+            shape_.layer_types[static_cast<size_t>(i)];
+        if (layer_type == LayerType::FullAttention) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
-            attention_layer.qkv = load_concat_linear_weight(
+            attention_layer.qkv = weight_loader_->load_concat_linear_weight(
                 file, layer_name(i, "self_attn.qkv.weight"),
                 {
                     {layer_name(i, "self_attn.q_proj.weight"),
-                     {LfmConfig::q_width, LfmConfig::hidden}},
+                     {shape_.q_width, shape_.hidden}},
                     {layer_name(i, "self_attn.k_proj.weight"),
-                     {LfmConfig::kv_width, LfmConfig::hidden}},
+                     {shape_.kv_width, shape_.hidden}},
                     {layer_name(i, "self_attn.v_proj.weight"),
-                     {LfmConfig::kv_width, LfmConfig::hidden}},
+                     {shape_.kv_width, shape_.hidden}},
                 });
-            attention_layer.out = load_linear_weight(
+            attention_layer.out = weight_loader_->load_linear_weight(
                 file, layer_name(i, "self_attn.out_proj.weight"),
-                {LfmConfig::hidden, LfmConfig::hidden});
-            attention_layer.q_norm = load_weight(
+                {shape_.hidden, shape_.hidden});
+            attention_layer.q_norm = weight_loader_->load_weight(
                 file, layer_name(i, "self_attn.q_layernorm.weight"),
-                {LfmConfig::head_dim});
-            attention_layer.k_norm = load_weight(
+                {shape_.head_dim});
+            attention_layer.k_norm = weight_loader_->load_weight(
                 file, layer_name(i, "self_attn.k_layernorm.weight"),
-                {LfmConfig::head_dim});
+                {shape_.head_dim});
 
             if (options_.allocate_local_kv_cache) {
                 const size_t cache_elements =
-                    static_cast<size_t>(max_context_) * LfmConfig::kv_width;
+                    static_cast<size_t>(max_context_) * shape_.kv_width;
                 if (options_.kv_cache_mode == KvCacheMode::Int8) {
                     attention_layer.key_cache_int8.reset(cache_elements);
                     attention_layer.value_cache_int8.reset(cache_elements);
                     const size_t scale_elements =
-                        static_cast<size_t>(max_context_) * LfmConfig::kv_heads;
+                        static_cast<size_t>(max_context_) * shape_.num_key_value_heads;
                     attention_layer.key_cache_scales.reset(scale_elements);
                     attention_layer.value_cache_scales.reset(scale_elements);
                 } else {
@@ -243,17 +263,17 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
         } else {
             ConvolutionLayer convolution_layer;
             convolution_layer.common = common_layer;
-            convolution_layer.conv_in = load_linear_weight(
+            convolution_layer.conv_in = weight_loader_->load_linear_weight(
                 file, layer_name(i, "conv.in_proj.weight"),
-                {3 * LfmConfig::hidden, LfmConfig::hidden});
-            convolution_layer.conv_weight = load_weight(
+                {3 * shape_.hidden, shape_.hidden});
+            convolution_layer.conv_weight = weight_loader_->load_weight(
                 file, layer_name(i, "conv.conv.weight"),
-                {LfmConfig::hidden, 1, LfmConfig::conv_cache});
-            convolution_layer.conv_out = load_linear_weight(
+                {shape_.hidden, 1, shape_.conv_cache});
+            convolution_layer.conv_out = weight_loader_->load_linear_weight(
                 file, layer_name(i, "conv.out_proj.weight"),
-                {LfmConfig::hidden, LfmConfig::hidden});
+                {shape_.hidden, shape_.hidden});
             convolution_layer.conv_state.reset(
-                static_cast<size_t>(LfmConfig::conv_cache) * LfmConfig::hidden);
+                static_cast<size_t>(shape_.conv_cache) * shape_.hidden);
             layers_.emplace_back(std::move(convolution_layer));
         }
     }
@@ -270,252 +290,22 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
 
 LfmModel::Impl::~Impl() = default;
 
-const __nv_bfloat16* LfmModel::Impl::load_weight(
-    const SafeTensorFile& file,
-    const std::string& name,
-    std::vector<int64_t> expected) {
-    if (const auto cached = weights_->tensors.find(name); cached != weights_->tensors.end()) {
-        if (!expected.empty() && cached->second.shape != expected) {
-            throw std::runtime_error("cached weight shape mismatch for " + name);
-        }
-        return cached->second.bf16_storage.data();
-    }
-    const HostTensorView tensor = file.tensor(name);
-    if (tensor.dtype != TensorDType::BF16) {
-        throw std::runtime_error(
-            "only BF16 source weights are supported; incompatible tensor: " + name);
-    }
-    if (!expected.empty() && tensor.shape != expected) {
-        throw std::runtime_error("unexpected shape for " + name);
-    }
-    const size_t count = checked_element_count(tensor.shape);
-    if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
-        throw std::runtime_error("invalid BF16 byte count for " + name);
-    }
-
-    DeviceWeight weight;
-    weight.shape = tensor.shape;
-    weight.bf16_storage.reset(count);
-    LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
-                        cudaMemcpyHostToDevice));
-    auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-    if (!inserted) throw std::runtime_error("duplicate weight: " + name);
-    return it->second.bf16_storage.data();
-}
-
-const LfmModel::Impl::LinearWeight* LfmModel::Impl::load_linear_weight(
-    const SafeTensorFile& file,
-    const std::string& name,
-    std::vector<int64_t> expected) {
-    if (const auto cached = weights_->tensors.find(name); cached != weights_->tensors.end()) {
-        if (cached->second.shape != expected) {
-            throw std::runtime_error("cached linear shape mismatch for " + name);
-        }
-        return &cached->second.linear;
-    }
-    const HostTensorView tensor = file.tensor(name);
-    if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
-        tensor.shape.size() != 2) {
-        throw std::runtime_error("unexpected linear tensor: " + name);
-    }
-    const size_t count = checked_element_count(tensor.shape);
-    if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
-        throw std::runtime_error("invalid linear tensor byte count: " + name);
-    }
-
-    DeviceWeight weight;
-    weight.shape = tensor.shape;
-    const int rows = static_cast<int>(tensor.shape[0]);
-    const int cols = static_cast<int>(tensor.shape[1]);
-    if (options_.weight_mode == WeightMode::Int8) {
-        Int8RowwisePack pack = quantize_bf16_rows(
-            tensor.data, static_cast<size_t>(rows), static_cast<size_t>(cols));
-        std::vector<int8_t>& quantized = pack.values;
-        std::vector<float>& scales = pack.scales;
-        weight.int8_storage.reset(count);
-        weight.scales_storage.reset(scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int8_storage.data(), quantized.data(),
-                            quantized.size() * sizeof(int8_t),
-                            cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
-                            scales.size() * sizeof(float),
-                            cudaMemcpyHostToDevice));
-        weight.linear.kind = LinearStorageKind::Int8;
-        weight.linear.int8 = weight.int8_storage.data();
-        weight.linear.scales = weight.scales_storage.data();
-    } else if (options_.weight_mode == WeightMode::Int4) {
-        Int4RowwisePack pack = quantize_bf16_rows_int4(
-            tensor.data, static_cast<size_t>(rows), static_cast<size_t>(cols));
-        weight.int4_storage.reset(pack.values.size());
-        weight.scales_storage.reset(pack.scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int4_storage.data(), pack.values.data(),
-                            pack.values.size() * sizeof(uint8_t),
-                            cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), pack.scales.data(),
-                            pack.scales.size() * sizeof(float),
-                            cudaMemcpyHostToDevice));
-        weight.linear.kind = LinearStorageKind::Int4;
-        weight.linear.int4 = weight.int4_storage.data();
-        weight.linear.scales = weight.scales_storage.data();
-    } else {
-        weight.bf16_storage.reset(count);
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
-                            cudaMemcpyHostToDevice));
-        weight.linear.kind = LinearStorageKind::Bf16;
-        weight.linear.bf16 = weight.bf16_storage.data();
-    }
-    weight.linear.rows = rows;
-    weight.linear.cols = cols;
-    weight.linear.validate_storage();
-
-    auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
-    if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
-    return &it->second.linear;
-}
-
-const LfmModel::Impl::LinearWeight* LfmModel::Impl::load_concat_linear_weight(
-    const SafeTensorFile& file,
-    const std::string& synthetic_name,
-    const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
-    if (const auto cached = weights_->tensors.find(synthetic_name);
-        cached != weights_->tensors.end()) {
-        return &cached->second.linear;
-    }
-    if (parts.empty()) throw std::invalid_argument("concat weight requires parts");
-    int64_t common_width = -1;
-    int64_t total_rows = 0;
-    size_t total_count = 0;
-    std::vector<HostTensorView> views;
-    views.reserve(parts.size());
-    for (const auto& [name, expected] : parts) {
-        const HostTensorView tensor = file.tensor(name);
-        if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
-            tensor.shape.size() != 2) {
-            throw std::runtime_error("unexpected concatenated tensor: " + name);
-        }
-        if (common_width < 0) common_width = tensor.shape[1];
-        if (tensor.shape[1] != common_width) {
-            throw std::runtime_error("concatenated tensors have different widths");
-        }
-        const size_t count = checked_element_count(tensor.shape);
-        if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
-            throw std::runtime_error("invalid concatenated tensor bytes: " + name);
-        }
-        total_count += count;
-        total_rows += tensor.shape[0];
-        views.push_back(tensor);
-    }
-
-    DeviceWeight weight;
-    weight.shape = {total_rows, common_width};
-    if (options_.weight_mode == WeightMode::Int8) {
-        std::vector<int8_t> quantized(total_count);
-        std::vector<float> scales(static_cast<size_t>(total_rows));
-        size_t row_offset = 0;
-        for (const HostTensorView& tensor : views) {
-            quantize_bf16_rows_into(
-                tensor.data, static_cast<size_t>(tensor.shape[0]),
-                static_cast<size_t>(tensor.shape[1]), quantized, scales,
-                row_offset);
-            row_offset += static_cast<size_t>(tensor.shape[0]);
-        }
-        weight.int8_storage.reset(total_count);
-        weight.scales_storage.reset(scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int8_storage.data(), quantized.data(),
-                            quantized.size() * sizeof(int8_t),
-                            cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
-                            scales.size() * sizeof(float),
-                            cudaMemcpyHostToDevice));
-        weight.linear.kind = LinearStorageKind::Int8;
-        weight.linear.int8 = weight.int8_storage.data();
-        weight.linear.scales = weight.scales_storage.data();
-    } else if (options_.weight_mode == WeightMode::Int4) {
-        const size_t packed_cols =
-            (static_cast<size_t>(common_width) + 1) / 2;
-        std::vector<uint8_t> quantized(
-            static_cast<size_t>(total_rows) * packed_cols);
-        std::vector<float> scales(static_cast<size_t>(total_rows));
-        size_t row_offset = 0;
-        for (const HostTensorView& tensor : views) {
-            quantize_bf16_rows_int4_into(
-                tensor.data, static_cast<size_t>(tensor.shape[0]),
-                static_cast<size_t>(tensor.shape[1]), quantized, scales,
-                row_offset);
-            row_offset += static_cast<size_t>(tensor.shape[0]);
-        }
-        weight.int4_storage.reset(quantized.size());
-        weight.scales_storage.reset(scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int4_storage.data(), quantized.data(),
-                            quantized.size() * sizeof(uint8_t),
-                            cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
-                            scales.size() * sizeof(float),
-                            cudaMemcpyHostToDevice));
-        weight.linear.kind = LinearStorageKind::Int4;
-        weight.linear.int4 = weight.int4_storage.data();
-        weight.linear.scales = weight.scales_storage.data();
-    } else {
-        weight.bf16_storage.reset(total_count);
-        size_t offset = 0;
-        for (const HostTensorView& tensor : views) {
-            LFM_CUDA(cudaMemcpy(weight.bf16_storage.data() + offset,
-                                tensor.data, tensor.bytes,
-                                cudaMemcpyHostToDevice));
-            offset += tensor.bytes / sizeof(__nv_bfloat16);
-        }
-        weight.linear.kind = LinearStorageKind::Bf16;
-        weight.linear.bf16 = weight.bf16_storage.data();
-    }
-    weight.linear.rows = static_cast<int>(total_rows);
-    weight.linear.cols = static_cast<int>(common_width);
-    weight.linear.validate_storage();
-
-    auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
-    if (!inserted) {
-        throw std::runtime_error("duplicate concatenated weight: " + synthetic_name);
-    }
-    return &it->second.linear;
-}
-
-LfmModel::Impl::LinearWeight LfmModel::Impl::slice_rows(
-    const LinearWeight& weight, int row_offset, int rows) const {
-    if (row_offset < 0 || rows <= 0 || row_offset + rows > weight.rows) {
-        throw std::out_of_range("linear weight row slice is out of range");
-    }
-    LinearWeight result = weight;
-    result.rows = rows;
-    if (weight.bf16) {
-        result.bf16 += static_cast<size_t>(row_offset) * weight.cols;
-    }
-    if (weight.int8) {
-        result.int8 += static_cast<size_t>(row_offset) * weight.cols;
-        result.scales += row_offset;
-    }
-    if (weight.int4) {
-        const size_t packed_cols =
-            (static_cast<size_t>(weight.cols) + 1) / 2;
-        result.int4 += static_cast<size_t>(row_offset) * packed_cols;
-        result.scales += row_offset;
-    }
-    return result;
-}
 
 void LfmModel::Impl::initialize_rope_tables() {
     const size_t table_elements =
-        static_cast<size_t>(max_context_) * LfmConfig::rope_pairs;
+        static_cast<size_t>(max_context_) * shape_.rope_pairs;
     std::vector<__nv_bfloat16> cos_table(table_elements);
     std::vector<__nv_bfloat16> sin_table(table_elements);
 
     for (int position = 0; position < max_context_; ++position) {
-        for (int pair = 0; pair < LfmConfig::rope_pairs; ++pair) {
+        for (int pair = 0; pair < shape_.rope_pairs; ++pair) {
             const float exponent =
                 -2.0f * static_cast<float>(pair) /
-                static_cast<float>(LfmConfig::head_dim);
-            const float frequency = std::pow(LfmConfig::rope_theta, exponent);
+                static_cast<float>(shape_.head_dim);
+            const float frequency = std::pow(shape_.rope_theta, exponent);
             const float angle = static_cast<float>(position) * frequency;
             const size_t index =
-                static_cast<size_t>(position) * LfmConfig::rope_pairs + pair;
+                static_cast<size_t>(position) * shape_.rope_pairs + pair;
             cos_table[index] = __float2bfloat16(std::cos(angle));
             sin_table[index] = __float2bfloat16(std::sin(angle));
         }
@@ -554,46 +344,46 @@ void LfmModel::Impl::warmup_decode_gemms() {
 
     if (options_.fused_projections) {
         linear(normed_.data(), *attention_layer->qkv, qkv_output_.data(),
-               1, LfmConfig::qkv_width, LfmConfig::hidden);
+               1, shape_.qkv_width, shape_.hidden);
         linear(normed_.data(), *first_common.w13, gate_up_.data(),
-               1, 2 * LfmConfig::intermediate, LfmConfig::hidden);
+               1, 2 * shape_.intermediate, shape_.hidden);
     } else {
         const LinearWeight q_weight =
-            slice_rows(*attention_layer->qkv, 0, LfmConfig::q_width);
+            slice_rows(*attention_layer->qkv, 0, shape_.q_width);
         const LinearWeight k_weight = slice_rows(
-            *attention_layer->qkv, LfmConfig::q_width, LfmConfig::kv_width);
+            *attention_layer->qkv, shape_.q_width, shape_.kv_width);
         const LinearWeight v_weight = slice_rows(
-            *attention_layer->qkv, LfmConfig::q_width + LfmConfig::kv_width,
-            LfmConfig::kv_width);
+            *attention_layer->qkv, shape_.q_width + shape_.kv_width,
+            shape_.kv_width);
         linear(normed_.data(), q_weight, qkv_output_.data(),
-               1, LfmConfig::q_width, LfmConfig::hidden);
-        linear(normed_.data(), k_weight, qkv_output_.data() + LfmConfig::q_width,
-               1, LfmConfig::kv_width, LfmConfig::hidden);
+               1, shape_.q_width, shape_.hidden);
+        linear(normed_.data(), k_weight, qkv_output_.data() + shape_.q_width,
+               1, shape_.kv_width, shape_.hidden);
         linear(normed_.data(), v_weight,
-               qkv_output_.data() + LfmConfig::q_width + LfmConfig::kv_width,
-               1, LfmConfig::kv_width, LfmConfig::hidden);
+               qkv_output_.data() + shape_.q_width + shape_.kv_width,
+               1, shape_.kv_width, shape_.hidden);
 
         const LinearWeight w1 =
-            slice_rows(*first_common.w13, 0, LfmConfig::intermediate);
+            slice_rows(*first_common.w13, 0, shape_.intermediate);
         const LinearWeight w3 = slice_rows(
-            *first_common.w13, LfmConfig::intermediate,
-            LfmConfig::intermediate);
+            *first_common.w13, shape_.intermediate,
+            shape_.intermediate);
         linear(normed_.data(), w1, gate_up_.data(),
-               1, LfmConfig::intermediate, LfmConfig::hidden);
-        linear(normed_.data(), w3, gate_up_.data() + LfmConfig::intermediate,
-               1, LfmConfig::intermediate, LfmConfig::hidden);
+               1, shape_.intermediate, shape_.hidden);
+        linear(normed_.data(), w3, gate_up_.data() + shape_.intermediate,
+               1, shape_.intermediate, shape_.hidden);
     }
 
     linear(op_output_.data(), *attention_layer->out, hidden_.data(),
-           1, LfmConfig::hidden, LfmConfig::hidden,
+           1, shape_.hidden, shape_.hidden,
            options_.fused_residuals ? 1.0f : 0.0f);
     linear(normed_.data(), *convolution_layer->conv_in, conv_projected_.data(),
-           1, 3 * LfmConfig::hidden, LfmConfig::hidden);
+           1, 3 * shape_.hidden, shape_.hidden);
     linear(activated_.data(), *first_common.w2, hidden_.data(),
-           1, LfmConfig::hidden, LfmConfig::intermediate,
+           1, shape_.hidden, shape_.intermediate,
            options_.fused_residuals ? 1.0f : 0.0f);
     linear(normed_.data(), *embedding_, logits_.data(),
-           1, LfmConfig::vocab, LfmConfig::hidden);
+           1, shape_.vocab_size, shape_.hidden);
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
@@ -601,9 +391,9 @@ void LfmModel::Impl::reset(bool allocate_local_kv) {
     allocate_local_kv = allocate_local_kv && options_.allocate_local_kv_cache;
     if (allocate_local_kv && !local_kv_cache_available_) {
         const size_t cache_elements =
-            static_cast<size_t>(max_context_) * LfmConfig::kv_width;
+            static_cast<size_t>(max_context_) * shape_.kv_width;
         const size_t scale_elements =
-            static_cast<size_t>(max_context_) * LfmConfig::kv_heads;
+            static_cast<size_t>(max_context_) * shape_.num_key_value_heads;
         for (Layer& layer : layers_) {
             AttentionLayer* attention = as_attention(layer);
             if (!attention) continue;
@@ -647,220 +437,21 @@ void LfmModel::Impl::reset(bool allocate_local_kv) {
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
-void LfmModel::Impl::linear_cublas(const __nv_bfloat16* x,
-                             const __nv_bfloat16* weight,
-                             __nv_bfloat16* y,
-                             int m,
-                             int n,
-                             int k,
-                             float beta) {
-    const float alpha = 1.0f;
-    LFM_CUBLAS(cublasGemmEx(
-        cublas_.get(), CUBLAS_OP_T, CUBLAS_OP_N,
-        n, m, k, &alpha,
-        weight, CUDA_R_16BF, k,
-        x, CUDA_R_16BF, k,
-        &beta,
-        y, CUDA_R_16BF, n,
-        CUBLAS_COMPUTE_32F,
-        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-}
-
-LfmModel::Impl::LtPlan& LfmModel::Impl::get_or_create_lt_plan(
-    const __nv_bfloat16* x,
-    const __nv_bfloat16* weight,
-    int m,
-    int n,
-    int k) {
-    const MatmulKey key{m, n, k};
-    if (auto it = lt_plans_.find(key); it != lt_plans_.end()) {
-        return *it->second;
-    }
-
-    auto plan = std::make_unique<LtPlan>();
-    LFM_CUBLAS(cublasLtMatmulDescCreate(
-        &plan->operation, CUBLAS_COMPUTE_32F, CUDA_R_32F));
-    const cublasOperation_t transa = CUBLAS_OP_T;
-    const cublasOperation_t transb = CUBLAS_OP_N;
-    LFM_CUBLAS(cublasLtMatmulDescSetAttribute(
-        plan->operation, CUBLASLT_MATMUL_DESC_TRANSA,
-        &transa, sizeof(transa)));
-    LFM_CUBLAS(cublasLtMatmulDescSetAttribute(
-        plan->operation, CUBLASLT_MATMUL_DESC_TRANSB,
-        &transb, sizeof(transb)));
-
-    // Buffers are row-major in the runtime. Interpreting them as column-major
-    // transposes the logical matrices: W[n,k] -> A[k,n], X[m,k] -> B[k,m],
-    // and Y[m,n] -> D[n,m]. TRANSA restores W to [n,k].
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
-        &plan->a, CUDA_R_16BF, k, n, k));
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
-        &plan->b, CUDA_R_16BF, k, m, k));
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
-        &plan->c, CUDA_R_16BF, n, m, n));
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
-        &plan->d, CUDA_R_16BF, n, m, n));
-
-    cublasLtMatmulPreference_t preference = nullptr;
-    LFM_CUBLAS(cublasLtMatmulPreferenceCreate(&preference));
-    try {
-        const uint64_t workspace_limit =
-            static_cast<uint64_t>(options_.lt_workspace_bytes);
-        LFM_CUBLAS(cublasLtMatmulPreferenceSetAttribute(
-            preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
-            &workspace_limit, sizeof(workspace_limit)));
-
-        std::vector<cublasLtMatmulHeuristicResult_t> results(
-            static_cast<size_t>(options_.lt_heuristics));
-        int returned = 0;
-        LFM_CUBLAS(cublasLtMatmulAlgoGetHeuristic(
-            cublas_lt_.get(), plan->operation,
-            plan->a, plan->b, plan->c, plan->d,
-            preference, options_.lt_heuristics,
-            results.data(), &returned));
-
-        std::vector<int> valid;
-        for (int i = 0; i < returned; ++i) {
-            if (results[static_cast<size_t>(i)].state == CUBLAS_STATUS_SUCCESS &&
-                results[static_cast<size_t>(i)].workspaceSize <=
-                    options_.lt_workspace_bytes) {
-                valid.push_back(i);
-            }
-        }
-
-        if (!valid.empty()) {
-            int selected = valid.front();
-            // Autotuning is intentionally restricted to decode shapes. Large
-            // prefill outputs would require an excessive temporary buffer.
-            if (options_.lt_autotune && m == 1 && valid.size() > 1) {
-                DeviceBuffer<__nv_bfloat16> scratch(static_cast<size_t>(n));
-                const float alpha = 1.0f;
-                const float beta = 0.0f;
-                float best_ms = std::numeric_limits<float>::infinity();
-                for (const int candidate : valid) {
-                    const auto& result = results[static_cast<size_t>(candidate)];
-                    LFM_CUBLAS(cublasLtMatmul(
-                        cublas_lt_.get(), plan->operation,
-                        &alpha, weight, plan->a, x, plan->b,
-                        &beta, scratch.data(), plan->c,
-                        scratch.data(), plan->d, &result.algo,
-                        lt_workspace_.data(), result.workspaceSize,
-                        stream_.get()));
-                    CudaEvent begin;
-                    CudaEvent end;
-                    begin.record(stream_.get());
-                    constexpr int iterations = 3;
-                    for (int iteration = 0; iteration < iterations; ++iteration) {
-                        LFM_CUBLAS(cublasLtMatmul(
-                            cublas_lt_.get(), plan->operation,
-                            &alpha, weight, plan->a, x, plan->b,
-                            &beta, scratch.data(), plan->c,
-                            scratch.data(), plan->d, &result.algo,
-                            lt_workspace_.data(), result.workspaceSize,
-                            stream_.get()));
-                    }
-                    end.record(stream_.get());
-                    end.synchronize();
-                    const float elapsed = CudaEvent::elapsed_ms(begin, end);
-                    if (elapsed < best_ms) {
-                        best_ms = elapsed;
-                        selected = candidate;
-                    }
-                }
-            }
-            const auto& chosen = results[static_cast<size_t>(selected)];
-            plan->algorithm = chosen.algo;
-            plan->workspace_size = chosen.workspaceSize;
-            plan->available = true;
-        }
-    } catch (...) {
-        cublasLtMatmulPreferenceDestroy(preference);
-        throw;
-    }
-    LFM_CUBLAS(cublasLtMatmulPreferenceDestroy(preference));
-
-    auto [it, inserted] = lt_plans_.emplace(key, std::move(plan));
-    if (!inserted) throw std::runtime_error("duplicate cuBLASLt plan");
-    return *it->second;
-}
-
-void LfmModel::Impl::linear_cublaslt(const __nv_bfloat16* x,
-                               const __nv_bfloat16* weight,
-                               __nv_bfloat16* y,
-                               int m,
-                               int n,
-                               int k,
-                               float beta) {
-    LtPlan& plan = get_or_create_lt_plan(x, weight, m, n, k);
-    if (!plan.available) {
-        linear_cublas(x, weight, y, m, n, k, beta);
-        return;
-    }
-    const float alpha = 1.0f;
-    LFM_CUBLAS(cublasLtMatmul(
-        cublas_lt_.get(), plan.operation,
-        &alpha, weight, plan.a, x, plan.b,
-        &beta, y, plan.c, y, plan.d,
-        &plan.algorithm, lt_workspace_.data(), plan.workspace_size,
-        stream_.get()));
-}
-
-void LfmModel::Impl::linear(const __nv_bfloat16* x,
-                      const LinearWeight& weight,
-                      __nv_bfloat16* y,
-                      int m,
-                      int n,
-                      int k,
-                      float beta) {
-    if (weight.rows != n || weight.cols != k) {
-        throw std::runtime_error("linear weight shape does not match the requested GEMM");
-    }
-    weight.validate_storage();
-    switch (plan_.linear_kernel()) {
-        case LinearKernelKind::W4A16:
-            if (!weight.int4_quantized()) {
-                throw std::runtime_error("execution plan requires INT4 weights");
-            }
-            launch_w4a16_linear(x, weight.int4, weight.scales, y,
-                                m, n, k, beta, stream_.get());
-            return;
-        case LinearKernelKind::W8A16:
-            if (!weight.int8_quantized()) {
-                throw std::runtime_error("execution plan requires INT8 weights");
-            }
-            launch_w8a16_linear(x, weight.int8, weight.scales, y,
-                                m, n, k, beta, stream_.get());
-            return;
-        case LinearKernelKind::Bf16CublasLt:
-            if (weight.kind != LinearStorageKind::Bf16) {
-                throw std::runtime_error("execution plan requires BF16 weights");
-            }
-            linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
-            return;
-        case LinearKernelKind::Bf16Cublas:
-            if (weight.kind != LinearStorageKind::Bf16) {
-                throw std::runtime_error("execution plan requires BF16 weights");
-            }
-            linear_cublas(x, weight.bf16, y, m, n, k, beta);
-            return;
-    }
-    throw std::runtime_error("unknown linear execution plan");
-}
 
 void LfmModel::Impl::allocate_prefill_workspace(int rows) {
     const size_t r = static_cast<size_t>(rows);
     prefill_tokens_.reset(r);
-    prefill_hidden_.reset(r * LfmConfig::hidden);
-    prefill_residual_.reset(r * LfmConfig::hidden);
-    prefill_normed_.reset(r * LfmConfig::hidden);
-    prefill_op_output_.reset(r * LfmConfig::hidden);
-    prefill_q_.reset(r * LfmConfig::q_width);
-    prefill_k_.reset(r * LfmConfig::kv_width);
-    prefill_v_.reset(r * LfmConfig::kv_width);
-    prefill_conv_projected_.reset(r * 3 * LfmConfig::hidden);
-    prefill_gate_up_.reset(r * 2 * LfmConfig::intermediate);
-    prefill_activated_.reset(r * LfmConfig::intermediate);
-    prefill_mlp_output_.reset(r * LfmConfig::hidden);
+    prefill_hidden_.reset(r * shape_.hidden);
+    prefill_residual_.reset(r * shape_.hidden);
+    prefill_normed_.reset(r * shape_.hidden);
+    prefill_op_output_.reset(r * shape_.hidden);
+    prefill_q_.reset(r * shape_.q_width);
+    prefill_k_.reset(r * shape_.kv_width);
+    prefill_v_.reset(r * shape_.kv_width);
+    prefill_conv_projected_.reset(r * 3 * shape_.hidden);
+    prefill_gate_up_.reset(r * 2 * shape_.intermediate);
+    prefill_activated_.reset(r * shape_.intermediate);
+    prefill_mlp_output_.reset(r * shape_.hidden);
 }
 
 void LfmModel::Impl::release_prefill_workspace() {
@@ -880,64 +471,64 @@ void LfmModel::Impl::release_prefill_workspace() {
 
 void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
     launch_rmsnorm(hidden_.data(), common_layer.ffn_norm, normed_.data(),
-                   1, LfmConfig::hidden, LfmConfig::norm_eps,
+                   1, shape_.hidden, shape_.norm_eps,
                    stream_.get());
     if (options_.fused_projections) {
         linear(normed_.data(), *common_layer.w13, gate_up_.data(),
-               1, 2 * LfmConfig::intermediate, LfmConfig::hidden);
+               1, 2 * shape_.intermediate, shape_.hidden);
     } else {
         const LinearWeight w1 =
-            slice_rows(*common_layer.w13, 0, LfmConfig::intermediate);
+            slice_rows(*common_layer.w13, 0, shape_.intermediate);
         const LinearWeight w3 = slice_rows(
-            *common_layer.w13, LfmConfig::intermediate, LfmConfig::intermediate);
+            *common_layer.w13, shape_.intermediate, shape_.intermediate);
         linear(normed_.data(), w1, gate_up_.data(),
-               1, LfmConfig::intermediate, LfmConfig::hidden);
-        linear(normed_.data(), w3, gate_up_.data() + LfmConfig::intermediate,
-               1, LfmConfig::intermediate, LfmConfig::hidden);
+               1, shape_.intermediate, shape_.hidden);
+        linear(normed_.data(), w3, gate_up_.data() + shape_.intermediate,
+               1, shape_.intermediate, shape_.hidden);
     }
     launch_swiglu_fused(gate_up_.data(), activated_.data(),
-                        LfmConfig::intermediate, stream_.get());
+                        shape_.intermediate, stream_.get());
     if (options_.fused_residuals) {
         linear(activated_.data(), *common_layer.w2, hidden_.data(),
-               1, LfmConfig::hidden, LfmConfig::intermediate, 1.0f);
+               1, shape_.hidden, shape_.intermediate, 1.0f);
     } else {
         linear(activated_.data(), *common_layer.w2, mlp_output_.data(),
-               1, LfmConfig::hidden, LfmConfig::intermediate);
+               1, shape_.hidden, shape_.intermediate);
         launch_residual_add(hidden_.data(), mlp_output_.data(),
-                            LfmConfig::hidden, stream_.get());
+                            shape_.hidden, stream_.get());
     }
 }
 
 void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) {
     const size_t matrix_elements =
-        static_cast<size_t>(rows) * LfmConfig::intermediate;
+        static_cast<size_t>(rows) * shape_.intermediate;
     launch_rmsnorm(prefill_hidden_.data(), common_layer.ffn_norm,
-                   prefill_normed_.data(), rows, LfmConfig::hidden,
-                   LfmConfig::norm_eps, stream_.get());
+                   prefill_normed_.data(), rows, shape_.hidden,
+                   shape_.norm_eps, stream_.get());
     if (options_.fused_projections) {
         linear(prefill_normed_.data(), *common_layer.w13, prefill_gate_up_.data(),
-               rows, 2 * LfmConfig::intermediate, LfmConfig::hidden);
+               rows, 2 * shape_.intermediate, shape_.hidden);
     } else {
         const LinearWeight w1 =
-            slice_rows(*common_layer.w13, 0, LfmConfig::intermediate);
+            slice_rows(*common_layer.w13, 0, shape_.intermediate);
         const LinearWeight w3 = slice_rows(
-            *common_layer.w13, LfmConfig::intermediate, LfmConfig::intermediate);
+            *common_layer.w13, shape_.intermediate, shape_.intermediate);
         linear(prefill_normed_.data(), w1, prefill_gate_up_.data(),
-               rows, LfmConfig::intermediate, LfmConfig::hidden);
+               rows, shape_.intermediate, shape_.hidden);
         linear(prefill_normed_.data(), w3,
                prefill_gate_up_.data() + matrix_elements,
-               rows, LfmConfig::intermediate, LfmConfig::hidden);
+               rows, shape_.intermediate, shape_.hidden);
     }
     launch_swiglu_fused(prefill_gate_up_.data(), prefill_activated_.data(),
                         static_cast<int>(matrix_elements), stream_.get());
     if (options_.fused_residuals) {
         linear(prefill_activated_.data(), *common_layer.w2, prefill_hidden_.data(),
-               rows, LfmConfig::hidden, LfmConfig::intermediate, 1.0f);
+               rows, shape_.hidden, shape_.intermediate, 1.0f);
     } else {
         linear(prefill_activated_.data(), *common_layer.w2, prefill_mlp_output_.data(),
-               rows, LfmConfig::hidden, LfmConfig::intermediate);
+               rows, shape_.hidden, shape_.intermediate);
         launch_residual_add(prefill_hidden_.data(), prefill_mlp_output_.data(),
-                            rows * LfmConfig::hidden, stream_.get());
+                            rows * shape_.hidden, stream_.get());
     }
 }
 
@@ -950,20 +541,10 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(prefill_tokens_.data(), rows, seen_tokens_.data(),
-                           LfmConfig::vocab, stream_.get());
-    if (embedding_->int4_quantized()) {
-        launch_embedding_int4_batch(
-            prefill_tokens_.data(), rows, embedding_->int4, embedding_->scales,
-            prefill_hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else if (embedding_->int8) {
-        launch_embedding_int8_batch(
-            prefill_tokens_.data(), rows, embedding_->int8, embedding_->scales,
-            prefill_hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else {
-        launch_embedding_batch(prefill_tokens_.data(), rows, embedding_->bf16,
-                               prefill_hidden_.data(), LfmConfig::hidden,
-                               stream_.get());
-    }
+                           shape_.vocab_size, stream_.get());
+    weight_layout_->embed_batch(
+        prefill_tokens_.data(), rows, prefill_hidden_.data(),
+        shape_.hidden, stream_.get());
 
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
@@ -974,39 +555,39 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                 stream_.get()));
         }
         launch_rmsnorm(prefill_hidden_.data(), common_layer.operator_norm,
-                       prefill_normed_.data(), rows, LfmConfig::hidden,
-                       LfmConfig::norm_eps, stream_.get());
+                       prefill_normed_.data(), rows, shape_.hidden,
+                       shape_.norm_eps, stream_.get());
 
         if (AttentionLayer* attention = as_attention(layer)) {
             const LinearWeight q_weight =
-                slice_rows(*attention->qkv, 0, LfmConfig::q_width);
+                slice_rows(*attention->qkv, 0, shape_.q_width);
             const LinearWeight k_weight = slice_rows(
-                *attention->qkv, LfmConfig::q_width, LfmConfig::kv_width);
+                *attention->qkv, shape_.q_width, shape_.kv_width);
             const LinearWeight v_weight = slice_rows(
-                *attention->qkv, LfmConfig::q_width + LfmConfig::kv_width,
-                LfmConfig::kv_width);
+                *attention->qkv, shape_.q_width + shape_.kv_width,
+                shape_.kv_width);
             linear(prefill_normed_.data(), q_weight, prefill_q_.data(),
-                   rows, LfmConfig::q_width, LfmConfig::hidden);
+                   rows, shape_.q_width, shape_.hidden);
             linear(prefill_normed_.data(), k_weight, prefill_k_.data(),
-                   rows, LfmConfig::kv_width, LfmConfig::hidden);
+                   rows, shape_.kv_width, shape_.hidden);
             linear(prefill_normed_.data(), v_weight, prefill_v_.data(),
-                   rows, LfmConfig::kv_width, LfmConfig::hidden);
+                   rows, shape_.kv_width, shape_.hidden);
 
             if (options_.fast_attention) {
                 launch_qk_norm_rope_prefill_fast(
                     prefill_q_.data(), prefill_k_.data(),
                     attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(), rows,
-                    LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, LfmConfig::norm_eps,
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, shape_.norm_eps,
                     stream_.get());
             } else {
                 launch_qk_norm_rope_prefill_strict(
                     prefill_q_.data(), prefill_k_.data(),
                     attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(), rows,
-                    LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, LfmConfig::norm_eps,
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, shape_.norm_eps,
                     stream_.get());
             }
             if (options_.kv_cache_mode == KvCacheMode::Int8) {
@@ -1014,7 +595,7 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                     prefill_k_.data(), prefill_v_.data(),
                     attention->key_cache_int8.data(), attention->value_cache_int8.data(),
                     attention->key_cache_scales.data(), attention->value_cache_scales.data(),
-                    rows, LfmConfig::kv_heads, LfmConfig::head_dim,
+                    rows, shape_.num_key_value_heads, shape_.head_dim,
                     stream_.get());
                 if (options_.fast_attention) {
                     launch_gqa_prefill_online_int8(
@@ -1022,68 +603,68 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(),
-                        prefill_op_output_.data(), rows, LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                        prefill_op_output_.data(), rows, shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 } else {
                     launch_gqa_prefill_strict_int8(
                         prefill_q_.data(), attention->key_cache_int8.data(),
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(),
-                        prefill_op_output_.data(), rows, LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                        prefill_op_output_.data(), rows, shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 }
             } else {
                 launch_store_kv_prefill(
                     prefill_k_.data(), prefill_v_.data(),
                     attention->key_cache.data(), attention->value_cache.data(),
-                    rows, LfmConfig::kv_width, stream_.get());
+                    rows, shape_.kv_width, stream_.get());
                 if (options_.fast_attention) {
                     launch_gqa_prefill_online(
                         prefill_q_.data(), attention->key_cache.data(),
                         attention->value_cache.data(), prefill_op_output_.data(),
-                        rows, LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, stream_.get());
+                        rows, shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, stream_.get());
                 } else {
                     launch_gqa_prefill_strict(
                         prefill_q_.data(), attention->key_cache.data(),
                         attention->value_cache.data(), prefill_op_output_.data(),
-                        rows, LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, stream_.get());
+                        rows, shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, stream_.get());
                 }
             }
             linear(prefill_op_output_.data(), *attention->out,
-                   prefill_hidden_.data(), rows, LfmConfig::hidden,
-                   LfmConfig::hidden, options_.fused_residuals ? 1.0f : 0.0f);
+                   prefill_hidden_.data(), rows, shape_.hidden,
+                   shape_.hidden, options_.fused_residuals ? 1.0f : 0.0f);
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
             linear(prefill_normed_.data(), *convolution.conv_in,
                    prefill_conv_projected_.data(), rows,
-                   3 * LfmConfig::hidden, LfmConfig::hidden);
+                   3 * shape_.hidden, shape_.hidden);
             launch_conv_prefill(
                 prefill_conv_projected_.data(), convolution.conv_weight,
                 convolution.conv_state.data(), prefill_op_output_.data(),
-                rows, LfmConfig::hidden, LfmConfig::conv_cache,
+                rows, shape_.hidden, shape_.conv_cache,
                 stream_.get());
             linear(prefill_op_output_.data(), *convolution.conv_out,
-                   prefill_hidden_.data(), rows, LfmConfig::hidden,
-                   LfmConfig::hidden, options_.fused_residuals ? 1.0f : 0.0f);
+                   prefill_hidden_.data(), rows, shape_.hidden,
+                   shape_.hidden, options_.fused_residuals ? 1.0f : 0.0f);
         }
 
         if (!options_.fused_residuals) {
             launch_residual_add(prefill_hidden_.data(), prefill_residual_.data(),
-                                rows * LfmConfig::hidden, stream_.get());
+                                rows * shape_.hidden, stream_.get());
         }
         run_mlp_prefill(common_layer, rows);
     }
 
     const __nv_bfloat16* last_hidden = prefill_hidden_.data() +
-        static_cast<size_t>(rows - 1) * LfmConfig::hidden;
+        static_cast<size_t>(rows - 1) * shape_.hidden;
     launch_rmsnorm(last_hidden, final_norm_, normed_.data(),
-                   1, LfmConfig::hidden, LfmConfig::norm_eps,
+                   1, shape_.hidden, shape_.norm_eps,
                    stream_.get());
     linear(normed_.data(), *embedding_, logits_.data(),
-           1, LfmConfig::vocab, LfmConfig::hidden);
+           1, shape_.vocab_size, shape_.hidden);
 
     position_ = rows;
     LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
@@ -1098,16 +679,8 @@ void LfmModel::Impl::forward_token_host(int32_t token, bool compute_logits) {
     if (position_ >= max_context_) {
         throw std::runtime_error("context limit reached");
     }
-    if (embedding_->int4_quantized()) {
-        launch_embedding_int4(token, embedding_->int4, embedding_->scales,
-                              hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else if (embedding_->int8) {
-        launch_embedding_int8(token, embedding_->int8, embedding_->scales,
-                              hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else {
-        launch_embedding(token, embedding_->bf16, hidden_.data(),
-                         LfmConfig::hidden, stream_.get());
-    }
+    weight_layout_->embed_token(
+        token, hidden_.data(), shape_.hidden, stream_.get());
 
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
@@ -1117,44 +690,44 @@ void LfmModel::Impl::forward_token_host(int32_t token, bool compute_logits) {
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
         launch_rmsnorm(hidden_.data(), common_layer.operator_norm, normed_.data(),
-                       1, LfmConfig::hidden, LfmConfig::norm_eps,
+                       1, shape_.hidden, shape_.norm_eps,
                        stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
             __nv_bfloat16* q = qkv_output_.data();
-            __nv_bfloat16* k = q + LfmConfig::q_width;
-            __nv_bfloat16* v = k + LfmConfig::kv_width;
+            __nv_bfloat16* k = q + shape_.q_width;
+            __nv_bfloat16* v = k + shape_.kv_width;
             if (options_.fused_projections) {
                 linear(normed_.data(), *attention->qkv, qkv_output_.data(),
-                       1, LfmConfig::qkv_width, LfmConfig::hidden);
+                       1, shape_.qkv_width, shape_.hidden);
             } else {
                 const LinearWeight q_weight =
-                    slice_rows(*attention->qkv, 0, LfmConfig::q_width);
+                    slice_rows(*attention->qkv, 0, shape_.q_width);
                 const LinearWeight k_weight = slice_rows(
-                    *attention->qkv, LfmConfig::q_width, LfmConfig::kv_width);
+                    *attention->qkv, shape_.q_width, shape_.kv_width);
                 const LinearWeight v_weight = slice_rows(
-                    *attention->qkv, LfmConfig::q_width + LfmConfig::kv_width,
-                    LfmConfig::kv_width);
+                    *attention->qkv, shape_.q_width + shape_.kv_width,
+                    shape_.kv_width);
                 linear(normed_.data(), q_weight, q,
-                       1, LfmConfig::q_width, LfmConfig::hidden);
+                       1, shape_.q_width, shape_.hidden);
                 linear(normed_.data(), k_weight, k,
-                       1, LfmConfig::kv_width, LfmConfig::hidden);
+                       1, shape_.kv_width, shape_.hidden);
                 linear(normed_.data(), v_weight, v,
-                       1, LfmConfig::kv_width, LfmConfig::hidden);
+                       1, shape_.kv_width, shape_.hidden);
             }
             if (options_.fast_attention) {
                 launch_qk_norm_rope_fast(
                     q, k, attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(),
-                    LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, position_,
-                    LfmConfig::norm_eps, stream_.get());
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_,
+                    shape_.norm_eps, stream_.get());
             } else {
                 launch_qk_norm_rope_strict(
                     q, k, attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(),
-                    LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, position_,
-                    LfmConfig::norm_eps, stream_.get());
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_,
+                    shape_.norm_eps, stream_.get());
             }
             if (options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8(
@@ -1162,70 +735,70 @@ void LfmModel::Impl::forward_token_host(int32_t token, bool compute_logits) {
                     attention->value_cache_int8.data(),
                     attention->key_cache_scales.data(),
                     attention->value_cache_scales.data(), position_,
-                    LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                    shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 if (options_.fast_attention) {
                     launch_gqa_decode_online_int8(
                         q, attention->key_cache_int8.data(),
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(), op_output_.data(),
-                        position_ + 1, LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                        position_ + 1, shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 } else {
                     launch_gqa_decode_strict_int8(
                         q, attention->key_cache_int8.data(),
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(), op_output_.data(),
-                        position_ + 1, LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                        position_ + 1, shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 }
             } else {
                 launch_store_kv(k, v, attention->key_cache.data(),
                                 attention->value_cache.data(), position_,
-                                LfmConfig::kv_width, stream_.get());
+                                shape_.kv_width, stream_.get());
                 if (options_.fast_attention) {
                     launch_gqa_decode_online(
                         q, attention->key_cache.data(), attention->value_cache.data(),
                         op_output_.data(), position_ + 1,
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, stream_.get());
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, stream_.get());
                 } else {
                     launch_gqa_decode_strict(
                         q, attention->key_cache.data(), attention->value_cache.data(),
                         op_output_.data(), position_ + 1,
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, stream_.get());
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, stream_.get());
                 }
             }
             linear(op_output_.data(), *attention->out, hidden_.data(),
-                   1, LfmConfig::hidden, LfmConfig::hidden,
+                   1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
             linear(normed_.data(), *convolution.conv_in, conv_projected_.data(),
-                   1, 3 * LfmConfig::hidden, LfmConfig::hidden);
+                   1, 3 * shape_.hidden, shape_.hidden);
             launch_conv_decode(
                 conv_projected_.data(), convolution.conv_weight,
                 convolution.conv_state.data(), op_output_.data(),
-                LfmConfig::hidden, LfmConfig::conv_cache, position_,
+                shape_.hidden, shape_.conv_cache, position_,
                 stream_.get());
             linear(op_output_.data(), *convolution.conv_out, hidden_.data(),
-                   1, LfmConfig::hidden, LfmConfig::hidden,
+                   1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
         }
         if (!options_.fused_residuals) {
             launch_residual_add(hidden_.data(), residual_.data(),
-                                LfmConfig::hidden, stream_.get());
+                                shape_.hidden, stream_.get());
         }
         run_mlp_decode(common_layer);
     }
     if (compute_logits) {
         launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(),
-                       1, LfmConfig::hidden, LfmConfig::norm_eps,
+                       1, shape_.hidden, shape_.norm_eps,
                        stream_.get());
         linear(normed_.data(), *embedding_, logits_.data(),
-               1, LfmConfig::vocab, LfmConfig::hidden);
+               1, shape_.vocab_size, shape_.hidden);
     }
     ++position_;
 }
@@ -1240,18 +813,10 @@ void LfmModel::Impl::forward_token_paged_host(
     if (paged_kv.mode() != options_.kv_cache_mode) {
         throw std::invalid_argument("model and physical paged KV modes differ");
     }
-    if (embedding_->int4_quantized()) {
-        launch_embedding_int4(token, embedding_->int4, embedding_->scales,
-                              hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else if (embedding_->int8) {
-        launch_embedding_int8(token, embedding_->int8, embedding_->scales,
-                              hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else {
-        launch_embedding(token, embedding_->bf16, hidden_.data(),
-                         LfmConfig::hidden, stream_.get());
-    }
+    weight_layout_->embed_token(
+        token, hidden_.data(), shape_.hidden, stream_.get());
 
-    for (int layer_index = 0; layer_index < LfmConfig::layers; ++layer_index) {
+    for (int layer_index = 0; layer_index < shape_.num_hidden_layers; ++layer_index) {
         Layer& layer = layers_[static_cast<size_t>(layer_index)];
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
@@ -1259,43 +824,43 @@ void LfmModel::Impl::forward_token_paged_host(
                                      cudaMemcpyDeviceToDevice, stream_.get()));
         }
         launch_rmsnorm(hidden_.data(), common_layer.operator_norm, normed_.data(),
-                       1, LfmConfig::hidden, LfmConfig::norm_eps, stream_.get());
+                       1, shape_.hidden, shape_.norm_eps, stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
             __nv_bfloat16* q = qkv_output_.data();
-            __nv_bfloat16* k = q + LfmConfig::q_width;
-            __nv_bfloat16* v = k + LfmConfig::kv_width;
+            __nv_bfloat16* k = q + shape_.q_width;
+            __nv_bfloat16* v = k + shape_.kv_width;
             if (options_.fused_projections) {
                 linear(normed_.data(), *attention->qkv, qkv_output_.data(), 1,
-                       LfmConfig::qkv_width, LfmConfig::hidden);
+                       shape_.qkv_width, shape_.hidden);
             } else {
                 const LinearWeight q_weight =
-                    slice_rows(*attention->qkv, 0, LfmConfig::q_width);
+                    slice_rows(*attention->qkv, 0, shape_.q_width);
                 const LinearWeight k_weight = slice_rows(
-                    *attention->qkv, LfmConfig::q_width, LfmConfig::kv_width);
+                    *attention->qkv, shape_.q_width, shape_.kv_width);
                 const LinearWeight v_weight = slice_rows(
-                    *attention->qkv, LfmConfig::q_width + LfmConfig::kv_width,
-                    LfmConfig::kv_width);
-                linear(normed_.data(), q_weight, q, 1, LfmConfig::q_width,
-                       LfmConfig::hidden);
-                linear(normed_.data(), k_weight, k, 1, LfmConfig::kv_width,
-                       LfmConfig::hidden);
-                linear(normed_.data(), v_weight, v, 1, LfmConfig::kv_width,
-                       LfmConfig::hidden);
+                    *attention->qkv, shape_.q_width + shape_.kv_width,
+                    shape_.kv_width);
+                linear(normed_.data(), q_weight, q, 1, shape_.q_width,
+                       shape_.hidden);
+                linear(normed_.data(), k_weight, k, 1, shape_.kv_width,
+                       shape_.hidden);
+                linear(normed_.data(), v_weight, v, 1, shape_.kv_width,
+                       shape_.hidden);
             }
             if (options_.fast_attention) {
                 launch_qk_norm_rope_fast(
                     q, k, attention->q_norm, attention->k_norm, rope_cos_.data(),
-                    rope_sin_.data(), LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, position_, LfmConfig::norm_eps,
+                    rope_sin_.data(), shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_, shape_.norm_eps,
                     stream_.get());
             } else {
                 launch_qk_norm_rope_strict(
                     q, k, attention->q_norm, attention->k_norm, rope_cos_.data(),
-                    rope_sin_.data(), LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, position_, LfmConfig::norm_eps,
+                    rope_sin_.data(), shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_, shape_.norm_eps,
                     stream_.get());
             }
-            const int slot = PhysicalPagedKvCache::attention_slot(layer_index);
+            const int slot = paged_kv.attention_slot(layer_index);
             if (slot < 0) throw std::logic_error("attention layer has no page slot");
             if (options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8_paged_batch(
@@ -1303,8 +868,8 @@ void LfmModel::Impl::forward_token_paged_host(
                     paged_kv.key_scales(), paged_kv.value_scales(),
                     device_page_table, page_table_stride, position_device_.data(),
                     1, slot, paged_kv.page_tokens(),
-                    PhysicalPagedKvCache::attention_layers, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, stream_.get());
+                    paged_kv.attention_layers(), shape_.num_key_value_heads,
+                    shape_.head_dim, stream_.get());
                 if (use_segmented_attention(position_)) {
                     const int chunks = (position_ + 1 +
                         options_.attention_chunk_tokens - 1) /
@@ -1315,9 +880,9 @@ void LfmModel::Impl::forward_token_paged_host(
                         device_page_table, page_table_stride, op_output_.data(),
                         position_device_.data(), 1, slot,
                         paged_kv.page_tokens(),
-                        PhysicalPagedKvCache::attention_layers,
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, options_.attention_chunk_tokens,
+                        paged_kv.attention_layers(),
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, options_.attention_chunk_tokens,
                         chunks, attention_partial_max_.data(),
                         attention_partial_denom_.data(),
                         attention_partial_accum_.data(), stream_.get());
@@ -1328,9 +893,9 @@ void LfmModel::Impl::forward_token_paged_host(
                         device_page_table, page_table_stride, op_output_.data(),
                         position_device_.data(), 1, slot,
                         paged_kv.page_tokens(),
-                        PhysicalPagedKvCache::attention_layers,
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, options_.fast_attention,
+                        paged_kv.attention_layers(),
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, options_.fast_attention,
                         stream_.get());
                 }
             } else {
@@ -1338,8 +903,8 @@ void LfmModel::Impl::forward_token_paged_host(
                     k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
                     device_page_table, page_table_stride, position_device_.data(),
                     1, slot, paged_kv.page_tokens(),
-                    PhysicalPagedKvCache::attention_layers, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, stream_.get());
+                    paged_kv.attention_layers(), shape_.num_key_value_heads,
+                    shape_.head_dim, stream_.get());
                 if (use_segmented_attention(position_)) {
                     const int chunks = (position_ + 1 +
                         options_.attention_chunk_tokens - 1) /
@@ -1349,9 +914,9 @@ void LfmModel::Impl::forward_token_paged_host(
                         device_page_table, page_table_stride,
                         op_output_.data(), position_device_.data(), 1, slot,
                         paged_kv.page_tokens(),
-                        PhysicalPagedKvCache::attention_layers,
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, options_.attention_chunk_tokens,
+                        paged_kv.attention_layers(),
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, options_.attention_chunk_tokens,
                         chunks, attention_partial_max_.data(),
                         attention_partial_denom_.data(),
                         attention_partial_accum_.data(), stream_.get());
@@ -1361,38 +926,38 @@ void LfmModel::Impl::forward_token_paged_host(
                         device_page_table, page_table_stride,
                         op_output_.data(), position_device_.data(), 1, slot,
                         paged_kv.page_tokens(),
-                        PhysicalPagedKvCache::attention_layers,
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, options_.fast_attention,
+                        paged_kv.attention_layers(),
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, options_.fast_attention,
                         stream_.get());
                 }
             }
             linear(op_output_.data(), *attention->out, hidden_.data(), 1,
-                   LfmConfig::hidden, LfmConfig::hidden,
+                   shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
             linear(normed_.data(), *convolution.conv_in, conv_projected_.data(), 1,
-                   3 * LfmConfig::hidden, LfmConfig::hidden);
+                   3 * shape_.hidden, shape_.hidden);
             launch_conv_decode(conv_projected_.data(), convolution.conv_weight,
                                convolution.conv_state.data(), op_output_.data(),
-                               LfmConfig::hidden, LfmConfig::conv_cache,
+                               shape_.hidden, shape_.conv_cache,
                                position_, stream_.get());
             linear(op_output_.data(), *convolution.conv_out, hidden_.data(), 1,
-                   LfmConfig::hidden, LfmConfig::hidden,
+                   shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
         }
         if (!options_.fused_residuals) {
             launch_residual_add(hidden_.data(), residual_.data(),
-                                LfmConfig::hidden, stream_.get());
+                                shape_.hidden, stream_.get());
         }
         run_mlp_decode(common_layer);
     }
     if (compute_logits) {
         launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(), 1,
-                       LfmConfig::hidden, LfmConfig::norm_eps, stream_.get());
+                       shape_.hidden, shape_.norm_eps, stream_.get());
         linear(normed_.data(), *embedding_, logits_.data(), 1,
-               LfmConfig::vocab, LfmConfig::hidden);
+               shape_.vocab_size, shape_.hidden);
     }
     ++position_;
     LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
@@ -1443,7 +1008,7 @@ void LfmModel::Impl::prefill_chunk_paged(
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(paged_prefill_tokens_.data(),
                            static_cast<int>(tokens.size()), seen_tokens_.data(),
-                           LfmConfig::vocab, stream_.get());
+                           shape_.vocab_size, stream_.get());
     phase_ = SessionPhase::Prefilling;
     const auto started = std::chrono::steady_clock::now();
     for (size_t i = 0; i < tokens.size(); ++i) {
@@ -1469,7 +1034,7 @@ void LfmModel::Impl::prefill_legacy(const std::vector<int32_t>& tokens) {
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(input.data(), static_cast<int>(tokens.size()),
-                           seen_tokens_.data(), LfmConfig::vocab,
+                           seen_tokens_.data(), shape_.vocab_size,
                            stream_.get());
     for (size_t i = 0; i < tokens.size(); ++i) {
         forward_token_host(tokens[i], i + 1 == tokens.size());
@@ -1527,7 +1092,7 @@ void LfmModel::Impl::prefill_chunk(const std::vector<int32_t>& tokens,
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(input.data(), static_cast<int>(tokens.size()),
-                           seen_tokens_.data(), LfmConfig::vocab,
+                           seen_tokens_.data(), shape_.vocab_size,
                            stream_.get());
     const auto started = std::chrono::steady_clock::now();
     for (size_t i = 0; i < tokens.size(); ++i) {
@@ -1565,7 +1130,7 @@ void LfmModel::Impl::enqueue_sampling() {
     if (plan_.sampling_kernel() == SamplingKernelKind::Fused) {
         launch_fused_sample_topk(
             logits_.data(), seen_tokens_.data(), sampling_scores_.data(),
-            topk_values_.data(), topk_indices_.data(), LfmConfig::vocab,
+            topk_values_.data(), topk_indices_.data(), shape_.vocab_size,
             effective_temperature, generation_.repetition_penalty,
             effective_top_k,
             generation_.greedy() ? 1.0f : generation_.top_p,
@@ -1573,11 +1138,11 @@ void LfmModel::Impl::enqueue_sampling() {
     } else {
         launch_prepare_sampling_scores(
             logits_.data(), seen_tokens_.data(), sampling_scores_.data(),
-            LfmConfig::vocab, effective_temperature,
+            shape_.vocab_size, effective_temperature,
             generation_.repetition_penalty, stream_.get());
         for (int rank = 0; rank < effective_top_k; ++rank) {
             launch_select_topk(sampling_scores_.data(), topk_values_.data(),
-                               topk_indices_.data(), rank, LfmConfig::vocab,
+                               topk_indices_.data(), rank, shape_.vocab_size,
                                stream_.get());
         }
         launch_sample_topk(topk_values_.data(), topk_indices_.data(),
@@ -1586,24 +1151,14 @@ void LfmModel::Impl::enqueue_sampling() {
                            rng_state_.data(), sampled_device_.data(),
                            stream_.get());
         launch_mark_seen(sampled_device_.data(), seen_tokens_.data(),
-                         LfmConfig::vocab, stream_.get());
+                         shape_.vocab_size, stream_.get());
     }
 }
 
 void LfmModel::Impl::enqueue_decode_forward() {
-    if (embedding_->int4_quantized()) {
-        launch_embedding_int4_device(
-            sampled_device_.data(), embedding_->int4, embedding_->scales,
-            hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else if (embedding_->int8) {
-        launch_embedding_int8_device(
-            sampled_device_.data(), embedding_->int8, embedding_->scales,
-            hidden_.data(), LfmConfig::hidden, stream_.get());
-    } else {
-        launch_embedding_device(sampled_device_.data(), embedding_->bf16,
-                                hidden_.data(), LfmConfig::hidden,
-                                stream_.get());
-    }
+    weight_layout_->embed_token_device(
+        sampled_device_.data(), hidden_.data(), shape_.hidden,
+        stream_.get());
 
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
@@ -1613,44 +1168,44 @@ void LfmModel::Impl::enqueue_decode_forward() {
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
         launch_rmsnorm(hidden_.data(), common_layer.operator_norm, normed_.data(),
-                       1, LfmConfig::hidden, LfmConfig::norm_eps,
+                       1, shape_.hidden, shape_.norm_eps,
                        stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
             __nv_bfloat16* q = qkv_output_.data();
-            __nv_bfloat16* k = q + LfmConfig::q_width;
-            __nv_bfloat16* v = k + LfmConfig::kv_width;
+            __nv_bfloat16* k = q + shape_.q_width;
+            __nv_bfloat16* v = k + shape_.kv_width;
             if (options_.fused_projections) {
                 linear(normed_.data(), *attention->qkv, qkv_output_.data(),
-                       1, LfmConfig::qkv_width, LfmConfig::hidden);
+                       1, shape_.qkv_width, shape_.hidden);
             } else {
                 const LinearWeight q_weight =
-                    slice_rows(*attention->qkv, 0, LfmConfig::q_width);
+                    slice_rows(*attention->qkv, 0, shape_.q_width);
                 const LinearWeight k_weight = slice_rows(
-                    *attention->qkv, LfmConfig::q_width, LfmConfig::kv_width);
+                    *attention->qkv, shape_.q_width, shape_.kv_width);
                 const LinearWeight v_weight = slice_rows(
-                    *attention->qkv, LfmConfig::q_width + LfmConfig::kv_width,
-                    LfmConfig::kv_width);
+                    *attention->qkv, shape_.q_width + shape_.kv_width,
+                    shape_.kv_width);
                 linear(normed_.data(), q_weight, q,
-                       1, LfmConfig::q_width, LfmConfig::hidden);
+                       1, shape_.q_width, shape_.hidden);
                 linear(normed_.data(), k_weight, k,
-                       1, LfmConfig::kv_width, LfmConfig::hidden);
+                       1, shape_.kv_width, shape_.hidden);
                 linear(normed_.data(), v_weight, v,
-                       1, LfmConfig::kv_width, LfmConfig::hidden);
+                       1, shape_.kv_width, shape_.hidden);
             }
             if (options_.fast_attention) {
                 launch_qk_norm_rope_fast_device(
                     q, k, attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(),
-                    LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, position_device_.data(),
-                    LfmConfig::norm_eps, stream_.get());
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_device_.data(),
+                    shape_.norm_eps, stream_.get());
             } else {
                 launch_qk_norm_rope_strict_device(
                     q, k, attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(),
-                    LfmConfig::q_heads, LfmConfig::kv_heads,
-                    LfmConfig::head_dim, position_device_.data(),
-                    LfmConfig::norm_eps, stream_.get());
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_device_.data(),
+                    shape_.norm_eps, stream_.get());
             }
             if (options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8_device(
@@ -1658,15 +1213,15 @@ void LfmModel::Impl::enqueue_decode_forward() {
                     attention->value_cache_int8.data(),
                     attention->key_cache_scales.data(),
                     attention->value_cache_scales.data(), position_device_.data(),
-                    LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                    shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 if (active_segmented_attention_) {
                     launch_gqa_decode_segmented_int8_device(
                         q, attention->key_cache_int8.data(),
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(), op_output_.data(),
-                        position_device_.data(), LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim,
+                        position_device_.data(), shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim,
                         options_.attention_chunk_tokens, attention_chunks_,
                         attention_partial_max_.data(),
                         attention_partial_denom_.data(),
@@ -1677,27 +1232,27 @@ void LfmModel::Impl::enqueue_decode_forward() {
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(), op_output_.data(),
-                        position_device_.data(), LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                        position_device_.data(), shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 } else {
                     launch_gqa_decode_strict_int8_device(
                         q, attention->key_cache_int8.data(),
                         attention->value_cache_int8.data(),
                         attention->key_cache_scales.data(),
                         attention->value_cache_scales.data(), op_output_.data(),
-                        position_device_.data(), LfmConfig::q_heads,
-                        LfmConfig::kv_heads, LfmConfig::head_dim, stream_.get());
+                        position_device_.data(), shape_.num_attention_heads,
+                        shape_.num_key_value_heads, shape_.head_dim, stream_.get());
                 }
             } else {
                 launch_store_kv_device(
                     k, v, attention->key_cache.data(), attention->value_cache.data(),
-                    position_device_.data(), LfmConfig::kv_width, stream_.get());
+                    position_device_.data(), shape_.kv_width, stream_.get());
                 if (active_segmented_attention_) {
                     launch_gqa_decode_segmented_device(
                         q, attention->key_cache.data(), attention->value_cache.data(),
                         op_output_.data(), position_device_.data(),
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, options_.attention_chunk_tokens,
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, options_.attention_chunk_tokens,
                         attention_chunks_, attention_partial_max_.data(),
                         attention_partial_denom_.data(),
                         attention_partial_accum_.data(), stream_.get());
@@ -1705,43 +1260,43 @@ void LfmModel::Impl::enqueue_decode_forward() {
                     launch_gqa_decode_online_device(
                         q, attention->key_cache.data(), attention->value_cache.data(),
                         op_output_.data(), position_device_.data(),
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, stream_.get());
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, stream_.get());
                 } else {
                     launch_gqa_decode_strict_device(
                         q, attention->key_cache.data(), attention->value_cache.data(),
                         op_output_.data(), position_device_.data(),
-                        LfmConfig::q_heads, LfmConfig::kv_heads,
-                        LfmConfig::head_dim, stream_.get());
+                        shape_.num_attention_heads, shape_.num_key_value_heads,
+                        shape_.head_dim, stream_.get());
                 }
             }
             linear(op_output_.data(), *attention->out, hidden_.data(),
-                   1, LfmConfig::hidden, LfmConfig::hidden,
+                   1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
             linear(normed_.data(), *convolution.conv_in, conv_projected_.data(),
-                   1, 3 * LfmConfig::hidden, LfmConfig::hidden);
+                   1, 3 * shape_.hidden, shape_.hidden);
             launch_conv_decode_device(
                 conv_projected_.data(), convolution.conv_weight,
                 convolution.conv_state.data(), op_output_.data(),
-                LfmConfig::hidden, LfmConfig::conv_cache,
+                shape_.hidden, shape_.conv_cache,
                 position_device_.data(), stream_.get());
             linear(op_output_.data(), *convolution.conv_out, hidden_.data(),
-                   1, LfmConfig::hidden, LfmConfig::hidden,
+                   1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
         }
         if (!options_.fused_residuals) {
             launch_residual_add(hidden_.data(), residual_.data(),
-                                LfmConfig::hidden, stream_.get());
+                                shape_.hidden, stream_.get());
         }
         run_mlp_decode(common_layer);
     }
     launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(),
-                   1, LfmConfig::hidden, LfmConfig::norm_eps,
+                   1, shape_.hidden, shape_.norm_eps,
                    stream_.get());
     linear(normed_.data(), *embedding_, logits_.data(),
-           1, LfmConfig::vocab, LfmConfig::hidden);
+           1, shape_.vocab_size, shape_.hidden);
 }
 
 void LfmModel::Impl::enqueue_decode_step() {
@@ -1904,10 +1459,46 @@ ModelMemoryStats LfmModel::Impl::memory_stats() const {
         position_device_.bytes() + sampled_device_.bytes() +
         seen_tokens_.bytes() + sampling_scores_.bytes() +
         topk_values_.bytes() + topk_indices_.bytes() + rng_state_.bytes();
-    stats.matmul_workspace = lt_workspace_.bytes();
+    stats.matmul_workspace = gemm_ ? gemm_->workspace_bytes() : 0;
     stats.attention_workspace = attention_partial_max_.bytes() +
         attention_partial_denom_.bytes() + attention_partial_accum_.bytes();
     return stats;
+}
+
+// Build the SessionState snapshot that SessionStore consumes. Centralizes
+// the per-call wiring (shape, variant, kv mode, per-layer buffer pointers)
+// so save/load/export/restore stay one-liners in the host.
+SessionStore::SessionState LfmModel::Impl::make_session_state() {
+    SessionStore::SessionState state{
+        .shape = shape_,
+        .max_context = max_context_,
+        .position = position_,
+        .kv_cache_mode = options_.kv_cache_mode,
+        .variant = variant_,
+        .stream = stream_.get(),
+        .seen_tokens = &seen_tokens_,
+        .logits = &logits_,
+        .rng_state = &rng_state_,
+    };
+    state.layer_buffers.reserve(layers_.size());
+    for (Layer& layer : layers_) {
+        SessionStore::SessionState::LayerBuffers buffers{};
+        if (AttentionLayer* attention = as_attention(layer)) {
+            buffers.is_attention = true;
+            buffers.key_cache_bf16 = attention->key_cache.data();
+            buffers.value_cache_bf16 = attention->value_cache.data();
+            buffers.key_cache_int8 = attention->key_cache_int8.data();
+            buffers.value_cache_int8 = attention->value_cache_int8.data();
+            buffers.key_cache_scales = attention->key_cache_scales.data();
+            buffers.value_cache_scales = attention->value_cache_scales.data();
+        } else if (ConvolutionLayer* convolution = as_convolution(layer)) {
+            buffers.is_attention = false;
+            buffers.conv_state = convolution->conv_state.data();
+            buffers.conv_state_elements = convolution->conv_state.size();
+        }
+        state.layer_buffers.push_back(buffers);
+    }
+    return state;
 }
 
 void LfmModel::Impl::save_session(const std::string& path) {
@@ -1918,131 +1509,17 @@ void LfmModel::Impl::save_session(const std::string& path) {
     if (phase_ != SessionPhase::Ready) {
         throw std::runtime_error("cannot save a session before prefill or load_session");
     }
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
-    SessionHeader header;
-    header.kv_cache_mode =
-        options_.kv_cache_mode == KvCacheMode::Int8 ? 1U : 0U;
-    header.position = position_;
-    header.max_context = max_context_;
-    LFM_CUDA(cudaMemcpy(&header.rng_state, rng_state_.data(),
-                        sizeof(header.rng_state), cudaMemcpyDeviceToHost));
-
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("cannot create session file: " + path);
-    write_scalar(out, header);
-
-    auto write_device = [&](const void* device, size_t bytes) {
-        std::vector<std::byte> host(bytes);
-        if (bytes) {
-            LFM_CUDA(cudaMemcpy(host.data(), device, bytes, cudaMemcpyDeviceToHost));
-            out.write(reinterpret_cast<const char*>(host.data()),
-                      static_cast<std::streamsize>(bytes));
-            if (!out) throw std::runtime_error("failed writing session payload");
-        }
-    };
-
-    write_device(seen_tokens_.data(), seen_tokens_.bytes());
-    write_device(logits_.data(), logits_.bytes());
-    const size_t cache_elements =
-        static_cast<size_t>(position_) * LfmConfig::kv_width;
-    const size_t scale_elements =
-        static_cast<size_t>(position_) * LfmConfig::kv_heads;
-    for (const Layer& layer : layers_) {
-        if (const AttentionLayer* attention = as_attention(layer)) {
-            if (options_.kv_cache_mode == KvCacheMode::Int8) {
-                write_device(attention->key_cache_int8.data(),
-                             cache_elements * sizeof(int8_t));
-                write_device(attention->value_cache_int8.data(),
-                             cache_elements * sizeof(int8_t));
-                write_device(attention->key_cache_scales.data(),
-                             scale_elements * sizeof(float));
-                write_device(attention->value_cache_scales.data(),
-                             scale_elements * sizeof(float));
-            } else {
-                write_device(attention->key_cache.data(),
-                             cache_elements * sizeof(__nv_bfloat16));
-                write_device(attention->value_cache.data(),
-                             cache_elements * sizeof(__nv_bfloat16));
-            }
-        } else {
-            const ConvolutionLayer& convolution = *as_convolution(layer);
-            write_device(convolution.conv_state.data(), convolution.conv_state.bytes());
-        }
-    }
+    SessionStore::SessionState state = make_session_state();
+    SessionStore::save(path, state);
 }
 
 void LfmModel::Impl::load_session(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("cannot open session file: " + path);
-    SessionHeader header;
-    read_scalar(in, header);
-    const std::array<char, 8> expected{{'L', 'F', 'M', 'S', 'E', 'S', 'S', '1'}};
-    if (header.magic != expected || header.version != 1) {
-        throw std::runtime_error("unsupported session format");
-    }
-    const uint32_t expected_kv =
-        options_.kv_cache_mode == KvCacheMode::Int8 ? 1U : 0U;
-    if (header.kv_cache_mode != expected_kv) {
-        throw std::runtime_error("session KV cache mode differs from model options");
-    }
-    if (header.position <= 0 || header.position > max_context_ ||
-        header.layers != LfmConfig::layers ||
-        header.kv_width != LfmConfig::kv_width ||
-        header.kv_heads != LfmConfig::kv_heads ||
-        header.vocab != LfmConfig::vocab) {
-        throw std::runtime_error("session dimensions are incompatible");
-    }
-
     reset();
-    auto read_device = [&](void* device, size_t bytes) {
-        std::vector<std::byte> host(bytes);
-        if (bytes) {
-            in.read(reinterpret_cast<char*>(host.data()),
-                    static_cast<std::streamsize>(bytes));
-            if (!in) throw std::runtime_error("truncated session payload");
-            LFM_CUDA(cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice));
-        }
-    };
-
-    read_device(seen_tokens_.data(), seen_tokens_.bytes());
-    read_device(logits_.data(), logits_.bytes());
-    const size_t cache_elements =
-        static_cast<size_t>(header.position) * LfmConfig::kv_width;
-    const size_t scale_elements =
-        static_cast<size_t>(header.position) * LfmConfig::kv_heads;
-    for (Layer& layer : layers_) {
-        if (AttentionLayer* attention = as_attention(layer)) {
-            if (options_.kv_cache_mode == KvCacheMode::Int8) {
-                read_device(attention->key_cache_int8.data(),
-                            cache_elements * sizeof(int8_t));
-                read_device(attention->value_cache_int8.data(),
-                            cache_elements * sizeof(int8_t));
-                read_device(attention->key_cache_scales.data(),
-                            scale_elements * sizeof(float));
-                read_device(attention->value_cache_scales.data(),
-                            scale_elements * sizeof(float));
-            } else {
-                read_device(attention->key_cache.data(),
-                            cache_elements * sizeof(__nv_bfloat16));
-                read_device(attention->value_cache.data(),
-                            cache_elements * sizeof(__nv_bfloat16));
-            }
-        } else {
-            ConvolutionLayer& convolution = *as_convolution(layer);
-            read_device(convolution.conv_state.data(), convolution.conv_state.bytes());
-        }
-    }
-    char trailing = 0;
-    if (in.read(&trailing, 1)) {
-        throw std::runtime_error("session file has trailing data");
-    }
-    if (!in.eof()) throw std::runtime_error("failed reading session file");
-
-    position_ = header.position;
+    SessionStore::SessionState state = make_session_state();
+    SessionStore::load(path, state);
+    position_ = state.position;
     LFM_CUDA(cudaMemcpy(position_device_.data(), &position_, sizeof(position_),
                         cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(rng_state_.data(), &header.rng_state,
-                        sizeof(header.rng_state), cudaMemcpyHostToDevice));
     phase_ = SessionPhase::Ready;
     active_segmented_attention_ = use_segmented_attention(position_);
     metrics_ = {};
@@ -2054,81 +1531,30 @@ PrefixState LfmModel::Impl::export_prefix_state() const {
         throw std::runtime_error("cannot export prefix state before prefill");
     }
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
-    PrefixState state;
-    state.position = position_;
-    state.seen_tokens.resize(seen_tokens_.size());
-    state.logits_bf16.resize(logits_.size());
-    size_t conv_elements = 0;
-    for (const Layer& layer : layers_) {
-        if (const ConvolutionLayer* convolution = as_convolution(layer)) {
-            conv_elements += convolution->conv_state.size();
-        }
-    }
-    state.conv_state_bf16.resize(conv_elements);
-    LFM_CUDA(cudaMemcpy(state.seen_tokens.data(), seen_tokens_.data(),
-                        seen_tokens_.bytes(), cudaMemcpyDeviceToHost));
-    LFM_CUDA(cudaMemcpy(state.logits_bf16.data(), logits_.data(),
-                        logits_.bytes(), cudaMemcpyDeviceToHost));
-    size_t offset = 0;
-    for (const Layer& layer : layers_) {
-        const ConvolutionLayer* convolution = as_convolution(layer);
-        if (!convolution) continue;
-        const size_t count = convolution->conv_state.size();
-        LFM_CUDA(cudaMemcpy(state.conv_state_bf16.data() + offset,
-                            convolution->conv_state.data(), convolution->conv_state.bytes(),
-                            cudaMemcpyDeviceToHost));
-        offset += count;
-    }
-    return state;
+    SessionStore::SessionState state = const_cast<Impl*>(this)->make_session_state();
+    auto snapshot = SessionStore::export_prefix(state);
+    PrefixState out;
+    out.position = snapshot.position;
+    out.seen_tokens = std::move(snapshot.seen_tokens);
+    out.logits_bf16 = std::move(snapshot.logits_bf16);
+    out.conv_state_bf16 = std::move(snapshot.conv_state_bf16);
+    return out;
 }
 
 void LfmModel::Impl::restore_prefix_state(const PrefixState& state) {
-    if (state.position <= 0 || state.position > max_context_) {
-        throw std::invalid_argument("prefix state position is invalid");
-    }
-    if (state.seen_tokens.size() != seen_tokens_.size() ||
-        state.logits_bf16.size() != logits_.size()) {
-        throw std::invalid_argument("prefix state sampling dimensions differ");
-    }
-    size_t expected_conv = 0;
-    for (const Layer& layer : layers_) {
-        if (const ConvolutionLayer* convolution = as_convolution(layer)) {
-            expected_conv += convolution->conv_state.size();
-        }
-    }
-    if (state.conv_state_bf16.size() != expected_conv) {
-        throw std::invalid_argument("prefix state convolution dimensions differ");
-    }
-    phase_ = SessionPhase::Prefilling;
-    position_ = state.position;
-    LFM_CUDA(cudaMemcpyAsync(seen_tokens_.data(), state.seen_tokens.data(),
-                             seen_tokens_.bytes(), cudaMemcpyHostToDevice,
-                             stream_.get()));
-    LFM_CUDA(cudaMemcpyAsync(logits_.data(), state.logits_bf16.data(),
-                             logits_.bytes(), cudaMemcpyHostToDevice,
-                             stream_.get()));
-    // Prefix computation is deterministic, but generation randomness belongs to
-    // the receiving request. Never inherit the seed/RNG stream of the request
-    // that populated the shared prefix cache.
+    SessionStore::PrefixSnapshot snapshot;
+    snapshot.position = state.position;
+    snapshot.seen_tokens = state.seen_tokens;
+    snapshot.logits_bf16 = state.logits_bf16;
+    snapshot.conv_state_bf16 = state.conv_state_bf16;
+    SessionStore::SessionState session = make_session_state();
     const uint64_t request_seed = generation_.seed;
-    LFM_CUDA(cudaMemcpyAsync(rng_state_.data(), &request_seed,
-                             sizeof(request_seed), cudaMemcpyHostToDevice,
-                             stream_.get()));
+    SessionStore::restore_prefix(snapshot, session, request_seed);
+    phase_ = SessionPhase::Prefilling;
+    position_ = session.position;
     LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
                              sizeof(position_), cudaMemcpyHostToDevice,
                              stream_.get()));
-    size_t offset = 0;
-    for (Layer& layer : layers_) {
-        ConvolutionLayer* convolution = as_convolution(layer);
-        if (!convolution) continue;
-        const size_t count = convolution->conv_state.size();
-        LFM_CUDA(cudaMemcpyAsync(convolution->conv_state.data(),
-                                 state.conv_state_bf16.data() + offset,
-                                 convolution->conv_state.bytes(), cudaMemcpyHostToDevice,
-                                 stream_.get()));
-        offset += count;
-    }
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
     phase_ = SessionPhase::Ready;
     active_segmented_attention_ = use_segmented_attention(position_);
     metrics_ = {};
@@ -2156,14 +1582,14 @@ std::vector<float> LfmModel::Impl::copy_logits() {
     if (phase_ != SessionPhase::Ready) {
         throw std::runtime_error("logits are unavailable before prefill");
     }
-    std::vector<__nv_bfloat16> bf16_logits(LfmConfig::vocab);
+    std::vector<__nv_bfloat16> bf16_logits(shape_.vocab_size);
     LFM_CUDA(cudaMemcpyAsync(
         bf16_logits.data(), logits_.data(), logits_.bytes(),
         cudaMemcpyDeviceToHost, stream_.get()));
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
 
-    std::vector<float> result(LfmConfig::vocab);
-    for (int i = 0; i < LfmConfig::vocab; ++i) {
+    std::vector<float> result(shape_.vocab_size);
+    for (int i = 0; i < shape_.vocab_size; ++i) {
         result[static_cast<size_t>(i)] =
             __bfloat162float(bf16_logits[static_cast<size_t>(i)]);
     }
@@ -2222,6 +1648,10 @@ SessionPhase LfmModel::phase() const { return impl_->phase(); }
 bool LfmModel::ready_for_decode() const { return impl_->ready_for_decode(); }
 bool LfmModel::decode_pending() const { return impl_->decode_pending(); }
 int LfmModel::position() const { return impl_->position(); }
+int LfmModel::vocab_size() const { return impl_->shape_.vocab_size; }
+
+IPackedSession& LfmModel::packed_session() { return *impl_; }
+const IPackedSession& LfmModel::packed_session() const { return *impl_; }
 bool LfmModel::cuda_graph_ready() const { return impl_->cuda_graph_ready(); }
 
 void LfmInferenceSession::reset(bool allocate_local_kv) {

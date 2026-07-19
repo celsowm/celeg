@@ -6,6 +6,8 @@
 #include "lfm/cpu_prefix_cache.hpp"
 #include "lfm/cpu_quantization.hpp"
 #include "lfm/cpu_thread_pool.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -76,6 +78,8 @@ struct CpuModel::Impl {
         std::filesystem::path pack_file;
         std::string source_id;
         bool loaded_pack = false;
+        ModelShape shape;
+        const IModelVariant* variant = nullptr;
         Q4GroupMatrix embedding;
         std::vector<float> final_norm;
         std::vector<WeightLayer> layers;
@@ -118,6 +122,7 @@ struct CpuModel::Impl {
     void run_attention(const AttentionState& state, const float* q,
                        float* output, int sequence_length) const;
     void release_attention_pages(AttentionState& state) noexcept;
+
     CpuPrefixSnapshot export_prefix_snapshot() const;
     void restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
                                  bool ready_for_decode);

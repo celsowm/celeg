@@ -1,6 +1,9 @@
 #include "lfm/concurrent.hpp"
 
+#include "lfm/config.hpp"
 #include "lfm/model.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
 #include "lfm/packed.hpp"
 #include "lfm/paged_kv.hpp"
 #include "lfm/prefix_cache.hpp"
@@ -11,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -58,6 +62,7 @@ private:
     int max_context_;
     ModelOptions model_options_;
     ConcurrentEngineOptions engine_options_;
+    ModelShape shape_;
 
     mutable std::mutex mutex_;
     std::mutex step_mutex_;
@@ -107,9 +112,23 @@ ConcurrentEngine::Impl::Impl(std::string safetensors_path,
     const size_t total_pages = engine_options_.logical_kv_pages != 0
         ? engine_options_.logical_kv_pages
         : pages_per_lane * active;
+    // Load the model topology so the physical paged KV arena and the packed
+    // executor can size per-attention-layer storage from the variant shape.
+    const std::filesystem::path config_path =
+        std::filesystem::path(safetensors_path_).parent_path() / "config.json";
+    if (!std::filesystem::exists(config_path)) {
+        throw std::runtime_error(
+            "config.json not found alongside checkpoint: " + config_path.string());
+    }
+    ModelConfig config = ModelConfig::load(config_path.string());
+    shape_ = ModelShape::from_config(config);
+    {
+        const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_);
+        shape_ = variant.resolve_shape(shape_);
+    }
     paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
         total_pages, engine_options_.page_tokens, max_context_,
-        model_options_.kv_cache_mode);
+        model_options_.kv_cache_mode, shape_);
     prefix_cache_ = std::make_unique<PrefixCacheManager>(
         *paged_kv_, engine_options_.prefix_cache,
         engine_options_.prefix_cache_entries);
@@ -124,7 +143,7 @@ ConcurrentEngine::Impl::Impl(std::string safetensors_path,
     if (engine_options_.packed_decode) {
         packed_executor_ = std::make_unique<PackedDecodeExecutor>(
             static_cast<size_t>(engine_options_.max_active_requests),
-            paged_kv_.get());
+            paged_kv_.get(), shape_);
     }
     if (engine_options_.worker_thread) start();
 }

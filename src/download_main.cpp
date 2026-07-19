@@ -27,6 +27,9 @@ int main(int argc, char** argv) {
                 std::cout
                     << "lfm25-download [REPO_ID] [options]\n"
                     << "  REPO_ID defaults to LiquidAI/LFM2.5-230M\n"
+                    << "  Common checkpoints:\n"
+                    << "    LiquidAI/LFM2.5-230M            (230M base)\n"
+                    << "    LiquidAI/LFM2.5-1.2B-Instruct   (1.2B Instruct)\n"
                     << "  --revision REV    (default: main)\n"
                     << "  --cache-dir DIR   (default: " << lfm::default_hf_cache_dir().string() << ")\n"
                     << "  --file FILE       (repeatable; default: all files)\n"

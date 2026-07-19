@@ -51,9 +51,6 @@ int main(int argc, char** argv) {
         const auto tokens = read_binary<int32_t>(reference / "tokens.i32");
         const auto expected = read_binary<float>(reference / "prefill_logits.f32");
         if (tokens.empty()) throw std::runtime_error("reference token sequence is empty");
-        if (expected.size() != lfm::LfmConfig::vocab) {
-            throw std::runtime_error("reference logits have the wrong vocabulary size");
-        }
         lfm::CpuModelOptions options;
         options.kv_cache_mode = lfm::parse_cpu_kv_cache_mode(argc > 3 ? argv[3] : "fp32");
         options.isa = lfm::parse_cpu_isa(argc > 4 ? argv[4] : "scalar");
@@ -64,6 +61,9 @@ int main(int argc, char** argv) {
         generation.top_k = 1;
         lfm::CpuModel model(argv[1], static_cast<int>(tokens.size() + 8),
                             options, generation);
+        if (expected.size() != model.copy_logits().size()) {
+            throw std::runtime_error("reference logits have the wrong vocabulary size");
+        }
         model.prefill(tokens);
         const auto actual = model.copy_logits();
         double absolute_sum = 0.0;

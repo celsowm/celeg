@@ -3,4 +3,10 @@ build-*/
 *.user
 .vs/
 .cache/
+err.txt
+out.txt
+# Model weights / tokenizer artifacts are fetched at runtime by the C++ HF
+# cache downloader (src/download_main.cpp). Do not commit them.
+model/
+
 

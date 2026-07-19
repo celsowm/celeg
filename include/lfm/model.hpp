@@ -13,6 +13,7 @@ namespace lfm {
 struct PackedDecodeExecutorImpl;
 class PhysicalPagedKvCache;
 class LfmModel;
+class IPackedSession;
 
 // Narrow interface for token-processing operations. New C++ callers should
 // depend on this view instead of the compatibility surface on LfmModel.
@@ -78,7 +79,6 @@ private:
 // topology live in Impl; focused clients can use session(), diagnostics() and
 // persistence() to avoid depending on the complete legacy surface.
 class LfmModel {
-    friend struct PackedDecodeExecutorImpl;
     friend class LfmInferenceSession;
     friend class LfmDiagnostics;
     friend class LfmPersistence;
@@ -100,6 +100,13 @@ public:
     const LfmDiagnostics& diagnostics() const { return diagnostics_view_; }
     LfmPersistence& persistence() { return persistence_view_; }
     const LfmPersistence& persistence() const { return persistence_view_; }
+
+    // Returns the narrow IPackedSession view. PackedDecodeExecutor depends
+    // only on this interface rather than on LfmModel's full surface
+    // (Interface Segregation Principle); the friend declaration for
+    // PackedDecodeExecutorImpl is no longer required.
+    IPackedSession& packed_session();
+    const IPackedSession& packed_session() const;
 
     // Compatibility forwarding API retained for existing C++ and C adapters.
     void reset(bool allocate_local_kv = true);
@@ -127,6 +134,7 @@ public:
     bool ready_for_decode() const;
     bool decode_pending() const;
     int position() const;
+    int vocab_size() const;
     bool cuda_graph_ready() const;
 
 private:

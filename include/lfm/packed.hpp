@@ -1,5 +1,8 @@
 #pragma once
 
+#include "lfm/model_shape.hpp"
+#include "lfm/packed_session.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -37,22 +40,32 @@ struct PackedDecodeMetrics {
 // linear layers use M=batch_size against one shared checkpoint allocation.
 class PackedDecodeExecutor {
 public:
-    explicit PackedDecodeExecutor(size_t maximum_batch,
-                                  PhysicalPagedKvCache* paged_kv = nullptr);
+    PackedDecodeExecutor(size_t maximum_batch,
+                         PhysicalPagedKvCache* paged_kv,
+                         const ModelShape& shape);
     ~PackedDecodeExecutor();
 
     PackedDecodeExecutor(const PackedDecodeExecutor&) = delete;
     PackedDecodeExecutor& operator=(const PackedDecodeExecutor&) = delete;
 
     bool eligible(const LfmModel& model, std::string* reason = nullptr) const;
+    bool eligible(const IPackedSession& session, std::string* reason = nullptr) const;
     std::vector<int32_t> decode(const std::vector<LfmModel*>& models);
+    std::vector<int32_t> decode(const std::vector<IPackedSession*>& sessions);
     std::vector<int32_t> decode(
         const std::vector<LfmModel*>& models,
+        const std::vector<std::vector<uint32_t>>& page_tables);
+    std::vector<int32_t> decode(
+        const std::vector<IPackedSession*>& sessions,
         const std::vector<std::vector<uint32_t>>& page_tables);
     // Advances one explicit prompt token for each row. Rows may have
     // different positions and page tables, which enables wavefront ragged
     // prefill while keeping GEMM M equal to the active prefill batch.
     void prefill_step(const std::vector<LfmModel*>& models,
+                      const std::vector<std::vector<uint32_t>>& page_tables,
+                      const std::vector<int32_t>& tokens,
+                      const std::vector<uint8_t>& finalize_rows);
+    void prefill_step(const std::vector<IPackedSession*>& sessions,
                       const std::vector<std::vector<uint32_t>>& page_tables,
                       const std::vector<int32_t>& tokens,
                       const std::vector<uint8_t>& finalize_rows);

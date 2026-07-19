@@ -4,6 +4,8 @@
 #include "lfm/runtime_types.hpp"
 #include "lfm/concurrent_policy.hpp"
 #include "lfm/kv_page_allocator.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/page_layout.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,14 +15,16 @@
 namespace lfm {
 
 // Physical, reference-counted KV page arena shared by all requests in one
-// ConcurrentEngine. A page contains the same token range for all six attention
-// layers, which makes a request page table valid across the entire model.
+// ConcurrentEngine. A page contains the same token range for every attention
+// layer of the variant, which makes a request page table valid across the
+// entire model.
 class PhysicalPagedKvCache final : public IKvPageAllocator {
 public:
     PhysicalPagedKvCache(size_t page_count,
                          int page_tokens,
                          int max_context,
-                         KvCacheMode mode);
+                         KvCacheMode mode,
+                         const ModelShape& shape);
     ~PhysicalPagedKvCache() = default;
 
     PhysicalPagedKvCache(const PhysicalPagedKvCache&) = delete;
@@ -64,8 +68,19 @@ public:
     const float* key_scales() const { return key_scales_.data(); }
     const float* value_scales() const { return value_scales_.data(); }
 
-    static constexpr int attention_layers = 6;
-    static int attention_slot(int model_layer);
+    int attention_layers() const { return attention_layer_count_; }
+    int kv_width() const { return kv_width_; }
+    int kv_heads() const { return kv_heads_; }
+    int head_dim() const { return head_dim_; }
+    // Returns the attention slot for a given model layer index, or -1 if the
+    // layer is a convolution layer.
+    int attention_slot(int model_layer) const {
+        if (model_layer < 0 ||
+            model_layer >= static_cast<int>(attention_slot_for_layer_.size())) {
+            return -1;
+        }
+        return attention_slot_for_layer_[static_cast<size_t>(model_layer)];
+    }
 
 private:
     size_t page_vector_elements() const;
@@ -73,7 +88,13 @@ private:
 
     int page_tokens_ = 0;
     int max_pages_per_request_ = 0;
+    int attention_layer_count_ = 0;
+    int kv_width_ = 0;
+    int kv_heads_ = 0;
+    int head_dim_ = 0;
     KvCacheMode mode_ = KvCacheMode::Bf16;
+    std::vector<int> attention_slot_for_layer_;
+    PageLayout layout_;
     PagedBlockPool allocator_;
 
     DeviceBuffer<__nv_bfloat16> key_bf16_;

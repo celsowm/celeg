@@ -1,5 +1,8 @@
 #include "lfm/config.hpp"
 #include "lfm/cpu_concurrent.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
+#include "lfm/chat_template.hpp"
 #include "lfm/tokenizer.hpp"
 
 #include <chrono>
@@ -32,8 +35,13 @@ int main(int argc, char** argv) {
 
         const lfm::ModelConfig config =
             lfm::ModelConfig::load((model_dir / "config.json").string());
-        config.validate_compiled_backend();
-        lfm::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
+        const lfm::ModelShape shape = lfm::ModelShape::from_config(config);
+        lfm::register_builtin_variants();
+        const lfm::IModelVariant& variant =
+            lfm::ModelVariantRegistry::instance().select(shape);
+        (void)variant;
+        lfm::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string(),
+            lfm::make_chat_template(variant.chat_template_kind()));
         const std::vector<int32_t> tokens = tokenizer.encode(
             tokenizer.format_chat(prompt, ""), false);
 

@@ -8,23 +8,9 @@
 
 namespace lfm {
 
-struct LfmConfig {
-    static constexpr int hidden = 1024;
-    static constexpr int intermediate = 2560;
-    static constexpr int layers = 14;
-    static constexpr int q_heads = 16;
-    static constexpr int kv_heads = 8;
-    static constexpr int head_dim = 64;
-    static constexpr int q_width = q_heads * head_dim;
-    static constexpr int kv_width = kv_heads * head_dim;
-    static constexpr int qkv_width = q_width + 2 * kv_width;
-    static constexpr int vocab = 65536;
-    static constexpr int conv_cache = 3;
-    static constexpr int rope_pairs = head_dim / 2;
-    static constexpr float norm_eps = 1e-5f;
-    static constexpr float rope_theta = 1'000'000.0f;
-    static constexpr int max_top_k = 128;
-};
+// Upper bound on the top-k sampler buffer. This is a kernel/workspace limit,
+// not a model-shape property, so it lives here instead of ModelShape.
+inline constexpr int kMaxTopK = 128;
 
 enum class GemmBackend {
     Cublas,

@@ -533,7 +533,7 @@ CpuRequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
         throw std::invalid_argument("CPU request exceeds configured context");
     }
     for (int32_t token : prompt) {
-        if (token < 0 || token >= LfmConfig::vocab) {
+        if (token < 0 || token >= impl_->base_model.vocab_size()) {
             throw std::invalid_argument("CPU request token out of range");
         }
     }

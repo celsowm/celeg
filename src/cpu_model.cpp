@@ -2,14 +2,17 @@
 
 #include "cpu_model_internal.hpp"
 
+#include "lfm/config.hpp"
 #include "lfm/quantization.hpp"
 #include "lfm/safetensors.hpp"
+#include "lfm/model_variant.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <numeric>
@@ -105,7 +108,7 @@ CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text) {
 }
 
 CpuModel::Impl::Shared::Shared(const std::string& path, int context,
-                              CpuModelOptions requested)
+                               CpuModelOptions requested)
     : safetensors_path(path), max_context(context), options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
       pool(options.threads, options.affinity),
@@ -127,6 +130,18 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     }
     options.isa = linear.isa();
     group_size = options.weight_format == CpuWeightFormat::Q4Group64 ? 64 : 32;
+    // Load model topology from config.json next to the safetensors file so the
+    // CPU runtime no longer depends on the 230M constexpr shape.
+    const std::filesystem::path config_path =
+        std::filesystem::path(safetensors_path).parent_path() / "config.json";
+    if (!std::filesystem::exists(config_path)) {
+        throw std::runtime_error(
+            "config.json not found alongside checkpoint: " + config_path.string());
+    }
+    ModelConfig config = ModelConfig::load(config_path.string());
+    shape = ModelShape::from_config(config);
+    variant = &ModelVariantRegistry::instance().select(shape);
+    shape = variant->resolve_shape(shape);
     prepare_pack_path();
     load_weights();
     layer_to_kv_pool.assign(layers.size(), -1);
@@ -135,7 +150,7 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
             layer_to_kv_pool[layer] = static_cast<int>(kv_pools.size());
             kv_pools.push_back(std::make_shared<CpuKvPagePool>(
                 options.kv_cache_mode, options.kv_page_tokens,
-                static_cast<size_t>(LfmConfig::kv_width)));
+                static_cast<size_t>(shape.kv_width)));
         }
     }
 }
@@ -170,8 +185,9 @@ void CpuModel::Impl::Shared::prepare_pack_path() {
     if (error) throw std::runtime_error("cannot create CPU pack cache: " + error.message());
     const std::string source = source_identity(safetensors_path);
     const size_t id = std::hash<std::string>{}(source);
+    const std::string variant_id = variant ? std::string(variant->id()) : "unknown";
     std::ostringstream filename;
-    filename << "lfm25-230m-" << std::hex << id << "-q4g" << group_size
+    filename << variant_id << '-' << std::hex << id << "-q4g" << group_size
              << '-' << cpu_isa_name(options.isa) << ".lfmpack";
     pack_file = directory / filename.str();
     source_id = source;
@@ -182,19 +198,19 @@ CpuModel::Impl::CommonWeights CpuModel::Impl::Shared::load_common(
     int layer) {
     CommonWeights common;
     common.operator_norm = load_vector(file, reader, writer,
-        layer_name(layer, "operator_norm.weight"), {LfmConfig::hidden});
+        layer_name(layer, "operator_norm.weight"), {shape.hidden});
     common.ffn_norm = load_vector(file, reader, writer,
-        layer_name(layer, "ffn_norm.weight"), {LfmConfig::hidden});
+        layer_name(layer, "ffn_norm.weight"), {shape.hidden});
     common.w13 = load_concat(file, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {layer_name(layer, "feed_forward.w1.weight"),
-             {LfmConfig::intermediate, LfmConfig::hidden}},
+             {shape.intermediate, shape.hidden}},
             {layer_name(layer, "feed_forward.w3.weight"),
-             {LfmConfig::intermediate, LfmConfig::hidden}},
+             {shape.intermediate, shape.hidden}},
         });
     common.w2 = load_matrix(file, reader, writer,
         layer_name(layer, "feed_forward.w2.weight"),
-        {LfmConfig::hidden, LfmConfig::intermediate});
+        {shape.hidden, shape.intermediate});
     return common;
 }
 
@@ -228,50 +244,48 @@ void CpuModel::Impl::Shared::load_weights() {
     }
 
     embedding = load_matrix(file.get(), reader.get(), writer.get(),
-        "model.embed_tokens.weight", {LfmConfig::vocab, LfmConfig::hidden});
+        "model.embed_tokens.weight", {shape.vocab_size, shape.hidden});
     final_norm = load_vector(file.get(), reader.get(), writer.get(),
-        "model.embedding_norm.weight", {LfmConfig::hidden});
+        "model.embedding_norm.weight", {shape.hidden});
 
-    static constexpr bool attention_map[LfmConfig::layers] = {
-        false, false, true, false, true, false, true,
-        false, true, false, true, false, true, false};
-    layers.reserve(LfmConfig::layers);
-    for (int index = 0; index < LfmConfig::layers; ++index) {
+    layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
+    for (int index = 0; index < shape.num_hidden_layers; ++index) {
         CommonWeights common = load_common(file.get(), reader.get(), writer.get(), index);
-        if (attention_map[index]) {
+        const LayerType layer_type = shape.layer_types[static_cast<size_t>(index)];
+        if (layer_type == LayerType::FullAttention) {
             AttentionWeights layer;
             layer.common = std::move(common);
             layer.qkv = load_concat(file.get(), reader.get(), writer.get(),
                 layer_name(index, "self_attn.qkv.weight"), {
                     {layer_name(index, "self_attn.q_proj.weight"),
-                     {LfmConfig::q_width, LfmConfig::hidden}},
+                     {shape.q_width, shape.hidden}},
                     {layer_name(index, "self_attn.k_proj.weight"),
-                     {LfmConfig::kv_width, LfmConfig::hidden}},
+                     {shape.kv_width, shape.hidden}},
                     {layer_name(index, "self_attn.v_proj.weight"),
-                     {LfmConfig::kv_width, LfmConfig::hidden}},
+                     {shape.kv_width, shape.hidden}},
                 });
             layer.out = load_matrix(file.get(), reader.get(), writer.get(),
                 layer_name(index, "self_attn.out_proj.weight"),
-                {LfmConfig::hidden, LfmConfig::hidden});
+                {shape.hidden, shape.hidden});
             layer.q_norm = load_vector(file.get(), reader.get(), writer.get(),
                 layer_name(index, "self_attn.q_layernorm.weight"),
-                {LfmConfig::head_dim});
+                {shape.head_dim});
             layer.k_norm = load_vector(file.get(), reader.get(), writer.get(),
                 layer_name(index, "self_attn.k_layernorm.weight"),
-                {LfmConfig::head_dim});
+                {shape.head_dim});
             layers.emplace_back(std::move(layer));
         } else {
             ConvolutionWeights layer;
             layer.common = std::move(common);
             layer.in = load_matrix(file.get(), reader.get(), writer.get(),
                 layer_name(index, "conv.in_proj.weight"),
-                {3 * LfmConfig::hidden, LfmConfig::hidden});
+                {3 * shape.hidden, shape.hidden});
             layer.weight = load_vector(file.get(), reader.get(), writer.get(),
                 layer_name(index, "conv.conv.weight"),
-                {LfmConfig::hidden, 1, LfmConfig::conv_cache});
+                {shape.hidden, 1, shape.conv_cache});
             layer.out = load_matrix(file.get(), reader.get(), writer.get(),
                 layer_name(index, "conv.out_proj.weight"),
-                {LfmConfig::hidden, LfmConfig::hidden});
+                {shape.hidden, shape.hidden});
             layers.emplace_back(std::move(layer));
         }
     }
@@ -384,25 +398,25 @@ void CpuModel::Impl::allocate_state() {
             states.emplace_back(std::move(state));
         } else {
             ConvolutionState state;
-            state.state.resize(static_cast<size_t>(LfmConfig::conv_cache) *
-                               LfmConfig::hidden);
+            state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
+                               shared->shape.hidden);
             states.emplace_back(std::move(state));
         }
     }
 }
 
 void CpuModel::Impl::allocate_activations() {
-    hidden.resize(LfmConfig::hidden);
-    residual.resize(LfmConfig::hidden);
-    normed.resize(LfmConfig::hidden);
-    op_output.resize(LfmConfig::hidden);
-    qkv.resize(LfmConfig::qkv_width);
-    conv_projected.resize(3 * LfmConfig::hidden);
-    gate_up.resize(2 * LfmConfig::intermediate);
-    activated.resize(LfmConfig::intermediate);
-    mlp_output.resize(LfmConfig::hidden);
-    logits.resize(LfmConfig::vocab);
-    seen.resize(LfmConfig::vocab);
+    hidden.resize(shared->shape.hidden);
+    residual.resize(shared->shape.hidden);
+    normed.resize(shared->shape.hidden);
+    op_output.resize(shared->shape.hidden);
+    qkv.resize(shared->shape.qkv_width);
+    conv_projected.resize(3 * shared->shape.hidden);
+    gate_up.resize(2 * shared->shape.intermediate);
+    activated.resize(shared->shape.intermediate);
+    mlp_output.resize(shared->shape.hidden);
+    logits.resize(shared->shape.vocab_size);
+    seen.resize(shared->shape.vocab_size);
 }
 
 const CpuModel::Impl::CommonWeights& CpuModel::Impl::common_weights(
@@ -472,7 +486,7 @@ void CpuModel::Impl::run_attention(const AttentionState& state,
     CpuPagedAttentionStats attention_stats;
     cpu_gqa_decode_paged_parallel(
         q, pool, state.pages, output, sequence_length,
-        LfmConfig::q_heads, LfmConfig::kv_heads, LfmConfig::head_dim,
+        shared->shape.num_attention_heads, shared->shape.num_key_value_heads, shared->shape.head_dim,
         shared->pool,
         CpuPagedAttentionOptions{
             shared->options.attention_parallel_threshold,
@@ -572,18 +586,18 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
         const CommonWeights& common = common_weights(index);
         std::copy(hidden.begin(), hidden.end(), residual.begin());
         cpu_rmsnorm(hidden.data(), common.operator_norm.data(), normed.data(),
-                    LfmConfig::hidden, LfmConfig::norm_eps);
+                    shared->shape.hidden, shared->shape.norm_eps);
         if (const auto* attention = std::get_if<AttentionWeights>(&layer_variant)) {
             shared->linear.gemv(attention->qkv, normed.data(), qkv.data());
             float* q = qkv.data();
-            float* k = q + LfmConfig::q_width;
-            float* v = k + LfmConfig::kv_width;
-            cpu_qk_norm_rope(q, attention->q_norm.data(), LfmConfig::q_heads,
-                LfmConfig::head_dim, position_value, LfmConfig::rope_theta,
-                LfmConfig::norm_eps);
-            cpu_qk_norm_rope(k, attention->k_norm.data(), LfmConfig::kv_heads,
-                LfmConfig::head_dim, position_value, LfmConfig::rope_theta,
-                LfmConfig::norm_eps);
+            float* k = q + shared->shape.q_width;
+            float* v = k + shared->shape.kv_width;
+            cpu_qk_norm_rope(q, attention->q_norm.data(), shared->shape.num_attention_heads,
+                shared->shape.head_dim, position_value, shared->shape.rope_theta,
+                shared->shape.norm_eps);
+            cpu_qk_norm_rope(k, attention->k_norm.data(), shared->shape.num_key_value_heads,
+                shared->shape.head_dim, position_value, shared->shape.rope_theta,
+                shared->shape.norm_eps);
             AttentionState& state = attention_state(index);
             store_kv(state, position_value, k, v);
             run_attention(state, q, op_output.data(), position_value + 1);
@@ -593,22 +607,22 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
             ConvolutionState& state = convolution_state(index);
             shared->linear.gemv(convolution.in, normed.data(), conv_projected.data());
             cpu_conv_decode(conv_projected.data(), convolution.weight.data(),
-                state.state.data(), op_output.data(), LfmConfig::hidden,
-                LfmConfig::conv_cache, position_value);
+                state.state.data(), op_output.data(), shared->shape.hidden,
+                shared->shape.conv_cache, position_value);
             shared->linear.gemv(convolution.out, op_output.data(), hidden.data());
         }
-        cpu_residual_add(hidden.data(), residual.data(), LfmConfig::hidden);
+        cpu_residual_add(hidden.data(), residual.data(), shared->shape.hidden);
 
         cpu_rmsnorm(hidden.data(), common.ffn_norm.data(), normed.data(),
-                    LfmConfig::hidden, LfmConfig::norm_eps);
+                    shared->shape.hidden, shared->shape.norm_eps);
         shared->linear.gemv(common.w13, normed.data(), gate_up.data());
-        cpu_swiglu(gate_up.data(), activated.data(), LfmConfig::intermediate);
+        cpu_swiglu(gate_up.data(), activated.data(), shared->shape.intermediate);
         shared->linear.gemv(common.w2, activated.data(), mlp_output.data());
-        cpu_residual_add(hidden.data(), mlp_output.data(), LfmConfig::hidden);
+        cpu_residual_add(hidden.data(), mlp_output.data(), shared->shape.hidden);
     }
     if (compute_logits) {
         cpu_rmsnorm(hidden.data(), shared->final_norm.data(), normed.data(),
-                    LfmConfig::hidden, LfmConfig::norm_eps);
+                    shared->shape.hidden, shared->shape.norm_eps);
         shared->linear.gemv(shared->embedding, normed.data(), logits.data());
     }
     ++position_value;
@@ -622,23 +636,23 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         throw std::runtime_error("CPU chunked prefill exceeds context limit");
     }
     const size_t rows = tokens.size();
-    chunk_hidden.resize(rows * LfmConfig::hidden);
-    chunk_residual.resize(rows * LfmConfig::hidden);
-    chunk_normed.resize(rows * LfmConfig::hidden);
-    chunk_op.resize(rows * LfmConfig::hidden);
-    chunk_qkv.resize(rows * LfmConfig::qkv_width);
-    chunk_conv.resize(rows * 3ULL * LfmConfig::hidden);
-    chunk_gate_up.resize(rows * 2ULL * LfmConfig::intermediate);
-    chunk_activated.resize(rows * LfmConfig::intermediate);
-    chunk_mlp.resize(rows * LfmConfig::hidden);
+    chunk_hidden.resize(rows * shared->shape.hidden);
+    chunk_residual.resize(rows * shared->shape.hidden);
+    chunk_normed.resize(rows * shared->shape.hidden);
+    chunk_op.resize(rows * shared->shape.hidden);
+    chunk_qkv.resize(rows * shared->shape.qkv_width);
+    chunk_conv.resize(rows * 3ULL * shared->shape.hidden);
+    chunk_gate_up.resize(rows * 2ULL * shared->shape.intermediate);
+    chunk_activated.resize(rows * shared->shape.intermediate);
+    chunk_mlp.resize(rows * shared->shape.hidden);
 
     for (size_t row = 0; row < rows; ++row) {
         const int32_t token = tokens[row];
-        if (token < 0 || token >= LfmConfig::vocab) {
+        if (token < 0 || token >= shared->shape.vocab_size) {
             throw std::invalid_argument("CPU chunked prefill token out of range");
         }
         shared->linear.embedding(shared->embedding, token,
-            chunk_hidden.data() + row * LfmConfig::hidden);
+            chunk_hidden.data() + row * shared->shape.hidden);
     }
 
     const int base_position = position_value;
@@ -647,10 +661,10 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         const CommonWeights& common = common_weights(layer_index);
         std::copy(chunk_hidden.begin(), chunk_hidden.end(), chunk_residual.begin());
         for (size_t row = 0; row < rows; ++row) {
-            cpu_rmsnorm(chunk_hidden.data() + row * LfmConfig::hidden,
+            cpu_rmsnorm(chunk_hidden.data() + row * shared->shape.hidden,
                         common.operator_norm.data(),
-                        chunk_normed.data() + row * LfmConfig::hidden,
-                        LfmConfig::hidden, LfmConfig::norm_eps);
+                        chunk_normed.data() + row * shared->shape.hidden,
+                        shared->shape.hidden, shared->shape.norm_eps);
         }
 
         if (const auto* attention = std::get_if<AttentionWeights>(&layer)) {
@@ -660,24 +674,24 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
             // Normalize/rotate and commit the complete chunk first. Each query
             // still observes only [0, base + row], preserving causality.
             for (size_t row = 0; row < rows; ++row) {
-                float* q = chunk_qkv.data() + row * LfmConfig::qkv_width;
-                float* k = q + LfmConfig::q_width;
-                float* v = k + LfmConfig::kv_width;
+                float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
+                float* k = q + shared->shape.q_width;
+                float* v = k + shared->shape.kv_width;
                 const int absolute_position = base_position + static_cast<int>(row);
                 cpu_qk_norm_rope(q, attention->q_norm.data(),
-                    LfmConfig::q_heads, LfmConfig::head_dim,
-                    absolute_position, LfmConfig::rope_theta,
-                    LfmConfig::norm_eps);
+                    shared->shape.num_attention_heads, shared->shape.head_dim,
+                    absolute_position, shared->shape.rope_theta,
+                    shared->shape.norm_eps);
                 cpu_qk_norm_rope(k, attention->k_norm.data(),
-                    LfmConfig::kv_heads, LfmConfig::head_dim,
-                    absolute_position, LfmConfig::rope_theta,
-                    LfmConfig::norm_eps);
+                    shared->shape.num_key_value_heads, shared->shape.head_dim,
+                    absolute_position, shared->shape.rope_theta,
+                    shared->shape.norm_eps);
                 store_kv(cache, absolute_position, k, v);
             }
             for (size_t row = 0; row < rows; ++row) {
-                const float* q = chunk_qkv.data() + row * LfmConfig::qkv_width;
+                const float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
                 run_attention(cache, q,
-                    chunk_op.data() + row * LfmConfig::hidden,
+                    chunk_op.data() + row * shared->shape.hidden,
                     base_position + static_cast<int>(row) + 1);
             }
             shared->linear.gemm(attention->out, chunk_op.data(),
@@ -689,10 +703,10 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
             ConvolutionState& conv_state = convolution_state(layer_index);
             for (size_t row = 0; row < rows; ++row) {
                 cpu_conv_decode(
-                    chunk_conv.data() + row * 3ULL * LfmConfig::hidden,
+                    chunk_conv.data() + row * 3ULL * shared->shape.hidden,
                     convolution.weight.data(), conv_state.state.data(),
-                    chunk_op.data() + row * LfmConfig::hidden,
-                    LfmConfig::hidden, LfmConfig::conv_cache,
+                    chunk_op.data() + row * shared->shape.hidden,
+                    shared->shape.hidden, shared->shape.conv_cache,
                     base_position + static_cast<int>(row));
             }
             shared->linear.gemm(convolution.out, chunk_op.data(),
@@ -700,34 +714,34 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         }
 
         for (size_t row = 0; row < rows; ++row) {
-            float* row_hidden = chunk_hidden.data() + row * LfmConfig::hidden;
+            float* row_hidden = chunk_hidden.data() + row * shared->shape.hidden;
             cpu_residual_add(row_hidden,
-                chunk_residual.data() + row * LfmConfig::hidden,
-                LfmConfig::hidden);
+                chunk_residual.data() + row * shared->shape.hidden,
+                shared->shape.hidden);
             cpu_rmsnorm(row_hidden, common.ffn_norm.data(),
-                chunk_normed.data() + row * LfmConfig::hidden,
-                LfmConfig::hidden, LfmConfig::norm_eps);
+                chunk_normed.data() + row * shared->shape.hidden,
+                shared->shape.hidden, shared->shape.norm_eps);
         }
         shared->linear.gemm(common.w13, chunk_normed.data(),
                             chunk_gate_up.data(), rows);
         for (size_t row = 0; row < rows; ++row) {
-            cpu_swiglu(chunk_gate_up.data() + row * 2ULL * LfmConfig::intermediate,
-                       chunk_activated.data() + row * LfmConfig::intermediate,
-                       LfmConfig::intermediate);
+            cpu_swiglu(chunk_gate_up.data() + row * 2ULL * shared->shape.intermediate,
+                       chunk_activated.data() + row * shared->shape.intermediate,
+                       shared->shape.intermediate);
         }
         shared->linear.gemm(common.w2, chunk_activated.data(),
                             chunk_mlp.data(), rows);
         for (size_t row = 0; row < rows; ++row) {
-            cpu_residual_add(chunk_hidden.data() + row * LfmConfig::hidden,
-                             chunk_mlp.data() + row * LfmConfig::hidden,
-                             LfmConfig::hidden);
+            cpu_residual_add(chunk_hidden.data() + row * shared->shape.hidden,
+                             chunk_mlp.data() + row * shared->shape.hidden,
+                             shared->shape.hidden);
         }
     }
 
     if (compute_logits) {
-        const float* last = chunk_hidden.data() + (rows - 1) * LfmConfig::hidden;
+        const float* last = chunk_hidden.data() + (rows - 1) * shared->shape.hidden;
         cpu_rmsnorm(last, shared->final_norm.data(), normed.data(),
-                    LfmConfig::hidden, LfmConfig::norm_eps);
+                    shared->shape.hidden, shared->shape.norm_eps);
         shared->linear.gemv(shared->embedding, normed.data(), logits.data());
     }
     position_value += static_cast<int>(rows);
@@ -747,7 +761,7 @@ int32_t CpuModel::Impl::sample() {
     if (temperature <= 0.0f || generation.top_k == 1) {
         int32_t best = 0;
         float best_value = penalized(0);
-        for (int32_t token = 1; token < LfmConfig::vocab; ++token) {
+        for (int32_t token = 1; token < shared->shape.vocab_size; ++token) {
             const float value = penalized(token);
             if (value > best_value) {
                 best = token;
@@ -756,8 +770,8 @@ int32_t CpuModel::Impl::sample() {
         }
         return best;
     }
-    const int top_k = std::min(generation.top_k, LfmConfig::vocab);
-    std::vector<int32_t> indices(static_cast<size_t>(LfmConfig::vocab));
+    const int top_k = std::min(generation.top_k, shared->shape.vocab_size);
+    std::vector<int32_t> indices(static_cast<size_t>(shared->shape.vocab_size));
     std::iota(indices.begin(), indices.end(), 0);
     auto adjusted = [&](int32_t token) { return penalized(token) / temperature; };
     std::partial_sort(indices.begin(), indices.begin() + top_k, indices.end(),
@@ -876,7 +890,7 @@ void CpuModel::prefill(const std::vector<int32_t>& tokens) {
         throw std::invalid_argument("CPU prefill exceeds context");
     }
     for (int32_t token : tokens) {
-        if (token < 0 || token >= LfmConfig::vocab) {
+        if (token < 0 || token >= impl_->shared->shape.vocab_size) {
             throw std::invalid_argument("CPU token out of range");
         }
     }
@@ -931,6 +945,7 @@ RuntimeMetrics CpuModel::runtime_metrics() const { return impl_->metrics; }
 void CpuModel::clear_runtime_metrics() { impl_->metrics = {}; }
 CpuModelMemoryStats CpuModel::memory_stats() const { return impl_->memory_stats(); }
 int CpuModel::position() const { return impl_->position_value; }
+int CpuModel::vocab_size() const { return impl_->shared->shape.vocab_size; }
 bool CpuModel::ready_for_decode() const {
     return impl_->phase == SessionPhase::Ready;
 }

@@ -1,31 +1,50 @@
 # lfm25-native-cpp
 
-Experimental C++20 inference runtime specialized for
-`LiquidAI/LFM2.5-230M`, with independent NVIDIA CUDA and native CPU backends.
-The runtime reads the original `safetensors`, `config.json` and
-`tokenizer.json` files. Python or another model-serving runtime is not required.
+Experimental C++20 inference runtime for LiquidAI LFM2.5 checkpoints, with
+independent NVIDIA CUDA and native CPU backends. The runtime reads the
+original `safetensors`, `config.json` and `tokenizer.json` files. Python or
+another model-serving runtime is not required.
 
-## v0.0.20: parallel paged attention and shared CPU prefixes
+## Supported variants
 
-The native CPU serving path now adds the missing long-context and reuse pieces:
+| Variant id              | HuggingFace repo                       | Hidden | Layers | Q heads | KV heads | Head dim | Vocab  |
+|-------------------------|----------------------------------------|-------:|-------:|--------:|---------:|---------:|-------:|
+| `lfm2.5-230m`           | `LiquidAI/LFM2.5-230M`                 |   1024 |     14 |      16 |        8 |       64 |  65536 |
+| `lfm2.5-1.2b-instruct`  | `LiquidAI/LFM2.5-1.2B-Instruct`        |   2048 |     16 |      32 |        8 |       64 |  65536 |
 
-- adaptive paged GQA parallelism over query heads and page tiles;
-- numerically stable reduction of partial online-softmax states;
-- radix-indexed longest-prefix cache over token IDs;
-- complete hybrid prefix snapshots: paged K/V, all ShortConv states, final
-  logits and seen-token state;
-- partial-page copy-on-write that copies only initialized K/V tokens;
-- LRU eviction constrained by entry count and resident-byte budget;
-- NUMA-aware request placement and best-effort page binding on Linux;
-- explicit metrics for prefix hits, reused tokens, COW traffic, page placement
-  and parallel-attention calls;
-- validation-only Transformers exporter and native C++ logit comparator;
-- CPU C API v5 while preserving the previous CPU API entry points.
+Variants are selected at runtime from the checkpoint's `config.json` through
+`lfm::ModelVariantRegistry`. Adding a new variant does not require editing the
+kernels: register a new `IModelVariant` subclass and the runtime will pick it
+up automatically (Open/Closed Principle).
 
-Long-prompt layer-major prefill, packed decode, ragged multi-request prefill,
-Q4 groupwise weights and FP32/BF16 physical KV pages remain available. The CPU
-microkernels cover scalar, AVX2/FMA, AVX-VNNI, AVX-512 VNNI and NEON. See
-`CPU.md`, `CPU_CONCURRENCY.md`, `CPU_API.md` and `BENCHMARK.md`.
+## v0.0.21: multi-variant support
+
+The runtime is no longer specialized for the 230M checkpoint. The major
+refactor is the introduction of `lfm::ModelShape`, a runtime topology
+descriptor that replaces the former `LfmConfig` constexpr struct. Every buffer
+size and kernel call now reads dimensions from `ModelShape` rather than from
+compile-time constants, so the same binary can execute either the 230M or the
+1.2B-Instruct checkpoint.
+
+Additional changes:
+
+- `IModelVariant` / `ModelVariantRegistry` for variant discovery and selection;
+- `IChatTemplate` interface with the LFM2 Instruct template selected per
+  variant by the tokenizer;
+- `PhysicalPagedKvCache` no longer hard-codes 6 attention layers; it accepts
+  the variant's attention-layer count and slot table at construction;
+- session file header bumped to v2 (`LFMSESS2`) with a variant id field; old
+  v1 session files are rejected cleanly;
+- CPU C API v6 — the legacy v1-v4 entry points were removed (no retrocompat
+  surface is maintained in this release);
+- CUDA C API gains `lfm25_model_vocab_size`;
+- CMake `LFM_VARIANTS` option lists which variants the build advertises
+  (default: `230m;1.2b-instruct`).
+
+The CUDA backend continues to provide quantized weights, paged KV, prefix
+reuse, ragged packed prefill, packed decode, continuous scheduling, CUDA
+Graphs and cuBLAS/cuBLASLt. When `nvcc` is unavailable, CMake builds only the
+CPU targets.
 
 ## CPU-only build
 
@@ -38,7 +57,7 @@ cmake --build build-cpu -j
 ctest --test-dir build-cpu --output-on-failure
 ```
 
-Standalone execution:
+Standalone execution (230M):
 
 ```bash
 ./build-cpu/lfm25-cpu-run \
@@ -53,11 +72,32 @@ Standalone execution:
   --max-new-tokens 32
 ```
 
+Standalone execution (1.2B-Instruct):
+
+```bash
+./build-cpu/lfm25-cpu-run \
+  --model ./model/LFM2.5-1.2B-Instruct \
+  --prompt "Explique CUDA em uma frase." \
+  --cpu-isa auto \
+  --cpu-kv-cache bf16 \
+  --threads 8 \
+  --max-new-tokens 32
+```
+
+Downloading a checkpoint:
+
+```bash
+# 230M (default)
+./scripts/download_model.sh 230m
+# 1.2B-Instruct
+./scripts/download_model.sh 1.2b-instruct
+```
+
 Concurrent benchmark:
 
 ```bash
 ./build-cpu/lfm25-cpu-concurrent-benchmark \
-  ./model/LFM2.5-230M \
+  ./model/LFM2.5-1.2B-Instruct \
   "Explique como a CPU executa uma rede neural." \
   8 32 8 bf16 auto
 ```
@@ -65,17 +105,9 @@ Concurrent benchmark:
 Long-prompt chunk/page sweep:
 
 ```bash
-MODEL=./model/LFM2.5-230M/model.safetensors \
+MODEL=./model/LFM2.5-1.2B-Instruct/model.safetensors \
 TOKENS=1024 KV=bf16 \
 ./scripts/cpu_long_prefill_benchmark.sh
-```
-
-Or run the 1/2/4/8/16-request matrix:
-
-```bash
-MODEL=./model/LFM2.5-230M \
-THREADS=8 KV=bf16 \
-./scripts/cpu_concurrency_benchmark.sh
 ```
 
 ## CUDA backend retained
@@ -94,6 +126,6 @@ cuBLAS/cuBLASLt. When `nvcc` is unavailable, CMake builds only the CPU targets.
 ./scripts/architecture_check.sh
 ```
 
-The original checkpoint is not included. The packaging environment could not
-run the complete official model, so the package does not claim end-to-end
+The original checkpoints are not bundled. The packaging environment could not
+run the complete official models, so the package does not claim end-to-end
 logit parity, text quality or model tokens/s. See `VALIDATION.md`.

@@ -4,6 +4,14 @@
 #include "lfm/cuda_utils.cuh"
 #include "lfm/safetensors.hpp"
 #include "lfm/execution_plan.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
+#include "lfm/session_store.hpp"
+#include "lfm/weight_layout.hpp"
+#include "lfm/weight_loader.hpp"
+#include "lfm/gemm_dispatcher.hpp"
+#include "lfm/packed_session.hpp"
+#include "lfm/detail/model_types.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -18,145 +26,21 @@
 
 namespace lfm {
 
-struct LfmModel::Impl {
+struct LfmModel::Impl : public IPackedSession {
     Impl(const std::string& safetensors_path,
          int max_context,
          ModelOptions options,
          GenerationConfig generation);
     ~Impl();
 
-    struct MatmulKey {
-        int m = 0;
-        int n = 0;
-        int k = 0;
-
-        bool operator==(const MatmulKey& other) const {
-            return m == other.m && n == other.n && k == other.k;
-        }
-    };
-
-    struct MatmulKeyHash {
-        size_t operator()(const MatmulKey& key) const {
-            size_t value = static_cast<size_t>(key.m);
-            value = value * 1315423911u + static_cast<size_t>(key.n);
-            value = value * 2654435761u + static_cast<size_t>(key.k);
-            return value;
-        }
-    };
-
-    struct LtPlan;
-
-    enum class LinearStorageKind : uint8_t {
-        Bf16,
-        Int8,
-        Int4,
-    };
-
-    struct LinearWeight {
-        LinearStorageKind kind = LinearStorageKind::Bf16;
-        const __nv_bfloat16* bf16 = nullptr;
-        const int8_t* int8 = nullptr;
-        const uint8_t* int4 = nullptr;
-        const float* scales = nullptr;
-        int rows = 0;
-        int cols = 0;
-
-        bool quantized() const { return kind != LinearStorageKind::Bf16; }
-        bool int4_quantized() const { return kind == LinearStorageKind::Int4; }
-        bool int8_quantized() const { return kind == LinearStorageKind::Int8; }
-        void validate_storage() const;
-    };
-
-    struct DeviceWeight {
-        DeviceBuffer<__nv_bfloat16> bf16_storage;
-        DeviceBuffer<int8_t> int8_storage;
-        DeviceBuffer<uint8_t> int4_storage;
-        DeviceBuffer<float> scales_storage;
-        std::vector<int64_t> shape;
-        LinearWeight linear;
-    };
-
-    using WeightMap = std::unordered_map<std::string, DeviceWeight>;
-
-    struct SharedModelWeights {
-        std::mutex mutex;
-        WeightMap tensors;
-
-        size_t memory_bytes() const;
-    };
-
-    struct LayerCommon {
-        const __nv_bfloat16* operator_norm = nullptr;
-        const __nv_bfloat16* ffn_norm = nullptr;
-        const LinearWeight* w13 = nullptr;
-        const LinearWeight* w2 = nullptr;
-    };
-
-    struct AttentionLayer {
-        LayerCommon common;
-        const LinearWeight* qkv = nullptr;
-        const LinearWeight* out = nullptr;
-        const __nv_bfloat16* q_norm = nullptr;
-        const __nv_bfloat16* k_norm = nullptr;
-        DeviceBuffer<__nv_bfloat16> key_cache;
-        DeviceBuffer<__nv_bfloat16> value_cache;
-        DeviceBuffer<int8_t> key_cache_int8;
-        DeviceBuffer<int8_t> value_cache_int8;
-        DeviceBuffer<float> key_cache_scales;
-        DeviceBuffer<float> value_cache_scales;
-    };
-
-    struct ConvolutionLayer {
-        LayerCommon common;
-        const LinearWeight* conv_in = nullptr;
-        const __nv_bfloat16* conv_weight = nullptr;
-        const LinearWeight* conv_out = nullptr;
-        DeviceBuffer<__nv_bfloat16> conv_state;
-    };
-
-    using Layer = std::variant<AttentionLayer, ConvolutionLayer>;
-
-    static LayerCommon& common(Layer& layer) {
-        return std::visit([](auto& value) -> LayerCommon& { return value.common; }, layer);
-    }
-    static const LayerCommon& common(const Layer& layer) {
-        return std::visit([](const auto& value) -> const LayerCommon& { return value.common; }, layer);
-    }
-    static AttentionLayer* as_attention(Layer& layer) {
-        return std::get_if<AttentionLayer>(&layer);
-    }
-    static const AttentionLayer* as_attention(const Layer& layer) {
-        return std::get_if<AttentionLayer>(&layer);
-    }
-    static ConvolutionLayer* as_convolution(Layer& layer) {
-        return std::get_if<ConvolutionLayer>(&layer);
-    }
-    static const ConvolutionLayer* as_convolution(const Layer& layer) {
-        return std::get_if<ConvolutionLayer>(&layer);
-    }
-
-    const __nv_bfloat16* load_weight(const SafeTensorFile& file,
-                                     const std::string& name,
-                                     std::vector<int64_t> expected = {});
-    const LinearWeight* load_linear_weight(
-        const SafeTensorFile& file, const std::string& name,
-        std::vector<int64_t> expected);
-    const LinearWeight* load_concat_linear_weight(
-        const SafeTensorFile& file,
-        const std::string& synthetic_name,
-        const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts);
-    LinearWeight slice_rows(const LinearWeight& weight,
-                            int row_offset, int rows) const;
-
+    // Thin wrapper around gemm_->linear(..., plan_) so call sites in the
+    // forward pass don't need to thread plan_ through every call. New
+    // GEMM backends are added by extending GemmDispatcher (OCP).
     void linear(const __nv_bfloat16* x, const LinearWeight& weight,
-                __nv_bfloat16* y, int m, int n, int k, float beta = 0.0f);
-    void linear_cublas(const __nv_bfloat16* x, const __nv_bfloat16* weight,
-                       __nv_bfloat16* y, int m, int n, int k, float beta);
-    void linear_cublaslt(const __nv_bfloat16* x, const __nv_bfloat16* weight,
-                         __nv_bfloat16* y, int m, int n, int k, float beta);
-    LtPlan& get_or_create_lt_plan(const __nv_bfloat16* x,
-                                  const __nv_bfloat16* weight,
-                                  int m, int n, int k);
+                __nv_bfloat16* y, int m, int n, int k, float beta = 0.0f) {
+        gemm_->linear(x, weight, y, m, n, k, beta, plan_);
+    }
+
     void initialize_rope_tables();
     void warmup_decode_gemms();
 
@@ -181,12 +65,38 @@ struct LfmModel::Impl {
     void load_session(const std::string& path);
     PrefixState export_prefix_state() const;
     void restore_prefix_state(const PrefixState& state);
+    SessionStore::SessionState make_session_state();
     void release_local_kv_cache();
     bool local_kv_cache_available() const { return local_kv_cache_available_; }
     SessionPhase phase() const { return phase_; }
+    void set_phase(SessionPhase value) { phase_ = value; }
     bool ready_for_decode() const { return phase_ == SessionPhase::Ready; }
     bool decode_pending() const { return phase_ == SessionPhase::DecodePending; }
     int position() const { return position_; }
+    void set_position(int value) { position_ = value; }
+    int max_context() const { return max_context_; }
+    bool active_segmented_attention() const { return active_segmented_attention_; }
+    void set_active_segmented_attention(bool value) { active_segmented_attention_ = value; }
+    const ModelOptions& options() const { return options_; }
+    const GenerationConfig& generation() const { return generation_; }
+    const ModelShape& shape() const { return shape_; }
+    const std::shared_ptr<SharedModelWeights>& weights() const { return weights_; }
+    DeviceBuffer<__nv_bfloat16>& logits() { return logits_; }
+    DeviceBuffer<uint8_t>& seen_tokens() { return seen_tokens_; }
+    DeviceBuffer<uint64_t>& rng_state() { return rng_state_; }
+    DeviceBuffer<int32_t>& sampled_device() { return sampled_device_; }
+    DeviceBuffer<int32_t>& position_device() { return position_device_; }
+    PinnedBuffer<int32_t>& sampled_host() { return sampled_host_; }
+    std::vector<Layer>& layers() { return layers_; }
+    const std::vector<Layer>& layers() const { return layers_; }
+    RuntimeMetrics& metrics() { return metrics_; }
+    int32_t sampled_host_value() const { return sampled_host_.data()[0]; }
+    void set_sampled_host_value(int32_t value) { sampled_host_.data()[0] = value; }
+    IWeightLayout& weight_layout() { return *weight_layout_; }
+    const LinearWeight* embedding() const { return embedding_; }
+    const __nv_bfloat16* final_norm() const { return final_norm_; }
+    const __nv_bfloat16* rope_cos() const { return rope_cos_.data(); }
+    const __nv_bfloat16* rope_sin() const { return rope_sin_.data(); }
     bool cuda_graph_ready() const {
         return decode_graph_.ready() || segmented_decode_graph_.ready();
     }
@@ -210,14 +120,13 @@ struct LfmModel::Impl {
     bool use_segmented_attention(int host_position) const;
     CudaGraphExec& graph_for_attention(bool segmented);
 
+    ModelShape shape_;
+    const IModelVariant* variant_ = nullptr;
     ExecutionPlan plan_;
     ModelOptions options_;
     GenerationConfig generation_;
     CudaStream stream_;
-    CublasHandle cublas_;
-    CublasLtHandle cublas_lt_;
-    DeviceBuffer<std::byte> lt_workspace_;
-    std::unordered_map<MatmulKey, std::unique_ptr<LtPlan>, MatmulKeyHash> lt_plans_;
+    std::unique_ptr<GemmDispatcher> gemm_;
     CudaGraphExec decode_graph_;
     CudaGraphExec segmented_decode_graph_;
     int max_context_;
@@ -229,29 +138,31 @@ struct LfmModel::Impl {
     RuntimeMetrics metrics_;
 
     std::shared_ptr<SharedModelWeights> weights_;
+    std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;
     const LinearWeight* embedding_ = nullptr;
     const __nv_bfloat16* final_norm_ = nullptr;
+    std::unique_ptr<IWeightLayout> weight_layout_;
 
     DeviceBuffer<int32_t> position_device_{1};
     DeviceBuffer<int32_t> sampled_device_{1};
     PinnedBuffer<int32_t> sampled_host_{1};
-    DeviceBuffer<uint8_t> seen_tokens_{LfmConfig::vocab};
-    DeviceBuffer<float> sampling_scores_{LfmConfig::vocab};
-    DeviceBuffer<float> topk_values_{LfmConfig::max_top_k};
-    DeviceBuffer<int32_t> topk_indices_{LfmConfig::max_top_k};
+    DeviceBuffer<uint8_t> seen_tokens_;
+    DeviceBuffer<float> sampling_scores_;
+    DeviceBuffer<float> topk_values_{static_cast<size_t>(kMaxTopK)};
+    DeviceBuffer<int32_t> topk_indices_{static_cast<size_t>(kMaxTopK)};
     DeviceBuffer<uint64_t> rng_state_{1};
 
-    DeviceBuffer<__nv_bfloat16> hidden_{LfmConfig::hidden};
-    DeviceBuffer<__nv_bfloat16> residual_{LfmConfig::hidden};
-    DeviceBuffer<__nv_bfloat16> normed_{LfmConfig::hidden};
-    DeviceBuffer<__nv_bfloat16> op_output_{LfmConfig::hidden};
-    DeviceBuffer<__nv_bfloat16> qkv_output_{LfmConfig::qkv_width};
-    DeviceBuffer<__nv_bfloat16> conv_projected_{3 * LfmConfig::hidden};
-    DeviceBuffer<__nv_bfloat16> gate_up_{2 * LfmConfig::intermediate};
-    DeviceBuffer<__nv_bfloat16> activated_{LfmConfig::intermediate};
-    DeviceBuffer<__nv_bfloat16> mlp_output_{LfmConfig::hidden};
-    DeviceBuffer<__nv_bfloat16> logits_{LfmConfig::vocab};
+    DeviceBuffer<__nv_bfloat16> hidden_;
+    DeviceBuffer<__nv_bfloat16> residual_;
+    DeviceBuffer<__nv_bfloat16> normed_;
+    DeviceBuffer<__nv_bfloat16> op_output_;
+    DeviceBuffer<__nv_bfloat16> qkv_output_;
+    DeviceBuffer<__nv_bfloat16> conv_projected_;
+    DeviceBuffer<__nv_bfloat16> gate_up_;
+    DeviceBuffer<__nv_bfloat16> activated_;
+    DeviceBuffer<__nv_bfloat16> mlp_output_;
+    DeviceBuffer<__nv_bfloat16> logits_;
     DeviceBuffer<__nv_bfloat16> rope_cos_;
     DeviceBuffer<__nv_bfloat16> rope_sin_;
     DeviceBuffer<float> attention_partial_max_;

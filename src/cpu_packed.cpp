@@ -13,12 +13,12 @@
 namespace lfm {
 
 struct CpuPackedExecutor::Impl {
-    void ensure(size_t batch) {
-        const size_t hidden_count = batch * LfmConfig::hidden;
-        const size_t qkv_count = batch * LfmConfig::qkv_width;
-        const size_t conv_count = batch * 3ULL * LfmConfig::hidden;
-        const size_t gate_count = batch * 2ULL * LfmConfig::intermediate;
-        const size_t intermediate_count = batch * LfmConfig::intermediate;
+    void ensure(size_t batch, const ModelShape& shape) {
+        const size_t hidden_count = batch * shape.hidden;
+        const size_t qkv_count = batch * shape.qkv_width;
+        const size_t conv_count = batch * 3ULL * shape.hidden;
+        const size_t gate_count = batch * 2ULL * shape.intermediate;
+        const size_t intermediate_count = batch * shape.intermediate;
         hidden.resize(hidden_count);
         residual.resize(hidden_count);
         normed.resize(hidden_count);
@@ -58,19 +58,20 @@ struct CpuPackedExecutor::Impl {
         }
         validate_shared(sessions);
         const size_t batch = sessions.size();
-        ensure(batch);
         CpuModel::Impl::Shared& shared = *state(sessions.front()).shared;
+        const ModelShape& shape = shared.shape;
+        ensure(batch, shape);
 
         for (size_t row = 0; row < batch; ++row) {
             CpuModel::Impl& session = state(sessions[row]);
             if (session.position_value >= shared.max_context) {
                 throw std::runtime_error("CPU context limit reached in packed batch");
             }
-            if (tokens[row] < 0 || tokens[row] >= LfmConfig::vocab) {
+            if (tokens[row] < 0 || tokens[row] >= shape.vocab_size) {
                 throw std::invalid_argument("CPU token out of range in packed batch");
             }
             shared.linear.embedding(shared.embedding, tokens[row],
-                                    hidden.data() + row * LfmConfig::hidden);
+                                    hidden.data() + row * shape.hidden);
         }
 
         for (size_t layer_index = 0; layer_index < shared.layers.size(); ++layer_index) {
@@ -81,12 +82,12 @@ struct CpuPackedExecutor::Impl {
                 }, layer);
 
             std::copy(hidden.begin(), hidden.begin() + static_cast<ptrdiff_t>(
-                batch * LfmConfig::hidden), residual.begin());
+                batch * shape.hidden), residual.begin());
             for (size_t row = 0; row < batch; ++row) {
-                cpu_rmsnorm(hidden.data() + row * LfmConfig::hidden,
+                cpu_rmsnorm(hidden.data() + row * shape.hidden,
                             common.operator_norm.data(),
-                            normed.data() + row * LfmConfig::hidden,
-                            LfmConfig::hidden, LfmConfig::norm_eps);
+                            normed.data() + row * shape.hidden,
+                            shape.hidden, shape.norm_eps);
             }
 
             if (const auto* attention =
@@ -94,21 +95,21 @@ struct CpuPackedExecutor::Impl {
                 shared.linear.gemm(attention->qkv, normed.data(), qkv.data(), batch);
                 for (size_t row = 0; row < batch; ++row) {
                     CpuModel::Impl& session = state(sessions[row]);
-                    float* q = qkv.data() + row * LfmConfig::qkv_width;
-                    float* k = q + LfmConfig::q_width;
-                    float* v = k + LfmConfig::kv_width;
+                    float* q = qkv.data() + row * shape.qkv_width;
+                    float* k = q + shape.q_width;
+                    float* v = k + shape.kv_width;
                     cpu_qk_norm_rope(q, attention->q_norm.data(),
-                        LfmConfig::q_heads, LfmConfig::head_dim,
-                        session.position_value, LfmConfig::rope_theta,
-                        LfmConfig::norm_eps);
+                        shape.num_attention_heads, shape.head_dim,
+                        session.position_value, shape.rope_theta,
+                        shape.norm_eps);
                     cpu_qk_norm_rope(k, attention->k_norm.data(),
-                        LfmConfig::kv_heads, LfmConfig::head_dim,
-                        session.position_value, LfmConfig::rope_theta,
-                        LfmConfig::norm_eps);
+                        shape.num_key_value_heads, shape.head_dim,
+                        session.position_value, shape.rope_theta,
+                        shape.norm_eps);
                     auto& cache = session.attention_state(layer_index);
                     session.store_kv(cache, session.position_value, k, v);
                     session.run_attention(
-                        cache, q, op_output.data() + row * LfmConfig::hidden,
+                        cache, q, op_output.data() + row * shape.hidden,
                         session.position_value + 1);
                 }
                 shared.linear.gemm(attention->out, op_output.data(), hidden.data(), batch);
@@ -121,10 +122,10 @@ struct CpuPackedExecutor::Impl {
                     CpuModel::Impl& session = state(sessions[row]);
                     auto& conv_state = session.convolution_state(layer_index);
                     cpu_conv_decode(
-                        conv_projected.data() + row * 3ULL * LfmConfig::hidden,
+                        conv_projected.data() + row * 3ULL * shape.hidden,
                         convolution.weight.data(), conv_state.state.data(),
-                        op_output.data() + row * LfmConfig::hidden,
-                        LfmConfig::hidden, LfmConfig::conv_cache,
+                        op_output.data() + row * shape.hidden,
+                        shape.hidden, shape.conv_cache,
                         session.position_value);
                 }
                 shared.linear.gemm(convolution.out, op_output.data(),
@@ -132,25 +133,25 @@ struct CpuPackedExecutor::Impl {
             }
 
             for (size_t row = 0; row < batch; ++row) {
-                cpu_residual_add(hidden.data() + row * LfmConfig::hidden,
-                                 residual.data() + row * LfmConfig::hidden,
-                                 LfmConfig::hidden);
-                cpu_rmsnorm(hidden.data() + row * LfmConfig::hidden,
+                cpu_residual_add(hidden.data() + row * shape.hidden,
+                                 residual.data() + row * shape.hidden,
+                                 shape.hidden);
+                cpu_rmsnorm(hidden.data() + row * shape.hidden,
                             common.ffn_norm.data(),
-                            normed.data() + row * LfmConfig::hidden,
-                            LfmConfig::hidden, LfmConfig::norm_eps);
+                            normed.data() + row * shape.hidden,
+                            shape.hidden, shape.norm_eps);
             }
             shared.linear.gemm(common.w13, normed.data(), gate_up.data(), batch);
             for (size_t row = 0; row < batch; ++row) {
-                cpu_swiglu(gate_up.data() + row * 2ULL * LfmConfig::intermediate,
-                            activated.data() + row * LfmConfig::intermediate,
-                            LfmConfig::intermediate);
+                cpu_swiglu(gate_up.data() + row * 2ULL * shape.intermediate,
+                            activated.data() + row * shape.intermediate,
+                            shape.intermediate);
             }
             shared.linear.gemm(common.w2, activated.data(), mlp_output.data(), batch);
             for (size_t row = 0; row < batch; ++row) {
-                cpu_residual_add(hidden.data() + row * LfmConfig::hidden,
-                                 mlp_output.data() + row * LfmConfig::hidden,
-                                 LfmConfig::hidden);
+                cpu_residual_add(hidden.data() + row * shape.hidden,
+                                 mlp_output.data() + row * shape.hidden,
+                                 shape.hidden);
             }
         }
 
@@ -159,14 +160,14 @@ struct CpuPackedExecutor::Impl {
             if (compute_logits[row]) terminal_rows.push_back(row);
         }
         if (!terminal_rows.empty()) {
-            final_normed.resize(terminal_rows.size() * LfmConfig::hidden);
-            final_logits.resize(terminal_rows.size() * LfmConfig::vocab);
+            final_normed.resize(terminal_rows.size() * shape.hidden);
+            final_logits.resize(terminal_rows.size() * shape.vocab_size);
             for (size_t index = 0; index < terminal_rows.size(); ++index) {
                 const size_t row = terminal_rows[index];
-                cpu_rmsnorm(hidden.data() + row * LfmConfig::hidden,
+                cpu_rmsnorm(hidden.data() + row * shape.hidden,
                             shared.final_norm.data(),
-                            final_normed.data() + index * LfmConfig::hidden,
-                            LfmConfig::hidden, LfmConfig::norm_eps);
+                            final_normed.data() + index * shape.hidden,
+                            shape.hidden, shape.norm_eps);
             }
             shared.linear.gemm(shared.embedding, final_normed.data(),
                                final_logits.data(), terminal_rows.size());
@@ -174,9 +175,9 @@ struct CpuPackedExecutor::Impl {
                 CpuModel::Impl& session = state(sessions[terminal_rows[index]]);
                 std::copy(
                     final_logits.begin() + static_cast<ptrdiff_t>(
-                        index * LfmConfig::vocab),
+                        index * shape.vocab_size),
                     final_logits.begin() + static_cast<ptrdiff_t>(
-                        (index + 1) * LfmConfig::vocab),
+                        (index + 1) * shape.vocab_size),
                     session.logits.begin());
             }
         }
@@ -222,7 +223,8 @@ CpuPackedStepMetrics CpuPackedExecutor::prefill_step(
             session.phase != SessionPhase::Prefilling) {
             throw std::runtime_error("CPU session is not eligible for prefill");
         }
-        if (item.token < 0 || item.token >= LfmConfig::vocab) {
+        if (item.token < 0 ||
+            item.token >= session.shared->shape.vocab_size) {
             throw std::invalid_argument("CPU prefill token out of range");
         }
         session.phase = SessionPhase::Prefilling;
@@ -254,7 +256,8 @@ CpuPackedStepMetrics CpuPackedExecutor::prefill_chunk(
         throw std::runtime_error("CPU session is not eligible for chunked prefill");
     }
     for (int32_t token : tokens) {
-        if (token < 0 || token >= LfmConfig::vocab) {
+        if (token < 0 ||
+            token >= session.shared->shape.vocab_size) {
             throw std::invalid_argument("CPU chunked prefill token out of range");
         }
         session.seen[static_cast<size_t>(token)] = 1;

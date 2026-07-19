@@ -267,7 +267,8 @@ LFM25_API lfm25_status lfm25_prefill(
 LFM25_API lfm25_status lfm25_decode(lfm25_model* model, int32_t* token);
 LFM25_API lfm25_status lfm25_position(
     const lfm25_model* model, int32_t* position);
-LFM25_API int32_t lfm25_vocab_size(void);
+LFM25_API lfm25_status lfm25_model_vocab_size(
+    const lfm25_model* model, int32_t* vocab_size);
 LFM25_API lfm25_status lfm25_copy_logits(
     lfm25_model* model, float* logits, size_t logits_count);
 LFM25_API lfm25_status lfm25_generate(

@@ -1,0 +1,205 @@
+#pragma once
+
+// Hoisted model implementation types. These were previously nested inside
+// LfmModel::Impl and are now at namespace lfm:: scope so that WeightLoader,
+// GemmDispatcher, and IPackedSession can depend on them without being
+// friends of LfmModel::Impl (Interface Segregation + Dependency Inversion).
+//
+// All types in this header are implementation details; they are not part of
+// the public API and live under lfm:: so the detail/ headers can reference
+// them without leaking the Impl class.
+
+#include "lfm/cuda_utils.cuh"
+#include "lfm/safetensors.hpp"
+
+#include <cublasLt.h>
+#include <cublas_v2.h>
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+namespace lfm {
+
+// ---------------------------------------------------------------------------
+// GEMM plan keys (cuBLASLt).
+// ---------------------------------------------------------------------------
+
+struct MatmulKey {
+    int m = 0;
+    int n = 0;
+    int k = 0;
+
+    bool operator==(const MatmulKey& other) const {
+        return m == other.m && n == other.n && k == other.k;
+    }
+};
+
+struct MatmulKeyHash {
+    size_t operator()(const MatmulKey& key) const {
+        size_t value = static_cast<size_t>(key.m);
+        value = value * 1315423911u + static_cast<size_t>(key.n);
+        value = value * 2654435761u + static_cast<size_t>(key.k);
+        return value;
+    }
+};
+
+// Cached cuBLASLt matmul plan for one (m, n, k) shape. Holds the operation
+// descriptor, matrix layouts, selected algorithm, and workspace size.
+// Destroyed via RAII in the dtor.
+struct LtPlan {
+    cublasLtMatmulDesc_t operation = nullptr;
+    cublasLtMatrixLayout_t a = nullptr;
+    cublasLtMatrixLayout_t b = nullptr;
+    cublasLtMatrixLayout_t c = nullptr;
+    cublasLtMatrixLayout_t d = nullptr;
+    cublasLtMatmulAlgo_t algorithm{};
+    size_t workspace_size = 0;
+    bool available = false;
+
+    ~LtPlan() {
+        if (d) cublasLtMatrixLayoutDestroy(d);
+        if (c) cublasLtMatrixLayoutDestroy(c);
+        if (b) cublasLtMatrixLayoutDestroy(b);
+        if (a) cublasLtMatrixLayoutDestroy(a);
+        if (operation) cublasLtMatmulDescDestroy(operation);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Linear weight storage.
+// ---------------------------------------------------------------------------
+
+enum class LinearStorageKind : uint8_t {
+    Bf16,
+    Int8,
+    Int4,
+};
+
+struct LinearWeight {
+    LinearStorageKind kind = LinearStorageKind::Bf16;
+    const __nv_bfloat16* bf16 = nullptr;
+    const int8_t* int8 = nullptr;
+    const uint8_t* int4 = nullptr;
+    const float* scales = nullptr;
+    int rows = 0;
+    int cols = 0;
+
+    bool quantized() const { return kind != LinearStorageKind::Bf16; }
+    bool int4_quantized() const { return kind == LinearStorageKind::Int4; }
+    bool int8_quantized() const { return kind == LinearStorageKind::Int8; }
+    void validate_storage() const;
+};
+
+struct DeviceWeight {
+    DeviceBuffer<__nv_bfloat16> bf16_storage;
+    DeviceBuffer<int8_t> int8_storage;
+    DeviceBuffer<uint8_t> int4_storage;
+    DeviceBuffer<float> scales_storage;
+    std::vector<int64_t> shape;
+    LinearWeight linear;
+};
+
+using WeightMap = std::unordered_map<std::string, DeviceWeight>;
+
+// Process-wide shared weight arena. Multiple LfmModel sessions on the same
+// device + checkpoint + weight_mode share one instance to avoid duplicate
+// GPU allocations.
+struct SharedModelWeights {
+    std::mutex mutex;
+    WeightMap tensors;
+
+    size_t memory_bytes() const;
+};
+
+// ---------------------------------------------------------------------------
+// Per-layer topology.
+// ---------------------------------------------------------------------------
+
+struct LayerCommon {
+    const __nv_bfloat16* operator_norm = nullptr;
+    const __nv_bfloat16* ffn_norm = nullptr;
+    const LinearWeight* w13 = nullptr;
+    const LinearWeight* w2 = nullptr;
+};
+
+struct AttentionLayer {
+    LayerCommon common;
+    const LinearWeight* qkv = nullptr;
+    const LinearWeight* out = nullptr;
+    const __nv_bfloat16* q_norm = nullptr;
+    const __nv_bfloat16* k_norm = nullptr;
+    DeviceBuffer<__nv_bfloat16> key_cache;
+    DeviceBuffer<__nv_bfloat16> value_cache;
+    DeviceBuffer<int8_t> key_cache_int8;
+    DeviceBuffer<int8_t> value_cache_int8;
+    DeviceBuffer<float> key_cache_scales;
+    DeviceBuffer<float> value_cache_scales;
+};
+
+struct ConvolutionLayer {
+    LayerCommon common;
+    const LinearWeight* conv_in = nullptr;
+    const __nv_bfloat16* conv_weight = nullptr;
+    const LinearWeight* conv_out = nullptr;
+    DeviceBuffer<__nv_bfloat16> conv_state;
+};
+
+using Layer = std::variant<AttentionLayer, ConvolutionLayer>;
+
+// Free-function visitors (replaces the old Impl::common / as_attention /
+// as_convolution statics). Putting them at namespace scope means callers
+// in packed.cu no longer need `friend struct PackedDecodeExecutorImpl`.
+inline LayerCommon& common(Layer& layer) {
+    return std::visit([](auto& value) -> LayerCommon& { return value.common; }, layer);
+}
+inline const LayerCommon& common(const Layer& layer) {
+    return std::visit([](const auto& value) -> const LayerCommon& { return value.common; }, layer);
+}
+inline AttentionLayer* as_attention(Layer& layer) {
+    return std::get_if<AttentionLayer>(&layer);
+}
+inline const AttentionLayer* as_attention(const Layer& layer) {
+    return std::get_if<AttentionLayer>(&layer);
+}
+inline ConvolutionLayer* as_convolution(Layer& layer) {
+    return std::get_if<ConvolutionLayer>(&layer);
+}
+inline const ConvolutionLayer* as_convolution(const Layer& layer) {
+    return std::get_if<ConvolutionLayer>(&layer);
+}
+
+// Returns a view into a contiguous row range of an existing linear weight.
+// The returned LinearWeight shares storage with the source.
+inline LinearWeight slice_rows(const LinearWeight& weight,
+                               int row_offset, int rows) {
+    if (row_offset < 0 || rows <= 0 || row_offset + rows > weight.rows) {
+        throw std::out_of_range("linear weight row slice is out of range");
+    }
+    LinearWeight result = weight;
+    result.rows = rows;
+    if (weight.bf16) {
+        result.bf16 = weight.bf16 + static_cast<size_t>(row_offset) * weight.cols;
+    }
+    if (weight.int8) {
+        result.int8 = weight.int8 + static_cast<size_t>(row_offset) * weight.cols;
+        result.scales = weight.scales + row_offset;
+    }
+    if (weight.int4) {
+        const size_t packed_cols =
+            (static_cast<size_t>(weight.cols) + 1) / 2;
+        result.int4 = weight.int4 + static_cast<size_t>(row_offset) * packed_cols;
+        result.scales = weight.scales + row_offset;
+    }
+    return result;
+}
+
+} // namespace lfm

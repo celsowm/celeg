@@ -74,6 +74,7 @@ public:
     void clear_runtime_metrics();
     CpuModelMemoryStats memory_stats() const;
     int position() const;
+    int vocab_size() const;
     bool ready_for_decode() const;
     CpuIsa isa() const;
     CpuKvCacheMode kv_cache_mode() const;

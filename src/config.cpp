@@ -16,8 +16,20 @@ int read_int(const Json& root, const char* name) {
     return static_cast<int>(value);
 }
 
+int read_int_or(const Json& root, const char* primary, const char* fallback) {
+    if (root.contains(primary)) return read_int(root, primary);
+    if (root.contains(fallback)) return read_int(root, fallback);
+    throw std::runtime_error(std::string("missing config integer: ") + primary);
+}
+
 bool read_bool(const Json& root, const char* name) {
     return root[name].as_bool();
+}
+
+bool read_bool_or(const Json& root, const char* primary, const char* fallback) {
+    if (root.contains(primary)) return root[primary].as_bool();
+    if (root.contains(fallback)) return root[fallback].as_bool();
+    return false;
 }
 
 } // namespace
@@ -30,7 +42,9 @@ ModelConfig ModelConfig::load(const std::string& path) {
     config.hidden_size = read_int(root, "hidden_size");
     config.intermediate_size = read_int(root, "intermediate_size");
     config.num_hidden_layers = read_int(root, "num_hidden_layers");
-    config.num_attention_heads = read_int(root, "num_attention_heads");
+    // LiquidAI publishes "num_attention_heads" but some checkpoints ship the
+    // alias "num_heads". Accept either to stay forward-compatible.
+    config.num_attention_heads = read_int_or(root, "num_attention_heads", "num_heads");
     config.num_key_value_heads = read_int(root, "num_key_value_heads");
     config.vocab_size = read_int(root, "vocab_size");
     config.conv_cache = read_int(root, "conv_L_cache");
@@ -41,10 +55,26 @@ ModelConfig ModelConfig::load(const std::string& path) {
     config.pad_token_id = read_int(root, "pad_token_id");
     config.norm_eps = static_cast<float>(root["norm_eps"].as_number());
     config.conv_bias = read_bool(root, "conv_bias");
-    config.tie_word_embeddings = read_bool(root, "tie_word_embeddings");
+    // 1.2B-Instruct uses "tie_embedding"; 230M uses "tie_word_embeddings".
+    config.tie_word_embeddings = read_bool_or(root, "tie_word_embeddings", "tie_embedding");
     config.use_pos_enc = read_bool(root, "use_pos_enc");
-    config.rope_theta = static_cast<float>(root["rope_parameters"]["rope_theta"].as_number());
-    config.rope_type = root["rope_parameters"]["rope_type"].as_string();
+    // rope_theta / rope_type may be top-level (1.2B-Instruct) or nested under
+    // "rope_parameters" (230M). Accept either layout.
+    if (root.contains("rope_parameters") && !root.contains("rope_theta")) {
+        config.rope_theta = static_cast<float>(root["rope_parameters"]["rope_theta"].as_number());
+        if (root["rope_parameters"].contains("rope_type")) {
+            config.rope_type = root["rope_parameters"]["rope_type"].as_string();
+        } else {
+            config.rope_type = "default";
+        }
+    } else {
+        config.rope_theta = static_cast<float>(root["rope_theta"].as_number());
+        if (root.contains("rope_type")) {
+            config.rope_type = root["rope_type"].as_string();
+        } else {
+            config.rope_type = "default";
+        }
+    }
 
     if (root.contains("head_dim")) {
         config.head_dim = read_int(root, "head_dim");
@@ -99,32 +129,6 @@ void ModelConfig::validate() const {
     if (bos_token_id < 0 || eos_token_id < 0 || pad_token_id < 0 ||
         bos_token_id >= vocab_size || eos_token_id >= vocab_size || pad_token_id >= vocab_size) {
         throw std::runtime_error("invalid special token IDs in config");
-    }
-}
-
-void ModelConfig::validate_compiled_backend() const {
-    // The backend reads the real config and rejects silent shape mismatches. The
-    // kernels and workspace are still specialized for the 230M checkpoint.
-    if (hidden_size != 1024 || intermediate_size != 2560 || num_hidden_layers != 14 ||
-        num_attention_heads != 16 || num_key_value_heads != 8 || head_dim != 64 ||
-        vocab_size != 65536 || conv_cache != 3 || conv_dim != 1024 ||
-        std::fabs(norm_eps - 1.0e-5f) > 1.0e-12f ||
-        std::fabs(rope_theta - 1'000'000.0f) > 0.5f) {
-        throw std::runtime_error(
-            "this build is specialized for LiquidAI/LFM2.5-230M; config dimensions differ");
-    }
-
-    static constexpr LayerType expected[] = {
-        LayerType::Convolution, LayerType::Convolution, LayerType::FullAttention,
-        LayerType::Convolution, LayerType::FullAttention, LayerType::Convolution,
-        LayerType::FullAttention, LayerType::Convolution, LayerType::FullAttention,
-        LayerType::Convolution, LayerType::FullAttention, LayerType::Convolution,
-        LayerType::FullAttention, LayerType::Convolution,
-    };
-    for (int i = 0; i < num_hidden_layers; ++i) {
-        if (layer_types[static_cast<size_t>(i)] != expected[i]) {
-            throw std::runtime_error("layer_types do not match the compiled LFM2.5-230M schedule");
-        }
     }
 }
 

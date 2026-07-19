@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(lfm25_cuda_cpp VERSION 0.0.20 LANGUAGES C CXX)
+project(lfm25_cuda_cpp VERSION 0.0.21 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -12,6 +12,24 @@ option(LFM_BUILD_TESTS "Build host, CPU and CUDA tests" ON)
 option(LFM_FAST_MATH "Enable CUDA --use_fast_math" OFF)
 option(LFM_DEBUG_SYNC "Synchronize after every CUDA kernel" OFF)
 option(LFM_RUN_CUDA_TESTS "Register CUDA runtime tests with CTest" ON)
+set(LFM_VARIANTS "230m;1.2b-instruct" CACHE STRING
+    "Semicolon-separated list of model variants to compile in. Available: 230m, 1.2b-instruct")
+
+list(REMOVE_DUPLICATES LFM_VARIANTS)
+foreach(variant IN LISTS LFM_VARIANTS)
+    if(variant STREQUAL "230m")
+        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-230M")
+    elseif(variant STREQUAL "1.2b-instruct")
+        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-1.2B-Instruct")
+    else()
+        message(FATAL_ERROR "Unknown LFM variant: ${variant}. Valid: 230m, 1.2b-instruct")
+    endif()
+endforeach()
+# Expose the variant list as a space-separated string for any tooling that
+# wants to read it at compile time. Semicolons are avoided so MSVC does not
+# split the value on the command line.
+string(REPLACE ";" " " LFM_VARIANTS_STR "${LFM_VARIANTS}")
+add_compile_definitions(LFM_VARIANTS="${LFM_VARIANTS_STR}")
 
 find_package(Threads REQUIRED)
 
@@ -44,6 +62,9 @@ add_library(lfm25_host
     src/cpu_paged_kv.cpp
     src/cpu_prefix_cache.cpp
     src/downloader.cpp
+    src/model_shape.cpp
+    src/model_variant.cpp
+    src/chat_template.cpp
 )
 target_include_directories(lfm25_host PUBLIC include)
 if(NOT MSVC)
@@ -117,6 +138,10 @@ if(LFM_CUDA_AVAILABLE)
         src/model.cu
         src/packed.cu
         src/paged_kv.cu
+        src/session_store.cu
+        src/weight_layout.cu
+        src/weight_loader.cu
+        src/gemm_dispatcher.cu
         src/concurrent.cpp
     )
     target_include_directories(lfm25_core PUBLIC include)
@@ -176,9 +201,15 @@ if(LFM_BUILD_TESTS)
     add_executable(json_test tests/json_test.cpp src/json.cpp)
     target_include_directories(json_test PRIVATE include)
     add_test(NAME json_test COMMAND json_test)
-    add_executable(config_test tests/config_test.cpp src/config.cpp src/json.cpp)
+    add_executable(config_test tests/config_test.cpp src/config.cpp src/model_shape.cpp src/model_variant.cpp src/json.cpp)
     target_include_directories(config_test PRIVATE include)
     add_test(NAME config_test COMMAND config_test)
+    add_executable(model_variant_test tests/model_variant_test.cpp src/model_shape.cpp src/model_variant.cpp)
+    target_include_directories(model_variant_test PRIVATE include)
+    add_test(NAME model_variant_test COMMAND model_variant_test)
+    add_executable(chat_template_test tests/chat_template_test.cpp src/chat_template.cpp)
+    target_include_directories(chat_template_test PRIVATE include)
+    add_test(NAME chat_template_test COMMAND chat_template_test)
     add_executable(reference_test tests/reference_test.cpp src/reference.cpp)
     target_include_directories(reference_test PRIVATE include)
     add_test(NAME reference_test COMMAND reference_test)
@@ -188,7 +219,7 @@ if(LFM_BUILD_TESTS)
     add_executable(quantization_test tests/quantization_test.cpp src/quantization.cpp)
     target_include_directories(quantization_test PRIVATE include)
     add_test(NAME quantization_test COMMAND quantization_test)
-    add_executable(tokenizer_test tests/tokenizer_test.cpp src/tokenizer.cpp src/json.cpp)
+    add_executable(tokenizer_test tests/tokenizer_test.cpp src/tokenizer.cpp src/chat_template.cpp src/json.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
     add_executable(safetensors_test tests/safetensors_test.cpp src/safetensors.cpp src/json.cpp)

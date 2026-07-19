@@ -1,6 +1,9 @@
 #include "lfm/config.hpp"
+#include "lfm/chat_template.hpp"
 #include "lfm/downloader.hpp"
 #include "lfm/model.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
 #include "lfm/tokenizer.hpp"
 
 #include <algorithm>
@@ -234,7 +237,11 @@ int main(int argc, char** argv) {
         }
         const lfm::ModelConfig config =
             lfm::ModelConfig::load((model / "config.json").string());
-        config.validate_compiled_backend();
+        const lfm::ModelShape shape = lfm::ModelShape::from_config(config);
+        lfm::register_builtin_variants();
+        const lfm::IModelVariant& variant =
+            lfm::ModelVariantRegistry::instance().select(shape);
+        (void)variant;
         if (args.context > config.max_position_embeddings) {
             throw std::runtime_error("--context exceeds max_position_embeddings in config.json");
         }
@@ -243,7 +250,8 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string());
+        lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
+            lfm::make_chat_template(variant.chat_template_kind()));
         if (tokenizer.bos_id() != config.bos_token_id ||
             tokenizer.eos_id() != config.eos_token_id) {
             throw std::runtime_error("tokenizer special IDs disagree with config.json");

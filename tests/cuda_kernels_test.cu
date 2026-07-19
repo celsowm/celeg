@@ -2,6 +2,8 @@
 #include "lfm/kernels.cuh"
 #include "lfm/reference.hpp"
 #include "lfm/paged_kv.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -17,6 +19,96 @@ float to_float(__nv_bfloat16 value) {
 
 __nv_bfloat16 to_bf16(float value) {
     return __float2bfloat16(value);
+}
+
+// Returns the canonical shapes for every registered model variant. The
+// paged-KV tests run against each entry so a regression that affects only
+// one variant (e.g. a different num_hidden_layers or kv_width) is caught.
+// Adding a new variant to ModelVariantRegistry automatically extends the
+// test matrix without editing this file (Open/Closed Principle).
+std::vector<lfm::ModelShape> registered_variant_shapes() {
+    lfm::register_builtin_variants();
+    std::vector<lfm::ModelShape> shapes;
+    for (const lfm::IModelVariant* variant :
+         []() -> std::vector<const lfm::IModelVariant*> {
+         std::vector<const lfm::IModelVariant*> out;
+         for (const auto id : lfm::ModelVariantRegistry::instance().ids()) {
+             const auto* v = lfm::ModelVariantRegistry::instance().find(id);
+             if (v != nullptr) out.push_back(v);
+         }
+         return out;
+     }()) {
+        // Rebuild a ModelShape from the variant's matching topology by
+        // running resolve_shape on the canonical shape the variant
+        // advertises. We approximate "canonical" by constructing from the
+        // known published configs; this keeps the test self-contained.
+        lfm::ModelShape shape;
+        if (variant->id() == "lfm2.5-230m") {
+            shape.hidden = 1024;
+            shape.intermediate = 2560;
+            shape.num_hidden_layers = 14;
+            shape.num_attention_heads = 16;
+            shape.num_key_value_heads = 8;
+            shape.head_dim = 64;
+            shape.vocab_size = 65536;
+            shape.conv_cache = 3;
+            shape.conv_dim = 1024;
+            shape.max_position_embeddings = 128000;
+            shape.bos_token_id = 1;
+            shape.eos_token_id = 7;
+            shape.pad_token_id = 0;
+            shape.norm_eps = 1e-5f;
+            shape.rope_theta = 1'000'000.0f;
+            shape.rope_type = "default";
+            shape.layer_types = {
+                lfm::LayerType::Convolution, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+            };
+        } else if (variant->id() == "lfm2.5-1.2b-instruct") {
+            shape.hidden = 2048;
+            shape.intermediate = 12288;
+            shape.num_hidden_layers = 16;
+            shape.num_attention_heads = 32;
+            shape.num_key_value_heads = 8;
+            shape.head_dim = 64;
+            shape.vocab_size = 65536;
+            shape.conv_cache = 3;
+            shape.conv_dim = 2048;
+            shape.max_position_embeddings = 128000;
+            shape.bos_token_id = 1;
+            shape.eos_token_id = 7;
+            shape.pad_token_id = 0;
+            shape.norm_eps = 1e-5f;
+            shape.rope_theta = 1'000'000.0f;
+            shape.rope_type = "default";
+            shape.layer_types = {
+                lfm::LayerType::Convolution, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::Convolution, lfm::LayerType::FullAttention,
+                lfm::LayerType::Convolution, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+                lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
+            };
+        } else {
+            continue;
+        }
+        shape.compute_derived();
+        shape.validate();
+        shape = variant->resolve_shape(shape);
+        shapes.push_back(shape);
+    }
+    if (shapes.empty()) {
+        std::cerr << "registered_variant_shapes: no variants registered\n";
+        std::abort();
+    }
+    return shapes;
 }
 
 void expect_near(float actual, float expected, float tolerance = 0.03f) {
@@ -899,15 +991,16 @@ int main() {
     }
 
     // Copy-on-write cloning duplicates all physical page storage while keeping
-    // independent reference counts.
-    {
-        lfm::PhysicalPagedKvCache cache(3, 1, 4, lfm::KvCacheMode::Bf16);
+    // independent reference counts. Run against every registered variant so a
+    // regression that affects only one (e.g. different attention_layers) is
+    // caught without editing this test.
+    for (const lfm::ModelShape& shape : registered_variant_shapes()) {
+        lfm::PhysicalPagedKvCache cache(3, 1, 4, lfm::KvCacheMode::Bf16, shape);
         auto source = cache.allocate_tokens(1);
         assert(source && source->size() == 1);
         const uint32_t source_page = source->front();
         const size_t page_elements = static_cast<size_t>(
-            lfm::PhysicalPagedKvCache::attention_layers) *
-            lfm::LfmConfig::kv_width;
+            cache.attention_layers()) * shape.kv_width;
         std::vector<__nv_bfloat16> contents(page_elements, to_bf16(0.0f));
         contents[0] = to_bf16(3.5f);
         LFM_CUDA(cudaMemcpy(cache.key_bf16() +
@@ -929,16 +1022,15 @@ int main() {
     }
 
     // Partial-page COW copies initialized token slots without transferring the unused suffix.
-    {
+    for (const lfm::ModelShape& shape : registered_variant_shapes()) {
         constexpr int page_tokens = 4;
         lfm::PhysicalPagedKvCache cache(3, page_tokens, 8,
-                                        lfm::KvCacheMode::Bf16);
+                                        lfm::KvCacheMode::Bf16, shape);
         auto source = cache.allocate_tokens(page_tokens);
         assert(source && source->size() == 1);
         const uint32_t source_page = source->front();
         const size_t page_elements = static_cast<size_t>(
-            lfm::PhysicalPagedKvCache::attention_layers) * page_tokens *
-            lfm::LfmConfig::kv_width;
+            cache.attention_layers()) * page_tokens * shape.kv_width;
         std::vector<__nv_bfloat16> contents(page_elements, to_bf16(9.0f));
         LFM_CUDA(cudaMemcpy(cache.key_bf16() +
                             static_cast<size_t>(source_page) * page_elements,
@@ -951,10 +1043,9 @@ int main() {
                             static_cast<size_t>(*cloned) * page_elements,
                             copied.size() * sizeof(__nv_bfloat16),
                             cudaMemcpyDeviceToHost));
-        for (int layer = 0; layer < lfm::PhysicalPagedKvCache::attention_layers;
-             ++layer) {
+        for (int layer = 0; layer < cache.attention_layers(); ++layer) {
             const size_t layer_base = static_cast<size_t>(layer) * page_tokens *
-                                      lfm::LfmConfig::kv_width;
+                                      shape.kv_width;
             expect_near(to_float(copied[layer_base]), 9.0f, 0.01f);
         }
         cache.release(*source);
@@ -962,17 +1053,15 @@ int main() {
     }
 
     // INT8 copy-on-write clones both quantized vectors and scale planes.
-    {
-        lfm::PhysicalPagedKvCache cache(3, 1, 4, lfm::KvCacheMode::Int8);
+    for (const lfm::ModelShape& shape : registered_variant_shapes()) {
+        lfm::PhysicalPagedKvCache cache(3, 1, 4, lfm::KvCacheMode::Int8, shape);
         auto source = cache.allocate_tokens(1);
         assert(source && source->size() == 1);
         const uint32_t source_page = source->front();
         const size_t page_elements = static_cast<size_t>(
-            lfm::PhysicalPagedKvCache::attention_layers) *
-            lfm::LfmConfig::kv_width;
+            cache.attention_layers()) * shape.kv_width;
         const size_t scale_elements = static_cast<size_t>(
-            lfm::PhysicalPagedKvCache::attention_layers) *
-            lfm::LfmConfig::kv_heads;
+            cache.attention_layers()) * shape.num_key_value_heads;
         const int8_t quantized = -37;
         const float scale = 0.03125f;
         LFM_CUDA(cudaMemcpy(cache.key_int8() +

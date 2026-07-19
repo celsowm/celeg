@@ -134,7 +134,20 @@ std::string pair_key(const std::string& a, const std::string& b) {
 
 } // namespace
 
-BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path) {
+BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path)
+    : BpeTokenizer(tokenizer_json_path,
+                   std::make_unique<Lfm2InstructChatTemplate>()) {}
+
+BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path,
+                           std::unique_ptr<IChatTemplate> chat_template)
+    : chat_template_(std::move(chat_template)) {
+    if (!chat_template_) {
+        throw std::invalid_argument("BpeTokenizer requires a chat template");
+    }
+    load(tokenizer_json_path);
+}
+
+void BpeTokenizer::load(const std::string& tokenizer_json_path) {
     const Json root = Json::parse_file(tokenizer_json_path);
     const Json& model = root["model"];
     if (model["type"].as_string() != "BPE") throw std::runtime_error("tokenizer model is not BPE");
@@ -374,16 +387,7 @@ std::string BpeTokenizer::decode(const std::vector<int32_t>& ids, bool skip_spec
 }
 
 std::string BpeTokenizer::format_chat(std::string_view user_prompt, std::string_view system_prompt) const {
-    std::string out = "<|startoftext|>";
-    if (!system_prompt.empty()) {
-        out += "<|im_start|>system\n";
-        out += system_prompt;
-        out += "<|im_end|>\n";
-    }
-    out += "<|im_start|>user\n";
-    out += user_prompt;
-    out += "<|im_end|>\n<|im_start|>assistant\n";
-    return out;
+    return chat_template_->format(user_prompt, system_prompt);
 }
 
 } // namespace lfm

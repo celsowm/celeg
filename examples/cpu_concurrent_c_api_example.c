@@ -9,15 +9,15 @@ int main(int argc, char** argv) {
         fprintf(stderr, "usage: %s model.safetensors\n", argv[0]);
         return 2;
     }
-    lfm25_cpu_model_options_v5 model;
-    lfm25_cpu_model_options_v5_init(&model);
+    lfm25_cpu_model_options_v6 model;
+    lfm25_cpu_model_options_init(&model);
     model.kv_cache_mode = LFM25_CPU_KV_BF16;
 
     lfm25_cpu_engine_options_v3 engine_options;
-    lfm25_cpu_engine_options_v3_init(&engine_options);
+    lfm25_cpu_engine_options_init(&engine_options);
     engine_options.max_active_requests = 4;
 
-    lfm25_cpu_engine* engine = lfm25_cpu_engine_create_v3(
+    lfm25_cpu_engine* engine = lfm25_cpu_engine_create(
         argv[1], &model, &engine_options);
     if (!engine) {
         fprintf(stderr, "engine creation failed\n");

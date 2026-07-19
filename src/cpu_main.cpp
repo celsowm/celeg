@@ -2,7 +2,10 @@
 #include "lfm/cpu_isa.hpp"
 #include "lfm/cpu_model.hpp"
 #include "lfm/cpu_topology.hpp"
+#include "lfm/chat_template.hpp"
 #include "lfm/downloader.hpp"
+#include "lfm/model_shape.hpp"
+#include "lfm/model_variant.hpp"
 #include "lfm/tokenizer.hpp"
 
 #include <algorithm>
@@ -140,11 +143,15 @@ int main(int argc, char** argv) {
             model = std::filesystem::path(args.model_dir);
         }
         const lfm::ModelConfig config = lfm::ModelConfig::load((model / "config.json").string());
-        config.validate_compiled_backend();
+        const lfm::ModelShape shape = lfm::ModelShape::from_config(config);
+        lfm::register_builtin_variants();
+        const lfm::IModelVariant& variant =
+            lfm::ModelVariantRegistry::instance().select(shape);
         if (args.context > config.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
-        lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string());
+        lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
+            lfm::make_chat_template(variant.chat_template_kind()));
         const std::string text = args.raw_prompt
             ? args.prompt : tokenizer.format_chat(args.prompt, args.system);
         const std::vector<int32_t> input = tokenizer.encode(text, args.raw_prompt);

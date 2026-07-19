@@ -9,7 +9,7 @@ void GenerationConfig::validate() const {
     if (!std::isfinite(temperature) || temperature < 0.0f) {
         throw std::invalid_argument("temperature must be finite and non-negative");
     }
-    if (top_k <= 0 || top_k > LfmConfig::max_top_k) {
+    if (top_k <= 0 || top_k > kMaxTopK) {
         throw std::invalid_argument("top_k must be between 1 and 128");
     }
     if (!std::isfinite(top_p) || top_p <= 0.0f || top_p > 1.0f) {
