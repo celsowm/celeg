@@ -1,6 +1,7 @@
 #include "lfm/packed.hpp"
 
 #include "lfm/kernels.cuh"
+#include "lfm/moe.hpp"
 #include "lfm/detail/model_impl.hpp"
 #include "lfm/paged_kv.hpp"
 
@@ -42,6 +43,15 @@ struct PackedDecodeExecutorImpl {
           gate_up(maximum_batch * 2 * shape_.intermediate),
           activated(maximum_batch * shape_.intermediate),
           mlp_output(maximum_batch * shape_.hidden),
+          moe_hidden_float(maximum_batch * shape_.hidden),
+          moe_sel(maximum_batch * shape_.experts_per_token),
+          moe_routing_w(maximum_batch * shape_.experts_per_token),
+          moe_router_scratch(maximum_batch * shape_.num_experts),
+          moe_output(maximum_batch * shape_.hidden),
+          moe_gu_scratch(static_cast<size_t>(maximum_batch) *
+                         shape_.experts_per_token * 2 * shape_.moe_intermediate),
+          moe_act_scratch(static_cast<size_t>(maximum_batch) *
+                          shape_.experts_per_token * shape_.moe_intermediate),
           logits(maximum_batch * shape_.vocab_size),
           sampling_scores(maximum_batch * shape_.vocab_size),
           selected_values(maximum_batch * static_cast<size_t>(kMaxTopK)),
@@ -123,6 +133,17 @@ struct PackedDecodeExecutorImpl {
     DeviceBuffer<__nv_bfloat16> activated;
     DeviceBuffer<__nv_bfloat16> mlp_output;
     DeviceBuffer<__nv_bfloat16> logits;
+
+    // MoE scratch (reused across layers; sized for the maximum packed batch).
+    // The router runs in float, so normed activations are cast to float and
+    // the selected expert gate/up and activated projections are buffered here.
+    DeviceBuffer<float> moe_hidden_float;       // [batch * hidden]
+    DeviceBuffer<int32_t> moe_sel;              // [batch * experts_per_token]
+    DeviceBuffer<float> moe_routing_w;          // [batch * experts_per_token]
+    DeviceBuffer<float> moe_router_scratch;     // [batch * num_experts]
+    DeviceBuffer<__nv_bfloat16> moe_output;     // [batch * hidden]
+    DeviceBuffer<__nv_bfloat16> moe_gu_scratch; // [batch * K * 2 * moe_inter]
+    DeviceBuffer<__nv_bfloat16> moe_act_scratch; // [batch * K * moe_inter]
     DeviceBuffer<float> sampling_scores;
     DeviceBuffer<float> selected_values;
     DeviceBuffer<int32_t> selected_indices;
@@ -671,14 +692,19 @@ struct PackedDecodeExecutorImpl {
     void run_mlp_layer(IPackedSession& reference,
                        const LayerCommon& common_layer,
                        int rows) {
+        if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
+            (void)moe;
+            run_mlp_moe_layer(reference, common_layer, rows);
+            return;
+        }
         launch_rmsnorm(hidden.data(), common_layer.ffn_norm, normed.data(),
                        rows, shape_.hidden, shape_.norm_eps,
                        stream.get());
         if (reference.options().fused_projections) {
             linear(normed.data(), *as_dense_ffn(common_layer.feed_forward)->w13, gate_up.data(), rows,
-                   2 * shape_.intermediate, shape_.hidden);
+                    2 * shape_.intermediate, shape_.hidden);
             launch_swiglu_interleaved(gate_up.data(), activated.data(), rows,
-                                      shape_.intermediate, stream.get());
+                                       shape_.intermediate, stream.get());
         } else {
             const auto w1 = slice_rows(
                 *as_dense_ffn(common_layer.feed_forward)->w13, 0, shape_.intermediate);
@@ -688,21 +714,55 @@ struct PackedDecodeExecutorImpl {
             const size_t plane =
                 static_cast<size_t>(rows) * shape_.intermediate;
             linear(normed.data(), w1, gate_up.data(), rows,
-                   shape_.intermediate, shape_.hidden);
+                    shape_.intermediate, shape_.hidden);
             linear(normed.data(), w3, gate_up.data() + plane, rows,
-                   shape_.intermediate, shape_.hidden);
+                    shape_.intermediate, shape_.hidden);
             launch_swiglu_fused(gate_up.data(), activated.data(),
                                 static_cast<int>(plane), stream.get());
         }
         if (reference.options().fused_residuals) {
             linear(activated.data(), *as_dense_ffn(common_layer.feed_forward)->w2, hidden.data(), rows,
-                   shape_.hidden, shape_.intermediate, 1.0f);
+                    shape_.hidden, shape_.intermediate, 1.0f);
         } else {
             linear(activated.data(), *as_dense_ffn(common_layer.feed_forward)->w2, mlp_output.data(), rows,
-                   shape_.hidden, shape_.intermediate);
+                    shape_.hidden, shape_.intermediate);
             launch_residual_add(hidden.data(), mlp_output.data(),
                                 rows * shape_.hidden, stream.get());
         }
+    }
+
+    // MoE feed-forward for packed decode/ragged prefill. Mirrors the standalone
+    // run_mlp_moe_decode path: RMSNorm -> cast -> router -> selected-expert FFN
+    // -> residual add. Router runs in float (router_float is a device copy of
+    // the BF16 router kept by the owning LfmModel).
+    void run_mlp_moe_layer(IPackedSession& reference,
+                            const LayerCommon& common_layer, int rows) {
+        const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
+        launch_rmsnorm(hidden.data(), common_layer.ffn_norm, normed.data(),
+                       rows, shape_.hidden, shape_.norm_eps, stream.get());
+        launch_cast_bf16_to_float(normed.data(), moe_hidden_float.data(),
+                                  rows * shape_.hidden, stream.get());
+
+        const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
+        lfm::MoeRouterDevice rdev;
+        rdev.router_weight = moe.router_float;
+        rdev.expert_bias = moe.expert_bias;
+        rdev.hidden_data = moe_hidden_float.data();
+        rdev.selected_experts = moe_sel.data();
+        rdev.routing_weights = moe_routing_w.data();
+        rdev.rows = rows;
+        rdev.hidden_dim = shape_.hidden;
+        launch_moe_router(rdev, cfg, moe_router_scratch.data(), stream.get());
+
+        moe_output.zero_async(stream.get());
+        const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+        launch_moe_ffn(fdev, moe_sel.data(), moe_routing_w.data(),
+                       normed.data(), moe_output.data(), rows,
+                       shape_.experts_per_token, moe_gu_scratch.data(),
+                       moe_act_scratch.data(), stream.get());
+
+        launch_residual_add(hidden.data(), moe_output.data(),
+                            rows * shape_.hidden, stream.get());
     }
 
     void run_transformer_layers(IPackedSession& reference, int rows,

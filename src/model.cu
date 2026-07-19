@@ -591,31 +591,9 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) 
 
 namespace {
 
-// Builds the MoE router device/config descriptors from the model shape and a
-// precomputed float router copy. Shared by the decode and prefill paths.
-lfm::MoeRouterConfig moe_router_config(const ModelShape& shape) {
-    lfm::MoeRouterConfig cfg;
-    cfg.num_experts = shape.num_experts;
-    cfg.experts_per_token = shape.experts_per_token;
-    cfg.normalize_topk = shape.normalize_topk;
-    cfg.use_expert_bias = shape.use_expert_bias;
-    cfg.routed_scaling_factor = shape.routed_scaling_factor;
-    return cfg;
-}
-
-lfm::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const ModelShape& shape) {
-    lfm::MoeFfnDevice fdev;
-    fdev.gate_up = moe.gate_up->bf16;
-    fdev.down = moe.down->bf16;
-    fdev.num_experts = shape.num_experts;
-    fdev.inter = shape.moe_intermediate;
-    fdev.hidden_dim = shape.hidden;
-    fdev.expert_gate_up_stride =
-        static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
-    fdev.expert_down_stride =
-        static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
-    return fdev;
-}
+// MoE router config / FFN device descriptors are provided inline by
+// lfm/detail/model_types.hpp (moe_router_config / moe_ffn_device) so the
+// standalone paths and the packed executor share one definition.
 
 } // namespace
 

@@ -10,6 +10,8 @@
 // them without leaking the Impl class.
 
 #include "lfm/cuda_utils.cuh"
+#include "lfm/moe.hpp"
+#include "lfm/model_shape.hpp"
 #include "lfm/safetensors.hpp"
 
 #include <cublasLt.h>
@@ -259,6 +261,35 @@ inline const MoeFfnWeights* as_moe_ffn(const FeedForwardWeights& ff) {
 }
 inline bool is_moe_ffn(const FeedForwardWeights& ff) {
     return std::holds_alternative<MoeFfnWeights>(ff);
+}
+
+// Builds the MoE router config / FFN device descriptor from the model shape and
+// MoE weights. Shared by the standalone decode/prefill paths (model.cu) and the
+// packed executor (packed.cu) so both stay in lock-step with the checkpoint
+// topology. Defined inline here (where MoeFfnWeights is complete) to avoid
+// duplicating the descriptor construction across translation units.
+inline lfm::MoeRouterConfig moe_router_config(const ModelShape& shape) {
+    lfm::MoeRouterConfig cfg;
+    cfg.num_experts = shape.num_experts;
+    cfg.experts_per_token = shape.experts_per_token;
+    cfg.normalize_topk = shape.normalize_topk;
+    cfg.use_expert_bias = shape.use_expert_bias;
+    cfg.routed_scaling_factor = shape.routed_scaling_factor;
+    return cfg;
+}
+
+inline lfm::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const ModelShape& shape) {
+    lfm::MoeFfnDevice fdev;
+    fdev.gate_up = moe.gate_up->bf16;
+    fdev.down = moe.down->bf16;
+    fdev.num_experts = shape.num_experts;
+    fdev.inter = shape.moe_intermediate;
+    fdev.hidden_dim = shape.hidden;
+    fdev.expert_gate_up_stride =
+        static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
+    fdev.expert_down_stride =
+        static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+    return fdev;
 }
 
 // Returns a view into a contiguous row range of an existing linear weight.

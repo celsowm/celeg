@@ -6,8 +6,10 @@
 // Make __nv_bfloat16 available to this header in both CUDA and host-only
 // translation units. Under CUDA it comes from cuda_bf16.h; in host-only TUs
 // (e.g. moe_router_test) we define a minimal placeholder since the type is
-// only ever used opaquely as a pointer there.
-#ifdef __CUDACC__
+// only ever used opaquely as a pointer there. Guard on __CUDA_BF16_H__ as well
+// as __CUDACC__ because some host TUs pull in cuda_bf16.h transitively (e.g. via
+// model_types.hpp) before reaching this header.
+#if defined(__CUDACC__) || defined(__CUDA_BF16_H__)
 #include <cuda_bf16.h>
 using cudaStream_t = struct CUstream_st*;
 #else
