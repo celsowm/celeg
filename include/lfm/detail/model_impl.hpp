@@ -107,6 +107,8 @@ struct LfmModel::Impl : public IPackedSession {
     void release_prefill_workspace();
     void run_mlp_decode(const LayerCommon& common_layer);
     void run_mlp_prefill(const LayerCommon& common_layer, int rows);
+    void run_mlp_moe_decode(const LayerCommon& common_layer);
+    void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows);
     void forward_token_host(int32_t token, bool compute_logits);
     void forward_token_paged_host(int32_t token, bool compute_logits,
                                   PhysicalPagedKvCache& paged_kv,
@@ -185,6 +187,28 @@ struct LfmModel::Impl : public IPackedSession {
     DeviceBuffer<__nv_bfloat16> prefill_gate_up_;
     DeviceBuffer<__nv_bfloat16> prefill_activated_;
     DeviceBuffer<__nv_bfloat16> prefill_mlp_output_;
+
+    // ---- MoE feed-forward scratch (decode path, single token) ----
+    DeviceBuffer<float> moe_hidden_float_;    // [hidden]
+    DeviceBuffer<int> moe_sel_;               // [experts_per_token]
+    DeviceBuffer<float> moe_routing_w_;       // [experts_per_token]
+    DeviceBuffer<float> moe_router_scratch_;  // [num_experts]
+    DeviceBuffer<__nv_bfloat16> moe_output_;  // [hidden]
+    DeviceBuffer<__nv_bfloat16> moe_gu_scratch_;  // [K * 2*moe_inter]
+    DeviceBuffer<__nv_bfloat16> moe_act_scratch_; // [K * moe_inter]
+
+    // ---- MoE feed-forward scratch (prefill path, rows tokens) ----
+    DeviceBuffer<float> moe_pf_hidden_float_;
+    DeviceBuffer<int> moe_pf_sel_;
+    DeviceBuffer<float> moe_pf_routing_w_;
+    DeviceBuffer<float> moe_pf_router_scratch_;
+    DeviceBuffer<__nv_bfloat16> moe_pf_output_;
+    DeviceBuffer<__nv_bfloat16> moe_pf_gu_scratch_;
+    DeviceBuffer<__nv_bfloat16> moe_pf_act_scratch_;
+
+    // Per-MoE-layer device float copy of the router weight, produced at load.
+    // Indexed by model layer index; non-MoE layers hold an empty buffer.
+    std::vector<DeviceBuffer<float>> moe_router_float_;
 };
 
 } // namespace lfm

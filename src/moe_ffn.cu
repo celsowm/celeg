@@ -122,4 +122,25 @@ void launch_moe_ffn(const MoeFfnDevice& device,
     LFM_KERNEL_CHECK();
 }
 
+__global__ void cast_bf16_to_float_kernel(const __nv_bfloat16* input,
+                                          float* output, int count) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= count) return;
+    output[i] = bf16_to_f(input[i]);
+}
+
+void launch_cast_bf16_to_float(const __nv_bfloat16* input,
+                               float* output,
+                               int count,
+                               cudaStream_t stream) {
+    if (count <= 0) return;
+    if (input == nullptr || output == nullptr) {
+        throw std::invalid_argument("null cast pointer");
+    }
+    const int block = 256;
+    cast_bf16_to_float_kernel<<<static_cast<unsigned>((count + block - 1) / block), block, 0, stream>>>(
+        input, output, count);
+    LFM_KERNEL_CHECK();
+}
+
 } // namespace lfm

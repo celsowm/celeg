@@ -133,4 +133,11 @@ void compute_moe_ffn(const std::vector<float>& hidden,
                      int rows, int hidden_dim, int inter, int num_experts,
                      std::vector<float>& output);  // [rows * hidden]
 
+// Element-wise cast __nv_bfloat16 -> float. Used to feed BF16 activations
+// into the float router kernels without changing the rest of the pipeline.
+void launch_cast_bf16_to_float(const __nv_bfloat16* input,
+                               float* output,
+                               int count,
+                               cudaStream_t stream);
+
 } // namespace lfm

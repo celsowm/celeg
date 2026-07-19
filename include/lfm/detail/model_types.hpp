@@ -130,6 +130,10 @@ struct MoeFfnWeights {
     const float* expert_bias = nullptr;
     const ExpertLinearWeight* gate_up = nullptr;
     const ExpertLinearWeight* down = nullptr;
+    // Device-resident float copy of `router` ([num_experts * hidden]), produced
+    // once at load time so the CUDA router kernel (which expects float) does
+    // not re-cast every token. Owned by the session Impl, not by this view.
+    const float* router_float = nullptr;
 };
 
 // A layer's feed-forward block is either dense or MoE. The layer operator

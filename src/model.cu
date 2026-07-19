@@ -5,6 +5,7 @@
 #include "lfm/model_variant.hpp"
 #include "lfm/weight_layout.hpp"
 #include "lfm/weight_loader.hpp"
+#include "lfm/moe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -156,6 +157,22 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     mlp_output_.reset(static_cast<size_t>(shape_.hidden));
     logits_.reset(static_cast<size_t>(shape_.vocab_size));
 
+    // MoE scratch (decode path: one token). Sized from the MoE topology when
+    // present; harmless (tiny) for dense-only models.
+    {
+        const int E = shape_.num_experts > 0 ? shape_.num_experts : 1;
+        const int K = shape_.experts_per_token > 0 ? shape_.experts_per_token : 1;
+        const int inter = shape_.moe_intermediate > 0 ? shape_.moe_intermediate : 1;
+        moe_hidden_float_.reset(static_cast<size_t>(shape_.hidden));
+        moe_sel_.reset(static_cast<size_t>(K));
+        moe_routing_w_.reset(static_cast<size_t>(K));
+        moe_router_scratch_.reset(static_cast<size_t>(E));
+        moe_output_.reset(static_cast<size_t>(shape_.hidden));
+        moe_gu_scratch_.reset(static_cast<size_t>(K) * 2 * inter);
+        moe_act_scratch_.reset(static_cast<size_t>(K) * inter);
+        moe_router_float_.resize(static_cast<size_t>(shape_.num_hidden_layers));
+    }
+
     attention_chunks_ = plan_.attention_chunks();
     if (attention_chunks_ > 0) {
         const size_t partials =
@@ -207,18 +224,47 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
             repo, layer_name(i, "operator_norm.weight"), {shape_.hidden});
         common_layer.ffn_norm = weight_loader_->load_weight(
             repo, layer_name(i, "ffn_norm.weight"), {shape_.hidden});
-        const LinearWeight* w13 = weight_loader_->load_concat_linear_weight(
-            repo, layer_name(i, "feed_forward.w13.weight"),
-            {
-                {layer_name(i, "feed_forward.w1.weight"),
-                 {shape_.intermediate, shape_.hidden}},
-                {layer_name(i, "feed_forward.w3.weight"),
-                 {shape_.intermediate, shape_.hidden}},
-            });
-        const LinearWeight* w2 = weight_loader_->load_linear_weight(
-            repo, layer_name(i, "feed_forward.w2.weight"),
-            {shape_.hidden, shape_.intermediate});
-        common_layer.feed_forward = DenseFfnWeights{w13, w2};
+        if (shape_.layer_uses_moe(i)) {
+            // Mixture-of-experts feed-forward for this layer.
+            const int E = shape_.num_experts;
+            const int inter = shape_.moe_intermediate;
+            const float* expert_bias = nullptr;
+            if (shape_.use_expert_bias) {
+                expert_bias = weight_loader_->load_f32_weight(
+                    repo, layer_name(i, "feed_forward.expert_bias.weight"),
+                    {static_cast<int64_t>(E)});
+            }
+            const LinearWeight* router = weight_loader_->load_router(
+                repo, i, E, shape_.hidden);
+            const ExpertLinearWeight* gate_up =
+                weight_loader_->load_moe_gate_up(repo, i, E, inter, shape_.hidden);
+            const ExpertLinearWeight* down =
+                weight_loader_->load_moe_down(repo, i, E, inter, shape_.hidden);
+
+            // Cache a device float copy of the router weight for the CUDA
+            // router kernel (it consumes float, the loaded weight is BF16).
+            DeviceBuffer<float>& router_float = moe_router_float_[static_cast<size_t>(i)];
+            router_float.reset(static_cast<size_t>(E) * shape_.hidden);
+            launch_cast_bf16_to_float(
+                router->bf16, router_float.data(),
+                static_cast<int>(E) * shape_.hidden, stream_.get());
+
+            common_layer.feed_forward = MoeFfnWeights{
+                router, expert_bias, gate_up, down, router_float.data()};
+        } else {
+            const LinearWeight* w13 = weight_loader_->load_concat_linear_weight(
+                repo, layer_name(i, "feed_forward.w13.weight"),
+                {
+                    {layer_name(i, "feed_forward.w1.weight"),
+                     {shape_.intermediate, shape_.hidden}},
+                    {layer_name(i, "feed_forward.w3.weight"),
+                     {shape_.intermediate, shape_.hidden}},
+                });
+            const LinearWeight* w2 = weight_loader_->load_linear_weight(
+                repo, layer_name(i, "feed_forward.w2.weight"),
+                {shape_.hidden, shape_.intermediate});
+            common_layer.feed_forward = DenseFfnWeights{w13, w2};
+        }
 
         const LayerType layer_type =
             shape_.layer_types[static_cast<size_t>(i)];
@@ -471,6 +517,11 @@ void LfmModel::Impl::release_prefill_workspace() {
 }
 
 void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
+    if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
+        (void)moe;
+        run_mlp_moe_decode(common_layer);
+        return;
+    }
     launch_rmsnorm(hidden_.data(), common_layer.ffn_norm, normed_.data(),
                    1, shape_.hidden, shape_.norm_eps,
                    stream_.get());
@@ -501,6 +552,11 @@ void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
 }
 
 void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) {
+    if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
+        (void)moe;
+        run_mlp_moe_prefill(common_layer, rows);
+        return;
+    }
     const size_t matrix_elements =
         static_cast<size_t>(rows) * shape_.intermediate;
     launch_rmsnorm(prefill_hidden_.data(), common_layer.ffn_norm,
@@ -527,10 +583,110 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) 
                rows, shape_.hidden, shape_.intermediate, 1.0f);
     } else {
         linear(prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, prefill_mlp_output_.data(),
-               rows, shape_.hidden, shape_.intermediate);
+                rows, shape_.hidden, shape_.intermediate);
         launch_residual_add(prefill_hidden_.data(), prefill_mlp_output_.data(),
                             rows * shape_.hidden, stream_.get());
     }
+}
+
+namespace {
+
+// Builds the MoE router device/config descriptors from the model shape and a
+// precomputed float router copy. Shared by the decode and prefill paths.
+lfm::MoeRouterConfig moe_router_config(const ModelShape& shape) {
+    lfm::MoeRouterConfig cfg;
+    cfg.num_experts = shape.num_experts;
+    cfg.experts_per_token = shape.experts_per_token;
+    cfg.normalize_topk = shape.normalize_topk;
+    cfg.use_expert_bias = shape.use_expert_bias;
+    cfg.routed_scaling_factor = shape.routed_scaling_factor;
+    return cfg;
+}
+
+lfm::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const ModelShape& shape) {
+    lfm::MoeFfnDevice fdev;
+    fdev.gate_up = moe.gate_up->bf16;
+    fdev.down = moe.down->bf16;
+    fdev.num_experts = shape.num_experts;
+    fdev.inter = shape.moe_intermediate;
+    fdev.hidden_dim = shape.hidden;
+    fdev.expert_gate_up_stride =
+        static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
+    fdev.expert_down_stride =
+        static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+    return fdev;
+}
+
+} // namespace
+
+void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer) {
+    const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
+    launch_rmsnorm(hidden_.data(), common_layer.ffn_norm, normed_.data(),
+                   1, shape_.hidden, shape_.norm_eps, stream_.get());
+    // Router: BF16 normed hidden -> float -> top-K experts.
+    launch_cast_bf16_to_float(normed_.data(), moe_hidden_float_.data(),
+                              shape_.hidden, stream_.get());
+    const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
+    lfm::MoeRouterDevice rdev;
+    rdev.router_weight = moe.router_float;
+    rdev.expert_bias = moe.expert_bias;
+    rdev.hidden_data = moe_hidden_float_.data();
+    rdev.selected_experts = moe_sel_.data();
+    rdev.routing_weights = moe_routing_w_.data();
+    rdev.rows = 1;
+    rdev.hidden_dim = shape_.hidden;
+    launch_moe_router(rdev, cfg, moe_router_scratch_.data(), stream_.get());
+
+    // Expert FFN: accumulate the routing-weighted expert outputs into moe_output_.
+    moe_output_.zero_async(stream_.get());
+    const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+    launch_moe_ffn(fdev, moe_sel_.data(), moe_routing_w_.data(),
+                   normed_.data(), moe_output_.data(), 1, shape_.experts_per_token,
+                   moe_gu_scratch_.data(), moe_act_scratch_.data(), stream_.get());
+
+    // Residual add into the hidden state.
+    launch_residual_add(hidden_.data(), moe_output_.data(),
+                        shape_.hidden, stream_.get());
+}
+
+void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows) {
+    const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
+    // Size the prefill scratch to the requested row count.
+    moe_pf_hidden_float_.reset(static_cast<size_t>(rows) * shape_.hidden);
+    moe_pf_sel_.reset(static_cast<size_t>(rows) * shape_.experts_per_token);
+    moe_pf_routing_w_.reset(static_cast<size_t>(rows) * shape_.experts_per_token);
+    moe_pf_router_scratch_.reset(static_cast<size_t>(rows) * shape_.num_experts);
+    moe_pf_output_.reset(static_cast<size_t>(rows) * shape_.hidden);
+    moe_pf_gu_scratch_.reset(
+        static_cast<size_t>(rows) * shape_.experts_per_token * 2 * shape_.moe_intermediate);
+    moe_pf_act_scratch_.reset(
+        static_cast<size_t>(rows) * shape_.experts_per_token * shape_.moe_intermediate);
+
+    launch_rmsnorm(prefill_hidden_.data(), common_layer.ffn_norm,
+                   prefill_normed_.data(), rows, shape_.hidden, shape_.norm_eps,
+                   stream_.get());
+    launch_cast_bf16_to_float(prefill_normed_.data(), moe_pf_hidden_float_.data(),
+                              rows * shape_.hidden, stream_.get());
+    const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
+    lfm::MoeRouterDevice rdev;
+    rdev.router_weight = moe.router_float;
+    rdev.expert_bias = moe.expert_bias;
+    rdev.hidden_data = moe_pf_hidden_float_.data();
+    rdev.selected_experts = moe_pf_sel_.data();
+    rdev.routing_weights = moe_pf_routing_w_.data();
+    rdev.rows = rows;
+    rdev.hidden_dim = shape_.hidden;
+    launch_moe_router(rdev, cfg, moe_pf_router_scratch_.data(), stream_.get());
+
+    moe_pf_output_.zero_async(stream_.get());
+    const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+    launch_moe_ffn(fdev, moe_pf_sel_.data(), moe_pf_routing_w_.data(),
+                   prefill_normed_.data(), moe_pf_output_.data(), rows,
+                   shape_.experts_per_token, moe_pf_gu_scratch_.data(),
+                   moe_pf_act_scratch_.data(), stream_.get());
+
+    launch_residual_add(prefill_hidden_.data(), moe_pf_output_.data(),
+                        rows * shape_.hidden, stream_.get());
 }
 
 void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
