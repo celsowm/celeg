@@ -207,7 +207,7 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
             file, layer_name(i, "operator_norm.weight"), {shape_.hidden});
         common_layer.ffn_norm = weight_loader_->load_weight(
             file, layer_name(i, "ffn_norm.weight"), {shape_.hidden});
-        common_layer.w13 = weight_loader_->load_concat_linear_weight(
+        const LinearWeight* w13 = weight_loader_->load_concat_linear_weight(
             file, layer_name(i, "feed_forward.w13.weight"),
             {
                 {layer_name(i, "feed_forward.w1.weight"),
@@ -215,9 +215,10 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
                 {layer_name(i, "feed_forward.w3.weight"),
                  {shape_.intermediate, shape_.hidden}},
             });
-        common_layer.w2 = weight_loader_->load_linear_weight(
+        const LinearWeight* w2 = weight_loader_->load_linear_weight(
             file, layer_name(i, "feed_forward.w2.weight"),
             {shape_.hidden, shape_.intermediate});
+        common_layer.feed_forward = DenseFfnWeights{w13, w2};
 
         const LayerType layer_type =
             shape_.layer_types[static_cast<size_t>(i)];
@@ -345,7 +346,7 @@ void LfmModel::Impl::warmup_decode_gemms() {
     if (options_.fused_projections) {
         linear(normed_.data(), *attention_layer->qkv, qkv_output_.data(),
                1, shape_.qkv_width, shape_.hidden);
-        linear(normed_.data(), *first_common.w13, gate_up_.data(),
+        linear(normed_.data(), *as_dense_ffn(first_common.feed_forward)->w13, gate_up_.data(),
                1, 2 * shape_.intermediate, shape_.hidden);
     } else {
         const LinearWeight q_weight =
@@ -364,9 +365,9 @@ void LfmModel::Impl::warmup_decode_gemms() {
                1, shape_.kv_width, shape_.hidden);
 
         const LinearWeight w1 =
-            slice_rows(*first_common.w13, 0, shape_.intermediate);
+            slice_rows(*as_dense_ffn(first_common.feed_forward)->w13, 0, shape_.intermediate);
         const LinearWeight w3 = slice_rows(
-            *first_common.w13, shape_.intermediate,
+            *as_dense_ffn(first_common.feed_forward)->w13, shape_.intermediate,
             shape_.intermediate);
         linear(normed_.data(), w1, gate_up_.data(),
                1, shape_.intermediate, shape_.hidden);
@@ -379,7 +380,7 @@ void LfmModel::Impl::warmup_decode_gemms() {
            options_.fused_residuals ? 1.0f : 0.0f);
     linear(normed_.data(), *convolution_layer->conv_in, conv_projected_.data(),
            1, 3 * shape_.hidden, shape_.hidden);
-    linear(activated_.data(), *first_common.w2, hidden_.data(),
+    linear(activated_.data(), *as_dense_ffn(first_common.feed_forward)->w2, hidden_.data(),
            1, shape_.hidden, shape_.intermediate,
            options_.fused_residuals ? 1.0f : 0.0f);
     linear(normed_.data(), *embedding_, logits_.data(),
@@ -474,13 +475,13 @@ void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
                    1, shape_.hidden, shape_.norm_eps,
                    stream_.get());
     if (options_.fused_projections) {
-        linear(normed_.data(), *common_layer.w13, gate_up_.data(),
+        linear(normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, gate_up_.data(),
                1, 2 * shape_.intermediate, shape_.hidden);
     } else {
         const LinearWeight w1 =
-            slice_rows(*common_layer.w13, 0, shape_.intermediate);
+            slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, shape_.intermediate);
         const LinearWeight w3 = slice_rows(
-            *common_layer.w13, shape_.intermediate, shape_.intermediate);
+            *as_dense_ffn(common_layer.feed_forward)->w13, shape_.intermediate, shape_.intermediate);
         linear(normed_.data(), w1, gate_up_.data(),
                1, shape_.intermediate, shape_.hidden);
         linear(normed_.data(), w3, gate_up_.data() + shape_.intermediate,
@@ -489,10 +490,10 @@ void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
     launch_swiglu_fused(gate_up_.data(), activated_.data(),
                         shape_.intermediate, stream_.get());
     if (options_.fused_residuals) {
-        linear(activated_.data(), *common_layer.w2, hidden_.data(),
+        linear(activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, hidden_.data(),
                1, shape_.hidden, shape_.intermediate, 1.0f);
     } else {
-        linear(activated_.data(), *common_layer.w2, mlp_output_.data(),
+        linear(activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, mlp_output_.data(),
                1, shape_.hidden, shape_.intermediate);
         launch_residual_add(hidden_.data(), mlp_output_.data(),
                             shape_.hidden, stream_.get());
@@ -506,13 +507,13 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) 
                    prefill_normed_.data(), rows, shape_.hidden,
                    shape_.norm_eps, stream_.get());
     if (options_.fused_projections) {
-        linear(prefill_normed_.data(), *common_layer.w13, prefill_gate_up_.data(),
+        linear(prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, prefill_gate_up_.data(),
                rows, 2 * shape_.intermediate, shape_.hidden);
     } else {
         const LinearWeight w1 =
-            slice_rows(*common_layer.w13, 0, shape_.intermediate);
+            slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, shape_.intermediate);
         const LinearWeight w3 = slice_rows(
-            *common_layer.w13, shape_.intermediate, shape_.intermediate);
+            *as_dense_ffn(common_layer.feed_forward)->w13, shape_.intermediate, shape_.intermediate);
         linear(prefill_normed_.data(), w1, prefill_gate_up_.data(),
                rows, shape_.intermediate, shape_.hidden);
         linear(prefill_normed_.data(), w3,
@@ -522,10 +523,10 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) 
     launch_swiglu_fused(prefill_gate_up_.data(), prefill_activated_.data(),
                         static_cast<int>(matrix_elements), stream_.get());
     if (options_.fused_residuals) {
-        linear(prefill_activated_.data(), *common_layer.w2, prefill_hidden_.data(),
+        linear(prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, prefill_hidden_.data(),
                rows, shape_.hidden, shape_.intermediate, 1.0f);
     } else {
-        linear(prefill_activated_.data(), *common_layer.w2, prefill_mlp_output_.data(),
+        linear(prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, prefill_mlp_output_.data(),
                rows, shape_.hidden, shape_.intermediate);
         launch_residual_add(prefill_hidden_.data(), prefill_mlp_output_.data(),
                             rows * shape_.hidden, stream_.get());

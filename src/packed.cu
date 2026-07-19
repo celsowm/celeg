@@ -675,15 +675,15 @@ struct PackedDecodeExecutorImpl {
                        rows, shape_.hidden, shape_.norm_eps,
                        stream.get());
         if (reference.options().fused_projections) {
-            linear(normed.data(), *common_layer.w13, gate_up.data(), rows,
+            linear(normed.data(), *as_dense_ffn(common_layer.feed_forward)->w13, gate_up.data(), rows,
                    2 * shape_.intermediate, shape_.hidden);
             launch_swiglu_interleaved(gate_up.data(), activated.data(), rows,
                                       shape_.intermediate, stream.get());
         } else {
             const auto w1 = slice_rows(
-                *common_layer.w13, 0, shape_.intermediate);
+                *as_dense_ffn(common_layer.feed_forward)->w13, 0, shape_.intermediate);
             const auto w3 = slice_rows(
-                *common_layer.w13, shape_.intermediate,
+                *as_dense_ffn(common_layer.feed_forward)->w13, shape_.intermediate,
                 shape_.intermediate);
             const size_t plane =
                 static_cast<size_t>(rows) * shape_.intermediate;
@@ -695,10 +695,10 @@ struct PackedDecodeExecutorImpl {
                                 static_cast<int>(plane), stream.get());
         }
         if (reference.options().fused_residuals) {
-            linear(activated.data(), *common_layer.w2, hidden.data(), rows,
+            linear(activated.data(), *as_dense_ffn(common_layer.feed_forward)->w2, hidden.data(), rows,
                    shape_.hidden, shape_.intermediate, 1.0f);
         } else {
-            linear(activated.data(), *common_layer.w2, mlp_output.data(), rows,
+            linear(activated.data(), *as_dense_ffn(common_layer.feed_forward)->w2, mlp_output.data(), rows,
                    shape_.hidden, shape_.intermediate);
             launch_residual_add(hidden.data(), mlp_output.data(),
                                 rows * shape_.hidden, stream.get());

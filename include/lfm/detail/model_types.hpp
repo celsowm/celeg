@@ -99,6 +99,69 @@ struct LinearWeight {
     void validate_storage() const;
 };
 
+// Packed expert linear weight. For the LFM2 MoE architecture, expert
+// collections are stored as contiguous 3D tensors
+//   gate_up_proj: [num_experts, 2 * moe_intermediate, hidden]
+//   down_proj:    [num_experts, hidden, moe_intermediate]
+// `expert_view()` exposes a zero-copy 2D LinearWeight into one expert's
+// contiguous region.
+struct ExpertLinearWeight {
+    LinearStorageKind kind = LinearStorageKind::Bf16;
+    const __nv_bfloat16* bf16 = nullptr;
+    const int8_t* int8 = nullptr;
+    const uint8_t* int4 = nullptr;
+    const float* scales = nullptr;
+    int experts = 0;
+    int rows_per_expert = 0;
+    int cols = 0;
+
+    LinearWeight expert_view(int expert_id) const;
+};
+
+// Dense (SwiGLU) feed-forward weights.
+struct DenseFfnWeights {
+    const LinearWeight* w13 = nullptr;
+    const LinearWeight* w2 = nullptr;
+};
+
+// Mixture-of-experts feed-forward weights.
+struct MoeFfnWeights {
+    const LinearWeight* router = nullptr;
+    const float* expert_bias = nullptr;
+    const ExpertLinearWeight* gate_up = nullptr;
+    const ExpertLinearWeight* down = nullptr;
+};
+
+// A layer's feed-forward block is either dense or MoE. The layer operator
+// (attention or convolution) is independent of the FFN type.
+using FeedForwardWeights = std::variant<DenseFfnWeights, MoeFfnWeights>;
+
+inline LinearWeight ExpertLinearWeight::expert_view(int expert_id) const {
+    if (expert_id < 0 || expert_id >= experts) {
+        throw std::out_of_range("expert id out of range");
+    }
+    LinearWeight view;
+    view.kind = kind;
+    view.rows = rows_per_expert;
+    view.cols = cols;
+    const size_t expert_offset =
+        static_cast<size_t>(expert_id) * static_cast<size_t>(rows_per_expert) *
+        static_cast<size_t>(cols);
+    const size_t scale_offset =
+        static_cast<size_t>(expert_id) * static_cast<size_t>(rows_per_expert);
+    if (kind == LinearStorageKind::Bf16) {
+        view.bf16 = bf16 + expert_offset;
+    } else if (kind == LinearStorageKind::Int8) {
+        view.int8 = int8 + expert_offset;
+        view.scales = scales + scale_offset;
+    } else {
+        const size_t packed_cols = (static_cast<size_t>(cols) + 1) / 2;
+        view.int4 = int4 + expert_offset / static_cast<size_t>(cols) * packed_cols;
+        view.scales = scales + scale_offset;
+    }
+    return view;
+}
+
 struct DeviceWeight {
     DeviceBuffer<__nv_bfloat16> bf16_storage;
     DeviceBuffer<int8_t> int8_storage;
@@ -127,8 +190,7 @@ struct SharedModelWeights {
 struct LayerCommon {
     const __nv_bfloat16* operator_norm = nullptr;
     const __nv_bfloat16* ffn_norm = nullptr;
-    const LinearWeight* w13 = nullptr;
-    const LinearWeight* w2 = nullptr;
+    FeedForwardWeights feed_forward;
 };
 
 struct AttentionLayer {
@@ -175,6 +237,24 @@ inline ConvolutionLayer* as_convolution(Layer& layer) {
 }
 inline const ConvolutionLayer* as_convolution(const Layer& layer) {
     return std::get_if<ConvolutionLayer>(&layer);
+}
+
+// Feed-forward visitors. These decouple call sites from whether a layer uses
+// the dense SwiGLU FFN or the MoE FFN; dispatch is done via the variant.
+inline DenseFfnWeights* as_dense_ffn(FeedForwardWeights& ff) {
+    return std::get_if<DenseFfnWeights>(&ff);
+}
+inline const DenseFfnWeights* as_dense_ffn(const FeedForwardWeights& ff) {
+    return std::get_if<DenseFfnWeights>(&ff);
+}
+inline MoeFfnWeights* as_moe_ffn(FeedForwardWeights& ff) {
+    return std::get_if<MoeFfnWeights>(&ff);
+}
+inline const MoeFfnWeights* as_moe_ffn(const FeedForwardWeights& ff) {
+    return std::get_if<MoeFfnWeights>(&ff);
+}
+inline bool is_moe_ffn(const FeedForwardWeights& ff) {
+    return std::holds_alternative<MoeFfnWeights>(ff);
 }
 
 // Returns a view into a contiguous row range of an existing linear weight.
