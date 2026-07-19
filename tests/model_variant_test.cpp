@@ -56,7 +56,8 @@ int main() {
     auto& registry = lfm::ModelVariantRegistry::instance();
 
     const auto ids = registry.ids();
-    assert(ids.size() == 3);
+    assert(ids.size() == 4);
+    assert(registry.find("lfm2.5-8b-a1b") != nullptr);
 
     const lfm::ModelShape shape_230m = make_shape(
         1024, 2560, 14, 16, 8, 64, 65536, 3, 1024, 6, 8);
@@ -135,6 +136,68 @@ int main() {
         rejected = true;
     }
     assert(rejected);
+
+    // ---- LFM2.5-8B-A1B (MoE) variant ----
+    {
+        lfm::ModelShape shape_8b;
+        shape_8b.architecture = lfm::ArchitectureKind::MoeLfm2;
+        shape_8b.hidden = 2048;
+        shape_8b.intermediate = 7168;
+        shape_8b.dense_intermediate = 7168;
+        shape_8b.moe_intermediate = 1792;
+        shape_8b.num_hidden_layers = 24;
+        shape_8b.num_attention_heads = 32;
+        shape_8b.num_key_value_heads = 8;
+        shape_8b.head_dim = 64;
+        shape_8b.vocab_size = 128000;
+        shape_8b.conv_cache = 3;
+        shape_8b.conv_dim = 2048;
+        shape_8b.max_position_embeddings = 128000;
+        shape_8b.bos_token_id = 124894;
+        shape_8b.eos_token_id = 124900;
+        shape_8b.pad_token_id = 124893;
+        shape_8b.norm_eps = 1e-5f;
+        shape_8b.rope_theta = 5'000'000.0f;
+        shape_8b.rope_type = "default";
+        shape_8b.num_dense_layers = 2;
+        shape_8b.num_experts = 32;
+        shape_8b.experts_per_token = 4;
+        shape_8b.normalize_topk = true;
+        shape_8b.use_expert_bias = true;
+        shape_8b.routed_scaling_factor = 1.0f;
+        // layer_types: 6 full_attention + 18 conv (matching the official
+        // checkpoint ordering).
+        const std::vector<int> attn_pos = {2, 6, 10, 14, 18, 21};
+        shape_8b.layer_types.assign(24, lfm::LayerType::Convolution);
+        for (int p : attn_pos) {
+            shape_8b.layer_types[static_cast<size_t>(p)] = lfm::LayerType::FullAttention;
+        }
+        shape_8b.compute_derived();
+        shape_8b.validate();
+
+        const lfm::IModelVariant& variant_8b = registry.select(shape_8b);
+        assert(variant_8b.id() == "lfm2.5-8b-a1b");
+        assert(variant_8b.repo_id() == "LiquidAI/LFM2.5-8B-A1B");
+        assert(variant_8b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+        assert(variant_8b.label().find("8B-A1B") != std::string::npos);
+        assert(variant_8b.resolve_shape(shape_8b).intermediate == 7168);
+
+        // A dense 1.2B shape must NOT select the MoE variant.
+        bool selected_moe = false;
+        try {
+            const lfm::IModelVariant& v = registry.select(shape_1_2b);
+            selected_moe = (v.id() == "lfm2.5-8b-a1b");
+        } catch (const std::runtime_error&) {
+            selected_moe = false;
+        }
+        assert(!selected_moe);
+
+        // The repo hint must select the 8B variant even though the base match
+        // already succeeds on shape alone.
+        const lfm::IModelVariant& variant_8b_hint =
+            registry.select(shape_8b, "LiquidAI/LFM2.5-8B-A1B");
+        assert(variant_8b_hint.id() == "lfm2.5-8b-a1b");
+    }
 
     std::cout << "model_variant_test: ok variants=";
     for (const auto id : registry.ids()) {

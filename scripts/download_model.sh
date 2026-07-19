@@ -4,7 +4,7 @@
 # Usage:
 #   ./scripts/download_model.sh [variant] [destination]
 #
-# variant:  "230m" (default), "1.2b-instruct", or "1.2b-thinking"
+# variant:  "230m" (default), "1.2b-instruct", "1.2b-thinking", or "8b-a1b"
 # destination: defaults to model/LFM2.5-<variant>
 set -euo pipefail
 
@@ -25,8 +25,13 @@ case "$VARIANT" in
         DEST="${2:-model/LFM2.5-1.2B-Thinking}"
         MODEL_SHA256=""
         ;;
+    8b-a1b)
+        REPO="LiquidAI/LFM2.5-8B-A1B"
+        DEST="${2:-model/LFM2.5-8B-A1B}"
+        MODEL_SHA256=""
+        ;;
     *)
-        echo "unknown variant: $VARIANT (use '230m', '1.2b-instruct', or '1.2b-thinking')" >&2
+        echo "unknown variant: $VARIANT (use '230m', '1.2b-instruct', '1.2b-thinking', or '8b-a1b')" >&2
         exit 2
         ;;
 esac

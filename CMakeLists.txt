@@ -12,8 +12,8 @@ option(LFM_BUILD_TESTS "Build host, CPU and CUDA tests" ON)
 option(LFM_FAST_MATH "Enable CUDA --use_fast_math" OFF)
 option(LFM_DEBUG_SYNC "Synchronize after every CUDA kernel" OFF)
 option(LFM_RUN_CUDA_TESTS "Register CUDA runtime tests with CTest" ON)
-set(LFM_VARIANTS "230m;1.2b-instruct;1.2b-thinking" CACHE STRING
-    "Semicolon-separated list of model variants to compile in. Available: 230m, 1.2b-instruct, 1.2b-thinking")
+set(LFM_VARIANTS "230m;1.2b-instruct;1.2b-thinking;8b-a1b" CACHE STRING
+    "Semicolon-separated list of model variants to compile in. Available: 230m, 1.2b-instruct, 1.2b-thinking, 8b-a1b")
 
 list(REMOVE_DUPLICATES LFM_VARIANTS)
 foreach(variant IN LISTS LFM_VARIANTS)
@@ -23,8 +23,10 @@ foreach(variant IN LISTS LFM_VARIANTS)
         message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-1.2B-Instruct")
     elseif(variant STREQUAL "1.2b-thinking")
         message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-1.2B-Thinking")
+    elseif(variant STREQUAL "8b-a1b")
+        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-8B-A1B (MoE)")
     else()
-        message(FATAL_ERROR "Unknown LFM variant: ${variant}. Valid: 230m, 1.2b-instruct, 1.2b-thinking")
+        message(FATAL_ERROR "Unknown LFM variant: ${variant}. Valid: 230m, 1.2b-instruct, 1.2b-thinking, 8b-a1b")
     endif()
 endforeach()
 # Expose the variant list as a space-separated string for any tooling that
