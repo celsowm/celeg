@@ -4,13 +4,15 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace lfm {
 
 // Runtime model topology descriptor. Replaces the former LfmConfig constexpr
-// struct so multiple checkpoints (230M, 1.2B-Instruct, ...) can coexist.
+// struct so multiple checkpoints (230M, 1.2B-Instruct, ..., 8B-A1B MoE) can
+// coexist.
 //
 // Invariants are validated once at construction; hot paths read derived fields
 // directly. ModelShape is value-semantic and cheap to copy.
@@ -32,6 +34,27 @@ struct ModelShape {
     float rope_theta = 0.0f;
     std::string rope_type;
     std::vector<LayerType> layer_types;
+
+    // ---- MoE topology (populated when architecture == MoeLfm2) ----
+    ArchitectureKind architecture = ArchitectureKind::DenseLfm2;
+    // Dense FFN intermediate size (used by the first `num_dense_layers` layers).
+    int dense_intermediate = 0;
+    // MoE expert FFN intermediate size (used by the remaining layers).
+    int moe_intermediate = 0;
+    int num_dense_layers = 0;
+    int num_experts = 0;
+    int experts_per_token = 0;
+    bool normalize_topk = false;
+    bool use_expert_bias = false;
+    float routed_scaling_factor = 1.0f;
+
+    // True when the layer at `layer_index` uses the MoE feed-forward path.
+    // For the MoE architecture this is every layer at or beyond
+    // `num_dense_layers`; dense architectures never use MoE.
+    bool layer_uses_moe(int layer_index) const {
+        return architecture == ArchitectureKind::MoeLfm2 &&
+               layer_index >= num_dense_layers;
+    }
 
     // Derived fields populated by compute_derived().
     int q_width = 0;            // num_attention_heads * head_dim

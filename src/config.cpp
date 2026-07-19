@@ -38,6 +38,13 @@ ModelConfig ModelConfig::load(const std::string& path) {
     const Json root = Json::parse_file(path);
     ModelConfig config;
     config.model_type = root["model_type"].as_string();
+    if (config.model_type == "lfm2") {
+        config.architecture = ArchitectureKind::DenseLfm2;
+    } else if (config.model_type == "lfm2_moe") {
+        config.architecture = ArchitectureKind::MoeLfm2;
+    } else {
+        throw std::runtime_error("unsupported model architecture: " + config.model_type);
+    }
     config.dtype = root["dtype"].as_string();
     config.hidden_size = read_int(root, "hidden_size");
     config.intermediate_size = read_int(root, "intermediate_size");
@@ -48,7 +55,13 @@ ModelConfig ModelConfig::load(const std::string& path) {
     config.num_key_value_heads = read_int(root, "num_key_value_heads");
     config.vocab_size = read_int(root, "vocab_size");
     config.conv_cache = read_int(root, "conv_L_cache");
-    config.conv_dim = read_int(root, "conv_dim");
+    // MoE configurations omit conv_dim and use_pos_enc; the official
+    // architecture always uses conv_dim == hidden_size and positional
+    // encoding. Default those only when absent (validated against the
+    // official Transformers implementation).
+    config.conv_dim = root.contains("conv_dim")
+        ? read_int(root, "conv_dim")
+        : config.hidden_size;
     config.max_position_embeddings = read_int(root, "max_position_embeddings");
     config.bos_token_id = read_int(root, "bos_token_id");
     config.eos_token_id = read_int(root, "eos_token_id");
@@ -57,7 +70,9 @@ ModelConfig ModelConfig::load(const std::string& path) {
     config.conv_bias = read_bool(root, "conv_bias");
     // 1.2B-Instruct uses "tie_embedding"; 230M uses "tie_word_embeddings".
     config.tie_word_embeddings = read_bool_or(root, "tie_word_embeddings", "tie_embedding");
-    config.use_pos_enc = read_bool(root, "use_pos_enc");
+    config.use_pos_enc = root.contains("use_pos_enc")
+        ? read_bool(root, "use_pos_enc")
+        : true;
     // rope_theta / rope_type may be top-level (1.2B-Instruct) or nested under
     // "rope_parameters" (230M). Accept either layout.
     if (root.contains("rope_parameters") && !root.contains("rope_theta")) {
@@ -89,6 +104,21 @@ ModelConfig ModelConfig::load(const std::string& path) {
         config.head_dim = config.hidden_size / config.num_attention_heads;
     }
 
+    if (config.architecture == ArchitectureKind::MoeLfm2) {
+        MoeConfig moe;
+        moe.intermediate_size = config.intermediate_size;
+        moe.moe_intermediate_size = read_int(root, "moe_intermediate_size");
+        moe.num_dense_layers = read_int(root, "num_dense_layers");
+        moe.num_experts = read_int(root, "num_experts");
+        moe.experts_per_token = read_int(root, "num_experts_per_tok");
+        moe.normalize_topk = read_bool(root, "norm_topk_prob");
+        moe.use_expert_bias = read_bool(root, "use_expert_bias");
+        moe.routed_scaling_factor = root.contains("routed_scaling_factor")
+            ? static_cast<float>(root["routed_scaling_factor"].as_number())
+            : 1.0f;
+        config.moe = moe;
+    }
+
     for (const Json& item : root["layer_types"].as_array()) {
         const std::string& value = item.as_string();
         if (value == "conv") {
@@ -105,7 +135,35 @@ ModelConfig ModelConfig::load(const std::string& path) {
 }
 
 void ModelConfig::validate() const {
-    if (model_type != "lfm2") throw std::runtime_error("config model_type is not lfm2");
+    if (architecture == ArchitectureKind::DenseLfm2) {
+        if (model_type != "lfm2") throw std::runtime_error("config model_type is not lfm2");
+    } else if (architecture == ArchitectureKind::MoeLfm2) {
+        if (model_type != "lfm2_moe") {
+            throw std::runtime_error("config model_type is not lfm2_moe");
+        }
+        const MoeConfig& m = *moe;
+        if (m.intermediate_size <= 0) {
+            throw std::runtime_error("invalid MoE dense intermediate size");
+        }
+        if (m.num_experts <= 0) throw std::runtime_error("invalid MoE expert count");
+        if (m.experts_per_token <= 0) {
+            throw std::runtime_error("invalid MoE experts_per_token");
+        }
+        if (m.experts_per_token > m.num_experts) {
+            throw std::runtime_error("experts_per_token exceeds num_experts");
+        }
+        if (m.num_dense_layers < 0) {
+            throw std::runtime_error("invalid MoE dense layer count");
+        }
+        if (m.num_dense_layers > num_hidden_layers) {
+            throw std::runtime_error("MoE dense layer count exceeds total layers");
+        }
+        if (!(m.routed_scaling_factor > 0.0f) || !std::isfinite(m.routed_scaling_factor)) {
+            throw std::runtime_error("invalid MoE routed_scaling_factor");
+        }
+    } else {
+        throw std::runtime_error("unsupported model architecture");
+    }
     if (dtype != "bfloat16") throw std::runtime_error("only bfloat16 checkpoints are supported");
     if (hidden_size <= 0 || intermediate_size <= 0 || vocab_size <= 0) {
         throw std::runtime_error("invalid non-positive model dimensions");
@@ -143,9 +201,19 @@ std::string ModelConfig::summary() const {
     }
     std::ostringstream out;
     out << "model_type=" << model_type
+        << " architecture=" << (architecture == ArchitectureKind::MoeLfm2 ? "lfm2_moe" : "lfm2")
         << " dtype=" << dtype
-        << " hidden=" << hidden_size
-        << " intermediate=" << intermediate_size
+        << " hidden=" << hidden_size;
+    if (architecture == ArchitectureKind::MoeLfm2 && moe) {
+        out << " moe_intermediate=" << moe->intermediate_size
+            << " num_dense_layers=" << moe->num_dense_layers
+            << " num_experts=" << moe->num_experts
+            << " experts_per_token=" << moe->experts_per_token
+            << " normalize_topk=" << (moe->normalize_topk ? 1 : 0)
+            << " use_expert_bias=" << (moe->use_expert_bias ? 1 : 0)
+            << " routed_scaling_factor=" << moe->routed_scaling_factor;
+    }
+    out << " intermediate=" << intermediate_size
         << " layers=" << num_hidden_layers
         << " attention_layers=" << attention_layers
         << " conv_layers=" << (num_hidden_layers - attention_layers)

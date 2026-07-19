@@ -24,6 +24,18 @@ ModelShape ModelShape::from_config(const ModelConfig& config) {
     shape.rope_theta = config.rope_theta;
     shape.rope_type = config.rope_type;
     shape.layer_types = config.layer_types;
+    shape.architecture = config.architecture;
+    if (config.architecture == ArchitectureKind::MoeLfm2 && config.moe) {
+        const MoeConfig& m = *config.moe;
+        shape.dense_intermediate = m.intermediate_size;
+        shape.moe_intermediate = m.moe_intermediate_size;
+        shape.num_dense_layers = m.num_dense_layers;
+        shape.num_experts = m.num_experts;
+        shape.experts_per_token = m.experts_per_token;
+        shape.normalize_topk = m.normalize_topk;
+        shape.use_expert_bias = m.use_expert_bias;
+        shape.routed_scaling_factor = m.routed_scaling_factor;
+    }
     shape.compute_derived();
     shape.validate();
     return shape;
@@ -55,6 +67,24 @@ void ModelShape::compute_derived() {
 void ModelShape::validate() const {
     if (hidden <= 0 || intermediate <= 0 || vocab_size <= 0) {
         throw std::runtime_error("invalid non-positive model dimensions");
+    }
+    if (architecture == ArchitectureKind::MoeLfm2) {
+        if (moe_intermediate <= 0) {
+            throw std::runtime_error("invalid MoE expert intermediate size");
+        }
+        if (num_experts <= 0) throw std::runtime_error("invalid MoE expert count");
+        if (experts_per_token <= 0) {
+            throw std::runtime_error("invalid MoE experts_per_token");
+        }
+        if (experts_per_token > num_experts) {
+            throw std::runtime_error("experts_per_token exceeds num_experts");
+        }
+        if (num_dense_layers < 0) {
+            throw std::runtime_error("invalid MoE dense layer count");
+        }
+        if (num_dense_layers > num_hidden_layers) {
+            throw std::runtime_error("MoE dense layer count exceeds total layers");
+        }
     }
     if (num_hidden_layers <= 0 ||
         static_cast<int>(layer_types.size()) != num_hidden_layers) {
@@ -97,6 +127,16 @@ std::string ModelShape::fingerprint() const {
         << "-voc" << vocab_size
         << "-int" << intermediate
         << "-cc" << conv_cache;
+    if (architecture == ArchitectureKind::MoeLfm2) {
+        out << "-moe"
+            << "-e" << num_experts
+            << "-k" << experts_per_token
+            << "-d" << num_dense_layers
+            << "-mi" << moe_intermediate
+            << "-nt" << (normalize_topk ? 1 : 0)
+            << "-eb" << (use_expert_bias ? 1 : 0)
+            << "-rs" << static_cast<int>(routed_scaling_factor);
+    }
     return out.str();
 }
 
@@ -113,6 +153,17 @@ std::string ModelShape::summary() const {
         << " vocab=" << vocab_size
         << " max_positions=" << max_position_embeddings
         << " rope_theta=" << rope_theta;
+    if (architecture == ArchitectureKind::MoeLfm2) {
+        out << " arch=moe"
+            << " dense_intermediate=" << dense_intermediate
+            << " moe_intermediate=" << moe_intermediate
+            << " num_dense_layers=" << num_dense_layers
+            << " num_experts=" << num_experts
+            << " experts_per_token=" << experts_per_token
+            << " normalize_topk=" << (normalize_topk ? 1 : 0)
+            << " use_expert_bias=" << (use_expert_bias ? 1 : 0)
+            << " routed_scaling_factor=" << routed_scaling_factor;
+    }
     return out.str();
 }
 

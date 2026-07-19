@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,27 @@ namespace lfm {
 enum class LayerType {
     Convolution,
     FullAttention,
+};
+
+// Discriminator between the dense LFM2 feed-forward architecture and the
+// LFM2 MoE (mixture-of-experts) architecture. The two share the same
+// attention/convolution operators but differ in their per-layer FFN.
+enum class ArchitectureKind {
+    DenseLfm2,
+    MoeLfm2,
+};
+
+// Explicit MoE topology for the LFM2 MoE architecture. Populated only when
+// ArchitectureKind is MoeLfm2.
+struct MoeConfig {
+    int intermediate_size = 0;     // dense FFN intermediate size (first layers)
+    int moe_intermediate_size = 0; // expert FFN intermediate size
+    int num_dense_layers = 0;      // layers using the dense FFN path
+    int num_experts = 0;
+    int experts_per_token = 0;
+    bool normalize_topk = false;   // norm_topk_prob
+    bool use_expert_bias = false;
+    float routed_scaling_factor = 1.0f;
 };
 
 struct ModelConfig {
@@ -39,6 +61,10 @@ struct ModelConfig {
     // to disambiguate checkpoints that share an identical topology.
     std::string repo_hint;
     std::vector<LayerType> layer_types;
+
+    // Architecture discriminator + optional MoE topology.
+    ArchitectureKind architecture = ArchitectureKind::DenseLfm2;
+    std::optional<MoeConfig> moe;
 
     static ModelConfig load(const std::string& path);
     void validate() const;
