@@ -33,6 +33,11 @@ struct ModelConfig {
     bool tie_word_embeddings = false;
     bool use_pos_enc = false;
     std::string rope_type;
+    // Best-effort hint identifying the source checkpoint, captured from the
+    // optional top-level "_name" field in config.json (HuggingFace stores the
+    // repo id there, e.g. "LiquidAI/LFM2.5-1.2B-Thinking"). Variants use this
+    // to disambiguate checkpoints that share an identical topology.
+    std::string repo_hint;
     std::vector<LayerType> layer_types;
 
     static ModelConfig load(const std::string& path);

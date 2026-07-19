@@ -45,6 +45,26 @@ void write_1_2b_config(const std::filesystem::path& path) {
     })";
 }
 
+void write_1_2b_thinking_config(const std::filesystem::path& path) {
+    // Topologically identical to the Instruct config, but disambiguated by the
+    // "_name" field (HuggingFace stores the repo id there).
+    std::ofstream out(path);
+    out << R"({
+      "_name":"LiquidAI/LFM2.5-1.2B-Thinking",
+      "model_type":"lfm2", "dtype":"bfloat16",
+      "hidden_size":2048, "intermediate_size":12288,
+      "num_hidden_layers":16, "num_heads":32,
+      "num_key_value_heads":8, "vocab_size":65536,
+      "conv_L_cache":3, "conv_dim":2048,
+      "max_position_embeddings":32768,
+      "bos_token_id":1, "eos_token_id":7, "pad_token_id":0,
+      "norm_eps":1e-5, "conv_bias":false,
+      "tie_embedding":true, "use_pos_enc":true,
+      "rope_theta":1000000.0,
+      "layer_types":["conv","conv","full_attention","conv","conv","full_attention","conv","conv","full_attention","conv","full_attention","conv","full_attention","conv","full_attention","conv"]
+    })";
+}
+
 } // namespace
 
 int main() {
@@ -90,6 +110,25 @@ int main() {
         lfm::ModelVariantRegistry::instance().select(shape_1_2b);
     assert(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
     assert(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
+
+    // The Thinking checkpoint shares the Instruct topology but must be
+    // selected via its "_name" repo hint. Without the hint it must fall back
+    // to the Instruct variant (shape-only loading stays unambiguous).
+    write_1_2b_thinking_config(path);
+    const lfm::ModelConfig config_thinking = lfm::ModelConfig::load(path.string());
+    assert(!config_thinking.repo_hint.empty());
+    const lfm::ModelShape shape_thinking =
+        lfm::ModelShape::from_config(config_thinking);
+    const lfm::IModelVariant& variant_fallback =
+        lfm::ModelVariantRegistry::instance().select(shape_thinking);
+    assert(variant_fallback.id() == "lfm2.5-1.2b-instruct");
+    const lfm::IModelVariant& variant_thinking =
+        lfm::ModelVariantRegistry::instance().select(shape_thinking,
+                                                      config_thinking.repo_hint);
+    assert(variant_thinking.id() == "lfm2.5-1.2b-thinking");
+    assert(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
+    const lfm::ModelShape resolved_thinking = variant_thinking.resolve_shape(shape_thinking);
+    assert(resolved_thinking.intermediate == 8192);
 
     // Unknown shapes must be rejected by the registry.
     lfm::ModelShape bogus;

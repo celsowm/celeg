@@ -6,6 +6,7 @@
 |-------------------------|-----------------------------------|-------------|
 | `lfm2.5-230m`           | `LiquidAI/LFM2.5-230M`            | Loaded from `config.json`; runtime-selected. |
 | `lfm2.5-1.2b-instruct`  | `LiquidAI/LFM2.5-1.2B-Instruct`   | Loaded from `config.json`; runtime-selected. |
+| `lfm2.5-1.2b-thinking`  | `LiquidAI/LFM2.5-1.2B-Thinking`   | Shares Instruct topology; disambiguated by the config.json `_name` repo hint. |
 
 Both variants share the same kernel paths; no per-variant `#ifdef` exists in
 the kernel sources. Variants are registered in `ModelVariantRegistry` and

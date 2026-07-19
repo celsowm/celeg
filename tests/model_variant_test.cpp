@@ -56,7 +56,7 @@ int main() {
     auto& registry = lfm::ModelVariantRegistry::instance();
 
     const auto ids = registry.ids();
-    assert(ids.size() == 2);
+    assert(ids.size() == 3);
 
     const lfm::ModelShape shape_230m = make_shape(
         1024, 2560, 14, 16, 8, 64, 65536, 3, 1024, 6, 8);
@@ -89,8 +89,40 @@ int main() {
     const lfm::ModelShape resolved_real = variant_1_2b.resolve_shape(shape_1_2b_real);
     assert(resolved_real.intermediate == 8192);
 
+    // LFM2.5-1.2B-Thinking shares the Instruct topology. It must NOT match on
+    // shape alone (would create an ambiguous registry), but must match when the
+    // repo hint identifies it as the Thinking checkpoint.
+    const lfm::ModelShape shape_thinking = make_shape(
+        2048, 12288, 16, 32, 8, 64, 65536, 3, 2048, 6, 10);
+    bool thinking_matches_shape_only = true;
+    try {
+        const lfm::IModelVariant& v = registry.select(shape_thinking);
+        (void)v;
+        thinking_matches_shape_only = (v.id() == "lfm2.5-1.2b-thinking");
+    } catch (const std::runtime_error&) {
+        thinking_matches_shape_only = false;
+    }
+    assert(!thinking_matches_shape_only);  // never dominant on shape alone
+
+    const lfm::IModelVariant& variant_thinking =
+        registry.select(shape_thinking, "LiquidAI/LFM2.5-1.2B-Thinking");
+    assert(variant_thinking.id() == "lfm2.5-1.2b-thinking");
+    assert(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
+    assert(variant_thinking.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+    assert(variant_thinking.label().find("1.2B-Thinking") != std::string::npos);
+    assert(variant_thinking.resolve_shape(shape_thinking).intermediate == 8192);
+
+    // A Thinking repo hint must NOT select the Instruct variant.
+    const lfm::IModelVariant& variant_instruct_again =
+        registry.select(shape_1_2b, "LiquidAI/LFM2.5-1.2B-Thinking");
+    assert(variant_instruct_again.id() == "lfm2.5-1.2b-thinking");
+
+    // A Thinking config resolved via its own hint must differ from Instruct.
+    assert(variant_thinking.id() != variant_1_2b.id());
+
     assert(registry.find("lfm2.5-230m") != nullptr);
     assert(registry.find("lfm2.5-1.2b-instruct") != nullptr);
+    assert(registry.find("lfm2.5-1.2b-thinking") != nullptr);
     assert(registry.find("nonexistent-variant") == nullptr);
 
     // A valid but unrecognized shape must be rejected.

@@ -28,6 +28,16 @@ public:
     // True if the shape matches this variant. The registry picks the variant
     // whose matches() returns true; exactly one is expected to match.
     virtual bool matches(const ModelShape& shape) const = 0;
+    // Two-argument overload used by the registry to disambiguate checkpoints
+    // that share an identical topology. `repo_hint` is the source repo id
+    // captured from config.json's optional "_name" field (may be empty).
+    // Variants with unique shapes keep the single-argument semantics by
+    // ignoring `repo_hint`. The default delegates to the single-argument form
+    // so existing variants stay compatible.
+    virtual bool matches(const ModelShape& shape, std::string_view repo_hint) const {
+        (void)repo_hint;
+        return matches(shape);
+    }
     // Returns the canonical shape this variant uses at runtime. Some
     // checkpoints publish an intermediate_size in config.json that does not
     // match the actual tensor dimensions (e.g. block_auto_adjust_ff_dim). The
@@ -50,6 +60,10 @@ public:
 
     // Returns the matching variant or throws std::runtime_error.
     const IModelVariant& select(const ModelShape& shape) const;
+    // Returns the matching variant, informed by the source repo hint captured
+    // from config.json's "_name" field, or throws std::runtime_error.
+    const IModelVariant& select(const ModelShape& shape,
+                                std::string_view repo_hint) const;
     // Returns the variant with the given id or nullptr.
     const IModelVariant* find(std::string_view id) const;
     // All registered variant ids, in registration order.
@@ -76,6 +90,22 @@ public:
     std::string_view id() const override;
     std::string_view repo_id() const override;
     bool matches(const ModelShape& shape) const override;
+    bool matches(const ModelShape& shape, std::string_view repo_hint) const override;
+    ModelShape resolve_shape(ModelShape shape) const override;
+    ChatTemplateKind chat_template_kind() const override;
+    std::string label() const override;
+};
+
+// Built-in variant: LiquidAI/LFM2.5-1.2B-Thinking. Shares the exact topology
+// of the Instruct variant (16 layers: 10 conv + 6 GQA), so disambiguation
+// relies on the config.json "_name" repo hint. Uses the same ChatML-like
+// template and the same intermediate_size=8192 resolve_shape() correction.
+class Lfm25_1_2B_Thinking_Variant final : public IModelVariant {
+public:
+    std::string_view id() const override;
+    std::string_view repo_id() const override;
+    bool matches(const ModelShape& shape) const override;
+    bool matches(const ModelShape& shape, std::string_view repo_hint) const override;
     ModelShape resolve_shape(ModelShape shape) const override;
     ChatTemplateKind chat_template_kind() const override;
     std::string label() const override;

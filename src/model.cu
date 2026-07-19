@@ -137,7 +137,7 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     }
     ModelConfig config = ModelConfig::load(config_path.string());
     shape_ = ModelShape::from_config(config);
-    const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_);
+    const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_, config.repo_hint);
     variant_ = &variant;
     shape_ = variant.resolve_shape(shape_);
     (void)variant_;  // retained for future per-variant dispatch

@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
         const lfm::ModelShape shape = lfm::ModelShape::from_config(config);
         lfm::register_builtin_variants();
         const lfm::IModelVariant& variant =
-            lfm::ModelVariantRegistry::instance().select(shape);
+            lfm::ModelVariantRegistry::instance().select(shape, config.repo_hint);
         (void)variant;
         lfm::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string(),
             lfm::make_chat_template(variant.chat_template_kind()));

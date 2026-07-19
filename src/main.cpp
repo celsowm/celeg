@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
         const lfm::ModelShape shape = lfm::ModelShape::from_config(config);
         lfm::register_builtin_variants();
         const lfm::IModelVariant& variant =
-            lfm::ModelVariantRegistry::instance().select(shape);
+            lfm::ModelVariantRegistry::instance().select(shape, config.repo_hint);
         (void)variant;
         if (args.context > config.max_position_embeddings) {
             throw std::runtime_error("--context exceeds max_position_embeddings in config.json");

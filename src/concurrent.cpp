@@ -123,7 +123,7 @@ ConcurrentEngine::Impl::Impl(std::string safetensors_path,
     ModelConfig config = ModelConfig::load(config_path.string());
     shape_ = ModelShape::from_config(config);
     {
-        const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_);
+        const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_, config.repo_hint);
         shape_ = variant.resolve_shape(shape_);
     }
     paged_kv_ = std::make_unique<PhysicalPagedKvCache>(

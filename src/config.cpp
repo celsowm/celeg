@@ -76,6 +76,10 @@ ModelConfig ModelConfig::load(const std::string& path) {
         }
     }
 
+    if (root.contains("_name")) {
+        config.repo_hint = root["_name"].as_string();
+    }
+
     if (root.contains("head_dim")) {
         config.head_dim = read_int(root, "head_dim");
     } else {

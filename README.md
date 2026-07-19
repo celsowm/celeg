@@ -11,6 +11,7 @@ another model-serving runtime is not required.
 |-------------------------|----------------------------------------|-------:|-------:|--------:|---------:|---------:|-------:|
 | `lfm2.5-230m`           | `LiquidAI/LFM2.5-230M`                 |   1024 |     14 |      16 |        8 |       64 |  65536 |
 | `lfm2.5-1.2b-instruct`  | `LiquidAI/LFM2.5-1.2B-Instruct`        |   2048 |     16 |      32 |        8 |       64 |  65536 |
+| `lfm2.5-1.2b-thinking`  | `LiquidAI/LFM2.5-1.2B-Thinking`        |   2048 |     16 |      32 |        8 |       64 |  65536 |
 
 Variants are selected at runtime from the checkpoint's `config.json` through
 `lfm::ModelVariantRegistry`. Adding a new variant does not require editing the
@@ -39,7 +40,7 @@ Additional changes:
   surface is maintained in this release);
 - CUDA C API gains `lfm25_model_vocab_size`;
 - CMake `LFM_VARIANTS` option lists which variants the build advertises
-  (default: `230m;1.2b-instruct`).
+  (default: `230m;1.2b-instruct;1.2b-thinking`).
 
 The CUDA backend continues to provide quantized weights, paged KV, prefix
 reuse, ragged packed prefill, packed decode, continuous scheduling, CUDA
@@ -91,6 +92,8 @@ Downloading a checkpoint:
 ./scripts/download_model.sh 230m
 # 1.2B-Instruct
 ./scripts/download_model.sh 1.2b-instruct
+# 1.2B-Thinking
+./scripts/download_model.sh 1.2b-thinking
 ```
 
 Concurrent benchmark:

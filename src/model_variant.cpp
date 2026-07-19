@@ -13,6 +13,17 @@ bool close_float(float a, float b, float tol) {
     return diff <= tol;
 }
 
+bool repo_hint_contains(std::string_view repo_hint, std::string_view needle) {
+    if (repo_hint.empty() || needle.empty()) return false;
+    std::string haystack;
+    haystack.reserve(repo_hint.size());
+    for (char c : repo_hint) haystack.push_back(static_cast<char>(::tolower(c)));
+    std::string sub;
+    sub.reserve(needle.size());
+    for (char c : needle) sub.push_back(static_cast<char>(::tolower(c)));
+    return haystack.find(sub) != std::string::npos;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -76,6 +87,18 @@ bool Lfm25_1_2B_Instruct_Variant::matches(const ModelShape& shape) const {
            close_float(shape.rope_theta, 1'000'000.0f, 0.5f);
 }
 
+bool Lfm25_1_2B_Instruct_Variant::matches(const ModelShape& shape,
+                                           std::string_view repo_hint) const {
+    // Disambiguate from the Thinking variant which shares this exact topology.
+    // When a repo hint is present, reject the Thinking checkpoint; otherwise
+    // fall back to the shape-only match so shape-only loading keeps selecting
+    // the Instruct variant.
+    if (!repo_hint.empty() && repo_hint_contains(repo_hint, "thinking")) {
+        return false;
+    }
+    return matches(shape);
+}
+
 ModelShape Lfm25_1_2B_Instruct_Variant::resolve_shape(ModelShape shape) const {
     // The published checkpoint stores w1/w3 with 8192 rows even though
     // config.json advertises intermediate_size=12288 (see matches() above).
@@ -94,6 +117,59 @@ std::string Lfm25_1_2B_Instruct_Variant::label() const {
 }
 
 // ---------------------------------------------------------------------------
+// LFM2.5-1.2B-Thinking
+// ---------------------------------------------------------------------------
+
+std::string_view Lfm25_1_2B_Thinking_Variant::id() const {
+    return "lfm2.5-1.2b-thinking";
+}
+std::string_view Lfm25_1_2B_Thinking_Variant::repo_id() const {
+    return "LiquidAI/LFM2.5-1.2B-Thinking";
+}
+
+bool Lfm25_1_2B_Thinking_Variant::matches(const ModelShape& shape) const {
+    // Never match on shape alone: the Thinking and Instruct checkpoints share
+    // an identical topology, so a shape-only match would make the registry
+    // ambiguous. Selection must go through the (shape, repo_hint) overload.
+    (void)shape;
+    return false;
+}
+
+bool Lfm25_1_2B_Thinking_Variant::matches(const ModelShape& shape,
+                                           std::string_view repo_hint) const {
+    // Same topology as the Instruct variant; require the repo hint to confirm
+    // this is the Thinking checkpoint.
+    if (!repo_hint_contains(repo_hint, "thinking")) return false;
+    return shape.hidden == 2048 &&
+           (shape.intermediate == 12288 || shape.intermediate == 8192) &&
+           shape.num_hidden_layers == 16 &&
+           shape.num_attention_heads == 32 &&
+           shape.num_key_value_heads == 8 &&
+           shape.head_dim == 64 &&
+           shape.vocab_size == 65536 &&
+           shape.conv_cache == 3 &&
+           shape.conv_dim == 2048 &&
+           shape.attention_layer_count == 6 &&
+           shape.conv_layer_count == 10 &&
+           close_float(shape.norm_eps, 1.0e-5f, 1.0e-12f) &&
+           close_float(shape.rope_theta, 1'000'000.0f, 0.5f);
+}
+
+ModelShape Lfm25_1_2B_Thinking_Variant::resolve_shape(ModelShape shape) const {
+    // Same intermediate_size=8192 correction as the Instruct variant.
+    shape.intermediate = 8192;
+    return shape;
+}
+
+ChatTemplateKind Lfm25_1_2B_Thinking_Variant::chat_template_kind() const {
+    return ChatTemplateKind::Lfm2Instruct;
+}
+
+std::string Lfm25_1_2B_Thinking_Variant::label() const {
+    return "LiquidAI LFM2.5-1.2B-Thinking";
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -106,6 +182,7 @@ ModelVariantRegistry& ModelVariantRegistry::instance() {
     if (registry.variants_.empty()) {
         registry.register_variant(std::make_unique<Lfm25_230M_Variant>());
         registry.register_variant(std::make_unique<Lfm25_1_2B_Instruct_Variant>());
+        registry.register_variant(std::make_unique<Lfm25_1_2B_Thinking_Variant>());
     }
     return registry;
 }
@@ -129,9 +206,14 @@ const IModelVariant* ModelVariantRegistry::find(std::string_view id) const {
 }
 
 const IModelVariant& ModelVariantRegistry::select(const ModelShape& shape) const {
+    return select(shape, {});
+}
+
+const IModelVariant& ModelVariantRegistry::select(const ModelShape& shape,
+                                                  std::string_view repo_hint) const {
     const IModelVariant* match = nullptr;
     for (const auto& variant : variants_) {
-        if (variant->matches(shape)) {
+        if (variant->matches(shape, repo_hint)) {
             if (match != nullptr) {
                 throw std::runtime_error(
                     "multiple model variants match the same shape; registry is ambiguous");

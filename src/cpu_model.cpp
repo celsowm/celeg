@@ -140,7 +140,7 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     }
     ModelConfig config = ModelConfig::load(config_path.string());
     shape = ModelShape::from_config(config);
-    variant = &ModelVariantRegistry::instance().select(shape);
+    variant = &ModelVariantRegistry::instance().select(shape, config.repo_hint);
     shape = variant->resolve_shape(shape);
     prepare_pack_path();
     load_weights();

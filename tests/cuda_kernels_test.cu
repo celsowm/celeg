@@ -69,7 +69,9 @@ std::vector<lfm::ModelShape> registered_variant_shapes() {
                 lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
                 lfm::LayerType::FullAttention, lfm::LayerType::Convolution,
             };
-        } else if (variant->id() == "lfm2.5-1.2b-instruct") {
+        } else if (variant->id() == "lfm2.5-1.2b-instruct" ||
+                   variant->id() == "lfm2.5-1.2b-thinking") {
+            // The Thinking and Instruct variants share the same topology.
             shape.hidden = 2048;
             shape.intermediate = 12288;
             shape.num_hidden_layers = 16;
