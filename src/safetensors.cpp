@@ -3,12 +3,22 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
-#include <fcntl.h>
 #include <limits>
 #include <stdexcept>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <fileapi.h>
+#include <memoryapi.h>
+#else
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 namespace lfm {
 namespace {
@@ -40,7 +50,11 @@ uint64_t read_u64_le(const std::byte* data) {
     uint64_t value = 0;
     std::memcpy(&value, data, sizeof(value));
     if constexpr (std::endian::native == std::endian::big) {
-        value = __builtin_bswap64(value);
+#if defined(_MSC_VER)
+        return _byteswap_uint64(value);
+#else
+        return __builtin_bswap64(value);
+#endif
     }
     return value;
 }
@@ -66,6 +80,40 @@ size_t checked_element_count(const std::vector<int64_t>& shape,
 
 SafeTensorFile::SafeTensorFile(const std::string& path) {
     try {
+#if defined(_WIN32)
+        file_handle_ = ::CreateFileA(
+            path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file_handle_ == INVALID_HANDLE_VALUE) {
+            file_handle_ = nullptr;
+            throw std::runtime_error("cannot open safetensors file: " + path);
+        }
+
+        LARGE_INTEGER size{};
+        if (::GetFileSizeEx(file_handle_, &size) == 0) {
+            throw std::runtime_error("cannot stat safetensors file: " + path);
+        }
+        if (size.QuadPart < 0 ||
+            static_cast<uint64_t>(size.QuadPart) >
+                std::numeric_limits<size_t>::max()) {
+            throw std::runtime_error("unsupported safetensors file size");
+        }
+        file_size_ = static_cast<size_t>(size.QuadPart);
+        if (file_size_ < 8) {
+            throw std::runtime_error("invalid safetensors file: too small");
+        }
+
+        mapping_handle_ = ::CreateFileMappingA(
+            file_handle_, nullptr, PAGE_READONLY, 0, 0, nullptr);
+        if (mapping_handle_ == nullptr) {
+            throw std::runtime_error("CreateFileMapping failed for safetensors file");
+        }
+
+        mapping_ = ::MapViewOfFile(mapping_handle_, FILE_MAP_READ, 0, 0, 0);
+        if (mapping_ == nullptr) {
+            throw std::runtime_error("MapViewOfFile failed for safetensors file");
+        }
+#else
         fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (fd_ < 0) {
             throw std::runtime_error("cannot open safetensors file: " + path);
@@ -90,6 +138,7 @@ SafeTensorFile::SafeTensorFile(const std::string& path) {
             mapping_ = nullptr;
             throw std::runtime_error("mmap failed for safetensors file");
         }
+#endif
 
         const auto* bytes = static_cast<const std::byte*>(mapping_);
         const uint64_t header_size_u64 = read_u64_le(bytes);
@@ -177,6 +226,20 @@ SafeTensorFile::SafeTensorFile(const std::string& path) {
             }
         }
     } catch (...) {
+#if defined(_WIN32)
+        if (mapping_) {
+            ::UnmapViewOfFile(mapping_);
+            mapping_ = nullptr;
+        }
+        if (mapping_handle_) {
+            ::CloseHandle(mapping_handle_);
+            mapping_handle_ = nullptr;
+        }
+        if (file_handle_) {
+            ::CloseHandle(file_handle_);
+            file_handle_ = nullptr;
+        }
+#else
         if (mapping_) {
             ::munmap(mapping_, file_size_);
             mapping_ = nullptr;
@@ -185,13 +248,20 @@ SafeTensorFile::SafeTensorFile(const std::string& path) {
             ::close(fd_);
             fd_ = -1;
         }
+#endif
         throw;
     }
 }
 
 SafeTensorFile::~SafeTensorFile() {
+#if defined(_WIN32)
+    if (mapping_) ::UnmapViewOfFile(mapping_);
+    if (mapping_handle_) ::CloseHandle(mapping_handle_);
+    if (file_handle_) ::CloseHandle(file_handle_);
+#else
     if (mapping_) ::munmap(mapping_, file_size_);
     if (fd_ >= 0) ::close(fd_);
+#endif
 }
 
 bool SafeTensorFile::contains(std::string_view name) const {

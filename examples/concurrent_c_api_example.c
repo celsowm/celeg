@@ -6,6 +6,18 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+static void sleep_ms(int milliseconds) { Sleep((DWORD)milliseconds); }
+#else
+static void sleep_ms(int milliseconds) {
+    struct timespec pause;
+    pause.tv_sec = milliseconds / 1000;
+    pause.tv_nsec = (long)(milliseconds % 1000) * 1000000L;
+    nanosleep(&pause, NULL);
+}
+#endif
+
 static int terminal(int32_t status) {
     return status == LFM25_REQUEST_FINISHED ||
            status == LFM25_REQUEST_CANCELLED ||
@@ -110,8 +122,7 @@ int main(int argc, char** argv) {
                 ++done_count;
             }
         }
-        struct timespec pause = {0, 1000000};
-        nanosleep(&pause, NULL);
+        sleep_ms(1);
     }
 
     lfm25_engine_metrics_v2 metrics = {0};

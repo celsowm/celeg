@@ -42,6 +42,10 @@ private:
 
     int fd_ = -1;
     void* mapping_ = nullptr;
+#if defined(_WIN32)
+    void* file_handle_ = nullptr;
+    void* mapping_handle_ = nullptr;
+#endif
     size_t file_size_ = 0;
     size_t data_offset_ = 0;
     std::unordered_map<std::string, Entry> entries_;

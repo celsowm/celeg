@@ -1,4 +1,5 @@
 #include "lfm/config.hpp"
+#include "lfm/downloader.hpp"
 #include "lfm/model.hpp"
 #include "lfm/tokenizer.hpp"
 
@@ -20,6 +21,7 @@ namespace {
 
 struct Args {
     std::string model_dir;
+    std::string repo;
     std::string prompt;
     std::string system;
     std::string dump_logits;
@@ -66,6 +68,7 @@ Args parse_args(int argc, char** argv) {
             return argv[i];
         };
         if (key == "--model") args.model_dir = value();
+        else if (key == "--repo") args.repo = value();
         else if (key == "--prompt") args.prompt = value();
         else if (key == "--system") args.system = value();
         else if (key == "--max-new-tokens") args.max_new_tokens = std::stoi(value());
@@ -104,7 +107,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--segmented-attention") args.attention_mode = "segmented";
         else if (key == "--help") {
             std::cout
-                << "lfm25-run --model DIR [--prompt TEXT] [--system TEXT]\n"
+                << "lfm25-run [--model DIR | --repo REPO_ID] [--prompt TEXT] [--system TEXT]\n"
                 << "  [--max-new-tokens N] [--context N] [--raw]\n"
                 << "  [--fused-residuals] [--fast-attention] [--fused-projections]\n"
                 << "  [--print-config] [--tokens-only] [--legacy-prefill]\n"
@@ -126,7 +129,10 @@ Args parse_args(int argc, char** argv) {
             throw std::runtime_error("unknown argument: " + key);
         }
     }
-    if (args.model_dir.empty()) throw std::runtime_error("--model is required");
+    if (args.model_dir.empty() && args.repo.empty())
+        throw std::runtime_error("--model or --repo is required");
+    if (!args.model_dir.empty() && !args.repo.empty())
+        throw std::runtime_error("--model and --repo are mutually exclusive");
     if (!args.print_config && args.prompt.empty() && args.load_session.empty()) {
         throw std::runtime_error(
             "--prompt is required unless --print-config or --load-session is used");
@@ -220,7 +226,12 @@ void print_memory_stats(const lfm::ModelMemoryStats& stats) {
 int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
-        const std::filesystem::path model(args.model_dir);
+        std::filesystem::path model;
+        if (!args.repo.empty()) {
+            model = lfm::resolve_hf_model(args.repo);
+        } else {
+            model = std::filesystem::path(args.model_dir);
+        }
         const lfm::ModelConfig config =
             lfm::ModelConfig::load((model / "config.json").string());
         config.validate_compiled_backend();

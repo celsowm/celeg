@@ -15,6 +15,10 @@ option(LFM_RUN_CUDA_TESTS "Register CUDA runtime tests with CTest" ON)
 
 find_package(Threads REQUIRED)
 
+if(MSVC)
+    add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/utf-8>)
+endif()
+
 add_library(lfm25_host
     src/json.cpp
     src/config.cpp
@@ -39,10 +43,16 @@ add_library(lfm25_host
     src/cpu_kernels.cpp
     src/cpu_paged_kv.cpp
     src/cpu_prefix_cache.cpp
+    src/downloader.cpp
 )
 target_include_directories(lfm25_host PUBLIC include)
-target_compile_options(lfm25_host PRIVATE -Wall -Wextra -Wpedantic)
+if(NOT MSVC)
+    target_compile_options(lfm25_host PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 target_link_libraries(lfm25_host PUBLIC Threads::Threads)
+if(WIN32)
+    target_link_libraries(lfm25_host PUBLIC winhttp)
+endif()
 
 add_library(lfm25_cpu_core
     src/cpu_model.cpp
@@ -50,7 +60,9 @@ add_library(lfm25_cpu_core
     src/cpu_concurrent.cpp
 )
 target_include_directories(lfm25_cpu_core PUBLIC include)
-target_compile_options(lfm25_cpu_core PRIVATE -Wall -Wextra -Wpedantic)
+if(NOT MSVC)
+    target_compile_options(lfm25_cpu_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 target_link_libraries(lfm25_cpu_core PUBLIC lfm25_host Threads::Threads)
 
 add_library(lfm25_cpu SHARED src/cpu_c_api.cpp)
@@ -81,6 +93,9 @@ target_link_libraries(lfm25-cpu-prefix-cache-benchmark PRIVATE lfm25_cpu_core)
 add_executable(lfm25-cpu-compare-reference src/cpu_compare_reference.cpp)
 target_link_libraries(lfm25-cpu-compare-reference PRIVATE lfm25_cpu_core)
 
+add_executable(lfm25-download src/download_main.cpp)
+target_link_libraries(lfm25-download PRIVATE lfm25_host)
+
 include(CheckLanguage)
 set(LFM_CUDA_AVAILABLE OFF)
 if(LFM_ENABLE_CUDA)
@@ -107,7 +122,7 @@ if(LFM_CUDA_AVAILABLE)
     target_include_directories(lfm25_core PUBLIC include)
     target_link_libraries(lfm25_core PUBLIC lfm25_host CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
     target_compile_options(lfm25_core PRIVATE
-        $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic>
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     )
     if(LFM_FAST_MATH)
@@ -143,7 +158,7 @@ include(GNUInstallDirs)
 set(LFM_INSTALL_TARGETS lfm25_host lfm25_cpu_core lfm25_cpu lfm25-cpu-run lfm25-cpu-pack lfm25-cpu-kernel-benchmark lfm25-cpu-c-api-example
     lfm25-cpu-concurrent-c-api-example lfm25-cpu-concurrent-benchmark
     lfm25-cpu-prefill-benchmark lfm25-cpu-prefix-cache-benchmark
-    lfm25-cpu-compare-reference lfm25-compare-logits)
+    lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download)
 if(LFM_CUDA_AVAILABLE)
     list(APPEND LFM_INSTALL_TARGETS lfm25_core lfm25 lfm25-run
         lfm25-concurrent-benchmark lfm25-prefix-cache-benchmark

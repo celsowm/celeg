@@ -27,6 +27,24 @@ size_t round_up(size_t value, size_t alignment) {
     return (value + alignment - 1) / alignment * alignment;
 }
 
+void* aligned_alloc_portable(size_t alignment, size_t size) {
+#if defined(_WIN32)
+    return ::_aligned_malloc(size, alignment);
+#else
+    void* ptr = nullptr;
+    if (::posix_memalign(&ptr, alignment, size) != 0) return nullptr;
+    return ptr;
+#endif
+}
+
+void aligned_free_portable(void* ptr) {
+#if defined(_WIN32)
+    ::_aligned_free(ptr);
+#else
+    ::free(ptr);
+#endif
+}
+
 struct PartialAttention {
     float maximum = -std::numeric_limits<float>::infinity();
     float denominator = 0.0f;
@@ -80,7 +98,7 @@ struct CpuKvPagePool::Page {
     bool numa_bound = false;
     bool numa_binding_failed = false;
 
-    ~Page() { std::free(storage); }
+    ~Page() { aligned_free_portable(storage); }
 };
 
 CpuKvPagePool::CpuKvPagePool(CpuKvCacheMode mode,
@@ -129,10 +147,10 @@ CpuKvPageId CpuKvPagePool::allocate(int requested_node) {
     const size_t allocation_bytes = round_up(page_bytes_, alignment);
     if (!page.storage || page.storage_bytes != allocation_bytes ||
         (requested_node >= 0 && page.numa_node != requested_node)) {
-        std::free(page.storage);
+        aligned_free_portable(page.storage);
         page.storage = nullptr;
-        void* memory = nullptr;
-        if (posix_memalign(&memory, alignment, allocation_bytes) != 0 || !memory) {
+        void* memory = aligned_alloc_portable(alignment, allocation_bytes);
+        if (!memory) {
             throw std::bad_alloc();
         }
         page.storage = memory;

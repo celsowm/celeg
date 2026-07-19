@@ -2,6 +2,7 @@
 #include "lfm/cpu_isa.hpp"
 #include "lfm/cpu_model.hpp"
 #include "lfm/cpu_topology.hpp"
+#include "lfm/downloader.hpp"
 #include "lfm/tokenizer.hpp"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 namespace {
 struct Args {
     std::string model_dir;
+    std::string repo;
     std::string prompt;
     std::string system;
     std::string isa = "auto";
@@ -54,6 +56,7 @@ Args parse_args(int argc, char** argv) {
             return argv[i];
         };
         if (key == "--model") args.model_dir = value();
+        else if (key == "--repo") args.repo = value();
         else if (key == "--prompt") args.prompt = value();
         else if (key == "--system") args.system = value();
         else if (key == "--cpu-isa") args.isa = value();
@@ -81,7 +84,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--help") {
             std::cout
-                << "lfm25-cpu-run --model DIR --prompt TEXT [options]\n"
+                << "lfm25-cpu-run [--model DIR | --repo REPO_ID] --prompt TEXT [options]\n"
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
                 << "    (AMX/I8MM/SME2 remain diagnostic-only in v0.0.20)\n"
                 << "  --cpu-q4-group 32|64 --threads N\n"
@@ -94,8 +97,11 @@ Args parse_args(int argc, char** argv) {
             std::exit(0);
         } else throw std::runtime_error("unknown argument: " + key);
     }
-    if (args.print_cpu && args.model_dir.empty()) return args;
-    if (args.model_dir.empty()) throw std::runtime_error("--model is required");
+    if (args.print_cpu && args.model_dir.empty() && args.repo.empty()) return args;
+    if (args.model_dir.empty() && args.repo.empty())
+        throw std::runtime_error("--model or --repo is required");
+    if (!args.model_dir.empty() && !args.repo.empty())
+        throw std::runtime_error("--model and --repo are mutually exclusive");
     if (args.prompt.empty()) throw std::runtime_error("--prompt is required");
     if (args.context <= 0 || args.max_new_tokens < 0 || args.threads < 0 ||
         args.kv_page_tokens <= 0 || args.prefill_chunk_tokens <= 0 ||
@@ -125,9 +131,14 @@ int main(int argc, char** argv) {
         if (args.print_cpu) {
             std::cout << caps.summary() << '\n'
                       << lfm::detect_cpu_topology().summary() << '\n';
-            if (args.model_dir.empty()) return 0;
+            if (args.model_dir.empty() && args.repo.empty()) return 0;
         }
-        const std::filesystem::path model(args.model_dir);
+        std::filesystem::path model;
+        if (!args.repo.empty()) {
+            model = lfm::resolve_hf_model(args.repo);
+        } else {
+            model = std::filesystem::path(args.model_dir);
+        }
         const lfm::ModelConfig config = lfm::ModelConfig::load((model / "config.json").string());
         config.validate_compiled_backend();
         if (args.context > config.max_position_embeddings) {
