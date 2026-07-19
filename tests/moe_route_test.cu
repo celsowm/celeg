@@ -86,8 +86,12 @@ int main() {
             lfm::compute_moe_router(hv, rw, bias_ptr, rows, hidden, cfg, sel_cpu, wts_cpu);
 
             for (size_t i = 0; i < sel_gpu.size(); ++i) {
-                assert(sel_gpu[i] == sel_cpu[i]);
-                assert(std::abs(wts_gpu[i] - wts_cpu[i]) < 1e-4f);
+                if (sel_gpu[i] != sel_cpu[i])
+                    throw std::runtime_error("router selection mismatch at " +
+                                             std::to_string(i));
+                if (std::abs(wts_gpu[i] - wts_cpu[i]) >= 1e-4f)
+                    throw std::runtime_error("router weight mismatch at " +
+                                             std::to_string(i));
             }
             // Also verify weights equal the original sigmoid of the selected
             // expert (bias must never leak into the gathered weight).
@@ -112,7 +116,8 @@ int main() {
                         expected /= (sum + 1e-6f);
                     }
                     expected *= cfg.routed_scaling_factor;
-                    assert(std::abs(wts_gpu[static_cast<size_t>(r) * K + k] - expected) < 1e-4f);
+                    if (std::abs(wts_gpu[static_cast<size_t>(r) * K + k] - expected) >= 1e-4f)
+                        throw std::runtime_error("router weight recompute mismatch");
                 }
             }
         };
@@ -161,7 +166,60 @@ int main() {
             run_case(cfg, &bias);
         }
 
-        // Case 5: larger expert count (E=32) to exercise multi-warp blocks.
+        // Case 5: single-token (rows=1) decode path. The original router
+        // selection was broken for rows=1 (top-K buffer never updated its
+        // scores), so this guards the decode path explicitly.
+        {
+            const int E1 = 6, K1 = 4, H1 = 4, R1 = 1;
+            std::vector<float> hv1, rw1, b1;
+            build_problem(R1, H1, E1, hv1, rw1, b1);
+            lfm::DeviceBuffer<float> dh1(R1 * H1), dr1(static_cast<size_t>(E1) * H1);
+            lfm::DeviceBuffer<float> db1(E1);
+            lfm::DeviceBuffer<int> dsel1(static_cast<size_t>(R1) * K1);
+            lfm::DeviceBuffer<float> dw1(static_cast<size_t>(R1) * K1);
+            lfm::DeviceBuffer<float> dscr1(static_cast<size_t>(R1) * E1);
+            LFM_CUDA(cudaMemcpy(dh1.data(), hv1.data(), dh1.bytes(), cudaMemcpyHostToDevice));
+            LFM_CUDA(cudaMemcpy(dr1.data(), rw1.data(), dr1.bytes(), cudaMemcpyHostToDevice));
+            LFM_CUDA(cudaMemcpy(db1.data(), b1.data(), db1.bytes(), cudaMemcpyHostToDevice));
+
+            lfm::MoeRouterConfig cfg;
+            cfg.num_experts = E1;
+            cfg.experts_per_token = K1;
+            cfg.normalize_topk = true;
+            cfg.use_expert_bias = true;
+            cfg.routed_scaling_factor = 1.0f;
+
+            lfm::MoeRouterDevice dev;
+            dev.router_weight = dr1.data();
+            dev.expert_bias = db1.data();
+            dev.hidden_data = dh1.data();
+            dev.selected_experts = dsel1.data();
+            dev.routing_weights = dw1.data();
+            dev.rows = R1;
+            dev.hidden_dim = H1;
+            lfm::launch_moe_router(dev, cfg, dscr1.data(), stream.get());
+            LFM_CUDA(cudaStreamSynchronize(stream.get()));
+
+            std::vector<int> sg(static_cast<size_t>(R1) * K1);
+            std::vector<float> wg(static_cast<size_t>(R1) * K1);
+            LFM_CUDA(cudaMemcpy(sg.data(), dsel1.data(),
+                                dsel1.bytes(), cudaMemcpyDeviceToHost));
+            LFM_CUDA(cudaMemcpy(wg.data(), dw1.data(),
+                                dw1.bytes(), cudaMemcpyDeviceToHost));
+            std::vector<int> sc;
+            std::vector<float> wc;
+            lfm::compute_moe_router(hv1, rw1, &b1, R1, H1, cfg, sc, wc);
+            for (size_t i = 0; i < sg.size(); ++i) {
+                if (sg[i] != sc[i])
+                    throw std::runtime_error("rows=1 router selection mismatch at " +
+                                             std::to_string(i));
+                if (std::abs(wg[i] - wc[i]) >= 1e-4f)
+                    throw std::runtime_error("rows=1 router weight mismatch at " +
+                                             std::to_string(i));
+            }
+        }
+
+        // Case 6: larger expert count (E=32) to exercise multi-warp blocks.
         {
             const int E2 = 32, K2 = 4, H2 = 8, R2 = 5;
             std::vector<float> hv2, rw2, b2;

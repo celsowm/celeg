@@ -17,9 +17,10 @@ __device__ inline float moe_sigmoid(float x) {
 // memory, performs a small-K top-K selection (K <= 64), and writes the
 // selected expert ids and (normalized, scaled) sigmoid routing weights.
 //
-// Top-K uses a shared K-wide buffer guarded by atomicCAS so the globally
-// top-K (by selection score, ties broken by smaller expert id) survives the
-// parallel per-expert competition deterministically.
+// The selection is done deterministically: every thread loads the full
+// scores[0..E-1] into shared memory, then the first K threads each pick the
+// best expert not yet taken, scanning in order. This is O(E*K) per block and
+// avoids the race-prone atomicCAS cascade.
 __global__ void moe_router_kernel(const float* router_weight,
                                   const float* expert_bias,
                                   const float* hidden_data,
@@ -50,59 +51,44 @@ __global__ void moe_router_kernel(const float* router_weight,
     }
     __syncthreads();
 
-    // Shared K-wide top buffer initialized to worst-possible.
-    __shared__ int top_expert[64];
-    __shared__ float top_score[64];
-    if (threadIdx.x < K) {
-        top_expert[threadIdx.x] = -1;
-        top_score[threadIdx.x] = -1e30f;
-    }
+    // Deterministic top-K over the shared scores array. Slot k (0..K-1) is
+    // filled in order: thread k picks the highest-scoring expert not yet taken
+    // (ties broken by smaller expert id) and publishes it; a sync after each
+    // slot guarantees later slots observe earlier selections. -1 marks an
+    // unfilled slot (must not collide with a valid expert id, which start at 0).
+    __shared__ int taken[64];
+    if (threadIdx.x < K) taken[threadIdx.x] = -1;
     __syncthreads();
-
-    for (int e = threadIdx.x; e < E; e += blockDim.x) {
-        const float s = scores[e];
-        for (int k = 0; k < K; ++k) {
-            const int occ = top_expert[k];
-            const float occ_s = top_score[k];
-            bool better = false;
-            if (s != occ_s) better = s > occ_s;
-            else better = e < occ;
-            if (!better) continue;
-
-            // Claim slot k via CAS on the expert id; if we win, the displaced
-            // occupant is pushed down to compete for the following slots.
-            int expected = occ;
-            if (atomicCAS(&top_expert[k], expected, e) == expected) {
-                int bump_e = occ;
-                float bump_s = occ_s;
-                for (int kk = k + 1; kk < K; ++kk) {
-                    const int occ2 = top_expert[kk];
-                    const float occ2_s = top_score[kk];
-                    bool bump_better = false;
-                    if (bump_s != occ2_s) bump_better = bump_s > occ2_s;
-                    else bump_better = bump_e < occ2;
-                    if (!bump_better) break;
-                    int exp2 = occ2;
-                    if (atomicCAS(&top_expert[kk], exp2, bump_e) == exp2) {
-                        const float old_s = bump_s;
-                        bump_e = exp2;
-                        bump_s = old_s;  // displaced entry becomes new candidate
-                    }
+    for (int k = 0; k < K; ++k) {
+        int best = -1;
+        float best_s = -1e30f;
+        if (threadIdx.x == k) {
+            for (int e = 0; e < E; ++e) {
+                bool is_taken = false;
+                for (int t = 0; t < K; ++t) {
+                    if (taken[t] == e) { is_taken = true; break; }
                 }
+                if (is_taken) continue;
+                const float s = scores[e];
+                bool better = false;
+                if (s != best_s) better = s > best_s;
+                else better = e < best;
+                if (better) { best = e; best_s = s; }
             }
+            taken[k] = best;
         }
+        __syncthreads();
     }
-    __syncthreads();
 
     // Gather original sigmoid probabilities, normalize, and scale.
     if (threadIdx.x < K) {
-        const int expert = top_expert[threadIdx.x];
+        const int expert = taken[threadIdx.x];
         if (expert >= 0) {
             float w = probs[expert];
             if (normalize_topk) {
                 float sum = 0.0f;
                 for (int k = 0; k < K; ++k) {
-                    const int ex = top_expert[k];
+                    const int ex = taken[k];
                     if (ex >= 0) sum += probs[ex];
                 }
                 w /= (sum + 1e-6f);
