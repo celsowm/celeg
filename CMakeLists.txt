@@ -47,6 +47,7 @@ add_library(lfm25_host
     src/reference.cpp
     src/quantization.cpp
     src/safetensors.cpp
+    src/safetensors_repo.cpp
     src/tokenizer.cpp
     src/runtime_types.cpp
     src/execution_plan.cpp
@@ -229,6 +230,9 @@ if(LFM_BUILD_TESTS)
     add_executable(safetensors_test tests/safetensors_test.cpp src/safetensors.cpp src/json.cpp)
     target_include_directories(safetensors_test PRIVATE include)
     add_test(NAME safetensors_test COMMAND safetensors_test)
+    add_executable(safetensors_repo_test tests/safetensors_repo_test.cpp src/safetensors.cpp src/safetensors_repo.cpp src/json.cpp)
+    target_include_directories(safetensors_repo_test PRIVATE include)
+    add_test(NAME safetensors_repo_test COMMAND safetensors_repo_test)
 
     add_executable(concurrent_policy_test tests/concurrent_policy_test.cpp src/concurrent_policy.cpp)
     target_include_directories(concurrent_policy_test PRIVATE include)
