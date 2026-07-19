@@ -248,6 +248,12 @@ void CpuModel::Impl::Shared::load_weights() {
     final_norm = load_vector(file.get(), reader.get(), writer.get(),
         "model.embedding_norm.weight", {shape.hidden});
 
+    if (shape.architecture == ArchitectureKind::MoeLfm2) {
+        throw std::runtime_error(
+            "LFM2 MoE CPU execution is not implemented in this release. "
+            "Use the CUDA backend to run MoE checkpoints such as LFM2.5-8B-A1B.");
+    }
+
     layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
     for (int index = 0; index < shape.num_hidden_layers; ++index) {
         CommonWeights common = load_common(file.get(), reader.get(), writer.get(), index);
