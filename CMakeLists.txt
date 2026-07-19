@@ -70,6 +70,7 @@ add_library(lfm25_host
     src/model_shape.cpp
     src/model_variant.cpp
     src/chat_template.cpp
+    src/moe_reference.cpp
 )
 target_include_directories(lfm25_host PUBLIC include)
 if(NOT MSVC)
@@ -148,6 +149,7 @@ if(LFM_CUDA_AVAILABLE)
         src/weight_loader.cu
         src/gemm_dispatcher.cu
         src/concurrent.cpp
+        src/moe_route.cu
     )
     target_include_directories(lfm25_core PUBLIC include)
     target_link_libraries(lfm25_core PUBLIC lfm25_host CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
@@ -233,10 +235,10 @@ if(LFM_BUILD_TESTS)
     add_executable(safetensors_repo_test tests/safetensors_repo_test.cpp src/safetensors.cpp src/safetensors_repo.cpp src/json.cpp)
     target_include_directories(safetensors_repo_test PRIVATE include)
     add_test(NAME safetensors_repo_test COMMAND safetensors_repo_test)
-    add_executable(expert_weight_test tests/expert_weight_test.cpp)
-    target_link_libraries(expert_weight_test PRIVATE lfm25_core lfm25_host)
-    target_include_directories(expert_weight_test PRIVATE include)
-    add_test(NAME expert_weight_test COMMAND expert_weight_test)
+    add_executable(moe_router_test tests/moe_router_test.cpp)
+    target_link_libraries(moe_router_test PRIVATE lfm25_host)
+    target_include_directories(moe_router_test PRIVATE include)
+    add_test(NAME moe_router_test COMMAND moe_router_test)
 
     add_executable(concurrent_policy_test tests/concurrent_policy_test.cpp src/concurrent_policy.cpp)
     target_include_directories(concurrent_policy_test PRIVATE include)
@@ -326,6 +328,13 @@ if(LFM_BUILD_TESTS)
         target_include_directories(cuda_kernels_test PRIVATE include)
         if(LFM_RUN_CUDA_TESTS)
             add_test(NAME cuda_kernels_test COMMAND cuda_kernels_test)
+        endif()
+
+        add_executable(moe_route_test tests/moe_route_test.cu)
+        target_link_libraries(moe_route_test PRIVATE lfm25_core)
+        target_include_directories(moe_route_test PRIVATE include)
+        if(LFM_RUN_CUDA_TESTS)
+            add_test(NAME moe_route_test COMMAND moe_route_test)
         endif()
     endif()
 endif()
