@@ -89,4 +89,64 @@ void compute_moe_router(const std::vector<float>& hidden,
     }
 }
 
+namespace {
+
+inline float sigmoid_ref(float x) {
+    if (x >= 0.0f) return 1.0f / (1.0f + std::exp(-x));
+    const float e = std::exp(x);
+    return e / (1.0f + e);
+}
+
+} // namespace
+
+void compute_moe_ffn(const std::vector<float>& hidden,
+                     const std::vector<float>& gate_up,
+                     const std::vector<float>& down,
+                     const std::vector<int>& selected_experts,
+                     const std::vector<float>& routing_weights,
+                     int rows, int hidden_dim, int inter, int num_experts,
+                     std::vector<float>& output) {
+    if (num_experts <= 0 || inter <= 0 || hidden_dim <= 0) {
+        throw std::invalid_argument("invalid MoE FFN configuration");
+    }
+    const int K = static_cast<int>(routing_weights.size()) / (rows == 0 ? 1 : rows);
+    if (selected_experts.size() != routing_weights.size()) {
+        throw std::invalid_argument("MoE FFN expert/weight count mismatch");
+    }
+    output.assign(static_cast<size_t>(rows) * hidden_dim, 0.0f);
+
+    const size_t gu_stride = static_cast<size_t>(2) * inter * hidden_dim;
+    const size_t down_stride = static_cast<size_t>(hidden_dim) * inter;
+
+    std::vector<float> guo(2 * inter);
+    std::vector<float> activated(inter);
+
+    for (int r = 0; r < rows; ++r) {
+        const float* h = hidden.data() + static_cast<size_t>(r) * hidden_dim;
+        for (int k = 0; k < K; ++k) {
+            const int expert = selected_experts[static_cast<size_t>(r) * K + k];
+            if (expert < 0 || expert >= num_experts) continue;
+            const float rw = routing_weights[static_cast<size_t>(r) * K + k];
+            const float* gu = gate_up.data() + static_cast<size_t>(expert) * gu_stride;
+            const float* dw = down.data() + static_cast<size_t>(expert) * down_stride;
+
+            for (int c = 0; c < 2 * inter; ++c) {
+                const float* col = gu + static_cast<size_t>(c) * hidden_dim;
+                float acc = 0.0f;
+                for (int i = 0; i < hidden_dim; ++i) acc += h[i] * col[i];
+                guo[c] = acc;
+            }
+            for (int i = 0; i < inter; ++i) {
+                activated[i] = (guo[i] / (1.0f + std::exp(-guo[i]))) * guo[inter + i];
+            }
+            for (int j = 0; j < hidden_dim; ++j) {
+                const float* col = dw + static_cast<size_t>(j) * inter;
+                float acc = 0.0f;
+                for (int i = 0; i < inter; ++i) acc += activated[i] * col[i];
+                output[static_cast<size_t>(r) * hidden_dim + j] += acc * rw;
+            }
+        }
+    }
+}
+
 } // namespace lfm

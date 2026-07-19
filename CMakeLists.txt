@@ -150,6 +150,7 @@ if(LFM_CUDA_AVAILABLE)
         src/gemm_dispatcher.cu
         src/concurrent.cpp
         src/moe_route.cu
+        src/moe_ffn.cu
     )
     target_include_directories(lfm25_core PUBLIC include)
     target_link_libraries(lfm25_core PUBLIC lfm25_host CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
@@ -335,6 +336,13 @@ if(LFM_BUILD_TESTS)
         target_include_directories(moe_route_test PRIVATE include)
         if(LFM_RUN_CUDA_TESTS)
             add_test(NAME moe_route_test COMMAND moe_route_test)
+        endif()
+
+        add_executable(moe_ffn_test tests/moe_ffn_test.cu)
+        target_link_libraries(moe_ffn_test PRIVATE lfm25_core)
+        target_include_directories(moe_ffn_test PRIVATE include)
+        if(LFM_RUN_CUDA_TESTS)
+            add_test(NAME moe_ffn_test COMMAND moe_ffn_test)
         endif()
     endif()
 endif()
