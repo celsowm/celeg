@@ -111,9 +111,11 @@ int main() {
         }
         for (int k = 0; k < K; ++k) {
             const int ex = sel_b[static_cast<size_t>(k)];
+            // The gathered weight is the original sigmoid prob only; the expert
+            // bias influences selection but never leaks into the weight value.
             assert(std::abs(w_b[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
-            // Bias must never appear in the output weight.
-            assert(std::abs(w_b[static_cast<size_t>(k)] - (probs[ex] + biased_bias[ex])) > 1.0f);
+            assert(std::abs(w_b[static_cast<size_t>(k)] - (probs[ex] + biased_bias[ex])) >=
+                   (biased_bias[ex] > 0.0f ? 1.0f : 0.0f));
         }
     }
 

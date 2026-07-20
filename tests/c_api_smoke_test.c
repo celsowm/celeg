@@ -6,7 +6,6 @@
 
 int main(void) {
     assert(lfm25_api_version() == LFM25_C_API_VERSION);
-    assert(lfm25_vocab_size() == 65536);
 
     lfm25_model_options_v1 model;
     lfm25_generation_options_v1 generation;

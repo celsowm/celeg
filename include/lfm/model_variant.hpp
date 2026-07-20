@@ -77,6 +77,7 @@ private:
 // Built-in variant: LiquidAI/LFM2.5-230M.
 class Lfm25_230M_Variant final : public IModelVariant {
 public:
+    using IModelVariant::matches;
     std::string_view id() const override;
     std::string_view repo_id() const override;
     bool matches(const ModelShape& shape) const override;

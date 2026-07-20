@@ -76,10 +76,11 @@ struct CpuPackedExecutor::Impl {
 
         for (size_t layer_index = 0; layer_index < shared.layers.size(); ++layer_index) {
             const CpuModel::Impl::WeightLayer& layer = shared.layers[layer_index];
-            const CpuModel::Impl::CommonWeights& common = std::visit(
-                [](const auto& value) -> const CpuModel::Impl::CommonWeights& {
-                    return value.common;
+            const CpuModel::Impl::CommonWeights* common_ptr = std::visit(
+                [](const auto& value) -> const CpuModel::Impl::CommonWeights* {
+                    return &value.common;
                 }, layer);
+            const CpuModel::Impl::CommonWeights& common = *common_ptr;
 
             std::copy(hidden.begin(), hidden.begin() + static_cast<ptrdiff_t>(
                 batch * shape.hidden), residual.begin());

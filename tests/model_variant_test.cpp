@@ -56,8 +56,9 @@ int main() {
     auto& registry = lfm::ModelVariantRegistry::instance();
 
     const auto ids = registry.ids();
-    assert(ids.size() == 4);
+    assert(ids.size() == 5);
     assert(registry.find("lfm2.5-8b-a1b") != nullptr);
+    assert(registry.find("lfm2-8b-a1b") != nullptr);
 
     const lfm::ModelShape shape_230m = make_shape(
         1024, 2560, 14, 16, 8, 64, 65536, 3, 1024, 6, 8);
@@ -197,6 +198,22 @@ int main() {
         const lfm::IModelVariant& variant_8b_hint =
             registry.select(shape_8b, "LiquidAI/LFM2.5-8B-A1B");
         assert(variant_8b_hint.id() == "lfm2.5-8b-a1b");
+
+        // LFM2-8B-A1B shares the MoE topology but uses vocab_size 65536 and a
+        // different rope_theta, so it must NOT be selected by the LFM2.5 shape.
+        lfm::ModelShape shape_lfm2 = shape_8b;
+        shape_lfm2.vocab_size = 65536;
+        shape_lfm2.rope_theta = 1'000'000.0f;
+        shape_lfm2.compute_derived();
+        shape_lfm2.validate();
+        assert(!registry.select(shape_lfm2).matches(shape_8b));
+        const lfm::IModelVariant& variant_lfm2 =
+            registry.select(shape_lfm2, "LiquidAI/LFM2-8B-A1B");
+        assert(variant_lfm2.id() == "lfm2-8b-a1b");
+        assert(variant_lfm2.repo_id() == "LiquidAI/LFM2-8B-A1B");
+        assert(variant_lfm2.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+        assert(variant_lfm2.label().find("LFM2-8B-A1B") != std::string::npos);
+        assert(variant_lfm2.resolve_shape(shape_lfm2).intermediate == 7168);
     }
 
     std::cout << "model_variant_test: ok variants=";

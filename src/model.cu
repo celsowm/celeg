@@ -26,20 +26,6 @@
 namespace lfm {
 namespace {
 
-size_t checked_element_count(const std::vector<int64_t>& shape) {
-    size_t count = 1;
-    for (int64_t dim : shape) {
-        if (dim < 0) throw std::runtime_error("negative tensor dimension");
-        if (dim == 0) return 0;
-        const size_t value = static_cast<size_t>(dim);
-        if (count > std::numeric_limits<size_t>::max() / value) {
-            throw std::overflow_error("tensor element count overflow");
-        }
-        count *= value;
-    }
-    return count;
-}
-
 std::string layer_name(int index, const std::string& suffix) {
     return "model.layers." + std::to_string(index) + "." + suffix;
 }
