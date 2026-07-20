@@ -237,6 +237,67 @@ std::string Lfm25_8B_A1B_Variant::label() const {
 }
 
 // ---------------------------------------------------------------------------
+// LFM2-8B-A1B (earlier LFM2 MoE release, vocab 65536 / rope_theta 1e6)
+// ---------------------------------------------------------------------------
+
+std::string_view Lfm25_8B_A1B_LFM2_Variant::id() const {
+    return "lfm2-8b-a1b";
+}
+
+std::string_view Lfm25_8B_A1B_LFM2_Variant::repo_id() const {
+    return "LiquidAI/LFM2-8B-A1B";
+}
+
+bool Lfm25_8B_A1B_LFM2_Variant::matches(const ModelShape& shape) const {
+    return shape.architecture == ArchitectureKind::MoeLfm2 &&
+           shape.hidden == 2048 &&
+           shape.intermediate == 7168 &&
+           shape.num_hidden_layers == 24 &&
+           shape.num_attention_heads == 32 &&
+           shape.num_key_value_heads == 8 &&
+           shape.head_dim == 64 &&
+           shape.vocab_size == 65536 &&
+           shape.conv_cache == 3 &&
+           shape.conv_dim == 2048 &&
+           shape.attention_layer_count == 6 &&
+           shape.conv_layer_count == 18 &&
+           shape.num_dense_layers == 2 &&
+           shape.num_experts == 32 &&
+           shape.experts_per_token == 4 &&
+           shape.moe_intermediate == 1792 &&
+           shape.use_expert_bias &&
+           shape.normalize_topk &&
+           close_float(shape.routed_scaling_factor, 1.0f, 1.0e-6f) &&
+           close_float(shape.norm_eps, 1.0e-5f, 1.0e-12f) &&
+           close_float(shape.rope_theta, 1'000'000.0f, 0.5f);
+}
+
+bool Lfm25_8B_A1B_LFM2_Variant::matches(const ModelShape& shape,
+                                        std::string_view repo_hint) const {
+    if (!repo_hint.empty()) {
+        const bool hint_ok = repo_hint_contains(repo_hint, "8b-a1b") ||
+                             repo_hint_contains(repo_hint, "8b_a1b") ||
+                             repo_hint_contains(repo_hint, "a1b");
+        if (hint_ok && !matches(shape)) return false;
+        if (hint_ok) return true;
+    }
+    return matches(shape);
+}
+
+ModelShape Lfm25_8B_A1B_LFM2_Variant::resolve_shape(ModelShape shape) const {
+    shape.intermediate = shape.dense_intermediate;
+    return shape;
+}
+
+ChatTemplateKind Lfm25_8B_A1B_LFM2_Variant::chat_template_kind() const {
+    return ChatTemplateKind::Lfm2Instruct;
+}
+
+std::string Lfm25_8B_A1B_LFM2_Variant::label() const {
+    return "LiquidAI LFM2-8B-A1B (MoE)";
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -251,6 +312,7 @@ ModelVariantRegistry& ModelVariantRegistry::instance() {
         registry.register_variant(std::make_unique<Lfm25_1_2B_Instruct_Variant>());
         registry.register_variant(std::make_unique<Lfm25_1_2B_Thinking_Variant>());
         registry.register_variant(std::make_unique<Lfm25_8B_A1B_Variant>());
+        registry.register_variant(std::make_unique<Lfm25_8B_A1B_LFM2_Variant>());
     }
     return registry;
 }

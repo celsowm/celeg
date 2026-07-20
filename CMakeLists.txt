@@ -71,6 +71,7 @@ add_library(lfm25_host
     src/model_variant.cpp
     src/chat_template.cpp
     src/moe_reference.cpp
+    src/expert_offload.cpp
 )
 target_include_directories(lfm25_host PUBLIC include)
 if(NOT MSVC)
@@ -151,6 +152,7 @@ if(LFM_CUDA_AVAILABLE)
         src/concurrent.cpp
         src/moe_route.cu
         src/moe_ffn.cu
+        src/expert_residency.cu
     )
     target_include_directories(lfm25_core PUBLIC include)
     target_link_libraries(lfm25_core PUBLIC lfm25_host CUDA::cudart CUDA::cublas CUDA::cublasLt Threads::Threads)
@@ -271,6 +273,10 @@ if(LFM_BUILD_TESTS)
     add_executable(engine_worker_test tests/engine_worker_test.cpp)
     target_link_libraries(engine_worker_test PRIVATE lfm25_host)
     add_test(NAME engine_worker_test COMMAND engine_worker_test)
+    add_executable(expert_offload_test tests/expert_offload_test.cpp)
+    target_link_libraries(expert_offload_test PRIVATE lfm25_host)
+    target_include_directories(expert_offload_test PRIVATE include)
+    add_test(NAME expert_offload_test COMMAND expert_offload_test)
 
     add_executable(cpu_isa_test tests/cpu_isa_test.cpp)
     target_link_libraries(cpu_isa_test PRIVATE lfm25_host)
@@ -350,6 +356,13 @@ if(LFM_BUILD_TESTS)
         target_include_directories(moe_integration_test PRIVATE include)
         if(LFM_RUN_CUDA_TESTS)
             add_test(NAME moe_integration_test COMMAND moe_integration_test)
+        endif()
+
+        add_executable(expert_residency_test tests/expert_residency_test.cu)
+        target_link_libraries(expert_residency_test PRIVATE lfm25_core)
+        target_include_directories(expert_residency_test PRIVATE include)
+        if(LFM_RUN_CUDA_TESTS)
+            add_test(NAME expert_residency_test COMMAND expert_residency_test)
         endif()
     endif()
 endif()

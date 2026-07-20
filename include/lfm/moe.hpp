@@ -99,6 +99,16 @@ struct MoeFfnDevice {
     int hidden_dim = 0;
     size_t expert_gate_up_stride = 0;  // elements per expert in gate_up
     size_t expert_down_stride = 0;      // elements per expert in down
+
+    // Optional per-expert indirection tables for MoE expert offload. When both
+    // are non-null the kernel resolves each expert's weights through these
+    // device-resident pointer arrays (each entry either points into a GPU
+    // cache slot or into host-mapped/UVA memory) instead of computing
+    // `gate_up + expert * stride`. The tables are [num_experts] each; entries
+    // for absent experts may be null and are skipped by the kernel. When null
+    // the kernel falls back to the contiguous `gate_up`/`down` base pointers.
+    const __nv_bfloat16* const* gate_up_ptrs = nullptr;  // [E]
+    const __nv_bfloat16* const* down_ptrs = nullptr;      // [E]
 };
 
 // CUDA device implementation of the LFM2 MoE feed-forward block. For every

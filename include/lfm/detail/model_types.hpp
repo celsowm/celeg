@@ -136,6 +136,16 @@ struct MoeFfnWeights {
     // once at load time so the CUDA router kernel (which expects float) does
     // not re-cast every token. Owned by the session Impl, not by this view.
     const float* router_float = nullptr;
+
+    // Expert-offload indirection tables ([num_experts] device pointer arrays).
+    // Non-null only when this layer's experts are offloaded (host-backed with a
+    // GPU cache). When set, gate_up/down above are null and the MoE FFN kernel
+    // resolves experts through these tables. Owned by the session's per-layer
+    // ExpertLayerCache, not by this view.
+    const __nv_bfloat16* const* gate_up_ptrs = nullptr;
+    const __nv_bfloat16* const* down_ptrs = nullptr;
+
+    bool offloaded() const { return gate_up_ptrs != nullptr; }
 };
 
 // A layer's feed-forward block is either dense or MoE. The layer operator
@@ -280,15 +290,22 @@ inline lfm::MoeRouterConfig moe_router_config(const ModelShape& shape) {
 
 inline lfm::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const ModelShape& shape) {
     lfm::MoeFfnDevice fdev;
-    fdev.gate_up = moe.gate_up->bf16;
-    fdev.down = moe.down->bf16;
     fdev.num_experts = shape.num_experts;
     fdev.inter = shape.moe_intermediate;
     fdev.hidden_dim = shape.hidden;
-    fdev.expert_gate_up_stride =
-        static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
-    fdev.expert_down_stride =
-        static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+    if (moe.offloaded()) {
+        // Host-backed experts with a GPU cache: resolve through the per-expert
+        // pointer tables. Strides are unused in indirect mode.
+        fdev.gate_up_ptrs = moe.gate_up_ptrs;
+        fdev.down_ptrs = moe.down_ptrs;
+    } else {
+        fdev.gate_up = moe.gate_up->bf16;
+        fdev.down = moe.down->bf16;
+        fdev.expert_gate_up_stride =
+            static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
+        fdev.expert_down_stride =
+            static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+    }
     return fdev;
 }
 

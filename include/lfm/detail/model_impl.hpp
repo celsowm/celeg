@@ -11,6 +11,8 @@
 #include "lfm/weight_loader.hpp"
 #include "lfm/gemm_dispatcher.hpp"
 #include "lfm/packed_session.hpp"
+#include "lfm/expert_offload.hpp"
+#include "lfm/expert_residency.hpp"
 #include "lfm/detail/model_types.hpp"
 
 #include <chrono>
@@ -59,6 +61,7 @@ struct LfmModel::Impl : public IPackedSession {
     std::vector<float> copy_logits();
     DecodeBenchmark benchmark_decode(int warmup_steps, int measured_steps);
     ModelMemoryStats memory_stats() const;
+    LfmDiagnostics::ExpertOffloadStats expert_offload_stats() const;
     RuntimeMetrics runtime_metrics() const { return metrics_; }
     void clear_runtime_metrics() { metrics_ = {}; }
     void save_session(const std::string& path);
@@ -94,6 +97,13 @@ struct LfmModel::Impl : public IPackedSession {
     void set_sampled_host_value(int32_t value) { sampled_host_.data()[0] = value; }
     IWeightLayout& weight_layout() { return *weight_layout_; }
     const LinearWeight* embedding() const { return embedding_; }
+    // Weight used for the final logits projection. When the checkpoint ships a
+    // separate (untied) lm_head, that is returned; otherwise the tied
+    // embed_tokens table is shared.
+    const LinearWeight* logits_weight() const {
+        return lm_head_ ? lm_head_ : embedding_;
+    }
+    bool tied_lm_head() const { return lm_head_ == nullptr; }
     const __nv_bfloat16* final_norm() const { return final_norm_; }
     const __nv_bfloat16* rope_cos() const { return rope_cos_.data(); }
     const __nv_bfloat16* rope_sin() const { return rope_sin_.data(); }
@@ -105,10 +115,18 @@ struct LfmModel::Impl : public IPackedSession {
     void prefill_legacy(const std::vector<int32_t>& tokens);
     void allocate_prefill_workspace(int rows);
     void release_prefill_workspace();
-    void run_mlp_decode(const LayerCommon& common_layer);
-    void run_mlp_prefill(const LayerCommon& common_layer, int rows);
-    void run_mlp_moe_decode(const LayerCommon& common_layer);
-    void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows);
+    void run_mlp_decode(const LayerCommon& common_layer, int layer);
+    void run_mlp_prefill(const LayerCommon& common_layer, int rows, int layer);
+    void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
+    void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
+
+    // When offload is enabled, ensures every expert selected for `layer` (read
+    // from `sel_dev`, `rows*K` ints) is GPU-resident before the FFN kernel runs,
+    // promoting cold experts from host on expert_transfer_stream_ and ordering
+    // the streams via the two events. No-op when the layer has no cache.
+    void ensure_moe_experts_resident(int layer, const int* sel_dev, int rows,
+                                     cudaStream_t compute_stream,
+                                     const float* route_scores_dev = nullptr);
     void forward_token_host(int32_t token, bool compute_logits);
     void forward_token_paged_host(int32_t token, bool compute_logits,
                                   PhysicalPagedKvCache& paged_kv,
@@ -143,6 +161,10 @@ struct LfmModel::Impl : public IPackedSession {
     std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;
     const LinearWeight* embedding_ = nullptr;
+    // Separate LM head weight when the checkpoint uses an untied head
+    // (tie_word_embeddings == false and a model.lm_head.weight tensor exists).
+    // Null when the head is tied to the embedding table.
+    const LinearWeight* lm_head_ = nullptr;
     const __nv_bfloat16* final_norm_ = nullptr;
     std::unique_ptr<IWeightLayout> weight_layout_;
 
@@ -209,6 +231,43 @@ struct LfmModel::Impl : public IPackedSession {
     // Per-MoE-layer device float copy of the router weight, produced at load.
     // Indexed by model layer index; non-MoE layers hold an empty buffer.
     std::vector<DeviceBuffer<float>> moe_router_float_;
+
+    // ---- MoE expert offload (Tier 1 GPU cache + Tier 2 host store) ----
+    // Resolved offload layout for this session; disabled unless the plan
+    // enables it (see ExpertOffloadOptions in ModelOptions).
+    ExpertOffloadPlan expert_offload_plan_;
+    // Host-backed BF16 expert bytes (pinned+mapped). One store for all layers.
+    HostExpertStore host_expert_store_;
+    // Per-model-layer GPU expert cache. Empty unique_ptr for non-offloaded /
+    // non-MoE layers. Indexed by model layer index.
+    std::vector<std::unique_ptr<ExpertLayerCache>> expert_caches_;
+    // Dedicated stream for host->device expert promotions so transfers overlap
+    // compute. Created only when offload is enabled.
+    std::unique_ptr<CudaStream> expert_transfer_stream_;
+    // Ordering events between the compute stream (runs the FFN kernel) and the
+    // transfer stream (promotes cold experts): the transfer stream must not
+    // clobber a slot still being read by the prior FFN, and the FFN must not
+    // start until the needed experts are resident.
+    CudaEvent ffn_done_event_;
+    CudaEvent promote_done_event_;
+    // Recorded on the transfer stream after speculative prefetch completes; the
+    // next token's residency resolution waits on it so prefetched experts are
+    // guaranteed resident before that token's FFN.
+    CudaEvent prefetch_done_event_;
+    // Recorded on the compute stream right after the router kernel writes the
+    // expert selection; the transfer stream waits on it before reading the
+    // selection, so residency resolution never synchronizes the compute stream.
+    CudaEvent router_done_event_;
+    // Pinned host staging for asynchronously reading the router's expert
+    // selection on the transfer stream (offload path only). Pinned so the DtoH
+    // copy can run on the transfer stream without stalling the compute stream.
+    int* moe_sel_host_ = nullptr;
+    size_t moe_sel_host_cap_ = 0;
+    // Pinned host staging for asynchronously reading the router's per-expert
+    // scores on the transfer stream so speculative prefetch can rank experts by
+    // actual routing likelihood rather than stale recency.
+    float* moe_route_scores_host_ = nullptr;
+    size_t moe_route_scores_cap_ = 0;
 };
 
 } // namespace lfm

@@ -39,6 +39,15 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
 
     ExecutionPlan plan;
     plan.options_ = requested;
+
+    // MoE expert offload resolves residency at decode time using host-roundtrip
+    // reads of the router output and cross-stream event synchronization, neither
+    // of which is capturable into a CUDA graph. Force graph capture off when
+    // offload is enabled.
+    if (requested.expert_offload.enabled()) {
+        plan.options_.cuda_graph = false;
+    }
+
     switch (requested.weight_mode) {
         case WeightMode::Bf16:
             plan.linear_kernel_ = requested.gemm_backend == GemmBackend::CublasLt

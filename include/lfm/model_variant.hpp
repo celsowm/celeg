@@ -123,6 +123,20 @@ public:
     std::string label() const override;
 };
 
+// Built-in variant: LiquidAI/LFM2-8B-A1B (earlier LFM2 MoE release). Shares the
+// 8B-A1B topology but uses a 65536 vocab and rope_theta=1e6 instead of the
+// LFM2.5 values, so it needs its own shape match.
+class Lfm25_8B_A1B_LFM2_Variant final : public IModelVariant {
+public:
+    std::string_view id() const override;
+    std::string_view repo_id() const override;
+    bool matches(const ModelShape& shape) const override;
+    bool matches(const ModelShape& shape, std::string_view repo_hint) const override;
+    ModelShape resolve_shape(ModelShape shape) const override;
+    ChatTemplateKind chat_template_kind() const override;
+    std::string label() const override;
+};
+
 // Registers all built-in variants exactly once. Safe to call multiple times.
 void register_builtin_variants();
 

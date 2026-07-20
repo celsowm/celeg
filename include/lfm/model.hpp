@@ -55,6 +55,18 @@ public:
     void clear_runtime_metrics();
     bool cuda_graph_ready() const;
 
+    // MoE expert-offload residency stats (aggregate across all MoE layers):
+    // GPU-resident experts per layer, host-resident experts per layer, and the
+    // decode-time cache hit rate (hits / (hits + misses)).
+    struct ExpertOffloadStats {
+        int experts_per_layer = 0;
+        int host_experts_per_layer = 0;
+        uint64_t hits = 0;
+        uint64_t misses = 0;
+        double hit_rate = 0.0;  // in [0,1]; -1 if offload disabled
+    };
+    ExpertOffloadStats expert_offload_stats() const;
+
 private:
     friend class LfmModel;
     explicit LfmDiagnostics(LfmModel& owner) : owner_(&owner) {}
@@ -122,6 +134,7 @@ public:
     std::vector<float> copy_logits();
     DecodeBenchmark benchmark_decode(int warmup_steps, int measured_steps);
     ModelMemoryStats memory_stats() const;
+    LfmDiagnostics::ExpertOffloadStats expert_offload_stats() const;
     RuntimeMetrics runtime_metrics() const;
     void clear_runtime_metrics();
     void save_session(const std::string& path);

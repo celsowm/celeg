@@ -60,6 +60,14 @@ struct Args {
     bool lt_autotune = false;
     bool memory_report = false;
     bool runtime_metrics = false;
+    std::string expert_offload = "none";
+    std::string expert_host_mode = "mapped";
+    std::string expert_cache_policy = "lfu-lru";
+    int expert_cache_mib = 0;
+    int expert_cache_per_layer = 0;
+    int maximum_pinned_host_mib = 9216;
+    int gpu_memory_reserve_mib = 768;
+    int prefill_chunk = 256;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -107,6 +115,14 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--lt-autotune") args.lt_autotune = true;
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--runtime-metrics") args.runtime_metrics = true;
+        else if (key == "--expert-offload") args.expert_offload = value();
+        else if (key == "--expert-host-mode") args.expert_host_mode = value();
+        else if (key == "--expert-cache-policy") args.expert_cache_policy = value();
+        else if (key == "--expert-cache-mib") args.expert_cache_mib = std::stoi(value());
+        else if (key == "--expert-cache-per-layer") args.expert_cache_per_layer = std::stoi(value());
+        else if (key == "--maximum-pinned-host-mib") args.maximum_pinned_host_mib = std::stoi(value());
+        else if (key == "--gpu-memory-reserve-mib") args.gpu_memory_reserve_mib = std::stoi(value());
+        else if (key == "--prefill-chunk") args.prefill_chunk = std::stoi(value());
         else if (key == "--segmented-attention") args.attention_mode = "segmented";
         else if (key == "--help") {
             std::cout
@@ -126,7 +142,13 @@ Args parse_args(int argc, char** argv) {
                 << "  [--repetition-penalty F] [--seed N]\n"
                 << "  [--dump-logits FILE.f32] [--print-top N]\n"
                 << "  [--save-session FILE] [--load-session FILE]\n"
-                << "  [--runtime-metrics]\n";
+                << "  [--runtime-metrics]\n"
+                << "  [--expert-offload none|auto|host]\n"
+                << "  [--expert-host-mode mapped|pinned-copy|staged]\n"
+                << "  [--expert-cache-policy static|lru|lfu-lru]\n"
+                << "  [--expert-cache-mib N] [--expert-cache-per-layer N]\n"
+                << "  [--maximum-pinned-host-mib N] [--gpu-memory-reserve-mib N]\n"
+                << "  [--prefill-chunk N]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + key);
@@ -167,6 +189,27 @@ Args parse_args(int argc, char** argv) {
     if (args.attention_mode != "single" && !args.fast_attention) {
         throw std::runtime_error(
             "segmented or automatic attention requires --fast-attention");
+    }
+    if (args.expert_offload != "none" && args.expert_offload != "auto" &&
+        args.expert_offload != "host") {
+        throw std::runtime_error(
+            "--expert-offload must be none, auto or host");
+    }
+    if (args.expert_host_mode != "mapped" &&
+        args.expert_host_mode != "pinned-copy" &&
+        args.expert_host_mode != "staged") {
+        throw std::runtime_error(
+            "--expert-host-mode must be mapped, pinned-copy or staged");
+    }
+    if (args.expert_cache_policy != "static" && args.expert_cache_policy != "lru" &&
+        args.expert_cache_policy != "lfu-lru") {
+        throw std::runtime_error(
+            "--expert-cache-policy must be static, lru or lfu-lru");
+    }
+    if (args.expert_cache_mib < 0 || args.expert_cache_per_layer < 0 ||
+        args.maximum_pinned_host_mib < 0 || args.gpu_memory_reserve_mib < 0 ||
+        args.prefill_chunk <= 0) {
+        throw std::runtime_error("invalid numeric argument");
     }
     return args;
 }
@@ -310,14 +353,57 @@ int main(int argc, char** argv) {
         }
         model_options.attention_chunk_tokens = args.attention_chunk_tokens;
         model_options.attention_auto_threshold = args.attention_auto_threshold;
+        {
+            lfm::ExpertOffloadOptions& off = model_options.expert_offload;
+            if (args.expert_offload == "auto") {
+                off.mode = lfm::ExpertOffloadMode::Auto;
+            } else if (args.expert_offload == "host") {
+                off.mode = lfm::ExpertOffloadMode::Host;
+            } else {
+                off.mode = lfm::ExpertOffloadMode::None;
+            }
+            if (args.expert_host_mode == "pinned-copy") {
+                off.host_mode = lfm::ExpertHostMode::PinnedCopy;
+            } else if (args.expert_host_mode == "staged") {
+                off.host_mode = lfm::ExpertHostMode::Staged;
+            } else {
+                off.host_mode = lfm::ExpertHostMode::Mapped;
+            }
+            if (args.expert_cache_policy == "static") {
+                off.policy = lfm::ExpertCachePolicy::Static;
+            } else if (args.expert_cache_policy == "lru") {
+                off.policy = lfm::ExpertCachePolicy::Lru;
+            } else {
+                off.policy = lfm::ExpertCachePolicy::LayerLocalLfuLru;
+            }
+            off.gpu_expert_cache_bytes =
+                static_cast<size_t>(args.expert_cache_mib) * 1024ULL * 1024ULL;
+            off.experts_per_layer = args.expert_cache_per_layer;
+            off.maximum_pinned_host_bytes =
+                static_cast<size_t>(args.maximum_pinned_host_mib) * 1024ULL * 1024ULL;
+            off.gpu_memory_reserve_bytes =
+                static_cast<size_t>(args.gpu_memory_reserve_mib) * 1024ULL * 1024ULL;
+            off.prefill_chunk_tokens = args.prefill_chunk;
+        }
         lfm::GenerationConfig generation;
         generation.temperature = args.temperature;
         generation.top_k = args.top_k;
         generation.top_p = args.top_p;
         generation.repetition_penalty = args.repetition_penalty;
         generation.seed = args.seed;
+        // Single-file checkpoints ship model.safetensors; sharded checkpoints
+        // ship model.safetensors.index.json in the same directory. The model
+        // constructor resolves the index when given the directory root.
+        const std::filesystem::path single =
+            model / "model.safetensors";
+        const std::filesystem::path index =
+            model / "model.safetensors.index.json";
+        const std::string safetensors_path =
+            std::filesystem::is_regular_file(single) ? single.string()
+            : std::filesystem::is_regular_file(index) ? model.string()
+                                                      : single.string();
         lfm::LfmModel engine(
-            (model / "model.safetensors").string(), args.context,
+            safetensors_path, args.context,
             model_options, generation);
         if (args.memory_report) print_memory_stats(engine.memory_stats());
 
@@ -346,6 +432,18 @@ int main(int argc, char** argv) {
                       << benchmark.milliseconds_per_token() << '\n'
                       << "benchmark.decode_tokens_per_second="
                       << benchmark.tokens_per_second() << '\n';
+
+            const lfm::LfmDiagnostics::ExpertOffloadStats off =
+                engine.expert_offload_stats();
+            if (off.hit_rate >= 0.0) {
+                std::cerr << "expert_offload.experts_per_layer="
+                          << off.experts_per_layer << '\n'
+                          << "expert_offload.host_experts_per_layer="
+                          << off.host_experts_per_layer << '\n'
+                          << "expert_offload.hits=" << off.hits << '\n'
+                          << "expert_offload.misses=" << off.misses << '\n'
+                          << "expert_offload.hit_rate=" << off.hit_rate << '\n';
+            }
             return 0;
         }
 

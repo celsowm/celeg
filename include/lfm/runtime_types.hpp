@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lfm/policy.hpp"
+#include "lfm/expert_offload.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -45,6 +46,7 @@ struct ModelOptions {
     int attention_chunk_tokens = 256;
     int attention_auto_threshold = 4096;
     bool allocate_local_kv_cache = true;
+    ExpertOffloadOptions expert_offload;
 };
 
 struct ModelMemoryStats {

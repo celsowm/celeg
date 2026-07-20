@@ -186,7 +186,6 @@ void ModelConfig::validate() const {
     if (!(rope_theta > 0.0f) || !std::isfinite(rope_theta)) throw std::runtime_error("invalid rope_theta");
     if (rope_type != "default") throw std::runtime_error("only default RoPE is supported");
     if (conv_bias) throw std::runtime_error("convolution bias is not implemented");
-    if (!tie_word_embeddings) throw std::runtime_error("untied LM head is not implemented");
     if (!use_pos_enc) throw std::runtime_error("checkpoint disables positional encoding");
     if (bos_token_id < 0 || eos_token_id < 0 || pad_token_id < 0 ||
         bos_token_id >= vocab_size || eos_token_id >= vocab_size || pad_token_id >= vocab_size) {

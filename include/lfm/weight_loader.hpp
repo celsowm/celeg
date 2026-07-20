@@ -102,6 +102,28 @@ public:
         const SafeTensorRepository& repo, int layer,
         int num_experts, int hidden);
 
+    // Result of loading a MoE layer's experts into host-backed storage for
+    // offload. `gate_up_host_dev` / `down_host_dev` are [num_experts]
+    // device-visible pointers (CUDA UVA) into `store`, laid out per expert as
+    // gate_up [2*moe_inter, hidden] and down [hidden, moe_inter].
+    struct HostExpertLayer {
+        std::vector<const __nv_bfloat16*> gate_up_host_dev;
+        std::vector<const __nv_bfloat16*> down_host_dev;
+        size_t gate_up_bytes = 0;  // bytes per expert
+        size_t down_bytes = 0;     // bytes per expert
+    };
+
+    // Loads a MoE layer's per-expert gate/up/down tensors into the supplied
+    // HostExpertStore instead of eagerly uploading them to the GPU. Returns
+    // device-visible host pointers per expert. Used by the expert-offload
+    // residency path; the caller drives promotion into a GPU ExpertLayerCache.
+    // Does NOT touch the shared device weight arena. `host_mode` selects whether
+    // the host tier is a pinned copy or a mapped arena.
+    HostExpertLayer load_moe_experts_host(
+        const SafeTensorRepository& repo, int layer,
+        int num_experts, int moe_intermediate, int hidden,
+        class HostExpertStore& store, ExpertHostMode host_mode);
+
     WeightMode weight_mode() const { return weight_mode_; }
 
 private:

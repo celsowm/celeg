@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -75,6 +76,11 @@ void read_scalar(std::ifstream& in, T& value) {
 
 std::filesystem::path config_path_for(const std::string& safetensors_path) {
     const std::filesystem::path p(safetensors_path);
+    // Sharded checkpoints pass the directory root (which contains
+    // model.safetensors.index.json); single-file checkpoints pass the file.
+    if (std::filesystem::is_directory(p)) {
+        return p / "config.json";
+    }
     return p.parent_path() / "config.json";
 }
 
@@ -216,6 +222,65 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
         weight_layout_ = make_weight_layout(
             options_.weight_mode, table, embedding_->scales);
     }
+    // Untied LM head: load the separate lm_head weight for the final logits
+    // projection. Some checkpoints omit the lm_head tensor yet leave
+    // tie_word_embeddings unset; in that case the head is effectively tied to
+    // the embedding table, so we fall back to it instead of erroring.
+    if (!config.tie_word_embeddings &&
+        repo.contains("model.lm_head.weight")) {
+        lm_head_ = weight_loader_->load_linear_weight(
+            repo, "model.lm_head.weight",
+            {shape_.vocab_size, shape_.hidden});
+    }
+
+    // Resolve the MoE expert-offload plan before loading experts. Snapshot the
+    // free VRAM now (embeddings/final norm already uploaded; attention/conv and
+    // experts are loaded below) and estimate the always-resident non-expert
+    // weight footprint analytically from the topology so the planner can decide
+    // how many experts fit in the GPU cache per layer.
+    if (options_.expert_offload.enabled() &&
+        shape_.architecture == ArchitectureKind::MoeLfm2) {
+        size_t free_bytes = 0, total_bytes = 0;
+        LFM_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
+        const int moe_layers = moe_layer_count(shape_);
+        const size_t bpe = bytes_per_expert_bf16(shape_);
+        // All experts are BF16; non-expert weights = everything else already or
+        // about to be resident on the GPU.
+        const size_t all_expert_bytes =
+            static_cast<size_t>(shape_.num_experts) *
+            static_cast<size_t>(moe_layers) * bpe;
+        // Conservative non-expert estimate: total checkpoint minus experts.
+        // embed + lm-head + attention + conv + dense FFN + router + norms.
+        const size_t embed_bytes =
+            static_cast<size_t>(shape_.vocab_size) * shape_.hidden *
+            sizeof(__nv_bfloat16);
+        const size_t per_attn = static_cast<size_t>(shape_.qkv_width) * shape_.hidden +
+            static_cast<size_t>(shape_.hidden) * shape_.q_width;
+        const size_t attn_bytes = per_attn *
+            static_cast<size_t>(shape_.attention_layer_count) * sizeof(__nv_bfloat16);
+        const size_t dense_ffn_bytes =
+            static_cast<size_t>(shape_.num_dense_layers) *
+            (3ull * shape_.dense_intermediate * shape_.hidden) * sizeof(__nv_bfloat16);
+        const size_t router_bytes =
+            static_cast<size_t>(moe_layers) * shape_.num_experts * shape_.hidden *
+            (sizeof(__nv_bfloat16) + sizeof(float));
+        const size_t non_expert_bytes =
+            embed_bytes + attn_bytes + dense_ffn_bytes + router_bytes +
+            (64ull << 20);  // norms/conv/bias slack
+        (void)all_expert_bytes;
+
+        ExpertOffloadPlanInputs pin;
+        pin.shape = shape_;
+        pin.options = options_.expert_offload;
+        pin.gpu_free_bytes = free_bytes;
+        pin.non_expert_weight_bytes = non_expert_bytes;
+        pin.workspace_bytes = options_.lt_workspace_bytes + (256ull << 20);
+        pin.context_tokens = max_context_;
+        expert_offload_plan_ = plan_expert_offload(pin);
+        expert_transfer_stream_ = std::make_unique<CudaStream>();
+        std::fprintf(stderr, "%s", expert_offload_plan_.report().c_str());
+    }
+    expert_caches_.resize(static_cast<size_t>(shape_.num_hidden_layers));
 
     layers_.reserve(static_cast<size_t>(shape_.num_hidden_layers));
     for (int i = 0; i < shape_.num_hidden_layers; ++i) {
@@ -230,16 +295,18 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
             const int inter = shape_.moe_intermediate;
             const float* expert_bias = nullptr;
             if (shape_.use_expert_bias) {
+                // Checkpoint naming varies: LFM2.5 ships
+                // "feed_forward.expert_bias.weight"; the earlier LFM2 MoE
+                // release ships "feed_forward.expert_bias" (no .weight suffix).
+                const std::string bias_name = repo.contains(
+                    layer_name(i, "feed_forward.expert_bias.weight"))
+                    ? layer_name(i, "feed_forward.expert_bias.weight")
+                    : layer_name(i, "feed_forward.expert_bias");
                 expert_bias = weight_loader_->load_f32_weight(
-                    repo, layer_name(i, "feed_forward.expert_bias.weight"),
-                    {static_cast<int64_t>(E)});
+                    repo, bias_name, {static_cast<int64_t>(E)});
             }
             const LinearWeight* router = weight_loader_->load_router(
                 repo, i, E, shape_.hidden);
-            const ExpertLinearWeight* gate_up =
-                weight_loader_->load_moe_gate_up(repo, i, E, inter, shape_.hidden);
-            const ExpertLinearWeight* down =
-                weight_loader_->load_moe_down(repo, i, E, inter, shape_.hidden);
 
             // Cache a device float copy of the router weight for the CUDA
             // router kernel (it consumes float, the loaded weight is BF16).
@@ -249,8 +316,43 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
                 router->bf16, router_float.data(),
                 static_cast<int>(E) * shape_.hidden, stream_.get());
 
-            common_layer.feed_forward = MoeFfnWeights{
-                router, expert_bias, gate_up, down, router_float.data()};
+            MoeFfnWeights moe_weights{};
+            moe_weights.router = router;
+            moe_weights.expert_bias = expert_bias;
+            moe_weights.router_float = router_float.data();
+
+            if (expert_offload_plan_.enabled) {
+                // Host-backed experts + per-layer GPU cache. Load expert bytes
+                // into the host store (no eager device upload), build the cache,
+                // and seed it with the first `experts_per_layer` experts.
+                WeightLoader::HostExpertLayer host_layer =
+                    weight_loader_->load_moe_experts_host(
+                        repo, i, E, inter, shape_.hidden, host_expert_store_,
+                        options_.expert_offload.host_mode);
+                auto cache = std::make_unique<ExpertLayerCache>(
+                    E, expert_offload_plan_.experts_per_layer,
+                    host_layer.gate_up_bytes, host_layer.down_bytes);
+                cache->set_policy(options_.expert_offload.policy);
+                cache->set_host_sources(host_layer.gate_up_host_dev,
+                                        host_layer.down_host_dev);
+                std::vector<int> seed(static_cast<size_t>(
+                    expert_offload_plan_.experts_per_layer));
+                for (int s = 0; s < expert_offload_plan_.experts_per_layer; ++s) {
+                    seed[static_cast<size_t>(s)] = s;
+                }
+                cache->seed(seed, expert_transfer_stream_->get());
+                LFM_CUDA(cudaStreamSynchronize(expert_transfer_stream_->get()));
+                moe_weights.gate_up_ptrs = cache->gate_up_ptrs();
+                moe_weights.down_ptrs = cache->down_ptrs();
+                expert_caches_[static_cast<size_t>(i)] = std::move(cache);
+            } else {
+                moe_weights.gate_up =
+                    weight_loader_->load_moe_gate_up(repo, i, E, inter, shape_.hidden);
+                moe_weights.down =
+                    weight_loader_->load_moe_down(repo, i, E, inter, shape_.hidden);
+            }
+
+            common_layer.feed_forward = moe_weights;
         } else {
             const LinearWeight* w13 = weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "feed_forward.w13.weight"),
@@ -335,7 +437,16 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     reset(options_.allocate_local_kv_cache);
 }
 
-LfmModel::Impl::~Impl() = default;
+LfmModel::Impl::~Impl() {
+    if (moe_sel_host_ != nullptr) {
+        cudaFreeHost(moe_sel_host_);
+        moe_sel_host_ = nullptr;
+    }
+    if (moe_route_scores_host_ != nullptr) {
+        cudaFreeHost(moe_route_scores_host_);
+        moe_route_scores_host_ = nullptr;
+    }
+}
 
 
 void LfmModel::Impl::initialize_rope_tables() {
@@ -429,7 +540,7 @@ void LfmModel::Impl::warmup_decode_gemms() {
     linear(activated_.data(), *as_dense_ffn(first_common.feed_forward)->w2, hidden_.data(),
            1, shape_.hidden, shape_.intermediate,
            options_.fused_residuals ? 1.0f : 0.0f);
-    linear(normed_.data(), *embedding_, logits_.data(),
+    linear(normed_.data(), *logits_weight(), logits_.data(),
            1, shape_.vocab_size, shape_.hidden);
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
 }
@@ -481,6 +592,12 @@ void LfmModel::Impl::reset(bool allocate_local_kv) {
             as_convolution(layer)->conv_state.zero_async(stream_.get());
         }
     }
+    // Prime the FFN-done, router-done and prefetch-done events so the offload
+    // transfer stream can start promoting experts on the first layer of the
+    // next forward pass.
+    LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
+    LFM_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
+    LFM_CUDA(cudaEventRecord(prefetch_done_event_.get(), stream_.get()));
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
@@ -516,10 +633,10 @@ void LfmModel::Impl::release_prefill_workspace() {
     prefill_mlp_output_.reset(0);
 }
 
-void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
+void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer, int layer) {
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
-        run_mlp_moe_decode(common_layer);
+        run_mlp_moe_decode(common_layer, layer);
         return;
     }
     launch_rmsnorm(hidden_.data(), common_layer.ffn_norm, normed_.data(),
@@ -551,10 +668,11 @@ void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer) {
     }
 }
 
-void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows) {
+void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows,
+                                     int layer) {
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
-        run_mlp_moe_prefill(common_layer, rows);
+        run_mlp_moe_prefill(common_layer, rows, layer);
         return;
     }
     const size_t matrix_elements =
@@ -597,13 +715,130 @@ namespace {
 
 } // namespace
 
-void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer) {
+void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
+                                                  int rows,
+                                                  cudaStream_t compute_stream,
+                                                  const float* route_scores_dev) {
+    if (!expert_offload_plan_.enabled) return;
+    ExpertLayerCache* cache = nullptr;
+    if (layer >= 0 && static_cast<size_t>(layer) < expert_caches_.size()) {
+        cache = expert_caches_[static_cast<size_t>(layer)].get();
+    }
+    if (cache == nullptr) return;
+
+    const int K = shape_.experts_per_token;
+    const size_t count = static_cast<size_t>(rows) * static_cast<size_t>(K);
+    // Pinned staging, grown on demand, so the DtoH copy can run on the transfer
+    // stream without synchronizing the compute stream.
+    if (moe_sel_host_cap_ < count) {
+        if (moe_sel_host_ != nullptr) LFM_CUDA(cudaFreeHost(moe_sel_host_));
+        LFM_CUDA(cudaHostAlloc(&moe_sel_host_, count * sizeof(int),
+                               cudaHostAllocDefault));
+        moe_sel_host_cap_ = count;
+    }
+
+    // The router (on compute_stream) wrote sel_dev; the transfer stream waits
+    // for that to finish, then reads the selection asynchronously. This avoids
+    // any cudaStreamSynchronize on the compute stream, so the FFN-prep kernels
+    // already queued on compute_stream can overlap the residency resolution.
+    cudaStream_t transfer = expert_transfer_stream_->get();
+    LFM_CUDA(cudaStreamWaitEvent(transfer, router_done_event_.get(), 0));
+    // Don't clobber a slot still being read by the previous FFN, nor overlap the
+    // previous token's prefetch (which is filling the cache we may victimize).
+    LFM_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event_.get(), 0));
+    LFM_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event_.get(), 0));
+    LFM_CUDA(cudaMemcpyAsync(moe_sel_host_, sel_dev, count * sizeof(int),
+                             cudaMemcpyDeviceToHost, transfer));
+
+    // For decode (rows == 1) we opportunistically fetch the per-expert router
+    // scores when available -- they drive score-aware eviction (resident set
+    // converges to the highest-likelihood experts) and router-guided prefetch.
+    // On-demand hits/promotions below pass the routed expert's score so the
+    // cache always knows *how strongly* the current token wanted each resident.
+    const float* route_scores_host = nullptr;
+    if (rows == 1 && route_scores_dev != nullptr) {
+        const int E = shape_.num_experts;
+        if (moe_route_scores_cap_ < static_cast<size_t>(E)) {
+            if (moe_route_scores_host_ != nullptr) {
+                LFM_CUDA(cudaFreeHost(moe_route_scores_host_));
+            }
+            LFM_CUDA(cudaHostAlloc(&moe_route_scores_host_, E * sizeof(float),
+                                   cudaHostAllocDefault));
+            moe_route_scores_cap_ = static_cast<size_t>(E);
+        }
+        LFM_CUDA(cudaMemcpyAsync(moe_route_scores_host_, route_scores_dev,
+                                 static_cast<size_t>(E) * sizeof(float),
+                                 cudaMemcpyDeviceToHost, transfer));
+    }
+    LFM_CUDA(cudaStreamSynchronize(transfer));
+
+    for (size_t i = 0; i < count; ++i) {
+        const int e = moe_sel_host_[i];
+        const float score = route_scores_host != nullptr
+            ? route_scores_host[static_cast<size_t>(e)]
+            : ExpertLayerCache::kUnseen;
+        if (cache->resident(e)) {
+            cache->record_hit();
+            cache->touch(e, score);
+        } else {
+            cache->record_miss();
+            cache->ensure_resident(e, transfer, score);
+        }
+    }
+
+    // Compute stream must wait for the on-demand promotions to land before the
+    // FFN reads the pointer table.
+    LFM_CUDA(cudaEventRecord(promote_done_event_.get(), transfer));
+    LFM_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event_.get(), 0));
+
+    // Speculatively prefetch experts so they are GPU-resident before the *next*
+    // token's FFN. This runs on the transfer stream concurrently with the
+    // current token's FFN compute.
+    //
+    // Router-guided path (decode, router scores available): rank experts by the
+    // router's actual per-expert score and promote the most likely experts
+    // *beyond* the top-K the current token selected. Consecutive tokens route
+    // with high correlation, so the current token's next-most-likely experts are
+    // the best predictor of the next token's top-K -- far better than stale
+    // recency. prefetch_list's anti-thrash check refuses to evict a resident
+    // whose score >= the candidate's, so speculative promotions never displace a
+    // more-likely expert (the root cause of the earlier prefetch regression).
+    // Fallback (prefill / no scores): recency-based prefetch.
+    if (expert_offload_plan_.prefetch_experts > 0 && route_scores_host != nullptr) {
+        const int E = shape_.num_experts;
+        const int take = std::min<int>(
+            K + expert_offload_plan_.prefetch_experts, E);
+        std::vector<int> idx(static_cast<size_t>(E));
+        for (int e = 0; e < E; ++e) idx[static_cast<size_t>(e)] = e;
+        std::partial_sort(
+            idx.begin(), idx.begin() + take, idx.end(),
+            [route_scores_host](int a, int b) {
+                return route_scores_host[static_cast<size_t>(a)] >
+                       route_scores_host[static_cast<size_t>(b)];
+            });
+        std::vector<int> ranked(static_cast<size_t>(take));
+        std::vector<float> scores(static_cast<size_t>(take));
+        for (int i = 0; i < take; ++i) {
+            const int e = idx[static_cast<size_t>(i)];
+            ranked[static_cast<size_t>(i)] = e;
+            scores[static_cast<size_t>(i)] = route_scores_host[static_cast<size_t>(e)];
+        }
+        cache->prefetch_list(ranked, scores,
+                             expert_offload_plan_.prefetch_experts, transfer);
+    } else if (expert_offload_plan_.prefetch_experts > 0) {
+        cache->prefetch(expert_offload_plan_.prefetch_experts, transfer);
+    }
+    LFM_CUDA(cudaEventRecord(prefetch_done_event_.get(), transfer));
+}
+
+void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
+                                         int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     launch_rmsnorm(hidden_.data(), common_layer.ffn_norm, normed_.data(),
-                   1, shape_.hidden, shape_.norm_eps, stream_.get());
+                    1, shape_.hidden, shape_.norm_eps, stream_.get());
     // Router: BF16 normed hidden -> float -> top-K experts.
     launch_cast_bf16_to_float(normed_.data(), moe_hidden_float_.data(),
-                              shape_.hidden, stream_.get());
+                               shape_.hidden, stream_.get());
     const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
     lfm::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
@@ -614,20 +849,27 @@ void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer) {
     rdev.rows = 1;
     rdev.hidden_dim = shape_.hidden;
     launch_moe_router(rdev, cfg, moe_router_scratch_.data(), stream_.get());
+    LFM_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
+
+    // Promote any cold experts selected by the router before the FFN reads them.
+    ensure_moe_experts_resident(layer, moe_sel_.data(), 1, stream_.get(),
+                                moe_router_scratch_.data());
 
     // Expert FFN: accumulate the routing-weighted expert outputs into moe_output_.
     moe_output_.zero_async(stream_.get());
     const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
     launch_moe_ffn(fdev, moe_sel_.data(), moe_routing_w_.data(),
-                   normed_.data(), moe_output_.data(), 1, shape_.experts_per_token,
-                   moe_gu_scratch_.data(), moe_act_scratch_.data(), stream_.get());
+                    normed_.data(), moe_output_.data(), 1, shape_.experts_per_token,
+                    moe_gu_scratch_.data(), moe_act_scratch_.data(), stream_.get());
+    LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
     // Residual add into the hidden state.
     launch_residual_add(hidden_.data(), moe_output_.data(),
-                        shape_.hidden, stream_.get());
+                         shape_.hidden, stream_.get());
 }
 
-void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows) {
+void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
+                                         int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     // Size the prefill scratch to the requested row count.
     moe_pf_hidden_float_.reset(static_cast<size_t>(rows) * shape_.hidden);
@@ -655,13 +897,18 @@ void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int ro
     rdev.rows = rows;
     rdev.hidden_dim = shape_.hidden;
     launch_moe_router(rdev, cfg, moe_pf_router_scratch_.data(), stream_.get());
+    LFM_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
+
+    // Promote any cold experts selected by the router before the FFN reads them.
+    ensure_moe_experts_resident(layer, moe_pf_sel_.data(), rows, stream_.get());
 
     moe_pf_output_.zero_async(stream_.get());
     const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
     launch_moe_ffn(fdev, moe_pf_sel_.data(), moe_pf_routing_w_.data(),
-                   prefill_normed_.data(), moe_pf_output_.data(), rows,
-                   shape_.experts_per_token, moe_pf_gu_scratch_.data(),
-                   moe_pf_act_scratch_.data(), stream_.get());
+                    prefill_normed_.data(), moe_pf_output_.data(), rows,
+                    shape_.experts_per_token, moe_pf_gu_scratch_.data(),
+                    moe_pf_act_scratch_.data(), stream_.get());
+    LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
     launch_residual_add(prefill_hidden_.data(), moe_pf_output_.data(),
                         rows * shape_.hidden, stream_.get());
@@ -681,6 +928,7 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
         prefill_tokens_.data(), rows, prefill_hidden_.data(),
         shape_.hidden, stream_.get());
 
+    int layer_idx = 0;
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
@@ -790,7 +1038,8 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
             launch_residual_add(prefill_hidden_.data(), prefill_residual_.data(),
                                 rows * shape_.hidden, stream_.get());
         }
-        run_mlp_prefill(common_layer, rows);
+        run_mlp_prefill(common_layer, rows, layer_idx);
+        ++layer_idx;
     }
 
     const __nv_bfloat16* last_hidden = prefill_hidden_.data() +
@@ -798,7 +1047,7 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
     launch_rmsnorm(last_hidden, final_norm_, normed_.data(),
                    1, shape_.hidden, shape_.norm_eps,
                    stream_.get());
-    linear(normed_.data(), *embedding_, logits_.data(),
+    linear(normed_.data(), *logits_weight(), logits_.data(),
            1, shape_.vocab_size, shape_.hidden);
 
     position_ = rows;
@@ -817,6 +1066,7 @@ void LfmModel::Impl::forward_token_host(int32_t token, bool compute_logits) {
     weight_layout_->embed_token(
         token, hidden_.data(), shape_.hidden, stream_.get());
 
+    int layer_idx = 0;
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
@@ -926,14 +1176,15 @@ void LfmModel::Impl::forward_token_host(int32_t token, bool compute_logits) {
             launch_residual_add(hidden_.data(), residual_.data(),
                                 shape_.hidden, stream_.get());
         }
-        run_mlp_decode(common_layer);
+        run_mlp_decode(common_layer, layer_idx);
+        ++layer_idx;
     }
     if (compute_logits) {
         launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(),
-                       1, shape_.hidden, shape_.norm_eps,
-                       stream_.get());
-        linear(normed_.data(), *embedding_, logits_.data(),
-               1, shape_.vocab_size, shape_.hidden);
+                        1, shape_.hidden, shape_.norm_eps,
+                        stream_.get());
+        linear(normed_.data(), *logits_weight(), logits_.data(),
+                1, shape_.vocab_size, shape_.hidden);
     }
     ++position_;
 }
@@ -1086,12 +1337,12 @@ void LfmModel::Impl::forward_token_paged_host(
             launch_residual_add(hidden_.data(), residual_.data(),
                                 shape_.hidden, stream_.get());
         }
-        run_mlp_decode(common_layer);
+        run_mlp_decode(common_layer, layer_index);
     }
     if (compute_logits) {
         launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(), 1,
                        shape_.hidden, shape_.norm_eps, stream_.get());
-        linear(normed_.data(), *embedding_, logits_.data(), 1,
+        linear(normed_.data(), *logits_weight(), logits_.data(), 1,
                shape_.vocab_size, shape_.hidden);
     }
     ++position_;
@@ -1295,6 +1546,7 @@ void LfmModel::Impl::enqueue_decode_forward() {
         sampled_device_.data(), hidden_.data(), shape_.hidden,
         stream_.get());
 
+    int layer_idx = 0;
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
@@ -1425,13 +1677,14 @@ void LfmModel::Impl::enqueue_decode_forward() {
             launch_residual_add(hidden_.data(), residual_.data(),
                                 shape_.hidden, stream_.get());
         }
-        run_mlp_decode(common_layer);
+        run_mlp_decode(common_layer, layer_idx);
+        ++layer_idx;
     }
     launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(),
-                   1, shape_.hidden, shape_.norm_eps,
-                   stream_.get());
-    linear(normed_.data(), *embedding_, logits_.data(),
-           1, shape_.vocab_size, shape_.hidden);
+                    1, shape_.hidden, shape_.norm_eps,
+                    stream_.get());
+    linear(normed_.data(), *logits_weight(), logits_.data(),
+            1, shape_.vocab_size, shape_.hidden);
 }
 
 void LfmModel::Impl::enqueue_decode_step() {
@@ -1597,6 +1850,28 @@ ModelMemoryStats LfmModel::Impl::memory_stats() const {
     stats.matmul_workspace = gemm_ ? gemm_->workspace_bytes() : 0;
     stats.attention_workspace = attention_partial_max_.bytes() +
         attention_partial_denom_.bytes() + attention_partial_accum_.bytes();
+    return stats;
+}
+
+LfmDiagnostics::ExpertOffloadStats LfmModel::Impl::expert_offload_stats() const {
+    LfmDiagnostics::ExpertOffloadStats stats;
+    if (!expert_offload_plan_.enabled) {
+        stats.hit_rate = -1.0;
+        return stats;
+    }
+    stats.experts_per_layer = expert_offload_plan_.experts_per_layer;
+    stats.host_experts_per_layer = expert_offload_plan_.host_experts_per_layer;
+    uint64_t hits = 0, misses = 0;
+    for (const auto& cache : expert_caches_) {
+        if (cache) {
+            hits += cache->hits();
+            misses += cache->misses();
+        }
+    }
+    stats.hits = hits;
+    stats.misses = misses;
+    const uint64_t total = hits + misses;
+    stats.hit_rate = total == 0 ? 0.0 : static_cast<double>(hits) / total;
     return stats;
 }
 
@@ -1789,6 +2064,10 @@ IPackedSession& LfmModel::packed_session() { return *impl_; }
 const IPackedSession& LfmModel::packed_session() const { return *impl_; }
 bool LfmModel::cuda_graph_ready() const { return impl_->cuda_graph_ready(); }
 
+LfmDiagnostics::ExpertOffloadStats LfmModel::expert_offload_stats() const {
+    return impl_->expert_offload_stats();
+}
+
 void LfmInferenceSession::reset(bool allocate_local_kv) {
     owner_->impl_->reset(allocate_local_kv);
 }
@@ -1840,6 +2119,10 @@ DecodeBenchmark LfmDiagnostics::benchmark_decode(int warmup_steps,
 }
 ModelMemoryStats LfmDiagnostics::memory_stats() const {
     return owner_->impl_->memory_stats();
+}
+
+LfmDiagnostics::ExpertOffloadStats LfmDiagnostics::expert_offload_stats() const {
+    return owner_->impl_->expert_offload_stats();
 }
 RuntimeMetrics LfmDiagnostics::runtime_metrics() const {
     return owner_->impl_->runtime_metrics();

@@ -19,6 +19,8 @@ __device__ inline __nv_bfloat16 f_to_bf16(float v) {
 // routing-weighted result into the token's output vector.
 __global__ void moe_ffn_kernel(const __nv_bfloat16* gate_up,
                                const __nv_bfloat16* down,
+                               const __nv_bfloat16* const* gate_up_ptrs,
+                               const __nv_bfloat16* const* down_ptrs,
                                int num_experts, int inter, int hidden_dim,
                                size_t gate_up_stride, size_t down_stride,
                                const int* selected_experts,
@@ -37,8 +39,18 @@ __global__ void moe_ffn_kernel(const __nv_bfloat16* gate_up,
     const float rw = routing_weights[pair];
 
     const __nv_bfloat16* token_hidden = hidden + static_cast<size_t>(row) * hidden_dim;
-    const __nv_bfloat16* gu = gate_up + static_cast<size_t>(expert) * gate_up_stride;
-    const __nv_bfloat16* dw = down + static_cast<size_t>(expert) * down_stride;
+    // Resolve expert weights: through the per-expert indirection tables when
+    // offload is active, otherwise contiguously from the base pointers.
+    const __nv_bfloat16* gu;
+    const __nv_bfloat16* dw;
+    if (gate_up_ptrs != nullptr) {
+        gu = gate_up_ptrs[expert];
+        dw = down_ptrs[expert];
+        if (gu == nullptr || dw == nullptr) return;
+    } else {
+        gu = gate_up + static_cast<size_t>(expert) * gate_up_stride;
+        dw = down + static_cast<size_t>(expert) * down_stride;
+    }
 
     __nv_bfloat16* gu_out = scratch_gate_up +
         (static_cast<size_t>(pair) * 2 * inter);
@@ -100,8 +112,20 @@ void launch_moe_ffn(const MoeFfnDevice& device,
                     __nv_bfloat16* scratch_gate_up,
                     __nv_bfloat16* scratch_activated,
                     cudaStream_t stream) {
-    if (device.num_experts <= 0 || device.inter <= 0 || device.hidden_dim <= 0 ||
-        device.expert_gate_up_stride == 0 || device.expert_down_stride == 0) {
+    const bool indirect =
+        device.gate_up_ptrs != nullptr || device.down_ptrs != nullptr;
+    if (device.num_experts <= 0 || device.inter <= 0 || device.hidden_dim <= 0) {
+        throw std::invalid_argument("invalid MoE FFN device configuration");
+    }
+    if (indirect) {
+        // Indirect mode resolves experts through the pointer tables; both must
+        // be present. Per-expert strides are irrelevant here.
+        if (device.gate_up_ptrs == nullptr || device.down_ptrs == nullptr) {
+            throw std::invalid_argument(
+                "MoE FFN offload requires both gate_up_ptrs and down_ptrs");
+        }
+    } else if (device.expert_gate_up_stride == 0 ||
+               device.expert_down_stride == 0) {
         throw std::invalid_argument("invalid MoE FFN device configuration");
     }
     if (rows <= 0 || K <= 0) {
@@ -115,7 +139,8 @@ void launch_moe_ffn(const MoeFfnDevice& device,
     const int block = (device.inter <= 64 && device.hidden_dim <= 64) ? 64 : 128;
     const int pairs = rows * K;
     moe_ffn_kernel<<<pairs, block, 0, stream>>>(
-        device.gate_up, device.down, device.num_experts, device.inter,
+        device.gate_up, device.down, device.gate_up_ptrs, device.down_ptrs,
+        device.num_experts, device.inter,
         device.hidden_dim, device.expert_gate_up_stride,
         device.expert_down_stride, selected_experts, routing_weights, hidden,
         output, rows, K, scratch_gate_up, scratch_activated);
