@@ -21,6 +21,13 @@ public:
     BpeTokenizer(const std::string& tokenizer_json_path,
                  std::unique_ptr<IChatTemplate> chat_template);
 
+    // Builds the tokenizer from a GGUF metadata container (tokenizer.ggml.*
+    // keys) instead of a tokenizer.json file. The tag disambiguates this from
+    // the path-based constructor.
+    struct FromGguf {};
+    BpeTokenizer(FromGguf, const class GgufFile& gguf,
+                 std::unique_ptr<IChatTemplate> chat_template);
+
     std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const;
     std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const;
     std::string format_chat(std::string_view user_prompt, std::string_view system_prompt = {}) const;
@@ -35,6 +42,10 @@ private:
     };
 
     void load(const std::string& tokenizer_json_path);
+    void load_gguf(const class GgufFile& gguf);
+    // Initializes the GPT-2 byte<->unicode encoder tables shared by both the
+    // JSON and GGUF load paths.
+    void init_byte_encoder();
 
     std::vector<std::string> pretokenize(std::string_view text) const;
     std::vector<int32_t> encode_ordinary(std::string_view text) const;

@@ -1,6 +1,7 @@
 #include "lfm/config.hpp"
 #include "lfm/chat_template.hpp"
 #include "lfm/downloader.hpp"
+#include "lfm/gguf.hpp"
 #include "lfm/model.hpp"
 #include "lfm/model_shape.hpp"
 #include "lfm/model_variant.hpp"
@@ -272,32 +273,66 @@ void print_memory_stats(const lfm::ModelMemoryStats& stats) {
 int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
-        std::filesystem::path model;
-        if (!args.repo.empty()) {
+        // Split an optional `:QUANT_TAG` suffix off the --repo argument so the
+        // CLI can select a specific GGUF shard (e.g. `...LFM2.5-230M-GGUF:Q4_K_M`).
+        std::string repo_id = args.repo;
+        std::string quant_tag;
+        if (!repo_id.empty()) {
+            const size_t colon = repo_id.find(':');
+            if (colon != std::string::npos) {
+                quant_tag = repo_id.substr(colon + 1);
+                repo_id = repo_id.substr(0, colon);
+            }
+        }
+        const bool is_gguf = !repo_id.empty() &&
+            (repo_id.ends_with("-GGUF") || !quant_tag.empty());
+
+        std::filesystem::path model;        // checkpoint dir (safetensors)
+        std::filesystem::path gguf_path;    // concrete .gguf file (GGUF)
+        if (is_gguf) {
+            gguf_path = lfm::resolve_hf_gguf(repo_id,
+                quant_tag.empty() ? "Q4_K_M" : quant_tag);
+        } else if (!args.repo.empty()) {
             model = lfm::resolve_hf_model(args.repo);
         } else {
             model = std::filesystem::path(args.model_dir);
         }
-        const lfm::ModelConfig config =
-            lfm::ModelConfig::load((model / "config.json").string());
-        const lfm::ModelShape shape = lfm::ModelShape::from_config(config);
+
+        lfm::ModelConfig config;
+        lfm::ModelShape shape;
         lfm::register_builtin_variants();
-        const lfm::IModelVariant& variant =
-            lfm::ModelVariantRegistry::instance().select(shape, config.repo_hint);
-        (void)variant;
+        const lfm::IModelVariant* variant_ptr = nullptr;
+        if (is_gguf) {
+            lfm::GgufFile gguf(gguf_path.string());
+            config = lfm::ModelConfig::from_gguf(gguf);
+            shape = lfm::ModelShape::from_config(config);
+            variant_ptr = &lfm::ModelVariantRegistry::instance().select(
+                shape, config.repo_hint);
+        } else {
+            config = lfm::ModelConfig::load((model / "config.json").string());
+            shape = lfm::ModelShape::from_config(config);
+            variant_ptr = &lfm::ModelVariantRegistry::instance().select(
+                shape, config.repo_hint);
+        }
+        const lfm::IModelVariant& variant = *variant_ptr;
         if (args.context > config.max_position_embeddings) {
-            throw std::runtime_error("--context exceeds max_position_embeddings in config.json");
+            throw std::runtime_error("--context exceeds max_position_embeddings");
         }
         if (args.print_config) {
             std::cout << config.summary() << '\n';
             return 0;
         }
 
-        lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
-            lfm::make_chat_template(variant.chat_template_kind()));
+        lfm::BpeTokenizer tokenizer =
+            is_gguf
+                ? lfm::BpeTokenizer(lfm::BpeTokenizer::FromGguf{},
+                                    lfm::GgufFile(gguf_path.string()),
+                                    lfm::make_chat_template(variant.chat_template_kind()))
+                : lfm::BpeTokenizer((model / "tokenizer.json").string(),
+                                    lfm::make_chat_template(variant.chat_template_kind()));
         if (tokenizer.bos_id() != config.bos_token_id ||
             tokenizer.eos_id() != config.eos_token_id) {
-            throw std::runtime_error("tokenizer special IDs disagree with config.json");
+            throw std::runtime_error("tokenizer special IDs disagree with config");
         }
 
         std::vector<int32_t> input;
@@ -393,15 +428,21 @@ int main(int argc, char** argv) {
         generation.seed = args.seed;
         // Single-file checkpoints ship model.safetensors; sharded checkpoints
         // ship model.safetensors.index.json in the same directory. The model
-        // constructor resolves the index when given the directory root.
-        const std::filesystem::path single =
-            model / "model.safetensors";
-        const std::filesystem::path index =
-            model / "model.safetensors.index.json";
+        // constructor resolves the index when given the directory root. GGUF
+        // checkpoints pass the concrete .gguf file path directly.
         const std::string safetensors_path =
-            std::filesystem::is_regular_file(single) ? single.string()
-            : std::filesystem::is_regular_file(index) ? model.string()
-                                                      : single.string();
+            is_gguf ? gguf_path.string()
+                    : [&] {
+                          const std::filesystem::path single =
+                              model / "model.safetensors";
+                          const std::filesystem::path index =
+                              model / "model.safetensors.index.json";
+                          return std::filesystem::is_regular_file(single)
+                                     ? single.string()
+                                     : std::filesystem::is_regular_file(index)
+                                           ? model.string()
+                                           : single.string();
+                      }();
         lfm::LfmModel engine(
             safetensors_path, args.context,
             model_options, generation);

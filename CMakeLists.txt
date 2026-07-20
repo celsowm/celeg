@@ -48,6 +48,8 @@ add_library(lfm25_host
     src/quantization.cpp
     src/safetensors.cpp
     src/safetensors_repo.cpp
+    src/gguf.cpp
+    src/gguf_model.cpp
     src/tokenizer.cpp
     src/runtime_types.cpp
     src/execution_plan.cpp
@@ -142,6 +144,7 @@ endif()
 if(LFM_CUDA_AVAILABLE)
     add_library(lfm25_core
         src/kernels.cu
+        src/gguf_kernels.cu
         src/model.cu
         src/packed.cu
         src/paged_kv.cu
@@ -238,6 +241,9 @@ if(LFM_BUILD_TESTS)
     add_executable(safetensors_repo_test tests/safetensors_repo_test.cpp src/safetensors.cpp src/safetensors_repo.cpp src/json.cpp)
     target_include_directories(safetensors_repo_test PRIVATE include)
     add_test(NAME safetensors_repo_test COMMAND safetensors_repo_test)
+    add_executable(gguf_parse_test tests/gguf_parse_test.cpp src/gguf.cpp)
+    target_include_directories(gguf_parse_test PRIVATE include)
+    add_test(NAME gguf_parse_test COMMAND gguf_parse_test)
     add_executable(moe_router_test tests/moe_router_test.cpp)
     target_link_libraries(moe_router_test PRIVATE lfm25_host)
     target_include_directories(moe_router_test PRIVATE include)

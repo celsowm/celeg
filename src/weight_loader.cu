@@ -30,8 +30,71 @@ std::string layer_name(int index, const std::string& suffix) {
     return "model.layers." + std::to_string(index) + "." + suffix;
 }
 
+// Host-side dequantization of a GGUF Q4_K / Q6_K tensor to row-major BF16. Used
+// as a fallback when a concatenation mixes quant formats (e.g. attention q/k/v
+// where value projection is Q6_K while query/key are Q4_K) and cannot stay
+// packed. The block decode mirrors the device kernel in gguf_kernels.cu.
+namespace {
+struct Q4KHost { __half d; __half dmin; uint8_t scales[12]; uint8_t qs[128]; };
+struct Q6KHost { uint8_t ql[128]; uint8_t qh[64]; int8_t scales[16]; __half d; };
+
+void q4k_decode(const Q4KHost* blk, int col, float& out) {
+    const float d = __half2float(blk->d);
+    const float dmin = __half2float(blk->dmin);
+    const int sub = col >> 5, within = col & 31;
+    uint8_t sc, m;
+    if (sub < 4) { sc = blk->scales[sub] & 63; m = blk->scales[sub + 4] & 63; }
+    else {
+        sc = (blk->scales[sub + 4] & 0xF) | ((blk->scales[sub - 4] >> 6) << 4);
+        m = (blk->scales[sub + 4] >> 4) | ((blk->scales[sub] >> 6) << 4);
+    }
+    const uint8_t* qs = blk->qs + (sub >> 1) * 32;
+    const int q = (sub & 1) ? (qs[within] >> 4) : (qs[within] & 0xF);
+    out = d * sc * static_cast<float>(q) - dmin * m;
+}
+void q6k_decode(const Q6KHost* blk, int col, float& out) {
+    const float d = __half2float(blk->d);
+    const int half = col >> 7, idx = col & 127;
+    const int n = idx & 31, grp = idx >> 5;
+    const uint8_t* ql = blk->ql + half * 64;
+    const uint8_t* qh = blk->qh + half * 32;
+    int q;
+    if (grp == 0) q = (ql[n] & 0xF) | (((qh[n]) & 3) << 4);
+    else if (grp == 1) q = (ql[n + 32] & 0xF) | (((qh[n] >> 2) & 3) << 4);
+    else if (grp == 2) q = (ql[n] >> 4) | (((qh[n] >> 4) & 3) << 4);
+    else q = (ql[n + 32] >> 4) | (((qh[n] >> 6) & 3) << 4);
+    const int is = half * 8 + grp * 2 + (n >> 4);
+    out = d * static_cast<float>(blk->scales[is]) * static_cast<float>(q - 32);
+}
+} // namespace
+
+void dequantize_gguf_to_bf16(const HostTensorView& tensor,
+                             std::vector<__nv_bfloat16>& out) {
+    const int rows = static_cast<int>(tensor.shape[0]);
+    const int cols = static_cast<int>(tensor.shape[1]);
+    out.resize(static_cast<size_t>(rows) * cols);
+    const GgmlTypeTrait trait = ggml_type_trait(tensor.ggml_type);
+    const int blocks_per_row = cols / trait.block_size;
+    const size_t row_bytes = static_cast<size_t>(blocks_per_row) * trait.type_size;
+    for (int r = 0; r < rows; ++r) {
+        const uint8_t* row_blocks =
+            reinterpret_cast<const uint8_t*>(tensor.data) + static_cast<size_t>(r) * row_bytes;
+        for (int c = 0; c < cols; ++c) {
+            const int b = c / trait.block_size;
+            const int within = c % trait.block_size;
+            float v = 0.0f;
+            if (tensor.ggml_type == GgmlType::Q4_K) {
+                q4k_decode(reinterpret_cast<const Q4KHost*>(row_blocks) + b, within, v);
+            } else {
+                q6k_decode(reinterpret_cast<const Q6KHost*>(row_blocks) + b, within, v);
+            }
+            out[static_cast<size_t>(r) * cols + c] = __float2bfloat16(v);
+        }
+    }
+}
+
 const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
-                                 const SafeTensorRepository& repo,
+                                 const IWeightRepository& repo,
                                  const std::string& name,
                                  const std::vector<int64_t>& expected,
                                  const std::string& cache_key) {
@@ -43,23 +106,49 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         return cached->second.bf16_storage.data();
     }
     const HostTensorView tensor = repo.tensor(name);
-    if (tensor.dtype != TensorDType::BF16) {
-        throw std::runtime_error(
-            "only BF16 source weights are supported; incompatible tensor: " + name);
-    }
-    if (!expected.empty() && tensor.shape != expected) {
-        throw std::runtime_error("unexpected shape for " + name);
+    if (!expected.empty()) {
+        // GGUF convolutional depthwise weights are stored as [hidden, cache]
+        // (2D) while the model builder expects [hidden, 1, cache] (3D). The
+        // extra unit dimension is implicit, so accept the 2D form.
+        bool shape_ok = (tensor.shape == expected);
+        if (!shape_ok && tensor.shape.size() == 2 && expected.size() == 3 &&
+            tensor.shape[0] == expected[0] &&
+            tensor.shape[1] == expected[1] * expected[2] &&
+            expected[1] == 1) {
+            shape_ok = true;
+        }
+        if (!shape_ok) {
+            throw std::runtime_error("unexpected shape for " + name);
+        }
     }
     const size_t count = checked_element_count(tensor.shape);
-    if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
-        throw std::runtime_error("invalid BF16 byte count for " + name);
-    }
 
     DeviceWeight weight;
     weight.shape = tensor.shape;
     weight.bf16_storage.reset(count);
-    LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
-                        cudaMemcpyHostToDevice));
+
+    if (tensor.dtype == TensorDType::BF16) {
+        if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
+            throw std::runtime_error("invalid BF16 byte count for " + name);
+        }
+        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
+                            cudaMemcpyHostToDevice));
+    } else if (tensor.dtype == TensorDType::F32) {
+        if (tensor.bytes != count * sizeof(float)) {
+            throw std::runtime_error("invalid F32 byte count for " + name);
+        }
+        const float* src = reinterpret_cast<const float*>(tensor.data);
+        std::vector<__nv_bfloat16> converted(count);
+        for (size_t i = 0; i < count; ++i) {
+            converted[i] = __float2bfloat16(src[i]);
+        }
+        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
+                            count * sizeof(__nv_bfloat16),
+                            cudaMemcpyHostToDevice));
+    } else {
+        throw std::runtime_error(
+            "only BF16/F32 source weights are supported; incompatible tensor: " + name);
+    }
     auto [it, inserted] = weights.tensors.emplace(cache_key, std::move(weight));
     if (!inserted) throw std::runtime_error("duplicate weight: " + cache_key);
     return it->second.bf16_storage.data();
@@ -104,14 +193,14 @@ WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
 }
 
 const __nv_bfloat16* WeightLoader::load_weight(
-    const SafeTensorRepository& repo,
+    const IWeightRepository& repo,
     const std::string& name,
     std::vector<int64_t> expected) {
     return upload_bf16(*weights_, repo, name, expected, name);
 }
 
 const LinearWeight* WeightLoader::load_linear_weight(
-    const SafeTensorRepository& repo,
+    const IWeightRepository& repo,
     const std::string& name,
     std::vector<int64_t> expected) {
     if (const auto cached = weights_->tensors.find(name);
@@ -122,19 +211,51 @@ const LinearWeight* WeightLoader::load_linear_weight(
         return &cached->second.linear;
     }
     const HostTensorView tensor = repo.tensor(name);
-    if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
-        tensor.shape.size() != 2) {
+    if (tensor.shape != expected || tensor.shape.size() != 2) {
         throw std::runtime_error("unexpected linear tensor: " + name);
+    }
+    const int rows = static_cast<int>(tensor.shape[0]);
+    const int cols = static_cast<int>(tensor.shape[1]);
+
+    DeviceWeight weight;
+    weight.shape = tensor.shape;
+
+    // Native GGUF block-quantized weights stay packed; the matmul kernel
+    // dequantizes on the fly. Upload the raw super-block bytes verbatim.
+    if (tensor.dtype == TensorDType::Quantized) {
+        const GgmlTypeTrait trait = ggml_type_trait(tensor.ggml_type);
+        const size_t expected_bytes =
+            static_cast<size_t>(rows) * static_cast<size_t>(cols) /
+            trait.block_size * trait.type_size;
+        if (tensor.bytes != expected_bytes) {
+            throw std::runtime_error(
+                "GGUF quantized byte count mismatch for " + name);
+        }
+        weight.gguf_blocks_storage.reset(tensor.bytes);
+        LFM_CUDA(cudaMemcpy(weight.gguf_blocks_storage.data(), tensor.data,
+                            tensor.bytes, cudaMemcpyHostToDevice));
+        weight.linear.kind = (tensor.ggml_type == GgmlType::Q4_K)
+                                ? LinearStorageKind::Q4_K
+                                : LinearStorageKind::Q6_K;
+        weight.linear.gguf_type = tensor.ggml_type;
+        weight.linear.gguf_blocks = weight.gguf_blocks_storage.data();
+        weight.linear.rows = rows;
+        weight.linear.cols = cols;
+        weight.linear.validate_storage();
+        auto [it, inserted] =
+            weights_->tensors.emplace(name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+        return &it->second.linear;
+    }
+
+    if (tensor.dtype != TensorDType::BF16) {
+        throw std::runtime_error("unexpected linear tensor dtype: " + name);
     }
     const size_t count = checked_element_count(tensor.shape);
     if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
         throw std::runtime_error("invalid linear tensor byte count: " + name);
     }
 
-    DeviceWeight weight;
-    weight.shape = tensor.shape;
-    const int rows = static_cast<int>(tensor.shape[0]);
-    const int cols = static_cast<int>(tensor.shape[1]);
     if (weight_mode_ == WeightMode::Int8) {
         Int8RowwisePack pack = quantize_bf16_rows(
             tensor.data, static_cast<size_t>(rows), static_cast<size_t>(cols));
@@ -182,7 +303,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
 }
 
 const LinearWeight* WeightLoader::load_concat_linear_weight(
-    const SafeTensorRepository& repo,
+    const IWeightRepository& repo,
     const std::string& synthetic_name,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
     if (const auto cached = weights_->tensors.find(synthetic_name);
@@ -197,13 +318,20 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     views.reserve(parts.size());
     for (const auto& [name, expected] : parts) {
         const HostTensorView tensor = repo.tensor(name);
-        if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
-            tensor.shape.size() != 2) {
+        if (tensor.shape != expected || tensor.shape.size() != 2) {
             throw std::runtime_error("unexpected concatenated tensor: " + name);
         }
         if (common_width < 0) common_width = tensor.shape[1];
         if (tensor.shape[1] != common_width) {
             throw std::runtime_error("concatenated tensors have different widths");
+        }
+        if (tensor.dtype == TensorDType::Quantized) {
+            views.push_back(tensor);
+            total_rows += tensor.shape[0];
+            continue;
+        }
+        if (tensor.dtype != TensorDType::BF16) {
+            throw std::runtime_error("unexpected concat tensor dtype: " + name);
         }
         const size_t count = checked_element_count(tensor.shape);
         if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
@@ -212,6 +340,74 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         total_count += count;
         total_rows += tensor.shape[0];
         views.push_back(tensor);
+    }
+
+    // GGUF block-quantized concat: stack the raw super-block payloads of the
+    // parts, which are already row-contiguous in packed form. The result keeps
+    // the same block format; the matmul kernel dequantizes on the fly. When the
+    // parts mix quant formats (e.g. attention q/k/v where value is Q6_K but
+    // query/key are Q4_K) a single packed matrix is impossible, so each part is
+    // dequantized to BF16 and concatenated as BF16 instead.
+    if (views.front().dtype == TensorDType::Quantized) {
+        const GgmlType concat_type = views.front().ggml_type;
+        bool same_type = true;
+        for (const auto& v : views) {
+            if (v.dtype != TensorDType::Quantized || v.ggml_type != concat_type) {
+                same_type = false;
+                break;
+            }
+        }
+        if (same_type) {
+            const GgmlTypeTrait trait = ggml_type_trait(concat_type);
+            size_t total_bytes = 0;
+            for (const auto& v : views) total_bytes += v.bytes;
+            DeviceWeight weight;
+            weight.shape = {total_rows, common_width};
+            weight.gguf_blocks_storage.reset(total_bytes);
+            uint8_t* dst = weight.gguf_blocks_storage.data();
+            for (const auto& v : views) {
+                LFM_CUDA(cudaMemcpy(dst, v.data, v.bytes, cudaMemcpyHostToDevice));
+                dst += v.bytes;
+            }
+            weight.linear.kind = (concat_type == GgmlType::Q4_K)
+                                    ? LinearStorageKind::Q4_K
+                                    : LinearStorageKind::Q6_K;
+            weight.linear.gguf_type = concat_type;
+            weight.linear.gguf_blocks = weight.gguf_blocks_storage.data();
+            weight.linear.rows = static_cast<int>(total_rows);
+            weight.linear.cols = static_cast<int>(common_width);
+            weight.linear.validate_storage();
+            auto [it, inserted] =
+                weights_->tensors.emplace(synthetic_name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
+            return &it->second.linear;
+        }
+        // Mixed quant formats: dequantize each part to BF16 and concat.
+        DeviceWeight weight;
+        weight.shape = {total_rows, common_width};
+        size_t total_count = 0;
+        for (const auto& v : views) {
+            total_count += static_cast<size_t>(v.shape[0]) * static_cast<size_t>(v.shape[1]);
+        }
+        weight.bf16_storage.reset(total_count);
+        __nv_bfloat16* dst = weight.bf16_storage.data();
+        for (const auto& v : views) {
+            std::vector<__nv_bfloat16> part;
+            dequantize_gguf_to_bf16(v, part);
+            const size_t count = part.size();
+            LFM_CUDA(cudaMemcpy(dst, part.data(), count * sizeof(__nv_bfloat16),
+                                cudaMemcpyHostToDevice));
+            dst += count;
+        }
+        weight.linear.kind = LinearStorageKind::Bf16;
+        weight.linear.bf16 = weight.bf16_storage.data();
+        weight.linear.rows = static_cast<int>(total_rows);
+        weight.linear.cols = static_cast<int>(common_width);
+        weight.linear.validate_storage();
+        auto [it, inserted] =
+            weights_->tensors.emplace(synthetic_name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
+        return &it->second.linear;
     }
 
     DeviceWeight weight;
@@ -294,7 +490,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
 }
 
 const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
-    const SafeTensorRepository& repo,
+    const IWeightRepository& repo,
     const std::string& name,
     int experts, int rows_per_expert, int cols) {
     const std::string cache_key = name;
@@ -342,7 +538,7 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
 // 2*moe_inter, hidden] buffer. w1 occupies rows [0, moe_inter); w3 occupies
 // [moe_inter, 2*moe_inter).
 const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
-    const SafeTensorRepository& repo, int layer,
+    const IWeightRepository& repo, int layer,
     int num_experts, int moe_intermediate, int hidden) {
     const std::string cache_key = layer_name(layer, "moe.gate_up");
     if (const auto cached = expert_cache_.find(cache_key);
@@ -396,7 +592,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
 }
 
 const ExpertLinearWeight* WeightLoader::load_moe_down(
-    const SafeTensorRepository& repo, int layer,
+    const IWeightRepository& repo, int layer,
     int num_experts, int moe_intermediate, int hidden) {
     const std::string cache_key = layer_name(layer, "moe.down");
     if (const auto cached = expert_cache_.find(cache_key);
@@ -444,7 +640,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
 }
 
 const float* WeightLoader::load_f32_weight(
-    const SafeTensorRepository& repo,
+    const IWeightRepository& repo,
     const std::string& name,
     std::vector<int64_t> expected) {
     if (const auto cached = weights_->tensors.find(name);
@@ -476,7 +672,7 @@ const float* WeightLoader::load_f32_weight(
 }
 
 const LinearWeight* WeightLoader::load_router(
-    const SafeTensorRepository& repo, int layer,
+    const IWeightRepository& repo, int layer,
     int num_experts, int hidden) {
     return load_linear_weight(
         repo, layer_name(layer, "feed_forward.gate.weight"),
@@ -484,7 +680,7 @@ const LinearWeight* WeightLoader::load_router(
 }
 
 WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
-    const SafeTensorRepository& repo, int layer,
+    const IWeightRepository& repo, int layer,
     int num_experts, int moe_intermediate, int hidden,
     HostExpertStore& store, ExpertHostMode host_mode) {
     if (num_experts <= 0 || moe_intermediate <= 0 || hidden <= 0) {

@@ -161,6 +161,11 @@ struct LfmModel::Impl : public IPackedSession {
     std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;
     const LinearWeight* embedding_ = nullptr;
+    // Dequantized BF16 copy of the embedding table, allocated only for GGUF
+    // block-quantized checkpoints so the token-gather lookup (which expects a
+    // dense BF16 table) can reuse the fast path. The matmul path keeps using the
+    // packed `embedding_` weight directly.
+    DeviceBuffer<__nv_bfloat16> embedding_bf16_storage_;
     // Separate LM head weight when the checkpoint uses an untied head
     // (tie_word_embeddings == false and a model.lm_head.weight tensor exists).
     // Null when the head is tied to the embedding table.

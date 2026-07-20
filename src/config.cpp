@@ -164,7 +164,9 @@ void ModelConfig::validate() const {
     } else {
         throw std::runtime_error("unsupported model architecture");
     }
-    if (dtype != "bfloat16") throw std::runtime_error("only bfloat16 checkpoints are supported");
+    if (!is_gguf && dtype != "bfloat16") {
+        throw std::runtime_error("only bfloat16 checkpoints are supported");
+    }
     if (hidden_size <= 0 || intermediate_size <= 0 || vocab_size <= 0) {
         throw std::runtime_error("invalid non-positive model dimensions");
     }

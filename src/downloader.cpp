@@ -470,6 +470,39 @@ std::filesystem::path resolve_hf_model(
     return result.snapshot_path;
 }
 
+std::filesystem::path resolve_hf_gguf(
+    const std::string& repo_id,
+    const std::string& quant_tag) {
+    std::filesystem::path cache = default_hf_cache_dir();
+    std::filesystem::path storage = cache / repo_folder_name(repo_id);
+    std::error_code ec;
+    for (const auto& snap_entry :
+         std::filesystem::directory_iterator(storage / "snapshots", ec)) {
+        if (!snap_entry.is_directory()) continue;
+        const std::filesystem::path dir = snap_entry.path();
+        std::vector<std::filesystem::path> candidates;
+        for (const auto& f : std::filesystem::directory_iterator(dir, ec)) {
+            if (f.path().extension() == ".gguf") candidates.push_back(f.path());
+        }
+        if (candidates.empty()) continue;
+        if (!quant_tag.empty()) {
+            for (const auto& c : candidates) {
+                if (c.filename().string().find(quant_tag) != std::string::npos)
+                    return c;
+            }
+        }
+        // Prefer a Q4_K_M shard, else the first .gguf found.
+        for (const auto& c : candidates) {
+            if (c.filename().string().find("Q4_K_M") != std::string::npos)
+                return c;
+        }
+        return candidates.front();
+    }
+    throw std::runtime_error(
+        "GGUF checkpoint not found in HF cache: " + repo_id
+        + ". Run: hf download " + repo_id);
+}
+
 #else // !_WIN32
 
 std::filesystem::path default_hf_cache_dir() {
@@ -514,6 +547,44 @@ std::filesystem::path resolve_hf_model(
     }
     throw std::runtime_error(
         "model not found in HF cache: " + repo_id + " @ " + revision
+        + ". Run: hf download " + repo_id);
+}
+
+std::filesystem::path resolve_hf_gguf(
+    const std::string& repo_id,
+    const std::string& quant_tag) {
+    std::filesystem::path cache = default_hf_cache_dir();
+    std::filesystem::path storage = cache / repo_folder_name(repo_id);
+    std::error_code ec;
+    std::filesystem::path snapshots = storage / "snapshots";
+    if (!std::filesystem::exists(snapshots)) {
+        throw std::runtime_error(
+            "GGUF checkpoint not found (no snapshots): " + repo_id
+            + ". Run: hf download " + repo_id);
+    }
+    for (const auto& snap_entry :
+         std::filesystem::directory_iterator(snapshots, ec)) {
+        if (!snap_entry.is_directory()) continue;
+        const std::filesystem::path dir = snap_entry.path();
+        std::vector<std::filesystem::path> candidates;
+        for (const auto& f : std::filesystem::directory_iterator(dir, ec)) {
+            if (f.path().extension() == ".gguf") candidates.push_back(f.path());
+        }
+        if (candidates.empty()) continue;
+        if (!quant_tag.empty()) {
+            for (const auto& c : candidates) {
+                if (c.filename().string().find(quant_tag) != std::string::npos)
+                    return c;
+            }
+        }
+        for (const auto& c : candidates) {
+            if (c.filename().string().find("Q4_K_M") != std::string::npos)
+                return c;
+        }
+        return candidates.front();
+    }
+    throw std::runtime_error(
+        "GGUF checkpoint not found in HF cache: " + repo_id
         + ". Run: hf download " + repo_id);
 }
 

@@ -84,6 +84,11 @@ enum class LinearStorageKind : uint8_t {
     Bf16,
     Int8,
     Int4,
+    // GGUF native block-quantized formats. Weights stay packed in their on-disk
+    // super-block layout on the device; the matmul kernel dequantizes on the
+    // fly. `gguf_blocks` points at the raw block bytes.
+    Q4_K,
+    Q6_K,
 };
 
 struct LinearWeight {
@@ -92,12 +97,20 @@ struct LinearWeight {
     const int8_t* int8 = nullptr;
     const uint8_t* int4 = nullptr;
     const float* scales = nullptr;
+    // Raw GGUF super-block payload for Q4_K / Q6_K storage kinds.
+    const uint8_t* gguf_blocks = nullptr;
+    // Which GGUF block format `gguf_blocks` holds. Only meaningful when
+    // `gguf_quantized()` is true.
+    GgmlType gguf_type = GgmlType::Unknown;
     int rows = 0;
     int cols = 0;
 
     bool quantized() const { return kind != LinearStorageKind::Bf16; }
     bool int4_quantized() const { return kind == LinearStorageKind::Int4; }
     bool int8_quantized() const { return kind == LinearStorageKind::Int8; }
+    bool gguf_quantized() const {
+        return kind == LinearStorageKind::Q4_K || kind == LinearStorageKind::Q6_K;
+    }
     void validate_storage() const;
 };
 
@@ -182,6 +195,7 @@ struct DeviceWeight {
     DeviceBuffer<__nv_bfloat16> bf16_storage;
     DeviceBuffer<int8_t> int8_storage;
     DeviceBuffer<uint8_t> int4_storage;
+    DeviceBuffer<uint8_t> gguf_blocks_storage;
     DeviceBuffer<float> scales_storage;
     std::vector<int64_t> shape;
     LinearWeight linear;

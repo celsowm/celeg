@@ -44,14 +44,14 @@ public:
     // Loads a BF16 weight tensor by name. Returns a device pointer into
     // the shared arena. Caches by name so repeated calls are cheap.
     const __nv_bfloat16* load_weight(
-        const SafeTensorRepository& repo,
+        const IWeightRepository& repo,
         const std::string& name,
         std::vector<int64_t> expected = {});
 
     // Loads a 2D linear weight, quantizing to Int8/Int4 if the weight mode
     // demands it. Returns a LinearWeight view into the shared arena.
     const LinearWeight* load_linear_weight(
-        const SafeTensorRepository& repo,
+        const IWeightRepository& repo,
         const std::string& name,
         std::vector<int64_t> expected);
 
@@ -59,7 +59,7 @@ public:
     // tensors (e.g. w1 + w3 -> w13). The result is cached under
     // `synthetic_name`.
     const LinearWeight* load_concat_linear_weight(
-        const SafeTensorRepository& repo,
+        const IWeightRepository& repo,
         const std::string& synthetic_name,
         const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts);
 
@@ -68,7 +68,7 @@ public:
     // into an ExpertLinearWeight. Used for synthetic/explicitly-packed
     // checkpoints and tests.
     const ExpertLinearWeight* load_expert_linear_weight(
-        const SafeTensorRepository& repo,
+        const IWeightRepository& repo,
         const std::string& name,
         int experts, int rows_per_expert, int cols);
 
@@ -78,7 +78,7 @@ public:
     //   model.layers.{layer}.feed_forward.experts.{j}.w1.weight  [moe_inter, hidden]
     //   model.layers.{layer}.feed_forward.experts.{j}.w3.weight  [moe_inter, hidden]
     const ExpertLinearWeight* load_moe_gate_up(
-        const SafeTensorRepository& repo, int layer,
+        const IWeightRepository& repo, int layer,
         int num_experts, int moe_intermediate, int hidden);
 
     // Packs per-expert down (w2) tensors of a MoE layer into a
@@ -86,12 +86,12 @@ public:
     // Official tensor name:
     //   model.layers.{layer}.feed_forward.experts.{j}.w2.weight  [hidden, moe_inter]
     const ExpertLinearWeight* load_moe_down(
-        const SafeTensorRepository& repo, int layer,
+        const IWeightRepository& repo, int layer,
         int num_experts, int moe_intermediate, int hidden);
 
     // Loads an F32 tensor (e.g. expert_bias) and returns a device pointer.
     const float* load_f32_weight(
-        const SafeTensorRepository& repo,
+        const IWeightRepository& repo,
         const std::string& name,
         std::vector<int64_t> expected);
 
@@ -99,7 +99,7 @@ public:
     // Official tensor name:
     //   model.layers.{layer}.feed_forward.gate.weight
     const LinearWeight* load_router(
-        const SafeTensorRepository& repo, int layer,
+        const IWeightRepository& repo, int layer,
         int num_experts, int hidden);
 
     // Result of loading a MoE layer's experts into host-backed storage for
@@ -120,7 +120,7 @@ public:
     // Does NOT touch the shared device weight arena. `host_mode` selects whether
     // the host tier is a pinned copy or a mapped arena.
     HostExpertLayer load_moe_experts_host(
-        const SafeTensorRepository& repo, int layer,
+        const IWeightRepository& repo, int layer,
         int num_experts, int moe_intermediate, int hidden,
         class HostExpertStore& store, ExpertHostMode host_mode);
 

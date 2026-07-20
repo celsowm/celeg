@@ -17,7 +17,7 @@ namespace lfm {
 //
 // Shards are memory-mapped lazily and kept alive for the lifetime of the
 // repository so HostTensorView values returned by tensor() remain valid.
-class SafeTensorRepository {
+class SafeTensorRepository : public IWeightRepository {
 public:
     // `model_dir` may be:
     //   * a directory containing `model.safetensors.index.json` (sharded),
@@ -25,9 +25,9 @@ public:
     //   * a single `.safetensors` file directly.
     explicit SafeTensorRepository(const std::filesystem::path& model_dir);
 
-    bool contains(std::string_view name) const;
-    HostTensorView tensor(std::string_view name) const;
-    std::vector<std::string> names() const;
+    bool contains(std::string_view name) const override;
+    HostTensorView tensor(std::string_view name) const override;
+    std::vector<std::string> names() const override;
 
     // True when the checkpoint is split across multiple shard files.
     bool sharded() const { return sharded_; }

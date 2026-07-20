@@ -1,4 +1,5 @@
 #include "lfm/tokenizer.hpp"
+#include "lfm/gguf.hpp"
 #include "lfm/json.hpp"
 
 #include <algorithm>
@@ -147,6 +148,90 @@ BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path,
     load(tokenizer_json_path);
 }
 
+BpeTokenizer::BpeTokenizer(FromGguf, const GgufFile& gguf,
+                           std::unique_ptr<IChatTemplate> chat_template)
+    : chat_template_(std::move(chat_template)) {
+    if (!chat_template_) {
+        throw std::invalid_argument("BpeTokenizer requires a chat template");
+    }
+    load_gguf(gguf);
+}
+
+void BpeTokenizer::init_byte_encoder() {
+    std::vector<int> bs;
+    for (int b = 33; b <= 126; ++b) bs.push_back(b);
+    for (int b = 161; b <= 172; ++b) bs.push_back(b);
+    for (int b = 174; b <= 255; ++b) bs.push_back(b);
+    std::vector<int> cs = bs;
+    int n = 0;
+    for (int b = 0; b < 256; ++b) {
+        if (std::find(bs.begin(), bs.end(), b) == bs.end()) {
+            bs.push_back(b);
+            cs.push_back(256 + n++);
+        }
+    }
+    for (size_t i = 0; i < bs.size(); ++i) {
+        std::string encoded;
+        append_utf8(encoded, static_cast<uint32_t>(cs[i]));
+        byte_encoder_[static_cast<size_t>(bs[i])] = encoded;
+        byte_decoder_[static_cast<uint32_t>(cs[i])] = static_cast<uint8_t>(bs[i]);
+    }
+}
+
+void BpeTokenizer::load_gguf(const GgufFile& gguf) {
+    const GgufValue& tokens = gguf.value("tokenizer.ggml.tokens");
+    if (tokens.kind != GgufValueKind::Array ||
+        tokens.array_kind != GgufValueKind::String) {
+        throw std::runtime_error("gguf tokenizer.ggml.tokens missing or not string array");
+    }
+    const std::vector<std::string>& toks = tokens.array_strings;
+    id_to_token_.resize(toks.size());
+    for (size_t id = 0; id < toks.size(); ++id) {
+        vocab_[toks[id]] = static_cast<int32_t>(id);
+        id_to_token_[id] = toks[id];
+    }
+
+    const GgufValue& merges = gguf.value("tokenizer.ggml.merges");
+    if (merges.kind != GgufValueKind::Array ||
+        merges.array_kind != GgufValueKind::String) {
+        throw std::runtime_error("gguf tokenizer.ggml.merges missing or not string array");
+    }
+    int32_t rank = 0;
+    for (const std::string& line : merges.array_strings) {
+        const size_t sep = line.find(' ');
+        if (sep == std::string::npos) continue;
+        merge_rank_[pair_key(line.substr(0, sep), line.substr(sep + 1))] = rank++;
+    }
+
+    // Special (CONTROL, type == 3) tokens drive verbatim matching in encode().
+    if (gguf.has("tokenizer.ggml.token_type")) {
+        const GgufValue& types = gguf.value("tokenizer.ggml.token_type");
+        if (types.kind == GgufValueKind::Array) {
+            for (size_t id = 0; id < types.array_integers.size() && id < toks.size();
+                 ++id) {
+                if (types.array_integers[id] == 3) {  // GGUF_TOKEN_TYPE_CONTROL
+                    SpecialToken token{toks[id], static_cast<int32_t>(id)};
+                    specials_.push_back(token);
+                    special_ids_[token.id] = true;
+                }
+            }
+            std::sort(specials_.begin(), specials_.end(),
+                      [](const auto& a, const auto& b) {
+                          return a.text.size() > b.text.size();
+                      });
+        }
+    }
+
+    if (gguf.has("tokenizer.ggml.bos_token_id")) {
+        bos_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.bos_token_id"));
+    }
+    if (gguf.has("tokenizer.ggml.eos_token_id")) {
+        eos_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.eos_token_id"));
+    }
+
+    init_byte_encoder();
+}
+
 void BpeTokenizer::load(const std::string& tokenizer_json_path) {
     const Json root = Json::parse_file(tokenizer_json_path);
     const Json& model = root["model"];
@@ -196,24 +281,7 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
         });
     }
 
-    std::vector<int> bs;
-    for (int b = 33; b <= 126; ++b) bs.push_back(b);
-    for (int b = 161; b <= 172; ++b) bs.push_back(b);
-    for (int b = 174; b <= 255; ++b) bs.push_back(b);
-    std::vector<int> cs = bs;
-    int n = 0;
-    for (int b = 0; b < 256; ++b) {
-        if (std::find(bs.begin(), bs.end(), b) == bs.end()) {
-            bs.push_back(b);
-            cs.push_back(256 + n++);
-        }
-    }
-    for (size_t i = 0; i < bs.size(); ++i) {
-        std::string encoded;
-        append_utf8(encoded, static_cast<uint32_t>(cs[i]));
-        byte_encoder_[static_cast<size_t>(bs[i])] = encoded;
-        byte_decoder_[static_cast<uint32_t>(cs[i])] = static_cast<uint8_t>(bs[i]);
-    }
+    init_byte_encoder();
 }
 
 std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const {

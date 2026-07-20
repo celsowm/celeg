@@ -1,4 +1,5 @@
 #include "lfm/gemm_dispatcher.hpp"
+#include "lfm/gguf_kernels.cuh"
 #include "lfm/kernels/embedding.hpp"
 
 #include <algorithm>
@@ -183,6 +184,11 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
         throw std::runtime_error("linear weight shape does not match the requested GEMM");
     }
     weight.validate_storage();
+    if (weight.gguf_quantized()) {
+        launch_gguf_linear(x, weight.gguf_blocks, weight.gguf_type, y,
+                           m, n, k, beta, stream_);
+        return;
+    }
     switch (plan.linear_kernel()) {
         case LinearKernelKind::W4A16:
             if (!weight.int4_quantized()) {

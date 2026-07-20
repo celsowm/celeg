@@ -5,6 +5,9 @@
 #include "lfm/model_variant.hpp"
 #include "lfm/weight_layout.hpp"
 #include "lfm/weight_loader.hpp"
+#include "lfm/gguf.hpp"
+#include "lfm/gguf_repo.hpp"
+#include "lfm/gguf_kernels.cuh"
 #include "lfm/moe.hpp"
 
 #include <algorithm>
@@ -60,6 +63,12 @@ void read_scalar(std::ifstream& in, T& value) {
     if (!in) throw std::runtime_error("truncated session file");
 }
 
+bool path_is_gguf(const std::string& path) {
+    const std::filesystem::path p(path);
+    if (std::filesystem::is_directory(p)) return false;
+    return p.extension() == ".gguf";
+}
+
 std::filesystem::path config_path_for(const std::string& safetensors_path) {
     const std::filesystem::path p(safetensors_path);
     // Sharded checkpoints pass the directory root (which contains
@@ -94,6 +103,12 @@ void LinearWeight::validate_storage() const {
                 throw std::runtime_error("invalid INT4 linear weight storage");
             }
             break;
+        case LinearStorageKind::Q4_K:
+        case LinearStorageKind::Q6_K:
+            if (bf16 || int8 || int4 || scales || !gguf_blocks) {
+                throw std::runtime_error("invalid GGUF-quantized linear weight storage");
+            }
+            break;
     }
 }
 
@@ -104,6 +119,7 @@ size_t SharedModelWeights::memory_bytes() const {
         total += weight.bf16_storage.bytes() +
                  weight.int8_storage.bytes() +
                  weight.int4_storage.bytes() +
+                 weight.gguf_blocks_storage.bytes() +
                  weight.scales_storage.bytes();
     }
     return total;
@@ -122,13 +138,23 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     if (max_context_ <= 0) {
         throw std::invalid_argument("max_context must be positive");
     }
-    // Load the model topology from config.json next to the safetensors file.
-    // The runtime no longer hard-codes the 230M shape.
-    const std::filesystem::path config_path = config_path_for(safetensors_path);
-    if (!std::filesystem::exists(config_path)) {
-        throw std::runtime_error("config.json not found alongside checkpoint: " + config_path.string());
+    // Load the model topology either from a GGUF checkpoint's embedded metadata
+    // or from a config.json next to the safetensors file. GGUF checkpoints carry
+    // their tokenizer + hyper-parameters inside the container, so there is no
+    // sidecar config.json to read.
+    const bool is_gguf = path_is_gguf(safetensors_path);
+    std::shared_ptr<GgufFile> gguf_file;
+    ModelConfig config;
+    if (is_gguf) {
+        gguf_file = std::make_shared<GgufFile>(safetensors_path);
+        config = ModelConfig::from_gguf(*gguf_file);
+    } else {
+        const std::filesystem::path config_path = config_path_for(safetensors_path);
+        if (!std::filesystem::exists(config_path)) {
+            throw std::runtime_error("config.json not found alongside checkpoint: " + config_path.string());
+        }
+        config = ModelConfig::load(config_path.string());
     }
-    ModelConfig config = ModelConfig::load(config_path.string());
     shape_ = ModelShape::from_config(config);
     const IModelVariant& variant = ModelVariantRegistry::instance().select(shape_, config.repo_hint);
     variant_ = &variant;
@@ -190,18 +216,35 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
     // Only one constructor populates a shared checkpoint at a time. Other
     // sessions wait, then reuse the immutable device buffers.
     std::unique_lock<std::mutex> shared_weights_lock(weights_->mutex);
-    SafeTensorRepository repo(safetensors_path);
+    std::unique_ptr<IWeightRepository> repo_owner;
+    if (is_gguf) {
+        repo_owner = std::make_unique<GgufRepository>(gguf_file);
+    } else {
+        repo_owner = std::make_unique<SafeTensorRepository>(safetensors_path);
+    }
+    const IWeightRepository& repo = *repo_owner;
     embedding_ = weight_loader_->load_linear_weight(
         repo, "model.embed_tokens.weight",
         {shape_.vocab_size, shape_.hidden});
     final_norm_ = weight_loader_->load_weight(
         repo, "model.embedding_norm.weight", {shape_.hidden});
     {
-        const void* table = nullptr;
-        if (options_.weight_mode == WeightMode::Int8) {
-            table = embedding_->int8;
+        const __nv_bfloat16* table = nullptr;
+        if (embedding_->gguf_quantized()) {
+            // Token gather needs a dense BF16 table; dequantize the packed
+            // embedding once and keep the result for the layout lookup. The
+            // tied LM head matmul still uses the packed weight directly.
+            embedding_bf16_storage_.reset(
+                static_cast<size_t>(shape_.vocab_size) * shape_.hidden);
+            launch_gguf_dequant(embedding_->gguf_blocks, embedding_->gguf_type,
+                                embedding_bf16_storage_.data(),
+                                shape_.vocab_size, shape_.hidden,
+                                stream_);
+            table = embedding_bf16_storage_.data();
+        } else if (options_.weight_mode == WeightMode::Int8) {
+            table = reinterpret_cast<const __nv_bfloat16*>(embedding_->int8);
         } else if (options_.weight_mode == WeightMode::Int4) {
-            table = embedding_->int4;
+            table = reinterpret_cast<const __nv_bfloat16*>(embedding_->int4);
         } else {
             table = embedding_->bf16;
         }

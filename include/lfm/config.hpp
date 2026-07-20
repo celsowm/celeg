@@ -66,7 +66,16 @@ struct ModelConfig {
     ArchitectureKind architecture = ArchitectureKind::DenseLfm2;
     std::optional<MoeConfig> moe;
 
+    // True when this config was derived from a GGUF checkpoint. GGUF weights are
+    // pre-quantized on disk (Q4_K/Q6_K/...), so `dtype` carries the GGUF file
+    // type label rather than "bfloat16"; validate() skips the BF16-only check in
+    // that case.
+    bool is_gguf = false;
+
     static ModelConfig load(const std::string& path);
+    // Builds a ModelConfig from a parsed GGUF metadata container. Declared here
+    // but defined in gguf_model.cpp so config.cpp keeps zero GGUF dependencies.
+    static ModelConfig from_gguf(const class GgufFile& gguf);
     void validate() const;
     std::string summary() const;
 };
