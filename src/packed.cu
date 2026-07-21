@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 namespace lfm {
@@ -48,6 +49,7 @@ struct PackedDecodeExecutorImpl {
           moe_routing_w(maximum_batch * shape_.experts_per_token),
           moe_router_scratch(maximum_batch * shape_.num_experts),
           moe_output(maximum_batch * shape_.hidden),
+          moe_output_accum(maximum_batch * shape_.hidden),
           moe_gu_scratch(static_cast<size_t>(maximum_batch) *
                          shape_.experts_per_token * 2 * shape_.moe_intermediate),
           moe_act_scratch(static_cast<size_t>(maximum_batch) *
@@ -142,6 +144,7 @@ struct PackedDecodeExecutorImpl {
     DeviceBuffer<float> moe_routing_w;          // [batch * experts_per_token]
     DeviceBuffer<float> moe_router_scratch;     // [batch * num_experts]
     DeviceBuffer<__nv_bfloat16> moe_output;     // [batch * hidden]
+    DeviceBuffer<float> moe_output_accum;      // [batch * hidden] FP32 accumulator
     DeviceBuffer<__nv_bfloat16> moe_gu_scratch; // [batch * K * 2 * moe_inter]
     DeviceBuffer<__nv_bfloat16> moe_act_scratch; // [batch * K * moe_inter]
     DeviceBuffer<float> sampling_scores;
@@ -293,7 +296,7 @@ struct PackedDecodeExecutorImpl {
             if (!page_tables || page_tables->size() != rows) {
                 throw std::invalid_argument("paged packed decode requires one page table per row");
             }
-            std::fill_n(h_page_tables.data(), maximum_batch * static_cast<size_t>(page_stride),
+            std::fill_n(h_page_tables.data(), rows * static_cast<size_t>(page_stride),
                         std::numeric_limits<uint32_t>::max());
         }
         for (size_t row = 0; row < rows; ++row) {
@@ -417,10 +420,12 @@ struct PackedDecodeExecutorImpl {
         IPackedSession& reference = *models.front();
         std::string reason;
         if (!eligible(reference, &reason)) throw std::invalid_argument(reason);
+        std::unordered_set<IPackedSession*> seen;
+        seen.reserve(models.size());
+        seen.insert(models[0]);
         for (size_t row = 1; row < models.size(); ++row) {
             if (!models[row]) throw std::invalid_argument("null packed session");
-            if (std::find(models.begin(), models.begin() + static_cast<ptrdiff_t>(row),
-                          models[row]) != models.begin() + static_cast<ptrdiff_t>(row)) {
+            if (!seen.insert(models[row]).second) {
                 throw std::invalid_argument("duplicate session in packed batch");
             }
             if (!eligible(*models[row], &reason) ||
@@ -463,10 +468,12 @@ struct PackedDecodeExecutorImpl {
             return true;
         };
         if (!eligible_prefill(reference)) throw std::invalid_argument(reason);
+        std::unordered_set<IPackedSession*> seen;
+        seen.reserve(models.size());
+        seen.insert(models[0]);
         for (size_t row = 1; row < models.size(); ++row) {
             if (!models[row]) throw std::invalid_argument("null packed session");
-            if (std::find(models.begin(), models.begin() + static_cast<ptrdiff_t>(row),
-                          models[row]) != models.begin() + static_cast<ptrdiff_t>(row)) {
+            if (!seen.insert(models[row]).second) {
                 throw std::invalid_argument("duplicate session in packed batch");
             }
             if (!eligible_prefill(*models[row]) ||
@@ -691,10 +698,13 @@ struct PackedDecodeExecutorImpl {
 
     void run_mlp_layer(IPackedSession& reference,
                        const LayerCommon& common_layer,
-                       int rows) {
+                       int rows,
+                       const std::vector<IPackedSession*>* batch_models = nullptr,
+                       int layer_index = -1) {
         if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
             (void)moe;
-            run_mlp_moe_layer(reference, common_layer, rows);
+            run_mlp_moe_layer(reference, common_layer, rows,
+                              batch_models, layer_index);
             return;
         }
         launch_rmsnorm(hidden.data(), common_layer.ffn_norm, normed.data(),
@@ -732,11 +742,12 @@ struct PackedDecodeExecutorImpl {
     }
 
     // MoE feed-forward for packed decode/ragged prefill. Mirrors the standalone
-    // run_mlp_moe_decode path: RMSNorm -> cast -> router -> selected-expert FFN
-    // -> residual add. Router runs in float (router_float is a device copy of
-    // the BF16 router kept by the owning LfmModel).
+    // run_mlp_moe_decode path: RMSNorm -> cast -> router -> expert residency
+    // resolution -> selected-expert FFN -> residual add. Router runs in float.
     void run_mlp_moe_layer(IPackedSession& reference,
-                            const LayerCommon& common_layer, int rows) {
+                            const LayerCommon& common_layer, int rows,
+                            const std::vector<IPackedSession*>* batch_models = nullptr,
+                            int layer_index = -1) {
         const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
         launch_rmsnorm(hidden.data(), common_layer.ffn_norm, normed.data(),
                        rows, shape_.hidden, shape_.norm_eps, stream.get());
@@ -754,12 +765,31 @@ struct PackedDecodeExecutorImpl {
         rdev.hidden_dim = shape_.hidden;
         launch_moe_router(rdev, cfg, moe_router_scratch.data(), stream.get());
 
-        moe_output.zero_async(stream.get());
+        // Ensure selected experts are GPU-resident before the FFN reads them.
+        // For each session in the batch, resolve residency for its K selections.
+        if (batch_models && layer_index >= 0) {
+            const int K = shape_.experts_per_token;
+            for (size_t row = 0; row < batch_models->size(); ++row) {
+                IPackedSession& session = *(*batch_models)[row];
+                session.ensure_moe_experts_resident_packed(
+                    layer_index,
+                    moe_sel.data() + row * static_cast<size_t>(K),
+                    1, stream.get(),
+                    moe.offloaded()
+                        ? moe_router_scratch.data() +
+                              row * static_cast<size_t>(shape_.num_experts)
+                        : nullptr);
+            }
+        }
+
+        moe_output_accum.zero_async(stream.get());
         const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
         launch_moe_ffn(fdev, moe_sel.data(), moe_routing_w.data(),
-                       normed.data(), moe_output.data(), rows,
+                       normed.data(), moe_output_accum.data(), rows,
                        shape_.experts_per_token, moe_gu_scratch.data(),
                        moe_act_scratch.data(), stream.get());
+        launch_finalize_moe_output(moe_output_accum.data(), moe_output.data(),
+                                   rows * shape_.hidden, stream.get());
 
         launch_residual_add(hidden.data(), moe_output.data(),
                             rows * shape_.hidden, stream.get());
@@ -767,7 +797,8 @@ struct PackedDecodeExecutorImpl {
 
     void run_transformer_layers(IPackedSession& reference, int rows,
                                 bool segmented_attention,
-                                int segmented_chunks) {
+                                int segmented_chunks,
+                                const std::vector<IPackedSession*>* batch_models = nullptr) {
         for (int layer_index = 0; layer_index < shape_.num_hidden_layers;
              ++layer_index) {
             const auto& layer = reference.layers()[layer_index];
@@ -795,7 +826,7 @@ struct PackedDecodeExecutorImpl {
                 launch_residual_add(hidden.data(), residual.data(),
                                     rows * shape_.hidden, stream.get());
             }
-            run_mlp_layer(reference, common_layer, rows);
+            run_mlp_layer(reference, common_layer, rows, batch_models, layer_index);
         }
     }
 
@@ -818,7 +849,7 @@ struct PackedDecodeExecutorImpl {
         launch_embedding_rows(reference, rows);
 
         run_transformer_layers(reference, rows, attention.segmented,
-                               attention.chunks);
+                               attention.chunks, &models);
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
                        rows, shape_.hidden, shape_.norm_eps,
                        stream.get());
@@ -883,7 +914,7 @@ struct PackedDecodeExecutorImpl {
         launch_embedding_rows(reference, rows);
 
         run_transformer_layers(reference, rows, attention.segmented,
-                               attention.chunks);
+                               attention.chunks, &models);
         if (any_finalize) {
             launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
                            rows, shape_.hidden, shape_.norm_eps,

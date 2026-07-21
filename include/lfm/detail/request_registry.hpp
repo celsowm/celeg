@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -46,12 +47,15 @@ public:
 
     bool empty_queue() const { return admission_queue_.empty(); }
     size_t queued_count() const { return admission_queue_.size(); }
-    const std::deque<RequestId>& admission_queue() const { return admission_queue_; }
+    // Returns the highest-priority (best) queued request, or nullopt.
+    std::optional<RequestId> best_queued() const;
     void erase_queued(RequestId id);
 
 private:
     std::unordered_map<RequestId, std::unique_ptr<RequestRecord>> requests_;
-    std::deque<RequestId> admission_queue_;
+    // Ordered set: highest priority first, then lowest ID first (FIFO).
+    // Key = (-priority, id).  O(log Q) insert/erase/best.
+    std::set<std::pair<int, RequestId>> admission_queue_;
     RequestId next_request_id_ = 1;
 };
 

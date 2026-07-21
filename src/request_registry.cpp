@@ -16,7 +16,9 @@ RequestRegistry::RequestId RequestRegistry::create(
     request->prompt = std::move(prompt);
     request->submitted_at = submitted_at;
     requests_.emplace(id, std::move(request));
-    admission_queue_.push_back(id);
+    // Insert into the priority-ordered set: highest priority first, then
+    // lowest ID first (FIFO within same priority).
+    admission_queue_.insert({-requests_[id]->options.priority, id});
     return id;
 }
 
@@ -42,9 +44,15 @@ const RequestRecord& RequestRegistry::at(RequestId id) const {
     return *value;
 }
 
+std::optional<RequestRegistry::RequestId> RequestRegistry::best_queued() const {
+    if (admission_queue_.empty()) return std::nullopt;
+    return admission_queue_.begin()->second;
+}
+
 void RequestRegistry::erase_queued(RequestId id) {
-    const auto it = std::find(admission_queue_.begin(), admission_queue_.end(), id);
-    if (it != admission_queue_.end()) admission_queue_.erase(it);
+    const auto* record = find(id);
+    if (!record) return;
+    admission_queue_.erase({-record->options.priority, id});
 }
 
 } // namespace lfm::detail

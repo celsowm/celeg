@@ -188,6 +188,15 @@ public:
     }
 
     void reset(size_t count) {
+        if (count == count_) return;
+        if (ptr_) LFM_CUDA(cudaFree(ptr_));
+        ptr_ = nullptr;
+        count_ = count;
+        if (count_) LFM_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+    }
+
+    void reserve(size_t count) {
+        if (count <= count_) return;
         if (ptr_) LFM_CUDA(cudaFree(ptr_));
         ptr_ = nullptr;
         count_ = count;
@@ -232,6 +241,15 @@ public:
     }
 
     void reset(size_t count) {
+        if (count == count_) return;
+        if (ptr_) LFM_CUDA(cudaFreeHost(ptr_));
+        ptr_ = nullptr;
+        count_ = count;
+        if (count_) LFM_CUDA(cudaMallocHost(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+    }
+
+    void reserve(size_t count) {
+        if (count <= count_) return;
         if (ptr_) LFM_CUDA(cudaFreeHost(ptr_));
         ptr_ = nullptr;
         count_ = count;

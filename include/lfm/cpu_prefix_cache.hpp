@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -94,6 +95,8 @@ private:
     size_t maximum_bytes_ = 0;
     PrefixRadixIndex radix_;
     std::unordered_map<PrefixRadixIndex::EntryId, std::unique_ptr<Entry>> entries_;
+    // LRU index: (last_used, id) ascending — begin() is the oldest.
+    std::set<std::pair<uint64_t, PrefixRadixIndex::EntryId>> lru_index_;
     PrefixRadixIndex::EntryId next_id_ = 1;
     uint64_t clock_ = 0;
     CpuPrefixCacheMetrics metrics_;

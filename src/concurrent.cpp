@@ -506,8 +506,11 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
 }
 
 bool ConcurrentEngine::Impl::run_decode_work() {
-    struct Work { Lane* lane; RequestId id; };
+    struct Work { Lane* lane; RequestId id; bool paged_ready; };
     std::vector<Work> work;
+    // Phase 1: build work list under a single lock.  Copy paged_ready so
+    // the classify phase (phase 3) never needs to re-acquire the lock.
+    std::vector<RequestId> page_needed;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         int decode_budget = engine_options_.max_batched_tokens;
@@ -530,16 +533,30 @@ bool ConcurrentEngine::Impl::run_decode_work() {
                 const size_t capacity = request.pages.size() *
                     static_cast<size_t>(engine_options_.page_tokens);
                 if (next_tokens > capacity) {
-                    auto page = prefix_cache_->allocate_request_pages(1);
-                    if (!page) continue;
-                    request.pages.insert(request.pages.end(),
-                                         page->begin(), page->end());
-                    metrics_.logical_pages_used = paged_kv_->used_pages();
+                    page_needed.push_back(request.id);
                 }
             }
-            work.push_back({&lane, request.id});
+            work.push_back({&lane, request.id, request.paged_ready});
             --decode_budget;
         }
+    }
+    // Phase 1b: allocate pages outside the lock, then commit.
+    if (!page_needed.empty()) {
+        std::vector<std::optional<std::vector<uint32_t>>> allocations;
+        allocations.reserve(page_needed.size());
+        for (size_t i = 0; i < page_needed.size(); ++i) {
+            allocations.push_back(prefix_cache_->allocate_request_pages(1));
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (size_t i = 0; i < page_needed.size(); ++i) {
+            if (allocations[i]) {
+                Request& request = registry_.at(page_needed[i]);
+                request.pages.insert(request.pages.end(),
+                                     allocations[i]->begin(),
+                                     allocations[i]->end());
+            }
+        }
+        metrics_.logical_pages_used = paged_kv_->used_pages();
     }
 
     auto accept_token = [&](const Work& item, int32_t token,
@@ -581,12 +598,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     lane_work.reserve(work.size());
     for (const Work& item : work) {
         std::string reason;
-        bool paged_ready = false;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            paged_ready = registry_.at(item.id).paged_ready;
-        }
-        if (paged_ready && packed_executor_ &&
+        if (item.paged_ready && packed_executor_ &&
             packed_executor_->eligible(*item.lane->model, &reason)) {
             packed_work.push_back(item);
         } else {

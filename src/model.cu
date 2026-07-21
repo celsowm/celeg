@@ -185,6 +185,7 @@ LfmModel::Impl::Impl(const std::string& safetensors_path,
         moe_sel_.reset(static_cast<size_t>(K));
         moe_routing_w_.reset(static_cast<size_t>(K));
         moe_router_scratch_.reset(static_cast<size_t>(E));
+        moe_output_accum_.reset(static_cast<size_t>(shape_.hidden));
         moe_output_.reset(static_cast<size_t>(shape_.hidden));
         moe_gu_scratch_.reset(static_cast<size_t>(K) * 2 * inter);
         moe_act_scratch_.reset(static_cast<size_t>(K) * inter);
@@ -605,21 +606,16 @@ void LfmModel::Impl::reset(bool allocate_local_kv) {
     LFM_CUDA(cudaMemcpyAsync(rng_state_.data(), &seed, sizeof(seed),
                              cudaMemcpyHostToDevice, stream_.get()));
     seen_tokens_.zero_async(stream_.get());
+    // Zero convolution state (running buffer that must start empty).  KV
+    // caches are intentionally NOT zeroed here: attention only reads
+    // positions 0..position_ and every used slot is overwritten before
+    // becoming visible after the position reset above.
     for (Layer& layer : layers_) {
         if (AttentionLayer* attention = as_attention(layer)) {
-            if (!local_kv_cache_available_) continue;
-            if (options_.kv_cache_mode == KvCacheMode::Int8) {
-                attention->key_cache_int8.zero_async(stream_.get());
-                attention->value_cache_int8.zero_async(stream_.get());
-                attention->key_cache_scales.zero_async(stream_.get());
-                attention->value_cache_scales.zero_async(stream_.get());
-            } else {
-                attention->key_cache.zero_async(stream_.get());
-                attention->value_cache.zero_async(stream_.get());
-            }
-        } else {
-            as_convolution(layer)->conv_state.zero_async(stream_.get());
+            (void)attention;
+            continue;
         }
+        as_convolution(layer)->conv_state.zero_async(stream_.get());
     }
     // Prime the FFN-done, router-done and prefetch-done events so the offload
     // transfer stream can start promoting experts on the first layer of the
@@ -633,33 +629,21 @@ void LfmModel::Impl::reset(bool allocate_local_kv) {
 
 void LfmModel::Impl::allocate_prefill_workspace(int rows) {
     const size_t r = static_cast<size_t>(rows);
-    prefill_tokens_.reset(r);
-    prefill_hidden_.reset(r * shape_.hidden);
-    prefill_residual_.reset(r * shape_.hidden);
-    prefill_normed_.reset(r * shape_.hidden);
-    prefill_op_output_.reset(r * shape_.hidden);
-    prefill_q_.reset(r * shape_.q_width);
-    prefill_k_.reset(r * shape_.kv_width);
-    prefill_v_.reset(r * shape_.kv_width);
-    prefill_conv_projected_.reset(r * 3 * shape_.hidden);
-    prefill_gate_up_.reset(r * 2 * shape_.intermediate);
-    prefill_activated_.reset(r * shape_.intermediate);
-    prefill_mlp_output_.reset(r * shape_.hidden);
+    prefill_tokens_.reserve(r);
+    prefill_hidden_.reserve(r * shape_.hidden);
+    prefill_residual_.reserve(r * shape_.hidden);
+    prefill_normed_.reserve(r * shape_.hidden);
+    prefill_op_output_.reserve(r * shape_.hidden);
+    prefill_q_.reserve(r * shape_.q_width);
+    prefill_k_.reserve(r * shape_.kv_width);
+    prefill_v_.reserve(r * shape_.kv_width);
+    prefill_conv_projected_.reserve(r * 3 * shape_.hidden);
+    prefill_gate_up_.reserve(r * 2 * shape_.intermediate);
+    prefill_activated_.reserve(r * shape_.intermediate);
+    prefill_mlp_output_.reserve(r * shape_.hidden);
 }
 
 void LfmModel::Impl::release_prefill_workspace() {
-    prefill_tokens_.reset(0);
-    prefill_hidden_.reset(0);
-    prefill_residual_.reset(0);
-    prefill_normed_.reset(0);
-    prefill_op_output_.reset(0);
-    prefill_q_.reset(0);
-    prefill_k_.reset(0);
-    prefill_v_.reset(0);
-    prefill_conv_projected_.reset(0);
-    prefill_gate_up_.reset(0);
-    prefill_activated_.reset(0);
-    prefill_mlp_output_.reset(0);
 }
 
 void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer, int layer) {
@@ -745,9 +729,9 @@ namespace {
 } // namespace
 
 void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
-                                                  int rows,
-                                                  cudaStream_t compute_stream,
-                                                  const float* route_scores_dev) {
+                                                   int rows,
+                                                   cudaStream_t compute_stream,
+                                                   const float* route_scores_dev) {
     if (!expert_offload_plan_.enabled) return;
     ExpertLayerCache* cache = nullptr;
     if (layer >= 0 && static_cast<size_t>(layer) < expert_caches_.size()) {
@@ -756,62 +740,65 @@ void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
     if (cache == nullptr) return;
 
     const int K = shape_.experts_per_token;
-    const size_t count = static_cast<size_t>(rows) * static_cast<size_t>(K);
-    // Pinned staging, grown on demand, so the DtoH copy can run on the transfer
-    // stream without synchronizing the compute stream.
-    if (moe_sel_host_cap_ < count) {
-        if (moe_sel_host_ != nullptr) LFM_CUDA(cudaFreeHost(moe_sel_host_));
-        LFM_CUDA(cudaHostAlloc(&moe_sel_host_, count * sizeof(int),
-                               cudaHostAllocDefault));
-        moe_sel_host_cap_ = count;
-    }
-
-    // The router (on compute_stream) wrote sel_dev; the transfer stream waits
-    // for that to finish, then reads the selection asynchronously. This avoids
-    // any cudaStreamSynchronize on the compute stream, so the FFN-prep kernels
-    // already queued on compute_stream can overlap the residency resolution.
     cudaStream_t transfer = expert_transfer_stream_->get();
     LFM_CUDA(cudaStreamWaitEvent(transfer, router_done_event_.get(), 0));
-    // Don't clobber a slot still being read by the previous FFN, nor overlap the
-    // previous token's prefetch (which is filling the cache we may victimize).
     LFM_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event_.get(), 0));
     LFM_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event_.get(), 0));
-    LFM_CUDA(cudaMemcpyAsync(moe_sel_host_, sel_dev, count * sizeof(int),
-                             cudaMemcpyDeviceToHost, transfer));
 
-    // For decode (rows == 1) we opportunistically fetch the per-expert router
-    // scores when available -- they drive score-aware eviction (resident set
-    // converges to the highest-likelihood experts) and router-guided prefetch.
-    // On-demand hits/promotions below pass the routed expert's score so the
-    // cache always knows *how strongly* the current token wanted each resident.
-    const float* route_scores_host = nullptr;
-    if (rows == 1 && route_scores_dev != nullptr) {
-        const int E = shape_.num_experts;
-        if (moe_route_scores_cap_ < static_cast<size_t>(E)) {
-            if (moe_route_scores_host_ != nullptr) {
-                LFM_CUDA(cudaFreeHost(moe_route_scores_host_));
-            }
-            LFM_CUDA(cudaHostAlloc(&moe_route_scores_host_, E * sizeof(float),
-                                   cudaHostAllocDefault));
-            moe_route_scores_cap_ = static_cast<size_t>(E);
-        }
-        LFM_CUDA(cudaMemcpyAsync(moe_route_scores_host_, route_scores_dev,
-                                 static_cast<size_t>(E) * sizeof(float),
-                                 cudaMemcpyDeviceToHost, transfer));
-    }
-    LFM_CUDA(cudaStreamSynchronize(transfer));
+    // Device-side residency check: reads sel_dev + expert_slot_dev_ on GPU,
+    // outputs a compact list of cold experts.  This avoids D2H-copying the
+    // full selection and router scores; only the (typically tiny) cold list
+    // is transferred back.
+    const int cold_count = cache->resolve_on_device(
+        sel_dev, route_scores_dev, rows, K, transfer,
+        cold_expert_host_, cold_scores_host_);
 
-    for (size_t i = 0; i < count; ++i) {
-        const int e = moe_sel_host_[i];
-        const float score = route_scores_host != nullptr
-            ? route_scores_host[static_cast<size_t>(e)]
-            : ExpertLayerCache::kUnseen;
-        if (cache->resident(e)) {
+    // Touch resident experts and promote cold ones.
+    if (cold_count == 0) {
+        // All selected experts are GPU-resident; touch them for LRU scoring.
+        const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(K);
+        for (size_t i = 0; i < total; ++i) {
+            const int e = cold_expert_host_[i];
+            const float score = route_scores_dev != nullptr
+                ? cold_scores_host_[static_cast<size_t>(e)]
+                : ExpertLayerCache::kUnseen;
             cache->record_hit();
             cache->touch(e, score);
-        } else {
+        }
+    } else {
+        // Promote cold experts.  The cold list has unique expert indices.
+        const float default_score = route_scores_dev != nullptr
+            ? ExpertLayerCache::kUnseen
+            : ExpertLayerCache::kUnseen;
+        for (int i = 0; i < cold_count; ++i) {
+            const int e = cold_expert_host_[static_cast<size_t>(i)];
+            float score = default_score;
+            if (route_scores_dev != nullptr) {
+                score = cold_scores_host_[static_cast<size_t>(e)];
+            }
             cache->record_miss();
             cache->ensure_resident(e, transfer, score);
+        }
+        // Also touch resident experts from the full selection that weren't cold.
+        // We need the full selection for this; fall back to the small D2H.
+        // For rows==1 (decode), K is small (4), so this is cheap.
+        if (rows == 1) {
+            // Re-read the selection (K ints, tiny) for resident touch.
+            std::vector<int> sel_host(static_cast<size_t>(K));
+            LFM_CUDA(cudaMemcpyAsync(sel_host.data(), sel_dev,
+                                     static_cast<size_t>(K) * sizeof(int),
+                                     cudaMemcpyDeviceToHost, transfer));
+            LFM_CUDA(cudaStreamSynchronize(transfer));
+            for (int i = 0; i < K; ++i) {
+                const int e = sel_host[static_cast<size_t>(i)];
+                if (cache->resident(e)) {
+                    const float score = route_scores_dev != nullptr
+                        ? cold_scores_host_[static_cast<size_t>(e)]
+                        : ExpertLayerCache::kUnseen;
+                    cache->record_hit();
+                    cache->touch(e, score);
+                }
+            }
         }
     }
 
@@ -821,43 +808,38 @@ void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
     LFM_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event_.get(), 0));
 
     // Speculatively prefetch experts so they are GPU-resident before the *next*
-    // token's FFN. This runs on the transfer stream concurrently with the
-    // current token's FFN compute.
-    //
-    // Router-guided path (decode, router scores available): rank experts by the
-    // router's actual per-expert score and promote the most likely experts
-    // *beyond* the top-K the current token selected. Consecutive tokens route
-    // with high correlation, so the current token's next-most-likely experts are
-    // the best predictor of the next token's top-K -- far better than stale
-    // recency. prefetch_list's anti-thrash check refuses to evict a resident
-    // whose score >= the candidate's, so speculative promotions never displace a
-    // more-likely expert (the root cause of the earlier prefetch regression).
-    // Fallback (prefill / no scores): recency-based prefetch.
-    if (expert_offload_plan_.prefetch_experts > 0 && route_scores_host != nullptr) {
+    // token's FFN.  Reuses host buffers to avoid per-call allocation.
+    if (expert_offload_plan_.prefetch_experts > 0 && route_scores_dev != nullptr) {
         const int E = shape_.num_experts;
         const int take = std::min<int>(
             K + expert_offload_plan_.prefetch_experts, E);
-        std::vector<int> idx(static_cast<size_t>(E));
-        for (int e = 0; e < E; ++e) idx[static_cast<size_t>(e)] = e;
+        prefetch_idx_.resize(static_cast<size_t>(E));
+        for (int e = 0; e < E; ++e) prefetch_idx_[static_cast<size_t>(e)] = e;
         std::partial_sort(
-            idx.begin(), idx.begin() + take, idx.end(),
-            [route_scores_host](int a, int b) {
-                return route_scores_host[static_cast<size_t>(a)] >
-                       route_scores_host[static_cast<size_t>(b)];
+            prefetch_idx_.begin(), prefetch_idx_.begin() + take, prefetch_idx_.end(),
+            [&cold_scores_host_ = cold_scores_host_](int a, int b) {
+                return cold_scores_host_[static_cast<size_t>(a)] >
+                       cold_scores_host_[static_cast<size_t>(b)];
             });
-        std::vector<int> ranked(static_cast<size_t>(take));
-        std::vector<float> scores(static_cast<size_t>(take));
+        prefetch_ranked_.resize(static_cast<size_t>(take));
+        prefetch_scores_.resize(static_cast<size_t>(take));
         for (int i = 0; i < take; ++i) {
-            const int e = idx[static_cast<size_t>(i)];
-            ranked[static_cast<size_t>(i)] = e;
-            scores[static_cast<size_t>(i)] = route_scores_host[static_cast<size_t>(e)];
+            const int e = prefetch_idx_[static_cast<size_t>(i)];
+            prefetch_ranked_[static_cast<size_t>(i)] = e;
+            prefetch_scores_[static_cast<size_t>(i)] = cold_scores_host_[static_cast<size_t>(e)];
         }
-        cache->prefetch_list(ranked, scores,
+        cache->prefetch_list(prefetch_ranked_, prefetch_scores_,
                              expert_offload_plan_.prefetch_experts, transfer);
     } else if (expert_offload_plan_.prefetch_experts > 0) {
         cache->prefetch(expert_offload_plan_.prefetch_experts, transfer);
     }
     LFM_CUDA(cudaEventRecord(prefetch_done_event_.get(), transfer));
+}
+
+void LfmModel::Impl::ensure_moe_experts_resident_packed(
+    int layer, const int* sel_dev, int rows, cudaStream_t stream,
+    const float* route_scores_dev) {
+    ensure_moe_experts_resident(layer, sel_dev, rows, stream, route_scores_dev);
 }
 
 void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
@@ -884,12 +866,15 @@ void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
     ensure_moe_experts_resident(layer, moe_sel_.data(), 1, stream_.get(),
                                 moe_router_scratch_.data());
 
-    // Expert FFN: accumulate the routing-weighted expert outputs into moe_output_.
-    moe_output_.zero_async(stream_.get());
+    // Expert FFN: accumulate the routing-weighted expert outputs into the
+    // FP32 output accumulator and then cast into the BF16 moe_output_.
+    moe_output_accum_.zero_async(stream_.get());
     const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
     launch_moe_ffn(fdev, moe_sel_.data(), moe_routing_w_.data(),
-                    normed_.data(), moe_output_.data(), 1, shape_.experts_per_token,
+                    normed_.data(), moe_output_accum_.data(), 1, shape_.experts_per_token,
                     moe_gu_scratch_.data(), moe_act_scratch_.data(), stream_.get());
+    launch_finalize_moe_output(moe_output_accum_.data(), moe_output_.data(),
+                                shape_.hidden, stream_.get());
     LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
     // Residual add into the hidden state.
@@ -901,14 +886,15 @@ void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int ro
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     // Size the prefill scratch to the requested row count.
-    moe_pf_hidden_float_.reset(static_cast<size_t>(rows) * shape_.hidden);
-    moe_pf_sel_.reset(static_cast<size_t>(rows) * shape_.experts_per_token);
-    moe_pf_routing_w_.reset(static_cast<size_t>(rows) * shape_.experts_per_token);
-    moe_pf_router_scratch_.reset(static_cast<size_t>(rows) * shape_.num_experts);
-    moe_pf_output_.reset(static_cast<size_t>(rows) * shape_.hidden);
-    moe_pf_gu_scratch_.reset(
+    moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * shape_.hidden);
+    moe_pf_sel_.reserve(static_cast<size_t>(rows) * shape_.experts_per_token);
+    moe_pf_routing_w_.reserve(static_cast<size_t>(rows) * shape_.experts_per_token);
+    moe_pf_router_scratch_.reserve(static_cast<size_t>(rows) * shape_.num_experts);
+    moe_pf_output_accum_.reserve(static_cast<size_t>(rows) * shape_.hidden);
+    moe_pf_output_.reserve(static_cast<size_t>(rows) * shape_.hidden);
+    moe_pf_gu_scratch_.reserve(
         static_cast<size_t>(rows) * shape_.experts_per_token * 2 * shape_.moe_intermediate);
-    moe_pf_act_scratch_.reset(
+    moe_pf_act_scratch_.reserve(
         static_cast<size_t>(rows) * shape_.experts_per_token * shape_.moe_intermediate);
 
     launch_rmsnorm(prefill_hidden_.data(), common_layer.ffn_norm,
@@ -931,12 +917,14 @@ void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int ro
     // Promote any cold experts selected by the router before the FFN reads them.
     ensure_moe_experts_resident(layer, moe_pf_sel_.data(), rows, stream_.get());
 
-    moe_pf_output_.zero_async(stream_.get());
+    moe_pf_output_accum_.zero_async(stream_.get());
     const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
     launch_moe_ffn(fdev, moe_pf_sel_.data(), moe_pf_routing_w_.data(),
-                    prefill_normed_.data(), moe_pf_output_.data(), rows,
+                    prefill_normed_.data(), moe_pf_output_accum_.data(), rows,
                     shape_.experts_per_token, moe_pf_gu_scratch_.data(),
                     moe_pf_act_scratch_.data(), stream_.get());
+    launch_finalize_moe_output(moe_pf_output_accum_.data(), moe_pf_output_.data(),
+                                rows * shape_.hidden, stream_.get());
     LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
     launch_residual_add(prefill_hidden_.data(), moe_pf_output_.data(),

@@ -52,6 +52,7 @@ std::vector<__nv_bfloat16> run_contiguous(const Problem& p, lfm::CudaStream& str
     lfm::DeviceBuffer<__nv_bfloat16> d_down(p.down.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
+    lfm::DeviceBuffer<float> d_accum(p.hidden_vec.size());
     lfm::DeviceBuffer<int> d_sel(p.sel.size());
     lfm::DeviceBuffer<float> d_wts(p.wts.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
@@ -63,7 +64,7 @@ std::vector<__nv_bfloat16> run_contiguous(const Problem& p, lfm::CudaStream& str
     LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
     LFM_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
     LFM_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
-    d_out.zero_async(stream.get());
+    d_accum.zero_async(stream.get());
 
     lfm::MoeFfnDevice fdev;
     fdev.gate_up = d_gate_up.data();
@@ -74,8 +75,11 @@ std::vector<__nv_bfloat16> run_contiguous(const Problem& p, lfm::CudaStream& str
     fdev.expert_gate_up_stride = static_cast<size_t>(2) * p.inter * p.hidden;
     fdev.expert_down_stride = static_cast<size_t>(p.hidden) * p.inter;
     lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
-                        d_out.data(), p.rows, p.K, d_gu_scratch.data(),
+                        d_accum.data(), p.rows, p.K, d_gu_scratch.data(),
                         d_act_scratch.data(), stream.get());
+    lfm::launch_finalize_moe_output(d_accum.data(), d_out.data(),
+                                    static_cast<int>(p.hidden_vec.size()),
+                                    stream.get());
     LFM_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> out(p.hidden_vec.size());
     LFM_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
@@ -111,6 +115,7 @@ std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
 
     lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
+    lfm::DeviceBuffer<float> d_accum(p.hidden_vec.size());
     lfm::DeviceBuffer<int> d_sel(p.sel.size());
     lfm::DeviceBuffer<float> d_wts(p.wts.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
@@ -120,7 +125,7 @@ std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
     LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
     LFM_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
     LFM_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
-    d_out.zero_async(stream.get());
+    d_accum.zero_async(stream.get());
 
     lfm::MoeFfnDevice fdev;
     fdev.num_experts = p.experts;
@@ -129,8 +134,11 @@ std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
     fdev.gate_up_ptrs = cache.gate_up_ptrs();
     fdev.down_ptrs = cache.down_ptrs();
     lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
-                        d_out.data(), p.rows, p.K, d_gu_scratch.data(),
+                        d_accum.data(), p.rows, p.K, d_gu_scratch.data(),
                         d_act_scratch.data(), stream.get());
+    lfm::launch_finalize_moe_output(d_accum.data(), d_out.data(),
+                                    static_cast<int>(p.hidden_vec.size()),
+                                    stream.get());
     LFM_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> out(p.hidden_vec.size());
     LFM_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
@@ -211,6 +219,7 @@ std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
 
     lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
+    lfm::DeviceBuffer<float> d_accum(p.hidden_vec.size());
     lfm::DeviceBuffer<int> d_sel(p.sel.size());
     lfm::DeviceBuffer<float> d_wts(p.wts.size());
     lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
@@ -220,11 +229,14 @@ std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
     LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
     LFM_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
     LFM_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
-    d_out.zero_async(stream.get());
+    d_accum.zero_async(stream.get());
 
     lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
-                        d_out.data(), p.rows, p.K, d_gu_scratch.data(),
+                        d_accum.data(), p.rows, p.K, d_gu_scratch.data(),
                         d_act_scratch.data(), stream.get());
+    lfm::launch_finalize_moe_output(d_accum.data(), d_out.data(),
+                                    static_cast<int>(p.hidden_vec.size()),
+                                    stream.get());
     LFM_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> out(p.hidden_vec.size());
     LFM_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));

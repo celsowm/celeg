@@ -162,7 +162,9 @@ std::optional<CpuPrefixMatch> CpuPrefixCacheManager::acquire(
     CpuPrefixMatch result;
     result.matched_tokens = matched;
     result.snapshot = clone_for_request(entry->snapshot, matched, request_numa_node);
+    lru_index_.erase({entry->last_used, entry->id});
     entry->last_used = ++clock_;
+    lru_index_.insert({entry->last_used, entry->id});
     ++metrics_.hits;
     metrics_.reused_tokens += matched;
     if (matched != prompt.size()) ++metrics_.partial_hits;
@@ -170,23 +172,26 @@ std::optional<CpuPrefixMatch> CpuPrefixCacheManager::acquire(
 }
 
 bool CpuPrefixCacheManager::evict_one(PrefixRadixIndex::EntryId protected_id) {
-    Entry* victim = nullptr;
-    for (auto& [id, entry] : entries_) {
-        if (id == protected_id) continue;
-        if (!victim || entry->last_used < victim->last_used) victim = entry.get();
+    // O(log n) victim selection via the LRU index.
+    for (auto it = lru_index_.begin(); it != lru_index_.end(); ++it) {
+        if (it->second == protected_id) continue;
+        const auto id = it->second;
+        auto entry_it = entries_.find(id);
+        if (entry_it == entries_.end()) continue;
+        Entry* victim = entry_it->second.get();
+        lru_index_.erase(it);
+        const size_t bytes = victim->resident_bytes;
+        release_snapshot(victim->snapshot);
+        if (!radix_.erase(victim->prompt, id)) {
+            throw std::runtime_error("CPU prefix radix eviction lost its entry");
+        }
+        entries_.erase(id);
+        metrics_.resident_bytes = metrics_.resident_bytes > bytes
+            ? metrics_.resident_bytes - bytes : 0;
+        ++metrics_.evictions;
+        return true;
     }
-    if (!victim) return false;
-    const auto id = victim->id;
-    const size_t bytes = victim->resident_bytes;
-    release_snapshot(victim->snapshot);
-    if (!radix_.erase(victim->prompt, id)) {
-        throw std::runtime_error("CPU prefix radix eviction lost its entry");
-    }
-    entries_.erase(id);
-    metrics_.resident_bytes = metrics_.resident_bytes > bytes
-        ? metrics_.resident_bytes - bytes : 0;
-    ++metrics_.evictions;
-    return true;
+    return false;
 }
 
 bool CpuPrefixCacheManager::evict_one() { return evict_one(0); }
@@ -205,7 +210,9 @@ bool CpuPrefixCacheManager::insert(
         release_snapshot(existing->snapshot);
         existing->snapshot = std::move(replacement);
         existing->resident_bytes = replacement_bytes;
+        lru_index_.erase({existing->last_used, existing->id});
         existing->last_used = ++clock_;
+        lru_index_.insert({existing->last_used, existing->id});
         metrics_.resident_bytes = metrics_.resident_bytes - old_bytes + replacement_bytes;
         while (metrics_.resident_bytes > maximum_bytes_) {
             if (!evict_one(existing->id)) break;
@@ -222,10 +229,12 @@ bool CpuPrefixCacheManager::insert(
     entry->resident_bytes = snapshot_resident_bytes(entry->snapshot);
     entry->last_used = ++clock_;
     const auto id = entry->id;
+    lru_index_.insert({entry->last_used, id});
     radix_.insert(entry->prompt, id);
     try {
         entries_.emplace(id, std::move(entry));
     } catch (...) {
+        lru_index_.erase({entry->last_used, id});
         radix_.erase(prompt, id);
         throw;
     }
@@ -236,6 +245,7 @@ bool CpuPrefixCacheManager::insert(
             auto inserted = entries_.find(id);
             if (inserted != entries_.end()) {
                 const size_t bytes = inserted->second->resident_bytes;
+                lru_index_.erase({inserted->second->last_used, id});
                 release_snapshot(inserted->second->snapshot);
                 radix_.erase(inserted->second->prompt, id);
                 entries_.erase(inserted);
@@ -251,6 +261,7 @@ bool CpuPrefixCacheManager::insert(
 void CpuPrefixCacheManager::clear() {
     for (auto& [_, entry] : entries_) release_snapshot(entry->snapshot);
     entries_.clear();
+    lru_index_.clear();
     radix_.clear();
     metrics_.resident_bytes = 0;
 }

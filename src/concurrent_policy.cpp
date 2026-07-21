@@ -39,45 +39,69 @@ std::optional<std::vector<uint32_t>> PagedBlockPool::allocate_tokens(size_t toke
 
 bool PagedBlockPool::retain(const std::vector<uint32_t>& pages) {
     // Validate the whole transaction first, including duplicate page IDs.
-    // This prevents a late failure or uint32 overflow from partially changing
-    // reference counts.
-    std::vector<uint32_t> occurrences(ref_counts_.size(), 0);
-    for (uint32_t page : pages) {
+    // O(k) sort + run-length encode instead of O(total_pages) histogram.
+    if (pages.empty()) return true;
+    std::vector<uint32_t> sorted = pages;
+    std::sort(sorted.begin(), sorted.end());
+    uint32_t prev = sorted[0];
+    uint32_t count = 1;
+    auto flush = [&](uint32_t page, uint32_t n) -> bool {
         if (page >= ref_counts_.size() || ref_counts_[page] == 0) return false;
-        if (occurrences[page] == std::numeric_limits<uint32_t>::max()) return false;
-        ++occurrences[page];
-    }
-    for (size_t page = 0; page < occurrences.size(); ++page) {
-        const uint32_t count = occurrences[page];
-        if (count != 0 &&
-            count > std::numeric_limits<uint32_t>::max() - ref_counts_[page]) {
-            return false;
+        if (n > std::numeric_limits<uint32_t>::max() - ref_counts_[page]) return false;
+        return true;
+    };
+    for (size_t i = 1; i <= sorted.size(); ++i) {
+        if (i < sorted.size() && sorted[i] == prev) {
+            ++count;
+            continue;
         }
+        if (!flush(prev, count)) return false;
+        if (i < sorted.size()) { prev = sorted[i]; count = 1; }
     }
-    for (size_t page = 0; page < occurrences.size(); ++page) {
-        ref_counts_[page] += occurrences[page];
+    // Apply: run-length decode and update ref counts.
+    prev = sorted[0];
+    count = 1;
+    for (size_t i = 1; i <= sorted.size(); ++i) {
+        if (i < sorted.size() && sorted[i] == prev) {
+            ++count;
+            continue;
+        }
+        ref_counts_[prev] += count;
+        if (i < sorted.size()) { prev = sorted[i]; count = 1; }
     }
     return true;
 }
 
 void PagedBlockPool::release(const std::vector<uint32_t>& pages) {
     // Release is also transactional: an invalid page later in the vector must
-    // not silently release earlier pages.
-    std::vector<uint32_t> occurrences(ref_counts_.size(), 0);
-    for (const uint32_t page : pages) {
-        if (page >= ref_counts_.size()) {
+    // not silently release earlier pages.  O(k) sort + run-length encode.
+    if (pages.empty()) return;
+    std::vector<uint32_t> sorted = pages;
+    std::sort(sorted.begin(), sorted.end());
+    uint32_t prev = sorted[0];
+    uint32_t count = 1;
+    // Validate first.
+    for (size_t i = 1; i <= sorted.size(); ++i) {
+        if (i < sorted.size() && sorted[i] == prev) {
+            ++count;
+            continue;
+        }
+        if (prev >= ref_counts_.size() || count > ref_counts_[prev]) {
             throw std::runtime_error("invalid or double page release");
         }
-        ++occurrences[page];
-        if (occurrences[page] > ref_counts_[page]) {
-            throw std::runtime_error("invalid or double page release");
-        }
+        if (i < sorted.size()) { prev = sorted[i]; count = 1; }
     }
-    for (size_t page = 0; page < occurrences.size(); ++page) {
-        const uint32_t count = occurrences[page];
-        if (count == 0) continue;
-        ref_counts_[page] -= count;
-        if (ref_counts_[page] == 0) free_.push_back(static_cast<uint32_t>(page));
+    // Apply.
+    prev = sorted[0];
+    count = 1;
+    for (size_t i = 1; i <= sorted.size(); ++i) {
+        if (i < sorted.size() && sorted[i] == prev) {
+            ++count;
+            continue;
+        }
+        ref_counts_[prev] -= count;
+        if (ref_counts_[prev] == 0) free_.push_back(prev);
+        if (i < sorted.size()) { prev = sorted[i]; count = 1; }
     }
 }
 

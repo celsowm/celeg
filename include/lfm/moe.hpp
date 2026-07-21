@@ -116,7 +116,11 @@ struct MoeFfnDevice {
 // e.g. via launch_moe_router) and for each selected expert computes
 //   activated = silu(hidden @ gate_up[e]^T) * (hidden @ up[e]^T)
 //   out += routing_weight * (activated @ down[e]^T)
-// accumulating the K expert contributions into `output` [rows * hidden].
+// Expert contributions accumulate into an FP32 caller-owned accumulator via
+// atomicAdd (NOT rounding per-contribution as the old BF16 CAS loop did).
+// The caller MUST zero `output_accum` before launching this kernel and MUST
+// invoke launch_finalize_moe_output to cast the accumulator back into the BF16
+// `output` buffer once all contributions have landed.
 //
 // `selected_experts` is [rows * K] (int), `routing_weights` is [rows * K]
 // (float). The scratch buffers `scratch_gate_up` ([rows * K * 2*inter]) and
@@ -125,11 +129,19 @@ void launch_moe_ffn(const MoeFfnDevice& device,
                     const int* selected_experts,   // [rows * K]
                     const float* routing_weights,  // [rows * K]
                     const __nv_bfloat16* hidden,   // [rows * hidden]
-                    __nv_bfloat16* output,         // [rows * hidden]
+                    float* output_accum,           // [rows * hidden], FP32, caller-zeroed
                     int rows, int K,
                     __nv_bfloat16* scratch_gate_up,  // [rows * K * 2*inter]
                     __nv_bfloat16* scratch_activated, // [rows * K * inter]
                     cudaStream_t stream);
+
+// Cast the FP32 MoE output accumulator back into the BF16 `output` buffer the
+// rest of the pipeline consumes. Callers should launch this AFTER
+// launch_moe_ffn has accumulated all K expert contributions for a row.
+void launch_finalize_moe_output(const float* accum,
+                                __nv_bfloat16* output,
+                                int count,
+                                cudaStream_t stream);
 
 // Reference (host) implementation of the LFM2 MoE feed-forward block. Operates
 // in float for an exact-parity baseline against the BF16 CUDA kernel (tolerance

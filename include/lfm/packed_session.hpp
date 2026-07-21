@@ -65,6 +65,14 @@ public:
     virtual int32_t sampled_host_value() const = 0;
     virtual void set_sampled_host_value(int32_t value) = 0;
 
+    // Expert offload: ensure selected experts are GPU-resident before the
+    // MoE FFN reads them.  Called by the packed executor after the router.
+    // `sel_dev` points to this session's selected-expert indices (K ints),
+    // `rows` is 1 for decode, and `route_scores_dev` may be null.
+    virtual void ensure_moe_experts_resident_packed(
+        int layer, const int* sel_dev, int rows, cudaStream_t stream,
+        const float* route_scores_dev) = 0;
+
     // Shared checkpoint state. The packed executor uses the reference
     // session's weight layout for embedding lookup, the final norm, and the
     // RoPE tables (these are identical across all sessions sharing the

@@ -43,22 +43,23 @@ PrefixCacheManager::Entry* PrefixCacheManager::exact_entry(
 }
 
 bool PrefixCacheManager::evict_one(PrefixRadixIndex::EntryId protected_id) {
-    Entry* victim = nullptr;
-    for (auto& [id, entry] : entries_) {
-        if (id == protected_id) continue;
-        if (!victim || entry->last_used < victim->last_used) {
-            victim = entry.get();
+    // O(log n) victim selection via the LRU index.
+    for (auto it = lru_index_.begin(); it != lru_index_.end(); ++it) {
+        if (it->second == protected_id) continue;
+        const auto id = it->second;
+        auto entry_it = entries_.find(id);
+        if (entry_it == entries_.end()) continue;
+        Entry* victim = entry_it->second.get();
+        lru_index_.erase(it);
+        pages_.release(victim->pages);
+        if (!radix_.erase(victim->prompt, id)) {
+            throw std::runtime_error("prefix radix eviction lost its entry");
         }
+        entries_.erase(id);
+        ++metrics_.evictions;
+        return true;
     }
-    if (!victim) return false;
-    const auto id = victim->id;
-    pages_.release(victim->pages);
-    if (!radix_.erase(victim->prompt, id)) {
-        throw std::runtime_error("prefix radix eviction lost its entry");
-    }
-    entries_.erase(id);
-    ++metrics_.evictions;
-    return true;
+    return false;
 }
 
 bool PrefixCacheManager::evict_one() {
@@ -151,7 +152,11 @@ PrefixAcquireResult PrefixCacheManager::acquire(
         throw;
     }
 
+    // Touch: update LRU index.
+    lru_index_.erase({entry->last_used, entry->id});
     entry->last_used = ++clock_;
+    lru_index_.insert({entry->last_used, entry->id});
+
     result.status = PrefixAcquireStatus::Hit;
     result.matched_tokens = matched_tokens;
     result.state = entry->state;
@@ -177,8 +182,10 @@ bool PrefixCacheManager::insert_or_update(
     }
 
     if (Entry* existing = exact_entry(prompt)) {
+        lru_index_.erase({existing->last_used, existing->id});
         existing->state = std::make_shared<PrefixState>(std::move(state));
         existing->last_used = ++clock_;
+        lru_index_.insert({existing->last_used, existing->id});
         return true;
     }
 
@@ -219,11 +226,13 @@ bool PrefixCacheManager::insert_or_update(
         entry->state = std::make_shared<PrefixState>(std::move(state));
         entry->last_used = ++clock_;
         const auto id = entry->id;
+        lru_index_.insert({entry->last_used, id});
         radix_.insert(entry->prompt, id);
         try {
             const auto [_, inserted] = entries_.emplace(id, std::move(entry));
             if (!inserted) throw std::runtime_error("duplicate prefix cache ID");
         } catch (...) {
+            lru_index_.erase({entry->last_used, id});
             radix_.erase(prompt, id);
             throw;
         }
@@ -242,6 +251,7 @@ bool PrefixCacheManager::insert_or_update(
 void PrefixCacheManager::clear() {
     for (auto& [_, entry] : entries_) pages_.release(entry->pages);
     entries_.clear();
+    lru_index_.clear();
     radix_.clear();
 }
 

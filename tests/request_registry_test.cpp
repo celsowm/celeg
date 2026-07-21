@@ -23,7 +23,8 @@ int main() {
 
     registry.erase_queued(first);
     assert(registry.queued_count() == 1);
-    assert(registry.admission_queue().front() == second);
+    assert(registry.best_queued().has_value());
+    assert(*registry.best_queued() == second);
     assert(registry.find(999999) == nullptr);
 
     bool threw = false;

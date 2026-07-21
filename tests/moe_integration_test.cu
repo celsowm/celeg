@@ -154,6 +154,7 @@ int main() {
         lfm::DeviceBuffer<__nv_bfloat16> d_down(
             static_cast<size_t>(p.experts) * p.hidden * p.inter);
         lfm::DeviceBuffer<__nv_bfloat16> d_output(p.hidden);
+        lfm::DeviceBuffer<float> d_accum(p.hidden);
         lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
             static_cast<size_t>(p.K) * 2 * p.inter);
         lfm::DeviceBuffer<__nv_bfloat16> d_act_scratch(
@@ -167,6 +168,7 @@ int main() {
         LFM_CUDA(cudaMemcpy(d_down.data(), down_bf16.data(),
                             d_down.bytes(), cudaMemcpyHostToDevice));
         d_output.zero_async(stream.get());
+        d_accum.zero_async(stream.get());
 
         lfm::MoeFfnDevice fdev;
         fdev.gate_up = d_gate_up.data();
@@ -177,9 +179,11 @@ int main() {
         fdev.expert_gate_up_stride = static_cast<size_t>(2) * p.inter * p.hidden;
         fdev.expert_down_stride = static_cast<size_t>(p.hidden) * p.inter;
         lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(),
-                            d_normed.data(), d_output.data(),
+                            d_normed.data(), d_accum.data(),
                             1, p.K, d_gu_scratch.data(),
                             d_act_scratch.data(), stream.get());
+        lfm::launch_finalize_moe_output(d_accum.data(), d_output.data(),
+                                        p.hidden, stream.get());
 
         // CPU reference of the full pipeline (rmsnorm -> router -> ffn -> residual).
         const std::vector<__nv_bfloat16> normed_cpu_ref = cpu_rmsnorm(

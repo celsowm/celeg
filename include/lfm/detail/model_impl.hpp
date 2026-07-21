@@ -127,6 +127,9 @@ struct LfmModel::Impl : public IPackedSession {
     void ensure_moe_experts_resident(int layer, const int* sel_dev, int rows,
                                      cudaStream_t compute_stream,
                                      const float* route_scores_dev = nullptr);
+    void ensure_moe_experts_resident_packed(
+        int layer, const int* sel_dev, int rows, cudaStream_t stream,
+        const float* route_scores_dev) override;
     void forward_token_host(int32_t token, bool compute_logits);
     void forward_token_paged_host(int32_t token, bool compute_logits,
                                   PhysicalPagedKvCache& paged_kv,
@@ -220,6 +223,7 @@ struct LfmModel::Impl : public IPackedSession {
     DeviceBuffer<int> moe_sel_;               // [experts_per_token]
     DeviceBuffer<float> moe_routing_w_;       // [experts_per_token]
     DeviceBuffer<float> moe_router_scratch_;  // [num_experts]
+    DeviceBuffer<float> moe_output_accum_;    // [hidden] FP32 expert accumulator
     DeviceBuffer<__nv_bfloat16> moe_output_;  // [hidden]
     DeviceBuffer<__nv_bfloat16> moe_gu_scratch_;  // [K * 2*moe_inter]
     DeviceBuffer<__nv_bfloat16> moe_act_scratch_; // [K * moe_inter]
@@ -229,6 +233,7 @@ struct LfmModel::Impl : public IPackedSession {
     DeviceBuffer<int> moe_pf_sel_;
     DeviceBuffer<float> moe_pf_routing_w_;
     DeviceBuffer<float> moe_pf_router_scratch_;
+    DeviceBuffer<float> moe_pf_output_accum_;  // [rows * hidden] FP32 accumulator
     DeviceBuffer<__nv_bfloat16> moe_pf_output_;
     DeviceBuffer<__nv_bfloat16> moe_pf_gu_scratch_;
     DeviceBuffer<__nv_bfloat16> moe_pf_act_scratch_;
@@ -273,6 +278,13 @@ struct LfmModel::Impl : public IPackedSession {
     // actual routing likelihood rather than stale recency.
     float* moe_route_scores_host_ = nullptr;
     size_t moe_route_scores_cap_ = 0;
+    // Reusable host buffers for speculative prefetch (avoids per-call alloc).
+    std::vector<int> prefetch_idx_;
+    std::vector<int> prefetch_ranked_;
+    std::vector<float> prefetch_scores_;
+    // Reusable host buffer for cold-expert list from device-side residency check.
+    std::vector<int> cold_expert_host_;
+    std::vector<float> cold_scores_host_;
 };
 
 } // namespace lfm

@@ -155,6 +155,16 @@ public:
     const __nv_bfloat16* const* gate_up_ptrs() const { return gate_up_ptrs_dev_.data(); }
     const __nv_bfloat16* const* down_ptrs() const { return down_ptrs_dev_.data(); }
 
+    // Device-side residency check: reads sel_dev and expert_slot_dev_ on the
+    // GPU, outputs a compact list of cold experts that need promotion.
+    // Returns the number of cold experts. cold_host receives the cold expert
+    // indices; cold_scores_host receives per-expert scores (E floats) when
+    // route_scores_dev is non-null.
+    int resolve_on_device(const int* sel_dev, const float* route_scores_dev,
+                          int rows, int K, cudaStream_t stream,
+                          std::vector<int>& cold_host,
+                          std::vector<float>& cold_scores_host);
+
     int num_experts() const { return num_experts_; }
     int capacity() const { return capacity_; }
     // Expert currently occupying `slot`, or -1 if empty.
@@ -218,6 +228,13 @@ private:
     // Device-resident pointer tables consumed by the kernel.
     DeviceBuffer<const __nv_bfloat16*> gate_up_ptrs_dev_;  // [E]
     DeviceBuffer<const __nv_bfloat16*> down_ptrs_dev_;      // [E]
+
+    // Device-side residency check state.
+    DeviceBuffer<int> expert_slot_dev_;   // [E] mirror of expert_slot_
+    DeviceBuffer<int> cold_list_dev_;     // [E] output: cold expert indices
+    DeviceBuffer<int> cold_count_dev_;    // [1] output: number of cold experts
+
+    void sync_expert_slot_to_device();
 };
 
 } // namespace lfm
