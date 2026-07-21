@@ -9,11 +9,6 @@
 #include <string>
 #include <vector>
 
-#if defined(_WIN32)
-#include <crtdbg.h>
-#include <stdlib.h>
-#endif
-
 namespace {
 
 // Minimal little-endian GGUF v3 writer used to synthesize a self-contained
@@ -41,6 +36,7 @@ struct GgufWriter {
 };
 
 std::filesystem::path write_fixture() {
+    std::cerr << "DEBUG: write_fixture start\n" << std::flush;
     GgufWriter w;
     w.put<uint32_t>(0x46554747u);  // magic "GGUF"
     w.put<uint32_t>(3);            // version
@@ -73,22 +69,30 @@ std::filesystem::path write_fixture() {
     w.put<uint32_t>(2);            // ndim
     w.put<uint64_t>(4);            // dim0 (cols)
     w.put<uint64_t>(2);            // dim1 (rows)
-    w.put<int32_t>(0);            // type F32
+    w.put<int32_t>(0);
+    std::cerr << "DEBUG: write_fixture after tensor info\n" << std::flush;
     w.put<uint64_t>(0);           // offset
+    std::cerr << "DEBUG: write_fixture after offset\n" << std::flush;
 
     w.align(32);
+    std::cerr << "DEBUG: write_fixture after align\n" << std::flush;
     const float payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     w.put_bytes(payload, sizeof(payload));
+    std::cerr << "DEBUG: write_fixture after payload\n" << std::flush;
 
     const auto path = std::filesystem::temp_directory_path() / "lfm_gguf_fixture.gguf";
     std::ofstream out(path, std::ios::binary);
+    std::cerr << "DEBUG: write_fixture writing file\n" << std::flush;
     out.write(reinterpret_cast<const char*>(w.buf.data()),
               static_cast<std::streamsize>(w.buf.size()));
+    std::cerr << "DEBUG: write_fixture wrote " << w.buf.size() << " bytes\n" << std::flush;
     out.close();
+    std::cerr << "DEBUG: write_fixture closing file\n" << std::flush;
     return path;
 }
 
 void test_fixture() {
+    std::cerr << "DEBUG: test_fixture start\n" << std::flush;
     const auto path = write_fixture();
     {
         lfm::GgufFile g(path.string());
@@ -141,23 +145,9 @@ void test_real_file_optional() {
 } // namespace
 
 int main() {
-#if defined(_WIN32)
-    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
-    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
-    _set_abort_behavior(0, _WRITE_ABORT_MSG);
-#endif
-    try {
-        test_fixture();
-        test_real_file_optional();
-        std::cout << "ALL PASS\n";
-    } catch (const std::exception& e) {
-        std::cerr << "EXCEPTION: " << e.what() << "\n";
-        return 1;
-    } catch (...) {
-        std::cerr << "UNKNOWN EXCEPTION\n";
-        return 1;
-    }
+    std::cerr << "DEBUG: main start\n" << std::flush;
+    test_fixture();
+    test_real_file_optional();
+    std::cout << "ALL PASS\n";
     return 0;
 }
