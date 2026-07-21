@@ -225,11 +225,13 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
     const int lane = threadIdx.x & 31;
     const int warp = threadIdx.x >> 5;
     const int output_row = blockIdx.x * warps_per_block + warp;
-    if (warp >= warps_per_block || output_row >= n) return;
+    if (warp >= warps_per_block) return;
 
     const size_t packed_cols = static_cast<size_t>((k + 1) / 2);
-    const uint8_t* row_weight = weight + static_cast<size_t>(output_row) * packed_cols;
-    const float row_scale = scales[output_row];
+    const uint8_t* row_weight = (output_row < n)
+        ? (weight + static_cast<size_t>(output_row) * packed_cols)
+        : nullptr;
+    const float row_scale = (output_row < n) ? scales[output_row] : 0.0f;
 
     for (int activation_row = blockIdx.y;
          activation_row < m;
@@ -250,16 +252,18 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
             }
             __syncthreads();
 
-            float sum = 0.0f;
-            for (int column = lane; column < chunk; column += 32) {
-                sum += bf16_float(s_act[column]) *
-                       static_cast<float>(unpack_int4(row_weight, base_k + column));
+            if (output_row < n) {
+                float sum = 0.0f;
+                for (int column = lane; column < chunk; column += 32) {
+                    sum += bf16_float(s_act[column]) *
+                           static_cast<float>(unpack_int4(row_weight, base_k + column));
+                }
+                accum += warp_sum(sum);
             }
-            accum += warp_sum(sum);
 
             __syncthreads();
         }
-        if (lane == 0) {
+        if (output_row < n && lane == 0) {
             float value = accum * row_scale;
             const size_t output_index =
                 static_cast<size_t>(activation_row) * n + output_row;

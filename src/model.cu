@@ -728,72 +728,67 @@ namespace {
 
 } // namespace
 
-void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
-                                                   int rows,
-                                                   cudaStream_t compute_stream,
-                                                   const float* route_scores_dev) {
-    if (!expert_offload_plan_.enabled) return;
+void SharedModelWeights::ensure_moe_experts_resident(
+    int layer, const int* sel_dev, int rows, int K, int num_experts,
+    cudaStream_t compute_stream, const float* route_scores_dev) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!expert_offload_plan.enabled) return;
     ExpertLayerCache* cache = nullptr;
-    if (layer >= 0 && static_cast<size_t>(layer) < expert_caches_.size()) {
-        cache = expert_caches_[static_cast<size_t>(layer)].get();
+    if (layer >= 0 && static_cast<size_t>(layer) < expert_caches.size()) {
+        cache = expert_caches[static_cast<size_t>(layer)].get();
     }
     if (cache == nullptr) return;
 
-    const int K = shape_.experts_per_token;
-    cudaStream_t transfer = expert_transfer_stream_->get();
-    LFM_CUDA(cudaStreamWaitEvent(transfer, router_done_event_.get(), 0));
-    LFM_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event_.get(), 0));
-    LFM_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event_.get(), 0));
+    cudaStream_t transfer = expert_transfer_stream->get();
+    LFM_CUDA(cudaStreamWaitEvent(transfer, router_done_event.get(), 0));
+    LFM_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event.get(), 0));
+    LFM_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event.get(), 0));
 
     // Device-side residency check: reads sel_dev + expert_slot_dev_ on GPU,
-    // outputs a compact list of cold experts.  This avoids D2H-copying the
+    // outputs a compact list of cold experts. This avoids D2H-copying the
     // full selection and router scores; only the (typically tiny) cold list
     // is transferred back.
     const int cold_count = cache->resolve_on_device(
         sel_dev, route_scores_dev, rows, K, transfer,
-        cold_expert_host_, cold_scores_host_);
+        cold_expert_host, cold_scores_host);
 
     // Touch resident experts and promote cold ones.
     if (cold_count == 0) {
         // All selected experts are GPU-resident; touch them for LRU scoring.
         const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(K);
         for (size_t i = 0; i < total; ++i) {
-            const int e = cold_expert_host_[i];
+            const int e = cold_expert_host[i];
             const float score = route_scores_dev != nullptr
-                ? cold_scores_host_[static_cast<size_t>(e)]
+                ? cold_scores_host[static_cast<size_t>(e)]
                 : ExpertLayerCache::kUnseen;
             cache->record_hit();
             cache->touch(e, score);
         }
     } else {
-        // Promote cold experts.  The cold list has unique expert indices.
-        const float default_score = route_scores_dev != nullptr
-            ? ExpertLayerCache::kUnseen
-            : ExpertLayerCache::kUnseen;
+        // Promote cold experts. The cold list has unique expert indices.
+        const float default_score = ExpertLayerCache::kUnseen;
         for (int i = 0; i < cold_count; ++i) {
-            const int e = cold_expert_host_[static_cast<size_t>(i)];
+            const int e = cold_expert_host[static_cast<size_t>(i)];
             float score = default_score;
             if (route_scores_dev != nullptr) {
-                score = cold_scores_host_[static_cast<size_t>(e)];
+                score = cold_scores_host[static_cast<size_t>(e)];
             }
             cache->record_miss();
             cache->ensure_resident(e, transfer, score);
         }
         // Also touch resident experts from the full selection that weren't cold.
-        // We need the full selection for this; fall back to the small D2H.
-        // For rows==1 (decode), K is small (4), so this is cheap.
-        if (rows == 1) {
-            // Re-read the selection (K ints, tiny) for resident touch.
-            std::vector<int> sel_host(static_cast<size_t>(K));
+        if (rows >= 1) {
+            const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(K);
+            std::vector<int> sel_host(total);
             LFM_CUDA(cudaMemcpyAsync(sel_host.data(), sel_dev,
-                                     static_cast<size_t>(K) * sizeof(int),
+                                     total * sizeof(int),
                                      cudaMemcpyDeviceToHost, transfer));
             LFM_CUDA(cudaStreamSynchronize(transfer));
-            for (int i = 0; i < K; ++i) {
-                const int e = sel_host[static_cast<size_t>(i)];
+            for (size_t i = 0; i < total; ++i) {
+                const int e = sel_host[i];
                 if (cache->resident(e)) {
                     const float score = route_scores_dev != nullptr
-                        ? cold_scores_host_[static_cast<size_t>(e)]
+                        ? cold_scores_host[static_cast<size_t>(e)]
                         : ExpertLayerCache::kUnseen;
                     cache->record_hit();
                     cache->touch(e, score);
@@ -804,36 +799,46 @@ void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
 
     // Compute stream must wait for the on-demand promotions to land before the
     // FFN reads the pointer table.
-    LFM_CUDA(cudaEventRecord(promote_done_event_.get(), transfer));
-    LFM_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event_.get(), 0));
+    LFM_CUDA(cudaEventRecord(promote_done_event.get(), transfer));
+    LFM_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event.get(), 0));
 
     // Speculatively prefetch experts so they are GPU-resident before the *next*
-    // token's FFN.  Reuses host buffers to avoid per-call allocation.
-    if (expert_offload_plan_.prefetch_experts > 0 && route_scores_dev != nullptr) {
-        const int E = shape_.num_experts;
+    // token's FFN. Reuses host buffers to avoid per-call allocation.
+    if (expert_offload_plan.prefetch_experts > 0 && route_scores_dev != nullptr) {
+        const int E = num_experts;
         const int take = std::min<int>(
-            K + expert_offload_plan_.prefetch_experts, E);
-        prefetch_idx_.resize(static_cast<size_t>(E));
-        for (int e = 0; e < E; ++e) prefetch_idx_[static_cast<size_t>(e)] = e;
+            K + expert_offload_plan.prefetch_experts, E);
+        prefetch_idx.resize(static_cast<size_t>(E));
+        for (int e = 0; e < E; ++e) prefetch_idx[static_cast<size_t>(e)] = e;
         std::partial_sort(
-            prefetch_idx_.begin(), prefetch_idx_.begin() + take, prefetch_idx_.end(),
-            [&cold_scores_host_ = cold_scores_host_](int a, int b) {
-                return cold_scores_host_[static_cast<size_t>(a)] >
-                       cold_scores_host_[static_cast<size_t>(b)];
+            prefetch_idx.begin(), prefetch_idx.begin() + take, prefetch_idx.end(),
+            [this](int a, int b) {
+                return cold_scores_host[static_cast<size_t>(a)] >
+                       cold_scores_host[static_cast<size_t>(b)];
             });
-        prefetch_ranked_.resize(static_cast<size_t>(take));
-        prefetch_scores_.resize(static_cast<size_t>(take));
+        prefetch_ranked.resize(static_cast<size_t>(take));
+        prefetch_scores.resize(static_cast<size_t>(take));
         for (int i = 0; i < take; ++i) {
-            const int e = prefetch_idx_[static_cast<size_t>(i)];
-            prefetch_ranked_[static_cast<size_t>(i)] = e;
-            prefetch_scores_[static_cast<size_t>(i)] = cold_scores_host_[static_cast<size_t>(e)];
+            const int e = prefetch_idx[static_cast<size_t>(i)];
+            prefetch_ranked[static_cast<size_t>(i)] = e;
+            prefetch_scores[static_cast<size_t>(i)] = cold_scores_host[static_cast<size_t>(e)];
         }
-        cache->prefetch_list(prefetch_ranked_, prefetch_scores_,
-                             expert_offload_plan_.prefetch_experts, transfer);
-    } else if (expert_offload_plan_.prefetch_experts > 0) {
-        cache->prefetch(expert_offload_plan_.prefetch_experts, transfer);
+        cache->prefetch_list(prefetch_ranked, prefetch_scores,
+                             expert_offload_plan.prefetch_experts, transfer);
+    } else if (expert_offload_plan.prefetch_experts > 0) {
+        cache->prefetch(expert_offload_plan.prefetch_experts, transfer);
     }
-    LFM_CUDA(cudaEventRecord(prefetch_done_event_.get(), transfer));
+    LFM_CUDA(cudaEventRecord(prefetch_done_event.get(), transfer));
+}
+
+void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
+                                                   int rows,
+                                                   cudaStream_t compute_stream,
+                                                   const float* route_scores_dev) {
+    if (!weights_) return;
+    weights_->ensure_moe_experts_resident(
+        layer, sel_dev, rows, shape_.experts_per_token, shape_.num_experts,
+        compute_stream, route_scores_dev);
 }
 
 void LfmModel::Impl::ensure_moe_experts_resident_packed(

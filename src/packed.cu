@@ -766,20 +766,14 @@ struct PackedDecodeExecutorImpl {
         launch_moe_router(rdev, cfg, moe_router_scratch.data(), stream.get());
 
         // Ensure selected experts are GPU-resident before the FFN reads them.
-        // For each session in the batch, resolve residency for its K selections.
-        if (batch_models && layer_index >= 0) {
-            const int K = shape_.experts_per_token;
-            for (size_t row = 0; row < batch_models->size(); ++row) {
-                IPackedSession& session = *(*batch_models)[row];
-                session.ensure_moe_experts_resident_packed(
-                    layer_index,
-                    moe_sel.data() + row * static_cast<size_t>(K),
-                    1, stream.get(),
-                    moe.offloaded()
-                        ? moe_router_scratch.data() +
-                              row * static_cast<size_t>(shape_.num_experts)
-                        : nullptr);
-            }
+        // Resolve residency once for the entire batch of tokens on the shared layer cache.
+        if (batch_models && !batch_models->empty() && layer_index >= 0) {
+            IPackedSession& session = *batch_models->front();
+            session.ensure_moe_experts_resident_packed(
+                layer_index,
+                moe_sel.data(),
+                rows, stream.get(),
+                moe.offloaded() ? moe_router_scratch.data() : nullptr);
         }
 
         moe_output_accum.zero_async(stream.get());

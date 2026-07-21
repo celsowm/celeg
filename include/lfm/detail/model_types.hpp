@@ -10,6 +10,8 @@
 // them without leaking the Impl class.
 
 #include "lfm/cuda_utils.cuh"
+#include "lfm/expert_offload.hpp"
+#include "lfm/expert_residency.hpp"
 #include "lfm/moe.hpp"
 #include "lfm/model_shape.hpp"
 #include "lfm/safetensors.hpp"
@@ -209,6 +211,24 @@ using WeightMap = std::unordered_map<std::string, DeviceWeight>;
 struct SharedModelWeights {
     std::mutex mutex;
     WeightMap tensors;
+
+    ExpertOffloadPlan expert_offload_plan;
+    HostExpertStore host_expert_store;
+    std::vector<std::unique_ptr<ExpertLayerCache>> expert_caches;
+    std::unique_ptr<CudaStream> expert_transfer_stream;
+    CudaEvent ffn_done_event;
+    CudaEvent promote_done_event;
+    CudaEvent prefetch_done_event;
+    CudaEvent router_done_event;
+    std::vector<int> cold_expert_host;
+    std::vector<float> cold_scores_host;
+    std::vector<int> prefetch_idx;
+    std::vector<int> prefetch_ranked;
+    std::vector<float> prefetch_scores;
+
+    void ensure_moe_experts_resident(
+        int layer, const int* sel_dev, int rows, int K, int num_experts,
+        cudaStream_t compute_stream, const float* route_scores_dev);
 
     size_t memory_bytes() const;
 };
