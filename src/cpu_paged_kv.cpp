@@ -1,6 +1,7 @@
 #include "lfm/cpu_paged_kv.hpp"
 #include "lfm/cpu_numa.hpp"
 #include "lfm/quantization.hpp"
+#include "lfm/cpu_isa.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,9 +11,24 @@
 #include <stdexcept>
 #include <vector>
 
+#if defined(__x86_64__) || defined(__i386__)
+#pragma GCC push_options
+#pragma GCC target("avx2,fma")
+#include <immintrin.h>
+#pragma GCC pop_options
+#endif
+
 namespace lfm {
 
 namespace {
+
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+static const bool g_has_avx2_fma = []() {
+    auto caps = detect_cpu_capabilities();
+    return caps.avx2 && caps.fma;
+}();
+#endif
+
 size_t checked_multiply(size_t a, size_t b, const char* what) {
     if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
         throw std::overflow_error(what);
@@ -50,10 +66,114 @@ struct PartialAttention {
     float denominator = 0.0f;
 };
 
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+__attribute__((target("avx2,fma")))
+void update_online_avx2(const float* query, int kv_head, int head_dim, float scale,
+                        const CpuKvPagePool& pool, CpuKvPageId page,
+                        int token_begin, int token_end, float* accumulator,
+                        PartialAttention& state) {
+    __m256 old_scale_vec = _mm256_setzero_ps();
+    __m256 new_scale_vec = _mm256_setzero_ps();
+
+    for (int local = token_begin; local < token_end; ++local) {
+        float dot = 0.0f;
+        if (pool.mode() == CpuKvCacheMode::Fp32) {
+            const float* key = pool.key_fp32(page, static_cast<size_t>(local)) +
+                static_cast<size_t>(kv_head) * head_dim;
+            __m256 dot_vec = _mm256_setzero_ps();
+            int d = 0;
+            for (; d + 8 <= head_dim; d += 8) {
+                __m256 q_val = _mm256_loadu_ps(query + d);
+                __m256 k_val = _mm256_loadu_ps(key + d);
+                dot_vec = _mm256_fmadd_ps(q_val, k_val, dot_vec);
+            }
+            __m128 lo = _mm256_castps256_ps128(dot_vec);
+            __m128 hi = _mm256_extractf128_ps(dot_vec, 1);
+            __m128 sum = _mm_add_ps(lo, hi);
+            sum = _mm_hadd_ps(sum, sum);
+            sum = _mm_hadd_ps(sum, sum);
+            dot = _mm_cvtss_f32(sum);
+            for (; d < head_dim; ++d) {
+                dot += query[d] * key[d];
+            }
+        } else {
+            const uint16_t* key = pool.key_bf16(page, static_cast<size_t>(local)) +
+                static_cast<size_t>(kv_head) * head_dim;
+            __m256 dot_vec = _mm256_setzero_ps();
+            int d = 0;
+            for (; d + 8 <= head_dim; d += 8) {
+                __m256 q_val = _mm256_loadu_ps(query + d);
+                __m128i raw = _mm_loadu_si128(reinterpret_cast<const __m128i*>(key + d));
+                __m256 k_val = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(raw), 16));
+                dot_vec = _mm256_fmadd_ps(q_val, k_val, dot_vec);
+            }
+            __m128 lo = _mm256_castps256_ps128(dot_vec);
+            __m128 hi = _mm256_extractf128_ps(dot_vec, 1);
+            __m128 sum = _mm_add_ps(lo, hi);
+            sum = _mm_hadd_ps(sum, sum);
+            sum = _mm_hadd_ps(sum, sum);
+            dot = _mm_cvtss_f32(sum);
+            for (; d < head_dim; ++d) {
+                dot += query[d] * bf16_bits_to_float(key[d]);
+            }
+        }
+
+        const float score = dot * scale;
+        const float new_max = std::max(state.maximum, score);
+        const float old_scale = std::isfinite(state.maximum)
+            ? std::exp(state.maximum - new_max) : 0.0f;
+        const float new_scale = std::exp(score - new_max);
+        state.denominator = state.denominator * old_scale + new_scale;
+
+        old_scale_vec = _mm256_set1_ps(old_scale);
+        new_scale_vec = _mm256_set1_ps(new_scale);
+
+        int d = 0;
+        if (pool.mode() == CpuKvCacheMode::Fp32) {
+            const float* value = pool.value_fp32(page, static_cast<size_t>(local)) +
+                static_cast<size_t>(kv_head) * head_dim;
+            for (; d + 8 <= head_dim; d += 8) {
+                __m256 acc_val = _mm256_loadu_ps(accumulator + d);
+                __m256 val_val = _mm256_loadu_ps(value + d);
+                acc_val = _mm256_mul_ps(acc_val, old_scale_vec);
+                acc_val = _mm256_fmadd_ps(val_val, new_scale_vec, acc_val);
+                _mm256_storeu_ps(accumulator + d, acc_val);
+            }
+            for (; d < head_dim; ++d) {
+                accumulator[d] = accumulator[d] * old_scale + new_scale * value[d];
+            }
+        } else {
+            const uint16_t* value = pool.value_bf16(page, static_cast<size_t>(local)) +
+                static_cast<size_t>(kv_head) * head_dim;
+            for (; d + 8 <= head_dim; d += 8) {
+                __m256 acc_val = _mm256_loadu_ps(accumulator + d);
+                __m128i raw = _mm_loadu_si128(reinterpret_cast<const __m128i*>(value + d));
+                __m256 val_val = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(raw), 16));
+                acc_val = _mm256_mul_ps(acc_val, old_scale_vec);
+                acc_val = _mm256_fmadd_ps(val_val, new_scale_vec, acc_val);
+                _mm256_storeu_ps(accumulator + d, acc_val);
+            }
+            for (; d < head_dim; ++d) {
+                accumulator[d] = accumulator[d] * old_scale + new_scale * bf16_bits_to_float(value[d]);
+            }
+        }
+        state.maximum = new_max;
+    }
+}
+#endif
+
 void update_online(const float* query, int kv_head, int head_dim, float scale,
                    const CpuKvPagePool& pool, CpuKvPageId page,
                    int token_begin, int token_end, float* accumulator,
                    PartialAttention& state) {
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+    if (g_has_avx2_fma) {
+        update_online_avx2(query, kv_head, head_dim, scale, pool, page,
+                           token_begin, token_end, accumulator, state);
+        return;
+    }
+#endif
+
     for (int local = token_begin; local < token_end; ++local) {
         float dot = 0.0f;
         if (pool.mode() == CpuKvCacheMode::Fp32) {
