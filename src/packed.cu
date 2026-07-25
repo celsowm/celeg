@@ -847,7 +847,7 @@ struct PackedDecodeExecutorImpl {
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
                        rows, shape_.hidden, shape_.norm_eps,
                        stream.get());
-        linear(normed.data(), *reference.embedding(), logits.data(), rows,
+        linear(normed.data(), *reference.logits_weight(), logits.data(), rows,
                shape_.vocab_size, shape_.hidden);
         launch_scatter_bf16_rows(
             logits.data(), d_logits.data(), rows, shape_.vocab_size,
@@ -913,7 +913,7 @@ struct PackedDecodeExecutorImpl {
             launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
                            rows, shape_.hidden, shape_.norm_eps,
                            stream.get());
-            linear(normed.data(), *reference.embedding(), logits.data(), rows,
+            linear(normed.data(), *reference.logits_weight(), logits.data(), rows,
                    shape_.vocab_size, shape_.hidden);
             launch_scatter_bf16_rows(
                 logits.data(), d_logits.data(), rows, shape_.vocab_size,

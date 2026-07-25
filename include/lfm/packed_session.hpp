@@ -79,6 +79,7 @@ public:
     // checkpoint).
     virtual IWeightLayout& weight_layout() = 0;
     virtual const LinearWeight* embedding() const = 0;
+    virtual const LinearWeight* logits_weight() const = 0;
     virtual const __nv_bfloat16* final_norm() const = 0;
     virtual const __nv_bfloat16* rope_cos() const = 0;
     virtual const __nv_bfloat16* rope_sin() const = 0;
