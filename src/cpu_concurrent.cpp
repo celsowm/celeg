@@ -173,7 +173,7 @@ struct CpuConcurrentEngine::Impl {
             request.prompt_offset != request.prompt.size()) return;
         try {
             request.prefix_inserted = prefix_cache->insert(
-                request.prompt, request.session->export_prefix_snapshot());
+                request.prompt, request.session->persistence().export_prefix_snapshot());
             sync_prefix_metrics_locked();
         } catch (const std::exception& error) {
             last_error_text = std::string("CPU prefix cache insert: ") + error.what();
@@ -182,7 +182,7 @@ struct CpuConcurrentEngine::Impl {
 
     void record_attention_parallel_locked(Request& request) {
         if (!request.session) return;
-        const uint64_t current = request.session->attention_parallel_calls();
+        const uint64_t current = request.session->diagnostics().attention_parallel_calls();
         if (current >= request.attention_parallel_observed) {
             metrics.attention_parallel_calls +=
                 current - request.attention_parallel_observed;
@@ -211,13 +211,13 @@ struct CpuConcurrentEngine::Impl {
             try {
                 request->numa_node = choose_numa_node_locked();
                 request->session = base_model.clone_session_on_node(request->numa_node);
-                request->session->set_generation_config(request->options.generation);
+                request->session->session().set_generation_config(request->options.generation);
                 request->status = CpuRequestStatus::Prefilling;
                 if (prefix_cache) {
                     if (auto match = prefix_cache->acquire(
                             request->prompt, request->numa_node)) {
                         const bool exact = match->matched_tokens == request->prompt.size();
-                        request->session->restore_prefix_snapshot(
+                        request->session->persistence().restore_prefix_snapshot(
                             std::move(match->snapshot), exact);
                         request->prompt_offset = match->matched_tokens;
                         request->status = exact ? CpuRequestStatus::Decoding
@@ -533,7 +533,7 @@ CpuRequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
         throw std::invalid_argument("CPU request exceeds configured context");
     }
     for (int32_t token : prompt) {
-        if (token < 0 || token >= impl_->base_model.vocab_size()) {
+        if (token < 0 || token >= impl_->base_model.diagnostics().vocab_size()) {
             throw std::invalid_argument("CPU request token out of range");
         }
     }
@@ -629,7 +629,7 @@ CpuConcurrentMetrics CpuConcurrentEngine::metrics() const {
 }
 
 std::string CpuConcurrentEngine::backend_description() const {
-    return impl_->base_model.backend_description() + " continuous-batching prefix-radix numa-aware";
+    return impl_->base_model.diagnostics().backend_description() + " continuous-batching prefix-radix numa-aware";
 }
 
 std::string CpuConcurrentEngine::last_error() const {

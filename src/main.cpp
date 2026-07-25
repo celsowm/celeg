@@ -446,25 +446,25 @@ int main(int argc, char** argv) {
         lfm::LfmModel engine(
             safetensors_path, args.context,
             model_options, generation);
-        if (args.memory_report) print_memory_stats(engine.memory_stats());
+        if (args.memory_report) print_memory_stats(engine.diagnostics().memory_stats());
 
         if (!args.load_session.empty()) {
-            engine.load_session(args.load_session);
-            if (engine.position() + args.max_new_tokens > args.context) {
+            engine.persistence().load_session(args.load_session);
+            if (engine.session().position() + args.max_new_tokens > args.context) {
                 throw std::runtime_error("loaded session plus output exceeds --context");
             }
         } else {
-            engine.prefill(input);
+            engine.session().prefill(input);
         }
         if (args.benchmark_decode > 0) {
-            const lfm::RuntimeMetrics runtime = engine.runtime_metrics();
+            const lfm::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
             const double prefill_ms = runtime.last_prefill_ms;
             const double prefill_tps = runtime.prefill_tokens_per_second();
             std::cerr << std::fixed << std::setprecision(3)
                       << "benchmark.prefill_tokens=" << runtime.prefill_tokens << '\n'
                       << "benchmark.prefill_ms=" << prefill_ms << '\n'
                       << "benchmark.prefill_tokens_per_second=" << prefill_tps << '\n';
-            const lfm::DecodeBenchmark benchmark = engine.benchmark_decode(
+            const lfm::DecodeBenchmark benchmark = engine.diagnostics().benchmark_decode(
                 args.benchmark_warmup, args.benchmark_decode);
             std::cerr << "benchmark.decode_warmup=" << benchmark.warmup_steps << '\n'
                       << "benchmark.decode_tokens=" << benchmark.measured_steps << '\n'
@@ -475,7 +475,7 @@ int main(int argc, char** argv) {
                       << benchmark.tokens_per_second() << '\n';
 
             const lfm::LfmDiagnostics::ExpertOffloadStats off =
-                engine.expert_offload_stats();
+                engine.diagnostics().expert_offload_stats();
             if (off.hit_rate >= 0.0) {
                 std::cerr << "expert_offload.experts_per_layer="
                           << off.experts_per_layer << '\n'
@@ -489,7 +489,7 @@ int main(int argc, char** argv) {
         }
 
         if (!args.dump_logits.empty() || args.print_top > 0) {
-            const std::vector<float> logits = engine.copy_logits();
+            const std::vector<float> logits = engine.diagnostics().copy_logits();
             if (!args.dump_logits.empty()) dump_logits_file(args.dump_logits, logits);
             if (args.print_top > 0) print_top_logits(logits, args.print_top);
         }
@@ -497,15 +497,15 @@ int main(int argc, char** argv) {
         std::vector<int32_t> generated;
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
         for (int i = 0; i < args.max_new_tokens; ++i) {
-            const int32_t next = engine.decode();
+            const int32_t next = engine.session().decode();
             if (next == tokenizer.eos_id()) break;
             generated.push_back(next);
             std::cout << tokenizer.decode({next}, true) << std::flush;
         }
         std::cout << '\n';
-        if (!args.save_session.empty()) engine.save_session(args.save_session);
+        if (!args.save_session.empty()) engine.persistence().save_session(args.save_session);
         if (args.runtime_metrics) {
-            const lfm::RuntimeMetrics runtime = engine.runtime_metrics();
+            const lfm::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
             std::cerr << std::fixed << std::setprecision(3)
                       << "runtime.prefill_tokens=" << runtime.prefill_tokens << '\n'
                       << "runtime.prefill_ms=" << runtime.last_prefill_ms << '\n'

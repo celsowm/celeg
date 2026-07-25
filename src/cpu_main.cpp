@@ -181,10 +181,10 @@ int main(int argc, char** argv) {
         generation.seed = args.seed;
         lfm::CpuModel engine((model / "model.safetensors").string(), args.context,
                              options, generation);
-        std::cerr << "backend=" << engine.backend_description() << '\n';
-        if (!engine.pack_path().empty()) std::cerr << "cpu.pack_path=" << engine.pack_path() << '\n';
+        std::cerr << "backend=" << engine.diagnostics().backend_description() << '\n';
+        if (!engine.diagnostics().pack_path().empty()) std::cerr << "cpu.pack_path=" << engine.diagnostics().pack_path() << '\n';
         if (args.memory_report) {
-            const auto stats = engine.memory_stats();
+            const auto stats = engine.diagnostics().memory_stats();
             std::cerr << "memory.weights=" << bytes(stats.weights) << '\n'
                       << "memory.kv_cache=" << bytes(stats.kv_cache) << '\n'
                       << "memory.conv_state=" << bytes(stats.conv_state) << '\n'
@@ -193,17 +193,17 @@ int main(int argc, char** argv) {
                       << "memory.kv_pages_total=" << stats.kv_pages_total << '\n'
                       << "memory.total=" << bytes(stats.total()) << '\n';
         }
-        engine.prefill(input);
+        engine.session().prefill(input);
         std::string pending;
         for (int i = 0; i < args.max_new_tokens; ++i) {
-            const int32_t token = engine.decode();
+            const int32_t token = engine.session().decode();
             if (token == config.eos_token_id) break;
             pending += tokenizer.decode({token}, true);
             std::cout << pending << std::flush;
             pending.clear();
         }
         std::cout << '\n';
-        const lfm::RuntimeMetrics metrics = engine.runtime_metrics();
+        const lfm::RuntimeMetrics metrics = engine.diagnostics().runtime_metrics();
         std::cerr << std::fixed << std::setprecision(3)
                   << "runtime.prefill_tokens=" << metrics.prefill_tokens << '\n'
                   << "runtime.prefill_ms=" << metrics.last_prefill_ms << '\n'

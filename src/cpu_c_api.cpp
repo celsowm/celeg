@@ -236,8 +236,8 @@ lfm25_cpu_model* lfm25_cpu_model_create(
         lfm::GenerationConfig generation = convert_generation(gen_source);
         handle->value = std::make_unique<lfm::CpuModel>(
             path, source.max_context, options, generation);
-        handle->description = handle->value->backend_description();
-        handle->pack_path = handle->value->pack_path().string();
+        handle->description = handle->value->diagnostics().backend_description();
+        handle->pack_path = handle->value->diagnostics().pack_path().string();
         return handle.release();
     } catch (const std::exception& error) {
         global_text = error.what();
@@ -250,17 +250,17 @@ void lfm25_cpu_model_destroy(lfm25_cpu_model* model) { delete model; }
 lfm25_cpu_status lfm25_cpu_model_prefill(lfm25_cpu_model* model,
                                          const int32_t* tokens, size_t count) {
     if (!tokens || count == 0) return LFM25_CPU_STATUS_INVALID_ARGUMENT;
-    return protect(model, [&] { model->value->prefill(std::vector<int32_t>(tokens, tokens + count)); });
+    return protect(model, [&] { model->value->session().prefill(std::vector<int32_t>(tokens, tokens + count)); });
 }
 lfm25_cpu_status lfm25_cpu_model_decode(lfm25_cpu_model* model, int32_t* token) {
     if (!token) return LFM25_CPU_STATUS_INVALID_ARGUMENT;
-    return protect(model, [&] { *token = model->value->decode(); });
+    return protect(model, [&] { *token = model->value->session().decode(); });
 }
 lfm25_cpu_status lfm25_cpu_model_copy_logits(lfm25_cpu_model* model, float* output,
                                               size_t capacity, size_t* required) {
     if (!model || !required) return LFM25_CPU_STATUS_INVALID_ARGUMENT;
     try {
-        const std::vector<float> logits = model->value->copy_logits();
+        const std::vector<float> logits = model->value->diagnostics().copy_logits();
         *required = logits.size();
         if (!output || capacity < logits.size()) return LFM25_CPU_STATUS_BUFFER_TOO_SMALL;
         std::copy(logits.begin(), logits.end(), output);
@@ -275,7 +275,7 @@ lfm25_cpu_status lfm25_cpu_model_get_metrics(lfm25_cpu_model* model,
                                               lfm25_cpu_runtime_metrics_v1* out) {
     if (!out || out->struct_size < sizeof(*out)) return LFM25_CPU_STATUS_INVALID_ARGUMENT;
     return protect(model, [&] {
-        const auto m = model->value->runtime_metrics();
+        const auto m = model->value->diagnostics().runtime_metrics();
         out->prefill_ms = m.last_prefill_ms;
         out->prefill_tokens = m.prefill_tokens;
         out->prefill_tokens_per_second = m.prefill_tokens_per_second();
@@ -288,7 +288,7 @@ lfm25_cpu_status lfm25_cpu_model_get_memory_stats(lfm25_cpu_model* model,
                                                    lfm25_cpu_memory_stats_v2* out) {
     if (!out || out->struct_size < sizeof(*out)) return LFM25_CPU_STATUS_INVALID_ARGUMENT;
     return protect(model, [&] {
-        const auto s = model->value->memory_stats();
+        const auto s = model->value->diagnostics().memory_stats();
         out->weights = s.weights; out->kv_cache = s.kv_cache;
         out->conv_state = s.conv_state; out->activations = s.activations;
         out->total = s.total();
@@ -299,7 +299,7 @@ lfm25_cpu_status lfm25_cpu_model_get_memory_stats(lfm25_cpu_model* model,
 lfm25_cpu_status lfm25_cpu_model_vocab_size(const lfm25_cpu_model* model,
                                              int32_t* vocab_size) {
     if (!model || !model->value || !vocab_size) return LFM25_CPU_STATUS_INVALID_ARGUMENT;
-    *vocab_size = model->value->vocab_size();
+    *vocab_size = model->value->diagnostics().vocab_size();
     return LFM25_CPU_STATUS_OK;
 }
 const char* lfm25_cpu_model_backend_description(lfm25_cpu_model* model) {

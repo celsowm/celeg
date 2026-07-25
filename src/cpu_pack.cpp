@@ -25,9 +25,9 @@ int main(int argc, char** argv) {
         options.threads = 1;
         lfm::GenerationConfig generation;
         lfm::CpuModel model(argv[1], 1, options, generation);
-        std::cout << "backend=" << model.backend_description() << '\n'
-                  << "pack_path=" << model.pack_path() << '\n'
-                  << "cache_status=" << (model.loaded_from_pack() ? "hit" : "created") << '\n';
+        std::cout << "backend=" << model.diagnostics().backend_description() << '\n'
+                  << "pack_path=" << model.diagnostics().pack_path() << '\n'
+                  << "cache_status=" << (model.diagnostics().loaded_from_pack() ? "hit" : "created") << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
