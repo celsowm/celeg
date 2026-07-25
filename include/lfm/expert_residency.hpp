@@ -99,6 +99,10 @@ public:
     void promote(int expert, int slot, cudaStream_t stream,
                  float score = -1.0e30f);
 
+    void promote(int expert, int slot, const __nv_bfloat16* gate_up_src,
+                 const __nv_bfloat16* down_src, cudaStream_t stream,
+                 float score = -1.0e30f);
+
     // Ensures `expert` is GPU-resident: if already cached, just refreshes its
     // LRU recency; otherwise promotes it into the lowest-score slot. `score` is
     // the routing likelihood of this expert (the router's per-expert score for
@@ -106,6 +110,10 @@ public:
     // pass the real score so the resident set converges to the highest-likelihood
     // experts. Returns true when a host->device promotion was performed.
     bool ensure_resident(int expert, cudaStream_t stream, float score = -1.0e30f);
+
+    bool ensure_resident(int expert, const __nv_bfloat16* gate_up_src,
+                         const __nv_bfloat16* down_src, cudaStream_t stream,
+                         float score = -1.0e30f);
 
     // Speculatively promotes up to `n` of the most-recently-used *not-yet-
     // resident* experts (ranked by last access tick) so they are GPU-resident
@@ -154,6 +162,9 @@ public:
     // Device pointer tables for the MoE FFN kernel.
     const __nv_bfloat16* const* gate_up_ptrs() const { return gate_up_ptrs_dev_.data(); }
     const __nv_bfloat16* const* down_ptrs() const { return down_ptrs_dev_.data(); }
+
+    const __nv_bfloat16* expert_gate_up_dev(int expert) const;
+    const __nv_bfloat16* expert_down_dev(int expert) const;
 
     // Device-side residency check: reads sel_dev and expert_slot_dev_ on the
     // GPU, outputs a compact list of cold experts that need promotion.
@@ -231,10 +242,11 @@ private:
 
     // Device-side residency check state.
     DeviceBuffer<int> expert_slot_dev_;   // [E] mirror of expert_slot_
+    DeviceBuffer<int> cold_flags_dev_;    // [E] temporary flags for deduplication
     DeviceBuffer<int> cold_list_dev_;     // [E] output: cold expert indices
     DeviceBuffer<int> cold_count_dev_;    // [1] output: number of cold experts
 
-    void sync_expert_slot_to_device();
+    void sync_expert_slot_to_device(cudaStream_t stream = nullptr);
 };
 
 } // namespace lfm

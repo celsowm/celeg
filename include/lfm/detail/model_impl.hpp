@@ -231,6 +231,8 @@ struct LfmModel::Impl : public IPackedSession {
     // ---- MoE feed-forward scratch (prefill path, rows tokens) ----
     DeviceBuffer<float> moe_pf_hidden_float_;
     DeviceBuffer<int> moe_pf_sel_;
+    DeviceBuffer<int> moe_pf_sel_masked_;
+    DeviceBuffer<bool> expert_active_dev_;
     DeviceBuffer<float> moe_pf_routing_w_;
     DeviceBuffer<float> moe_pf_router_scratch_;
     DeviceBuffer<float> moe_pf_output_accum_;  // [rows * hidden] FP32 accumulator
@@ -250,7 +252,8 @@ struct LfmModel::Impl : public IPackedSession {
     HostExpertStore host_expert_store_;
     // Per-model-layer GPU expert cache. Empty unique_ptr for non-offloaded /
     // non-MoE layers. Indexed by model layer index.
-    std::vector<std::unique_ptr<ExpertLayerCache>> expert_caches_;
+    std::vector<ExpertLayerCache*> expert_caches_;
+    std::vector<std::vector<ExpertLocation>> expert_catalog_;
     // Dedicated stream for host->device expert promotions so transfers overlap
     // compute. Created only when offload is enabled.
     std::unique_ptr<CudaStream> expert_transfer_stream_;

@@ -4,6 +4,21 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <cstring>
+#include <fstream>
+#include <filesystem>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <fileapi.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace lfm {
 
@@ -148,8 +163,12 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
     plan.host_experts_per_layer = shape.num_experts - slots_per_layer;
     // Prefetch depth cannot exceed the experts that are actually host-resident
     // (no point prefetching what is already cached).
-    plan.prefetch_experts = std::max(
-        0, std::min(options.prefetch_experts, plan.host_experts_per_layer));
+    if (options.backing == ExpertBackingMode::DiskCached) {
+        plan.prefetch_experts = 0;
+    } else {
+        plan.prefetch_experts = std::max(
+            0, std::min(options.prefetch_experts, plan.host_experts_per_layer));
+    }
     plan.gpu_expert_cache_bytes =
         static_cast<std::size_t>(slots_per_layer) *
         static_cast<std::size_t>(plan.moe_layers) * plan.bytes_per_expert;
@@ -182,6 +201,221 @@ std::string ExpertOffloadPlan::report() const {
         << "  cache policy:             " << policy_name(policy) << '\n'
         << "  prefetch depth:           " << prefetch_experts << '\n';
     return out.str();
+}
+
+// ---------------------------------------------------------------------------
+// ExpertSidecar Implementation
+// ---------------------------------------------------------------------------
+
+struct SidecarHeader {
+    char magic[8];
+    std::uint32_t num_layers;
+    std::uint32_t num_experts;
+    std::uint64_t moe_intermediate;
+    std::uint64_t hidden;
+    std::uint64_t reserved[4];
+};
+
+ExpertSidecar::~ExpertSidecar() {
+#if defined(_WIN32)
+    if (file_handle_) {
+        ::CloseHandle(file_handle_);
+        file_handle_ = nullptr;
+    }
+#else
+    if (fd_ >= 0) {
+        ::close(fd_);
+        fd_ = -1;
+    }
+#endif
+}
+
+bool ExpertSidecar::load(const std::string& path, int expected_layers, int expected_experts,
+                         std::uint64_t expected_inter, std::uint64_t expected_hidden) {
+#if defined(_WIN32)
+    file_handle_ = ::CreateFileA(
+        path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file_handle_ == INVALID_HANDLE_VALUE) {
+        file_handle_ = nullptr;
+        return false;
+    }
+    LARGE_INTEGER size{};
+    if (::GetFileSizeEx(file_handle_, &size) == 0) {
+        ::CloseHandle(file_handle_);
+        file_handle_ = nullptr;
+        return false;
+    }
+    file_size_ = static_cast<std::uint64_t>(size.QuadPart);
+#else
+    fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd_ < 0) {
+        return false;
+    }
+    struct stat st {};
+    if (::fstat(fd_, &st) != 0) {
+        ::close(fd_);
+        fd_ = -1;
+        return false;
+    }
+    file_size_ = static_cast<std::uint64_t>(st.st_size);
+#endif
+
+    if (file_size_ < sizeof(SidecarHeader)) {
+        return false;
+    }
+
+    // Read header using positioned read
+    SidecarHeader header{};
+#if defined(_WIN32)
+    OVERLAPPED overlapped = {};
+    DWORD bytes_read = 0;
+    if (!::ReadFile(file_handle_, &header, sizeof(header), &bytes_read, &overlapped) || bytes_read != sizeof(header)) {
+        return false;
+    }
+#else
+    if (::pread(fd_, &header, sizeof(header), 0) != sizeof(header)) {
+        return false;
+    }
+#endif
+
+    // Validate magic, layers, experts, and shapes
+    if (std::memcmp(header.magic, "LFMSIDE1", 8) != 0) {
+        return false;
+    }
+    if (header.num_layers != static_cast<std::uint32_t>(expected_layers) ||
+        header.num_experts != static_cast<std::uint32_t>(expected_experts) ||
+        header.moe_intermediate != expected_inter ||
+        header.hidden != expected_hidden) {
+        return false;
+    }
+
+    // Read index
+    index_.resize(expected_layers, std::vector<SidecarExpertIndex>(expected_experts));
+    std::uint64_t index_offset = sizeof(SidecarHeader);
+    for (int l = 0; l < expected_layers; ++l) {
+        std::size_t layer_index_bytes = expected_experts * sizeof(SidecarExpertIndex);
+#if defined(_WIN32)
+        overlapped.Offset = static_cast<DWORD>(index_offset & 0xFFFFFFFF);
+        overlapped.OffsetHigh = static_cast<DWORD>((index_offset >> 32) & 0xFFFFFFFF);
+        if (!::ReadFile(file_handle_, index_[l].data(), static_cast<DWORD>(layer_index_bytes), &bytes_read, &overlapped) ||
+            bytes_read != layer_index_bytes) {
+            return false;
+        }
+#else
+        if (static_cast<std::size_t>(::pread(fd_, index_[l].data(), layer_index_bytes, index_offset)) != layer_index_bytes) {
+            return false;
+        }
+#endif
+        index_offset += layer_index_bytes;
+    }
+
+    return true;
+}
+
+void ExpertSidecar::read_expert(int layer_idx, int expert_id, std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) const {
+    if (!valid()) {
+        throw std::runtime_error("Sidecar is not loaded");
+    }
+    if (layer_idx < 0 || layer_idx >= static_cast<int>(index_.size()) ||
+        expert_id < 0 || expert_id >= static_cast<int>(index_[layer_idx].size())) {
+        throw std::out_of_range("Sidecar: layer or expert index out of range");
+    }
+
+    const SidecarExpertIndex& idx = index_[layer_idx][expert_id];
+    if (gu_dest.size() != idx.gate_up_bytes || dn_dest.size() != idx.down_bytes) {
+        throw std::invalid_argument("Sidecar read: destination sizes do not match packed sizes");
+    }
+
+#if defined(_WIN32)
+    // Read gate_up
+    OVERLAPPED overlapped = {};
+    overlapped.Offset = static_cast<DWORD>(idx.gate_up_offset & 0xFFFFFFFF);
+    overlapped.OffsetHigh = static_cast<DWORD>((idx.gate_up_offset >> 32) & 0xFFFFFFFF);
+    DWORD bytes_read = 0;
+    if (!::ReadFile(file_handle_, gu_dest.data(), static_cast<DWORD>(idx.gate_up_bytes), &bytes_read, &overlapped) ||
+        bytes_read != idx.gate_up_bytes) {
+        throw std::runtime_error("Sidecar ReadFile failed for gate_up");
+    }
+
+    // Read down
+    overlapped.Offset = static_cast<DWORD>(idx.down_offset & 0xFFFFFFFF);
+    overlapped.OffsetHigh = static_cast<DWORD>((idx.down_offset >> 32) & 0xFFFFFFFF);
+    if (!::ReadFile(file_handle_, dn_dest.data(), static_cast<DWORD>(idx.down_bytes), &bytes_read, &overlapped) ||
+        bytes_read != idx.down_bytes) {
+        throw std::runtime_error("Sidecar ReadFile failed for down");
+    }
+#else
+    // Read gate_up
+    if (static_cast<std::size_t>(::pread(fd_, gu_dest.data(), idx.gate_up_bytes, idx.gate_up_offset)) != idx.gate_up_bytes) {
+        throw std::runtime_error("Sidecar pread failed for gate_up");
+    }
+    // Read down
+    if (static_cast<std::size_t>(::pread(fd_, dn_dest.data(), idx.down_bytes, idx.down_offset)) != idx.down_bytes) {
+        throw std::runtime_error("Sidecar pread failed for down");
+    }
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// ModelUsageStats Implementation
+// ---------------------------------------------------------------------------
+
+bool ModelUsageStats::load(const std::string& path, int expected_layers, int expected_experts) {
+    std::ifstream in(path);
+    if (!in) {
+        return false;
+    }
+    int num_layers = 0;
+    int num_experts = 0;
+    if (!(in >> num_layers >> num_experts)) {
+        return false;
+    }
+    if (num_layers != expected_layers || num_experts != expected_experts) {
+        return false;
+    }
+
+    layers.assign(static_cast<size_t>(num_layers), std::vector<ExpertUsageEntry>(static_cast<size_t>(num_experts)));
+    int l = 0, e = 0;
+    while (in >> l >> e) {
+        if (l < 0 || l >= num_layers || e < 0 || e >= num_experts) {
+            return false;
+        }
+        auto& entry = layers[static_cast<size_t>(l)][static_cast<size_t>(e)];
+        if (!(in >> entry.selection_count >> entry.recent_heat >> entry.last_used_sequence
+                 >> entry.ram_cache_hits >> entry.gpu_cache_hits >> entry.ssd_misses)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void ModelUsageStats::save(const std::string& path) const {
+    if (layers.empty()) return;
+    std::string tmp_path = path + ".tmp";
+    std::ofstream out(tmp_path);
+    if (!out) {
+        return;
+    }
+
+    out << layers.size() << " " << layers[0].size() << "\n";
+    for (size_t l = 0; l < layers.size(); ++l) {
+        for (size_t e = 0; e < layers[l].size(); ++e) {
+            const auto& entry = layers[l][e];
+            out << l << " " << e << " "
+                << entry.selection_count << " "
+                << entry.recent_heat << " "
+                << entry.last_used_sequence << " "
+                << entry.ram_cache_hits << " "
+                << entry.gpu_cache_hits << " "
+                << entry.ssd_misses << "\n";
+        }
+    }
+    out.close();
+
+    // Atomic rename
+    std::error_code ec;
+    std::filesystem::rename(tmp_path, path, ec);
 }
 
 } // namespace lfm
