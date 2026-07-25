@@ -282,7 +282,7 @@ bool ConcurrentEngine::Impl::admit_requests_locked() {
                     safetensors_path_, max_context_, lane_options,
                     request.options.generation);
             } else {
-                lane->model->set_generation_config(request.options.generation);
+                lane->model->session().set_generation_config(request.options.generation);
             }
         } catch (const std::exception& error) {
             paged_kv_->release(pages);
@@ -297,13 +297,13 @@ bool ConcurrentEngine::Impl::admit_requests_locked() {
         request.lane_index = lane->index;
         lane->request_id = id;
         try {
-            lane->model->release_local_kv_cache();
-            lane->model->reset(false);
+            lane->model->session().release_local_kv_cache();
+            lane->model->session().reset(false);
             if (prefix_hit) {
                 if (!prefix.state) {
                     throw std::runtime_error("prefix cache hit has no session state");
                 }
-                lane->model->restore_prefix_state(*prefix.state);
+                lane->model->persistence().restore_prefix_state(*prefix.state);
                 request.prefill_offset = prefix.matched_tokens;
                 request.status = request.prefill_offset == request.prompt.size()
                     ? RequestStatus::Decoding : RequestStatus::Prefill;
@@ -350,7 +350,7 @@ void ConcurrentEngine::Impl::finish_request_locked(Request& request,
 void ConcurrentEngine::Impl::complete_prefill_locked(Request& request, Lane& lane) {
     request.paged_ready = packed_executor_ != nullptr;
     if (packed_executor_ && prefix_cache_->enabled()) {
-        PrefixState state = lane.model->export_prefix_state();
+        PrefixState state = lane.model->persistence().export_prefix_state();
         (void)prefix_cache_->insert_or_update(
             request.prompt, request.pages, std::move(state));
     }
@@ -476,12 +476,12 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
                 page_table = request.pages;
             }
             if (packed_executor_) {
-                item.lane->model->prefill_chunk_paged(
+                item.lane->model->session().prefill_chunk_paged(
                     chunk, item.first, item.final, *paged_kv_, page_table);
             } else if (item.first && item.final) {
-                item.lane->model->prefill(chunk);
+                item.lane->model->session().prefill(chunk);
             } else {
-                item.lane->model->prefill_chunk(chunk, item.first, item.final);
+                item.lane->model->session().prefill_chunk(chunk, item.first, item.final);
             }
             std::lock_guard<std::mutex> lock(mutex_);
             Request& request = registry_.at(item.id);
@@ -609,7 +609,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
         static_cast<size_t>(engine_options_.packed_min_batch)) {
         bool can_fallback = true;
         for (const Work& item : packed_work) {
-            if (!item.lane->model->local_kv_cache_available()) {
+            if (!item.lane->model->session().local_kv_cache_available()) {
                 can_fallback = false;
                 break;
             }
@@ -660,7 +660,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
             // the lane path with null cache pointers.
             bool can_fallback = true;
             for (const Work& item : packed_work) {
-                if (!item.lane->model->local_kv_cache_available()) {
+                if (!item.lane->model->session().local_kv_cache_available()) {
                     can_fallback = false;
                     break;
                 }
@@ -695,7 +695,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     launched.reserve(lane_work.size());
     for (const Work& item : lane_work) {
         try {
-            item.lane->model->decode_async_begin();
+            item.lane->model->session().decode_async_begin();
             launched.push_back(item);
         } catch (const std::exception& error) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -705,7 +705,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     }
     for (const Work& item : launched) {
         try {
-            const int32_t token = item.lane->model->decode_async_finish();
+            const int32_t token = item.lane->model->session().decode_async_finish();
             accept_token(item, token, false);
         } catch (const std::exception& error) {
             std::lock_guard<std::mutex> lock(mutex_);

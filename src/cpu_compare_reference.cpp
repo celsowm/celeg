@@ -61,11 +61,11 @@ int main(int argc, char** argv) {
         generation.top_k = 1;
         lfm::CpuModel model(argv[1], static_cast<int>(tokens.size() + 8),
                             options, generation);
-        if (expected.size() != model.copy_logits().size()) {
+        if (expected.size() != model.diagnostics().copy_logits().size()) {
             throw std::runtime_error("reference logits have the wrong vocabulary size");
         }
-        model.prefill(tokens);
-        const auto actual = model.copy_logits();
+        model.session().prefill(tokens);
+        const auto actual = model.diagnostics().copy_logits();
         double absolute_sum = 0.0;
         double squared_sum = 0.0;
         double dot = 0.0;

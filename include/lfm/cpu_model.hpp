@@ -45,8 +45,59 @@ class CpuPackedExecutor;
 class CpuConcurrentEngine;
 class CpuKvPagePool;
 struct CpuPrefixSnapshot;
+class CpuModel;
+
+class CpuInferenceSession {
+public:
+    void reset();
+    void prefill(const std::vector<int32_t>& tokens);
+    int32_t decode();
+    void set_generation_config(GenerationConfig generation);
+    int position() const;
+    bool ready_for_decode() const;
+
+private:
+    friend class CpuModel;
+    explicit CpuInferenceSession(CpuModel& owner) : owner_(&owner) {}
+    CpuModel* owner_;
+};
+
+class CpuDiagnostics {
+public:
+    std::vector<float> copy_logits() const;
+    RuntimeMetrics runtime_metrics() const;
+    void clear_runtime_metrics();
+    CpuModelMemoryStats memory_stats() const;
+    int vocab_size() const;
+    CpuIsa isa() const;
+    CpuKvCacheMode kv_cache_mode() const;
+    std::string backend_description() const;
+    const std::filesystem::path& pack_path() const;
+    bool loaded_from_pack() const;
+    uint64_t attention_parallel_calls() const;
+
+private:
+    friend class CpuModel;
+    explicit CpuDiagnostics(CpuModel& owner) : owner_(&owner) {}
+    CpuModel* owner_;
+};
+
+class CpuPersistence {
+public:
+    CpuPrefixSnapshot export_prefix_snapshot() const;
+    void restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
+                                 bool ready_for_decode);
+
+private:
+    friend class CpuModel;
+    explicit CpuPersistence(CpuModel& owner) : owner_(&owner) {}
+    CpuModel* owner_;
+};
 
 class CpuModel {
+    friend class CpuInferenceSession;
+    friend class CpuDiagnostics;
+    friend class CpuPersistence;
 public:
     CpuModel(const std::string& safetensors_path,
              int max_context = 4096,
@@ -59,41 +110,27 @@ public:
     CpuModel(CpuModel&&) noexcept;
     CpuModel& operator=(CpuModel&&) noexcept;
 
+    CpuInferenceSession& session() { return session_view_; }
+    const CpuInferenceSession& session() const { return session_view_; }
+    CpuDiagnostics& diagnostics() { return diagnostics_view_; }
+    const CpuDiagnostics& diagnostics() const { return diagnostics_view_; }
+    CpuPersistence& persistence() { return persistence_view_; }
+    const CpuPersistence& persistence() const { return persistence_view_; }
+
     // Creates a new mutable inference session that reuses the same immutable
     // packed weights and the same persistent CPU thread pool.
     std::unique_ptr<CpuModel> clone_session() const;
     std::unique_ptr<CpuModel> clone_session_on_node(int numa_node) const;
 
-    void reset();
-    void prefill(const std::vector<int32_t>& tokens);
-    int32_t decode();
-    void set_generation_config(GenerationConfig generation);
-
-    std::vector<float> copy_logits() const;
-    RuntimeMetrics runtime_metrics() const;
-    void clear_runtime_metrics();
-    CpuModelMemoryStats memory_stats() const;
-    int position() const;
-    int vocab_size() const;
-    bool ready_for_decode() const;
-    CpuIsa isa() const;
-    CpuKvCacheMode kv_cache_mode() const;
-    std::string backend_description() const;
-    const std::filesystem::path& pack_path() const;
-    bool loaded_from_pack() const;
-
-    // Serving integration. Snapshots own retained page references supplied by
-    // CpuPrefixCacheManager and are transferred into/out of a session.
-    CpuPrefixSnapshot export_prefix_snapshot() const;
-    void restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
-                                 bool ready_for_decode);
     std::vector<std::shared_ptr<CpuKvPagePool>> shared_kv_pools() const;
-    uint64_t attention_parallel_calls() const;
 
 private:
     struct Impl;
     explicit CpuModel(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
+    CpuInferenceSession session_view_;
+    CpuDiagnostics diagnostics_view_;
+    CpuPersistence persistence_view_;
 
     friend class CpuPackedExecutor;
     friend class CpuConcurrentEngine;

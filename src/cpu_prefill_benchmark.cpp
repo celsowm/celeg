@@ -39,11 +39,11 @@ int main(int argc, char** argv) {
         lfm::CpuModel runtime(model, static_cast<int>(token_count + 16),
                               options, generation);
         std::vector<int32_t> tokens(token_count, 1);
-        runtime.prefill(tokens);
-        const auto metrics = runtime.runtime_metrics();
-        const auto memory = runtime.memory_stats();
+        runtime.session().prefill(tokens);
+        const auto metrics = runtime.diagnostics().runtime_metrics();
+        const auto memory = runtime.diagnostics().memory_stats();
         std::cout << std::fixed << std::setprecision(3)
-                  << "backend=" << runtime.backend_description() << '\n'
+                  << "backend=" << runtime.diagnostics().backend_description() << '\n'
                   << "prefill.tokens=" << metrics.prefill_tokens << '\n'
                   << "prefill.ms=" << metrics.last_prefill_ms << '\n'
                   << "prefill.tokens_per_second="

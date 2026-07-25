@@ -192,7 +192,7 @@ const char* lfm25_last_error(const lfm25_model* model) {
 }
 
 lfm25_status lfm25_reset(lfm25_model* model) {
-    return protect(model, [&] { model->engine->reset(); });
+    return protect(model, [&] { model->engine->session().reset(); });
 }
 
 lfm25_status lfm25_prefill(
@@ -202,7 +202,7 @@ lfm25_status lfm25_prefill(
                     "prefill requires at least one token");
     }
     return protect(model, [&] {
-        model->engine->prefill(std::vector<int32_t>(tokens, tokens + token_count));
+        model->engine->session().prefill(std::vector<int32_t>(tokens, tokens + token_count));
     });
 }
 
@@ -211,7 +211,7 @@ lfm25_status lfm25_decode(lfm25_model* model, int32_t* token) {
         return fail(model, LFM25_STATUS_INVALID_ARGUMENT,
                     "decode output pointer is null");
     }
-    return protect(model, [&] { *token = model->engine->decode(); });
+    return protect(model, [&] { *token = model->engine->session().decode(); });
 }
 
 lfm25_status lfm25_position(const lfm25_model* model, int32_t* position) {
@@ -220,7 +220,7 @@ lfm25_status lfm25_position(const lfm25_model* model, int32_t* position) {
                     LFM25_STATUS_INVALID_ARGUMENT,
                     "position requires a valid model and output pointer");
     }
-    *position = model->engine->position();
+    *position = model->engine->session().position();
     return LFM25_STATUS_OK;
 }
 
@@ -230,7 +230,7 @@ lfm25_status lfm25_model_vocab_size(const lfm25_model* model, int32_t* vocab_siz
                     LFM25_STATUS_INVALID_ARGUMENT,
                     "vocab_size requires a valid model and output pointer");
     }
-    *vocab_size = model->engine->vocab_size();
+    *vocab_size = model->engine->diagnostics().vocab_size();
     return LFM25_STATUS_OK;
 }
 
@@ -239,13 +239,13 @@ lfm25_status lfm25_copy_logits(
     if (!model || !model->engine) {
         return fail(model, LFM25_STATUS_INVALID_ARGUMENT, "model handle is null");
     }
-    const int32_t vocab = model->engine->vocab_size();
+    const int32_t vocab = model->engine->diagnostics().vocab_size();
     if (!logits || logits_count < static_cast<size_t>(vocab)) {
         return fail(model, LFM25_STATUS_BUFFER_TOO_SMALL,
                     "logits buffer must contain at least vocab_size floats");
     }
     return protect(model, [&] {
-        const std::vector<float> values = model->engine->copy_logits();
+        const std::vector<float> values = model->engine->diagnostics().copy_logits();
         std::copy(values.begin(), values.end(), logits);
     });
 }
@@ -264,7 +264,7 @@ lfm25_status lfm25_generate(
     try {
         int32_t count = 0;
         for (; count < max_new_tokens; ++count) {
-            const int32_t token = model->engine->decode();
+            const int32_t token = model->engine->session().decode();
             if (token == eos_token) break;
             if (callback && callback(token, user_data) != 0) {
                 if (generated_tokens) *generated_tokens = count + 1;
@@ -284,12 +284,12 @@ lfm25_status lfm25_generate(
 
 lfm25_status lfm25_save_session(lfm25_model* model, const char* path) {
     if (!path) return fail(model, LFM25_STATUS_INVALID_ARGUMENT, "session path is null");
-    return protect(model, [&] { model->engine->save_session(path); });
+    return protect(model, [&] { model->engine->persistence().save_session(path); });
 }
 
 lfm25_status lfm25_load_session(lfm25_model* model, const char* path) {
     if (!path) return fail(model, LFM25_STATUS_INVALID_ARGUMENT, "session path is null");
-    return protect(model, [&] { model->engine->load_session(path); });
+    return protect(model, [&] { model->engine->persistence().load_session(path); });
 }
 
 lfm25_status lfm25_get_memory_stats(
@@ -299,7 +299,7 @@ lfm25_status lfm25_get_memory_stats(
         return fail(const_cast<lfm25_model*>(model), LFM25_STATUS_INVALID_ARGUMENT,
                     "invalid memory stats request");
     }
-    const lfm::ModelMemoryStats value = model->engine->memory_stats();
+    const lfm::ModelMemoryStats value = model->engine->diagnostics().memory_stats();
     stats->weights = value.weights;
     stats->kv_cache = value.kv_cache;
     stats->conv_state = value.conv_state;
@@ -319,7 +319,7 @@ lfm25_status lfm25_get_runtime_metrics(
         return fail(const_cast<lfm25_model*>(model), LFM25_STATUS_INVALID_ARGUMENT,
                     "invalid runtime metrics request");
     }
-    const lfm::RuntimeMetrics value = model->engine->runtime_metrics();
+    const lfm::RuntimeMetrics value = model->engine->diagnostics().runtime_metrics();
     metrics->last_prefill_ms = value.last_prefill_ms;
     metrics->prefill_tokens = value.prefill_tokens;
     metrics->prefill_tokens_per_second = value.prefill_tokens_per_second();

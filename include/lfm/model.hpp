@@ -54,6 +54,7 @@ public:
     RuntimeMetrics runtime_metrics() const;
     void clear_runtime_metrics();
     bool cuda_graph_ready() const;
+    int vocab_size() const;
 
     // MoE expert-offload residency stats (aggregate across all MoE layers):
     // GPU-resident experts per layer, host-resident experts per layer, and the
@@ -119,36 +120,6 @@ public:
     // PackedDecodeExecutorImpl is no longer required.
     IPackedSession& packed_session();
     const IPackedSession& packed_session() const;
-
-    // Compatibility forwarding API retained for existing C++ and C adapters.
-    void reset(bool allocate_local_kv = true);
-    void prefill(const std::vector<int32_t>& tokens);
-    void prefill_chunk(const std::vector<int32_t>& tokens, bool begin, bool finalize);
-    void prefill_chunk_paged(const std::vector<int32_t>& tokens, bool begin,
-                             bool finalize, PhysicalPagedKvCache& paged_kv,
-                             const std::vector<uint32_t>& page_table);
-    int32_t decode();
-    void decode_async_begin();
-    int32_t decode_async_finish();
-    void set_generation_config(GenerationConfig generation);
-    std::vector<float> copy_logits();
-    DecodeBenchmark benchmark_decode(int warmup_steps, int measured_steps);
-    ModelMemoryStats memory_stats() const;
-    LfmDiagnostics::ExpertOffloadStats expert_offload_stats() const;
-    RuntimeMetrics runtime_metrics() const;
-    void clear_runtime_metrics();
-    void save_session(const std::string& path);
-    void load_session(const std::string& path);
-    PrefixState export_prefix_state() const;
-    void restore_prefix_state(const PrefixState& state);
-    void release_local_kv_cache();
-    bool local_kv_cache_available() const;
-    SessionPhase phase() const;
-    bool ready_for_decode() const;
-    bool decode_pending() const;
-    int position() const;
-    int vocab_size() const;
-    bool cuda_graph_ready() const;
 
 private:
     struct Impl;

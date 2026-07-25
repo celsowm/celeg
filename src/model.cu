@@ -2041,54 +2041,8 @@ LfmModel::LfmModel(const std::string& safetensors_path,
 
 LfmModel::~LfmModel() = default;
 
-void LfmModel::reset(bool allocate_local_kv) { impl_->reset(allocate_local_kv); }
-void LfmModel::prefill(const std::vector<int32_t>& tokens) { impl_->prefill(tokens); }
-void LfmModel::prefill_chunk(const std::vector<int32_t>& tokens,
-                             bool begin, bool finalize) {
-    impl_->prefill_chunk(tokens, begin, finalize);
-}
-void LfmModel::prefill_chunk_paged(const std::vector<int32_t>& tokens,
-                                   bool begin, bool finalize,
-                                   PhysicalPagedKvCache& paged_kv,
-                                   const std::vector<uint32_t>& page_table) {
-    impl_->prefill_chunk_paged(tokens, begin, finalize, paged_kv, page_table);
-}
-int32_t LfmModel::decode() { return impl_->decode(); }
-void LfmModel::decode_async_begin() { impl_->decode_async_begin(); }
-int32_t LfmModel::decode_async_finish() { return impl_->decode_async_finish(); }
-void LfmModel::set_generation_config(GenerationConfig generation) {
-    impl_->set_generation_config(std::move(generation));
-}
-std::vector<float> LfmModel::copy_logits() { return impl_->copy_logits(); }
-DecodeBenchmark LfmModel::benchmark_decode(int warmup_steps, int measured_steps) {
-    return impl_->benchmark_decode(warmup_steps, measured_steps);
-}
-ModelMemoryStats LfmModel::memory_stats() const { return impl_->memory_stats(); }
-RuntimeMetrics LfmModel::runtime_metrics() const { return impl_->runtime_metrics(); }
-void LfmModel::clear_runtime_metrics() { impl_->clear_runtime_metrics(); }
-void LfmModel::save_session(const std::string& path) { impl_->save_session(path); }
-void LfmModel::load_session(const std::string& path) { impl_->load_session(path); }
-PrefixState LfmModel::export_prefix_state() const { return impl_->export_prefix_state(); }
-void LfmModel::restore_prefix_state(const PrefixState& state) {
-    impl_->restore_prefix_state(state);
-}
-void LfmModel::release_local_kv_cache() { impl_->release_local_kv_cache(); }
-bool LfmModel::local_kv_cache_available() const {
-    return impl_->local_kv_cache_available();
-}
-SessionPhase LfmModel::phase() const { return impl_->phase(); }
-bool LfmModel::ready_for_decode() const { return impl_->ready_for_decode(); }
-bool LfmModel::decode_pending() const { return impl_->decode_pending(); }
-int LfmModel::position() const { return impl_->position(); }
-int LfmModel::vocab_size() const { return impl_->shape_.vocab_size; }
-
 IPackedSession& LfmModel::packed_session() { return *impl_; }
 const IPackedSession& LfmModel::packed_session() const { return *impl_; }
-bool LfmModel::cuda_graph_ready() const { return impl_->cuda_graph_ready(); }
-
-LfmDiagnostics::ExpertOffloadStats LfmModel::expert_offload_stats() const {
-    return impl_->expert_offload_stats();
-}
 
 void LfmInferenceSession::reset(bool allocate_local_kv) {
     owner_->impl_->reset(allocate_local_kv);
@@ -2134,6 +2088,9 @@ int LfmInferenceSession::position() const { return owner_->impl_->position(); }
 
 std::vector<float> LfmDiagnostics::copy_logits() const {
     return owner_->impl_->copy_logits();
+}
+int LfmDiagnostics::vocab_size() const {
+    return owner_->impl_->shape_.vocab_size;
 }
 DecodeBenchmark LfmDiagnostics::benchmark_decode(int warmup_steps,
                                                   int measured_steps) {
