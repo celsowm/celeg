@@ -96,11 +96,11 @@ struct LfmModel::Impl : public IPackedSession {
     int32_t sampled_host_value() const { return sampled_host_.data()[0]; }
     void set_sampled_host_value(int32_t value) { sampled_host_.data()[0] = value; }
     IWeightLayout& weight_layout() { return *weight_layout_; }
-    const LinearWeight* embedding() const { return embedding_; }
+    const LinearWeight* embedding() const override { return embedding_; }
     // Weight used for the final logits projection. When the checkpoint ships a
     // separate (untied) lm_head, that is returned; otherwise the tied
     // embed_tokens table is shared.
-    const LinearWeight* logits_weight() const {
+    const LinearWeight* logits_weight() const override {
         return lm_head_ ? lm_head_ : embedding_;
     }
     bool tied_lm_head() const { return lm_head_ == nullptr; }
