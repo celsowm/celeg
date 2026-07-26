@@ -31,6 +31,7 @@ std::size_t align_up(std::size_t v) {
 //   cold_count_dev[out] = number of cold experts (atomic, initialized to 0)
 __global__ void resolve_residency_kernel(const int* sel_dev,
                                          const int* expert_slot_dev,
+                                         int* cold_flags_dev,
                                          int* cold_list_dev,
                                          int* cold_count_dev,
                                          int total) {
@@ -38,8 +39,10 @@ __global__ void resolve_residency_kernel(const int* sel_dev,
     if (idx >= total) return;
     const int e = sel_dev[idx];
     if (expert_slot_dev[e] < 0) {
-        const int pos = atomicAdd(cold_count_dev, 1);
-        cold_list_dev[pos] = e;
+        if (atomicCAS(&cold_flags_dev[e], 0, 1) == 0) {
+            const int pos = atomicAdd(cold_count_dev, 1);
+            cold_list_dev[pos] = e;
+        }
     }
 }
 
@@ -176,6 +179,7 @@ ExpertLayerCache::ExpertLayerCache(int num_experts, int capacity,
     LFM_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
                         static_cast<size_t>(num_experts) * sizeof(int),
                         cudaMemcpyHostToDevice));
+    cold_flags_dev_.reset(static_cast<size_t>(num_experts));
     cold_list_dev_.reset(static_cast<size_t>(num_experts));
     cold_count_dev_.reset(1);
 }
@@ -199,10 +203,16 @@ void ExpertLayerCache::set_host_sources(
     sync_expert_slot_to_device();
 }
 
-void ExpertLayerCache::sync_expert_slot_to_device() {
-    LFM_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
-                        static_cast<size_t>(num_experts_) * sizeof(int),
-                        cudaMemcpyHostToDevice));
+void ExpertLayerCache::sync_expert_slot_to_device(cudaStream_t stream) {
+    if (stream != nullptr) {
+        LFM_CUDA(cudaMemcpyAsync(expert_slot_dev_.data(), expert_slot_.data(),
+                                 static_cast<size_t>(num_experts_) * sizeof(int),
+                                 cudaMemcpyHostToDevice, stream));
+    } else {
+        LFM_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
+                            static_cast<size_t>(num_experts_) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    }
 }
 
 int ExpertLayerCache::resolve_on_device(
@@ -218,11 +228,15 @@ int ExpertLayerCache::resolve_on_device(
     LFM_CUDA(cudaMemcpyAsync(cold_count_dev_.data(), &zero, sizeof(int),
                              cudaMemcpyHostToDevice, stream));
 
+    // Clear cold flags
+    LFM_CUDA(cudaMemsetAsync(cold_flags_dev_.data(), 0,
+                             static_cast<size_t>(num_experts_) * sizeof(int), stream));
+
     // Launch the residency check kernel.
     const int block = 256;
     const int grid = (total + block - 1) / block;
     resolve_residency_kernel<<<grid, block, 0, stream>>>(
-        sel_dev, expert_slot_dev_.data(),
+        sel_dev, expert_slot_dev_.data(), cold_flags_dev_.data(),
         cold_list_dev_.data(), cold_count_dev_.data(), total);
 
     // Read back the cold count.
@@ -318,7 +332,43 @@ void ExpertLayerCache::promote(int expert, int slot, cudaStream_t stream,
     // Point the table at the slot only after the copies are ordered on-stream.
     publish_pointer(expert, s.gate_up.data(), s.down.data(), stream);
     // Keep device mirror in sync for the next resolve_on_device call.
-    sync_expert_slot_to_device();
+    sync_expert_slot_to_device(stream);
+}
+
+void ExpertLayerCache::promote(int expert, int slot, const __nv_bfloat16* gate_up_src,
+                                const __nv_bfloat16* down_src, cudaStream_t stream,
+                                float score) {
+    if (expert < 0 || expert >= num_experts_) {
+        throw std::invalid_argument("promote: expert out of range");
+    }
+    if (slot < 0 || slot >= capacity_) {
+        throw std::invalid_argument("promote: slot out of range");
+    }
+    if (gate_up_src == nullptr || down_src == nullptr) {
+        throw std::invalid_argument("promote: source pointer is null");
+    }
+    Slot& s = slots_[static_cast<size_t>(slot)];
+    // Evict the current occupant back to its host source.
+    if (s.expert >= 0 && s.expert != expert) {
+        expert_slot_[static_cast<size_t>(s.expert)] = -1;
+        publish_pointer(s.expert, gate_up_host_dev_[static_cast<size_t>(s.expert)],
+                        down_host_dev_[static_cast<size_t>(s.expert)], stream);
+    }
+    // Copy weights host -> cache slot.
+    LFM_CUDA(cudaMemcpyAsync(s.gate_up.data(),
+                             gate_up_src,
+                             gate_up_bytes_, cudaMemcpyDefault, stream));
+    LFM_CUDA(cudaMemcpyAsync(s.down.data(),
+                             down_src,
+                             down_bytes_, cudaMemcpyDefault, stream));
+    s.expert = expert;
+    expert_slot_[static_cast<size_t>(expert)] = slot;
+    last_used_[static_cast<size_t>(expert)] = ++lru_tick_;
+    last_score_[static_cast<size_t>(expert)] = score;
+    // Point the table at the slot only after the copies are ordered on-stream.
+    publish_pointer(expert, s.gate_up.data(), s.down.data(), stream);
+    // Keep device mirror in sync for the next resolve_on_device call.
+    sync_expert_slot_to_device(stream);
 }
 
 void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
@@ -332,7 +382,7 @@ void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
     s.expert = -1;
     publish_pointer(expert, gate_up_host_dev_[static_cast<size_t>(expert)],
                     down_host_dev_[static_cast<size_t>(expert)], stream);
-    sync_expert_slot_to_device();
+    sync_expert_slot_to_device(stream);
 }
 
 int ExpertLayerCache::choose_victim() const {
@@ -389,6 +439,22 @@ bool ExpertLayerCache::ensure_resident(int expert, cudaStream_t stream,
     const int slot = choose_victim();
     if (slot < 0) return false;  // capacity 0 -> everything stays host-resident
     promote(expert, slot, stream, score);
+    return true;
+}
+
+bool ExpertLayerCache::ensure_resident(int expert, const __nv_bfloat16* gate_up_src,
+                                        const __nv_bfloat16* down_src, cudaStream_t stream,
+                                        float score) {
+    if (expert < 0 || expert >= num_experts_) {
+        throw std::invalid_argument("ensure_resident: expert out of range");
+    }
+    if (expert_slot_[static_cast<size_t>(expert)] >= 0) {
+        touch(expert, score);  // already cached: refresh recency + score
+        return false;
+    }
+    const int slot = choose_victim();
+    if (slot < 0) return false;  // capacity 0 -> everything stays host-resident
+    promote(expert, slot, gate_up_src, down_src, stream, score);
     return true;
 }
 
@@ -466,6 +532,18 @@ void ExpertLayerCache::seed(const std::vector<int>& experts,
     for (int i = 0; i < count; ++i) {
         promote(experts[static_cast<size_t>(i)], i, stream);
     }
+}
+
+const __nv_bfloat16* ExpertLayerCache::expert_gate_up_dev(int expert) const {
+    int slot = expert_slot(expert);
+    if (slot < 0) return nullptr;
+    return slots_[static_cast<size_t>(slot)].gate_up.data();
+}
+
+const __nv_bfloat16* ExpertLayerCache::expert_down_dev(int expert) const {
+    int slot = expert_slot(expert);
+    if (slot < 0) return nullptr;
+    return slots_[static_cast<size_t>(slot)].down.data();
 }
 
 } // namespace lfm

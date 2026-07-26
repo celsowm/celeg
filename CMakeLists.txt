@@ -48,6 +48,7 @@ add_library(lfm25_host
     src/quantization.cpp
     src/safetensors.cpp
     src/safetensors_repo.cpp
+    src/pinned_expert_cache.cpp
     src/gguf.cpp
     src/gguf_model.cpp
     src/tokenizer.cpp
@@ -192,11 +193,15 @@ endif()
 
 add_executable(lfm25-compare-logits src/compare_logits.cpp)
 
+add_executable(lfm25-pack-experts src/pack_experts_tool.cpp)
+target_link_libraries(lfm25-pack-experts PRIVATE lfm25_host)
+target_include_directories(lfm25-pack-experts PRIVATE include)
+
 include(GNUInstallDirs)
 set(LFM_INSTALL_TARGETS lfm25_host lfm25_cpu_core lfm25_cpu lfm25-cpu-run lfm25-cpu-pack lfm25-cpu-kernel-benchmark lfm25-cpu-c-api-example
     lfm25-cpu-concurrent-c-api-example lfm25-cpu-concurrent-benchmark
     lfm25-cpu-prefill-benchmark lfm25-cpu-prefix-cache-benchmark
-    lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download)
+    lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download lfm25-pack-experts)
 if(LFM_CUDA_AVAILABLE)
     list(APPEND LFM_INSTALL_TARGETS lfm25_core lfm25 lfm25-run
         lfm25-concurrent-benchmark lfm25-prefix-cache-benchmark
@@ -283,6 +288,11 @@ if(LFM_BUILD_TESTS)
     target_link_libraries(expert_offload_test PRIVATE lfm25_host)
     target_include_directories(expert_offload_test PRIVATE include)
     add_test(NAME expert_offload_test COMMAND expert_offload_test)
+
+    add_executable(pinned_expert_cache_test tests/pinned_expert_cache_test.cpp)
+    target_link_libraries(pinned_expert_cache_test PRIVATE lfm25_host)
+    target_include_directories(pinned_expert_cache_test PRIVATE include)
+    add_test(NAME pinned_expert_cache_test COMMAND pinned_expert_cache_test)
 
     add_executable(cpu_isa_test tests/cpu_isa_test.cpp)
     target_link_libraries(cpu_isa_test PRIVATE lfm25_host)

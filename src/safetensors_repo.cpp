@@ -55,6 +55,13 @@ SafeTensorRepository::SafeTensorRepository(const std::filesystem::path& model_di
                 throw std::runtime_error(
                     "missing safetensors shard: " + shard_path.string());
             }
+
+            // Populate the unique shard list
+            if (shard_filename_to_id_.find(shard_filename) == shard_filename_to_id_.end()) {
+                std::uint32_t new_id = static_cast<std::uint32_t>(shard_filenames_.size());
+                shard_filenames_.push_back(shard_filename);
+                shard_filename_to_id_.emplace(shard_filename, new_id);
+            }
         }
         if (name_to_shard_.empty()) {
             throw std::runtime_error("safetensors index references no tensors");
@@ -62,10 +69,14 @@ SafeTensorRepository::SafeTensorRepository(const std::filesystem::path& model_di
     } else if (std::filesystem::is_regular_file(single_path)) {
         sharded_ = false;
         single_file_ = std::make_unique<SafeTensorFile>(single_path.string());
+        shard_filenames_.push_back(single_path.filename().string());
+        shard_filename_to_id_.emplace(single_path.filename().string(), 0);
     } else if (std::filesystem::is_regular_file(root)) {
         // A single .safetensors file passed directly.
         sharded_ = false;
         single_file_ = std::make_unique<SafeTensorFile>(root.string());
+        shard_filenames_.push_back(root.filename().string());
+        shard_filename_to_id_.emplace(root.filename().string(), 0);
     } else {
         throw std::runtime_error(
             "no model.safetensors or model.safetensors.index.json found in " +
@@ -116,6 +127,51 @@ std::vector<std::string> SafeTensorRepository::names() const {
     for (const auto& [name, _] : name_to_shard_) result.push_back(name);
     std::sort(result.begin(), result.end());
     return result;
+}
+
+TensorLocator SafeTensorRepository::locate(std::string_view name) const {
+    if (!sharded_) {
+        if (!single_file_) {
+            throw std::out_of_range("safetensors repository has no tensors loaded");
+        }
+        return single_file_->locate(name, 0);
+    }
+    const auto it = name_to_shard_.find(std::string(name));
+    if (it == name_to_shard_.end()) {
+        throw std::out_of_range("missing tensor in safetensors index: " +
+                                std::string(name));
+    }
+    const std::string& shard_filename = it->second;
+    std::uint32_t shard_id = shard_filename_to_id_.at(shard_filename);
+    return shard_for(shard_filename).locate(name, shard_id);
+}
+
+void SafeTensorRepository::read(const TensorLocator& locator, std::span<std::byte> destination) const {
+    if (locator.shard_id >= shard_filenames_.size()) {
+        throw std::out_of_range("read: invalid shard_id " + std::to_string(locator.shard_id));
+    }
+    if (!sharded_) {
+        if (!single_file_) {
+            throw std::out_of_range("safetensors repository has no tensors loaded");
+        }
+        single_file_->read(locator, destination);
+        return;
+    }
+    const std::string& shard_filename = shard_filenames_[locator.shard_id];
+    shard_for(shard_filename).read(locator, destination);
+}
+
+std::filesystem::path SafeTensorRepository::shard_path(std::uint32_t shard_id) const {
+    if (shard_id >= shard_filenames_.size()) {
+        throw std::out_of_range("shard_path: invalid shard_id: " + std::to_string(shard_id));
+    }
+    if (!sharded_) {
+        if (std::filesystem::is_regular_file(dir_)) {
+            return dir_;
+        }
+        return dir_ / "model.safetensors";
+    }
+    return dir_ / shard_filenames_[shard_id];
 }
 
 } // namespace lfm

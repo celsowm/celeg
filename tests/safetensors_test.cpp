@@ -57,6 +57,37 @@ int main() {
         assert(tensor.shape.size() == 1 && tensor.shape[0] == 2);
         assert(tensor.bytes == 4);
         assert(std::memcmp(tensor.data, values, 4) == 0);
+
+        // Test locate and read
+        lfm::TensorLocator loc = file.locate("x");
+        assert(loc.bytes == 4);
+        assert(loc.dtype == lfm::TensorDType::BF16);
+        assert(loc.shape.size() == 1 && loc.shape[0] == 2);
+
+        std::vector<std::byte> dest(4);
+        file.read(loc, dest);
+        assert(std::memcmp(dest.data(), values, 4) == 0);
+
+        // Destination size mismatch throws exception
+        bool throws_size_mismatch = false;
+        try {
+            std::vector<std::byte> bad_dest(5);
+            file.read(loc, bad_dest);
+        } catch (const std::invalid_argument&) {
+            throws_size_mismatch = true;
+        }
+        assert(throws_size_mismatch);
+
+        // Out of bounds locator throws exception
+        bool throws_oob = false;
+        try {
+            lfm::TensorLocator bad_loc = loc;
+            bad_loc.absolute_offset = 100000;
+            file.read(bad_loc, dest);
+        } catch (const std::out_of_range&) {
+            throws_oob = true;
+        }
+        assert(throws_oob);
     }
 
     assert(rejects(path,

@@ -771,4 +771,35 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     return result;
 }
 
+std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
+    const IWeightRepository& repo, int layer,
+    int num_experts, int moe_intermediate, int hidden) {
+    if (num_experts <= 0 || moe_intermediate <= 0 || hidden <= 0) {
+        throw std::runtime_error("invalid MoE expert dimensions for layer " +
+                                 std::to_string(layer));
+    }
+    std::vector<ExpertLocation> catalog(static_cast<size_t>(num_experts));
+    for (int e = 0; e < num_experts; ++e) {
+        const std::string w1_name = layer_name(
+            layer, "feed_forward.experts." + std::to_string(e) + ".w1.weight");
+        const std::string w3_name = layer_name(
+            layer, "feed_forward.experts." + std::to_string(e) + ".w3.weight");
+        const std::string w2_name = layer_name(
+            layer, "feed_forward.experts." + std::to_string(e) + ".w2.weight");
+
+        TensorLocator w1_loc = repo.locate(w1_name);
+        TensorLocator w3_loc = repo.locate(w3_name);
+        TensorLocator w2_loc = repo.locate(w2_name);
+
+        if (w1_loc.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
+            w3_loc.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
+            w2_loc.shape != std::vector<int64_t>{hidden, moe_intermediate}) {
+            throw std::runtime_error("unexpected MoE expert tensor shape for " + w1_name);
+        }
+
+        catalog[static_cast<size_t>(e)] = ExpertLocation{w1_loc, w2_loc, w3_loc};
+    }
+    return catalog;
+}
+
 } // namespace lfm

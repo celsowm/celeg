@@ -292,4 +292,84 @@ std::vector<std::string> SafeTensorFile::names() const {
     return result;
 }
 
+TensorLocator SafeTensorFile::locate(std::string_view name, std::uint32_t shard_id) const {
+    const auto it = entries_.find(std::string(name));
+    if (it == entries_.end()) {
+        throw std::out_of_range("missing tensor: " + std::string(name));
+    }
+    const Entry& entry = it->second;
+    TensorLocator locator;
+    locator.shard_id = shard_id;
+    locator.absolute_offset = data_offset_ + entry.begin;
+    locator.bytes = entry.end - entry.begin;
+    locator.dtype = entry.dtype;
+    locator.shape = entry.shape;
+    return locator;
+}
+
+void SafeTensorFile::read(const TensorLocator& locator, std::span<std::byte> destination) const {
+    if (destination.size() != locator.bytes) {
+        throw std::invalid_argument("read: destination span size (" +
+                                    std::to_string(destination.size()) +
+                                    ") does not match requested bytes (" +
+                                    std::to_string(locator.bytes) + ")");
+    }
+    if (locator.absolute_offset + locator.bytes > file_size_) {
+        throw std::out_of_range("read: locator range [" +
+                                std::to_string(locator.absolute_offset) + ", " +
+                                std::to_string(locator.absolute_offset + locator.bytes) +
+                                "] exceeds file size " + std::to_string(file_size_));
+    }
+    if (locator.bytes == 0) return;
+
+#if defined(_WIN32)
+    // Windows positioned read using ReadFile with OVERLAPPED
+    OVERLAPPED overlapped = {};
+    overlapped.Offset = static_cast<DWORD>(locator.absolute_offset & 0xFFFFFFFF);
+    overlapped.OffsetHigh = static_cast<DWORD>((locator.absolute_offset >> 32) & 0xFFFFFFFF);
+
+    std::byte* dest_ptr = destination.data();
+    size_t bytes_to_read = locator.bytes;
+    while (bytes_to_read > 0) {
+        DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes_to_read, 0x7FFFFFFF));
+        DWORD bytes_read = 0;
+        if (!::ReadFile(file_handle_, dest_ptr, chunk, &bytes_read, &overlapped)) {
+            DWORD err = ::GetLastError();
+            if (err != ERROR_IO_PENDING) {
+                throw std::runtime_error("Windows ReadFile failed with error: " + std::to_string(err));
+            }
+        }
+        if (bytes_read == 0) {
+            throw std::runtime_error("Windows ReadFile returned 0 bytes (unexpected EOF)");
+        }
+        dest_ptr += bytes_read;
+        bytes_to_read -= bytes_read;
+
+        // Update offset in overlapped for next iteration
+        std::uint64_t next_offset = (static_cast<std::uint64_t>(overlapped.OffsetHigh) << 32) | overlapped.Offset;
+        next_offset += bytes_read;
+        overlapped.Offset = static_cast<DWORD>(next_offset & 0xFFFFFFFF);
+        overlapped.OffsetHigh = static_cast<DWORD>((next_offset >> 32) & 0xFFFFFFFF);
+    }
+#else
+    // POSIX positioned read using pread
+    std::byte* dest_ptr = destination.data();
+    size_t bytes_to_read = locator.bytes;
+    off_t offset = static_cast<off_t>(locator.absolute_offset);
+    while (bytes_to_read > 0) {
+        ssize_t n = ::pread(fd_, dest_ptr, bytes_to_read, offset);
+        if (n < 0) {
+            if (errno == EINTR) continue; // retry interrupted reads
+            throw std::runtime_error("POSIX pread failed: " + std::string(std::strerror(errno)));
+        }
+        if (n == 0) {
+            throw std::runtime_error("POSIX pread returned 0 bytes (unexpected EOF)");
+        }
+        dest_ptr += n;
+        bytes_to_read -= n;
+        offset += n;
+    }
+#endif
+}
+
 } // namespace lfm

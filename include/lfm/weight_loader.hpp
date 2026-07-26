@@ -124,6 +124,12 @@ public:
         int num_experts, int moe_intermediate, int hidden,
         class HostExpertStore& store, ExpertHostMode host_mode);
 
+    // Builds a catalog of on-disk/safetensors expert locations for a MoE layer
+    // without eagerly materializing any bytes.
+    std::vector<ExpertLocation> build_expert_catalog(
+        const IWeightRepository& repo, int layer,
+        int num_experts, int moe_intermediate, int hidden);
+
     WeightMode weight_mode() const { return weight_mode_; }
 
 private:

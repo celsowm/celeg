@@ -15,6 +15,7 @@
 #include "lfm/moe.hpp"
 #include "lfm/model_shape.hpp"
 #include "lfm/safetensors.hpp"
+#include "lfm/pinned_expert_cache.hpp"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>
@@ -212,10 +213,24 @@ struct SharedModelWeights {
     std::mutex mutex;
     WeightMap tensors;
 
+    std::shared_ptr<IWeightRepository> repo;
+
     ExpertOffloadPlan expert_offload_plan;
     HostExpertStore host_expert_store;
     std::vector<std::unique_ptr<ExpertLayerCache>> expert_caches;
     std::unique_ptr<CudaStream> expert_transfer_stream;
+    std::vector<std::vector<ExpertLocation>> expert_catalog;
+    std::unique_ptr<PinnedExpertCache> pinned_expert_cache;
+    std::unique_ptr<ExpertSidecar> expert_sidecar;
+    std::unique_ptr<ExpertIoManager> expert_io_manager;
+    ModelUsageStats usage_stats;
+    std::string usage_profile_path;
+
+    struct InflightTransfer {
+        ExpertHostLease lease;
+        std::unique_ptr<CudaEvent> event;
+    };
+    std::vector<InflightTransfer> inflight_transfers;
     CudaEvent ffn_done_event;
     CudaEvent promote_done_event;
     CudaEvent prefetch_done_event;

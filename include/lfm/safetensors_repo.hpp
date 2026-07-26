@@ -29,8 +29,14 @@ public:
     HostTensorView tensor(std::string_view name) const override;
     std::vector<std::string> names() const override;
 
+    TensorLocator locate(std::string_view name) const override;
+    void read(const TensorLocator& locator, std::span<std::byte> destination) const override;
+
     // True when the checkpoint is split across multiple shard files.
     bool sharded() const { return sharded_; }
+
+    // Returns the file path for a given shard ID.
+    std::filesystem::path shard_path(std::uint32_t shard_id) const;
 
 private:
     const SafeTensorFile& shard_for(const std::string& shard_filename) const;
@@ -43,6 +49,10 @@ private:
     std::unique_ptr<SafeTensorFile> single_file_;
     // Lazily opened, kept-alive shard files keyed by shard filename.
     mutable std::unordered_map<std::string, std::unique_ptr<SafeTensorFile>> shards_;
+
+    // Shard ID mapping helpers.
+    std::vector<std::string> shard_filenames_;
+    std::unordered_map<std::string, std::uint32_t> shard_filename_to_id_;
 };
 
 } // namespace lfm

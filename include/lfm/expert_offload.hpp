@@ -1,12 +1,76 @@
 #pragma once
 
 #include "lfm/model_shape.hpp"
+#include "lfm/safetensors.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace lfm {
+
+enum class ExpertBackingMode : uint8_t {
+    HostResident,
+    DiskCached
+};
+
+enum class ExpertIoBackend : uint8_t {
+    Auto,
+    ThreadPool,
+    IoUring,
+    WindowsOverlapped
+};
+
+struct ExpertLocation {
+    TensorLocator w1;
+    TensorLocator w2;
+    TensorLocator w3;
+};
+
+struct ExpertUsageEntry {
+    std::uint64_t selection_count = 0;
+    double recent_heat = 0.0;
+    std::uint64_t last_used_sequence = 0;
+    std::uint64_t ram_cache_hits = 0;
+    std::uint64_t gpu_cache_hits = 0;
+    std::uint64_t ssd_misses = 0;
+};
+
+struct ModelUsageStats {
+    std::vector<std::vector<ExpertUsageEntry>> layers;
+
+    bool load(const std::string& path, int expected_layers, int expected_experts);
+    void save(const std::string& path) const;
+};
+
+struct SidecarExpertIndex {
+    std::uint64_t gate_up_offset = 0;
+    std::uint64_t gate_up_bytes = 0;
+    std::uint64_t down_offset = 0;
+    std::uint64_t down_bytes = 0;
+};
+
+class ExpertSidecar {
+public:
+    ExpertSidecar() = default;
+    ~ExpertSidecar();
+
+    ExpertSidecar(const ExpertSidecar&) = delete;
+    ExpertSidecar& operator=(const ExpertSidecar&) = delete;
+
+    bool load(const std::string& path, int expected_layers, int expected_experts,
+              std::uint64_t expected_inter, std::uint64_t expected_hidden);
+
+    void read_expert(int layer_idx, int expert_id, std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) const;
+    bool valid() const { return fd_ >= 0 || file_handle_ != nullptr; }
+
+private:
+    int fd_ = -1;
+    void* file_handle_ = nullptr;
+    std::uint64_t file_size_ = 0;
+    std::vector<std::vector<SidecarExpertIndex>> index_;
+};
 
 // ---------------------------------------------------------------------------
 // MoE expert offload configuration and memory planning.
@@ -116,6 +180,16 @@ struct ExpertOffloadOptions {
 
     ExpertHostMode host_mode = ExpertHostMode::Mapped;
     ExpertCachePolicy policy = ExpertCachePolicy::LayerLocalLfuLru;
+
+    ExpertBackingMode backing = ExpertBackingMode::HostResident;
+    std::size_t host_expert_cache_bytes = 4_GiB;
+    ExpertIoBackend io_backend = ExpertIoBackend::Auto;
+    int io_queue_depth = 16;
+    int io_workers = 4;
+    bool direct_io = false;
+    std::string expert_sidecar_path;
+    std::string mirror_path;
+    std::string usage_profile_path;
 
     bool enabled() const { return mode != ExpertOffloadMode::None; }
 };
