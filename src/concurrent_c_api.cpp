@@ -18,7 +18,7 @@ thread_local std::string concurrent_global_error;
 
 bool valid_struct_v2(uint32_t actual, size_t expected) { return actual >= expected; }
 
-lfm::ModelOptions convert_model_options_v2(const lfm25_model_options_v1& source) {
+lfm::ModelOptions convert_model_options_v2(const lfm25_model_options_v2& source) {
     lfm::ModelOptions result;
     result.fused_residuals = (source.flags & LFM25_OPTION_FUSED_RESIDUALS) != 0;
     result.fast_attention = (source.flags & LFM25_OPTION_FAST_ATTENTION) != 0;
@@ -44,6 +44,73 @@ lfm::ModelOptions convert_model_options_v2(const lfm25_model_options_v1& source)
     result.lt_workspace_bytes = static_cast<size_t>(source.lt_workspace_mb) *
                                 1024ULL * 1024ULL;
     result.lt_heuristics = source.lt_heuristics;
+
+    // Expert offload options
+    lfm::ExpertOffloadOptions& off = result.expert_offload;
+    if (source.expert_offload_mode == 1) {
+        off.mode = lfm::ExpertOffloadMode::Auto;
+    } else if (source.expert_offload_mode == 2) {
+        off.mode = lfm::ExpertOffloadMode::Host;
+    } else {
+        off.mode = lfm::ExpertOffloadMode::None;
+    }
+
+    if (source.expert_host_mode == 1) {
+        off.host_mode = lfm::ExpertHostMode::PinnedCopy;
+    } else if (source.expert_host_mode == 2) {
+        off.host_mode = lfm::ExpertHostMode::Staged;
+    } else {
+        off.host_mode = lfm::ExpertHostMode::Mapped;
+    }
+
+    if (source.expert_cache_policy == 0) {
+        off.policy = lfm::ExpertCachePolicy::Static;
+    } else if (source.expert_cache_policy == 1) {
+        off.policy = lfm::ExpertCachePolicy::Lru;
+    } else if (source.expert_cache_policy == 3) {
+        off.policy = lfm::ExpertCachePolicy::Score;
+    } else {
+        off.policy = lfm::ExpertCachePolicy::LayerLocalLfuLru;
+    }
+
+    off.gpu_expert_cache_bytes = source.gpu_expert_cache_bytes;
+    off.experts_per_layer = source.experts_per_layer;
+    off.maximum_pinned_host_bytes = source.maximum_pinned_host_bytes;
+    off.gpu_memory_reserve_bytes = source.gpu_memory_reserve_bytes;
+    off.prefill_chunk_tokens = source.prefill_chunk_tokens;
+    off.prefetch_experts = source.prefetch_experts;
+
+    if (source.expert_backing == 1) {
+        off.backing = lfm::ExpertBackingMode::DiskCached;
+    } else {
+        off.backing = lfm::ExpertBackingMode::HostResident;
+    }
+
+    off.host_expert_cache_bytes = source.host_expert_cache_bytes;
+
+    if (source.expert_io_backend == 1) {
+        off.io_backend = lfm::ExpertIoBackend::ThreadPool;
+    } else if (source.expert_io_backend == 2) {
+        off.io_backend = lfm::ExpertIoBackend::IoUring;
+    } else if (source.expert_io_backend == 3) {
+        off.io_backend = lfm::ExpertIoBackend::WindowsOverlapped;
+    } else {
+        off.io_backend = lfm::ExpertIoBackend::Auto;
+    }
+
+    off.io_queue_depth = source.expert_io_queue_depth;
+    off.io_workers = source.expert_io_workers;
+    off.direct_io = source.expert_direct_io != 0;
+    if (source.expert_sidecar_path) {
+        off.expert_sidecar_path = source.expert_sidecar_path;
+    }
+    if (source.mirror_path) {
+        off.mirror_path = source.mirror_path;
+    }
+    if (source.usage_profile_path) {
+        off.usage_profile_path = source.usage_profile_path;
+    }
+
     return result;
 }
 
@@ -102,7 +169,7 @@ lfm25_status protect_engine(lfm25_engine* engine, Function&& function) noexcept 
 
 extern "C" {
 
-void lfm25_engine_options_init(lfm25_engine_options_v2* options) {
+void lfm25_engine_options_v3_init(lfm25_engine_options_v3* options) {
     if (!options) return;
     std::memset(options, 0, sizeof(*options));
     options->struct_size = sizeof(*options);
@@ -114,7 +181,7 @@ void lfm25_engine_options_init(lfm25_engine_options_v2* options) {
     options->scheduler_policy = LFM25_SCHEDULER_GUARANTEED_NO_EVICT;
     options->worker_thread = 1;
     options->idle_sleep_microseconds = 100;
-    lfm25_model_options_init(&options->model);
+    lfm25_model_options_v2_init(&options->model);
     options->model.max_context = options->max_context;
 }
 
@@ -128,7 +195,7 @@ void lfm25_request_options_init(lfm25_request_options_v2* options) {
 }
 
 lfm25_engine* lfm25_engine_create(
-    const char* safetensors_path, const lfm25_engine_options_v2* options) {
+    const char* safetensors_path, const lfm25_engine_options_v3* options) {
     concurrent_global_error.clear();
     if (!safetensors_path || !options ||
         !valid_struct_v2(options->struct_size, sizeof(*options)) ||

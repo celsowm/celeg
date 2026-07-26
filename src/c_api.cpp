@@ -83,7 +83,7 @@ bool valid_struct(uint32_t actual, size_t expected) {
     return actual >= expected;
 }
 
-lfm::ModelOptions convert_model_options(const lfm25_model_options_v1& source) {
+lfm::ModelOptions convert_model_options(const lfm25_model_options_v2& source) {
     lfm::ModelOptions result;
     result.fused_residuals = (source.flags & LFM25_OPTION_FUSED_RESIDUALS) != 0;
     result.fast_attention = (source.flags & LFM25_OPTION_FAST_ATTENTION) != 0;
@@ -109,6 +109,73 @@ lfm::ModelOptions convert_model_options(const lfm25_model_options_v1& source) {
     result.lt_workspace_bytes = static_cast<size_t>(source.lt_workspace_mb) *
         1024ULL * 1024ULL;
     result.lt_heuristics = source.lt_heuristics;
+
+    // Expert offload options
+    lfm::ExpertOffloadOptions& off = result.expert_offload;
+    if (source.expert_offload_mode == 1) {
+        off.mode = lfm::ExpertOffloadMode::Auto;
+    } else if (source.expert_offload_mode == 2) {
+        off.mode = lfm::ExpertOffloadMode::Host;
+    } else {
+        off.mode = lfm::ExpertOffloadMode::None;
+    }
+
+    if (source.expert_host_mode == 1) {
+        off.host_mode = lfm::ExpertHostMode::PinnedCopy;
+    } else if (source.expert_host_mode == 2) {
+        off.host_mode = lfm::ExpertHostMode::Staged;
+    } else {
+        off.host_mode = lfm::ExpertHostMode::Mapped;
+    }
+
+    if (source.expert_cache_policy == 0) {
+        off.policy = lfm::ExpertCachePolicy::Static;
+    } else if (source.expert_cache_policy == 1) {
+        off.policy = lfm::ExpertCachePolicy::Lru;
+    } else if (source.expert_cache_policy == 3) {
+        off.policy = lfm::ExpertCachePolicy::Score;
+    } else {
+        off.policy = lfm::ExpertCachePolicy::LayerLocalLfuLru;
+    }
+
+    off.gpu_expert_cache_bytes = source.gpu_expert_cache_bytes;
+    off.experts_per_layer = source.experts_per_layer;
+    off.maximum_pinned_host_bytes = source.maximum_pinned_host_bytes;
+    off.gpu_memory_reserve_bytes = source.gpu_memory_reserve_bytes;
+    off.prefill_chunk_tokens = source.prefill_chunk_tokens;
+    off.prefetch_experts = source.prefetch_experts;
+
+    if (source.expert_backing == 1) {
+        off.backing = lfm::ExpertBackingMode::DiskCached;
+    } else {
+        off.backing = lfm::ExpertBackingMode::HostResident;
+    }
+
+    off.host_expert_cache_bytes = source.host_expert_cache_bytes;
+
+    if (source.expert_io_backend == 1) {
+        off.io_backend = lfm::ExpertIoBackend::ThreadPool;
+    } else if (source.expert_io_backend == 2) {
+        off.io_backend = lfm::ExpertIoBackend::IoUring;
+    } else if (source.expert_io_backend == 3) {
+        off.io_backend = lfm::ExpertIoBackend::WindowsOverlapped;
+    } else {
+        off.io_backend = lfm::ExpertIoBackend::Auto;
+    }
+
+    off.io_queue_depth = source.expert_io_queue_depth;
+    off.io_workers = source.expert_io_workers;
+    off.direct_io = source.expert_direct_io != 0;
+    if (source.expert_sidecar_path) {
+        off.expert_sidecar_path = source.expert_sidecar_path;
+    }
+    if (source.mirror_path) {
+        off.mirror_path = source.mirror_path;
+    }
+    if (source.usage_profile_path) {
+        off.usage_profile_path = source.usage_profile_path;
+    }
+
     return result;
 }
 
@@ -128,7 +195,7 @@ extern "C" {
 
 uint32_t lfm25_api_version(void) { return LFM25_C_API_VERSION; }
 
-void lfm25_model_options_init(lfm25_model_options_v1* options) {
+void lfm25_model_options_v2_init(lfm25_model_options_v2* options) {
     if (!options) return;
     std::memset(options, 0, sizeof(*options));
     options->struct_size = sizeof(*options);
@@ -142,6 +209,26 @@ void lfm25_model_options_init(lfm25_model_options_v1* options) {
     options->attention_auto_threshold = 4096;
     options->lt_workspace_mb = 64;
     options->lt_heuristics = 8;
+
+    options->expert_offload_mode = 0; // none
+    options->expert_host_mode = 0;    // mapped
+    options->expert_cache_policy = 2; // lfu-lru
+    options->gpu_expert_cache_bytes = 0;
+    options->experts_per_layer = 0;
+    options->maximum_pinned_host_bytes = 9ULL * 1024 * 1024 * 1024;
+    options->gpu_memory_reserve_bytes = 768ULL * 1024 * 1024;
+    options->prefill_chunk_tokens = 256;
+    options->prefetch_experts = 0;
+
+    options->expert_backing = 0;      // host-resident
+    options->host_expert_cache_bytes = 4ULL * 1024 * 1024 * 1024;
+    options->expert_io_backend = 0;    // auto
+    options->expert_io_queue_depth = 16;
+    options->expert_io_workers = 4;
+    options->expert_direct_io = 0;
+    options->expert_sidecar_path = nullptr;
+    options->mirror_path = nullptr;
+    options->usage_profile_path = nullptr;
 }
 
 void lfm25_generation_options_init(lfm25_generation_options_v1* options) {
@@ -157,7 +244,7 @@ void lfm25_generation_options_init(lfm25_generation_options_v1* options) {
 
 lfm25_model* lfm25_model_create(
     const char* safetensors_path,
-    const lfm25_model_options_v1* model_options,
+    const lfm25_model_options_v2* model_options,
     const lfm25_generation_options_v1* generation_options) {
     global_error.clear();
     if (!safetensors_path || !model_options || !generation_options) {

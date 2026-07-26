@@ -232,7 +232,7 @@ struct LfmModel::Impl : public IPackedSession {
     DeviceBuffer<float> moe_pf_hidden_float_;
     DeviceBuffer<int> moe_pf_sel_;
     DeviceBuffer<int> moe_pf_sel_masked_;
-    DeviceBuffer<bool> expert_active_dev_;
+    DeviceBuffer<std::uint8_t> expert_active_dev_;
     DeviceBuffer<float> moe_pf_routing_w_;
     DeviceBuffer<float> moe_pf_router_scratch_;
     DeviceBuffer<float> moe_pf_output_accum_;  // [rows * hidden] FP32 accumulator

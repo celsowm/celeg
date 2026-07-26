@@ -7,9 +7,9 @@
 int main(void) {
     assert(lfm25_api_version() == LFM25_C_API_VERSION);
 
-    lfm25_model_options_v1 model;
+    lfm25_model_options_v2 model;
     lfm25_generation_options_v1 generation;
-    lfm25_model_options_init(&model);
+    lfm25_model_options_v2_init(&model);
     lfm25_generation_options_init(&generation);
     assert(model.struct_size == sizeof(model));
     assert(generation.struct_size == sizeof(generation));

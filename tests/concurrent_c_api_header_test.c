@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 int main(void) {
-    lfm25_engine_options_v2 engine = {0};
+    lfm25_engine_options_v3 engine = {0};
     lfm25_request_options_v2 request = {0};
     lfm25_engine_metrics_v2 metrics = {0};
     lfm25_packed_metrics_v1 packed = {0};
@@ -21,7 +21,7 @@ int main(void) {
     paged_v2.struct_size = sizeof(paged_v2);
     paged_v3.struct_size = sizeof(paged_v3);
     assert(LFM25_C_API_VERSION == 6u);
-    assert(offsetof(lfm25_engine_options_v2, struct_size) == 0);
+    assert(offsetof(lfm25_engine_options_v3, struct_size) == 0);
     assert(sizeof(lfm25_request_id) == sizeof(uint64_t));
     assert(offsetof(lfm25_packed_metrics_v1, struct_size) == 0);
     assert(packed.struct_size == sizeof(lfm25_packed_metrics_v1));

@@ -106,7 +106,9 @@ private:
         int ref_count = 0;
         uint64_t last_used = 0;
         bool loading = false;
+        uint64_t generation = 0;
         std::vector<std::shared_ptr<std::promise<void>>> waiters;
+        std::shared_future<void> shared_fut;
     };
 
     std::vector<CacheSlot> slots_;
