@@ -69,6 +69,14 @@ struct Args {
     int maximum_pinned_host_mib = 9216;
     int gpu_memory_reserve_mib = 768;
     int prefill_chunk = 256;
+    std::string expert_backing = "host";
+    int expert_host_cache_mib = 4096;
+    std::string expert_io_backend = "auto";
+    int expert_io_workers = 4;
+    int expert_io_queue_depth = 16;
+    std::string expert_sidecar;
+    std::string expert_usage_profile;
+    bool expert_direct_io = false;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -124,6 +132,14 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--maximum-pinned-host-mib") args.maximum_pinned_host_mib = std::stoi(value());
         else if (key == "--gpu-memory-reserve-mib") args.gpu_memory_reserve_mib = std::stoi(value());
         else if (key == "--prefill-chunk") args.prefill_chunk = std::stoi(value());
+        else if (key == "--expert-backing") args.expert_backing = value();
+        else if (key == "--expert-host-cache-mib") args.expert_host_cache_mib = std::stoi(value());
+        else if (key == "--expert-io-backend") args.expert_io_backend = value();
+        else if (key == "--expert-io-workers") args.expert_io_workers = std::stoi(value());
+        else if (key == "--expert-io-queue-depth") args.expert_io_queue_depth = std::stoi(value());
+        else if (key == "--expert-sidecar") args.expert_sidecar = value();
+        else if (key == "--expert-usage-profile") args.expert_usage_profile = value();
+        else if (key == "--expert-direct-io") args.expert_direct_io = true;
         else if (key == "--segmented-attention") args.attention_mode = "segmented";
         else if (key == "--help") {
             std::cout
@@ -149,7 +165,15 @@ Args parse_args(int argc, char** argv) {
                 << "  [--expert-cache-policy static|lru|lfu-lru]\n"
                 << "  [--expert-cache-mib N] [--expert-cache-per-layer N]\n"
                 << "  [--maximum-pinned-host-mib N] [--gpu-memory-reserve-mib N]\n"
-                << "  [--prefill-chunk N]\n";
+                << "  [--prefill-chunk N]\n"
+                << "  [--expert-backing host|disk]\n"
+                << "  [--expert-host-cache-mib N]\n"
+                << "  [--expert-io-backend auto|thread-pool|io-uring|overlapped]\n"
+                << "  [--expert-io-workers N]\n"
+                << "  [--expert-io-queue-depth N]\n"
+                << "  [--expert-sidecar PATH]\n"
+                << "  [--expert-usage-profile PATH]\n"
+                << "  [--expert-direct-io]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + key);
@@ -210,6 +234,16 @@ Args parse_args(int argc, char** argv) {
     if (args.expert_cache_mib < 0 || args.expert_cache_per_layer < 0 ||
         args.maximum_pinned_host_mib < 0 || args.gpu_memory_reserve_mib < 0 ||
         args.prefill_chunk <= 0) {
+        throw std::runtime_error("invalid numeric argument");
+    }
+    if (args.expert_backing != "host" && args.expert_backing != "disk") {
+        throw std::runtime_error("--expert-backing must be host or disk");
+    }
+    if (args.expert_io_backend != "auto" && args.expert_io_backend != "thread-pool" &&
+        args.expert_io_backend != "io-uring" && args.expert_io_backend != "overlapped") {
+        throw std::runtime_error("--expert-io-backend must be auto, thread-pool, io-uring or overlapped");
+    }
+    if (args.expert_host_cache_mib < 0 || args.expert_io_workers <= 0 || args.expert_io_queue_depth <= 0) {
         throw std::runtime_error("invalid numeric argument");
     }
     return args;
@@ -419,6 +453,28 @@ int main(int argc, char** argv) {
             off.gpu_memory_reserve_bytes =
                 static_cast<size_t>(args.gpu_memory_reserve_mib) * 1024ULL * 1024ULL;
             off.prefill_chunk_tokens = args.prefill_chunk;
+
+            if (args.expert_backing == "disk") {
+                off.backing = lfm::ExpertBackingMode::DiskCached;
+            } else {
+                off.backing = lfm::ExpertBackingMode::HostResident;
+            }
+            off.host_expert_cache_bytes =
+                static_cast<size_t>(args.expert_host_cache_mib) * 1024ULL * 1024ULL;
+            if (args.expert_io_backend == "thread-pool") {
+                off.io_backend = lfm::ExpertIoBackend::ThreadPool;
+            } else if (args.expert_io_backend == "io-uring") {
+                off.io_backend = lfm::ExpertIoBackend::IoUring;
+            } else if (args.expert_io_backend == "overlapped") {
+                off.io_backend = lfm::ExpertIoBackend::WindowsOverlapped;
+            } else {
+                off.io_backend = lfm::ExpertIoBackend::Auto;
+            }
+            off.io_workers = args.expert_io_workers;
+            off.io_queue_depth = args.expert_io_queue_depth;
+            off.expert_sidecar_path = args.expert_sidecar;
+            off.usage_profile_path = args.expert_usage_profile;
+            off.direct_io = args.expert_direct_io;
         }
         lfm::GenerationConfig generation;
         generation.temperature = args.temperature;

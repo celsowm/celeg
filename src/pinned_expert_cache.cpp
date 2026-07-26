@@ -174,18 +174,38 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
             if (slots_[slot_idx].loading) {
                 // Someone else is loading it. Coalesce and wait.
                 misses_++; // Still a miss from storage perspective but coalesced
-                std::shared_ptr<std::promise<void>> p = std::make_shared<std::promise<void>>();
-                slots_[slot_idx].waiters.push_back(p);
+                std::shared_future<void> fut = slots_[slot_idx].shared_fut;
+                uint64_t expected_gen = slots_[slot_idx].generation;
+
+                // Reserve ref_count before releasing lock!
+                slots_[slot_idx].ref_count++;
                 lock.unlock();
 
                 auto wait_start = std::chrono::high_resolution_clock::now();
-                p->get_future().wait();
+                try {
+                    fut.get(); // get() propagates exceptions!
+                } catch (...) {
+                    auto wait_end = std::chrono::high_resolution_clock::now();
+                    std::unique_lock<std::mutex> wait_lock(mutex_);
+                    total_wait_time_ms_ += std::chrono::duration<double, std::milli>(wait_end - wait_start).count();
+                    if (slots_[slot_idx].ref_count > 0) {
+                        slots_[slot_idx].ref_count--;
+                    }
+                    throw;
+                }
                 auto wait_end = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double, std::milli> wait_elapsed = wait_end - wait_start;
 
                 std::unique_lock<std::mutex> wait_lock(mutex_);
-                total_wait_time_ms_ += wait_elapsed.count();
-                slots_[slot_idx].ref_count++;
+                total_wait_time_ms_ += std::chrono::duration<double, std::milli>(wait_end - wait_start).count();
+
+                // Validate slot identity and generation upon waking up
+                if (slots_[slot_idx].layer != layer || slots_[slot_idx].expert != expert || slots_[slot_idx].generation != expected_gen) {
+                    if (slots_[slot_idx].ref_count > 0) {
+                        slots_[slot_idx].ref_count--;
+                    }
+                    throw std::runtime_error("PinnedExpertCache: race condition detected, slot content changed during wait");
+                }
+
                 return ExpertHostLease(this, slot_idx);
             } else {
                 hits_++;
@@ -211,6 +231,12 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
         slots_[slot_idx].last_used = tick_;
         slots_[slot_idx].ref_count = 1; // Mark as leased immediately
         slots_[slot_idx].loading = true;
+        slots_[slot_idx].generation++;
+
+        // Initialize the promise and shared_future
+        auto p = std::make_shared<std::promise<void>>();
+        slots_[slot_idx].shared_fut = p->get_future().share();
+        slots_[slot_idx].waiters = {p}; // Keep track of the main promise so we can set it
     }
 
     // Perform disk load outside the global lock!
@@ -225,22 +251,26 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
         std::lock_guard<std::mutex> lock(mutex_);
         slots_[slot_idx].layer = -1;
         slots_[slot_idx].expert = -1;
-        slots_[slot_idx].ref_count = 0;
+        if (slots_[slot_idx].ref_count > 0) {
+            slots_[slot_idx].ref_count--; // Decrement loader's ref count
+        }
         slots_[slot_idx].loading = false;
-        for (auto& waiter : slots_[slot_idx].waiters) {
-            waiter->set_exception(std::current_exception());
+        if (!slots_[slot_idx].waiters.empty()) {
+            slots_[slot_idx].waiters[0]->set_exception(std::current_exception());
         }
         slots_[slot_idx].waiters.clear();
+        slots_[slot_idx].shared_fut = {};
         throw;
     }
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
         slots_[slot_idx].loading = false;
-        for (auto& waiter : slots_[slot_idx].waiters) {
-            waiter->set_value();
+        if (!slots_[slot_idx].waiters.empty()) {
+            slots_[slot_idx].waiters[0]->set_value();
         }
         slots_[slot_idx].waiters.clear();
+        slots_[slot_idx].shared_fut = {};
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();

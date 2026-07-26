@@ -206,6 +206,18 @@ struct DeviceWeight {
 
 using WeightMap = std::unordered_map<std::string, DeviceWeight>;
 
+struct ResidencyController {
+    std::mutex mutex;
+    std::unique_ptr<ExpertLayerCache> cache;
+    std::unique_ptr<CudaStream> transfer_stream;
+
+    struct InflightTransfer {
+        ExpertHostLease lease;
+        std::unique_ptr<CudaEvent> event;
+    };
+    std::vector<InflightTransfer> inflight_transfers;
+};
+
 // Process-wide shared weight arena. Multiple LfmModel sessions on the same
 // device + checkpoint + weight_mode share one instance to avoid duplicate
 // GPU allocations.
@@ -217,8 +229,7 @@ struct SharedModelWeights {
 
     ExpertOffloadPlan expert_offload_plan;
     HostExpertStore host_expert_store;
-    std::vector<std::unique_ptr<ExpertLayerCache>> expert_caches;
-    std::unique_ptr<CudaStream> expert_transfer_stream;
+    std::vector<std::unique_ptr<ResidencyController>> expert_controllers;
     std::vector<std::vector<ExpertLocation>> expert_catalog;
     std::unique_ptr<PinnedExpertCache> pinned_expert_cache;
     std::unique_ptr<ExpertSidecar> expert_sidecar;
@@ -226,24 +237,14 @@ struct SharedModelWeights {
     ModelUsageStats usage_stats;
     std::string usage_profile_path;
 
-    struct InflightTransfer {
-        ExpertHostLease lease;
-        std::unique_ptr<CudaEvent> event;
-    };
-    std::vector<InflightTransfer> inflight_transfers;
-    CudaEvent ffn_done_event;
-    CudaEvent promote_done_event;
-    CudaEvent prefetch_done_event;
-    CudaEvent router_done_event;
-    std::vector<int> cold_expert_host;
-    std::vector<float> cold_scores_host;
-    std::vector<int> prefetch_idx;
-    std::vector<int> prefetch_ranked;
-    std::vector<float> prefetch_scores;
-
     void ensure_moe_experts_resident(
         int layer, const int* sel_dev, int rows, int K, int num_experts,
-        cudaStream_t compute_stream, const float* route_scores_dev);
+        cudaStream_t compute_stream, const float* route_scores_dev,
+        CudaEvent& router_done_event, CudaEvent& ffn_done_event,
+        CudaEvent& promote_done_event, CudaEvent& prefetch_done_event,
+        std::vector<int>& cold_expert_host, std::vector<float>& cold_scores_host,
+        std::vector<int>& prefetch_idx, std::vector<int>& prefetch_ranked,
+        std::vector<float>& prefetch_scores);
 
     size_t memory_bytes() const;
 };

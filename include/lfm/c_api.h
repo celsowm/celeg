@@ -23,7 +23,7 @@ typedef struct lfm25_tokenizer lfm25_tokenizer;
 
 typedef struct lfm25_engine lfm25_engine;
 typedef uint64_t lfm25_request_id;
-typedef struct lfm25_model_options_v1 lfm25_model_options_v1;
+typedef struct lfm25_model_options_v2 lfm25_model_options_v2;
 typedef struct lfm25_generation_options_v1 lfm25_generation_options_v1;
 
 typedef enum lfm25_request_status {
@@ -80,7 +80,7 @@ enum {
     LFM25_OPTION_LT_AUTOTUNE = 1u << 6
 };
 
-typedef struct lfm25_model_options_v1 {
+typedef struct lfm25_model_options_v2 {
     uint32_t struct_size;
     uint32_t flags;
     int32_t max_context;
@@ -92,7 +92,27 @@ typedef struct lfm25_model_options_v1 {
     int32_t attention_auto_threshold;
     int32_t lt_workspace_mb;
     int32_t lt_heuristics;
-} lfm25_model_options_v1;
+
+    int32_t expert_offload_mode;
+    int32_t expert_host_mode;
+    int32_t expert_cache_policy;
+    uint64_t gpu_expert_cache_bytes;
+    int32_t experts_per_layer;
+    uint64_t maximum_pinned_host_bytes;
+    uint64_t gpu_memory_reserve_bytes;
+    int32_t prefill_chunk_tokens;
+    int32_t prefetch_experts;
+
+    int32_t expert_backing;
+    uint64_t host_expert_cache_bytes;
+    int32_t expert_io_backend;
+    int32_t expert_io_queue_depth;
+    int32_t expert_io_workers;
+    int32_t expert_direct_io;
+    const char* expert_sidecar_path;
+    const char* mirror_path;
+    const char* usage_profile_path;
+} lfm25_model_options_v2;
 
 typedef struct lfm25_generation_options_v1 {
     uint32_t struct_size;
@@ -103,7 +123,7 @@ typedef struct lfm25_generation_options_v1 {
     uint64_t seed;
 } lfm25_generation_options_v1;
 
-typedef struct lfm25_engine_options_v2 {
+typedef struct lfm25_engine_options_v3 {
     uint32_t struct_size;
     int32_t max_context;
     int32_t max_active_requests;
@@ -114,8 +134,8 @@ typedef struct lfm25_engine_options_v2 {
     int32_t scheduler_policy;
     int32_t worker_thread;
     int32_t idle_sleep_microseconds;
-    lfm25_model_options_v1 model;
-} lfm25_engine_options_v2;
+    lfm25_model_options_v2 model;
+} lfm25_engine_options_v3;
 
 typedef struct lfm25_request_options_v2 {
     uint32_t struct_size;
@@ -251,12 +271,12 @@ typedef struct lfm25_runtime_metrics_v1 {
 typedef int (*lfm25_token_callback)(int32_t token, void* user_data);
 
 LFM25_API uint32_t lfm25_api_version(void);
-LFM25_API void lfm25_model_options_init(lfm25_model_options_v1* options);
+LFM25_API void lfm25_model_options_v2_init(lfm25_model_options_v2* options);
 LFM25_API void lfm25_generation_options_init(lfm25_generation_options_v1* options);
 
 LFM25_API lfm25_model* lfm25_model_create(
     const char* safetensors_path,
-    const lfm25_model_options_v1* model_options,
+    const lfm25_model_options_v2* model_options,
     const lfm25_generation_options_v1* generation_options);
 LFM25_API void lfm25_model_destroy(lfm25_model* model);
 LFM25_API const char* lfm25_last_error(const lfm25_model* model);
@@ -284,10 +304,10 @@ LFM25_API lfm25_status lfm25_get_memory_stats(
 LFM25_API lfm25_status lfm25_get_runtime_metrics(
     const lfm25_model* model, lfm25_runtime_metrics_v1* metrics);
 
-LFM25_API void lfm25_engine_options_init(lfm25_engine_options_v2* options);
+LFM25_API void lfm25_engine_options_v3_init(lfm25_engine_options_v3* options);
 LFM25_API void lfm25_request_options_init(lfm25_request_options_v2* options);
 LFM25_API lfm25_engine* lfm25_engine_create(
-    const char* safetensors_path, const lfm25_engine_options_v2* options);
+    const char* safetensors_path, const lfm25_engine_options_v3* options);
 LFM25_API void lfm25_engine_destroy(lfm25_engine* engine);
 LFM25_API const char* lfm25_engine_last_error(const lfm25_engine* engine);
 LFM25_API lfm25_status lfm25_engine_start(lfm25_engine* engine);

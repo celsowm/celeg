@@ -136,11 +136,90 @@ void test_loader_failure() {
     assert(load_count == 1);
 }
 
+void test_failure_propagation_to_waiters() {
+    PinnedExpertCache cache(10, 10, 5, 5);
+    std::atomic<int> waiter_exceptions{0};
+
+    auto failing_loader = [](std::span<std::byte>, std::span<std::byte>) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        throw std::runtime_error("Loader crash");
+    };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back([&cache, &failing_loader, &waiter_exceptions]() {
+            try {
+                cache.acquire(0, 1, failing_loader);
+            } catch (const std::runtime_error& e) {
+                if (std::string(e.what()) == "Loader crash") {
+                    waiter_exceptions++;
+                }
+            }
+        });
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // All 4 threads (1 loader, 3 waiters) should catch the exception!
+    assert(waiter_exceptions == 4);
+}
+
+void test_slot_protection_and_generation() {
+    // 1 slot capacity
+    PinnedExpertCache cache(10, 10, 5, 5);
+
+    std::atomic<bool> loader_running{true};
+    std::atomic<bool> waiter_running{false};
+
+    auto slow_loader = [&](std::span<std::byte>, std::span<std::byte>) {
+        while (loader_running) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
+
+    // Thread 1: starts a slow load
+    std::thread t1([&]() {
+        auto lease = cache.acquire(0, 1, slow_loader);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Thread 2: waiter on the same expert (0, 1)
+    std::thread t2([&]() {
+        waiter_running = true;
+        auto lease = cache.acquire(0, 1, [](std::span<std::byte>, std::span<std::byte>){});
+        assert(lease.valid());
+        assert(lease.expert() == 1);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(waiter_running);
+
+    // Thread 3: tries to evict the slot for expert (0, 2)
+    // Since waiter has reserved ref_count, this eviction must throw because no slot is free or evictable!
+    bool threw = false;
+    try {
+        cache.acquire(0, 2, [](std::span<std::byte>, std::span<std::byte>){});
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    assert(threw); // Eviction is safely blocked!
+
+    // Finish loader
+    loader_running = false;
+    t1.join();
+    t2.join();
+}
+
 int main() {
     test_basic_hits_misses();
     test_eviction_and_lease_protection();
     test_coalescing_and_concurrency();
     test_loader_failure();
+    test_failure_propagation_to_waiters();
+    test_slot_protection_and_generation();
     std::cout << "pinned_expert_cache_test: ok\n";
     return 0;
 }

@@ -57,9 +57,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    lfm25_model_options_v1 model_options;
+    lfm25_model_options_v2 model_options;
     lfm25_generation_options_v1 generation;
-    lfm25_model_options_init(&model_options);
+    lfm25_model_options_v2_init(&model_options);
     lfm25_generation_options_init(&generation);
     model_options.max_context = 4096;
     model_options.weight_mode = LFM25_WEIGHT_INT4;

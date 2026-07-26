@@ -57,8 +57,8 @@ int main(int argc, char** argv) {
         encoded_count[i] = required;
     }
 
-    lfm25_engine_options_v2 engine_options;
-    lfm25_engine_options_init(&engine_options);
+    lfm25_engine_options_v3 engine_options;
+    lfm25_engine_options_v3_init(&engine_options);
     engine_options.max_active_requests = REQUESTS;
     engine_options.max_batched_tokens = 64;
     engine_options.prefill_chunk_tokens = 32;
