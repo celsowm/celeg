@@ -4,6 +4,7 @@
 #include "lfm/moe.hpp"
 #include "lfm/detail/model_impl.hpp"
 #include "lfm/paged_kv.hpp"
+#include "lfm/gemm_dispatcher.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -13,6 +14,7 @@
 #include <string>
 #include <unordered_set>
 #include <utility>
+#include <optional>
 
 namespace lfm {
 
@@ -190,6 +192,20 @@ struct PackedDecodeExecutorImpl {
     size_t segmented_scalar_capacity = 0;
     size_t segmented_accum_capacity = 0;
 
+    std::unique_ptr<GemmDispatcher> gemm_;
+    ModelOptions cached_options_;
+    std::optional<ExecutionPlan> active_plan_;
+
+    void ensure_gemm_dispatcher(const ModelOptions& options) {
+        if (!gemm_ || cached_options_.gemm_backend != options.gemm_backend ||
+            cached_options_.lt_workspace_bytes != options.lt_workspace_bytes ||
+            cached_options_.lt_heuristics != options.lt_heuristics ||
+            cached_options_.lt_autotune != options.lt_autotune) {
+            cached_options_ = options;
+            gemm_ = std::make_unique<GemmDispatcher>(stream.get(), cached_options_);
+        }
+    }
+
     void ensure_segmented_workspace(int rows, int chunks) {
         const size_t scalar_count = static_cast<size_t>(rows) *
             shape_.num_attention_heads * static_cast<size_t>(chunks);
@@ -262,30 +278,10 @@ struct PackedDecodeExecutorImpl {
         if (weight.rows != n || weight.cols != k_width) {
             throw std::runtime_error("packed linear shape mismatch");
         }
-        weight.validate_storage();
-        switch (weight.kind) {
-            case LinearStorageKind::Int4:
-                launch_w4a16_linear(x, weight.int4, weight.scales, y,
-                                    m, n, k_width, beta, stream.get());
-                return;
-            case LinearStorageKind::Int8:
-                launch_w8a16_linear(x, weight.int8, weight.scales, y,
-                                    m, n, k_width, beta, stream.get());
-                return;
-            case LinearStorageKind::Bf16: {
-                const float alpha = 1.0f;
-                LFM_CUBLAS(cublasGemmEx(
-                    cublas.get(), CUBLAS_OP_T, CUBLAS_OP_N,
-                    n, m, k_width, &alpha,
-                    weight.bf16, CUDA_R_16BF, k_width,
-                    x, CUDA_R_16BF, k_width,
-                    &beta, y, CUDA_R_16BF, n,
-                    CUBLAS_COMPUTE_32F,
-                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-                return;
-            }
+        if (!active_plan_) {
+            throw std::runtime_error("no active execution plan set for packed linear");
         }
-        throw std::runtime_error("unknown packed linear storage");
+        gemm_->linear(x, weight, y, m, n, k_width, beta, *active_plan_);
     }
 
     void copy_metadata(const std::vector<IPackedSession*>& models,
@@ -829,6 +825,8 @@ struct PackedDecodeExecutorImpl {
         if (models.empty()) return {};
         IPackedSession& reference = validate_decode_batch(models);
         const int rows = static_cast<int>(models.size());
+        active_plan_ = ExecutionPlan::compile(reference.options(), reference.max_context());
+        ensure_gemm_dispatcher(reference.options());
         const auto started = std::chrono::steady_clock::now();
         const AttentionBatchPlan attention =
             prepare_batch_metadata(models, page_tables);
@@ -881,6 +879,7 @@ struct PackedDecodeExecutorImpl {
         metric.maximum_batch = std::max(metric.maximum_batch,
                                         static_cast<size_t>(rows));
         metric.cumulative_ms += elapsed_ms;
+        active_plan_.reset();
         return result;
     }
 
@@ -892,6 +891,8 @@ struct PackedDecodeExecutorImpl {
         IPackedSession& reference =
             validate_prefill_batch(models, explicit_tokens, finalize_rows);
         const int rows = static_cast<int>(models.size());
+        active_plan_ = ExecutionPlan::compile(reference.options(), reference.max_context());
+        ensure_gemm_dispatcher(reference.options());
         const bool any_finalize = std::any_of(
             finalize_rows.begin(), finalize_rows.end(),
             [](uint8_t value) { return value != 0; });
@@ -948,6 +949,7 @@ struct PackedDecodeExecutorImpl {
         metric.maximum_prefill_batch = std::max(
             metric.maximum_prefill_batch, static_cast<size_t>(rows));
         metric.cumulative_prefill_ms += elapsed_ms;
+        active_plan_.reset();
     }
 };
 
