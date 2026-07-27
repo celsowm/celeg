@@ -42,23 +42,30 @@ void GenerationDispatcher::run() {
 void GenerationDispatcher::dispatch_once() {
     const bool progressed = service_.step();
 
-    std::vector<std::pair<RequestId, EventCallback>> active;
+    std::vector<RequestId> ids;
     {
         std::lock_guard<std::mutex> lock(watchers_mutex_);
-        active.reserve(watchers_.size());
-        for (const auto& entry : watchers_) active.emplace_back(entry.first, entry.second);
+        ids.reserve(watchers_.size());
+        for (const auto& entry : watchers_) ids.push_back(entry.first);
     }
 
     bool delivered = false;
-    for (auto& entry : active) {
-        const RequestId id = entry.first;
+    for (RequestId id : ids) {
         GenerateEvent event = service_.poll(id, 0);
         if (event.tokens.empty() && !event.finished) continue;
         delivered = true;
-        entry.second(event);
+
+        // Hold watchers_mutex_ across the callback invocation itself (not just
+        // the map lookup): this is the only thread that ever calls a watcher,
+        // so unwatch() blocking on this same lock is what gives it its
+        // guarantee -- once unwatch() returns, no in-flight call for that id
+        // can still be running, and the erased entry can never be found again.
+        std::lock_guard<std::mutex> lock(watchers_mutex_);
+        auto it = watchers_.find(id);
+        if (it == watchers_.end()) continue; // unwatched between snapshot and now
+        it->second(event);
         if (event.finished) {
-            std::lock_guard<std::mutex> lock(watchers_mutex_);
-            watchers_.erase(id);
+            watchers_.erase(it);
             service_.release(id);
         }
     }
