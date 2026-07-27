@@ -105,6 +105,14 @@ target_link_libraries(lfm25-cpu-compare-reference PRIVATE lfm_cpu_backend)
 add_executable(lfm25-download src/app/download/main.cpp)
 target_link_libraries(lfm25-download PRIVATE lfm_base)
 
+add_library(lfm_serve_cpu src/serve/cpu_inference_service.cpp)
+target_include_directories(lfm_serve_cpu PUBLIC include)
+if(NOT MSVC)
+    target_compile_options(lfm_serve_cpu PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+target_link_libraries(lfm_serve_cpu PUBLIC lfm_cpu_backend)
+target_link_libraries(lfm25 PRIVATE lfm_serve_cpu)
+
 include(CheckLanguage)
 set(LFM_CUDA_AVAILABLE OFF)
 if(LFM_ENABLE_CUDA)
@@ -185,6 +193,11 @@ if(LFM_CUDA_AVAILABLE)
     target_link_libraries(lfm25-concurrent-benchmark PRIVATE lfm_cuda_backend)
     add_executable(lfm25-prefix-cache-benchmark src/app/benchmark/cuda/prefix_cache.cpp)
     target_link_libraries(lfm25-prefix-cache-benchmark PRIVATE lfm_cuda_backend)
+
+    add_library(lfm_serve_cuda src/serve/cuda_inference_service.cpp)
+    target_include_directories(lfm_serve_cuda PUBLIC include)
+    target_link_libraries(lfm_serve_cuda PUBLIC lfm_cuda_backend)
+    target_link_libraries(lfm25 PRIVATE lfm_serve_cuda)
 endif()
 
 add_executable(lfm25-compare-logits src/tools/compare_logits.cpp)
@@ -197,10 +210,12 @@ include(GNUInstallDirs)
 set(LFM_INSTALL_TARGETS lfm_base lfm_runtime lfm_cpu_backend lfm25 lfm25-cpu-run lfm25-cpu-pack lfm25-cpu-kernel-benchmark lfm25-c-api-example
     lfm25-cpu-concurrent-benchmark
     lfm25-cpu-prefill-benchmark lfm25-cpu-prefix-cache-benchmark
-    lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download lfm25-pack-experts)
+    lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download lfm25-pack-experts
+    lfm_serve_cpu)
 if(LFM_CUDA_AVAILABLE)
     list(APPEND LFM_INSTALL_TARGETS lfm_cuda_backend lfm25-run
         lfm25-concurrent-benchmark lfm25-prefix-cache-benchmark
+        lfm_serve_cuda
         )
 endif()
 install(TARGETS ${LFM_INSTALL_TARGETS}
