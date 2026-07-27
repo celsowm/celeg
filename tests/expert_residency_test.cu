@@ -1,8 +1,8 @@
-#include "lfm/expert_residency.hpp"
-#include "lfm/moe.hpp"
-#include "lfm/cuda_utils.cuh"
-#include "lfm/detail/model_types.hpp"
-#include "lfm/model_shape.hpp"
+#include "lfm/runtime/moe/expert_residency.hpp"
+#include "lfm/runtime/moe.hpp"
+#include "lfm/backend/cuda/utils.cuh"
+#include "lfm/detail/model/types.hpp"
+#include "lfm/model/config/shape.hpp"
 
 #include <cassert>
 #include <cmath>

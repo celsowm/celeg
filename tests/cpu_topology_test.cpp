@@ -1,4 +1,4 @@
-#include "lfm/cpu_topology.hpp"
+#include "lfm/backend/cpu/topology.hpp"
 
 #include <cassert>
 #include <iostream>

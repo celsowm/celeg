@@ -1,4 +1,4 @@
-#include "lfm/quantization.hpp"
+#include "lfm/model/weights/quantization.hpp"
 
 #include <cassert>
 #include <cmath>

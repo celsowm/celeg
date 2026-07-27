@@ -1,4 +1,4 @@
-#include "lfm/cpu_c_api.h"
+#include "lfm/api/cpu.h"
 #include <assert.h>
 #include <stddef.h>
 

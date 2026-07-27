@@ -1,5 +1,5 @@
-#include "lfm/model.hpp"
-#include "lfm/concurrent.hpp"
+#include "lfm/model/model.hpp"
+#include "lfm/runtime/concurrency.hpp"
 
 #include <cassert>
 #include <iostream>

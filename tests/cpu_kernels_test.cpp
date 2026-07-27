@@ -1,4 +1,4 @@
-#include "lfm/cpu_kernels.hpp"
+#include "lfm/backend/cpu/kernels.hpp"
 
 #include <algorithm>
 #include <cassert>

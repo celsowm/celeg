@@ -1,0 +1,15 @@
+set(LFM_CUDA_BACKEND_SOURCES
+    src/backend/cuda/kernels/kernels.cu
+    src/backend/cuda/kernels/gguf.cu
+    src/backend/cuda/model/model.cu
+    src/backend/cuda/model/packed.cu
+    src/backend/cuda/model/session_store.cu
+    src/backend/cuda/model/weight_layout.cu
+    src/backend/cuda/model/weight_loader.cu
+    src/backend/cuda/memory/paged_kv.cu
+    src/backend/cuda/moe/expert_residency.cu
+    src/backend/cuda/moe/ffn.cu
+    src/backend/cuda/moe/route.cu
+    src/backend/cuda/runtime/engine.cpp
+    src/backend/cuda/runtime/gemm_dispatcher.cu
+)

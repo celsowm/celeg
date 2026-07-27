@@ -1,4 +1,4 @@
-#include "lfm/json.hpp"
+#include "lfm/checkpoint/formats/json.hpp"
 #include <cassert>
 #include <iostream>
 

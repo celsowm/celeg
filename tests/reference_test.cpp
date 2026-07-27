@@ -1,4 +1,4 @@
-#include "lfm/reference.hpp"
+#include "lfm/model/reference.hpp"
 
 #include <cassert>
 #include <cmath>

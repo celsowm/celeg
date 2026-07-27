@@ -1,5 +1,5 @@
-#include "lfm/cpu_kernels.hpp"
-#include "lfm/quantization.hpp"
+#include "lfm/backend/cpu/kernels.hpp"
+#include "lfm/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cassert>

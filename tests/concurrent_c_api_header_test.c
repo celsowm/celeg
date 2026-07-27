@@ -1,4 +1,4 @@
-#include "lfm/c_api.h"
+#include "lfm/api/cuda.h"
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>

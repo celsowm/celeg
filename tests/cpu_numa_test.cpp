@@ -1,4 +1,4 @@
-#include "lfm/cpu_numa.hpp"
+#include "lfm/backend/cpu/numa.hpp"
 
 #include <cassert>
 #include <iostream>

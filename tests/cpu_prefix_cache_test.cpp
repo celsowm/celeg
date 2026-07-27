@@ -1,4 +1,4 @@
-#include "lfm/cpu_prefix_cache.hpp"
+#include "lfm/backend/cpu/prefix_cache.hpp"
 
 #include <cassert>
 #include <iostream>

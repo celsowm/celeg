@@ -1,4 +1,4 @@
-#include "lfm/detail/engine_worker.hpp"
+#include "lfm/detail/runtime/concurrency/worker.hpp"
 
 #include <atomic>
 #include <cassert>

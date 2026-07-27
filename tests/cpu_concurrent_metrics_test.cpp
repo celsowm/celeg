@@ -1,4 +1,4 @@
-#include "lfm/cpu_concurrent.hpp"
+#include "lfm/backend/cpu/concurrent.hpp"
 
 #include <cassert>
 #include <cmath>

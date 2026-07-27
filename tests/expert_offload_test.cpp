@@ -1,4 +1,4 @@
-#include "lfm/expert_offload.hpp"
+#include "lfm/runtime/moe/offload.hpp"
 
 #include <cassert>
 #include <iostream>

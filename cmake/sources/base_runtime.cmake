@@ -1,0 +1,29 @@
+# Backend-independent checkpoint, model, text, and runtime support.
+set(LFM_BASE_RUNTIME_SOURCES
+    src/checkpoint/formats/json.cpp
+    src/checkpoint/formats/safetensors.cpp
+    src/checkpoint/formats/gguf.cpp
+    src/checkpoint/repositories/safetensors.cpp
+    src/checkpoint/repositories/gguf.cpp
+    src/checkpoint/downloader.cpp
+    src/checkpoint/bootstrap.cpp
+    src/model/config/config.cpp
+    src/model/config/shape.cpp
+    src/model/config/variant.cpp
+    src/model/execution/runtime_types.cpp
+    src/model/execution/plan.cpp
+    src/model/weights/quantization.cpp
+    src/model/reference.cpp
+    src/text/tokenizer.cpp
+    src/text/chat_template.cpp
+    src/runtime/cache/pinned_expert_cache.cpp
+    src/runtime/cache/prefix_radix.cpp
+    src/runtime/cache/prefix_cache.cpp
+    src/runtime/concurrency/policy.cpp
+    src/runtime/concurrency/metrics.cpp
+    src/runtime/concurrency/request_registry.cpp
+    src/runtime/concurrency/batch_planner.cpp
+    src/runtime/concurrency/worker.cpp
+    src/runtime/moe/reference.cpp
+    src/runtime/moe/offload.cpp
+)

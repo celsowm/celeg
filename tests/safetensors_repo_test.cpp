@@ -1,5 +1,5 @@
-#include "lfm/safetensors.hpp"
-#include "lfm/safetensors_repo.hpp"
+#include "lfm/checkpoint/formats/safetensors.hpp"
+#include "lfm/checkpoint/repositories/safetensors.hpp"
 
 #include <cassert>
 #include <cstdint>

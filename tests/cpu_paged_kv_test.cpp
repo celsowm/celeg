@@ -1,6 +1,6 @@
-#include "lfm/cpu_kernels.hpp"
-#include "lfm/cpu_paged_kv.hpp"
-#include "lfm/quantization.hpp"
+#include "lfm/backend/cpu/kernels.hpp"
+#include "lfm/backend/cpu/paged_kv.hpp"
+#include "lfm/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cassert>

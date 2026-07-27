@@ -1,4 +1,4 @@
-#include "lfm/detail/request_registry.hpp"
+#include "lfm/detail/runtime/concurrency/request_registry.hpp"
 
 #include <cassert>
 #include <chrono>

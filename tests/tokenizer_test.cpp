@@ -1,4 +1,4 @@
-#include "lfm/tokenizer.hpp"
+#include "lfm/text/tokenizer.hpp"
 
 #include <cassert>
 #include <filesystem>

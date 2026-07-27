@@ -1,4 +1,4 @@
-#include "lfm/execution_plan.hpp"
+#include "lfm/model/execution/plan.hpp"
 
 #include <cassert>
 #include <iostream>

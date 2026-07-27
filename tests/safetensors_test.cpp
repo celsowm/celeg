@@ -1,4 +1,4 @@
-#include "lfm/safetensors.hpp"
+#include "lfm/checkpoint/formats/safetensors.hpp"
 
 #include <cassert>
 #include <cstdint>

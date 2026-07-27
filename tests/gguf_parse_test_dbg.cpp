@@ -1,4 +1,4 @@
-#include "lfm/gguf.hpp"
+#include "lfm/checkpoint/formats/gguf.hpp"
 
 #include <cassert>
 #include <cstdint>

@@ -1,4 +1,4 @@
-#include "lfm/concurrent_metrics.hpp"
+#include "lfm/runtime/concurrency/metrics.hpp"
 
 #include <cassert>
 #include <iostream>

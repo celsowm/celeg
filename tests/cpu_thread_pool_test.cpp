@@ -1,4 +1,4 @@
-#include "lfm/cpu_thread_pool.hpp"
+#include "lfm/backend/cpu/thread_pool.hpp"
 #include <atomic>
 #include <cassert>
 #include <cstddef>

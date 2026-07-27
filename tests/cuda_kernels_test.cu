@@ -1,9 +1,9 @@
-#include "lfm/cuda_utils.cuh"
-#include "lfm/kernels.cuh"
-#include "lfm/reference.hpp"
-#include "lfm/paged_kv.hpp"
-#include "lfm/model_shape.hpp"
-#include "lfm/model_variant.hpp"
+#include "lfm/backend/cuda/utils.cuh"
+#include "lfm/backend/cuda/kernels/kernels.cuh"
+#include "lfm/model/reference.hpp"
+#include "lfm/backend/cuda/paged_kv.hpp"
+#include "lfm/model/config/shape.hpp"
+#include "lfm/model/config/variant.hpp"
 
 #include <cassert>
 #include <cmath>

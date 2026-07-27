@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 199309L
-#include "lfm/c_api.h"
+#include "lfm/api/cuda.h"
 
 #include <stdio.h>
 #include <stdlib.h>

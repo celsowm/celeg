@@ -1,5 +1,5 @@
-#include "lfm/moe.hpp"
-#include "lfm/cuda_utils.cuh"
+#include "lfm/runtime/moe.hpp"
+#include "lfm/backend/cuda/utils.cuh"
 
 #include <cassert>
 #include <cmath>

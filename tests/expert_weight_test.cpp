@@ -1,7 +1,7 @@
-#include "lfm/weight_loader.hpp"
-#include "lfm/safetensors_repo.hpp"
-#include "lfm/detail/model_types.hpp"
-#include "lfm/cuda_utils.cuh"
+#include "lfm/model/weights/loader.hpp"
+#include "lfm/checkpoint/repositories/safetensors.hpp"
+#include "lfm/detail/model/types.hpp"
+#include "lfm/backend/cuda/utils.cuh"
 
 #include <cassert>
 #include <cstdint>

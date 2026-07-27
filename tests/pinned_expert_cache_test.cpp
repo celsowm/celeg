@@ -1,4 +1,4 @@
-#include "lfm/pinned_expert_cache.hpp"
+#include "lfm/runtime/cache/pinned_expert_cache.hpp"
 
 #include <cassert>
 #include <iostream>

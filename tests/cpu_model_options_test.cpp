@@ -1,4 +1,4 @@
-#include "lfm/cpu_model.hpp"
+#include "lfm/backend/cpu/model.hpp"
 
 #include <cassert>
 #include <iostream>

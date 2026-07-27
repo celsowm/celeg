@@ -1,4 +1,4 @@
-#include "lfm/detail/batch_planner.hpp"
+#include "lfm/detail/runtime/concurrency/batch_planner.hpp"
 
 #include <cassert>
 #include <chrono>

@@ -1,0 +1,115 @@
+#pragma once
+
+#include "lfm/model/execution/runtime_types.hpp"
+#include "lfm/model/config/shape.hpp"
+#include "lfm/model/config/variant.hpp"
+#include "lfm/backend/cuda/utils.cuh"
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace lfm {
+
+// Persistence boundary for an LfmModel session. Isolates the on-disk
+// session-file format (header layout, byte order, payload ordering, magic
+// number, version, variant fingerprint) and the prefix-state snapshot
+// representation from the inference path (Single Responsibility Principle).
+// New file-format versions or new prefix-state representations are added
+// here without touching the forward pass (Open/Closed Principle).
+//
+// The store exposes only static helpers: it never retains ownership and
+// never holds a reference to the host. The host (LfmModel::Impl) passes
+// the live device buffers and topology snapshot per call.
+class SessionStore {
+public:
+    // Header layout for the v2 session file. Bumping the version requires
+    // changing the magic and the version field; old files are rejected
+    // cleanly without a migration path because the on-disk layout now
+    // depends on the variant fingerprint.
+    struct Header {
+        std::array<char, 8> magic{{'L', 'F', 'M', 'S', 'E', 'S', 'S', '2'}};
+        uint32_t version = 2;
+        uint32_t kv_cache_mode = 0;
+        int32_t position = 0;
+        int32_t max_context = 0;
+        int32_t layers = 0;
+        int32_t kv_width = 0;
+        int32_t kv_heads = 0;
+        int32_t vocab = 0;
+        int32_t attention_layers = 0;
+        uint64_t rng_state = 0;
+        char variant_id[32] = {};
+    };
+
+    static constexpr std::array<char, 8> kMagic{
+        {'L', 'F', 'M', 'S', 'E', 'S', 'S', '2'}};
+    static constexpr uint32_t kVersion = 2;
+
+    // Snapshot of the live session state that SessionStore reads from or
+    // writes to. The host fills this struct and passes it in; the store
+    // never retains a reference beyond the call.
+    struct SessionState {
+        const ModelShape& shape;
+        int max_context = 0;
+        int position = 0;
+        KvCacheMode kv_cache_mode = KvCacheMode::Bf16;
+        const IModelVariant* variant = nullptr;
+        cudaStream_t stream = nullptr;
+        DeviceBuffer<uint8_t>* seen_tokens = nullptr;
+        DeviceBuffer<__nv_bfloat16>* logits = nullptr;
+        DeviceBuffer<uint64_t>* rng_state = nullptr;
+        // Per-layer K/V + conv-state buffers. The host populates this with
+        // pointers into the live AttentionLayer / ConvolutionLayer storage.
+        struct LayerBuffers {
+            bool is_attention = false;
+            // BF16 path (when kv_cache_mode == Bf16):
+            __nv_bfloat16* key_cache_bf16 = nullptr;
+            __nv_bfloat16* value_cache_bf16 = nullptr;
+            // INT8 path (when kv_cache_mode == Int8):
+            int8_t* key_cache_int8 = nullptr;
+            int8_t* value_cache_int8 = nullptr;
+            float* key_cache_scales = nullptr;
+            float* value_cache_scales = nullptr;
+            // Convolution path:
+            __nv_bfloat16* conv_state = nullptr;
+            size_t conv_state_elements = 0;
+        };
+        std::vector<LayerBuffers> layer_buffers;
+    };
+
+    // Writes a v2 session file at `path`. Throws on any I/O or CUDA error.
+    static void save(const std::string& path, SessionState& state);
+
+    // Reads a v2 session file from `path` and restores the buffers. Throws
+    // if the file is not a v2 session, the dimensions mismatch, or the
+    // variant fingerprint differs. On success, `state.position` is updated
+    // to match the header.
+    static void load(const std::string& path, SessionState& state);
+
+    // Snapshot of the prefix-state-of-record for cache reuse. Host-owned
+    // bytes; SessionStore only copies. Uses uint16_t for the BF16 payloads
+    // (bitwise-compatible with __nv_bfloat16) so the snapshot moves into
+    // the public PrefixState struct without conversion.
+    struct PrefixSnapshot {
+        int position = 0;
+        std::vector<uint8_t> seen_tokens;
+        std::vector<uint16_t> logits_bf16;
+        std::vector<uint16_t> conv_state_bf16;
+    };
+
+    // Exports a prefix snapshot (host-side copies of seen_tokens, logits,
+    // and the conv_state of every convolution layer).
+    static PrefixSnapshot export_prefix(const SessionState& state);
+
+    // Restores a prefix snapshot. Resets phase to Ready on success; the
+    // RNG is NOT inherited from the snapshot — `request_seed` is written
+    // instead, so the receiving request keeps its own generation stream.
+    // Updates `state.position` to the snapshot's position.
+    static void restore_prefix(const PrefixSnapshot& snapshot,
+                               SessionState& state,
+                               uint64_t request_seed);
+};
+
+} // namespace lfm

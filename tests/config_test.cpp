@@ -1,6 +1,6 @@
-#include "lfm/config.hpp"
-#include "lfm/model_shape.hpp"
-#include "lfm/model_variant.hpp"
+#include "lfm/model/config/config.hpp"
+#include "lfm/model/config/shape.hpp"
+#include "lfm/model/config/variant.hpp"
 
 #include <cassert>
 #include <filesystem>

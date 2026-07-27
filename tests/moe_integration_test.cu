@@ -12,9 +12,9 @@
 // NOTE: the router/FFN run in BF16, so a float CPU reference is expected to
 // differ by a few percent (BF16 rounding). Tolerances below reflect that.
 
-#include "lfm/moe.hpp"
-#include "lfm/cuda_utils.cuh"
-#include "lfm/kernels/norm_conv.hpp"
+#include "lfm/runtime/moe.hpp"
+#include "lfm/backend/cuda/utils.cuh"
+#include "lfm/backend/cuda/kernels/norm_conv.hpp"
 
 #include <cassert>
 #include <cmath>

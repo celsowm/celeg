@@ -1,4 +1,4 @@
-#include "lfm/chat_template.hpp"
+#include "lfm/text/chat_template.hpp"
 
 #include <cassert>
 #include <iostream>

@@ -1,4 +1,4 @@
-#include "lfm/policy.hpp"
+#include "lfm/runtime/concurrency/policy_types.hpp"
 
 #include <cassert>
 #include <iostream>

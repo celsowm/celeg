@@ -1,4 +1,4 @@
-#include "lfm/moe.hpp"
+#include "lfm/runtime/moe.hpp"
 
 #include <cmath>
 #include <cassert>

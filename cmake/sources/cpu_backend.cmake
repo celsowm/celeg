@@ -1,0 +1,13 @@
+set(LFM_CPU_BACKEND_SOURCES
+    src/backend/cpu/model.cpp
+    src/backend/cpu/packed.cpp
+    src/backend/cpu/concurrent.cpp
+    src/backend/cpu/kernels/kernels.cpp
+    src/backend/cpu/kernels/quantization.cpp
+    src/backend/cpu/memory/paged_kv.cpp
+    src/backend/cpu/memory/prefix_cache.cpp
+    src/backend/cpu/runtime/isa.cpp
+    src/backend/cpu/runtime/numa.cpp
+    src/backend/cpu/runtime/thread_pool.cpp
+    src/backend/cpu/runtime/topology.cpp
+)
