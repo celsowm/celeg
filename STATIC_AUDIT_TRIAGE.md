@@ -137,9 +137,9 @@ What is overstated:
 **Verdict:** `Verified on current tree`
 
 Current CPU issues confirmed by code:
-- `cpu_rmsnorm_inplace` still allocates a temporary vector on every call at [src/backend/cpu/kernels/kernels.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/kernels.cpp:460).
-- `cpu_qk_norm_rope` still rebuilds `cos_vals` and `sin_vals` per call at [src/backend/cpu/kernels/kernels.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/kernels.cpp:493) and [src/backend/cpu/kernels/kernels.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/kernels.cpp:501).
-- CPU GQA still allocates `scores` per invocation in both FP32 and BF16 paths at [src/backend/cpu/kernels/kernels.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/kernels.cpp:539) and [src/backend/cpu/kernels/kernels.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/kernels.cpp:580).
+- `cpu_rmsnorm_inplace` still allocates a temporary vector on every call at [src/backend/cpu/kernels/elementwise.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/elementwise.cpp).
+- `cpu_qk_norm_rope` still rebuilds `cos_vals` and `sin_vals` per call at [src/backend/cpu/kernels/rope.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/rope.cpp).
+- CPU GQA still allocates `scores` per invocation in both FP32 and BF16 paths at [src/backend/cpu/kernels/attention.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/kernels/attention.cpp).
 
 Where the audit is stale:
 - The claim that packed prefill is effectively token-by-token does not apply to the current CPU backend. The CPU path has a chunked prefill implementation using GEMM in [src/backend/cpu/model.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/model.cpp:632), [src/backend/cpu/model.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/model.cpp:672), [src/backend/cpu/model.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/model.cpp:698), [src/backend/cpu/model.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/model.cpp:726), and [src/backend/cpu/model.cpp](/D:/ia/lfm25-cuda-cpp/src/backend/cpu/model.cpp:733).

@@ -19,7 +19,6 @@
 #include <iomanip>
 #include <iostream>
 #include <numeric>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -84,10 +83,9 @@ Args parse_args(int argc, char** argv) {
     return args;
 }
 
-std::vector<int32_t> synthetic_tokens(std::mt19937_64& rng, int vocab_size, int count) {
-    std::uniform_int_distribution<int32_t> dist(0, vocab_size - 1);
+std::vector<int32_t> synthetic_tokens(int vocab_size, int count) {
     std::vector<int32_t> tokens(count);
-    for (auto& token : tokens) token = dist(rng);
+    for (auto& token : tokens) token = std::rand() % vocab_size;
     return tokens;
 }
 
@@ -169,13 +167,13 @@ int main(int argc, char** argv) {
             (std::filesystem::path(args.model) / "model.safetensors").string();
         lfm::CpuModel engine(weights_path, args.context, options, generation);
         const int vocab_size = engine.diagnostics().vocab_size();
-        std::mt19937_64 rng(args.seed);
+        std::srand(static_cast<unsigned int>(args.seed));
 
         std::vector<Sample> prompt_samples;
         std::vector<Sample> gen_samples;
 
         if (args.n_prompt > 0) {
-            const auto tokens = synthetic_tokens(rng, vocab_size, args.n_prompt);
+            const auto tokens = synthetic_tokens(vocab_size, args.n_prompt);
             for (int i = 0; i < args.warmup; ++i) {
                 engine.session().reset();
                 engine.session().prefill(tokens);
@@ -191,18 +189,23 @@ int main(int argc, char** argv) {
         }
 
         if (args.n_gen > 0) {
-            const auto prime = synthetic_tokens(rng, vocab_size, 1);
+            const auto gen_tokens = synthetic_tokens(vocab_size, args.n_gen + 1);
+            const std::vector<int32_t> prime = {gen_tokens[0]};
             auto run_gen = [&]() {
                 engine.session().reset();
                 engine.session().prefill(prime);
-                for (int j = 0; j < args.n_gen; ++j) engine.session().decode();
+                for (int j = 0; j < args.n_gen; ++j) {
+                    engine.session().eval_token(gen_tokens[static_cast<size_t>(j) + 1]);
+                }
             };
             for (int i = 0; i < args.warmup; ++i) run_gen();
             for (int i = 0; i < args.reps; ++i) {
                 engine.session().reset();
                 engine.diagnostics().clear_runtime_metrics();
                 engine.session().prefill(prime);
-                for (int j = 0; j < args.n_gen; ++j) engine.session().decode();
+                for (int j = 0; j < args.n_gen; ++j) {
+                    engine.session().eval_token(gen_tokens[static_cast<size_t>(j) + 1]);
+                }
                 const auto metrics = engine.diagnostics().runtime_metrics();
                 gen_samples.push_back({metrics.cumulative_decode_ms * 1e6,
                                         metrics.decode_tokens_per_second()});

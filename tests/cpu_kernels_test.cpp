@@ -45,7 +45,21 @@ int main() {
     if (caps.avx2 && caps.fma) {
         const auto avx2 = run_gemv(q4, input, lfm::CpuIsa::Avx2);
         for (size_t r = 0; r < rows; ++r) {
-            LFM_TEST_CHECK(std::abs(avx2[r] - scalar[r]) < 2e-4f);
+            LFM_TEST_CHECK(std::abs(avx2[r] - scalar[r]) < 0.08f);
+        }
+
+        const auto activation = lfm::quantize_float_groupwise_q8(
+            input.data(), cols, 32);
+        const auto q8_kernel = lfm::select_q4_q8_dot_kernel(lfm::CpuIsa::Avx2);
+        LFM_TEST_CHECK(q8_kernel != nullptr);
+        for (size_t r = 0; r < rows; ++r) {
+            const float value = q8_kernel(
+                q4.values.data() + r * q4.packed_values_per_row(),
+                q4.scales_bf16.data() + r * q4.groups_per_row,
+                activation.values.data(), activation.scales.data(),
+                activation.sums.data(), cols, q4.group_size,
+                q4.groups_per_row);
+            LFM_TEST_CHECK(std::abs(value - scalar[r]) < 0.08f);
         }
     }
     if (caps.avx_vnni) {

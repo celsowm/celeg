@@ -25,6 +25,12 @@ the exact same JSON row schema `llama-bench -o json` does (`n_prompt`,
 `n_gen`, `avg_ns`, `stddev_ns`, `avg_ts`, `stddev_ts`), so `run_bench.py` uses
 one loader for both.
 
+Decode timing uses direct evaluation of a predetermined token stream on the LFM
+side; it does not include greedy vocabulary sampling. The runner passes an
+explicit equal thread count to both engines, uses 256-token llama.cpp batch and
+microbatch sizes to match the LFM chunk size, and pins the llama.cpp and LFM
+checkpoint revisions used by the comparison.
+
 ## Requirements
 
 - Python 3.9+, with `huggingface_hub` installed (`pip install huggingface_hub`).
@@ -62,10 +68,10 @@ All available on `setup`, `run`, and the no-subcommand form:
 | `--quant` | `Q4_K_M` | llama.cpp GGUF quant to compare against |
 | `--prompt-tokens` | 512 | synthetic prefill tokens |
 | `--gen-tokens` | 128 | decode steps |
-| `--threads` | 0 (auto) | thread count for both engines |
+| `--threads` | host logical CPUs | explicit thread count for both engines |
 | `--reps` | 5 | timed repetitions |
 | `--group` | 32 | lfm25-cpu weight quantization group size (32 or 64) |
-| `--revision` | `main` | `LiquidAI/LFM2.5-230M` revision |
+| `--revision` | pinned commit | `LiquidAI/LFM2.5-230M` revision |
 | `--jobs` | 12 | parallel build jobs (`setup` only) |
 
 `GENERATOR` env var overrides the CMake generator used to build llama.cpp

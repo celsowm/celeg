@@ -63,6 +63,9 @@ public:
     void reset();
     void prefill(const std::vector<int32_t>& tokens);
     int32_t decode();
+    // Advances the session with a caller-supplied token without sampling.
+    // Intended for direct-evaluation benchmarks and deterministic replay.
+    void eval_token(int32_t token);
     void set_generation_config(GenerationConfig generation);
     int position() const;
     bool ready_for_decode() const;
@@ -144,6 +147,7 @@ public:
     void reset_session();
     void prefill_session(const std::vector<int32_t>& tokens);
     int32_t decode_session();
+    void eval_token_session(int32_t token);
     void set_session_generation(GenerationConfig generation);
     int session_position() const;
     bool session_ready_for_decode() const;

@@ -1,9 +1,19 @@
 set(LFM_CPU_BACKEND_SOURCES
     src/backend/cpu/model.cpp
+    src/backend/cpu/model_weights.cpp
+    src/backend/cpu/model_state.cpp
+    src/backend/cpu/model_forward.cpp
+    src/backend/cpu/model_sampling.cpp
     src/backend/cpu/packed.cpp
     src/backend/cpu/concurrent.cpp
-    src/backend/cpu/kernels/kernels.cpp
-    src/backend/cpu/kernels/kernels_avx2_msvc.cpp
+    src/backend/cpu/kernels/quantized_dot.cpp
+    src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
+    src/backend/cpu/kernels/linear.cpp
+    src/backend/cpu/kernels/elementwise.cpp
+    src/backend/cpu/kernels/elementwise_avx2_msvc.cpp
+    src/backend/cpu/kernels/rope.cpp
+    src/backend/cpu/kernels/attention.cpp
+    src/backend/cpu/kernels/convolution.cpp
     src/backend/cpu/kernels/quantization.cpp
     src/backend/cpu/memory/paged_kv.cpp
     src/backend/cpu/memory/prefix_cache.cpp

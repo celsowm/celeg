@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -40,6 +41,8 @@ LFM_BUILD_DIR = ROOT / "build-cpu"
 
 LFM_REPO = "LiquidAI/LFM2.5-230M"
 GGUF_REPO = "LiquidAI/LFM2.5-230M-GGUF"
+LLAMA_REVISION = "0e4a0362239713ea95a6864a17a8de4b0ad90d62"
+DEFAULT_LFM_REVISION = "37b30cce3446f3f2e26a0d3f8c67c9167f5079d7"
 KNOWN_QUANTS = ("BF16", "F16", "Q4_0", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0")
 
 
@@ -118,7 +121,9 @@ def setup_llama_cpp(jobs: int) -> None:
     if not (EXT_DIR / ".git").is_dir():
         print(f"cloning llama.cpp into {EXT_DIR}")
         EXT_DIR.parent.mkdir(parents=True, exist_ok=True)
-        run(["git", "clone", "--depth", "1", "https://github.com/ggml-org/llama.cpp.git", str(EXT_DIR)])
+        run(["git", "clone", "https://github.com/ggml-org/llama.cpp.git", str(EXT_DIR)])
+
+    run(["git", "-C", str(EXT_DIR), "checkout", "--detach", LLAMA_REVISION])
 
     configure_cmd = [
         "cmake", "-S", str(EXT_DIR), "-B", str(LLAMA_BUILD_DIR),
@@ -139,6 +144,12 @@ def setup_llama_cpp(jobs: int) -> None:
 
 
 def build_lfm25_bench(jobs: int) -> None:
+    run([
+        "cmake", "-S", str(ROOT), "-B", str(LFM_BUILD_DIR),
+        *default_generator(),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DLFM_BUILD_TESTS=ON",
+    ])
     run(["cmake", "--build", str(LFM_BUILD_DIR), "--config", "Release",
          "--target", "lfm25-bench", "-j", str(jobs)])
 
@@ -152,9 +163,9 @@ def run_llama_bench(args: argparse.Namespace) -> Path:
     gguf = ensure_gguf(args.quant)
 
     cmd = [str(bench), "-m", str(gguf), "-p", str(args.prompt_tokens),
-           "-n", str(args.gen_tokens), "-r", str(args.reps), "-o", "json"]
-    if args.threads:
-        cmd += ["-t", str(args.threads)]
+           "-n", str(args.gen_tokens), "-r", str(args.reps), "-o", "json",
+           "-t", str(args.threads), "-b", str(args.batch_size),
+           "-ub", str(args.ubatch_size)]
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"llama_cpp_{args.quant}.json"
@@ -240,11 +251,18 @@ def add_common_bench_args(parser: argparse.ArgumentParser) -> None:
                          help="llama.cpp GGUF quant to compare against (default: Q4_K_M)")
     parser.add_argument("--prompt-tokens", type=int, default=512)
     parser.add_argument("--gen-tokens", type=int, default=128)
-    parser.add_argument("--threads", type=int, default=0, help="0 = auto")
+    parser.add_argument("--threads", type=int,
+                        default=max(1, os.cpu_count() or 1),
+                        help="explicit thread count for both engines")
     parser.add_argument("--reps", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=256,
+                        help="llama.cpp logical batch size (matches LFM chunking)")
+    parser.add_argument("--ubatch-size", type=int, default=256,
+                        help="llama.cpp physical batch size (matches LFM chunking)")
     parser.add_argument("--group", type=int, default=32, choices=(32, 64),
                          help="lfm25-cpu weight quantization group size")
-    parser.add_argument("--revision", default="main", help="LFM2.5-230M revision")
+    parser.add_argument("--revision", default=DEFAULT_LFM_REVISION,
+                        help="pinned LFM2.5-230M revision")
 
 
 def cmd_setup(args: argparse.Namespace) -> None:

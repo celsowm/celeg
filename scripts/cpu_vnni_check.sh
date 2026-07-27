@@ -9,11 +9,12 @@ if [[ ! -x "$BUILD/cpu_kernels_test" ]]; then
 fi
 "$BUILD/cpu_kernels_test"
 
-OBJECT="$BUILD/CMakeFiles/lfm25_host.dir/src/cpu_kernels.cpp.o"
+OBJECT="$(find "$BUILD/CMakeFiles/lfm_cpu_backend.dir/src/backend/cpu/kernels" \
+  -name 'quantized_dot.cpp.o' -o -name 'quantized_dot.cpp.obj' | head -n 1)"
 if [[ -f "$OBJECT" ]] && command -v objdump >/dev/null 2>&1; then
   disassembly="$(objdump -d "$OBJECT")"
   if ! grep -q 'vpdpbusd' <<<"$disassembly"; then
-    echo "VPDPBUSD was not found in cpu_kernels.cpp machine code" >&2
+    echo "VPDPBUSD was not found in quantized_dot.cpp machine code" >&2
     exit 1
   fi
   echo "cpu_vnni_check: VPDPBUSD present"

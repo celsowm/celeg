@@ -89,8 +89,8 @@ bool cpu_isa_compiled(CpuIsa isa) {
     (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86)))
             // AVX2/FMA kernels exist on both toolchains: GCC/Clang via
             // per-function __attribute__((target(...))) multiversioning in
-            // kernels.cpp, MSVC via a dedicated TU (kernels_avx2_msvc.cpp)
-            // since MSVC has no per-function target attribute equivalent.
+            // the focused kernel translation units, MSVC via dedicated AVX2
+            // translation units since it has no per-function target attribute.
             return true;
 #else
             return false;
