@@ -171,6 +171,50 @@ void Q8GroupVector::validate() const {
     }
 }
 
+void quantize_float_groupwise_q8_into(const float* data,
+                                       size_t elements,
+                                       size_t group_size,
+                                       int8_t* values,
+                                       float* scales,
+                                       int32_t* sums) {
+    if (!data || !values || !scales || !sums || elements == 0 || group_size == 0) {
+        throw std::invalid_argument("invalid Q8 activation arguments");
+    }
+    const size_t groups = (elements + group_size - 1) / group_size;
+    for (size_t group = 0; group < groups; ++group) {
+        const size_t begin = group * group_size;
+        const size_t end = std::min(elements, begin + group_size);
+        float maximum = 0.0f;
+        for (size_t i = begin; i < end; ++i) {
+            // Written as !(v <= maximum) rather than std::max so a NaN input
+            // propagates into `maximum` (NaN compares unordered) and is caught
+            // by the single finite check below instead of one check per element.
+            const float value = std::abs(data[i]);
+            if (!(value <= maximum)) maximum = value;
+        }
+        if (!std::isfinite(maximum)) {
+            throw std::invalid_argument("Q8 activation contains a non-finite value");
+        }
+        const float scale = maximum == 0.0f ? 0.0f : maximum / 127.0f;
+        scales[group] = scale;
+        if (scale == 0.0f) {
+            std::fill(values + begin, values + end, int8_t{0});
+            sums[group] = 0;
+            continue;
+        }
+        const float inverse = 1.0f / scale;
+        int32_t sum = 0;
+        for (size_t i = begin; i < end; ++i) {
+            // |data[i]| <= maximum by construction, so the scaled value is
+            // always inside [-127, 127] and needs no clamp.
+            const int quantized = static_cast<int>(std::nearbyintf(data[i] * inverse));
+            values[i] = static_cast<int8_t>(quantized);
+            sum += quantized;
+        }
+        sums[group] = sum;
+    }
+}
+
 Q8GroupVector quantize_float_groupwise_q8(const float* data,
                                            size_t elements,
                                            size_t group_size) {
@@ -186,33 +230,8 @@ Q8GroupVector quantize_float_groupwise_q8(const float* data,
     result.values.resize(elements);
     result.scales.resize(result.groups);
     result.sums.resize(result.groups);
-    for (size_t group = 0; group < result.groups; ++group) {
-        const size_t begin = group * group_size;
-        const size_t end = std::min(elements, begin + group_size);
-        float maximum = 0.0f;
-        for (size_t i = begin; i < end; ++i) {
-            if (!std::isfinite(data[i])) {
-                throw std::invalid_argument("Q8 activation contains a non-finite value");
-            }
-            maximum = std::max(maximum, std::abs(data[i]));
-        }
-        const float scale = maximum == 0.0f ? 0.0f : maximum / 127.0f;
-        result.scales[group] = scale;
-        if (scale == 0.0f) {
-            std::fill(result.values.begin() + static_cast<ptrdiff_t>(begin),
-                      result.values.begin() + static_cast<ptrdiff_t>(end), int8_t{0});
-            result.sums[group] = 0;
-            continue;
-        }
-        const float inverse = 1.0f / scale;
-        int32_t sum = 0;
-        for (size_t i = begin; i < end; ++i) {
-            const long quantized = std::lround(data[i] * inverse);
-            result.values[i] = static_cast<int8_t>(std::clamp<long>(quantized, -127, 127));
-            sum += result.values[i];
-        }
-        result.sums[group] = sum;
-    }
+    quantize_float_groupwise_q8_into(data, elements, group_size, result.values.data(),
+                                     result.scales.data(), result.sums.data());
     result.validate();
     return result;
 }

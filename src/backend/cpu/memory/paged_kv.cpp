@@ -11,18 +11,32 @@
 #include <stdexcept>
 #include <vector>
 
+// The online-softmax attention kernel below is AVX2/FMA.  GCC and Clang need
+// the target attribute to emit those instructions from a generically compiled
+// translation unit; MSVC accepts the intrinsics directly, so it only needs the
+// runtime capability check.  Without this the whole attention inner loop fell
+// back to scalar code on MSVC builds.
 #if defined(__x86_64__) || defined(__i386__)
+#define LFM_CPU_HAS_AVX2_KERNEL 1
+#define LFM_CPU_AVX2_TARGET __attribute__((target("avx2,fma")))
 #pragma GCC push_options
 #pragma GCC target("avx2,fma")
 #include <immintrin.h>
 #pragma GCC pop_options
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#define LFM_CPU_HAS_AVX2_KERNEL 1
+#define LFM_CPU_AVX2_TARGET
+#include <immintrin.h>
+#else
+#define LFM_CPU_HAS_AVX2_KERNEL 0
+#define LFM_CPU_AVX2_TARGET
 #endif
 
 namespace lfm {
 
 namespace {
 
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+#if LFM_CPU_HAS_AVX2_KERNEL
 static const bool g_has_avx2_fma = []() {
     auto caps = detect_cpu_capabilities();
     return caps.avx2 && caps.fma;
@@ -66,8 +80,8 @@ struct PartialAttention {
     float denominator = 0.0f;
 };
 
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
-__attribute__((target("avx2,fma")))
+#if LFM_CPU_HAS_AVX2_KERNEL
+LFM_CPU_AVX2_TARGET
 void update_online_avx2(const float* query, int kv_head, int head_dim, float scale,
                         const CpuKvPagePool& pool, CpuKvPageId page,
                         int token_begin, int token_end, float* accumulator,
@@ -166,7 +180,7 @@ void update_online(const float* query, int kv_head, int head_dim, float scale,
                    const CpuKvPagePool& pool, CpuKvPageId page,
                    int token_begin, int token_end, float* accumulator,
                    PartialAttention& state) {
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+#if LFM_CPU_HAS_AVX2_KERNEL
     if (g_has_avx2_fma) {
         update_online_avx2(query, kv_head, head_dim, scale, pool, page,
                            token_begin, token_end, accumulator, state);

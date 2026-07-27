@@ -11,6 +11,18 @@ using Clock = std::chrono::steady_clock;
 double milliseconds_since(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
+
+// Prefill runs the row-wise elementwise passes (RMSNorm, SwiGLU, residual add)
+// over a whole chunk. They are independent per row, so they go on the shared
+// pool instead of running single-threaded on the calling thread between the
+// parallel GEMMs.
+template <typename Body>
+void parallel_rows(CpuThreadPool& pool, size_t rows, const Body& body) {
+    const size_t grain = std::max<size_t>(1, rows / std::max<size_t>(1, pool.size() * 4));
+    pool.parallel_for(0, rows, grain, [&](size_t begin, size_t end) {
+        for (size_t row = begin; row < end; ++row) body(row);
+    });
+}
 }
 
 void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
@@ -89,21 +101,23 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         if (token < 0 || token >= shared->shape.vocab_size) {
             throw std::invalid_argument("CPU chunked prefill token out of range");
         }
-        shared->linear.embedding(shared->embedding, token,
-            chunk_hidden.data() + row * shared->shape.hidden);
     }
+    parallel_rows(shared->pool, rows, [&](size_t row) {
+        shared->linear.embedding(shared->embedding, tokens[row],
+            chunk_hidden.data() + row * shared->shape.hidden);
+    });
 
     const int base_position = position_value;
     for (size_t layer_index = 0; layer_index < shared->layers.size(); ++layer_index) {
         const WeightLayer& layer = shared->layers[layer_index];
         const CommonWeights& common = common_weights(layer_index);
         std::copy(chunk_hidden.begin(), chunk_hidden.end(), chunk_residual.begin());
-        for (size_t row = 0; row < rows; ++row) {
+        parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_rmsnorm(chunk_hidden.data() + row * shared->shape.hidden,
                         common.operator_norm.data(),
                         chunk_normed.data() + row * shared->shape.hidden,
                         shared->shape.hidden, shared->shape.norm_eps);
-        }
+        });
 
         if (const auto* attention = std::get_if<AttentionWeights>(&layer)) {
             auto started = Clock::now();
@@ -113,10 +127,11 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
             AttentionState& cache = attention_state(layer_index);
             // Normalize/rotate and commit the complete chunk first. Each query
             // still observes only [0, base + row], preserving causality.
-            for (size_t row = 0; row < rows; ++row) {
+            // QK-norm + RoPE is per-row independent; the KV commit that follows
+            // appends to the shared page table and stays on this thread.
+            parallel_rows(shared->pool, rows, [&](size_t row) {
                 float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
                 float* k = q + shared->shape.q_width;
-                float* v = k + shared->shape.kv_width;
                 const int absolute_position = base_position + static_cast<int>(row);
                 cpu_qk_norm_rope(q, attention->q_norm.data(),
                     shared->shape.num_attention_heads, shared->shape.head_dim,
@@ -126,7 +141,12 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                     shared->shape.num_key_value_heads, shared->shape.head_dim,
                     absolute_position, shared->shape.rope_theta,
                     shared->shape.norm_eps);
-                store_kv(cache, absolute_position, k, v);
+            });
+            for (size_t row = 0; row < rows; ++row) {
+                float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
+                float* k = q + shared->shape.q_width;
+                float* v = k + shared->shape.kv_width;
+                store_kv(cache, base_position + static_cast<int>(row), k, v);
             }
             const CpuKvPagePool& pool = *shared->kv_pools.at(cache.pool_index);
             started = Clock::now();
@@ -160,7 +180,7 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
             prefill_profile.linear_ms += milliseconds_since(started);
         }
 
-        for (size_t row = 0; row < rows; ++row) {
+        parallel_rows(shared->pool, rows, [&](size_t row) {
             float* row_hidden = chunk_hidden.data() + row * shared->shape.hidden;
             cpu_residual_add(row_hidden,
                 chunk_residual.data() + row * shared->shape.hidden,
@@ -168,25 +188,25 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
             cpu_rmsnorm(row_hidden, common.ffn_norm.data(),
                 chunk_normed.data() + row * shared->shape.hidden,
                 shared->shape.hidden, shared->shape.norm_eps);
-        }
+        });
         auto started = Clock::now();
         shared->linear.gemm(common.w13, chunk_normed.data(),
                             chunk_gate_up.data(), rows);
         prefill_profile.linear_ms += milliseconds_since(started);
-        for (size_t row = 0; row < rows; ++row) {
+        parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_swiglu(chunk_gate_up.data() + row * 2ULL * shared->shape.intermediate,
                        chunk_activated.data() + row * shared->shape.intermediate,
                        shared->shape.intermediate);
-        }
+        });
         started = Clock::now();
         shared->linear.gemm(common.w2, chunk_activated.data(),
                             chunk_mlp.data(), rows);
         prefill_profile.linear_ms += milliseconds_since(started);
-        for (size_t row = 0; row < rows; ++row) {
+        parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_residual_add(chunk_hidden.data() + row * shared->shape.hidden,
                              chunk_mlp.data() + row * shared->shape.hidden,
                              shared->shape.hidden);
-        }
+        });
     }
 
     if (compute_logits) {

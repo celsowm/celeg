@@ -52,6 +52,17 @@ Q8GroupVector quantize_float_groupwise_q8(const float* data,
                                            size_t elements,
                                            size_t group_size);
 
+// Quantize into caller-owned storage. Lets a batch of activation rows live in
+// one contiguous allocation instead of one Q8GroupVector (three heap vectors)
+// per row, which is what the GEMM path needs. `values` holds `elements` bytes;
+// `scales` and `sums` hold ceil(elements / group_size) entries each.
+void quantize_float_groupwise_q8_into(const float* data,
+                                       size_t elements,
+                                       size_t group_size,
+                                       int8_t* values,
+                                       float* scales,
+                                       int32_t* sums);
+
 struct CpuPackMetadata {
     uint32_t version = 2;
     std::string source_id;
