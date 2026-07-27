@@ -138,6 +138,60 @@ endif()
 target_link_libraries(lfm_serve_cpu PUBLIC lfm_cpu_backend)
 target_link_libraries(lfm25 PRIVATE lfm_serve_cpu)
 
+if(LFM_ENABLE_SERVE)
+    # libuv is uSockets' event loop backend on platforms without epoll/kqueue
+    # (i.e. Windows). Force it to build as a static lib so lfm25-serve has no
+    # extra DLL to ship.
+    set(_lfm_saved_build_shared_libs "${BUILD_SHARED_LIBS}")
+    set(BUILD_SHARED_LIBS OFF)
+    set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        libuv
+        GIT_REPOSITORY https://github.com/libuv/libuv.git
+        GIT_TAG v1.49.2
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(libuv)
+    set(BUILD_SHARED_LIBS "${_lfm_saved_build_shared_libs}")
+
+    # uSockets has no CMake build of its own (upstream ships a plain
+    # Makefile), so its sources are fetched and compiled as our own target.
+    # Every backend-specific .c file self-guards with #ifdef on its own
+    # macro, so compiling the whole src/ tree with only LIBUS_USE_LIBUV and
+    # LIBUS_NO_SSL defined mirrors exactly what the upstream Makefile does
+    # for a libuv, no-TLS build.
+    FetchContent_Declare(
+        usockets
+        GIT_REPOSITORY https://github.com/uNetworking/uSockets.git
+        GIT_TAG 86097c490263ab662d62e8e7b541390bdec7d149 # pinned by uWebSockets v20.79.0
+        GIT_SHALLOW FALSE)
+    FetchContent_Populate(usockets)
+    file(GLOB LFM_USOCKETS_SOURCES
+        "${usockets_SOURCE_DIR}/src/*.c"
+        "${usockets_SOURCE_DIR}/src/eventing/*.c"
+        "${usockets_SOURCE_DIR}/src/crypto/*.c"
+        "${usockets_SOURCE_DIR}/src/io_uring/*.c")
+    add_library(usockets STATIC ${LFM_USOCKETS_SOURCES})
+    target_include_directories(usockets PUBLIC "${usockets_SOURCE_DIR}/src")
+    target_compile_definitions(usockets PUBLIC LIBUS_USE_LIBUV LIBUS_NO_SSL)
+    target_link_libraries(usockets PUBLIC libuv::libuv)
+
+    # uWebSockets itself is header-only C++ on top of uSockets.
+    FetchContent_Declare(
+        uwebsockets
+        GIT_REPOSITORY https://github.com/uNetworking/uWebSockets.git
+        GIT_TAG v20.79.0
+        GIT_SHALLOW TRUE)
+    FetchContent_Populate(uwebsockets)
+    add_library(uwebsockets INTERFACE)
+    target_include_directories(uwebsockets INTERFACE "${uwebsockets_SOURCE_DIR}/src")
+    target_compile_definitions(uwebsockets INTERFACE UWS_NO_ZLIB)
+    target_link_libraries(uwebsockets INTERFACE usockets)
+
+    add_executable(lfm25-serve src/app/serve/main.cpp)
+    target_link_libraries(lfm25-serve PRIVATE
+        lfm_cpu_backend lfm_serve_cpu lfm_serve_core lfm_serve_protocol uwebsockets)
+endif()
+
 include(CheckLanguage)
 set(LFM_CUDA_AVAILABLE OFF)
 if(LFM_ENABLE_CUDA)
@@ -244,7 +298,7 @@ if(LFM_CUDA_AVAILABLE)
         )
 endif()
 if(LFM_ENABLE_SERVE)
-    list(APPEND LFM_INSTALL_TARGETS lfm_serve_protocol)
+    list(APPEND LFM_INSTALL_TARGETS lfm_serve_protocol lfm25-serve)
 endif()
 install(TARGETS ${LFM_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
