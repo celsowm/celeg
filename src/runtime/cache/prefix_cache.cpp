@@ -226,13 +226,14 @@ bool PrefixCacheManager::insert_or_update(
         entry->state = std::make_shared<PrefixState>(std::move(state));
         entry->last_used = ++clock_;
         const auto id = entry->id;
-        lru_index_.insert({entry->last_used, id});
+        const auto lru_key = std::pair{entry->last_used, id};
+        lru_index_.insert(lru_key);
         radix_.insert(entry->prompt, id);
         try {
             const auto [_, inserted] = entries_.emplace(id, std::move(entry));
             if (!inserted) throw std::runtime_error("duplicate prefix cache ID");
         } catch (...) {
-            lru_index_.erase({entry->last_used, id});
+            lru_index_.erase(lru_key);
             radix_.erase(prompt, id);
             throw;
         }

@@ -1,7 +1,7 @@
 #include "lfm/runtime/moe.hpp"
+#include "support/assertions.hpp"
 
 #include <cmath>
-#include <cassert>
 #include <iostream>
 #include <vector>
 
@@ -68,12 +68,12 @@ int main() {
             logits[e] = logit;
             probs[e] = sigmoid(logit);
             // Large positive logits -> sigmoid near 1.
-            if (logit > 5.0f) assert(probs[e] > 0.99f);
+            if (logit > 5.0f) LFM_TEST_CHECK(probs[e] > 0.99f);
         }
         // Selected weights equal the original sigmoid of the selected experts.
         for (int k = 0; k < K; ++k) {
             const int ex = sel[static_cast<size_t>(k)];
-            assert(std::abs(weights[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
+            LFM_TEST_CHECK(std::abs(weights[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
         }
         // Top-K by prob: every unselected expert has prob <= the smallest
         // selected prob.
@@ -82,7 +82,7 @@ int main() {
         for (int e = 0; e < experts; ++e) {
             bool selected = false;
             for (int k = 0; k < K; ++k) if (sel[static_cast<size_t>(k)] == e) selected = true;
-            if (!selected) assert(probs[e] <= min_sel + 1e-6f);
+            if (!selected) LFM_TEST_CHECK(probs[e] <= min_sel + 1e-6f);
         }
     }
 
@@ -98,7 +98,7 @@ int main() {
         lfm::compute_moe_router(hv, rw, &biased_bias, rows, hidden, cfg_b, sel_b, w_b);
         bool expert5_selected = false;
         for (int k = 0; k < K; ++k) if (sel_b[static_cast<size_t>(k)] == 5) expert5_selected = true;
-        assert(expert5_selected);
+        LFM_TEST_CHECK(expert5_selected);
 
         // The gathered weight for expert 5 equals its sigmoid prob, NOT
         // (prob + bias).
@@ -113,8 +113,8 @@ int main() {
             const int ex = sel_b[static_cast<size_t>(k)];
             // The gathered weight is the original sigmoid prob only; the expert
             // bias influences selection but never leaks into the weight value.
-            assert(std::abs(w_b[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
-            assert(std::abs(w_b[static_cast<size_t>(k)] - (probs[ex] + biased_bias[ex])) >=
+            LFM_TEST_CHECK(std::abs(w_b[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
+            LFM_TEST_CHECK(std::abs(w_b[static_cast<size_t>(k)] - (probs[ex] + biased_bias[ex])) >=
                    (biased_bias[ex] > 0.0f ? 1.0f : 0.0f));
         }
     }
@@ -128,7 +128,7 @@ int main() {
         lfm::compute_moe_router(hv, rw, nullptr, rows, hidden, cfg_n, sel_n, w_n);
         float sum = 0.0f;
         for (int k = 0; k < K; ++k) sum += w_n[static_cast<size_t>(k)];
-        assert(std::abs(sum - 1.0f) < 1e-4f);
+        LFM_TEST_CHECK(std::abs(sum - 1.0f) < 1e-4f);
     }
 
     // Routed scaling multiplies weights.
@@ -141,7 +141,7 @@ int main() {
         lfm::compute_moe_router(hv, rw, nullptr, rows, hidden, cfg_s, sel_s, w_s);
         float sum = 0.0f;
         for (int k = 0; k < K; ++k) sum += w_s[static_cast<size_t>(k)];
-        assert(std::abs(sum - 2.0f) < 1e-4f);
+        LFM_TEST_CHECK(std::abs(sum - 2.0f) < 1e-4f);
     }
 
     // Tie-break: equal scores -> smaller expert index selected.
@@ -155,9 +155,9 @@ int main() {
         lfm::MoeRouterConfig cfg_t = cfg;
         cfg_t.use_expert_bias = true;
         lfm::compute_moe_router(hv, zero_rw, &zero_b, 1, hidden, cfg_t, sel_t, w_t);
-        for (int k = 0; k < K; ++k) assert(sel_t[static_cast<size_t>(k)] == k);
+        for (int k = 0; k < K; ++k) LFM_TEST_CHECK(sel_t[static_cast<size_t>(k)] == k);
         // All weights equal 0.5 (sigmoid(0)), then normalized -> 1/K each.
-        for (int k = 0; k < K; ++k) assert(std::abs(w_t[static_cast<size_t>(k)] - 0.5f) < 1e-5f);
+        for (int k = 0; k < K; ++k) LFM_TEST_CHECK(std::abs(w_t[static_cast<size_t>(k)] - 0.5f) < 1e-5f);
     }
 
     // Negative logits -> sigmoid < 0.5; large negative -> ~0.
@@ -166,7 +166,7 @@ int main() {
         std::vector<int> sel_n2;
         std::vector<float> w_n2;
         lfm::compute_moe_router(hv, neg_rw, nullptr, 1, hidden, cfg, sel_n2, w_n2);
-        for (int k = 0; k < K; ++k) assert(w_n2[static_cast<size_t>(k)] < 0.5f);
+        for (int k = 0; k < K; ++k) LFM_TEST_CHECK(w_n2[static_cast<size_t>(k)] < 0.5f);
     }
 
     std::cout << "moe_router_test: ok\n";

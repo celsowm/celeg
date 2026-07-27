@@ -79,11 +79,9 @@ private:
 
     void retain_snapshot(const CpuPrefixSnapshot& snapshot);
     void release_snapshot(const CpuPrefixSnapshot& snapshot) noexcept;
-    CpuPrefixSnapshot clone_for_request(const CpuPrefixSnapshot& cached,
-                                        size_t matched_tokens,
-                                        int request_numa_node);
-    CpuPrefixSnapshot clone_for_cache(const CpuPrefixSnapshot& request,
-                                      size_t prefix_tokens);
+    CpuPrefixSnapshot clone_snapshot(const CpuPrefixSnapshot& source,
+                                     size_t prefix_tokens,
+                                     int destination_numa_node);
     Entry* exact_entry(const std::vector<int32_t>& prompt);
     Entry* longest_entry(const std::vector<int32_t>& prompt,
                          size_t* matched_tokens);

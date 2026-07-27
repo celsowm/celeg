@@ -1,6 +1,7 @@
 #include "lfm/backend/cpu/prefix_cache.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 
@@ -42,7 +43,14 @@ void CpuPrefixCacheManager::retain_snapshot(const CpuPrefixSnapshot& snapshot) {
     } catch (...) {
         for (size_t layer = 0; layer <= retained_layers && layer < pools_.size(); ++layer) {
             for (CpuKvPageId page : snapshot.attention_pages[layer]) {
-                try { pools_[layer]->release(page); } catch (...) { }
+                try {
+                    pools_[layer]->release(page);
+                } catch (const std::exception& error) {
+                    std::clog << "CPU prefix cache rollback failed: "
+                              << error.what() << '\n';
+                } catch (...) {
+                    std::clog << "CPU prefix cache rollback failed: unknown exception\n";
+                }
             }
         }
         throw;
@@ -53,7 +61,13 @@ void CpuPrefixCacheManager::release_snapshot(const CpuPrefixSnapshot& snapshot) 
     const size_t layers = std::min(snapshot.attention_pages.size(), pools_.size());
     for (size_t layer = 0; layer < layers; ++layer) {
         for (CpuKvPageId page : snapshot.attention_pages[layer]) {
-            try { pools_[layer]->release(page); } catch (...) { }
+            try {
+                pools_[layer]->release(page);
+            } catch (const std::exception& error) {
+                std::clog << "CPU prefix cache release failed: " << error.what() << '\n';
+            } catch (...) {
+                std::clog << "CPU prefix cache release failed: unknown exception\n";
+            }
         }
     }
 }
@@ -88,56 +102,26 @@ CpuPrefixCacheManager::Entry* CpuPrefixCacheManager::exact_entry(
     return entry && matched == prompt.size() ? entry : nullptr;
 }
 
-CpuPrefixSnapshot CpuPrefixCacheManager::clone_for_request(
-    const CpuPrefixSnapshot& cached, size_t matched_tokens,
-    int request_numa_node) {
-    CpuPrefixSnapshot result = cached;
-    result.numa_node = request_numa_node;
-    result.attention_pages.assign(cached.attention_pages.size(), {});
+CpuPrefixSnapshot CpuPrefixCacheManager::clone_snapshot(
+    const CpuPrefixSnapshot& source, size_t prefix_tokens,
+    int destination_numa_node) {
+    CpuPrefixSnapshot result = source;
+    result.numa_node = destination_numa_node;
+    result.attention_pages.assign(source.attention_pages.size(), {});
     const size_t partial = pools_.front()->page_tokens() == 0 ? 0 :
-        matched_tokens % pools_.front()->page_tokens();
+        prefix_tokens % pools_.front()->page_tokens();
     try {
         for (size_t layer = 0; layer < pools_.size(); ++layer) {
-            const auto& source_pages = cached.attention_pages.at(layer);
+            const auto& source_pages = source.attention_pages.at(layer);
             auto& destination_pages = result.attention_pages[layer];
             destination_pages = source_pages;
             for (CpuKvPageId page : destination_pages) pools_[layer]->retain(page);
             if (partial != 0 && !destination_pages.empty()) {
                 const CpuKvPageId shared_tail = destination_pages.back();
                 const CpuKvPageId private_tail = pools_[layer]->clone_prefix(
-                    shared_tail, partial, request_numa_node);
+                    shared_tail, partial, destination_numa_node);
                 destination_pages.back() = private_tail;
                 pools_[layer]->release(shared_tail);
-                ++metrics_.cow_pages;
-                metrics_.cow_bytes += partial * pools_[layer]->kv_width() * 2 *
-                    (pools_[layer]->mode() == CpuKvCacheMode::Fp32
-                        ? sizeof(float) : sizeof(uint16_t));
-            }
-        }
-        return result;
-    } catch (...) {
-        release_snapshot(result);
-        throw;
-    }
-}
-
-CpuPrefixSnapshot CpuPrefixCacheManager::clone_for_cache(
-    const CpuPrefixSnapshot& request, size_t prefix_tokens) {
-    CpuPrefixSnapshot result = request;
-    result.attention_pages.assign(request.attention_pages.size(), {});
-    const size_t partial = prefix_tokens % pools_.front()->page_tokens();
-    try {
-        for (size_t layer = 0; layer < pools_.size(); ++layer) {
-            const auto& source_pages = request.attention_pages.at(layer);
-            auto& destination_pages = result.attention_pages[layer];
-            destination_pages = source_pages;
-            for (CpuKvPageId page : destination_pages) pools_[layer]->retain(page);
-            if (partial != 0 && !destination_pages.empty()) {
-                const CpuKvPageId request_tail = destination_pages.back();
-                const CpuKvPageId cache_tail = pools_[layer]->clone_prefix(
-                    request_tail, partial, request.numa_node);
-                destination_pages.back() = cache_tail;
-                pools_[layer]->release(request_tail);
                 ++metrics_.cow_pages;
                 metrics_.cow_bytes += partial * pools_[layer]->kv_width() * 2 *
                     (pools_[layer]->mode() == CpuKvCacheMode::Fp32
@@ -161,7 +145,7 @@ std::optional<CpuPrefixMatch> CpuPrefixCacheManager::acquire(
     }
     CpuPrefixMatch result;
     result.matched_tokens = matched;
-    result.snapshot = clone_for_request(entry->snapshot, matched, request_numa_node);
+    result.snapshot = clone_snapshot(entry->snapshot, matched, request_numa_node);
     lru_index_.erase({entry->last_used, entry->id});
     entry->last_used = ++clock_;
     lru_index_.insert({entry->last_used, entry->id});
@@ -204,7 +188,8 @@ bool CpuPrefixCacheManager::insert(
         throw std::invalid_argument("CPU prefix snapshot position does not match prompt");
     }
     if (Entry* existing = exact_entry(prompt)) {
-        CpuPrefixSnapshot replacement = clone_for_cache(request_snapshot, prompt.size());
+        CpuPrefixSnapshot replacement = clone_snapshot(
+            request_snapshot, prompt.size(), request_snapshot.numa_node);
         const size_t replacement_bytes = snapshot_resident_bytes(replacement);
         const size_t old_bytes = existing->resident_bytes;
         release_snapshot(existing->snapshot);
@@ -225,16 +210,18 @@ bool CpuPrefixCacheManager::insert(
     auto entry = std::make_unique<Entry>();
     entry->id = next_id_++;
     entry->prompt = prompt;
-    entry->snapshot = clone_for_cache(request_snapshot, prompt.size());
+    entry->snapshot = clone_snapshot(
+        request_snapshot, prompt.size(), request_snapshot.numa_node);
     entry->resident_bytes = snapshot_resident_bytes(entry->snapshot);
     entry->last_used = ++clock_;
     const auto id = entry->id;
-    lru_index_.insert({entry->last_used, id});
+    const auto lru_key = std::pair{entry->last_used, id};
+    lru_index_.insert(lru_key);
     radix_.insert(entry->prompt, id);
     try {
         entries_.emplace(id, std::move(entry));
     } catch (...) {
-        lru_index_.erase({entry->last_used, id});
+        lru_index_.erase(lru_key);
         radix_.erase(prompt, id);
         throw;
     }

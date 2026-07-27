@@ -1,6 +1,5 @@
 #include "lfm/model/reference.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -17,10 +16,14 @@ void near(float a, float b, float tolerance = 0.02f) {
 } // namespace
 
 int main() {
-    using namespace lfm::reference;
+    using lfm::reference::conv_decode_bf16;
+    using lfm::reference::gqa_decode_strict_bf16;
+    using lfm::reference::rmsnorm_bf16;
+    using lfm::reference::rope_bf16_inplace;
+    using lfm::reference::round_bf16;
 
-    assert(round_bf16(1.0f) == 1.0f);
-    assert(std::isnan(round_bf16(std::nanf(""))));
+    LFM_TEST_CHECK(round_bf16(1.0f) == 1.0f);
+    LFM_TEST_CHECK(std::isnan(round_bf16(std::nanf(""))));
 
     const auto normalized = rmsnorm_bf16({1, 2, 3, 4}, {1, 1, 1, 1}, 1e-5f);
     const float inv = 1.0f / std::sqrt(7.5f + 1e-5f);
@@ -43,10 +46,10 @@ int main() {
         6, 8,
     };
     const auto attention = gqa_decode_strict_bf16(q, keys, values, 2, 2, 1, 2);
-    assert(attention.size() == 4);
+    LFM_TEST_CHECK(attention.size() == 4);
     near(attention[0], attention[2]);
     near(attention[1], attention[3]);
-    assert(attention[0] > 2.0f && attention[0] < 6.0f);
+    LFM_TEST_CHECK(attention[0] > 2.0f && attention[0] < 6.0f);
 
     std::vector<float> state(6, 0.0f);
     const std::vector<float> weights = {1, 2, 3, 1, 2, 3};

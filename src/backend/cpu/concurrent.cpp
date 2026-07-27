@@ -1,6 +1,5 @@
 #include "lfm/backend/cpu/concurrent.hpp"
 
-#include "lfm/backend/cpu/packed.hpp"
 #include "lfm/backend/cpu/prefix_cache.hpp"
 #include "lfm/backend/cpu/numa.hpp"
 
@@ -283,7 +282,7 @@ struct CpuConcurrentEngine::Impl {
         sessions.reserve(plan.size());
         for (const auto& request : plan) sessions.push_back(request->session.get());
         try {
-            auto [tokens, step_metrics] = executor.decode_step(sessions);
+            auto [tokens, step_metrics] = CpuModel::decode_batch(sessions);
             const Clock::time_point now = Clock::now();
             std::lock_guard lock(mutex);
             metrics.packed_decode_steps++;
@@ -364,8 +363,8 @@ struct CpuConcurrentEngine::Impl {
             const size_t offset = request->prompt_offset;
             const bool final_chunk = offset + chunk_tokens == request->prompt.size();
             try {
-                const CpuPackedStepMetrics step_metrics = executor.prefill_chunk(
-                    request->session.get(),
+                const CpuBatchMetrics step_metrics = CpuModel::prefill_chunk(
+                    *request->session,
                     std::span<const int32_t>(request->prompt.data() + offset,
                                              chunk_tokens),
                     final_chunk);
@@ -408,7 +407,7 @@ struct CpuConcurrentEngine::Impl {
                              offset + 1 == request->prompt.size()});
         }
         try {
-            const CpuPackedStepMetrics step_metrics = executor.prefill_step(items);
+            const CpuBatchMetrics step_metrics = CpuModel::prefill_batch(items);
             std::lock_guard lock(mutex);
             ++metrics.ragged_prefill_steps;
             metrics.prefill_tokens += items.size();
@@ -497,7 +496,6 @@ struct CpuConcurrentEngine::Impl {
     CpuNumaTopology numa_topology;
     size_t next_numa_node = 0;
     CpuModel base_model;
-    CpuPackedExecutor executor;
     std::unique_ptr<CpuPrefixCacheManager> prefix_cache;
 
     mutable std::mutex mutex;

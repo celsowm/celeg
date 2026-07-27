@@ -19,6 +19,7 @@
 namespace lfm {
 
 struct CpuModel::Impl {
+    struct BatchScratch;
     struct CommonWeights {
         std::vector<float> operator_norm;
         std::vector<float> ffn_norm;
@@ -107,6 +108,9 @@ struct CpuModel::Impl {
     void reset();
     void forward_token(int32_t token, bool compute_logits);
     void forward_chunk(std::span<const int32_t> tokens, bool compute_logits);
+    static void forward_batch(std::span<Impl* const> sessions,
+                              std::span<const int32_t> tokens,
+                              std::span<const uint8_t> compute_logits);
     int32_t sample();
     void set_generation(GenerationConfig config);
     CpuModelMemoryStats memory_stats() const;

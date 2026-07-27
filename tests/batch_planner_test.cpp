@@ -1,6 +1,5 @@
 #include "lfm/detail/runtime/concurrency/batch_planner.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <chrono>
 #include <iostream>
 #include <vector>
@@ -16,7 +15,7 @@ int main() {
     const auto second = registry.create({2}, high, now);
 
     lfm::detail::BatchPlanner planner;
-    assert(planner.next_admission(registry).value() == second);
+    LFM_TEST_CHECK(planner.next_admission(registry).value() == second);
 
     std::vector<lfm::detail::LaneSnapshot> lanes = {
         {0, first, lfm::RequestStatus::Prefill, 1},
@@ -25,8 +24,8 @@ int main() {
         {3, 43, lfm::RequestStatus::Decoding, 8},
     };
     const auto prefill = planner.order_prefill(lanes);
-    assert((prefill == std::vector<int>{1, 0}));
+    LFM_TEST_CHECK((prefill == std::vector<int>{1, 0}));
     const auto decode = planner.order_decode(lanes);
-    assert((decode == std::vector<int>{3, 2}));
+    LFM_TEST_CHECK((decode == std::vector<int>{3, 2}));
     std::cout << "batch_planner_test: ok\n";
 }

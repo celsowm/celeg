@@ -231,8 +231,8 @@ struct CpuPackWriter::Impl {
 };
 
 CpuPackWriter::CpuPackWriter(const std::filesystem::path& path, CpuPackMetadata metadata)
-    : impl_(new Impl{path, std::move(metadata), {}, false}) {}
-CpuPackWriter::~CpuPackWriter() { delete impl_; }
+    : impl_(std::make_unique<Impl>(Impl{path, std::move(metadata), {}, false})) {}
+CpuPackWriter::~CpuPackWriter() = default;
 
 void CpuPackWriter::add_q4_matrix(const std::string& name, const Q4GroupMatrix& matrix) {
     if (impl_->committed || name.empty()) throw std::logic_error("invalid CPU pack writer state");
@@ -312,7 +312,8 @@ struct CpuPackReader::Impl {
     std::unordered_map<std::string, Entry> entries;
 };
 
-CpuPackReader::CpuPackReader(const std::filesystem::path& path) : impl_(new Impl) {
+CpuPackReader::CpuPackReader(const std::filesystem::path& path)
+    : impl_(std::make_unique<Impl>()) {
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("cannot open CPU pack: " + path.string());
     PackHeader header;
@@ -360,7 +361,8 @@ CpuPackReader::CpuPackReader(const std::filesystem::path& path) : impl_(new Impl
         }
     }
 }
-CpuPackReader::~CpuPackReader() { delete impl_; }
+CpuPackReader::~CpuPackReader() = default;
+
 const CpuPackMetadata& CpuPackReader::metadata() const { return impl_->metadata; }
 bool CpuPackReader::contains(const std::string& name) const { return impl_->entries.contains(name); }
 Q4GroupMatrix CpuPackReader::read_q4_matrix(const std::string& name) const {

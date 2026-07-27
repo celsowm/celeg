@@ -1,6 +1,5 @@
 #include "lfm/checkpoint/formats/gguf.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -93,30 +92,30 @@ void test_fixture() {
     {
         lfm::GgufFile g(path.string());
 
-        assert(g.version() == 3);
-        assert(g.str("general.architecture") == "lfm2");
-        assert(g.u32("lfm2.block_count") == 14);
-        assert(g.f32("lfm2.rope.freq_base") == 1000000.0f);
+        LFM_TEST_CHECK(g.version() == 3);
+        LFM_TEST_CHECK(g.str("general.architecture") == "lfm2");
+        LFM_TEST_CHECK(g.u32("lfm2.block_count") == 14);
+        LFM_TEST_CHECK(g.f32("lfm2.rope.freq_base") == 1000000.0f);
 
         const lfm::GgufValue& kv = g.value("lfm2.attention.head_count_kv");
-        assert(kv.kind == lfm::GgufValueKind::Array);
-        assert(kv.array_integers.size() == 3);
-        assert(kv.array_integers[0] == 0 && kv.array_integers[2] == 8);
+        LFM_TEST_CHECK(kv.kind == lfm::GgufValueKind::Array);
+        LFM_TEST_CHECK(kv.array_integers.size() == 3);
+        LFM_TEST_CHECK(kv.array_integers[0] == 0 && kv.array_integers[2] == 8);
 
-        assert(g.contains_tensor("token_embd.weight"));
+        LFM_TEST_CHECK(g.contains_tensor("token_embd.weight"));
         const lfm::GgufTensorView t = g.tensor("token_embd.weight");
-        assert(t.type == lfm::GgmlType::F32);
+        LFM_TEST_CHECK(t.type == lfm::GgmlType::F32);
         // HF shape is reversed GGUF dims: [rows=2, cols=4].
-        assert((t.shape == std::vector<int64_t>{2, 4}));
-        assert(t.element_count == 8);
-        assert(t.bytes == 8 * sizeof(float));
+        LFM_TEST_CHECK((t.shape == std::vector<int64_t>{2, 4}));
+        LFM_TEST_CHECK(t.element_count == 8);
+        LFM_TEST_CHECK(t.bytes == 8 * sizeof(float));
         const float* data = reinterpret_cast<const float*>(t.data);
-        assert(data[0] == 1.0f && data[7] == 8.0f);
+        LFM_TEST_CHECK(data[0] == 1.0f && data[7] == 8.0f);
 
         // Missing key / tensor should throw.
         bool threw = false;
         try { g.u32("does.not.exist"); } catch (const std::exception&) { threw = true; }
-        assert(threw);
+        LFM_TEST_CHECK(threw);
     }
 
     std::filesystem::remove(path);
@@ -130,11 +129,11 @@ void test_real_file_optional() {
         return;
     }
     lfm::GgufFile g(env);
-    assert(g.str("general.architecture") == "lfm2");
-    assert(g.contains_tensor("token_embd.weight"));
-    assert(g.tensor_count() > 0);
+    LFM_TEST_CHECK(g.str("general.architecture") == "lfm2");
+    LFM_TEST_CHECK(g.contains_tensor("token_embd.weight"));
+    LFM_TEST_CHECK(g.tensor_count() > 0);
     const auto t = g.tensor("blk.0.ffn_gate.weight");
-    assert(t.type == lfm::GgmlType::Q4_K);
+    LFM_TEST_CHECK(t.type == lfm::GgmlType::Q4_K);
     std::cout << "test_real_file PASS (" << g.tensor_count() << " tensors)\n";
 }
 

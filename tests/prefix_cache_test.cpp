@@ -1,6 +1,5 @@
 #include "lfm/runtime/cache/prefix_cache.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -79,46 +78,50 @@ private:
 } // namespace
 
 int main() {
-    using namespace lfm;
+    using lfm::PrefixAcquireResult;
+    using lfm::PrefixAcquireStatus;
+    using lfm::PrefixCacheManager;
+    using lfm::PrefixCacheMetrics;
+    using lfm::PrefixState;
 
     FakePages pages(16, 4);
     PrefixCacheManager cache(pages, true, 2);
 
     auto request_pages = cache.allocate_request_pages(8);
-    assert(request_pages && request_pages->size() == 2);
+    LFM_TEST_CHECK(request_pages && request_pages->size() == 2);
 
     PrefixState state;
     state.position = 3;
     state.seen_tokens = {1, 0, 1};
     state.logits_bf16 = {4, 5};
     state.conv_state_bf16 = {6};
-    assert(cache.insert_or_update({10, 20, 30}, *request_pages, state));
-    assert(cache.size() == 1);
-    assert(pages.clones == 1);
-    assert(pages.last_clone_tokens == 3);
+    LFM_TEST_CHECK(cache.insert_or_update({10, 20, 30}, *request_pages, state));
+    LFM_TEST_CHECK(cache.size() == 1);
+    LFM_TEST_CHECK(pages.clones == 1);
+    LFM_TEST_CHECK(pages.last_clone_tokens == 3);
 
     PrefixAcquireResult hit = cache.acquire({10, 20, 30, 40, 50}, 8);
-    assert(hit.status == PrefixAcquireStatus::Hit);
-    assert(hit.matched_tokens == 3);
-    assert(hit.pages.size() == 2);
-    assert(hit.state && hit.state->position == 3);
-    assert(pages.clones == 2);
+    LFM_TEST_CHECK(hit.status == PrefixAcquireStatus::Hit);
+    LFM_TEST_CHECK(hit.matched_tokens == 3);
+    LFM_TEST_CHECK(hit.pages.size() == 2);
+    LFM_TEST_CHECK(hit.state && hit.state->position == 3);
+    LFM_TEST_CHECK(pages.clones == 2);
 
     PrefixAcquireResult miss = cache.acquire({99, 100}, 4);
-    assert(miss.status == PrefixAcquireStatus::Miss);
+    LFM_TEST_CHECK(miss.status == PrefixAcquireStatus::Miss);
 
     const PrefixCacheMetrics metrics = cache.metrics();
-    assert(metrics.hits == 1);
-    assert(metrics.partial_hits == 1);
-    assert(metrics.misses == 1);
-    assert(metrics.inserts == 1);
-    assert(metrics.cow_pages == 2);
-    assert(metrics.cow_bytes_saved > 0);
+    LFM_TEST_CHECK(metrics.hits == 1);
+    LFM_TEST_CHECK(metrics.partial_hits == 1);
+    LFM_TEST_CHECK(metrics.misses == 1);
+    LFM_TEST_CHECK(metrics.inserts == 1);
+    LFM_TEST_CHECK(metrics.cow_pages == 2);
+    LFM_TEST_CHECK(metrics.cow_bytes_saved > 0);
 
     pages.release(hit.pages);
     pages.release(*request_pages);
     cache.clear();
-    assert(pages.used_pages() == 0);
+    LFM_TEST_CHECK(pages.used_pages() == 0);
 
     std::cout << "prefix_cache_test: ok\n";
     return 0;

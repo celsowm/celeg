@@ -1,6 +1,5 @@
 #include "lfm/model/weights/quantization.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,17 +21,17 @@ int main() {
     }
     const auto pack = lfm::quantize_bf16_rows(
         reinterpret_cast<const std::byte*>(bf16.data()), 3, 4);
-    assert(pack.values.size() == source.size());
-    assert(pack.scales.size() == 3);
-    assert(pack.values[3] == 127);
-    assert(pack.values[0] == -127);
-    assert(pack.scales[2] == 1.0f);
+    LFM_TEST_CHECK(pack.values.size() == source.size());
+    LFM_TEST_CHECK(pack.scales.size() == 3);
+    LFM_TEST_CHECK(pack.values[3] == 127);
+    LFM_TEST_CHECK(pack.values[0] == -127);
+    LFM_TEST_CHECK(pack.scales[2] == 1.0f);
 
     const auto restored = lfm::dequantize_int8_rows(pack);
     for (size_t i = 0; i < source.size(); ++i) {
         const size_t row = i / 4;
         const float tolerance = pack.scales[row] * 0.51f + 1e-6f;
-        assert(std::abs(restored[i] - source[i]) <= tolerance);
+        LFM_TEST_CHECK(std::abs(restored[i] - source[i]) <= tolerance);
     }
 
     // Concatenated destination with a non-zero row offset.
@@ -41,8 +40,8 @@ int main() {
     lfm::quantize_bf16_rows_into(
         reinterpret_cast<const std::byte*>(bf16.data()), 3, 4,
         values, scales, 1);
-    assert(scales[0] == 0.0f);
-    assert(values[4 + 3] == 127);
+    LFM_TEST_CHECK(scales[0] == 0.0f);
+    LFM_TEST_CHECK(values[4 + 3] == 127);
 
 
     // INT4 uses symmetric per-row scaling and supports odd column counts.
@@ -57,16 +56,16 @@ int main() {
         }
         const auto int4 = lfm::quantize_bf16_rows_int4(
             reinterpret_cast<const std::byte*>(bits.data()), 2, 5);
-        assert(int4.values.size() == 6); // 2 rows * ceil(5 / 2)
-        assert(int4.scales.size() == 2);
-        assert(int4.values[0] == 0xe9U); // [-7, -2]
-        assert(int4.values[1] == 0x20U); // [0, 2]
-        assert(int4.values[2] == 0x07U); // [7, padding]
+        LFM_TEST_CHECK(int4.values.size() == 6); // 2 rows * ceil(5 / 2)
+        LFM_TEST_CHECK(int4.scales.size() == 2);
+        LFM_TEST_CHECK(int4.values[0] == 0xe9U); // [-7, -2]
+        LFM_TEST_CHECK(int4.values[1] == 0x20U); // [0, 2]
+        LFM_TEST_CHECK(int4.values[2] == 0x07U); // [7, padding]
         const auto restored4 = lfm::dequantize_int4_rows(int4);
         for (size_t i = 0; i < source4.size(); ++i) {
             const size_t row = i / 5;
             const float tolerance = int4.scales[row] * 0.51f + 1e-6f;
-            assert(std::abs(restored4[i] - source4[i]) <= tolerance);
+            LFM_TEST_CHECK(std::abs(restored4[i] - source4[i]) <= tolerance);
         }
 
         std::vector<uint8_t> packed(3 * 3, 0xffU);
@@ -74,8 +73,8 @@ int main() {
         lfm::quantize_bf16_rows_int4_into(
             reinterpret_cast<const std::byte*>(bits.data()), 2, 5,
             packed, scales4, 1);
-        assert(scales4[0] == 0.0f);
-        assert(scales4[1] > 0.0f && scales4[2] > 0.0f);
+        LFM_TEST_CHECK(scales4[0] == 0.0f);
+        LFM_TEST_CHECK(scales4[1] > 0.0f && scales4[2] > 0.0f);
     }
 
     // Invalid checkpoint values must fail rather than silently producing a
@@ -97,7 +96,7 @@ int main() {
         } catch (const std::invalid_argument&) {
             int4_rejected = true;
         }
-        assert(int8_rejected && int4_rejected);
+        LFM_TEST_CHECK(int8_rejected && int4_rejected);
     }
 
     std::cout << "quantization_test: ok\n";

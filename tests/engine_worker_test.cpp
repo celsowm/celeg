@@ -1,7 +1,7 @@
 #include "lfm/detail/runtime/concurrency/worker.hpp"
+#include "support/assertions.hpp"
 
 #include <atomic>
-#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -20,9 +20,9 @@ int main() {
     while (calls.load() == 0 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    assert(calls.load() > 0);
-    assert(worker.running());
+    LFM_TEST_CHECK(calls.load() > 0);
+    LFM_TEST_CHECK(worker.running());
     worker.stop();
-    assert(!worker.running());
+    LFM_TEST_CHECK(!worker.running());
     std::cout << "engine_worker_test: ok\n";
 }

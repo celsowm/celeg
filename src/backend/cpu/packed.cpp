@@ -1,5 +1,3 @@
-#include "lfm/backend/cpu/packed.hpp"
-
 #include "detail/model_internal.hpp"
 #include "lfm/backend/cpu/kernels.hpp"
 #include "lfm/backend/cpu/model.hpp"
@@ -12,7 +10,13 @@
 
 namespace lfm {
 
-struct CpuPackedExecutor::Impl {
+struct CpuModel::Impl::BatchScratch {
+    using State = CpuModel::Impl;
+    using SharedWeights = State::Shared;
+    using LayerWeights = State::WeightLayer;
+    using CommonWeights = State::CommonWeights;
+    using AttentionWeights = State::AttentionWeights;
+    using ConvolutionWeights = State::ConvolutionWeights;
     void ensure(size_t batch, const ModelShape& shape) {
         const size_t hidden_count = batch * shape.hidden;
         const size_t qkv_count = batch * shape.qkv_width;
@@ -30,18 +34,12 @@ struct CpuPackedExecutor::Impl {
         mlp_output.resize(hidden_count);
     }
 
-    static CpuModel::Impl& state(CpuModel* model) {
-        if (!model || !model->impl_) {
-            throw std::invalid_argument("packed CPU session is null");
-        }
-        return *model->impl_;
-    }
-
-    static void validate_shared(std::span<CpuModel* const> sessions) {
+    static void validate_shared(std::span<State* const> sessions) {
         if (sessions.empty()) throw std::invalid_argument("packed CPU batch is empty");
-        const auto shared = state(sessions.front()).shared;
-        for (CpuModel* session : sessions) {
-            CpuModel::Impl& impl = state(session);
+        const auto shared = sessions.front()->shared;
+        for (State* session : sessions) {
+            if (!session) throw std::invalid_argument("packed CPU session is null");
+            State& impl = *session;
             if (impl.shared.get() != shared.get()) {
                 throw std::invalid_argument(
                     "packed CPU sessions must share the same model weights");
@@ -49,7 +47,7 @@ struct CpuPackedExecutor::Impl {
         }
     }
 
-    void forward(std::span<CpuModel* const> sessions,
+    void forward(std::span<State* const> sessions,
                  std::span<const int32_t> tokens,
                  std::span<const uint8_t> compute_logits) {
         if (sessions.size() != tokens.size() ||
@@ -58,12 +56,12 @@ struct CpuPackedExecutor::Impl {
         }
         validate_shared(sessions);
         const size_t batch = sessions.size();
-        CpuModel::Impl::Shared& shared = *state(sessions.front()).shared;
+        SharedWeights& shared = *sessions.front()->shared;
         const ModelShape& shape = shared.shape;
         ensure(batch, shape);
 
         for (size_t row = 0; row < batch; ++row) {
-            CpuModel::Impl& session = state(sessions[row]);
+            State& session = *sessions[row];
             if (session.position_value >= shared.max_context) {
                 throw std::runtime_error("CPU context limit reached in packed batch");
             }
@@ -75,12 +73,12 @@ struct CpuPackedExecutor::Impl {
         }
 
         for (size_t layer_index = 0; layer_index < shared.layers.size(); ++layer_index) {
-            const CpuModel::Impl::WeightLayer& layer = shared.layers[layer_index];
-            const CpuModel::Impl::CommonWeights* common_ptr = std::visit(
-                [](const auto& value) -> const CpuModel::Impl::CommonWeights* {
+            const LayerWeights& layer = shared.layers[layer_index];
+            const CommonWeights* common_ptr = std::visit(
+                [](const auto& value) -> const CommonWeights* {
                     return &value.common;
                 }, layer);
-            const CpuModel::Impl::CommonWeights& common = *common_ptr;
+            const CommonWeights& common = *common_ptr;
 
             std::copy(hidden.begin(), hidden.begin() + static_cast<ptrdiff_t>(
                 batch * shape.hidden), residual.begin());
@@ -92,10 +90,10 @@ struct CpuPackedExecutor::Impl {
             }
 
             if (const auto* attention =
-                    std::get_if<CpuModel::Impl::AttentionWeights>(&layer)) {
+                    std::get_if<AttentionWeights>(&layer)) {
                 shared.linear.gemm(attention->qkv, normed.data(), qkv.data(), batch);
                 for (size_t row = 0; row < batch; ++row) {
-                    CpuModel::Impl& session = state(sessions[row]);
+                    State& session = *sessions[row];
                     float* q = qkv.data() + row * shape.qkv_width;
                     float* k = q + shape.q_width;
                     float* v = k + shape.kv_width;
@@ -116,11 +114,11 @@ struct CpuPackedExecutor::Impl {
                 shared.linear.gemm(attention->out, op_output.data(), hidden.data(), batch);
             } else {
                 const auto& convolution =
-                    std::get<CpuModel::Impl::ConvolutionWeights>(layer);
+                    std::get<ConvolutionWeights>(layer);
                 shared.linear.gemm(convolution.in, normed.data(),
                                    conv_projected.data(), batch);
                 for (size_t row = 0; row < batch; ++row) {
-                    CpuModel::Impl& session = state(sessions[row]);
+                    State& session = *sessions[row];
                     auto& conv_state = session.convolution_state(layer_index);
                     cpu_conv_decode(
                         conv_projected.data() + row * 3ULL * shape.hidden,
@@ -173,7 +171,7 @@ struct CpuPackedExecutor::Impl {
             shared.linear.gemm(shared.embedding, final_normed.data(),
                                final_logits.data(), terminal_rows.size());
             for (size_t index = 0; index < terminal_rows.size(); ++index) {
-                CpuModel::Impl& session = state(sessions[terminal_rows[index]]);
+                State& session = *sessions[terminal_rows[index]];
                 std::copy(
                     final_logits.begin() + static_cast<ptrdiff_t>(
                         index * shape.vocab_size),
@@ -184,7 +182,7 @@ struct CpuPackedExecutor::Impl {
         }
 
         for (size_t row = 0; row < batch; ++row) {
-            CpuModel::Impl& session = state(sessions[row]);
+            State& session = *sessions[row];
             ++session.position_value;
             if (compute_logits[row]) session.phase = SessionPhase::Ready;
         }
@@ -204,22 +202,26 @@ struct CpuPackedExecutor::Impl {
     std::vector<float> final_logits;
 };
 
-CpuPackedExecutor::CpuPackedExecutor() : impl_(std::make_unique<Impl>()) {}
-CpuPackedExecutor::~CpuPackedExecutor() = default;
-CpuPackedExecutor::CpuPackedExecutor(CpuPackedExecutor&&) noexcept = default;
-CpuPackedExecutor& CpuPackedExecutor::operator=(CpuPackedExecutor&&) noexcept = default;
+void CpuModel::Impl::forward_batch(std::span<Impl* const> sessions,
+                                   std::span<const int32_t> tokens,
+                                   std::span<const uint8_t> compute_logits) {
+    thread_local BatchScratch scratch;
+    scratch.forward(sessions, tokens, compute_logits);
+}
 
-CpuPackedStepMetrics CpuPackedExecutor::prefill_step(
-    std::span<const CpuPrefillItem> items) {
+CpuBatchMetrics CpuModel::prefill_batch(std::span<const CpuPrefillItem> items) {
     if (items.empty()) throw std::invalid_argument("CPU ragged prefill batch is empty");
-    std::vector<CpuModel*> sessions;
+    std::vector<Impl*> sessions;
     std::vector<int32_t> tokens;
     std::vector<uint8_t> terminal;
     sessions.reserve(items.size());
     tokens.reserve(items.size());
     terminal.reserve(items.size());
     for (const CpuPrefillItem& item : items) {
-        CpuModel::Impl& session = Impl::state(item.session);
+        if (!item.session || !item.session->impl_) {
+            throw std::invalid_argument("packed CPU session is null");
+        }
+        Impl& session = *item.session->impl_;
         if (session.phase != SessionPhase::Empty &&
             session.phase != SessionPhase::Prefilling) {
             throw std::runtime_error("CPU session is not eligible for prefill");
@@ -230,28 +232,28 @@ CpuPackedStepMetrics CpuPackedExecutor::prefill_step(
         }
         session.phase = SessionPhase::Prefilling;
         session.seen[static_cast<size_t>(item.token)] = 1;
-        sessions.push_back(item.session);
+        sessions.push_back(item.session->impl_.get());
         tokens.push_back(item.token);
         terminal.push_back(item.final_token ? 1 : 0);
     }
     const auto started = std::chrono::steady_clock::now();
-    impl_->forward(sessions, tokens, terminal);
+    Impl::forward_batch(sessions, tokens, terminal);
     const auto ended = std::chrono::steady_clock::now();
     const double elapsed =
         std::chrono::duration<double, std::milli>(ended - started).count();
     for (const CpuPrefillItem& item : items) {
-        CpuModel::Impl& session = Impl::state(item.session);
+        Impl& session = *item.session->impl_;
         ++session.metrics.prefill_tokens;
         session.metrics.last_prefill_ms += elapsed / items.size();
     }
     return {items.size(), elapsed};
 }
 
-CpuPackedStepMetrics CpuPackedExecutor::prefill_chunk(
-    CpuModel* model, std::span<const int32_t> tokens, bool final_chunk) {
-    if (!model) throw std::invalid_argument("CPU chunked prefill session is null");
+CpuBatchMetrics CpuModel::prefill_chunk(
+    CpuModel& model, std::span<const int32_t> tokens, bool final_chunk) {
     if (tokens.empty()) throw std::invalid_argument("CPU chunked prefill is empty");
-    CpuModel::Impl& session = Impl::state(model);
+    if (!model.impl_) throw std::invalid_argument("CPU chunked prefill session is null");
+    Impl& session = *model.impl_;
     if (session.phase != SessionPhase::Empty &&
         session.phase != SessionPhase::Prefilling) {
         throw std::runtime_error("CPU session is not eligible for chunked prefill");
@@ -275,14 +277,23 @@ CpuPackedStepMetrics CpuPackedExecutor::prefill_chunk(
     return {tokens.size(), elapsed};
 }
 
-std::pair<std::vector<int32_t>, CpuPackedStepMetrics>
-CpuPackedExecutor::decode_step(std::span<CpuModel* const> sessions) {
-    Impl::validate_shared(sessions);
+std::pair<std::vector<int32_t>, CpuBatchMetrics>
+CpuModel::decode_batch(std::span<CpuModel* const> models) {
+    if (models.empty()) throw std::invalid_argument("packed CPU batch is empty");
+    std::vector<Impl*> sessions;
+    sessions.reserve(models.size());
+    for (CpuModel* model : models) {
+        if (!model || !model->impl_) {
+            throw std::invalid_argument("packed CPU session is null");
+        }
+        sessions.push_back(model->impl_.get());
+    }
+    Impl::BatchScratch::validate_shared(sessions);
     std::vector<int32_t> tokens;
     std::vector<uint8_t> compute_logits(sessions.size(), 1);
     tokens.reserve(sessions.size());
-    for (CpuModel* model : sessions) {
-        CpuModel::Impl& session = Impl::state(model);
+    for (Impl* state : sessions) {
+        Impl& session = *state;
         if (session.phase != SessionPhase::Ready) {
             throw std::runtime_error("CPU session is not ready for packed decode");
         }
@@ -291,12 +302,12 @@ CpuPackedExecutor::decode_step(std::span<CpuModel* const> sessions) {
         tokens.push_back(token);
     }
     const auto started = std::chrono::steady_clock::now();
-    impl_->forward(sessions, tokens, compute_logits);
+    Impl::forward_batch(sessions, tokens, compute_logits);
     const auto ended = std::chrono::steady_clock::now();
     const double elapsed =
         std::chrono::duration<double, std::milli>(ended - started).count();
-    for (CpuModel* model : sessions) {
-        CpuModel::Impl& session = Impl::state(model);
+    for (Impl* state : sessions) {
+        Impl& session = *state;
         session.metrics.cumulative_decode_ms += elapsed / sessions.size();
         ++session.metrics.decoded_tokens;
     }

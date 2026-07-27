@@ -1,6 +1,5 @@
 #include "lfm/runtime/concurrency/metrics.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <iostream>
 
 int main() {
@@ -16,14 +15,14 @@ int main() {
     flat.logical_pages_total = 8;
 
     const auto grouped = lfm::group_concurrent_metrics(flat);
-    assert(grouped.requests.submitted == 9);
-    assert(grouped.requests.completed == 7);
-    assert(grouped.requests.average_ttft_ms == 5.0);
-    assert(grouped.prefill.ragged_tokens == 100);
-    assert(grouped.decode.packed_tokens == 50);
-    assert(grouped.prefix.hits == 4);
-    assert(grouped.kv.pages_used == 3);
-    assert(grouped.kv.pages_total == 8);
+    LFM_TEST_CHECK(grouped.requests.submitted == 9);
+    LFM_TEST_CHECK(grouped.requests.completed == 7);
+    LFM_TEST_CHECK(grouped.requests.average_ttft_ms == 5.0);
+    LFM_TEST_CHECK(grouped.prefill.ragged_tokens == 100);
+    LFM_TEST_CHECK(grouped.decode.packed_tokens == 50);
+    LFM_TEST_CHECK(grouped.prefix.hits == 4);
+    LFM_TEST_CHECK(grouped.kv.pages_used == 3);
+    LFM_TEST_CHECK(grouped.kv.pages_total == 8);
     std::cout << "concurrent_metrics_test: ok\n";
     return 0;
 }

@@ -1,7 +1,7 @@
 #include "lfm/backend/cpu/paged_kv.hpp"
+#include "support/assertions.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -37,13 +37,13 @@ int main() {
         query.data(), pool, pages, parallel.data(), sequence,
         q_heads, kv_heads, head_dim, workers,
         lfm::CpuPagedAttentionOptions{1, 2}, &stats);
-    assert(stats.parallel);
-    assert(stats.tasks == q_heads * 3);
+    LFM_TEST_CHECK(stats.parallel);
+    LFM_TEST_CHECK(stats.tasks == q_heads * 3);
     float maximum = 0.0f;
     for (size_t i = 0; i < reference.size(); ++i) {
         maximum = std::max(maximum, std::abs(reference[i] - parallel[i]));
     }
-    assert(maximum < 1e-5f);
+    LFM_TEST_CHECK(maximum < 1e-5f);
     for (auto page : pages) pool.release(page);
     std::cout << "cpu_parallel_attention_test: ok max_error=" << maximum << '\n';
 }

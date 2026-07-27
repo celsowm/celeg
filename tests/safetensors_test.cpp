@@ -1,6 +1,6 @@
 #include "lfm/checkpoint/formats/safetensors.hpp"
-
-#include <cassert>
+#include "lfm/detail/binary_codec.hpp"
+#include "support/assertions.hpp"
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -17,7 +17,7 @@ void write_file(const std::filesystem::path& path,
                 size_t data_size) {
     const uint64_t header_size = header.size();
     std::ofstream out(path, std::ios::binary);
-    out.write(reinterpret_cast<const char*>(&header_size), sizeof(header_size));
+    lfm::binary::write_le(out, header_size);
     out.write(header.data(), static_cast<std::streamsize>(header.size()));
     if (data_size) {
         out.write(static_cast<const char*>(data),
@@ -51,22 +51,22 @@ int main() {
 
     {
         lfm::SafeTensorFile file(path.string());
-        assert(file.contains("x"));
+        LFM_TEST_CHECK(file.contains("x"));
         const auto tensor = file.tensor("x");
-        assert(tensor.dtype == lfm::TensorDType::BF16);
-        assert(tensor.shape.size() == 1 && tensor.shape[0] == 2);
-        assert(tensor.bytes == 4);
-        assert(std::memcmp(tensor.data, values, 4) == 0);
+        LFM_TEST_CHECK(tensor.dtype == lfm::TensorDType::BF16);
+        LFM_TEST_CHECK(tensor.shape.size() == 1 && tensor.shape[0] == 2);
+        LFM_TEST_CHECK(tensor.bytes == 4);
+        LFM_TEST_CHECK(std::memcmp(tensor.data, values, 4) == 0);
 
         // Test locate and read
         lfm::TensorLocator loc = file.locate("x");
-        assert(loc.bytes == 4);
-        assert(loc.dtype == lfm::TensorDType::BF16);
-        assert(loc.shape.size() == 1 && loc.shape[0] == 2);
+        LFM_TEST_CHECK(loc.bytes == 4);
+        LFM_TEST_CHECK(loc.dtype == lfm::TensorDType::BF16);
+        LFM_TEST_CHECK(loc.shape.size() == 1 && loc.shape[0] == 2);
 
         std::vector<std::byte> dest(4);
         file.read(loc, dest);
-        assert(std::memcmp(dest.data(), values, 4) == 0);
+        LFM_TEST_CHECK(std::memcmp(dest.data(), values, 4) == 0);
 
         // Destination size mismatch throws exception
         bool throws_size_mismatch = false;
@@ -76,7 +76,7 @@ int main() {
         } catch (const std::invalid_argument&) {
             throws_size_mismatch = true;
         }
-        assert(throws_size_mismatch);
+        LFM_TEST_CHECK(throws_size_mismatch);
 
         // Out of bounds locator throws exception
         bool throws_oob = false;
@@ -87,19 +87,19 @@ int main() {
         } catch (const std::out_of_range&) {
             throws_oob = true;
         }
-        assert(throws_oob);
+        LFM_TEST_CHECK(throws_oob);
     }
 
-    assert(rejects(path,
+    LFM_TEST_CHECK(rejects(path,
                    R"({"x":{"dtype":"BF16","shape":[3],"data_offsets":[0,4]}})",
                    values, sizeof(values)));
-    assert(rejects(path,
+    LFM_TEST_CHECK(rejects(path,
                    R"({"x":{"dtype":"XYZ","shape":[2],"data_offsets":[0,4]}})",
                    values, sizeof(values)));
-    assert(rejects(path,
+    LFM_TEST_CHECK(rejects(path,
                    R"({"x":{"dtype":"BF16","shape":[2],"data_offsets":[-1,3]}})",
                    values, sizeof(values)));
-    assert(rejects(path,
+    LFM_TEST_CHECK(rejects(path,
                    R"({"x":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]},"y":{"dtype":"BF16","shape":[1],"data_offsets":[2,4]}})",
                    values, sizeof(values)));
 

@@ -1,8 +1,8 @@
 #include "lfm/backend/cpu/kernels.hpp"
+#include "support/assertions.hpp"
 #include "lfm/model/weights/quantization.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -48,7 +48,7 @@ int main() {
     for (size_t i = 0; i < actual.size(); ++i) {
         maximum = std::max(maximum, std::abs(actual[i] - reference[i]));
     }
-    assert(maximum < 1e-6f);
+    LFM_TEST_CHECK(maximum < 1e-6f);
     std::cout << "cpu_kv_cache_test: ok max_error=" << maximum << '\n';
     return 0;
 }

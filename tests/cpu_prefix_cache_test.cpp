@@ -1,6 +1,5 @@
 #include "lfm/backend/cpu/prefix_cache.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -36,14 +35,14 @@ int main() {
         lfm::CpuPrefixCacheManager cache(pools, 8, 1 << 20);
         const std::vector<int32_t> prefix{10, 20, 30};
         const bool inserted = cache.insert(prefix, request);
-        assert(inserted);
-        assert(cache.size() == 1);
+        LFM_TEST_CHECK(inserted);
+        LFM_TEST_CHECK(cache.size() == 1);
         const auto hit = cache.acquire({10, 20, 30, 40});
-        assert(hit);
-        assert(hit->matched_tokens == 3);
-        assert(hit->snapshot.attention_pages[0].back() !=
+        LFM_TEST_CHECK(hit);
+        LFM_TEST_CHECK(hit->matched_tokens == 3);
+        LFM_TEST_CHECK(hit->snapshot.attention_pages[0].back() !=
                request.attention_pages[0].back());
-        assert(pools[0]->key_fp32(hit->snapshot.attention_pages[0].back(), 2)[1] == 21.0f);
+        LFM_TEST_CHECK(pools[0]->key_fp32(hit->snapshot.attention_pages[0].back(), 2)[1] == 21.0f);
 
         // Mutating the private request tail must not modify the cached page.
         std::fill(key.begin(), key.end(), 999.0f);
@@ -51,10 +50,10 @@ int main() {
         pools[0]->write(hit->snapshot.attention_pages[0].back(), 3,
                         key.data(), value.data());
         const auto second = cache.acquire(prefix);
-        assert(second);
-        assert(pools[0]->key_fp32(second->snapshot.attention_pages[0].back(), 2)[1] == 21.0f);
-        assert(cache.metrics().partial_hits == 1);
-        assert(cache.metrics().cow_pages >= 4);
+        LFM_TEST_CHECK(second);
+        LFM_TEST_CHECK(pools[0]->key_fp32(second->snapshot.attention_pages[0].back(), 2)[1] == 21.0f);
+        LFM_TEST_CHECK(cache.metrics().partial_hits == 1);
+        LFM_TEST_CHECK(cache.metrics().cow_pages >= 4);
 
         for (size_t layer = 0; layer < pools.size(); ++layer) {
             for (auto page : hit->snapshot.attention_pages[layer]) pools[layer]->release(page);
@@ -63,7 +62,7 @@ int main() {
     }
     for (size_t layer = 0; layer < pools.size(); ++layer) {
         for (auto page : request.attention_pages[layer]) pools[layer]->release(page);
-        assert(pools[layer]->stats().used_pages == 0);
+        LFM_TEST_CHECK(pools[layer]->stats().used_pages == 0);
     }
     std::cout << "cpu_prefix_cache_test: ok\n";
 }

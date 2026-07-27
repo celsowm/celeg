@@ -1,7 +1,7 @@
 #include "lfm/checkpoint/formats/safetensors.hpp"
+#include "lfm/detail/binary_codec.hpp"
+#include "support/assertions.hpp"
 #include "lfm/checkpoint/repositories/safetensors.hpp"
-
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -16,7 +16,7 @@ void write_shard(const std::filesystem::path& path,
                  const void* data, size_t data_size) {
     const uint64_t header_size = header.size();
     std::ofstream out(path, std::ios::binary);
-    out.write(reinterpret_cast<const char*>(&header_size), sizeof(header_size));
+    lfm::binary::write_le(out, header_size);
     out.write(header.data(), static_cast<std::streamsize>(header.size()));
     if (data_size) {
         out.write(static_cast<const char*>(data),
@@ -43,7 +43,7 @@ int main() {
             R"({"a":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]},"b":{"dtype":"BF16","shape":[1],"data_offsets":[4,6]}})";
         const uint64_t hs = header.size();
         std::ofstream out(dir / "model-00001-of-00002.safetensors", std::ios::binary);
-        out.write(reinterpret_cast<const char*>(&hs), sizeof(hs));
+        lfm::binary::write_le(out, hs);
         out.write(header.data(), static_cast<std::streamsize>(header.size()));
         out.write(reinterpret_cast<const char*>(a_vals), sizeof(a_vals));
         out.write(reinterpret_cast<const char*>(b_vals), sizeof(b_vals));
@@ -53,7 +53,7 @@ int main() {
             R"({"c":{"dtype":"BF16","shape":[3],"data_offsets":[0,6]}})";
         const uint64_t hs = header.size();
         std::ofstream out(dir / "model-00002-of-00002.safetensors", std::ios::binary);
-        out.write(reinterpret_cast<const char*>(&hs), sizeof(hs));
+        lfm::binary::write_le(out, hs);
         out.write(header.data(), static_cast<std::streamsize>(header.size()));
         out.write(reinterpret_cast<const char*>(c_vals), sizeof(c_vals));
     }
@@ -67,25 +67,25 @@ int main() {
 
     {
         lfm::SafeTensorRepository repo(dir);
-        assert(repo.sharded());
-        assert(repo.contains("a"));
-        assert(repo.contains("b"));
-        assert(repo.contains("c"));
-        assert(!repo.contains("missing"));
+        LFM_TEST_CHECK(repo.sharded());
+        LFM_TEST_CHECK(repo.contains("a"));
+        LFM_TEST_CHECK(repo.contains("b"));
+        LFM_TEST_CHECK(repo.contains("c"));
+        LFM_TEST_CHECK(!repo.contains("missing"));
 
         std::vector<std::string> names = repo.names();
-        assert(names.size() == 3);
-        assert(names[0] == "a" && names[1] == "b" && names[2] == "c");
+        LFM_TEST_CHECK(names.size() == 3);
+        LFM_TEST_CHECK(names[0] == "a" && names[1] == "b" && names[2] == "c");
 
         const auto ta = repo.tensor("a");
-        assert(ta.dtype == lfm::TensorDType::BF16);
-        assert(ta.shape.size() == 1 && ta.shape[0] == 2);
-        assert(ta.bytes == 4);
-        assert(std::memcmp(ta.data, a_vals, 4) == 0);
+        LFM_TEST_CHECK(ta.dtype == lfm::TensorDType::BF16);
+        LFM_TEST_CHECK(ta.shape.size() == 1 && ta.shape[0] == 2);
+        LFM_TEST_CHECK(ta.bytes == 4);
+        LFM_TEST_CHECK(std::memcmp(ta.data, a_vals, 4) == 0);
 
         const auto tc = repo.tensor("c");
-        assert(tc.shape[0] == 3);
-        assert(std::memcmp(tc.data, c_vals, 6) == 0);
+        LFM_TEST_CHECK(tc.shape[0] == 3);
+        LFM_TEST_CHECK(std::memcmp(tc.data, c_vals, 6) == 0);
     }
 
     // Single-file backward compatibility via directory with model.safetensors.
@@ -96,11 +96,11 @@ int main() {
                 a_vals, sizeof(a_vals));
     {
         lfm::SafeTensorRepository repo(single_dir);
-        assert(!repo.sharded());
-        assert(repo.contains("x"));
+        LFM_TEST_CHECK(!repo.sharded());
+        LFM_TEST_CHECK(repo.contains("x"));
         const auto tx = repo.tensor("x");
-        assert(tx.shape[0] == 2);
-        assert(std::memcmp(tx.data, a_vals, 4) == 0);
+        LFM_TEST_CHECK(tx.shape[0] == 2);
+        LFM_TEST_CHECK(std::memcmp(tx.data, a_vals, 4) == 0);
     }
 
     // Missing shard must be detected at construction.
@@ -114,7 +114,7 @@ int main() {
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    assert(rejected);
+    LFM_TEST_CHECK(rejected);
 
     std::filesystem::remove_all(dir);
     std::filesystem::remove_all(single_dir);

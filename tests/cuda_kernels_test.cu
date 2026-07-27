@@ -1,11 +1,10 @@
 #include "lfm/backend/cuda/utils.cuh"
+#include "support/assertions.hpp"
 #include "lfm/backend/cuda/kernels/kernels.cuh"
 #include "lfm/model/reference.hpp"
 #include "lfm/backend/cuda/paged_kv.hpp"
 #include "lfm/model/config/shape.hpp"
 #include "lfm/model/config/variant.hpp"
-
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -540,7 +539,7 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(&index, result.data(), sizeof(index),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(index == 1);
+        LFM_TEST_CHECK(index == 1);
     }
 
 
@@ -568,7 +567,7 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(&token, result.data(), sizeof(token),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(token == 1); // token 0 is penalized from 5 to 2.5
+        LFM_TEST_CHECK(token == 1); // token 0 is penalized from 5 to 2.5
     }
 
 
@@ -590,7 +589,7 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(&token, result.data(), sizeof(token),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(token == 20);
+        LFM_TEST_CHECK(token == 20);
     }
 
 
@@ -650,7 +649,7 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(&fused_token, fused_result.data(), sizeof(fused_token),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(legacy_token == fused_token);
+        LFM_TEST_CHECK(legacy_token == fused_token);
     }
 
     // Weight-only INT8 linear supports both GEMV and batched rows.
@@ -779,9 +778,9 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(hv.data(), v.data(), v.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(to_float(hq[0]) == 1 && to_float(hq[3]) == 6);
-        assert(to_float(hk[0]) == 3 && to_float(hk[1]) == 7);
-        assert(to_float(hv[0]) == 4 && to_float(hv[1]) == 8);
+        LFM_TEST_CHECK(to_float(hq[0]) == 1 && to_float(hq[3]) == 6);
+        LFM_TEST_CHECK(to_float(hk[0]) == 3 && to_float(hk[1]) == 7);
+        LFM_TEST_CHECK(to_float(hv[0]) == 4 && to_float(hv[1]) == 8);
 
         std::vector<__nv_bfloat16> gate_up = {
             to_bf16(0), to_bf16(1), to_bf16(2), to_bf16(3),
@@ -852,8 +851,8 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(tokens.data(), result.data(), result.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(tokens[0] == 1);
-        assert(tokens[1] == 0);
+        LFM_TEST_CHECK(tokens[0] == 1);
+        LFM_TEST_CHECK(tokens[1] == 0);
     }
 
     // Physical paged BF16 GQA follows a non-contiguous page table.
@@ -1047,8 +1046,8 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(b.data(), seen_b.data(), seen_b.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(a[3] == 1 && a[5] == 0);
-        assert(b[5] == 1 && b[3] == 0);
+        LFM_TEST_CHECK(a[3] == 1 && a[5] == 0);
+        LFM_TEST_CHECK(b[5] == 1 && b[3] == 0);
     }
 
     // Copy-on-write cloning duplicates all physical page storage while keeping
@@ -1058,7 +1057,7 @@ int main() {
     for (const lfm::ModelShape& shape : registered_variant_shapes()) {
         lfm::PhysicalPagedKvCache cache(3, 1, 4, lfm::KvCacheMode::Bf16, shape);
         auto source = cache.allocate_tokens(1);
-        assert(source && source->size() == 1);
+        LFM_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
         const size_t page_elements = static_cast<size_t>(
             cache.attention_layers()) * shape.kv_width;
@@ -1069,9 +1068,9 @@ int main() {
                             contents.data(), contents.size() * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
         auto cloned = cache.clone_page(source_page);
-        assert(cloned && *cloned != source_page);
-        assert(cache.ref_count(source_page) == 1);
-        assert(cache.ref_count(*cloned) == 1);
+        LFM_TEST_CHECK(cloned && *cloned != source_page);
+        LFM_TEST_CHECK(cache.ref_count(source_page) == 1);
+        LFM_TEST_CHECK(cache.ref_count(*cloned) == 1);
         __nv_bfloat16 copied{};
         LFM_CUDA(cudaMemcpy(&copied, cache.key_bf16() +
                             static_cast<size_t>(*cloned) * page_elements,
@@ -1079,7 +1078,7 @@ int main() {
         expect_near(to_float(copied), 3.5f, 0.01f);
         cache.release(*source);
         cache.release(std::vector<uint32_t>{*cloned});
-        assert(cache.free_pages() == cache.total_pages());
+        LFM_TEST_CHECK(cache.free_pages() == cache.total_pages());
     }
 
     // Partial-page COW copies initialized token slots without transferring the unused suffix.
@@ -1088,7 +1087,7 @@ int main() {
         lfm::PhysicalPagedKvCache cache(3, page_tokens, 8,
                                         lfm::KvCacheMode::Bf16, shape);
         auto source = cache.allocate_tokens(page_tokens);
-        assert(source && source->size() == 1);
+        LFM_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
         const size_t page_elements = static_cast<size_t>(
             cache.attention_layers()) * page_tokens * shape.kv_width;
@@ -1098,7 +1097,7 @@ int main() {
                             contents.data(), contents.size() * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
         auto cloned = cache.clone_page_prefix(source_page, 1);
-        assert(cloned);
+        LFM_TEST_CHECK(cloned);
         std::vector<__nv_bfloat16> copied(page_elements);
         LFM_CUDA(cudaMemcpy(copied.data(), cache.key_bf16() +
                             static_cast<size_t>(*cloned) * page_elements,
@@ -1117,7 +1116,7 @@ int main() {
     for (const lfm::ModelShape& shape : registered_variant_shapes()) {
         lfm::PhysicalPagedKvCache cache(3, 1, 4, lfm::KvCacheMode::Int8, shape);
         auto source = cache.allocate_tokens(1);
-        assert(source && source->size() == 1);
+        LFM_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
         const size_t page_elements = static_cast<size_t>(
             cache.attention_layers()) * shape.kv_width;
@@ -1132,7 +1131,7 @@ int main() {
                             static_cast<size_t>(source_page) * scale_elements,
                             &scale, sizeof(scale), cudaMemcpyHostToDevice));
         auto cloned = cache.clone_page(source_page);
-        assert(cloned && *cloned != source_page);
+        LFM_TEST_CHECK(cloned && *cloned != source_page);
         int8_t copied_quantized = 0;
         float copied_scale = 0.0f;
         LFM_CUDA(cudaMemcpy(&copied_quantized, cache.key_int8() +
@@ -1141,7 +1140,7 @@ int main() {
         LFM_CUDA(cudaMemcpy(&copied_scale, cache.key_scales() +
                             static_cast<size_t>(*cloned) * scale_elements,
                             sizeof(copied_scale), cudaMemcpyDeviceToHost));
-        assert(copied_quantized == quantized);
+        LFM_TEST_CHECK(copied_quantized == quantized);
         expect_near(copied_scale, scale, 1e-7f);
         cache.release(*source);
         cache.release(std::vector<uint32_t>{*cloned});
@@ -1195,8 +1194,8 @@ int main() {
         const size_t scale_base = static_cast<size_t>(page_tokens);
         expect_near(host_key_scales[scale_base], 1.0f / 127.0f, 1e-4f);
         expect_near(host_value_scales[scale_base], 2.0f / 127.0f, 1e-4f);
-        assert(host_keys[vector_base] == 127);
-        assert(host_values[vector_base] == 127);
+        LFM_TEST_CHECK(host_keys[vector_base] == 127);
+        LFM_TEST_CHECK(host_values[vector_base] == 127);
     }
 
     // CUDA Graph replay uses device-resident mutable state.
@@ -1215,7 +1214,7 @@ int main() {
         LFM_CUDA(cudaMemcpyAsync(&result, position.data(), sizeof(result),
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
-        assert(result == 11);
+        LFM_TEST_CHECK(result == 11);
     }
 
     std::cout << "cuda_kernels_test: ok\n";

@@ -1,9 +1,9 @@
 #include "lfm/backend/cpu/kernels.hpp"
+#include "support/assertions.hpp"
 #include "lfm/backend/cpu/paged_kv.hpp"
 #include "lfm/model/weights/quantization.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <random>
@@ -51,13 +51,13 @@ static void run(lfm::CpuKvCacheMode mode) {
     for (size_t i = 0; i < actual.size(); ++i) {
         max_error = std::max(max_error, std::abs(actual[i] - expected[i]));
     }
-    assert(max_error < 1e-5f);
-    assert(pool.stats().used_pages == pages.size());
+    LFM_TEST_CHECK(max_error < 1e-5f);
+    LFM_TEST_CHECK(pool.stats().used_pages == pages.size());
     pool.retain(pages.front());
-    assert(pool.reference_count(pages.front()) == 2);
+    LFM_TEST_CHECK(pool.reference_count(pages.front()) == 2);
     pool.release(pages.front());
     for (auto page : pages) pool.release(page);
-    assert(pool.stats().used_pages == 0);
+    LFM_TEST_CHECK(pool.stats().used_pages == 0);
 }
 
 int main() {

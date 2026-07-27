@@ -1,7 +1,6 @@
 #include "lfm/runtime/moe.hpp"
+#include "support/assertions.hpp"
 #include "lfm/backend/cuda/utils.cuh"
-
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -260,8 +259,8 @@ int main() {
             std::vector<float> wc;
             lfm::compute_moe_router(hv2, rw2, &b2, R2, H2, cfg, sc, wc);
             for (size_t i = 0; i < sg.size(); ++i) {
-                assert(sg[i] == sc[i]);
-                assert(std::abs(wg[i] - wc[i]) < 1e-4f);
+                LFM_TEST_CHECK(sg[i] == sc[i]);
+                LFM_TEST_CHECK(std::abs(wg[i] - wc[i]) < 1e-4f);
             }
         }
 

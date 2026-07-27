@@ -1,6 +1,8 @@
 #include "lfm/runtime/moe/offload.hpp"
+#include "lfm/detail/binary_codec.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -216,6 +218,34 @@ struct SidecarHeader {
     std::uint64_t reserved[4];
 };
 
+constexpr size_t kSidecarHeaderBytes = 64;
+constexpr size_t kSidecarIndexBytes = 32;
+
+SidecarHeader decode_header(std::span<const std::byte> bytes) {
+    if (bytes.size() != kSidecarHeaderBytes) {
+        throw std::invalid_argument("invalid sidecar header size");
+    }
+    SidecarHeader header{};
+    std::memcpy(header.magic, bytes.data(), sizeof(header.magic));
+    size_t offset = sizeof(header.magic);
+    header.num_layers = binary::read_le<uint32_t>(bytes, offset);
+    header.num_experts = binary::read_le<uint32_t>(bytes, offset);
+    header.moe_intermediate = binary::read_le<uint64_t>(bytes, offset);
+    header.hidden = binary::read_le<uint64_t>(bytes, offset);
+    for (uint64_t& value : header.reserved) value = binary::read_le<uint64_t>(bytes, offset);
+    return header;
+}
+
+SidecarExpertIndex decode_index(std::span<const std::byte> bytes) {
+    size_t offset = 0;
+    SidecarExpertIndex index;
+    index.gate_up_offset = binary::read_le<uint64_t>(bytes, offset);
+    index.gate_up_bytes = binary::read_le<uint64_t>(bytes, offset);
+    index.down_offset = binary::read_le<uint64_t>(bytes, offset);
+    index.down_bytes = binary::read_le<uint64_t>(bytes, offset);
+    return index;
+}
+
 ExpertSidecar::~ExpertSidecar() {
 #if defined(_WIN32)
     if (file_handle_) {
@@ -261,26 +291,27 @@ bool ExpertSidecar::load(const std::string& path, int expected_layers, int expec
     file_size_ = static_cast<std::uint64_t>(st.st_size);
 #endif
 
-    if (file_size_ < sizeof(SidecarHeader)) {
+    if (file_size_ < kSidecarHeaderBytes) {
         return false;
     }
 
     // Read header using positioned read
-    SidecarHeader header{};
+    std::array<std::byte, kSidecarHeaderBytes> header_bytes{};
 #if defined(_WIN32)
     OVERLAPPED overlapped = {};
     DWORD bytes_read = 0;
-    if (!::ReadFile(file_handle_, &header, sizeof(header), &bytes_read, &overlapped) || bytes_read != sizeof(header)) {
+    if (!::ReadFile(file_handle_, header_bytes.data(), static_cast<DWORD>(header_bytes.size()), &bytes_read, &overlapped) || bytes_read != header_bytes.size()) {
         return false;
     }
 #else
-    if (::pread(fd_, &header, sizeof(header), 0) != sizeof(header)) {
+    if (::pread(fd_, header_bytes.data(), header_bytes.size(), 0) != header_bytes.size()) {
         return false;
     }
 #endif
+    const SidecarHeader header = decode_header(header_bytes);
 
     // Validate magic, layers, experts, and shapes
-    if (std::memcmp(header.magic, "LFMSIDE1", 8) != 0) {
+    if (std::memcmp(header.magic, "LFMSIDE2", 8) != 0) {
         return false;
     }
     if (header.num_layers != static_cast<std::uint32_t>(expected_layers) ||
@@ -292,22 +323,20 @@ bool ExpertSidecar::load(const std::string& path, int expected_layers, int expec
 
     // Read index
     index_.resize(expected_layers, std::vector<SidecarExpertIndex>(expected_experts));
-    std::uint64_t index_offset = sizeof(SidecarHeader);
+    std::uint64_t index_offset = kSidecarHeaderBytes;
     for (int l = 0; l < expected_layers; ++l) {
-        std::size_t layer_index_bytes = expected_experts * sizeof(SidecarExpertIndex);
+        for (int expert = 0; expert < expected_experts; ++expert) {
+            std::array<std::byte, kSidecarIndexBytes> index_bytes{};
 #if defined(_WIN32)
-        overlapped.Offset = static_cast<DWORD>(index_offset & 0xFFFFFFFF);
-        overlapped.OffsetHigh = static_cast<DWORD>((index_offset >> 32) & 0xFFFFFFFF);
-        if (!::ReadFile(file_handle_, index_[l].data(), static_cast<DWORD>(layer_index_bytes), &bytes_read, &overlapped) ||
-            bytes_read != layer_index_bytes) {
-            return false;
-        }
+            overlapped.Offset = static_cast<DWORD>(index_offset & 0xFFFFFFFF);
+            overlapped.OffsetHigh = static_cast<DWORD>((index_offset >> 32) & 0xFFFFFFFF);
+            if (!::ReadFile(file_handle_, index_bytes.data(), static_cast<DWORD>(index_bytes.size()), &bytes_read, &overlapped) || bytes_read != index_bytes.size()) return false;
 #else
-        if (static_cast<std::size_t>(::pread(fd_, index_[l].data(), layer_index_bytes, index_offset)) != layer_index_bytes) {
-            return false;
-        }
+            if (::pread(fd_, index_bytes.data(), index_bytes.size(), index_offset) != index_bytes.size()) return false;
 #endif
-        index_offset += layer_index_bytes;
+            index_[l][expert] = decode_index(index_bytes);
+            index_offset += kSidecarIndexBytes;
+        }
     }
 
     return true;

@@ -1,6 +1,7 @@
 #include "lfm/checkpoint/repositories/safetensors.hpp"
 #include "lfm/model/config/config.hpp"
 #include "lfm/detail/checkpoint/bootstrap.hpp"
+#include "lfm/detail/binary_codec.hpp"
 #include "lfm/model/config/shape.hpp"
 #include "lfm/runtime/moe/offload.hpp"
 
@@ -14,7 +15,7 @@
 namespace {
 
 struct SidecarHeader {
-    char magic[8] = {'L', 'F', 'M', 'S', 'I', 'D', 'E', '1'};
+    char magic[8] = {'L', 'F', 'M', 'S', 'I', 'D', 'E', '2'};
     std::uint32_t num_layers = 0;
     std::uint32_t num_experts = 0;
     std::uint64_t moe_intermediate = 0;
@@ -28,6 +29,24 @@ struct SidecarExpertIndex {
     std::uint64_t down_offset = 0;
     std::uint64_t down_bytes = 0;
 };
+
+void write_header(std::ostream& output, const SidecarHeader& header) {
+    output.write(header.magic, sizeof(header.magic));
+    lfm::binary::write_le(output, header.num_layers);
+    lfm::binary::write_le(output, header.num_experts);
+    lfm::binary::write_le(output, header.moe_intermediate);
+    lfm::binary::write_le(output, header.hidden);
+    for (const std::uint64_t value : header.reserved) {
+        lfm::binary::write_le(output, value);
+    }
+}
+
+void write_index(std::ostream& output, const SidecarExpertIndex& index) {
+    lfm::binary::write_le(output, index.gate_up_offset);
+    lfm::binary::write_le(output, index.gate_up_bytes);
+    lfm::binary::write_le(output, index.down_offset);
+    lfm::binary::write_le(output, index.down_bytes);
+}
 
 std::string layer_name(int layer, const std::string& suffix) {
     return "model.layers." + std::to_string(layer) + "." + suffix;
@@ -79,12 +98,11 @@ int main(int argc, char** argv) {
         }
 
         // Write placeholder header
-        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        write_header(out, header);
 
         // Write placeholder index
         for (int l = 0; l < moe_layers; ++l) {
-            out.write(reinterpret_cast<const char*>(index[l].data()),
-                      index[l].size() * sizeof(SidecarExpertIndex));
+            for (const SidecarExpertIndex& entry : index[l]) write_index(out, entry);
         }
 
         // Align start of data to 4096 bytes
@@ -108,7 +126,7 @@ int main(int argc, char** argv) {
 
         for (int l = 0; l < moe_layers; ++l) {
             int actual_layer_idx = shape.num_dense_layers + l;
-            std::cout << "Packing layer " << actual_layer_idx << " (" << (l + 1) << "/" << moe_layers << ")..." << std::endl;
+            std::cout << "Packing layer " << actual_layer_idx << " (" << (l + 1) << "/" << moe_layers << ")...\n";
 
             for (int e = 0; e < shape.num_experts; ++e) {
                 const std::string w1_name = layer_name(
@@ -149,10 +167,9 @@ int main(int argc, char** argv) {
 
         // Rewrite final index and header
         out.seekp(0);
-        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        write_header(out, header);
         for (int l = 0; l < moe_layers; ++l) {
-            out.write(reinterpret_cast<const char*>(index[l].data()),
-                      index[l].size() * sizeof(SidecarExpertIndex));
+            for (const SidecarExpertIndex& entry : index[l]) write_index(out, entry);
         }
 
         std::cout << "Successfully packed experts into: " << sidecar_path << "\n";

@@ -1,7 +1,6 @@
 #include "lfm/runtime/moe.hpp"
+#include "support/assertions.hpp"
 #include "lfm/backend/cuda/utils.cuh"
-
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -108,7 +107,7 @@ int main() {
         lfm::compute_moe_router(p.hidden_vec, p.router_w,
                                 with_bias ? &p.bias : nullptr,
                                 p.rows, p.hidden, cfg, sel_cpu, wts_cpu);
-        for (size_t i = 0; i < sel_gpu.size(); ++i) assert(sel_gpu[i] == sel_cpu[i]);
+        for (size_t i = 0; i < sel_gpu.size(); ++i) LFM_TEST_CHECK(sel_gpu[i] == sel_cpu[i]);
 
         // FFN device buffers.
         lfm::DeviceBuffer<__nv_bfloat16> d_gate_up(
@@ -173,7 +172,7 @@ int main() {
         // The GPU kernel operates in BF16, so the legitimate reference is the
         // BF16-cast of the float computation, not the float computation itself.
         // Keep the float comparison only as a loose sanity bound.
-        assert(max_rel < 0.25f);
+        LFM_TEST_CHECK(max_rel < 0.25f);
 
         // Also verify against a pure-BF16 CPU recompute (per-element tolerance
         // tightened to account only for BF16 rounding of the weights/inputs).
@@ -186,7 +185,7 @@ int main() {
         std::cout << "moe_ffn_test: max abs diff vs bf16-cast reference = " << max_abs_bf16 << "\n";
         // BF16 carries ~3 decimal digits; a per-element deviation larger than
         // 0.1 indicates a real kernel mismatch rather than rounding.
-        assert(max_abs_bf16 < 0.1f);
+        LFM_TEST_CHECK(max_abs_bf16 < 0.1f);
 
         std::cout << "moe_ffn_test: ok\n";
         return 0;

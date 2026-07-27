@@ -1,6 +1,5 @@
 #include "lfm/runtime/moe/offload.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <iostream>
 
 namespace {
@@ -30,15 +29,15 @@ void test_byte_helpers() {
     const lfm::ModelShape shape = make_8b_a1b_shape();
     // 21 MiB per expert per the proposal.
     const std::size_t per_expert = lfm::bytes_per_expert_bf16(shape);
-    assert(per_expert == 3ull * 1792ull * 2048ull * 2ull);
-    assert(per_expert == 21ull * 1024ull * 1024ull);
+    LFM_TEST_CHECK(per_expert == 3ull * 1792ull * 2048ull * 2ull);
+    LFM_TEST_CHECK(per_expert == 21ull * 1024ull * 1024ull);
 
-    assert(lfm::moe_layer_count(shape) == 22);
+    LFM_TEST_CHECK(lfm::moe_layer_count(shape) == 22);
 
     // 12 KiB/token: 6 layers * 2 * 8 KV heads * 64 * 2 bytes.
     const std::size_t kv_per_token = lfm::kv_cache_bytes(shape, 1);
-    assert(kv_per_token == 12ull * 1024ull);
-    assert(lfm::kv_cache_bytes(shape, 16384) == 12ull * 1024ull * 16384ull);
+    LFM_TEST_CHECK(kv_per_token == 12ull * 1024ull);
+    LFM_TEST_CHECK(lfm::kv_cache_bytes(shape, 16384) == 12ull * 1024ull * 16384ull);
 }
 
 void test_disabled_plan() {
@@ -46,9 +45,9 @@ void test_disabled_plan() {
     in.shape = make_8b_a1b_shape();
     in.options.mode = lfm::ExpertOffloadMode::None;
     const lfm::ExpertOffloadPlan plan = lfm::plan_expert_offload(in);
-    assert(!plan.enabled);
-    assert(plan.experts_per_layer == in.shape.num_experts);
-    assert(plan.host_experts_per_layer == 0);
+    LFM_TEST_CHECK(!plan.enabled);
+    LFM_TEST_CHECK(plan.experts_per_layer == in.shape.num_experts);
+    LFM_TEST_CHECK(plan.host_experts_per_layer == 0);
 }
 
 void test_auto_plan_rtx3060() {
@@ -63,13 +62,13 @@ void test_auto_plan_rtx3060() {
     in.context_tokens = 16384;
 
     const lfm::ExpertOffloadPlan plan = lfm::plan_expert_offload(in);
-    assert(plan.enabled);
+    LFM_TEST_CHECK(plan.enabled);
     // With ~10.42 GiB free and this topology the planner should land in the
     // 14-16 experts/layer band from the proposal.
-    assert(plan.experts_per_layer >= 14 && plan.experts_per_layer <= 16);
-    assert(plan.host_experts_per_layer ==
+    LFM_TEST_CHECK(plan.experts_per_layer >= 14 && plan.experts_per_layer <= 16);
+    LFM_TEST_CHECK(plan.host_experts_per_layer ==
            in.shape.num_experts - plan.experts_per_layer);
-    assert(plan.gpu_expert_cache_bytes ==
+    LFM_TEST_CHECK(plan.gpu_expert_cache_bytes ==
            static_cast<std::size_t>(plan.experts_per_layer) * 22ull *
                plan.bytes_per_expert);
 }
@@ -80,11 +79,11 @@ void test_explicit_per_layer() {
     in.options.mode = lfm::ExpertOffloadMode::Host;
     in.options.experts_per_layer = 14;
     const lfm::ExpertOffloadPlan plan = lfm::plan_expert_offload(in);
-    assert(plan.enabled);
-    assert(plan.experts_per_layer == 14);
-    assert(plan.host_experts_per_layer == 18);
+    LFM_TEST_CHECK(plan.enabled);
+    LFM_TEST_CHECK(plan.experts_per_layer == 14);
+    LFM_TEST_CHECK(plan.host_experts_per_layer == 18);
     // 14 * 22 * 21 MiB = 6.32 GiB (per the proposal table).
-    assert(plan.gpu_expert_cache_bytes ==
+    LFM_TEST_CHECK(plan.gpu_expert_cache_bytes ==
            14ull * 22ull * 21ull * 1024ull * 1024ull);
 }
 
@@ -101,7 +100,7 @@ void test_infeasible_throws() {
     } catch (const std::runtime_error&) {
         threw = true;
     }
-    assert(threw);
+    LFM_TEST_CHECK(threw);
 }
 
 void test_report_nonempty() {
@@ -111,8 +110,8 @@ void test_report_nonempty() {
     in.options.experts_per_layer = 14;
     const lfm::ExpertOffloadPlan plan = lfm::plan_expert_offload(in);
     const std::string report = plan.report();
-    assert(report.find("MoE offload plan:") != std::string::npos);
-    assert(report.find("experts per layer:") != std::string::npos);
+    LFM_TEST_CHECK(report.find("MoE offload plan:") != std::string::npos);
+    LFM_TEST_CHECK(report.find("experts per layer:") != std::string::npos);
 }
 
 } // namespace

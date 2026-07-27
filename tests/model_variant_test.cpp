@@ -1,8 +1,7 @@
 #include "lfm/model/config/config.hpp"
+#include "support/assertions.hpp"
 #include "lfm/model/config/shape.hpp"
 #include "lfm/model/config/variant.hpp"
-
-#include <cassert>
 #include <iostream>
 #include <string>
 
@@ -56,40 +55,40 @@ int main() {
     auto& registry = lfm::ModelVariantRegistry::instance();
 
     const auto ids = registry.ids();
-    assert(ids.size() == 5);
-    assert(registry.find("lfm2.5-8b-a1b") != nullptr);
-    assert(registry.find("lfm2-8b-a1b") != nullptr);
+    LFM_TEST_CHECK(ids.size() == 5);
+    LFM_TEST_CHECK(registry.find("lfm2.5-8b-a1b") != nullptr);
+    LFM_TEST_CHECK(registry.find("lfm2-8b-a1b") != nullptr);
 
     const lfm::ModelShape shape_230m = make_shape(
         1024, 2560, 14, 16, 8, 64, 65536, 3, 1024, 6, 8);
     const lfm::IModelVariant& variant_230m = registry.select(shape_230m);
-    assert(variant_230m.id() == "lfm2.5-230m");
-    assert(variant_230m.repo_id() == "LiquidAI/LFM2.5-230M");
-    assert(variant_230m.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-    assert(variant_230m.label().find("230M") != std::string::npos);
+    LFM_TEST_CHECK(variant_230m.id() == "lfm2.5-230m");
+    LFM_TEST_CHECK(variant_230m.repo_id() == "LiquidAI/LFM2.5-230M");
+    LFM_TEST_CHECK(variant_230m.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+    LFM_TEST_CHECK(variant_230m.label().find("230M") != std::string::npos);
 
     const lfm::ModelShape shape_1_2b = make_shape(
         2048, 12288, 16, 32, 8, 64, 65536, 3, 2048, 6, 10);
     const lfm::IModelVariant& variant_1_2b = registry.select(shape_1_2b);
-    assert(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
-    assert(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
-    assert(variant_1_2b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-    assert(variant_1_2b.label().find("1.2B-Instruct") != std::string::npos);
+    LFM_TEST_CHECK(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
+    LFM_TEST_CHECK(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
+    LFM_TEST_CHECK(variant_1_2b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+    LFM_TEST_CHECK(variant_1_2b.label().find("1.2B-Instruct") != std::string::npos);
 
     // config.json advertises intermediate_size=12288 but the published
     // checkpoint actually stores w1/w3 with 8192 rows. resolve_shape() must
     // canonicalize to the real value so the weight loader expects the right
     // tensor dimensions.
     const lfm::ModelShape resolved_1_2b = variant_1_2b.resolve_shape(shape_1_2b);
-    assert(resolved_1_2b.intermediate == 8192);
+    LFM_TEST_CHECK(resolved_1_2b.intermediate == 8192);
 
     // A shape built directly from the real checkpoint (intermediate=8192)
     // must also match this variant so loading from a corrected config works.
     const lfm::ModelShape shape_1_2b_real = make_shape(
         2048, 8192, 16, 32, 8, 64, 65536, 3, 2048, 6, 10);
-    assert(variant_1_2b.matches(shape_1_2b_real));
+    LFM_TEST_CHECK(variant_1_2b.matches(shape_1_2b_real));
     const lfm::ModelShape resolved_real = variant_1_2b.resolve_shape(shape_1_2b_real);
-    assert(resolved_real.intermediate == 8192);
+    LFM_TEST_CHECK(resolved_real.intermediate == 8192);
 
     // LFM2.5-1.2B-Thinking shares the Instruct topology. It must NOT match on
     // shape alone (would create an ambiguous registry), but must match when the
@@ -104,28 +103,28 @@ int main() {
     } catch (const std::runtime_error&) {
         thinking_matches_shape_only = false;
     }
-    assert(!thinking_matches_shape_only);  // never dominant on shape alone
+    LFM_TEST_CHECK(!thinking_matches_shape_only);  // never dominant on shape alone
 
     const lfm::IModelVariant& variant_thinking =
         registry.select(shape_thinking, "LiquidAI/LFM2.5-1.2B-Thinking");
-    assert(variant_thinking.id() == "lfm2.5-1.2b-thinking");
-    assert(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
-    assert(variant_thinking.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-    assert(variant_thinking.label().find("1.2B-Thinking") != std::string::npos);
-    assert(variant_thinking.resolve_shape(shape_thinking).intermediate == 8192);
+    LFM_TEST_CHECK(variant_thinking.id() == "lfm2.5-1.2b-thinking");
+    LFM_TEST_CHECK(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
+    LFM_TEST_CHECK(variant_thinking.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+    LFM_TEST_CHECK(variant_thinking.label().find("1.2B-Thinking") != std::string::npos);
+    LFM_TEST_CHECK(variant_thinking.resolve_shape(shape_thinking).intermediate == 8192);
 
     // A Thinking repo hint must NOT select the Instruct variant.
     const lfm::IModelVariant& variant_instruct_again =
         registry.select(shape_1_2b, "LiquidAI/LFM2.5-1.2B-Thinking");
-    assert(variant_instruct_again.id() == "lfm2.5-1.2b-thinking");
+    LFM_TEST_CHECK(variant_instruct_again.id() == "lfm2.5-1.2b-thinking");
 
     // A Thinking config resolved via its own hint must differ from Instruct.
-    assert(variant_thinking.id() != variant_1_2b.id());
+    LFM_TEST_CHECK(variant_thinking.id() != variant_1_2b.id());
 
-    assert(registry.find("lfm2.5-230m") != nullptr);
-    assert(registry.find("lfm2.5-1.2b-instruct") != nullptr);
-    assert(registry.find("lfm2.5-1.2b-thinking") != nullptr);
-    assert(registry.find("nonexistent-variant") == nullptr);
+    LFM_TEST_CHECK(registry.find("lfm2.5-230m") != nullptr);
+    LFM_TEST_CHECK(registry.find("lfm2.5-1.2b-instruct") != nullptr);
+    LFM_TEST_CHECK(registry.find("lfm2.5-1.2b-thinking") != nullptr);
+    LFM_TEST_CHECK(registry.find("nonexistent-variant") == nullptr);
 
     // A valid but unrecognized shape must be rejected.
     const lfm::ModelShape shape_unknown = make_shape(
@@ -136,7 +135,7 @@ int main() {
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    assert(rejected);
+    LFM_TEST_CHECK(rejected);
 
     // ---- LFM2.5-8B-A1B (MoE) variant ----
     {
@@ -177,11 +176,11 @@ int main() {
         shape_8b.validate();
 
         const lfm::IModelVariant& variant_8b = registry.select(shape_8b);
-        assert(variant_8b.id() == "lfm2.5-8b-a1b");
-        assert(variant_8b.repo_id() == "LiquidAI/LFM2.5-8B-A1B");
-        assert(variant_8b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-        assert(variant_8b.label().find("8B-A1B") != std::string::npos);
-        assert(variant_8b.resolve_shape(shape_8b).intermediate == 7168);
+        LFM_TEST_CHECK(variant_8b.id() == "lfm2.5-8b-a1b");
+        LFM_TEST_CHECK(variant_8b.repo_id() == "LiquidAI/LFM2.5-8B-A1B");
+        LFM_TEST_CHECK(variant_8b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+        LFM_TEST_CHECK(variant_8b.label().find("8B-A1B") != std::string::npos);
+        LFM_TEST_CHECK(variant_8b.resolve_shape(shape_8b).intermediate == 7168);
 
         // A dense 1.2B shape must NOT select the MoE variant.
         bool selected_moe = false;
@@ -191,13 +190,13 @@ int main() {
         } catch (const std::runtime_error&) {
             selected_moe = false;
         }
-        assert(!selected_moe);
+        LFM_TEST_CHECK(!selected_moe);
 
         // The repo hint must select the 8B variant even though the base match
         // already succeeds on shape alone.
         const lfm::IModelVariant& variant_8b_hint =
             registry.select(shape_8b, "LiquidAI/LFM2.5-8B-A1B");
-        assert(variant_8b_hint.id() == "lfm2.5-8b-a1b");
+        LFM_TEST_CHECK(variant_8b_hint.id() == "lfm2.5-8b-a1b");
 
         // LFM2-8B-A1B shares the MoE topology but uses vocab_size 65536 and a
         // different rope_theta, so it must NOT be selected by the LFM2.5 shape.
@@ -206,14 +205,14 @@ int main() {
         shape_lfm2.rope_theta = 1'000'000.0f;
         shape_lfm2.compute_derived();
         shape_lfm2.validate();
-        assert(!registry.select(shape_lfm2).matches(shape_8b));
+        LFM_TEST_CHECK(!registry.select(shape_lfm2).matches(shape_8b));
         const lfm::IModelVariant& variant_lfm2 =
             registry.select(shape_lfm2, "LiquidAI/LFM2-8B-A1B");
-        assert(variant_lfm2.id() == "lfm2-8b-a1b");
-        assert(variant_lfm2.repo_id() == "LiquidAI/LFM2-8B-A1B");
-        assert(variant_lfm2.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-        assert(variant_lfm2.label().find("LFM2-8B-A1B") != std::string::npos);
-        assert(variant_lfm2.resolve_shape(shape_lfm2).intermediate == 7168);
+        LFM_TEST_CHECK(variant_lfm2.id() == "lfm2-8b-a1b");
+        LFM_TEST_CHECK(variant_lfm2.repo_id() == "LiquidAI/LFM2-8B-A1B");
+        LFM_TEST_CHECK(variant_lfm2.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
+        LFM_TEST_CHECK(variant_lfm2.label().find("LFM2-8B-A1B") != std::string::npos);
+        LFM_TEST_CHECK(variant_lfm2.resolve_shape(shape_lfm2).intermediate == 7168);
     }
 
     std::cout << "model_variant_test: ok variants=";

@@ -1,6 +1,5 @@
 #include "lfm/text/tokenizer.hpp"
-
-#include <cassert>
+#include "support/assertions.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -22,10 +21,10 @@ int main() {
 
     lfm::BpeTokenizer tokenizer(path.string());
     const auto ids = tokenizer.encode("hi", false);
-    assert(ids.size() == 1 && ids[0] == 3);
-    assert(tokenizer.decode(ids, false) == "hi");
+    LFM_TEST_CHECK(ids.size() == 1 && ids[0] == 3);
+    LFM_TEST_CHECK(tokenizer.decode(ids, false) == "hi");
     const auto contraction = tokenizer.encode("'S", false);
-    assert(contraction.size() == 1 && contraction[0] == 8);
+    LFM_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
     std::filesystem::remove(path);
     std::cout << "tokenizer_test: ok\n";
 }
