@@ -4,7 +4,11 @@
 #include "lfm/backend/cpu/model.hpp"
 #include "lfm/backend/cpu/numa.hpp"
 #include "lfm/backend/cpu/topology.hpp"
+#include "lfm/serve/cpu_inference_service.hpp"
 #include "lfm/text/tokenizer.hpp"
+#ifdef LFM25_API_WITH_CUDA
+#include "lfm/serve/cuda_inference_service.hpp"
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -19,8 +23,7 @@ struct lfm25_model {
     std::string error;
 };
 struct lfm25_engine {
-    lfm25_backend backend = LFM25_BACKEND_CPU;
-    std::unique_ptr<lfm::CpuConcurrentEngine> cpu;
+    std::unique_ptr<lfm::serve::IInferenceService> service;
     std::string error;
 };
 struct lfm25_tokenizer { std::unique_ptr<lfm::BpeTokenizer> value; std::string error; };
@@ -145,17 +148,91 @@ lfm::CpuConcurrentEngineOptions cpu_engine_options(const lfm25_engine_options& s
     return result;
 }
 
-lfm25_request_status status(lfm::CpuRequestStatus source) {
+lfm25_request_status status(lfm::serve::RequestStatus source) {
     switch (source) {
-        case lfm::CpuRequestStatus::Queued: return LFM25_REQUEST_QUEUED;
-        case lfm::CpuRequestStatus::Prefilling: return LFM25_REQUEST_PREFILLING;
-        case lfm::CpuRequestStatus::Decoding: return LFM25_REQUEST_DECODING;
-        case lfm::CpuRequestStatus::Completed: return LFM25_REQUEST_COMPLETED;
-        case lfm::CpuRequestStatus::Cancelled: return LFM25_REQUEST_CANCELLED;
-        case lfm::CpuRequestStatus::Failed: return LFM25_REQUEST_FAILED;
+        case lfm::serve::RequestStatus::Queued: return LFM25_REQUEST_QUEUED;
+        case lfm::serve::RequestStatus::Prefill: return LFM25_REQUEST_PREFILLING;
+        case lfm::serve::RequestStatus::Decoding: return LFM25_REQUEST_DECODING;
+        case lfm::serve::RequestStatus::Finished: return LFM25_REQUEST_COMPLETED;
+        case lfm::serve::RequestStatus::Cancelled: return LFM25_REQUEST_CANCELLED;
+        case lfm::serve::RequestStatus::Failed: return LFM25_REQUEST_FAILED;
     }
     return LFM25_REQUEST_FAILED;
 }
+
+#ifdef LFM25_API_WITH_CUDA
+lfm::WeightMode cuda_weight_mode(int value) {
+    switch (value) {
+        case 0: return lfm::WeightMode::Bf16;
+        case 1: return lfm::WeightMode::Int8;
+        case 2: return lfm::WeightMode::Int4;
+        default: throw std::invalid_argument("invalid CUDA weight mode");
+    }
+}
+
+lfm::KvCacheMode cuda_kv_cache_mode(int value) {
+    switch (value) {
+        case 0: return lfm::KvCacheMode::Bf16;
+        case 1: return lfm::KvCacheMode::Int8;
+        default: throw std::invalid_argument("invalid CUDA KV cache mode");
+    }
+}
+
+lfm::GemmBackend cuda_gemm_backend(int value) {
+    switch (value) {
+        case 0: return lfm::GemmBackend::Cublas;
+        case 1: return lfm::GemmBackend::CublasLt;
+        default: throw std::invalid_argument("invalid CUDA GEMM backend");
+    }
+}
+
+lfm::AttentionMode cuda_attention_mode(int value) {
+    switch (value) {
+        case 0: return lfm::AttentionMode::Single;
+        case 1: return lfm::AttentionMode::Segmented;
+        case 2: return lfm::AttentionMode::Auto;
+        default: throw std::invalid_argument("invalid CUDA attention mode");
+    }
+}
+
+lfm::ModelOptions cuda_options(const lfm25_model_options& source) {
+    const auto& input = source.backend_options.cuda;
+    if (source.backend != LFM25_BACKEND_CUDA) throw std::invalid_argument("CUDA options require CUDA backend");
+    if (input.flags != 0) throw std::invalid_argument("CUDA model option flags are reserved and must be zero");
+    lfm::ModelOptions result;
+    result.weight_mode = cuda_weight_mode(input.weight_mode);
+    result.kv_cache_mode = cuda_kv_cache_mode(input.kv_cache_mode);
+    result.gemm_backend = cuda_gemm_backend(input.gemm_backend);
+    result.attention_mode = cuda_attention_mode(input.attention_mode);
+    result.attention_chunk_tokens = input.attention_chunk_tokens;
+    result.attention_auto_threshold = input.attention_auto_threshold;
+    if (input.lt_workspace_mb > 0) {
+        result.lt_workspace_bytes = static_cast<size_t>(input.lt_workspace_mb) * 1024ULL * 1024ULL;
+    }
+    result.lt_heuristics = input.lt_heuristics;
+    return result;
+}
+
+lfm::SchedulerPolicy cuda_scheduler_policy(int value) {
+    switch (value) {
+        case 0: return lfm::SchedulerPolicy::GuaranteedNoEvict;
+        case 1: return lfm::SchedulerPolicy::MaxUtilization;
+        default: throw std::invalid_argument("invalid CUDA scheduler policy");
+    }
+}
+
+lfm::ConcurrentEngineOptions cuda_engine_options(const lfm25_engine_options& source) {
+    const auto& input = source.backend_options.cuda;
+    lfm::ConcurrentEngineOptions result;
+    result.max_active_requests = input.max_active_requests;
+    result.max_batched_tokens = input.max_batched_tokens;
+    result.prefill_chunk_tokens = input.prefill_chunk_tokens;
+    result.page_tokens = input.page_tokens;
+    result.logical_kv_pages = input.logical_kv_pages;
+    result.scheduler_policy = cuda_scheduler_policy(input.scheduler_policy);
+    return result;
+}
+#endif
 } // namespace
 
 extern "C" {
@@ -222,7 +299,12 @@ const char* lfm25_backend_capabilities(lfm25_backend backend) {
         global_error = lfm::detect_cpu_capabilities().summary();
         return global_error.c_str();
     }
+#ifdef LFM25_API_WITH_CUDA
+    global_error = "CUDA backend available for lfm25_engine_*; lfm25_model_* remains CPU-only";
+    return global_error.c_str();
+#else
     return "CUDA backend unavailable in this build";
+#endif
 }
 
 lfm25_model* lfm25_model_create(const char* path, const lfm25_model_options* options) {
@@ -260,24 +342,61 @@ lfm25_engine* lfm25_engine_create(const char* path, const lfm25_engine_options* 
     try {
         require_size(options->struct_size, sizeof(*options), "engine options");
         require_size(options->model.struct_size, sizeof(options->model), "model options");
-        if (options->backend != LFM25_BACKEND_CPU || options->model.backend != LFM25_BACKEND_CPU) { global_error = "requested backend is unavailable"; return nullptr; }
+        if (options->backend != options->model.backend) {
+            global_error = "engine backend must match model backend";
+            return nullptr;
+        }
         auto result = std::make_unique<lfm25_engine>();
-        result->cpu = std::make_unique<lfm::CpuConcurrentEngine>(path, options->model.max_context, cpu_options(options->model), cpu_engine_options(*options));
+        if (options->backend == LFM25_BACKEND_CPU) {
+            result->service = std::make_unique<lfm::serve::CpuInferenceService>(
+                path, options->model.max_context, cpu_options(options->model),
+                cpu_engine_options(*options));
+        } else if (options->backend == LFM25_BACKEND_CUDA) {
+#ifdef LFM25_API_WITH_CUDA
+            result->service = std::make_unique<lfm::serve::CudaInferenceService>(
+                path, options->model.max_context, cuda_options(options->model),
+                cuda_engine_options(*options));
+#else
+            global_error = "CUDA backend is unavailable in this build";
+            return nullptr;
+#endif
+        } else {
+            global_error = "unknown backend";
+            return nullptr;
+        }
         return result.release();
     } catch (const std::exception& error) { global_error = error.what(); return nullptr; }
 }
 void lfm25_engine_destroy(lfm25_engine* engine) { delete engine; }
 lfm25_status lfm25_engine_submit(lfm25_engine* engine, const int32_t* tokens, size_t count, const lfm25_request_options* options, lfm25_request_id* request_id) {
     if (!engine || !tokens || count == 0 || !options || !request_id) return LFM25_STATUS_INVALID_ARGUMENT;
-    return protect(engine, [&] { require_size(options->struct_size, sizeof(*options), "request options"); lfm::CpuRequestOptions request; request.max_new_tokens = options->max_new_tokens; request.eos_token_id = options->eos_token_id; request.priority = options->priority; request.generation = generation(options->generation); *request_id = engine->cpu->submit(std::vector<int32_t>(tokens, tokens + count), request); });
+    return protect(engine, [&] {
+        require_size(options->struct_size, sizeof(*options), "request options");
+        lfm::serve::GenerateRequest request;
+        request.prompt_tokens.assign(tokens, tokens + count);
+        request.max_output_tokens = options->max_new_tokens;
+        request.eos_token_id = options->eos_token_id;
+        request.priority = options->priority;
+        request.generation = generation(options->generation);
+        *request_id = engine->service->submit(std::move(request));
+    });
 }
 lfm25_status lfm25_engine_poll(lfm25_engine* engine, lfm25_request_id id, int32_t* output, size_t capacity, size_t* count, int* finished) {
     if (!engine || !output || capacity == 0 || !count || !finished) return LFM25_STATUS_INVALID_ARGUMENT;
-    return protect(engine, [&] { bool done = false; const auto tokens = engine->cpu->poll(id, capacity, &done); std::copy(tokens.begin(), tokens.end(), output); *count = tokens.size(); *finished = done ? 1 : 0; });
+    return protect(engine, [&] {
+        const lfm::serve::GenerateEvent event = engine->service->poll(id, capacity);
+        std::copy(event.tokens.begin(), event.tokens.end(), output);
+        *count = event.tokens.size();
+        *finished = event.finished ? 1 : 0;
+    });
 }
-lfm25_status lfm25_engine_status(lfm25_engine* engine, lfm25_request_id id, lfm25_request_status* value) { if (!value) return LFM25_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *value = status(engine->cpu->status(id)); }); }
-lfm25_status lfm25_engine_cancel(lfm25_engine* engine, lfm25_request_id id) { return protect(engine, [&] { engine->cpu->cancel(id); }); }
-lfm25_status lfm25_engine_step(lfm25_engine* engine, int* progressed) { if (!progressed) return LFM25_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *progressed = engine->cpu->step() ? 1 : 0; }); }
+lfm25_status lfm25_engine_status(lfm25_engine* engine, lfm25_request_id id, lfm25_request_status* value) { if (!value) return LFM25_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *value = status(engine->service->status(id)); }); }
+lfm25_status lfm25_engine_cancel(lfm25_engine* engine, lfm25_request_id id) {
+    return protect(engine, [&] {
+        if (!engine->service->cancel(id)) throw std::out_of_range("unknown request id");
+    });
+}
+lfm25_status lfm25_engine_step(lfm25_engine* engine, int* progressed) { if (!progressed) return LFM25_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *progressed = engine->service->step() ? 1 : 0; }); }
 const char* lfm25_engine_last_error(const lfm25_engine* engine) { return engine ? engine->error.c_str() : global_error.c_str(); }
 
 lfm25_tokenizer* lfm25_tokenizer_create(const char* path) { if (!path || !*path) return nullptr; try { auto result = std::make_unique<lfm25_tokenizer>(); result->value = std::make_unique<lfm::BpeTokenizer>(path); return result.release(); } catch (const std::exception& error) { global_error = error.what(); return nullptr; } }
