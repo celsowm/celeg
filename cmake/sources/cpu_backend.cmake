@@ -3,6 +3,7 @@ set(LFM_CPU_BACKEND_SOURCES
     src/backend/cpu/packed.cpp
     src/backend/cpu/concurrent.cpp
     src/backend/cpu/kernels/kernels.cpp
+    src/backend/cpu/kernels/kernels_avx2_msvc.cpp
     src/backend/cpu/kernels/quantization.cpp
     src/backend/cpu/memory/paged_kv.cpp
     src/backend/cpu/memory/prefix_cache.cpp

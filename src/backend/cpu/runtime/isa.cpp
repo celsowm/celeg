@@ -84,10 +84,25 @@ bool cpu_isa_compiled(CpuIsa isa) {
         case CpuIsa::Scalar:
             return true;
         case CpuIsa::Avx2:
+#if ((defined(__GNUC__) || defined(__clang__)) && \
+     (defined(__x86_64__) || defined(__i386__))) || \
+    (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86)))
+            // AVX2/FMA kernels exist on both toolchains: GCC/Clang via
+            // per-function __attribute__((target(...))) multiversioning in
+            // kernels.cpp, MSVC via a dedicated TU (kernels_avx2_msvc.cpp)
+            // since MSVC has no per-function target attribute equivalent.
+            return true;
+#else
+            return false;
+#endif
         case CpuIsa::AvxVnni:
         case CpuIsa::Avx512Vnni:
 #if (defined(__GNUC__) || defined(__clang__)) && \
     (defined(__x86_64__) || defined(__i386__))
+            // AVX-VNNI / AVX-512-VNNI kernels are GCC/Clang-only for now;
+            // porting them to MSVC would need its own dedicated TU the same
+            // way AVX2 does, but no test hardware here has this ISA to
+            // validate against.
             return true;
 #else
             return false;

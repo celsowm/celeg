@@ -9,17 +9,24 @@
 #include <stdexcept>
 #include <vector>
 
-#if defined(__x86_64__) || defined(__i386__)
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#define LFM_CPU_X86 1
 #include <immintrin.h>
+#else
+#define LFM_CPU_X86 0
 #endif
 #if defined(__aarch64__)
 #include <arm_neon.h>
 #endif
 
+#if defined(_MSC_VER) && LFM_CPU_X86
+#include "kernels_avx2_msvc.hpp"
+#endif
+
 namespace lfm {
 namespace {
 
-#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
+#if LFM_CPU_X86
 static const bool g_has_avx2_fma = []() {
     auto caps = detect_cpu_capabilities();
     return caps.avx2 && caps.fma;
@@ -260,6 +267,11 @@ Q4DotFunction select_q4_dot_kernel(CpuIsa isa) {
         isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8) {
         return q4_dot_avx2;
     }
+#elif defined(_MSC_VER) && LFM_CPU_X86
+    if (isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni ||
+        isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8) {
+        return lfm::detail::q4_dot_avx2_msvc;
+    }
 #endif
 #if defined(__aarch64__)
     if (isa == CpuIsa::Neon || isa == CpuIsa::DotProd || isa == CpuIsa::I8mm ||
@@ -450,6 +462,11 @@ void cpu_rmsnorm(const float* input, const float* weight, float* output,
         cpu_rmsnorm_avx2(input, weight, output, width, eps);
         return;
     }
+#elif defined(_MSC_VER) && LFM_CPU_X86
+    if (g_has_avx2_fma) {
+        lfm::detail::cpu_rmsnorm_avx2_msvc(input, weight, output, width, eps);
+        return;
+    }
 #endif
     double sum = 0.0;
     for (size_t i = 0; i < width; ++i) sum += static_cast<double>(input[i]) * input[i];
@@ -472,6 +489,11 @@ void cpu_residual_add(float* data, const float* residual, size_t count) {
         cpu_residual_add_avx2(data, residual, count);
         return;
     }
+#elif defined(_MSC_VER) && LFM_CPU_X86
+    if (g_has_avx2_fma) {
+        lfm::detail::cpu_residual_add_avx2_msvc(data, residual, count);
+        return;
+    }
 #endif
     for (size_t i = 0; i < count; ++i) data[i] += residual[i];
 }
@@ -481,6 +503,11 @@ void cpu_swiglu(const float* gate_up, float* output, size_t count) {
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (g_has_avx2_fma) {
         cpu_swiglu_avx2(gate_up, output, count);
+        return;
+    }
+#elif defined(_MSC_VER) && LFM_CPU_X86
+    if (g_has_avx2_fma) {
+        lfm::detail::cpu_swiglu_avx2_msvc(gate_up, output, count);
         return;
     }
 #endif
@@ -512,6 +539,11 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (g_has_avx2_fma) {
         cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
+        return;
+    }
+#elif defined(_MSC_VER) && LFM_CPU_X86
+    if (g_has_avx2_fma) {
+        lfm::detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
         return;
     }
 #endif
