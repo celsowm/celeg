@@ -11,4 +11,10 @@ out.txt
 # cache downloader (src/download_main.cpp). Do not commit them.
 model/
 
+# Third-party sources cloned/built locally for reference benchmarking
+# (e.g. llama.cpp). Never committed. Benchmark model weights are not stored
+# under benchmarks/ at all -- both engines read from the user's default HF
+# hub cache (see benchmarks/run_bench.py).
+.externals/
+benchmarks/results/
 

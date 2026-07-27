@@ -102,6 +102,8 @@ add_executable(lfm25-cpu-prefix-cache-benchmark src/app/benchmark/cpu/prefix_cac
 target_link_libraries(lfm25-cpu-prefix-cache-benchmark PRIVATE lfm_cpu_backend)
 add_executable(lfm25-cpu-compare-reference src/tools/cpu_compare_reference.cpp)
 target_link_libraries(lfm25-cpu-compare-reference PRIVATE lfm_cpu_backend)
+add_executable(lfm25-bench src/app/benchmark/cpu/lfm25_bench.cpp)
+target_link_libraries(lfm25-bench PRIVATE lfm_cpu_backend)
 
 add_executable(lfm25-download src/app/download/main.cpp)
 target_link_libraries(lfm25-download PRIVATE lfm_base)
@@ -312,7 +314,7 @@ include(GNUInstallDirs)
 set(LFM_INSTALL_TARGETS lfm_base lfm_runtime lfm_cpu_backend lfm25 lfm25-cpu-run lfm25-cpu-pack lfm25-cpu-kernel-benchmark lfm25-c-api-example
     lfm25-cpu-concurrent-benchmark
     lfm25-cpu-prefill-benchmark lfm25-cpu-prefix-cache-benchmark
-    lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download lfm25-pack-experts
+    lfm25-cpu-compare-reference lfm25-bench lfm25-compare-logits lfm25-download lfm25-pack-experts
     lfm_serve_core lfm_serve_cpu)
 if(LFM_CUDA_AVAILABLE)
     list(APPEND LFM_INSTALL_TARGETS lfm_cuda_backend lfm25-run
