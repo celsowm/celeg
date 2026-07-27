@@ -12,6 +12,7 @@ option(LFM_BUILD_TESTS "Build host, CPU and CUDA tests" ON)
 option(LFM_FAST_MATH "Enable CUDA --use_fast_math" OFF)
 option(LFM_DEBUG_SYNC "Synchronize after every CUDA kernel" OFF)
 option(LFM_RUN_CUDA_TESTS "Register CUDA runtime tests with CTest" ON)
+option(LFM_ENABLE_SERVE "Build lfm25-serve and its OpenAI-compatible protocol layer (fetches Glaze)" ON)
 set(LFM_VARIANTS "230m;1.2b-instruct;1.2b-thinking;8b-a1b" CACHE STRING
     "Semicolon-separated list of model variants to compile in. Available: 230m, 1.2b-instruct, 1.2b-thinking, 8b-a1b")
 
@@ -104,6 +105,23 @@ target_link_libraries(lfm25-cpu-compare-reference PRIVATE lfm_cpu_backend)
 
 add_executable(lfm25-download src/app/download/main.cpp)
 target_link_libraries(lfm25-download PRIVATE lfm_base)
+
+if(LFM_ENABLE_SERVE)
+    include(FetchContent)
+    FetchContent_Declare(
+        glaze
+        GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+        GIT_TAG v2.9.5
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(glaze)
+
+    add_library(lfm_serve_protocol src/serve/protocol/mapping.cpp)
+    target_include_directories(lfm_serve_protocol PUBLIC include)
+    if(NOT MSVC)
+        target_compile_options(lfm_serve_protocol PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    target_link_libraries(lfm_serve_protocol PUBLIC lfm_runtime glaze::glaze)
+endif()
 
 add_library(lfm_serve_core src/serve/generation_dispatcher.cpp)
 target_include_directories(lfm_serve_core PUBLIC include)
@@ -225,6 +243,9 @@ if(LFM_CUDA_AVAILABLE)
         lfm_serve_cuda
         )
 endif()
+if(LFM_ENABLE_SERVE)
+    list(APPEND LFM_INSTALL_TARGETS lfm_serve_protocol)
+endif()
 install(TARGETS ${LFM_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -299,6 +320,11 @@ if(LFM_BUILD_TESTS)
     add_executable(generation_dispatcher_test tests/generation_dispatcher_test.cpp)
     target_link_libraries(generation_dispatcher_test PRIVATE lfm_serve_core)
     add_test(NAME generation_dispatcher_test COMMAND generation_dispatcher_test)
+    if(LFM_ENABLE_SERVE)
+        add_executable(chat_protocol_mapping_test tests/chat_protocol_mapping_test.cpp)
+        target_link_libraries(chat_protocol_mapping_test PRIVATE lfm_serve_protocol)
+        add_test(NAME chat_protocol_mapping_test COMMAND chat_protocol_mapping_test)
+    endif()
     add_executable(batch_planner_test tests/batch_planner_test.cpp)
     target_link_libraries(batch_planner_test PRIVATE lfm_runtime)
     add_test(NAME batch_planner_test COMMAND batch_planner_test)
