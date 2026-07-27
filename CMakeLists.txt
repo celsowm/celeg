@@ -105,6 +105,13 @@ target_link_libraries(lfm25-cpu-compare-reference PRIVATE lfm_cpu_backend)
 add_executable(lfm25-download src/app/download/main.cpp)
 target_link_libraries(lfm25-download PRIVATE lfm_base)
 
+add_library(lfm_serve_core src/serve/generation_dispatcher.cpp)
+target_include_directories(lfm_serve_core PUBLIC include)
+if(NOT MSVC)
+    target_compile_options(lfm_serve_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+target_link_libraries(lfm_serve_core PUBLIC Threads::Threads)
+
 add_library(lfm_serve_cpu src/serve/cpu_inference_service.cpp)
 target_include_directories(lfm_serve_cpu PUBLIC include)
 if(NOT MSVC)
@@ -211,7 +218,7 @@ set(LFM_INSTALL_TARGETS lfm_base lfm_runtime lfm_cpu_backend lfm25 lfm25-cpu-run
     lfm25-cpu-concurrent-benchmark
     lfm25-cpu-prefill-benchmark lfm25-cpu-prefix-cache-benchmark
     lfm25-cpu-compare-reference lfm25-compare-logits lfm25-download lfm25-pack-experts
-    lfm_serve_cpu)
+    lfm_serve_core lfm_serve_cpu)
 if(LFM_CUDA_AVAILABLE)
     list(APPEND LFM_INSTALL_TARGETS lfm_cuda_backend lfm25-run
         lfm25-concurrent-benchmark lfm25-prefix-cache-benchmark
@@ -289,6 +296,9 @@ if(LFM_BUILD_TESTS)
     add_executable(request_registry_test tests/request_registry_test.cpp)
     target_link_libraries(request_registry_test PRIVATE lfm_runtime)
     add_test(NAME request_registry_test COMMAND request_registry_test)
+    add_executable(generation_dispatcher_test tests/generation_dispatcher_test.cpp)
+    target_link_libraries(generation_dispatcher_test PRIVATE lfm_serve_core)
+    add_test(NAME generation_dispatcher_test COMMAND generation_dispatcher_test)
     add_executable(batch_planner_test tests/batch_planner_test.cpp)
     target_link_libraries(batch_planner_test PRIVATE lfm_runtime)
     add_test(NAME batch_planner_test COMMAND batch_planner_test)
