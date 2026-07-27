@@ -93,22 +93,21 @@ incrementally; a request can pause while no page is free.
 - benchmark-guided chunk and page-size autotuning;
 - asynchronous page clone on a dedicated transfer stream.
 
-## v0.0.13 wavefront ragged packed prefill
+## Flattened ragged packed prefill
 
-The scheduler builds a prefill wave from all selected prompt chunks. Every row
-contributes its next token, current position, physical page table and model-state
-pointers. `PackedDecodeExecutor::prefill_step` then executes the same shared
-weights with `M = number of active prefill rows`.
+The scheduler flattens all selected prompt chunks into one token batch. Every
+token carries its request position and a copy of that request's physical page
+table. `PackedDecodeExecutor::prefill` executes the shared weights once with
+`M = total prompt tokens`.
 
-Rows are removed as soon as their reserved chunk ends. A batch may therefore
-shrink from 16 to 11 to 4 rows without padding short prompts. Decode tokens keep
-a reserved share of `max_batched_tokens`; prefill consumes only the remaining
-budget.
+Each request retains an independent causal KV history and ShortConv ring state;
+the ShortConv kernel advances each request span in token order. Decode tokens
+keep a reserved share of `max_batched_tokens`; prefill consumes only the
+remaining budget.
 
-The current implementation is wavefront packed rather than flattened-token
-packed. It preserves the recurrent ShortConv update and causal history exactly,
-but performs one shared model pass per token wave. A future POD kernel may fuse
-multiple prefill tiles and decode rows into one attention launch.
+There are no internal dependency-safe token waves: one admitted ragged chunk
+causes one transformer pass. BF16/INT8 paged KV and segmented attention use the
+same flattened token mapping.
 
 New C++ controls:
 
@@ -119,4 +118,5 @@ engine_options.ragged_prefill_min_batch = 2;
 
 New counters include `ragged_prefill_steps`, `ragged_prefill_tokens`,
 `lane_prefill_tokens`, `maximum_ragged_prefill_batch` and
-`cumulative_ragged_prefill_ms`.
+`cumulative_ragged_prefill_ms`. `PackedDecodeMetrics` additionally exposes
+`ragged_prefill_transformer_passes` for structural verification.

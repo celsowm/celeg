@@ -30,9 +30,20 @@ void launch_scatter_bf16_rows(
     const __nv_bfloat16* source,
     __nv_bfloat16* const* destinations,
     int rows, int width, cudaStream_t stream);
+void launch_scatter_bf16_selected_rows(
+    const __nv_bfloat16* source,
+    const int32_t* source_rows,
+    __nv_bfloat16* const* destinations,
+    int rows, int width, cudaStream_t stream);
 void launch_scatter_decode_state(
     const int32_t* sampled,
     const int32_t* positions,
+    int32_t* const* sampled_destinations,
+    int32_t* const* position_destinations,
+    int rows, cudaStream_t stream);
+void launch_scatter_selected_decode_state(
+    const int32_t* sampled, const int32_t* positions,
+    const int32_t* source_rows,
     int32_t* const* sampled_destinations,
     int32_t* const* position_destinations,
     int rows, cudaStream_t stream);

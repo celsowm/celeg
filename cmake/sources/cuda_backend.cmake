@@ -7,7 +7,8 @@ set(LFM_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/weight_layout.cu
     src/backend/cuda/model/weight_loader.cu
     src/backend/cuda/memory/paged_kv.cu
-    src/backend/cuda/moe/expert_residency.cu
+    src/backend/cuda/moe/host_expert_store.cu
+    src/backend/cuda/moe/expert_layer_cache.cu
     src/backend/cuda/moe/ffn.cu
     src/backend/cuda/moe/route.cu
     src/backend/cuda/runtime/engine.cpp

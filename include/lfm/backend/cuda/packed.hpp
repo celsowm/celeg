@@ -23,6 +23,9 @@ struct PackedDecodeMetrics {
     uint64_t segmented_paged_tokens = 0;
     uint64_t ragged_prefill_steps = 0;
     uint64_t ragged_prefill_tokens = 0;
+    // Number of full transformer passes issued for ragged prefill.  A
+    // flattened ragged batch must contribute exactly one.
+    uint64_t ragged_prefill_transformer_passes = 0;
     size_t maximum_batch = 0;
     size_t maximum_prefill_batch = 0;
     double cumulative_ms = 0.0;
@@ -46,7 +49,8 @@ struct PackedPrefillRow {
 // linear layers use M=batch_size against one shared checkpoint allocation.
 class PackedDecodeExecutor {
 public:
-    PackedDecodeExecutor(size_t maximum_batch,
+    PackedDecodeExecutor(size_t maximum_sessions,
+                         size_t maximum_prefill_tokens,
                          PhysicalPagedKvCache* paged_kv,
                          const ModelShape& shape);
     ~PackedDecodeExecutor();
@@ -76,6 +80,7 @@ public:
                  const std::vector<int32_t>& tokens,
                  const std::vector<PackedPrefillRow>& rows);
     size_t maximum_batch() const;
+    size_t maximum_prefill_tokens() const;
     PackedDecodeMetrics metrics() const;
 
 private:

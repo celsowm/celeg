@@ -381,6 +381,65 @@ int main() {
         }
     }
 
+    // Ragged ShortConv advances every request span in order without a host
+    // token-wave loop.  Its outputs and independent ring states match
+    // sequential decode for unequal spans and nonzero positions.
+    {
+        constexpr int requests = 2;
+        constexpr int hidden = 2;
+        constexpr int cache = 3;
+        const std::vector<int> offsets = {0, 3};
+        const std::vector<int> counts = {3, 2};
+        const std::vector<int> positions = {1, 2, 3, 4, 5};
+        std::vector<float> projected_f = {
+            1, 2, 1, 1, 1, 2,  2, 1, 1, 2, 2, 1,  1, 1, 2, 1, 3, 2,
+            3, 1, 1, 1, 2, 2,  2, 2, 1, 3, 1, 2,
+        };
+        std::vector<float> weight_f = {1, 2, 3, 3, 2, 1};
+        std::vector<__nv_bfloat16> projected(projected_f.size()), weight(weight_f.size());
+        for (size_t i = 0; i < projected.size(); ++i) projected[i] = to_bf16(projected_f[i]);
+        for (size_t i = 0; i < weight.size(); ++i) weight[i] = to_bf16(weight_f[i]);
+        lfm::DeviceBuffer<__nv_bfloat16> dp(projected.size()), dw(weight.size()),
+            ds0(hidden * cache), ds1(hidden * cache), dy(positions.size() * hidden);
+        lfm::DeviceBuffer<__nv_bfloat16*> states(requests);
+        lfm::DeviceBuffer<int32_t> dpositions(positions.size()), doffsets(requests), dcounts(requests);
+        const std::vector<__nv_bfloat16*> state_ptrs = {ds0.data(), ds1.data()};
+        LFM_CUDA(cudaMemcpy(dp.data(), projected.data(), dp.bytes(), cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(dw.data(), weight.data(), dw.bytes(), cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(states.data(), state_ptrs.data(), states.bytes(), cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(dpositions.data(), positions.data(), dpositions.bytes(), cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(doffsets.data(), offsets.data(), doffsets.bytes(), cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(dcounts.data(), counts.data(), dcounts.bytes(), cudaMemcpyHostToDevice));
+        ds0.zero_async(stream.get());
+        ds1.zero_async(stream.get());
+        lfm::launch_conv_ragged_prefill(dp.data(), dw.data(), states.data(), dy.data(),
+                                        dpositions.data(), doffsets.data(), dcounts.data(),
+                                        requests, hidden, cache, stream.get());
+        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        std::vector<__nv_bfloat16> output(positions.size() * hidden), state0(hidden * cache), state1(hidden * cache);
+        LFM_CUDA(cudaMemcpy(output.data(), dy.data(), dy.bytes(), cudaMemcpyDeviceToHost));
+        LFM_CUDA(cudaMemcpy(state0.data(), ds0.data(), ds0.bytes(), cudaMemcpyDeviceToHost));
+        LFM_CUDA(cudaMemcpy(state1.data(), ds1.data(), ds1.bytes(), cudaMemcpyDeviceToHost));
+        std::vector<float> expected0(hidden * cache, 0.0f), expected1(hidden * cache, 0.0f);
+        for (int request = 0; request < requests; ++request) {
+            std::vector<float>& state = request == 0 ? expected0 : expected1;
+            for (int token = 0; token < counts[request]; ++token) {
+                const int row = offsets[request] + token;
+                const std::vector<float> one(projected_f.begin() + row * 3 * hidden,
+                                             projected_f.begin() + (row + 1) * 3 * hidden);
+                const auto expected = lfm::reference::conv_decode_bf16(
+                    one, weight_f, state, hidden, cache, positions[row]);
+                for (int channel = 0; channel < hidden; ++channel) {
+                    expect_near(to_float(output[row * hidden + channel]), expected[channel], 0.02f);
+                }
+            }
+        }
+        for (int i = 0; i < hidden * cache; ++i) {
+            expect_near(to_float(state0[i]), expected0[i], 0.01f);
+            expect_near(to_float(state1[i]), expected1[i], 0.01f);
+        }
+    }
+
     // Batched strict GQA produces the same output as decoding each prefix.
     {
         constexpr int rows = 2;

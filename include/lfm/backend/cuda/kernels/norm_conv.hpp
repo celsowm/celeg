@@ -30,5 +30,15 @@ void launch_conv_prefill(const __nv_bfloat16* projected_bcx,
                         __nv_bfloat16* state, __nv_bfloat16* y,
                         int rows, int hidden, int cache_length,
                         cudaStream_t stream);
+void launch_conv_ragged_prefill(
+    const __nv_bfloat16* projected_bcx,
+    const __nv_bfloat16* conv_weight,
+    __nv_bfloat16* const* states,
+    __nv_bfloat16* y,
+    const int32_t* positions,
+    const int32_t* span_offsets,
+    const int32_t* span_counts,
+    int requests, int hidden, int cache_length,
+    cudaStream_t stream);
 
 } // namespace lfm

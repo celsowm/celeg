@@ -23,29 +23,6 @@ std::size_t align_up(std::size_t v) {
     return (v + kPageSize - 1) & ~(kPageSize - 1);
 }
 
-// Device kernel: for each selected expert, check if it is GPU-resident.
-// Outputs a compact list of cold experts that need promotion.
-//   sel_dev[i]          = selected expert index (rows * K total)
-//   expert_slot_dev[e]  = cache slot for expert e, or -1 if host-resident
-//   cold_list_dev[out]  = compact list of cold expert indices
-//   cold_count_dev[out] = number of cold experts (atomic, initialized to 0)
-__global__ void resolve_residency_kernel(const int* sel_dev,
-                                         const int* expert_slot_dev,
-                                         int* cold_flags_dev,
-                                         int* cold_list_dev,
-                                         int* cold_count_dev,
-                                         int total) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total) return;
-    const int e = sel_dev[idx];
-    if (expert_slot_dev[e] < 0) {
-        if (atomicCAS(&cold_flags_dev[e], 0, 1) == 0) {
-            const int pos = atomicAdd(cold_count_dev, 1);
-            cold_list_dev[pos] = e;
-        }
-    }
-}
-
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -144,4 +121,3 @@ const void* HostExpertStore::alloc_mapped(std::size_t bytes) {
 // ---------------------------------------------------------------------------
 
 } // namespace lfm
-

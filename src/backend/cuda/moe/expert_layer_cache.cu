@@ -13,16 +13,6 @@ namespace lfm {
 
 namespace {
 
-// Rounds `value` down / up to a page-aligned boundary. cudaHostRegister
-// requires page-aligned ranges; we register the enclosing aligned range and
-// offset the returned device pointer back to the requested address.
-constexpr std::size_t kPageSize = 4096;
-
-std::uintptr_t align_down(std::uintptr_t v) { return v & ~(kPageSize - 1); }
-std::size_t align_up(std::size_t v) {
-    return (v + kPageSize - 1) & ~(kPageSize - 1);
-}
-
 // Device kernel: for each selected expert, check if it is GPU-resident.
 // Outputs a compact list of cold experts that need promotion.
 //   sel_dev[i]          = selected expert index (rows * K total)
@@ -45,6 +35,9 @@ __global__ void resolve_residency_kernel(const int* sel_dev,
         }
     }
 }
+
+} // namespace
+
 // ExpertLayerCache
 // ---------------------------------------------------------------------------
 
@@ -478,4 +471,3 @@ const __nv_bfloat16* ExpertLayerCache::expert_down_dev(int expert) const {
     return slots_[static_cast<size_t>(slot)].down.data();
 }
 } // namespace lfm
-
