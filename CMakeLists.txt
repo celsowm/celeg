@@ -39,6 +39,13 @@ find_package(Threads REQUIRED)
 
 if(MSVC)
     add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/utf-8>)
+    set(LFM_MSVC_SHOWINCLUDES_PREFIX "" CACHE STRING
+        "Exact localized MSVC /showIncludes prefix detected by scripts/dev.py")
+    if(LFM_MSVC_SHOWINCLUDES_PREFIX)
+        set(CMAKE_C_CL_SHOWINCLUDES_PREFIX "${LFM_MSVC_SHOWINCLUDES_PREFIX}")
+        set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "${LFM_MSVC_SHOWINCLUDES_PREFIX}")
+        set(CMAKE_CL_SHOWINCLUDES_PREFIX "${LFM_MSVC_SHOWINCLUDES_PREFIX}")
+    endif()
 endif()
 
 add_library(lfm25_host
@@ -135,8 +142,41 @@ if(LFM_ENABLE_CUDA)
         enable_language(CUDA)
         set(CMAKE_CUDA_STANDARD 20)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+        if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+            # Unsupported newer MSVC toolsets can fail inside <chrono> under
+            # NVCC's RelWithDebInfo host pass. Keep normal C/C++ symbols while
+            # compiling CUDA translation units with the known-good optimized
+            # host flags.
+            set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELEASE}")
+        endif()
         find_package(CUDAToolkit REQUIRED)
         set(LFM_CUDA_AVAILABLE ON)
+        if(WIN32)
+            set(_lfm_cuda_runtime_dirs
+                "${CUDAToolkit_BIN_DIR}/x64"
+                "${CUDAToolkit_BIN_DIR}")
+            set(LFM_CUDA_RUNTIME_DLLS)
+            foreach(_runtime_dir IN LISTS _lfm_cuda_runtime_dirs)
+                if(IS_DIRECTORY "${_runtime_dir}")
+                    file(GLOB _runtime_dlls LIST_DIRECTORIES FALSE
+                        "${_runtime_dir}/cudart64_*.dll"
+                        "${_runtime_dir}/cublas64_*.dll"
+                        "${_runtime_dir}/cublasLt64_*.dll")
+                    list(APPEND LFM_CUDA_RUNTIME_DLLS ${_runtime_dlls})
+                endif()
+            endforeach()
+            list(REMOVE_DUPLICATES LFM_CUDA_RUNTIME_DLLS)
+            if(NOT LFM_CUDA_RUNTIME_DLLS)
+                message(FATAL_ERROR
+                    "CUDA runtime DLLs were not found under ${CUDAToolkit_BIN_DIR}. "
+                    "Check that the selected CUDA toolkit includes cuBLAS.")
+            endif()
+            add_custom_target(lfm25_cuda_runtime ALL
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${LFM_CUDA_RUNTIME_DLLS} "${CMAKE_BINARY_DIR}"
+                COMMAND_EXPAND_LISTS
+                COMMENT "Staging CUDA runtime DLLs beside Windows executables")
+        endif()
     else()
         message(WARNING "CUDA compiler not found: building the CPU backend only")
     endif()
@@ -174,12 +214,18 @@ if(LFM_CUDA_AVAILABLE)
 
     add_executable(lfm25-run src/main.cpp)
     target_link_libraries(lfm25-run PRIVATE lfm25_core)
+    if(TARGET lfm25_cuda_runtime)
+        add_dependencies(lfm25-run lfm25_cuda_runtime)
+    endif()
 
     add_library(lfm25 SHARED src/c_api.cpp src/concurrent_c_api.cpp)
     target_link_libraries(lfm25 PRIVATE lfm25_core)
     target_include_directories(lfm25 PUBLIC include)
     target_compile_definitions(lfm25 PRIVATE LFM25_C_API_BUILD=1)
     set_target_properties(lfm25 PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0 OUTPUT_NAME lfm25)
+    if(TARGET lfm25_cuda_runtime)
+        add_dependencies(lfm25 lfm25_cuda_runtime)
+    endif()
 
     add_executable(lfm25-concurrent-benchmark src/concurrent_benchmark.cpp)
     target_link_libraries(lfm25-concurrent-benchmark PRIVATE lfm25_core)

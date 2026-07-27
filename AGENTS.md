@@ -21,12 +21,15 @@
 
 ## Build
 
-```powershell
-cmd /c '"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" && cd /d D:\ia\lfm25-cuda-cpp && cmake --build build-cuda -j'
+```text
+python scripts/dev.py verify
 ```
 
-Clean build: append `--clean-first`. All 36 test executables live in
-`build-cuda/` and must pass (`ALL PASS (36)`).
+The harness dynamically discovers Visual Studio, CUDA, the GPU architecture,
+runtime DLLs and checkpoints. It always performs a fresh configure and writes
+to `out/<platform>-<backend>-<build-type>`. Use `--backend cuda` when CUDA is
+required or `--backend cpu` for a CPU-only check. All 45 configured CTest tests
+must pass for a CUDA build.
 
 ## Model checkpoints (HuggingFace cache)
 
@@ -47,11 +50,12 @@ the cached checkpoints already present on the machine.
 
 ## Smoke checks
 
-```powershell
-./build-cuda/lfm25-run.exe --repo LiquidAI/LFM2.5-230M --prompt "Hello" --max-new-tokens 4
-./build-cuda/lfm25-run.exe --repo LiquidAI/LFM2.5-1.2B-Instruct --prompt "Explain CUDA in one sentence." --max-new-tokens 16
-./build-cuda/lfm25-concurrent-benchmark.exe ./model/LFM2.5-230M/model.safetensors ./model/LFM2.5-230M/tokenizer.json "Hello world" 4 8
+```text
+python scripts/dev.py smoke --backend cuda
 ```
+
+The smoke command checks CLI startup, the C API, expert residency and cached
+230M inference. It never downloads a checkpoint implicitly.
 
 Note: the LFM2.5-8B-A1B checkpoint is sharded across ~16 GB of BF16 weights and
 does not fit in the 12 GB VRAM of the reference RTX 3060, so full BF16

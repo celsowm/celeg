@@ -1201,13 +1201,15 @@ void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int ro
                             weights_->repo->read(loc.w2, dn_dest);
                         }
                     });
-                    cache->promote(e, cache->choose_victim(), reinterpret_cast<const __nv_bfloat16*>(lease.gate_up()),
-                                   reinterpret_cast<const __nv_bfloat16*>(lease.down()),
-                                   stream_.get());
-                    auto ev = std::make_unique<CudaEvent>();
-                    ev->record(stream_.get());
-                    std::lock_guard<std::mutex> ctrl_lock(weights_->expert_controllers[static_cast<size_t>(layer)]->mutex);
-                    weights_->expert_controllers[static_cast<size_t>(layer)]->inflight_transfers.push_back({std::move(lease), std::move(ev)});
+                    if (cache->ensure_resident(e,
+                                               reinterpret_cast<const __nv_bfloat16*>(lease.gate_up()),
+                                               reinterpret_cast<const __nv_bfloat16*>(lease.down()),
+                                               stream_.get())) {
+                        auto ev = std::make_unique<CudaEvent>();
+                        ev->record(stream_.get());
+                        std::lock_guard<std::mutex> ctrl_lock(weights_->expert_controllers[static_cast<size_t>(layer)]->mutex);
+                        weights_->expert_controllers[static_cast<size_t>(layer)]->inflight_transfers.push_back({std::move(lease), std::move(ev)});
+                    }
                 } else {
                     cache->touch(e);
                 }

@@ -47,21 +47,45 @@ reuse, ragged packed prefill, packed decode, continuous scheduling, CUDA
 Graphs and cuBLAS/cuBLASLt. When `nvcc` is unavailable, CMake builds only the
 CPU targets.
 
-## CPU-only build
+## Portable build and verification
 
-```bash
-cmake -S . -B build-cpu \
-  -DLFM_ENABLE_CUDA=OFF \
-  -DLFM_BUILD_TESTS=ON \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build-cpu -j
-ctest --test-dir build-cpu --output-on-failure
+The standard developer entrypoint works from Windows, Linux and agent
+harnesses. It discovers Visual Studio, CUDA, the GPU architecture, runtime
+libraries and cached checkpoints without machine-specific paths:
+
+```text
+python scripts/dev.py doctor
+python scripts/dev.py verify
+```
+
+`auto` uses CUDA when a compatible toolkit and GPU architecture are available,
+otherwise it builds the CPU backend. Select a backend explicitly when required:
+
+```text
+python scripts/dev.py verify --backend cpu
+python scripts/dev.py verify --backend cuda
+python scripts/dev.py doctor --backend cuda --json
+```
+
+Builds default to `RelWithDebInfo` under
+`out/<platform>-<backend>-relwithdebinfo`. Common overrides include
+`--build-type Release`, `--arch 86`, `--jobs 8` and `--build-dir PATH`.
+`build`, `test`, `smoke` and `verify` always perform a fresh CMake configure so
+an old cache cannot retain a different compiler or CUDA toolkit.
+
+For IDEs and direct CMake use, equivalent CPU/CUDA Release and RelWithDebInfo
+presets are available:
+
+```text
+cmake --preset cpu-relwithdebinfo
+cmake --build --preset cpu-relwithdebinfo
+ctest --preset cpu-relwithdebinfo
 ```
 
 Standalone execution (230M):
 
 ```bash
-./build-cpu/lfm25-cpu-run \
+./out/linux-cpu-relwithdebinfo/lfm25-cpu-run \
   --model ./model/LFM2.5-230M \
   --prompt "Explique CUDA em uma frase." \
   --cpu-isa auto \
@@ -76,7 +100,7 @@ Standalone execution (230M):
 Standalone execution (1.2B-Instruct):
 
 ```bash
-./build-cpu/lfm25-cpu-run \
+./out/linux-cpu-relwithdebinfo/lfm25-cpu-run \
   --model ./model/LFM2.5-1.2B-Instruct \
   --prompt "Explique CUDA em uma frase." \
   --cpu-isa auto \
@@ -99,7 +123,7 @@ Downloading a checkpoint:
 Concurrent benchmark:
 
 ```bash
-./build-cpu/lfm25-cpu-concurrent-benchmark \
+./out/linux-cpu-relwithdebinfo/lfm25-cpu-concurrent-benchmark \
   ./model/LFM2.5-1.2B-Instruct \
   "Explique como a CPU executa uma rede neural." \
   8 32 8 bf16 auto
@@ -113,16 +137,21 @@ TOKENS=1024 KV=bf16 \
 ./scripts/cpu_long_prefill_benchmark.sh
 ```
 
-## CUDA backend retained
+On Windows, replace `linux` in those paths with `windows` and append `.exe`.
+
+## CUDA backend
 
 The CUDA path continues to provide quantized weights, paged KV, prefix reuse,
 ragged packed prefill, packed decode, continuous scheduling, CUDA Graphs and
-cuBLAS/cuBLASLt. When `nvcc` is unavailable, CMake builds only the CPU targets.
+cuBLAS/cuBLASLt. Windows builds stage the selected toolkit's required runtime
+DLLs beside the executables. A cached 230M checkpoint is exercised by
+`scripts/dev.py smoke`; if it is absent, inference is clearly skipped and no
+download occurs.
 
 ## Validation helpers
 
 ```bash
-./scripts/cpu_build_test.sh
+python scripts/dev.py verify
 ./scripts/cpu_sanitizer_test.sh
 ./scripts/cpu_vnni_check.sh
 ./scripts/host_check.sh

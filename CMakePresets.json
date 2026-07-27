@@ -1,0 +1,110 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "LFM_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "cpu-release",
+      "inherits": "base",
+      "displayName": "CPU Release",
+      "binaryDir": "${sourceDir}/out/${hostSystemName}-cpu-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LFM_ENABLE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "cpu-relwithdebinfo",
+      "inherits": "base",
+      "displayName": "CPU RelWithDebInfo",
+      "binaryDir": "${sourceDir}/out/${hostSystemName}-cpu-relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "LFM_ENABLE_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "cuda-release",
+      "inherits": "base",
+      "displayName": "CUDA Release",
+      "binaryDir": "${sourceDir}/out/${hostSystemName}-cuda-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CUDA_ARCHITECTURES": "native",
+        "LFM_ENABLE_CUDA": "ON",
+        "LFM_RUN_CUDA_TESTS": "ON"
+      }
+    },
+    {
+      "name": "cuda-relwithdebinfo",
+      "inherits": "base",
+      "displayName": "CUDA RelWithDebInfo",
+      "binaryDir": "${sourceDir}/out/${hostSystemName}-cuda-relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CUDA_ARCHITECTURES": "native",
+        "LFM_ENABLE_CUDA": "ON",
+        "LFM_RUN_CUDA_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release"
+    },
+    {
+      "name": "cpu-relwithdebinfo",
+      "configurePreset": "cpu-relwithdebinfo"
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release"
+    },
+    {
+      "name": "cuda-relwithdebinfo",
+      "configurePreset": "cuda-relwithdebinfo"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cpu-relwithdebinfo",
+      "configurePreset": "cpu-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cuda-relwithdebinfo",
+      "configurePreset": "cuda-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
