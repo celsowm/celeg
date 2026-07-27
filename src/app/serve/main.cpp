@@ -6,19 +6,23 @@
 #include "lfm/serve/generation_dispatcher.hpp"
 #include "lfm/serve/protocol/json.hpp"
 #include "lfm/serve/protocol/mapping.hpp"
+#include "lfm/serve/protocol/openapi.hpp"
 #include "lfm/text/tokenizer.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -94,7 +98,7 @@ textarea{width:100%;height:5rem}
 </style></head>
 <body>
 <h1>lfm25-serve</h1>
-<p>POST <code>/v1/chat/completions</code> (OpenAI-compatible) or try it here:</p>
+<p>POST <code>/v1/chat/completions</code> (OpenAI-compatible), browse the <a href="/docs">API docs</a>, or try it here:</p>
 <textarea id="prompt">Hello!</textarea><br>
 <button id="send">Send</button>
 <div id="out"></div>
@@ -116,6 +120,48 @@ document.getElementById('send').onclick = async () => {
 </script>
 </body></html>
 )HTML";
+
+constexpr std::string_view kDocsHtml = R"HTML(<!doctype html>
+<html><head><meta charset="utf-8"><title>lfm25-serve API docs</title>
+<link rel="stylesheet" href="/docs/swagger-ui.css">
+<style>body{margin:0}</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="/docs/swagger-ui-bundle.js"></script>
+<script src="/docs/swagger-ui-standalone-preset.js"></script>
+<script>
+window.onload = () => {
+  window.ui = SwaggerUIBundle({
+    url: '/openapi.json',
+    dom_id: '#swagger-ui',
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+    layout: 'StandaloneLayout'
+  });
+};
+</script>
+</body></html>
+)HTML";
+
+// Known Swagger UI dist assets served under /docs/<name>. Kept as an
+// explicit allowlist (rather than general static-file serving) so a request
+// path can never escape LFM_SWAGGER_UI_DIR.
+const std::unordered_map<std::string, std::string>& swagger_ui_assets() {
+    static const std::unordered_map<std::string, std::string> assets = {
+        {"swagger-ui-bundle.js", "application/javascript"},
+        {"swagger-ui-standalone-preset.js", "application/javascript"},
+        {"swagger-ui.css", "text/css"},
+    };
+    return assets;
+}
+
+std::optional<std::string> read_file(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
 
 } // namespace
 
@@ -159,6 +205,28 @@ int main(int argc, char** argv) {
                 res->writeHeader("Content-Type", "application/json")
                     ->end("{\"object\":\"list\",\"data\":[{\"id\":\"" + model_name +
                           "\",\"object\":\"model\"}]}");
+            })
+            .get("/openapi.json", [&](auto* res, auto* /*req*/) {
+                res->writeHeader("Content-Type", "application/json")
+                    ->end(protocol::build_openapi_spec(model_name));
+            })
+            .get("/docs", [](auto* res, auto* /*req*/) {
+                res->writeHeader("Content-Type", "text/html; charset=utf-8")->end(kDocsHtml);
+            })
+            .get("/docs/:file", [](auto* res, auto* req) {
+                const std::string file(req->getParameter(0));
+                const auto& assets = swagger_ui_assets();
+                const auto asset = assets.find(file);
+                if (asset == assets.end()) {
+                    res->writeStatus("404 Not Found")->end("not found");
+                    return;
+                }
+                const auto contents = read_file(std::filesystem::path(LFM_SWAGGER_UI_DIR) / file);
+                if (!contents) {
+                    res->writeStatus("404 Not Found")->end("not found");
+                    return;
+                }
+                res->writeHeader("Content-Type", asset->second)->end(*contents);
             })
             .post("/v1/chat/completions", [&](auto* res, auto* /*req*/) {
                 struct State {

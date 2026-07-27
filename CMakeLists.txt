@@ -115,7 +115,7 @@ if(LFM_ENABLE_SERVE)
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(glaze)
 
-    add_library(lfm_serve_protocol src/serve/protocol/mapping.cpp)
+    add_library(lfm_serve_protocol src/serve/protocol/mapping.cpp src/serve/protocol/openapi.cpp)
     target_include_directories(lfm_serve_protocol PUBLIC include)
     if(NOT MSVC)
         target_compile_options(lfm_serve_protocol PRIVATE -Wall -Wextra -Wpedantic)
@@ -187,9 +187,22 @@ if(LFM_ENABLE_SERVE)
     target_compile_definitions(uwebsockets INTERFACE UWS_NO_ZLIB)
     target_link_libraries(uwebsockets INTERFACE usockets)
 
+    # Swagger UI ships no CMake build; it's pure static assets (dist/), so we
+    # only need to fetch the tree and point the server at it. Served straight
+    # out of the fetched source dir rather than embedded, since minified
+    # swagger-ui-bundle.js exceeds MSVC's string-literal size limit.
+    FetchContent_Declare(
+        swaggerui
+        GIT_REPOSITORY https://github.com/swagger-api/swagger-ui.git
+        GIT_TAG v5.17.14
+        GIT_SHALLOW TRUE)
+    FetchContent_Populate(swaggerui)
+
     add_executable(lfm25-serve src/app/serve/main.cpp)
     target_link_libraries(lfm25-serve PRIVATE
         lfm_cpu_backend lfm_serve_cpu lfm_serve_core lfm_serve_protocol uwebsockets)
+    target_compile_definitions(lfm25-serve PRIVATE
+        LFM_SWAGGER_UI_DIR="${swaggerui_SOURCE_DIR}/dist")
 endif()
 
 include(CheckLanguage)
