@@ -117,6 +117,8 @@ if(LFM_ENABLE_SERVE)
 
     add_library(lfm_serve_protocol src/serve/protocol/mapping.cpp src/serve/protocol/openapi.cpp)
     target_include_directories(lfm_serve_protocol PUBLIC include)
+    target_compile_definitions(lfm_serve_protocol PRIVATE
+        LFM_OPENAPI_SPEC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/serve/protocol/openapi.json")
     if(NOT MSVC)
         target_compile_options(lfm_serve_protocol PRIVATE -Wall -Wextra -Wpedantic)
     endif()
@@ -198,11 +200,19 @@ if(LFM_ENABLE_SERVE)
         GIT_SHALLOW TRUE)
     FetchContent_Populate(swaggerui)
 
-    add_executable(lfm25-serve src/app/serve/main.cpp)
+    add_executable(lfm25-serve
+        src/app/serve/main.cpp
+        src/app/serve/static_assets.cpp
+        src/app/serve/routes/health.cpp
+        src/app/serve/routes/models.cpp
+        src/app/serve/routes/docs.cpp
+        src/app/serve/routes/tokenize.cpp
+        src/app/serve/routes/chat_completions.cpp)
     target_link_libraries(lfm25-serve PRIVATE
         lfm_cpu_backend lfm_serve_cpu lfm_serve_core lfm_serve_protocol uwebsockets)
     target_compile_definitions(lfm25-serve PRIVATE
-        LFM_SWAGGER_UI_DIR="${swaggerui_SOURCE_DIR}/dist")
+        LFM_SWAGGER_UI_DIR="${swaggerui_SOURCE_DIR}/dist"
+        LFM_SERVE_STATIC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/app/serve/static")
 endif()
 
 include(CheckLanguage)

@@ -107,4 +107,34 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
     return chunk;
 }
 
+TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
+                                      const lfm::BpeTokenizer& tokenizer,
+                                      std::size_t max_model_len) {
+    if (static_cast<bool>(request.prompt) == static_cast<bool>(request.messages)) {
+        throw std::invalid_argument("exactly one of prompt or messages must be set");
+    }
+
+    const bool add_special_tokens = request.add_special_tokens.value_or(true);
+
+    TokenizeResponse response;
+    if (request.prompt) {
+        response.tokens = tokenizer.encode(*request.prompt, /*add_bos=*/add_special_tokens);
+    } else {
+        std::vector<lfm::ChatMessage> messages;
+        messages.reserve(request.messages->size());
+        for (const ChatMessageDto& message : *request.messages) {
+            messages.push_back({role_from_string(message.role), message.content});
+        }
+        const std::string prompt_text =
+            tokenizer.format_chat(messages, /*add_generation_prompt=*/true);
+        // The chat template already embeds the model's special tokens, so BOS
+        // is never added again here regardless of add_special_tokens (which
+        // only applies to the raw-prompt path above).
+        response.tokens = tokenizer.encode(prompt_text, /*add_bos=*/false);
+    }
+    response.count = response.tokens.size();
+    response.max_model_len = max_model_len;
+    return response;
+}
+
 } // namespace lfm::serve::protocol

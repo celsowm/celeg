@@ -48,4 +48,12 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              std::optional<FinishReason> finish,
                                              const lfm::BpeTokenizer& tokenizer);
 
+// Tokenizes a /tokenize request: renders `messages` through the chat template
+// if given, otherwise tokenizes `prompt` directly. Throws std::invalid_argument
+// if neither (or both) are given. max_model_len is the server's configured
+// context window, echoed back as-is.
+TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
+                                      const lfm::BpeTokenizer& tokenizer,
+                                      std::size_t max_model_len);
+
 } // namespace lfm::serve::protocol

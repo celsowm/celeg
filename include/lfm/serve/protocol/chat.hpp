@@ -73,4 +73,19 @@ struct ChatCompletionChunk {
     std::vector<ChatCompletionChunkChoice> choices;
 };
 
+// /tokenize DTOs, modeled after vLLM/SGLang's endpoint of the same name:
+// either "prompt" (raw text) or "messages" (rendered through the chat
+// template) is supplied, and the response reports the resulting token ids.
+struct TokenizeRequest {
+    std::optional<std::string> prompt;
+    std::optional<std::vector<ChatMessageDto>> messages;
+    std::optional<bool> add_special_tokens;
+};
+
+struct TokenizeResponse {
+    std::vector<std::int32_t> tokens;
+    std::size_t count = 0;
+    std::size_t max_model_len = 0;
+};
+
 } // namespace lfm::serve::protocol
