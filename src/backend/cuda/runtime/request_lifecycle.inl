@@ -41,6 +41,16 @@ bool ConcurrentEngine::Impl::cancel(RequestId id) {
     return true;
 }
 
+bool ConcurrentEngine::Impl::release(RequestId id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Request* found = registry_.find(id);
+    if (!found) return false;
+    if (found->status != RequestStatus::Finished &&
+        found->status != RequestStatus::Cancelled &&
+        found->status != RequestStatus::Failed) return false;
+    return registry_.erase(id);
+}
+
 PollResult ConcurrentEngine::Impl::poll(RequestId id, size_t max_tokens) {
     std::lock_guard<std::mutex> lock(mutex_);
     Request& request = registry_.at(id);

@@ -14,6 +14,8 @@ ConcurrentEngine::RequestId ConcurrentEngine::submit(
 
 bool ConcurrentEngine::cancel(RequestId id) { return impl_->cancel(id); }
 
+bool ConcurrentEngine::release(RequestId id) { return impl_->release(id); }
+
 PollResult ConcurrentEngine::poll(RequestId id, size_t max_tokens) {
     return impl_->poll(id, max_tokens);
 }

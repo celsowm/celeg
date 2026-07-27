@@ -33,5 +33,12 @@ int main() {
         threw = true;
     }
     LFM_TEST_CHECK(threw);
+
+    LFM_TEST_CHECK(registry.erase(second) == true);
+    LFM_TEST_CHECK(registry.find(second) == nullptr);
+    LFM_TEST_CHECK(registry.queued_count() == 0);
+    LFM_TEST_CHECK(registry.erase(second) == false);
+    LFM_TEST_CHECK(registry.erase(999999) == false);
+
     std::cout << "request_registry_test: ok\n";
 }

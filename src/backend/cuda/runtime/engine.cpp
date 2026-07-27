@@ -40,6 +40,7 @@ struct ConcurrentEngine::Impl {
 
     RequestId submit(std::vector<int32_t> prompt, ConcurrentRequestOptions options);
     bool cancel(RequestId id);
+    bool release(RequestId id);
     PollResult poll(RequestId id, size_t max_tokens);
     RequestStatus status(RequestId id) const;
     bool step();

@@ -67,6 +67,10 @@ public:
     PollResult poll(RequestId id, size_t max_tokens = 0);
     RequestStatus status(RequestId id) const;
 
+    // Frees the request record. Only valid once the request has reached a
+    // terminal status; returns false otherwise or if the id is unknown.
+    bool release(RequestId id);
+
     // Executes one scheduler iteration. Useful for embedding the runtime in an
     // external event loop. Returns true when useful work was performed.
     bool step();

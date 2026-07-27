@@ -55,4 +55,12 @@ void RequestRegistry::erase_queued(RequestId id) {
     admission_queue_.erase({-record->options.priority, id});
 }
 
+bool RequestRegistry::erase(RequestId id) {
+    const auto* record = find(id);
+    if (!record) return false;
+    admission_queue_.erase({-record->options.priority, id});
+    requests_.erase(id);
+    return true;
+}
+
 } // namespace lfm::detail

@@ -592,6 +592,15 @@ void CpuConcurrentEngine::cancel(CpuRequestId id) {
     }
 }
 
+bool CpuConcurrentEngine::release(CpuRequestId id) {
+    std::lock_guard lock(impl_->mutex);
+    auto it = impl_->requests.find(id);
+    if (it == impl_->requests.end()) return false;
+    if (!terminal(it->second->status)) return false;
+    impl_->requests.erase(it);
+    return true;
+}
+
 bool CpuConcurrentEngine::step() { return impl_->step_once(); }
 
 void CpuConcurrentEngine::start() {

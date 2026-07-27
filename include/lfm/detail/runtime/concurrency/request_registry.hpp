@@ -51,6 +51,9 @@ public:
     std::optional<RequestId> best_queued() const;
     void erase_queued(RequestId id);
 
+    // Fully removes the request record. Returns false if unknown.
+    bool erase(RequestId id);
+
 private:
     std::unordered_map<RequestId, std::unique_ptr<RequestRecord>> requests_;
     // Ordered set: highest priority first, then lowest ID first (FIFO).

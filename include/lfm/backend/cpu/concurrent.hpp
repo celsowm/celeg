@@ -101,6 +101,10 @@ public:
     CpuRequestStatus status(CpuRequestId request_id) const;
     void cancel(CpuRequestId request_id);
 
+    // Frees the request record. Only valid once the request has reached a
+    // terminal status; returns false otherwise or if the id is unknown.
+    bool release(CpuRequestId request_id);
+
     // Runs one scheduling iteration. Returns true when any request advanced.
     bool step();
     void start();
