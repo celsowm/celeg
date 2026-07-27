@@ -13,20 +13,19 @@ __device__ inline float moe_sigmoid(float x) {
     return e / (1.0f + e);
 }
 
-// One block per row (token). Computes router logits/probs/scores in shared
-// memory, performs a small-K top-K selection (K <= 64), and writes the
+// One block per row (token). Consumes GEMM-produced router logits, computes
+// probabilities/scores in shared memory, performs a small-K top-K selection
+// (K <= 64), and writes the
 // selected expert ids and (normalized, scaled) sigmoid routing weights.
 //
 // The selection is done deterministically: every thread loads the full
 // scores[0..E-1] into shared memory, then the first K threads each pick the
 // best expert not yet taken, scanning in order. This is O(E*K) per block and
 // avoids the race-prone atomicCAS cascade.
-__global__ void moe_router_kernel(const float* router_weight,
-                                  const float* expert_bias,
-                                  const float* hidden_data,
+__global__ void moe_router_kernel(const float* expert_bias,
                                   int* selected_experts,
                                   float* routing_weights,
-                                  int rows, int hidden_dim, int E, int K,
+                                  int rows, int E, int K,
                                   bool use_expert_bias,
                                   bool normalize_topk,
                                   float routed_scaling_factor,
@@ -39,12 +38,8 @@ __global__ void moe_router_kernel(const float* router_weight,
     float* probs = shared;
     float* scores = shared + E;
 
-    const float* row_hidden = hidden_data + static_cast<size_t>(row) * hidden_dim;
     for (int e = threadIdx.x; e < E; e += blockDim.x) {
-        const float* w = router_weight + static_cast<size_t>(e) * hidden_dim;
-        float logit = 0.0f;
-        for (int h = 0; h < hidden_dim; ++h) logit += row_hidden[h] * w[h];
-        logits[e] = logit;
+        const float logit = logits[e];
         const float prob = moe_sigmoid(logit);
         probs[e] = prob;
         scores[e] = use_expert_bias ? prob + expert_bias[e] : prob;
@@ -119,12 +114,23 @@ void launch_moe_router(const MoeRouterDevice& device,
     }
 
     const int E = cfg.num_experts;
+    CublasHandle cublas(stream);
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    // C = W * hidden^T, with both inputs supplied in row-major storage. In
+    // cuBLAS' column-major view this is W^T(op=T) times hidden(op=N).
+    LFM_CUBLAS(cublasSgemm(
+        cublas.get(), CUBLAS_OP_T, CUBLAS_OP_N,
+        E, device.rows, device.hidden_dim,
+        &alpha, device.router_weight, device.hidden_dim,
+        device.hidden_data, device.hidden_dim,
+        &beta, scratch_logits, E));
     const int block = (E <= 64) ? 64 : 128;
     const size_t shared_bytes = static_cast<size_t>(2) * E * sizeof(float);
     moe_router_kernel<<<device.rows, block, shared_bytes, stream>>>(
-        device.router_weight, device.expert_bias, device.hidden_data,
+        device.expert_bias,
         device.selected_experts, device.routing_weights,
-        device.rows, device.hidden_dim, E, cfg.experts_per_token,
+        device.rows, E, cfg.experts_per_token,
         cfg.use_expert_bias, cfg.normalize_topk, cfg.routed_scaling_factor,
         scratch_logits);
     LFM_KERNEL_CHECK();

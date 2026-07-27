@@ -35,6 +35,12 @@ struct PackedDecodeMetrics {
     }
 };
 
+struct PackedPrefillRow {
+    size_t token_offset = 0;
+    size_t token_count = 0;
+    uint8_t finalize = 0;
+};
+
 // Executes one decode token for several independent sessions in one packed
 // model pass. The sessions retain separate KV/ShortConv/RNG state, while all
 // linear layers use M=batch_size against one shared checkpoint allocation.
@@ -58,17 +64,17 @@ public:
     std::vector<int32_t> decode(
         const std::vector<IPackedSession*>& sessions,
         const std::vector<std::vector<uint32_t>>& page_tables);
-    // Advances one explicit prompt token for each row. Rows may have
-    // different positions and page tables, which enables wavefront ragged
-    // prefill while keeping GEMM M equal to the active prefill batch.
-    void prefill_step(const std::vector<LfmModel*>& models,
-                      const std::vector<std::vector<uint32_t>>& page_tables,
-                      const std::vector<int32_t>& tokens,
-                      const std::vector<uint8_t>& finalize_rows);
-    void prefill_step(const std::vector<IPackedSession*>& sessions,
-                      const std::vector<std::vector<uint32_t>>& page_tables,
-                      const std::vector<int32_t>& tokens,
-                      const std::vector<uint8_t>& finalize_rows);
+    // Advances a flattened ragged prompt batch. Each row consumes
+    // `rows[i].token_count` tokens from `tokens` beginning at
+    // `rows[i].token_offset`.
+    void prefill(const std::vector<LfmModel*>& models,
+                 const std::vector<std::vector<uint32_t>>& page_tables,
+                 const std::vector<int32_t>& tokens,
+                 const std::vector<PackedPrefillRow>& rows);
+    void prefill(const std::vector<IPackedSession*>& sessions,
+                 const std::vector<std::vector<uint32_t>>& page_tables,
+                 const std::vector<int32_t>& tokens,
+                 const std::vector<PackedPrefillRow>& rows);
     size_t maximum_batch() const;
     PackedDecodeMetrics metrics() const;
 

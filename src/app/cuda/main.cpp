@@ -35,7 +35,7 @@ struct Args {
     int max_new_tokens = 128;
     int context = 4096;
     int print_top = 0;
-    int top_k = 50;
+    int top_k = 1;
     float temperature = 0.1f;
     float top_p = 1.0f;
     float repetition_penalty = 1.05f;
@@ -47,12 +47,12 @@ struct Args {
     std::string gemm_backend = "cublas";
     std::string weight_mode = "bf16";
     std::string kv_cache_mode = "bf16";
-    std::string attention_mode = "single";
+    std::string attention_mode = "auto";
     int attention_chunk_tokens = 256;
     int attention_auto_threshold = 4096;
     bool raw_prompt = false;
     bool fused_residuals = false;
-    bool fast_attention = false;
+    bool fast_attention = true;
     bool fused_projections = false;
     bool print_config = false;
     bool tokens_only = false;

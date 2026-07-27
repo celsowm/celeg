@@ -459,7 +459,8 @@ void cpu_rmsnorm(const float* input, const float* weight, float* output,
 
 void cpu_rmsnorm_inplace(float* data, const float* weight,
                          size_t width, float eps) {
-    std::vector<float> temp(width);
+    thread_local std::vector<float> temp;
+    temp.resize(width);
     cpu_rmsnorm(data, weight, temp.data(), width, eps);
     std::copy(temp.begin(), temp.end(), data);
 }
@@ -498,8 +499,10 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
         throw std::invalid_argument("invalid QK norm/RoPE arguments");
     }
     const int half = head_dim / 2;
-    std::vector<float> cos_vals(half);
-    std::vector<float> sin_vals(half);
+    thread_local std::vector<float> cos_vals;
+    thread_local std::vector<float> sin_vals;
+    cos_vals.resize(static_cast<size_t>(half));
+    sin_vals.resize(static_cast<size_t>(half));
     for (int d = 0; d < half; ++d) {
         const float frequency = std::pow(rope_theta, -2.0f * static_cast<float>(d) / head_dim);
         const float angle = static_cast<float>(position) * frequency;
@@ -536,7 +539,8 @@ void cpu_gqa_decode(const float* q, const float* key_cache,
     }
     const int queries_per_kv = q_heads / kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    std::vector<float> scores(static_cast<size_t>(sequence_length));
+    thread_local std::vector<float> scores;
+    scores.resize(static_cast<size_t>(sequence_length));
     for (int qh = 0; qh < q_heads; ++qh) {
         const int kvh = qh / queries_per_kv;
         const float* query = q + static_cast<size_t>(qh) * head_dim;
@@ -577,7 +581,8 @@ void cpu_gqa_decode_bf16(const float* q, const uint16_t* key_cache,
     }
     const int queries_per_kv = q_heads / kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    std::vector<float> scores(static_cast<size_t>(sequence_length));
+    thread_local std::vector<float> scores;
+    scores.resize(static_cast<size_t>(sequence_length));
     for (int qh = 0; qh < q_heads; ++qh) {
         const int kvh = qh / queries_per_kv;
         const float* query = q + static_cast<size_t>(qh) * head_dim;

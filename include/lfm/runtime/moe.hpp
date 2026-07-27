@@ -46,9 +46,9 @@ struct MoeRouterDevice {
     int hidden_dim = 0;
 };
 
-// CUDA device implementation of compute_moe_router semantics. Each thread block
-// processes one row of the hidden state (one token), computing the top-K
-// experts by sigmoid probability with expert-bias-aware selection.
+// CUDA device implementation of compute_moe_router semantics. Router logits
+// are produced by a GEMM, then each thread block processes one row of the
+// logits (one token) for sigmoid probabilities and expert-bias-aware top-K.
 //
 // `cfg` mirrors MoeRouterConfig, passed by value so the kernel is self
 // contained. The scratch buffer must hold at least E floats per row

@@ -176,6 +176,8 @@ public:
                           std::vector<int>& cold_host,
                           std::vector<float>& cold_scores_host);
 
+    void sync_residency_tables(cudaStream_t stream = nullptr);
+
     int num_experts() const { return num_experts_; }
     int capacity() const { return capacity_; }
     // Expert currently occupying `slot`, or -1 if empty.
@@ -212,6 +214,9 @@ private:
 
     void publish_pointer(int expert, const __nv_bfloat16* gate_up,
                          const __nv_bfloat16* down, cudaStream_t stream);
+    void publish_pointer_immediate(int expert,
+                                   const __nv_bfloat16* gate_up,
+                                   const __nv_bfloat16* down);
 
     int num_experts_ = 0;
     int capacity_ = 0;
@@ -235,6 +240,8 @@ private:
 
     std::vector<const __nv_bfloat16*> gate_up_host_dev_;  // [E] host UVA ptrs
     std::vector<const __nv_bfloat16*> down_host_dev_;      // [E]
+    std::vector<const __nv_bfloat16*> gate_up_ptrs_host_;  // [E] current table
+    std::vector<const __nv_bfloat16*> down_ptrs_host_;     // [E] current table
 
     // Device-resident pointer tables consumed by the kernel.
     DeviceBuffer<const __nv_bfloat16*> gate_up_ptrs_dev_;  // [E]

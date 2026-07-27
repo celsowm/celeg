@@ -1085,7 +1085,6 @@ __global__ void argmax_bf16_kernel(const __nv_bfloat16* values,
                                    int32_t* result) {
     __shared__ float best_values[256];
     __shared__ int best_indices[256];
-
     float best = -FLT_MAX;
     int index = -1;
     for (int i = threadIdx.x; i < count; i += blockDim.x) {
@@ -1276,40 +1275,37 @@ __global__ void fused_sample_topk_kernel(const __nv_bfloat16* logits,
     }
     __syncthreads();
 
-    for (int rank = 0; rank < top_k; ++rank) {
-        float best = -FLT_MAX;
-        int index = -1;
-        for (int i = threadIdx.x; i < vocab; i += blockDim.x) {
+    // Keep the score preparation parallel, then select the ordered top-k in
+    // one vocabulary pass. The previous implementation rescanned the entire
+    // vocabulary once per rank and mutated scores between passes.
+    if (threadIdx.x == 0) {
+        int count = 0;
+        for (int i = 0; i < vocab; ++i) {
             const float value = scores[i];
-            if (value > best || (value == best && (index < 0 || i < index))) {
-                best = value;
-                index = i;
+            if (count == top_k &&
+                !(value > selected_values[count - 1] ||
+                  (value == selected_values[count - 1] &&
+                   i < selected_indices[count - 1]))) {
+                continue;
             }
-        }
-        best_values[threadIdx.x] = best;
-        best_indices[threadIdx.x] = index;
-        __syncthreads();
-        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-            if (static_cast<int>(threadIdx.x) < stride) {
-                const float other_value = best_values[threadIdx.x + stride];
-                const int other_index = best_indices[threadIdx.x + stride];
-                if (other_value > best_values[threadIdx.x] ||
-                    (other_value == best_values[threadIdx.x] && other_index >= 0 &&
-                     (best_indices[threadIdx.x] < 0 ||
-                      other_index < best_indices[threadIdx.x]))) {
-                    best_values[threadIdx.x] = other_value;
-                    best_indices[threadIdx.x] = other_index;
+            int slot = count < top_k ? count++ : top_k;
+            while (slot > 0 &&
+                   (value > selected_values[slot - 1] ||
+                    (value == selected_values[slot - 1] &&
+                     i < selected_indices[slot - 1]))) {
+                if (slot < top_k) {
+                    selected_values[slot] = selected_values[slot - 1];
+                    selected_indices[slot] = selected_indices[slot - 1];
                 }
+                --slot;
             }
-            __syncthreads();
+            if (slot < top_k) {
+                selected_values[slot] = value;
+                selected_indices[slot] = i;
+            }
         }
-        if (threadIdx.x == 0) {
-            selected_values[rank] = best_values[0];
-            selected_indices[rank] = best_indices[0];
-            if (best_indices[0] >= 0) scores[best_indices[0]] = -FLT_MAX;
-        }
-        __syncthreads();
     }
+    __syncthreads();
 
     if (threadIdx.x == 0) {
         const float maximum = selected_values[0];
@@ -1372,8 +1368,6 @@ __global__ void packed_sample_topk_kernel(
     int32_t* result) {
     const int row = blockIdx.x;
     if (row >= rows) return;
-    __shared__ float best_values[256];
-    __shared__ int best_indices[256];
     const __nv_bfloat16* row_logits = logits[row];
     uint8_t* row_seen = seen[row];
     float* row_scores = scores + static_cast<size_t>(row) * vocab;
@@ -1397,42 +1391,35 @@ __global__ void packed_sample_topk_kernel(
     }
     __syncthreads();
 
-    const int ranks = greedy ? 1 : top_k;
-    for (int rank = 0; rank < ranks; ++rank) {
-        float best = -FLT_MAX;
-        int index = -1;
-        for (int i = threadIdx.x; i < vocab; i += blockDim.x) {
+    if (threadIdx.x == 0) {
+        const int ranks = greedy ? 1 : top_k;
+        int count = 0;
+        for (int i = 0; i < vocab; ++i) {
             const float value = row_scores[i];
-            if (value > best || (value == best && (index < 0 || i < index))) {
-                best = value;
-                index = i;
+            if (count == ranks &&
+                !(value > row_selected_values[count - 1] ||
+                  (value == row_selected_values[count - 1] &&
+                   i < row_selected_indices[count - 1]))) {
+                continue;
             }
-        }
-        best_values[threadIdx.x] = best;
-        best_indices[threadIdx.x] = index;
-        __syncthreads();
-        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-            if (static_cast<int>(threadIdx.x) < stride) {
-                const float other_value = best_values[threadIdx.x + stride];
-                const int other_index = best_indices[threadIdx.x + stride];
-                if (other_value > best_values[threadIdx.x] ||
-                    (other_value == best_values[threadIdx.x] &&
-                     other_index >= 0 &&
-                     (best_indices[threadIdx.x] < 0 ||
-                      other_index < best_indices[threadIdx.x]))) {
-                    best_values[threadIdx.x] = other_value;
-                    best_indices[threadIdx.x] = other_index;
+            int slot = count < ranks ? count++ : ranks;
+            while (slot > 0 &&
+                   (value > row_selected_values[slot - 1] ||
+                    (value == row_selected_values[slot - 1] &&
+                     i < row_selected_indices[slot - 1]))) {
+                if (slot < ranks) {
+                    row_selected_values[slot] = row_selected_values[slot - 1];
+                    row_selected_indices[slot] = row_selected_indices[slot - 1];
                 }
+                --slot;
             }
-            __syncthreads();
+            if (slot < ranks) {
+                row_selected_values[slot] = value;
+                row_selected_indices[slot] = i;
+            }
         }
-        if (threadIdx.x == 0) {
-            row_selected_values[rank] = best_values[0];
-            row_selected_indices[rank] = best_indices[0];
-            if (best_indices[0] >= 0) row_scores[best_indices[0]] = -FLT_MAX;
-        }
-        __syncthreads();
     }
+    __syncthreads();
 
     if (threadIdx.x == 0) {
         int chosen_token = row_selected_indices[0];

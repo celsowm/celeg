@@ -388,34 +388,33 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
     }
     if (packed_executor_ && engine_options_.ragged_packed_prefill &&
         work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)) {
-        size_t maximum_tokens = 0;
-        for (const Work& item : work) maximum_tokens = std::max(maximum_tokens, item.count);
-        for (size_t wave = 0; wave < maximum_tokens; ++wave) {
-            std::vector<Work> active;
-            std::vector<LfmModel*> models;
-            std::vector<std::vector<uint32_t>> page_tables;
-            std::vector<int32_t> tokens;
-            std::vector<uint8_t> finalize_rows;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                for (const Work& item : work) {
-                    if (wave >= item.count) continue;
-                    Request& request = registry_.at(item.id);
-                    if (request.status != RequestStatus::Prefill ||
-                        request.cancel_requested) continue;
-                    active.push_back(item);
-                    models.push_back(item.lane->model.get());
-                    page_tables.push_back(request.pages);
-                    tokens.push_back(request.prompt[item.begin + wave]);
-                    finalize_rows.push_back(
-                        static_cast<uint8_t>(item.final && wave + 1 == item.count));
-                }
+        std::vector<Work> active;
+        std::vector<LfmModel*> models;
+        std::vector<std::vector<uint32_t>> page_tables;
+        std::vector<int32_t> tokens;
+        std::vector<PackedPrefillRow> rows;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const Work& item : work) {
+                Request& request = registry_.at(item.id);
+                if (request.status != RequestStatus::Prefill ||
+                    request.cancel_requested) continue;
+                active.push_back(item);
+                models.push_back(item.lane->model.get());
+                page_tables.push_back(request.pages);
+                rows.push_back(PackedPrefillRow{
+                    tokens.size(),
+                    item.count,
+                    static_cast<uint8_t>(item.final)});
+                tokens.insert(tokens.end(),
+                              request.prompt.begin() + static_cast<ptrdiff_t>(item.begin),
+                              request.prompt.begin() + static_cast<ptrdiff_t>(item.begin + item.count));
             }
-            if (active.empty()) continue;
+        }
+        if (!active.empty()) {
             try {
                 const PackedDecodeMetrics before = packed_executor_->metrics();
-                packed_executor_->prefill_step(models, page_tables, tokens,
-                                               finalize_rows);
+                packed_executor_->prefill(models, page_tables, tokens, rows);
                 const PackedDecodeMetrics after = packed_executor_->metrics();
                 std::lock_guard<std::mutex> lock(mutex_);
                 metrics_.ragged_prefill_steps +=
@@ -433,11 +432,11 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
                         continue;
                     }
                     if (request.status != RequestStatus::Prefill) continue;
-                    ++request.prefill_offset;
-                    ++metrics_.prefill_tokens;
-                    ++metrics_.direct_paged_prefill_tokens;
-                    ++metrics_.ragged_prefill_tokens;
-                    if (finalize_rows[row] != 0) {
+                    request.prefill_offset += item.count;
+                    metrics_.prefill_tokens += item.count;
+                    metrics_.direct_paged_prefill_tokens += item.count;
+                    metrics_.ragged_prefill_tokens += item.count;
+                    if (item.final) {
                         complete_prefill_locked(request, *item.lane);
                     }
                 }
@@ -450,7 +449,6 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
                                               error.what());
                     }
                 }
-                break;
             }
         }
         return !work.empty();

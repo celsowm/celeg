@@ -199,12 +199,13 @@ void lfm25_model_options_v2_init(lfm25_model_options_v2* options) {
     if (!options) return;
     std::memset(options, 0, sizeof(*options));
     options->struct_size = sizeof(*options);
-    options->flags = LFM25_OPTION_FUSED_SAMPLING | LFM25_OPTION_CUDA_GRAPH;
+    options->flags = LFM25_OPTION_FUSED_SAMPLING | LFM25_OPTION_CUDA_GRAPH |
+                     LFM25_OPTION_FAST_ATTENTION;
     options->max_context = 4096;
     options->weight_mode = LFM25_WEIGHT_BF16;
     options->kv_cache_mode = LFM25_KV_BF16;
     options->gemm_backend = LFM25_GEMM_CUBLAS;
-    options->attention_mode = LFM25_ATTENTION_SINGLE;
+    options->attention_mode = LFM25_ATTENTION_AUTO;
     options->attention_chunk_tokens = 256;
     options->attention_auto_threshold = 4096;
     options->lt_workspace_mb = 64;
@@ -236,7 +237,7 @@ void lfm25_generation_options_init(lfm25_generation_options_v1* options) {
     std::memset(options, 0, sizeof(*options));
     options->struct_size = sizeof(*options);
     options->temperature = 0.1f;
-    options->top_k = 50;
+    options->top_k = 1;
     options->top_p = 1.0f;
     options->repetition_penalty = 1.05f;
     options->seed = 1;

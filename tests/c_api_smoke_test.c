@@ -14,6 +14,9 @@ int main(void) {
     assert(model.struct_size == sizeof(model));
     assert(generation.struct_size == sizeof(generation));
     assert(model.kv_cache_mode == LFM25_KV_BF16);
+    assert((model.flags & LFM25_OPTION_FAST_ATTENTION) != 0);
+    assert(model.attention_mode == LFM25_ATTENTION_AUTO);
+    assert(generation.top_k == 1);
 
     const char* path = "lfm25_c_api_tokenizer_test.json";
     FILE* file = fopen(path, "wb");

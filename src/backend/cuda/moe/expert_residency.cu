@@ -193,6 +193,8 @@ void ExpertLayerCache::set_host_sources(
     }
     gate_up_host_dev_ = gate_up_host_dev;
     down_host_dev_ = down_host_dev;
+    gate_up_ptrs_host_ = gate_up_host_dev_;
+    down_ptrs_host_ = down_host_dev_;
     // Every expert starts host-resident: publish host pointers into the table.
     LFM_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_host_dev_.data(),
                         static_cast<size_t>(num_experts_) * sizeof(const __nv_bfloat16*),
@@ -292,12 +294,41 @@ void ExpertLayerCache::publish_pointer(int expert,
                                        const __nv_bfloat16* gate_up,
                                        const __nv_bfloat16* down,
                                        cudaStream_t stream) {
-    LFM_CUDA(cudaMemcpyAsync(gate_up_ptrs_dev_.data() + expert, &gate_up,
-                             sizeof(const __nv_bfloat16*),
-                             cudaMemcpyHostToDevice, stream));
-    LFM_CUDA(cudaMemcpyAsync(down_ptrs_dev_.data() + expert, &down,
-                             sizeof(const __nv_bfloat16*),
-                             cudaMemcpyHostToDevice, stream));
+    (void)stream;
+    gate_up_ptrs_host_[static_cast<size_t>(expert)] = gate_up;
+    down_ptrs_host_[static_cast<size_t>(expert)] = down;
+}
+
+void ExpertLayerCache::publish_pointer_immediate(int expert,
+                                                 const __nv_bfloat16* gate_up,
+                                                 const __nv_bfloat16* down) {
+    gate_up_ptrs_host_[static_cast<size_t>(expert)] = gate_up;
+    down_ptrs_host_[static_cast<size_t>(expert)] = down;
+    const size_t offset = static_cast<size_t>(expert) * sizeof(const __nv_bfloat16*);
+    LFM_CUDA(cudaMemcpy(reinterpret_cast<char*>(gate_up_ptrs_dev_.data()) + offset,
+                        &gate_up, sizeof(gate_up), cudaMemcpyHostToDevice));
+    LFM_CUDA(cudaMemcpy(reinterpret_cast<char*>(down_ptrs_dev_.data()) + offset,
+                        &down, sizeof(down), cudaMemcpyHostToDevice));
+}
+
+void ExpertLayerCache::sync_residency_tables(cudaStream_t stream) {
+    if (gate_up_ptrs_host_.size() != static_cast<size_t>(num_experts_) ||
+        down_ptrs_host_.size() != static_cast<size_t>(num_experts_)) {
+        throw std::runtime_error("residency pointer table is not initialized");
+    }
+    const size_t bytes = static_cast<size_t>(num_experts_) * sizeof(const __nv_bfloat16*);
+    if (stream != nullptr) {
+        LFM_CUDA(cudaMemcpyAsync(gate_up_ptrs_dev_.data(), gate_up_ptrs_host_.data(),
+                                 bytes, cudaMemcpyHostToDevice, stream));
+        LFM_CUDA(cudaMemcpyAsync(down_ptrs_dev_.data(), down_ptrs_host_.data(),
+                                 bytes, cudaMemcpyHostToDevice, stream));
+    } else {
+        LFM_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_ptrs_host_.data(),
+                            bytes, cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(down_ptrs_dev_.data(), down_ptrs_host_.data(),
+                            bytes, cudaMemcpyHostToDevice));
+    }
+    sync_expert_slot_to_device(stream);
 }
 
 void ExpertLayerCache::promote(int expert, int slot, cudaStream_t stream,
@@ -331,8 +362,6 @@ void ExpertLayerCache::promote(int expert, int slot, cudaStream_t stream,
     last_score_[static_cast<size_t>(expert)] = score;
     // Point the table at the slot only after the copies are ordered on-stream.
     publish_pointer(expert, s.gate_up.data(), s.down.data(), stream);
-    // Keep device mirror in sync for the next resolve_on_device call.
-    sync_expert_slot_to_device(stream);
 }
 
 void ExpertLayerCache::promote(int expert, int slot, const __nv_bfloat16* gate_up_src,
@@ -367,8 +396,6 @@ void ExpertLayerCache::promote(int expert, int slot, const __nv_bfloat16* gate_u
     last_score_[static_cast<size_t>(expert)] = score;
     // Point the table at the slot only after the copies are ordered on-stream.
     publish_pointer(expert, s.gate_up.data(), s.down.data(), stream);
-    // Keep device mirror in sync for the next resolve_on_device call.
-    sync_expert_slot_to_device(stream);
 }
 
 void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
@@ -382,7 +409,6 @@ void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
     s.expert = -1;
     publish_pointer(expert, gate_up_host_dev_[static_cast<size_t>(expert)],
                     down_host_dev_[static_cast<size_t>(expert)], stream);
-    sync_expert_slot_to_device(stream);
 }
 
 int ExpertLayerCache::choose_victim() const {
@@ -488,6 +514,7 @@ int ExpertLayerCache::prefetch(int n, cudaStream_t stream) {
         promote(e, slot, stream);
         ++promoted;
     }
+    if (promoted > 0) sync_residency_tables(stream);
     return promoted;
 }
 
@@ -523,6 +550,7 @@ int ExpertLayerCache::prefetch_list(const std::vector<int>& ranked,
         promote(e, slot, stream, scores[static_cast<size_t>(i)]);
         ++promoted;
     }
+    if (promoted > 0) sync_residency_tables(stream);
     return promoted;
 }
 
@@ -532,6 +560,7 @@ void ExpertLayerCache::seed(const std::vector<int>& experts,
     for (int i = 0; i < count; ++i) {
         promote(experts[static_cast<size_t>(i)], i, stream);
     }
+    if (count > 0) sync_residency_tables(stream);
 }
 
 const __nv_bfloat16* ExpertLayerCache::expert_gate_up_dev(int expert) const {

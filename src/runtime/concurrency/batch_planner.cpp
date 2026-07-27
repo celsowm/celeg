@@ -12,19 +12,28 @@ std::optional<ConcurrentEngine::RequestId> BatchPlanner::next_admission(
 namespace {
 std::vector<int> order_for(const std::vector<LaneSnapshot>& lanes,
                            RequestStatus desired) {
-    std::vector<LaneSnapshot> selected;
+    std::vector<int> selected;
     selected.reserve(lanes.size());
-    for (const LaneSnapshot& lane : lanes) {
-        if (lane.request_id != 0 && lane.status == desired) selected.push_back(lane);
+    for (size_t i = 0; i < lanes.size(); ++i) {
+        const LaneSnapshot& lane = lanes[i];
+        if (lane.request_id != 0 && lane.status == desired) {
+            selected.push_back(static_cast<int>(i));
+        }
     }
-    std::stable_sort(selected.begin(), selected.end(),
-                     [](const LaneSnapshot& a, const LaneSnapshot& b) {
-                         if (a.priority != b.priority) return a.priority > b.priority;
-                         return a.request_id < b.request_id;
-                     });
+    std::sort(selected.begin(), selected.end(),
+              [&](int a, int b) {
+                  const LaneSnapshot& left = lanes[static_cast<size_t>(a)];
+                  const LaneSnapshot& right = lanes[static_cast<size_t>(b)];
+                  if (left.priority != right.priority) {
+                      return left.priority > right.priority;
+                  }
+                  return left.request_id < right.request_id;
+              });
     std::vector<int> result;
     result.reserve(selected.size());
-    for (const LaneSnapshot& lane : selected) result.push_back(lane.lane_index);
+    for (int index : selected) {
+        result.push_back(lanes[static_cast<size_t>(index)].lane_index);
+    }
     return result;
 }
 } // namespace
