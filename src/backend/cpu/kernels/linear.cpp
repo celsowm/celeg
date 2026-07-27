@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <vector>
 
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include "quantized_dot_avx2_msvc.hpp"
+#endif
+
 namespace lfm {
 
 CpuLinearEngine::CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool)
@@ -58,27 +62,54 @@ void CpuLinearEngine::gemm(const Q4GroupMatrix& weight, const float* input,
                 weight.cols, weight.group_size));
         }
     }
-    const size_t jobs = rows * static_cast<size_t>(weight.rows);
-    const size_t grain = std::max<size_t>(1, jobs / std::max<size_t>(1, pool_->size() * 16));
-    pool_->parallel_for(0, jobs, grain, [&](size_t begin, size_t end) {
-        for (size_t job = begin; job < end; ++job) {
-            const size_t r = job / weight.rows;
-            const size_t out = job % weight.rows;
-            float value = 0.0f;
-            if (dynamic_q8_) {
-                const Q8GroupVector& activation = quantized[r];
-                value = q8_dot_(weight.values.data() + out * row_bytes,
-                    weight.scales_bf16.data() + out * weight.groups_per_row,
-                    activation.values.data(), activation.scales.data(), activation.sums.data(),
-                    weight.cols, weight.group_size, weight.groups_per_row);
-            } else {
-                value = dot_(weight.values.data() + out * row_bytes,
-                    weight.scales_bf16.data() + out * weight.groups_per_row,
-                    input + r * weight.cols, weight.cols, weight.group_size,
-                    weight.groups_per_row);
+    // Keep an output-row tile resident while sweeping the activation batch.
+    // The old flattened (row, output) schedule streamed the complete weight
+    // matrix once for every prompt token.  This schedule reuses each packed
+    // weight row for a small activation microtile before moving on.
+    constexpr size_t output_tile = 4;
+    const size_t tiles = (static_cast<size_t>(weight.rows) + output_tile - 1) / output_tile;
+    const size_t grain = std::max<size_t>(1, tiles / std::max<size_t>(1, pool_->size() * 4));
+    pool_->parallel_for(0, tiles, grain, [&](size_t begin, size_t end) {
+        for (size_t tile = begin; tile < end; ++tile) {
+            const size_t output_begin = tile * output_tile;
+            const size_t output_end = std::min(output_begin + output_tile,
+                                               static_cast<size_t>(weight.rows));
+            for (size_t out = output_begin; out < output_end; ++out) {
+                const uint8_t* packed = weight.values.data() + out * row_bytes;
+                const uint16_t* scales = weight.scales_bf16.data() +
+                    out * weight.groups_per_row;
+                size_t r = 0;
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+                if (dynamic_q8_ && isa_ == CpuIsa::Avx2 && weight.group_size == 32 &&
+                    (weight.cols % 32) == 0) {
+                    for (; r + 4 <= rows; r += 4) {
+                        float values[4];
+                        detail::q4_q8_dot4_avx2_msvc(packed, scales,
+                            quantized[r], quantized[r + 1], quantized[r + 2], quantized[r + 3],
+                            weight.cols, weight.group_size, weight.groups_per_row, values);
+                        for (size_t lane = 0; lane < 4; ++lane) {
+                            float& destination = output[(r + lane) * weight.rows + out];
+                            destination = beta == 0.0f ? values[lane] :
+                                values[lane] + beta * destination;
+                        }
+                    }
+                }
+#endif
+                for (; r < rows; ++r) {
+                    float value = 0.0f;
+                    if (dynamic_q8_) {
+                        const Q8GroupVector& activation = quantized[r];
+                        value = q8_dot_(packed, scales, activation.values.data(),
+                            activation.scales.data(), activation.sums.data(), weight.cols,
+                            weight.group_size, weight.groups_per_row);
+                    } else {
+                        value = dot_(packed, scales, input + r * weight.cols,
+                            weight.cols, weight.group_size, weight.groups_per_row);
+                    }
+                    float& destination = output[r * weight.rows + out];
+                    destination = beta == 0.0f ? value : value + beta * destination;
+                }
             }
-            float& destination = output[r * weight.rows + out];
-            destination = beta == 0.0f ? value : value + beta * destination;
         }
     });
 }

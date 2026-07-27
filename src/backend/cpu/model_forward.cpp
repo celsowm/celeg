@@ -1,9 +1,17 @@
 #include "detail/model_internal.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 namespace lfm {
+
+namespace {
+using Clock = std::chrono::steady_clock;
+double milliseconds_since(Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
+}
 
 void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
     if (position_value >= shared->max_context) {
@@ -35,7 +43,7 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
             const auto& convolution = std::get<ConvolutionWeights>(layer_variant);
             ConvolutionState& state = convolution_state(index);
             shared->linear.gemv(convolution.in, normed.data(), conv_projected.data());
-            cpu_conv_decode(conv_projected.data(), convolution.weight.data(),
+            cpu_conv_decode(conv_projected.data(), convolution.weight_tap_major.data(),
                 state.state.data(), op_output.data(), shared->shape.hidden,
                 shared->shape.conv_cache, position_value);
             shared->linear.gemv(convolution.out, op_output.data(), hidden.data());
@@ -65,6 +73,7 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         throw std::runtime_error("CPU chunked prefill exceeds context limit");
     }
     const size_t rows = tokens.size();
+    const auto chunk_started = Clock::now();
     chunk_hidden.resize(rows * shared->shape.hidden);
     chunk_residual.resize(rows * shared->shape.hidden);
     chunk_normed.resize(rows * shared->shape.hidden);
@@ -97,8 +106,10 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         }
 
         if (const auto* attention = std::get_if<AttentionWeights>(&layer)) {
+            auto started = Clock::now();
             shared->linear.gemm(attention->qkv, chunk_normed.data(),
                                 chunk_qkv.data(), rows);
+            prefill_profile.linear_ms += milliseconds_since(started);
             AttentionState& cache = attention_state(layer_index);
             // Normalize/rotate and commit the complete chunk first. Each query
             // still observes only [0, base + row], preserving causality.
@@ -117,29 +128,36 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                     shared->shape.norm_eps);
                 store_kv(cache, absolute_position, k, v);
             }
-            for (size_t row = 0; row < rows; ++row) {
-                const float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
-                run_attention(cache, q,
-                    chunk_op.data() + row * shared->shape.hidden,
-                    base_position + static_cast<int>(row) + 1);
-            }
+            const CpuKvPagePool& pool = *shared->kv_pools.at(cache.pool_index);
+            started = Clock::now();
+            cpu_gqa_prefill_paged(chunk_qkv.data(), rows, shared->shape.qkv_width,
+                                  pool, cache.pages,
+                                  chunk_op.data(), base_position,
+                                  shared->shape.num_attention_heads,
+                                  shared->shape.num_key_value_heads,
+                                  shared->shape.head_dim, shared->pool);
+            prefill_profile.attention_ms += milliseconds_since(started);
+            started = Clock::now();
             shared->linear.gemm(attention->out, chunk_op.data(),
                                 chunk_hidden.data(), rows);
+            prefill_profile.linear_ms += milliseconds_since(started);
         } else {
             const auto& convolution = std::get<ConvolutionWeights>(layer);
+            auto started = Clock::now();
             shared->linear.gemm(convolution.in, chunk_normed.data(),
                                 chunk_conv.data(), rows);
+            prefill_profile.linear_ms += milliseconds_since(started);
             ConvolutionState& conv_state = convolution_state(layer_index);
-            for (size_t row = 0; row < rows; ++row) {
-                cpu_conv_decode(
-                    chunk_conv.data() + row * 3ULL * shared->shape.hidden,
-                    convolution.weight.data(), conv_state.state.data(),
-                    chunk_op.data() + row * shared->shape.hidden,
-                    shared->shape.hidden, shared->shape.conv_cache,
-                    base_position + static_cast<int>(row));
-            }
+            started = Clock::now();
+            cpu_conv_prefill(chunk_conv.data(), convolution.weight_tap_major.data(),
+                             conv_state.state.data(), chunk_op.data(), rows,
+                             shared->shape.hidden, shared->shape.conv_cache,
+                             base_position, shared->pool);
+            prefill_profile.shortconv_ms += milliseconds_since(started);
+            started = Clock::now();
             shared->linear.gemm(convolution.out, chunk_op.data(),
                                 chunk_hidden.data(), rows);
+            prefill_profile.linear_ms += milliseconds_since(started);
         }
 
         for (size_t row = 0; row < rows; ++row) {
@@ -151,15 +169,19 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                 chunk_normed.data() + row * shared->shape.hidden,
                 shared->shape.hidden, shared->shape.norm_eps);
         }
+        auto started = Clock::now();
         shared->linear.gemm(common.w13, chunk_normed.data(),
                             chunk_gate_up.data(), rows);
+        prefill_profile.linear_ms += milliseconds_since(started);
         for (size_t row = 0; row < rows; ++row) {
             cpu_swiglu(chunk_gate_up.data() + row * 2ULL * shared->shape.intermediate,
                        chunk_activated.data() + row * shared->shape.intermediate,
                        shared->shape.intermediate);
         }
+        started = Clock::now();
         shared->linear.gemm(common.w2, chunk_activated.data(),
                             chunk_mlp.data(), rows);
+        prefill_profile.linear_ms += milliseconds_since(started);
         for (size_t row = 0; row < rows; ++row) {
             cpu_residual_add(chunk_hidden.data() + row * shared->shape.hidden,
                              chunk_mlp.data() + row * shared->shape.hidden,
@@ -174,6 +196,7 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         shared->linear.gemv(shared->embedding, normed.data(), logits.data());
     }
     position_value += static_cast<int>(rows);
+    prefill_profile.total_ms += milliseconds_since(chunk_started);
 }
 
 } // namespace lfm

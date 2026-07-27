@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
         std::vector<int32_t> tokens(token_count, 1);
         runtime.session().prefill(tokens);
         const auto metrics = runtime.diagnostics().runtime_metrics();
+        const auto profile = runtime.diagnostics().prefill_profile();
         const auto memory = runtime.diagnostics().memory_stats();
         std::cout << std::fixed << std::setprecision(3)
                   << "backend=" << runtime.diagnostics().backend_description() << '\n'
@@ -48,6 +49,10 @@ int main(int argc, char** argv) {
                   << "prefill.ms=" << metrics.last_prefill_ms << '\n'
                   << "prefill.tokens_per_second="
                   << metrics.prefill_tokens_per_second() << '\n'
+                  << "prefill.profile.linear_ms=" << profile.linear_ms << '\n'
+                  << "prefill.profile.attention_ms=" << profile.attention_ms << '\n'
+                  << "prefill.profile.shortconv_ms=" << profile.shortconv_ms << '\n'
+                  << "prefill.profile.total_ms=" << profile.total_ms << '\n'
                   << "kv.pages.used=" << memory.kv_pages_used << '\n'
                   << "kv.pages.total=" << memory.kv_pages_total << '\n'
                   << "kv.bytes=" << memory.kv_cache << '\n';

@@ -84,6 +84,7 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens) {
     }
     impl_->reset();
     impl_->phase = SessionPhase::Prefilling;
+    impl_->prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
     if (tokens.size() < impl_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
@@ -152,6 +153,7 @@ bool CpuModel::session_ready_for_decode() const {
 
 std::vector<float> CpuModel::session_logits() const { return impl_->logits; }
 RuntimeMetrics CpuModel::session_metrics() const { return impl_->metrics; }
+CpuPrefillProfile CpuModel::session_prefill_profile() const { return impl_->prefill_profile; }
 void CpuModel::clear_session_metrics() { impl_->metrics = {}; }
 CpuModelMemoryStats CpuModel::session_memory_stats() const { return impl_->memory_stats(); }
 int CpuModel::session_vocab_size() const { return impl_->shared->shape.vocab_size; }
@@ -216,6 +218,7 @@ bool CpuInferenceSession::ready_for_decode() const {
 
 std::vector<float> CpuDiagnostics::copy_logits() const { return owner_->session_logits(); }
 RuntimeMetrics CpuDiagnostics::runtime_metrics() const { return owner_->session_metrics(); }
+CpuPrefillProfile CpuDiagnostics::prefill_profile() const { return owner_->session_prefill_profile(); }
 void CpuDiagnostics::clear_runtime_metrics() { owner_->clear_session_metrics(); }
 CpuModelMemoryStats CpuDiagnostics::memory_stats() const { return owner_->session_memory_stats(); }
 int CpuDiagnostics::vocab_size() const { return owner_->session_vocab_size(); }

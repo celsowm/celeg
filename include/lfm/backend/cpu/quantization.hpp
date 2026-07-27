@@ -53,7 +53,7 @@ Q8GroupVector quantize_float_groupwise_q8(const float* data,
                                            size_t group_size);
 
 struct CpuPackMetadata {
-    uint32_t version = 1;
+    uint32_t version = 2;
     std::string source_id;
     std::string isa;
     uint32_t group_size = 32;

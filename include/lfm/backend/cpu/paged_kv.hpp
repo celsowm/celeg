@@ -104,4 +104,21 @@ void cpu_gqa_decode_paged_parallel(
     CpuPagedAttentionOptions options = {},
     CpuPagedAttentionStats* stats = nullptr);
 
+// Causal multi-query prefill attention.  Keys and values for the full chunk
+// must already be committed to pages; query row r sees exactly
+// [0, base_sequence_length + r].  Parallelism is owned by this call so
+// prefill does not create a thread-pool rendezvous for every query.
+void cpu_gqa_prefill_paged(
+    const float* queries,
+    size_t query_rows,
+    size_t query_stride,
+    const CpuKvPagePool& pool,
+    std::span<const CpuKvPageId> pages,
+    float* output,
+    int base_sequence_length,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    CpuThreadPool& thread_pool);
+
 } // namespace lfm

@@ -318,7 +318,7 @@ CpuPackReader::CpuPackReader(const std::filesystem::path& path)
     if (!in) throw std::runtime_error("cannot open CPU pack: " + path.string());
     PackHeader header;
     read_exact(in, &header, sizeof(header));
-    if (header.magic != kMagic || header.version != 1 ||
+    if (header.magic != kMagic || header.version != 2 ||
         header.source_len > (1u << 20) || header.isa_len > 128 ||
         header.entries > 10000) {
         throw std::runtime_error("invalid CPU pack header");

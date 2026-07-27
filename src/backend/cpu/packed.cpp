@@ -122,7 +122,7 @@ struct CpuModel::Impl::BatchScratch {
                     auto& conv_state = session.convolution_state(layer_index);
                     cpu_conv_decode(
                         conv_projected.data() + row * 3ULL * shape.hidden,
-                        convolution.weight.data(), conv_state.state.data(),
+                        convolution.weight_tap_major.data(), conv_state.state.data(),
                         op_output.data() + row * shape.hidden,
                         shape.hidden, shape.conv_cache,
                         session.position_value);

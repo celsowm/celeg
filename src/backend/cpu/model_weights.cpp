@@ -250,9 +250,16 @@ void CpuModel::Impl::Shared::load_weights() {
             layer.in = load_matrix(file.get(), reader.get(), writer.get(),
                 layer_name(index, "conv.in_proj.weight"),
                 {3 * shape.hidden, shape.hidden});
-            layer.weight = load_vector(file.get(), reader.get(), writer.get(),
+            const std::vector<float> channel_major = load_vector(file.get(), reader.get(), writer.get(),
                 layer_name(index, "conv.conv.weight"),
                 {shape.hidden, 1, shape.conv_cache});
+            layer.weight_tap_major.resize(channel_major.size());
+            for (int tap = 0; tap < shape.conv_cache; ++tap) {
+                for (int channel = 0; channel < shape.hidden; ++channel) {
+                    layer.weight_tap_major[static_cast<size_t>(tap) * shape.hidden + channel] =
+                        channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
+                }
+            }
             layer.out = load_matrix(file.get(), reader.get(), writer.get(),
                 layer_name(index, "conv.out_proj.weight"),
                 {shape.hidden, shape.hidden});
@@ -329,7 +336,7 @@ size_t CpuModel::Impl::Shared::weights_memory_bytes() const {
                          value.k_norm.size() * sizeof(float);
             } else {
                 bytes += value.in.memory_bytes() + value.out.memory_bytes() +
-                         value.weight.size() * sizeof(float);
+                         value.weight_tap_major.size() * sizeof(float);
             }
         }, layer);
     }

@@ -53,6 +53,13 @@ struct CpuPrefillItem {
     bool final_token = false;
 };
 
+struct CpuPrefillProfile {
+    double linear_ms = 0.0;
+    double attention_ms = 0.0;
+    double shortconv_ms = 0.0;
+    double total_ms = 0.0;
+};
+
 struct CpuBatchMetrics {
     size_t batch_size = 0;
     double elapsed_ms = 0.0;
@@ -80,6 +87,7 @@ class CpuDiagnostics {
 public:
     std::vector<float> copy_logits() const;
     RuntimeMetrics runtime_metrics() const;
+    CpuPrefillProfile prefill_profile() const;
     void clear_runtime_metrics();
     CpuModelMemoryStats memory_stats() const;
     int vocab_size() const;
@@ -154,6 +162,7 @@ public:
 
     std::vector<float> session_logits() const;
     RuntimeMetrics session_metrics() const;
+    CpuPrefillProfile session_prefill_profile() const;
     void clear_session_metrics();
     CpuModelMemoryStats session_memory_stats() const;
     int session_vocab_size() const;

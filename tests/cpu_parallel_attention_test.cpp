@@ -44,6 +44,33 @@ int main() {
         maximum = std::max(maximum, std::abs(reference[i] - parallel[i]));
     }
     LFM_TEST_CHECK(maximum < 1e-5f);
+
+    // Chunk prefill must be equivalent to independently evaluated causal
+    // queries, while using a single parallel region for the whole chunk.
+    constexpr int base = 11;
+    constexpr size_t query_rows = 5;
+    std::vector<float> query_chunk(query_rows * query.size());
+    std::vector<float> chunk_output(query_rows * query.size());
+    std::vector<float> chunk_reference(query_rows * query.size());
+    for (size_t row = 0; row < query_rows; ++row) {
+        for (size_t i = 0; i < query.size(); ++i) {
+            query_chunk[row * query.size() + i] = query[i] + 0.003f * static_cast<float>(row);
+        }
+        lfm::cpu_gqa_decode_paged(query_chunk.data() + row * query.size(), pool, pages,
+                                  chunk_reference.data() + row * query.size(),
+                                  base + static_cast<int>(row) + 1,
+                                  q_heads, kv_heads, head_dim);
+    }
+    lfm::cpu_gqa_prefill_paged(query_chunk.data(), query_rows, query.size(), pool, pages,
+                                chunk_output.data(), base, q_heads, kv_heads, head_dim,
+                                workers);
+    float chunk_maximum = 0.0f;
+    for (size_t i = 0; i < chunk_output.size(); ++i) {
+        chunk_maximum = std::max(chunk_maximum,
+            std::abs(chunk_output[i] - chunk_reference[i]));
+    }
+    LFM_TEST_CHECK(chunk_maximum < 1e-5f);
     for (auto page : pages) pool.release(page);
-    std::cout << "cpu_parallel_attention_test: ok max_error=" << maximum << '\n';
+    std::cout << "cpu_parallel_attention_test: ok max_error=" << maximum
+              << " chunk_max_error=" << chunk_maximum << '\n';
 }

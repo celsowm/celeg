@@ -36,7 +36,8 @@ struct CpuModel::Impl {
     struct ConvolutionWeights {
         CommonWeights common;
         Q4GroupMatrix in;
-        std::vector<float> weight;
+        // [tap][channel], so a tap is contiguous for SIMD/vector kernels.
+        std::vector<float> weight_tap_major;
         Q4GroupMatrix out;
     };
     using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights>;
@@ -164,6 +165,7 @@ struct CpuModel::Impl {
     SessionPhase phase = SessionPhase::Empty;
     uint64_t rng_state = 1;
     RuntimeMetrics metrics;
+    CpuPrefillProfile prefill_profile;
 };
 
 } // namespace lfm
