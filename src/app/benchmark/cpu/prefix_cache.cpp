@@ -26,9 +26,14 @@ int main(int argc, char** argv) {
             lfm::detail::load_model_bootstrap(model_dir);
         const auto& config = bootstrap.config;
         lfm::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
-        const auto base = tokenizer.encode(tokenizer.format_chat(prompt, ""), false);
+        const auto base = tokenizer.encode(
+            tokenizer.format_chat(
+                std::vector<lfm::ChatMessage>{{lfm::ChatRole::User, prompt}}),
+            false);
         const auto longer = suffix.empty() ? base : tokenizer.encode(
-            tokenizer.format_chat(prompt + suffix, ""), false);
+            tokenizer.format_chat(
+                std::vector<lfm::ChatMessage>{{lfm::ChatRole::User, prompt + suffix}}),
+            false);
         lfm::CpuModelOptions model_options;
         model_options.kv_cache_mode = lfm::CpuKvCacheMode::Bf16;
         model_options.numa_mode = lfm::CpuNumaMode::Local;

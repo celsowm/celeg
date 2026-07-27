@@ -359,8 +359,13 @@ int main(int argc, char** argv) {
 
         std::vector<int32_t> input;
         if (args.load_session.empty()) {
+            std::vector<lfm::ChatMessage> chat_messages;
+            if (!args.system.empty()) {
+                chat_messages.push_back({lfm::ChatRole::System, args.system});
+            }
+            chat_messages.push_back({lfm::ChatRole::User, args.prompt});
             const std::string formatted = args.raw_prompt
-                ? args.prompt : tokenizer.format_chat(args.prompt, args.system);
+                ? args.prompt : tokenizer.format_chat(chat_messages);
             // Chat formatting contains <|startoftext|>; raw prompts receive BOS automatically.
             input = tokenizer.encode(formatted, args.raw_prompt);
             if (args.tokens_only) {

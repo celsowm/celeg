@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -30,7 +31,8 @@ public:
 
     std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const;
     std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const;
-    std::string format_chat(std::string_view user_prompt, std::string_view system_prompt = {}) const;
+    std::string format_chat(std::span<const ChatMessage> messages,
+                            bool add_generation_prompt = true) const;
 
     int32_t bos_id() const { return bos_id_; }
     int32_t eos_id() const { return eos_id_; }

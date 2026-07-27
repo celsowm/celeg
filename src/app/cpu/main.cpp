@@ -152,8 +152,13 @@ int main(int argc, char** argv) {
         }
         lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
             lfm::make_chat_template(variant.chat_template_kind()));
+        std::vector<lfm::ChatMessage> chat_messages;
+        if (!args.system.empty()) {
+            chat_messages.push_back({lfm::ChatRole::System, args.system});
+        }
+        chat_messages.push_back({lfm::ChatRole::User, args.prompt});
         const std::string text = args.raw_prompt
-            ? args.prompt : tokenizer.format_chat(args.prompt, args.system);
+            ? args.prompt : tokenizer.format_chat(chat_messages);
         const std::vector<int32_t> input = tokenizer.encode(text, args.raw_prompt);
         if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {
             throw std::runtime_error("prompt plus output exceeds context");

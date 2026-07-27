@@ -39,7 +39,9 @@ int main(int argc, char** argv) {
         lfm::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string(),
             lfm::make_chat_template(variant.chat_template_kind()));
         const std::vector<int32_t> tokens = tokenizer.encode(
-            tokenizer.format_chat(prompt, ""), false);
+            tokenizer.format_chat(
+                std::vector<lfm::ChatMessage>{{lfm::ChatRole::User, prompt}}),
+            false);
 
         lfm::CpuModelOptions model_options;
         model_options.threads = static_cast<size_t>(threads);

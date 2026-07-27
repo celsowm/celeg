@@ -454,8 +454,9 @@ std::string BpeTokenizer::decode(const std::vector<int32_t>& ids, bool skip_spec
     return byte_decode(encoded);
 }
 
-std::string BpeTokenizer::format_chat(std::string_view user_prompt, std::string_view system_prompt) const {
-    return chat_template_->format(user_prompt, system_prompt);
+std::string BpeTokenizer::format_chat(std::span<const ChatMessage> messages,
+                                      bool add_generation_prompt) const {
+    return chat_template_->format(messages, add_generation_prompt);
 }
 
 } // namespace lfm
