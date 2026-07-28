@@ -1,6 +1,7 @@
 #include "lfm/detail/runtime/concurrency/batch_planner.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 namespace lfm::detail {
 
@@ -46,6 +47,19 @@ std::vector<int> BatchPlanner::order_prefill(
 std::vector<int> BatchPlanner::order_decode(
     const std::vector<LaneSnapshot>& lanes) const {
     return order_for(lanes, RequestStatus::Decoding);
+}
+
+std::vector<size_t> BatchPlanner::order_priority(
+    std::span<const RequestPriorityView> requests) const {
+    std::vector<size_t> result(requests.size());
+    std::iota(result.begin(), result.end(), size_t{0});
+    std::sort(result.begin(), result.end(), [&](size_t left, size_t right) {
+        const auto& a = requests[left];
+        const auto& b = requests[right];
+        if (a.priority != b.priority) return a.priority > b.priority;
+        return a.request_id < b.request_id;
+    });
+    return result;
 }
 
 } // namespace lfm::detail

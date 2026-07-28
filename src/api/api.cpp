@@ -109,9 +109,7 @@ lfm::CpuNumaMode cpu_numa_mode(int value) {
     }
 }
 
-lfm::CpuModelOptions cpu_options(const lfm25_model_options& source) {
-    const auto& input = source.backend_options.cpu;
-    if (source.backend != LFM25_BACKEND_CPU) throw std::invalid_argument("CPU options require CPU backend");
+lfm::CpuModelOptions cpu_options(const lfm25_cpu_model_config& input) {
     if (input.q4_group_size != 32 && input.q4_group_size != 64) {
         throw std::invalid_argument("CPU Q4 group size must be 32 or 64");
     }
@@ -130,6 +128,17 @@ lfm::CpuModelOptions cpu_options(const lfm25_model_options& source) {
     result.attention_page_tile = input.attention_page_tile;
     result.numa_mode = cpu_numa_mode(input.numa_mode);
     return result;
+}
+
+lfm::CpuModelOptions cpu_options(const lfm25_cpu_model_options& source) {
+    return cpu_options(source.cpu);
+}
+
+lfm::CpuModelOptions cpu_options(const lfm25_engine_model_options& source) {
+    if (source.backend != LFM25_BACKEND_CPU) {
+        throw std::invalid_argument("CPU options require CPU backend");
+    }
+    return cpu_options(source.backend_options.cpu);
 }
 
 lfm::CpuConcurrentEngineOptions cpu_engine_options(const lfm25_engine_options& source) {
@@ -195,7 +204,7 @@ lfm::AttentionMode cuda_attention_mode(int value) {
     }
 }
 
-lfm::ModelOptions cuda_options(const lfm25_model_options& source) {
+lfm::ModelOptions cuda_options(const lfm25_engine_model_options& source) {
     const auto& input = source.backend_options.cuda;
     if (source.backend != LFM25_BACKEND_CUDA) throw std::invalid_argument("CUDA options require CUDA backend");
     if (input.flags != 0) throw std::invalid_argument("CUDA model option flags are reserved and must be zero");
@@ -236,40 +245,56 @@ lfm::ConcurrentEngineOptions cuda_engine_options(const lfm25_engine_options& sou
 } // namespace
 
 extern "C" {
-void lfm25_model_options_init(lfm25_model_options* options, lfm25_backend backend) {
+void lfm25_cpu_model_options_init(lfm25_cpu_model_options* options) {
     if (!options) return;
     *options = {};
     options->struct_size = sizeof(*options);
-    options->backend = backend;
     options->max_context = 4096;
     options->generation.struct_size = sizeof(options->generation);
     options->generation.temperature = 0.1f; options->generation.top_k = 50;
     options->generation.top_p = 1.0f; options->generation.repetition_penalty = 1.05f; options->generation.seed = 1;
-    if (backend == LFM25_BACKEND_CPU) {
-        options->backend_options.cpu.q4_group_size = 32;
-        options->backend_options.cpu.use_pack_cache = 1;
-        options->backend_options.cpu.kv_cache_mode = 1;
-        options->backend_options.cpu.kv_page_tokens = 32;
-        options->backend_options.cpu.prefill_chunk_tokens = 256;
-        options->backend_options.cpu.prefill_chunk_threshold = 16;
-        options->backend_options.cpu.attention_parallel_threshold = 256;
-        options->backend_options.cpu.attention_page_tile = 4;
-    } else if (backend == LFM25_BACKEND_CUDA) {
-        options->backend_options.cuda.weight_mode = 0;
-        options->backend_options.cuda.kv_cache_mode = 0;
-        options->backend_options.cuda.gemm_backend = 0;
-        options->backend_options.cuda.attention_mode = 2;
-        options->backend_options.cuda.attention_chunk_tokens = 256;
-        options->backend_options.cuda.attention_auto_threshold = 4096;
-        options->backend_options.cuda.lt_workspace_mb = 64;
-        options->backend_options.cuda.lt_heuristics = 8;
-    }
+    options->cpu.q4_group_size = 32;
+    options->cpu.use_pack_cache = 1;
+    options->cpu.kv_cache_mode = 1;
+    options->cpu.kv_page_tokens = 32;
+    options->cpu.prefill_chunk_tokens = 256;
+    options->cpu.prefill_chunk_threshold = 16;
+    options->cpu.attention_parallel_threshold = 256;
+    options->cpu.attention_page_tile = 4;
 }
 void lfm25_engine_options_init(lfm25_engine_options* options, lfm25_backend backend) {
     if (!options) return;
     *options = {};
     options->struct_size = sizeof(*options); options->backend = backend;
-    lfm25_model_options_init(&options->model, backend);
+    options->model = {};
+    options->model.struct_size = sizeof(options->model);
+    options->model.backend = backend;
+    options->model.max_context = 4096;
+    options->model.generation.struct_size = sizeof(options->model.generation);
+    options->model.generation.temperature = 0.1f;
+    options->model.generation.top_k = 50;
+    options->model.generation.top_p = 1.0f;
+    options->model.generation.repetition_penalty = 1.05f;
+    options->model.generation.seed = 1;
+    if (backend == LFM25_BACKEND_CPU) {
+        options->model.backend_options.cpu.q4_group_size = 32;
+        options->model.backend_options.cpu.use_pack_cache = 1;
+        options->model.backend_options.cpu.kv_cache_mode = 1;
+        options->model.backend_options.cpu.kv_page_tokens = 32;
+        options->model.backend_options.cpu.prefill_chunk_tokens = 256;
+        options->model.backend_options.cpu.prefill_chunk_threshold = 16;
+        options->model.backend_options.cpu.attention_parallel_threshold = 256;
+        options->model.backend_options.cpu.attention_page_tile = 4;
+    } else if (backend == LFM25_BACKEND_CUDA) {
+        options->model.backend_options.cuda.weight_mode = 0;
+        options->model.backend_options.cuda.kv_cache_mode = 0;
+        options->model.backend_options.cuda.gemm_backend = 0;
+        options->model.backend_options.cuda.attention_mode = 2;
+        options->model.backend_options.cuda.attention_chunk_tokens = 256;
+        options->model.backend_options.cuda.attention_auto_threshold = 4096;
+        options->model.backend_options.cuda.lt_workspace_mb = 64;
+        options->model.backend_options.cuda.lt_heuristics = 8;
+    }
     if (backend == LFM25_BACKEND_CPU) {
         options->backend_options.cpu.max_active_requests = 16;
         options->backend_options.cpu.max_batched_tokens = 256;
@@ -307,13 +332,13 @@ const char* lfm25_backend_capabilities(lfm25_backend backend) {
 #endif
 }
 
-lfm25_model* lfm25_model_create(const char* path, const lfm25_model_options* options) {
+lfm25_model* lfm25_model_create(const char* path, const lfm25_cpu_model_options* options) {
     if (!path || !*path || !options) { global_error = "model path and options are required"; return nullptr; }
     try {
         require_size(options->struct_size, sizeof(*options), "model options");
         require_size(options->generation.struct_size, sizeof(options->generation), "generation options");
-        if (options->backend != LFM25_BACKEND_CPU) { global_error = "requested backend is unavailable"; return nullptr; }
         auto result = std::make_unique<lfm25_model>();
+        require_size(options->generation.struct_size, sizeof(options->generation), "generation options");
         result->cpu = std::make_unique<lfm::CpuModel>(path, options->max_context, cpu_options(*options), generation(options->generation));
         return result.release();
     } catch (const std::exception& error) { global_error = error.what(); return nullptr; }

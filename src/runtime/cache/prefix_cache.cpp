@@ -1,4 +1,5 @@
 #include "lfm/runtime/cache/prefix_cache.hpp"
+#include "lfm/runtime/cache/page_lease.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -24,13 +25,10 @@ PrefixCacheManager::Entry* PrefixCacheManager::longest_entry(
     const std::vector<int32_t>& prompt, size_t* matched_tokens) {
     if (!enabled_) return nullptr;
     ++metrics_.radix_lookups;
-    const auto match = radix_.longest_prefix(prompt);
+    const auto match = index_.longest(prompt);
     if (!match) return nullptr;
     const auto found = entries_.find(match->id);
-    if (found == entries_.end() ||
-        found->second->prompt.size() != match->matched_tokens) {
-        throw std::runtime_error("prefix radix references a missing cache entry");
-    }
+    if (found == entries_.end()) throw std::runtime_error("prefix index references a missing cache entry");
     if (matched_tokens) *matched_tokens = match->matched_tokens;
     return found->second.get();
 }
@@ -42,24 +40,19 @@ PrefixCacheManager::Entry* PrefixCacheManager::exact_entry(
     return entry && matched == prompt.size() ? entry : nullptr;
 }
 
-bool PrefixCacheManager::evict_one(PrefixRadixIndex::EntryId protected_id) {
+bool PrefixCacheManager::evict_one(PrefixCacheIndex::EntryId protected_id) {
     // O(log n) victim selection via the LRU index.
-    for (auto it = lru_index_.begin(); it != lru_index_.end(); ++it) {
-        if (it->second == protected_id) continue;
-        const auto id = it->second;
-        auto entry_it = entries_.find(id);
-        if (entry_it == entries_.end()) continue;
-        Entry* victim = entry_it->second.get();
-        lru_index_.erase(it);
-        pages_.release(victim->pages);
-        if (!radix_.erase(victim->prompt, id)) {
-            throw std::runtime_error("prefix radix eviction lost its entry");
-        }
-        entries_.erase(id);
-        ++metrics_.evictions;
-        return true;
-    }
-    return false;
+    const auto id = index_.oldest(protected_id);
+    if (!id) return false;
+    auto entry_it = entries_.find(*id);
+    if (entry_it == entries_.end()) throw std::runtime_error("prefix index entry payload missing");
+    PageLease<uint32_t> lease(
+        entry_it->second->pages,
+        [this](const std::vector<uint32_t>& pages) { pages_.release(pages); });
+    index_.erase(*id);
+    entries_.erase(*id);
+    ++metrics_.evictions;
+    return true;
 }
 
 bool PrefixCacheManager::evict_one() {
@@ -68,7 +61,7 @@ bool PrefixCacheManager::evict_one() {
 
 std::optional<std::vector<uint32_t>>
 PrefixCacheManager::allocate_with_eviction(
-    size_t token_count, PrefixRadixIndex::EntryId protected_id) {
+    size_t token_count, PrefixCacheIndex::EntryId protected_id) {
     for (;;) {
         auto allocated = pages_.allocate_tokens(token_count);
         if (allocated) return allocated;
@@ -105,29 +98,32 @@ PrefixAcquireResult PrefixCacheManager::acquire(
         result.status = PrefixAcquireStatus::Miss;
         return result;
     }
+    const auto indexed = index_.longest(prompt);
+    if (!indexed) throw std::runtime_error("prefix index entry disappeared during acquire");
     if (!pages_.retain(entry->pages)) {
         throw std::runtime_error("failed to retain pages owned by prefix cache");
     }
 
-    result.pages = entry->pages;
+    PageLease<uint32_t> page_lease(
+        entry->pages,
+        [this](const std::vector<uint32_t>& pages) { pages_.release(pages); });
+    auto& pages = page_lease.pages();
     try {
         const size_t partial = matched_tokens %
             static_cast<size_t>(pages_.page_tokens());
-        if (partial != 0 && !result.pages.empty()) {
+        if (partial != 0 && !pages.empty()) {
             std::optional<uint32_t> cloned;
             for (;;) {
                 cloned = pages_.clone_page_prefix(
-                    result.pages.back(), static_cast<int>(partial));
-                if (cloned || !evict_one(entry->id)) break;
+                    pages.back(), static_cast<int>(partial));
+                if (cloned || !evict_one(indexed->id)) break;
             }
             if (!cloned) {
-                pages_.release(result.pages);
-                result.pages.clear();
                 result.status = PrefixAcquireStatus::OutOfMemory;
                 return result;
             }
-            const uint32_t shared_last = result.pages.back();
-            result.pages.back() = *cloned;
+            const uint32_t shared_last = pages.back();
+            pages.back() = *cloned;
             pages_.release(std::vector<uint32_t>{shared_last});
             record_cow(partial);
         }
@@ -135,29 +131,25 @@ PrefixAcquireResult PrefixCacheManager::acquire(
         const size_t total_pages_needed = reserved_tokens == 0 ? 0 :
             (reserved_tokens + static_cast<size_t>(pages_.page_tokens()) - 1) /
             static_cast<size_t>(pages_.page_tokens());
-        const size_t additional_pages = total_pages_needed > result.pages.size()
-            ? total_pages_needed - result.pages.size() : 0;
+        const size_t additional_pages = total_pages_needed > pages.size()
+            ? total_pages_needed - pages.size() : 0;
         auto extra = allocate_with_eviction(
             additional_pages * static_cast<size_t>(pages_.page_tokens()),
-            entry->id);
+            indexed->id);
         if (!extra) {
-            pages_.release(result.pages);
-            result.pages.clear();
             result.status = PrefixAcquireStatus::OutOfMemory;
             return result;
         }
-        result.pages.insert(result.pages.end(), extra->begin(), extra->end());
+        pages.insert(pages.end(), extra->begin(), extra->end());
     } catch (...) {
-        if (!result.pages.empty()) pages_.release(result.pages);
         throw;
     }
 
     // Touch: update LRU index.
-    lru_index_.erase({entry->last_used, entry->id});
-    entry->last_used = ++clock_;
-    lru_index_.insert({entry->last_used, entry->id});
+    index_.touch(indexed->id);
 
     result.status = PrefixAcquireStatus::Hit;
+    result.pages = page_lease.release_ownership();
     result.matched_tokens = matched_tokens;
     result.state = entry->state;
     ++metrics_.hits;
@@ -182,10 +174,10 @@ bool PrefixCacheManager::insert_or_update(
     }
 
     if (Entry* existing = exact_entry(prompt)) {
-        lru_index_.erase({existing->last_used, existing->id});
         existing->state = std::make_shared<PrefixState>(std::move(state));
-        existing->last_used = ++clock_;
-        lru_index_.insert({existing->last_used, existing->id});
+        const auto indexed = index_.longest(prompt);
+        if (!indexed) throw std::runtime_error("prefix index entry disappeared during update");
+        index_.touch(indexed->id);
         return true;
     }
 
@@ -196,64 +188,58 @@ bool PrefixCacheManager::insert_or_update(
         throw std::runtime_error("failed retaining request pages for prefix cache");
     }
 
+    PageLease<uint32_t> cache_lease(
+        std::move(cache_pages),
+        [this](const std::vector<uint32_t>& pages) { pages_.release(pages); });
+    auto& owned_pages = cache_lease.pages();
+
     try {
         const size_t partial = prompt.size() %
             static_cast<size_t>(pages_.page_tokens());
-        if (partial != 0 && !cache_pages.empty()) {
+        if (partial != 0 && !owned_pages.empty()) {
             std::optional<uint32_t> cloned;
             for (;;) {
                 cloned = pages_.clone_page_prefix(
-                    cache_pages.back(), static_cast<int>(partial));
+                    owned_pages.back(), static_cast<int>(partial));
                 if (cloned || !evict_one()) break;
             }
             if (!cloned) {
-                pages_.release(cache_pages);
                 return false;
             }
-            const uint32_t request_page = cache_pages.back();
-            cache_pages.back() = *cloned;
+            const uint32_t request_page = owned_pages.back();
+            owned_pages.back() = *cloned;
             pages_.release(std::vector<uint32_t>{request_page});
             record_cow(partial);
         }
 
-        if (next_id_ == std::numeric_limits<PrefixRadixIndex::EntryId>::max()) {
-            throw std::overflow_error("prefix cache entry ID space exhausted");
-        }
         auto entry = std::make_unique<Entry>();
-        entry->id = next_id_++;
-        entry->prompt = prompt;
-        entry->pages = cache_pages;
+        entry->pages = owned_pages;
         entry->state = std::make_shared<PrefixState>(std::move(state));
-        entry->last_used = ++clock_;
-        const auto id = entry->id;
-        const auto lru_key = std::pair{entry->last_used, id};
-        lru_index_.insert(lru_key);
-        radix_.insert(entry->prompt, id);
+        const auto id = index_.insert(prompt);
         try {
             const auto [_, inserted] = entries_.emplace(id, std::move(entry));
             if (!inserted) throw std::runtime_error("duplicate prefix cache ID");
         } catch (...) {
-            lru_index_.erase(lru_key);
-            radix_.erase(prompt, id);
+            index_.erase(id);
             throw;
         }
-        cache_pages.clear();
+        cache_lease.release_ownership();
         ++metrics_.inserts;
         while (entries_.size() > maximum_entries_) {
             if (!evict_one(id)) break;
         }
         return true;
-    } catch (...) {
-        if (!cache_pages.empty()) pages_.release(cache_pages);
-        throw;
-    }
+    } catch (...) { throw; }
 }
 
 void PrefixCacheManager::clear() {
-    for (auto& [_, entry] : entries_) pages_.release(entry->pages);
+    for (auto& [_, entry] : entries_) {
+        PageLease<uint32_t> lease(
+            entry->pages,
+            [this](const std::vector<uint32_t>& pages) { pages_.release(pages); });
+    }
     entries_.clear();
-    lru_index_.clear();
-    radix_.clear();
+    index_.clear();
 }
 
 } // namespace lfm

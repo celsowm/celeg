@@ -185,7 +185,6 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
     }
     weight.validate_storage();
     if (weight.gguf_quantized()) {
-        bool first = true;
         for (const GgufLinearSegment& segment : weight.gguf_segments) {
             if (segment.cols != k) {
                 throw std::runtime_error("GGUF segment width does not match GEMM");
@@ -193,8 +192,7 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             launch_gguf_linear_segment(
                 x, segment.blocks, segment.type,
                 y + static_cast<size_t>(segment.row_offset), m, segment.rows, k,
-                segment.row_bytes, n, first ? beta : 1.0f, stream_);
-            first = false;
+                segment.row_bytes, n, beta, stream_);
         }
         return;
     }

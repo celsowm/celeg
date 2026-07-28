@@ -152,6 +152,11 @@ public:
     static std::pair<std::vector<int32_t>, CpuBatchMetrics>
     decode_batch(std::span<CpuModel* const> sessions);
 
+private:
+    friend class CpuInferenceSession;
+    friend class CpuDiagnostics;
+    friend class CpuPersistence;
+
     void reset_session();
     void prefill_session(const std::vector<int32_t>& tokens);
     int32_t decode_session();
@@ -159,7 +164,6 @@ public:
     void set_session_generation(GenerationConfig generation);
     int session_position() const;
     bool session_ready_for_decode() const;
-
     std::vector<float> session_logits() const;
     RuntimeMetrics session_metrics() const;
     CpuPrefillProfile session_prefill_profile() const;
@@ -175,7 +179,6 @@ public:
     CpuPrefixSnapshot export_session_prefix() const;
     void restore_session_prefix(CpuPrefixSnapshot snapshot, bool ready_for_decode);
 
-private:
     struct Impl;
     explicit CpuModel(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;

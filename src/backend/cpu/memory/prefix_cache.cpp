@@ -1,4 +1,5 @@
 #include "lfm/backend/cpu/prefix_cache.hpp"
+#include "lfm/runtime/cache/page_lease.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -33,41 +34,37 @@ void CpuPrefixCacheManager::retain_snapshot(const CpuPrefixSnapshot& snapshot) {
     if (snapshot.attention_pages.size() != pools_.size()) {
         throw std::invalid_argument("CPU prefix snapshot layer count mismatch");
     }
-    size_t retained_layers = 0;
+    size_t retained_pages = 0;
+    for (const auto& pages : snapshot.attention_pages) retained_pages += pages.size();
+    std::vector<PageLease<CpuKvPageId>> leases;
+    leases.reserve(retained_pages);
     try {
-        for (; retained_layers < pools_.size(); ++retained_layers) {
-            for (CpuKvPageId page : snapshot.attention_pages[retained_layers]) {
-                pools_[retained_layers]->retain(page);
+        for (size_t layer = 0; layer < pools_.size(); ++layer) {
+            const auto pool = pools_[layer];
+            for (CpuKvPageId page : snapshot.attention_pages[layer]) {
+                pool->retain(page);
+                leases.emplace_back(
+                    std::vector<CpuKvPageId>{page},
+                    [pool](const std::vector<CpuKvPageId>& owned) {
+                        for (CpuKvPageId value : owned) pool->release(value);
+                    });
             }
         }
     } catch (...) {
-        for (size_t layer = 0; layer <= retained_layers && layer < pools_.size(); ++layer) {
-            for (CpuKvPageId page : snapshot.attention_pages[layer]) {
-                try {
-                    pools_[layer]->release(page);
-                } catch (const std::exception& error) {
-                    std::clog << "CPU prefix cache rollback failed: "
-                              << error.what() << '\n';
-                } catch (...) {
-                    std::clog << "CPU prefix cache rollback failed: unknown exception\n";
-                }
-            }
-        }
         throw;
     }
+    for (auto& lease : leases) lease.release_ownership();
 }
 
 void CpuPrefixCacheManager::release_snapshot(const CpuPrefixSnapshot& snapshot) noexcept {
     const size_t layers = std::min(snapshot.attention_pages.size(), pools_.size());
     for (size_t layer = 0; layer < layers; ++layer) {
         for (CpuKvPageId page : snapshot.attention_pages[layer]) {
-            try {
-                pools_[layer]->release(page);
-            } catch (const std::exception& error) {
-                std::clog << "CPU prefix cache release failed: " << error.what() << '\n';
-            } catch (...) {
-                std::clog << "CPU prefix cache release failed: unknown exception\n";
-            }
+            PageLease<CpuKvPageId> lease(
+                std::vector<CpuKvPageId>{page},
+                [pool = pools_[layer]](const std::vector<CpuKvPageId>& owned) {
+                    for (CpuKvPageId value : owned) pool->release(value);
+                });
         }
     }
 }
@@ -85,7 +82,7 @@ size_t CpuPrefixCacheManager::snapshot_resident_bytes(
 CpuPrefixCacheManager::Entry* CpuPrefixCacheManager::longest_entry(
     const std::vector<int32_t>& prompt, size_t* matched_tokens) {
     ++metrics_.radix_lookups;
-    const auto match = radix_.longest_prefix(prompt);
+    const auto match = index_.longest(prompt);
     if (!match) return nullptr;
     auto found = entries_.find(match->id);
     if (found == entries_.end()) {
@@ -146,36 +143,29 @@ std::optional<CpuPrefixMatch> CpuPrefixCacheManager::acquire(
     CpuPrefixMatch result;
     result.matched_tokens = matched;
     result.snapshot = clone_snapshot(entry->snapshot, matched, request_numa_node);
-    lru_index_.erase({entry->last_used, entry->id});
-    entry->last_used = ++clock_;
-    lru_index_.insert({entry->last_used, entry->id});
+    const auto indexed = index_.longest(prompt);
+    if (!indexed) throw std::runtime_error("CPU prefix index entry disappeared");
+    index_.touch(indexed->id);
     ++metrics_.hits;
     metrics_.reused_tokens += matched;
     if (matched != prompt.size()) ++metrics_.partial_hits;
     return result;
 }
 
-bool CpuPrefixCacheManager::evict_one(PrefixRadixIndex::EntryId protected_id) {
-    // O(log n) victim selection via the LRU index.
-    for (auto it = lru_index_.begin(); it != lru_index_.end(); ++it) {
-        if (it->second == protected_id) continue;
-        const auto id = it->second;
-        auto entry_it = entries_.find(id);
-        if (entry_it == entries_.end()) continue;
-        Entry* victim = entry_it->second.get();
-        lru_index_.erase(it);
-        const size_t bytes = victim->resident_bytes;
-        release_snapshot(victim->snapshot);
-        if (!radix_.erase(victim->prompt, id)) {
-            throw std::runtime_error("CPU prefix radix eviction lost its entry");
-        }
-        entries_.erase(id);
-        metrics_.resident_bytes = metrics_.resident_bytes > bytes
-            ? metrics_.resident_bytes - bytes : 0;
-        ++metrics_.evictions;
-        return true;
-    }
-    return false;
+bool CpuPrefixCacheManager::evict_one(PrefixCacheIndex::EntryId protected_id) {
+    const auto id = index_.oldest(protected_id);
+    if (!id) return false;
+    auto entry_it = entries_.find(*id);
+    if (entry_it == entries_.end()) throw std::runtime_error("CPU prefix index payload missing");
+    Entry* victim = entry_it->second.get();
+    const size_t bytes = victim->resident_bytes;
+    release_snapshot(victim->snapshot);
+    index_.erase(*id);
+    entries_.erase(*id);
+    metrics_.resident_bytes = metrics_.resident_bytes > bytes
+        ? metrics_.resident_bytes - bytes : 0;
+    ++metrics_.evictions;
+    return true;
 }
 
 bool CpuPrefixCacheManager::evict_one() { return evict_one(0); }
@@ -195,34 +185,24 @@ bool CpuPrefixCacheManager::insert(
         release_snapshot(existing->snapshot);
         existing->snapshot = std::move(replacement);
         existing->resident_bytes = replacement_bytes;
-        lru_index_.erase({existing->last_used, existing->id});
-        existing->last_used = ++clock_;
-        lru_index_.insert({existing->last_used, existing->id});
+        const auto indexed = index_.longest(prompt);
+        if (!indexed) throw std::runtime_error("CPU prefix index entry disappeared");
+        index_.touch(indexed->id);
         metrics_.resident_bytes = metrics_.resident_bytes - old_bytes + replacement_bytes;
         while (metrics_.resident_bytes > maximum_bytes_) {
-            if (!evict_one(existing->id)) break;
+            if (!evict_one(indexed->id)) break;
         }
         return true;
     }
-    if (next_id_ == std::numeric_limits<PrefixRadixIndex::EntryId>::max()) {
-        throw std::overflow_error("CPU prefix cache entry ID space exhausted");
-    }
     auto entry = std::make_unique<Entry>();
-    entry->id = next_id_++;
-    entry->prompt = prompt;
     entry->snapshot = clone_snapshot(
         request_snapshot, prompt.size(), request_snapshot.numa_node);
     entry->resident_bytes = snapshot_resident_bytes(entry->snapshot);
-    entry->last_used = ++clock_;
-    const auto id = entry->id;
-    const auto lru_key = std::pair{entry->last_used, id};
-    lru_index_.insert(lru_key);
-    radix_.insert(entry->prompt, id);
+    const auto id = index_.insert(prompt);
     try {
         entries_.emplace(id, std::move(entry));
     } catch (...) {
-        lru_index_.erase(lru_key);
-        radix_.erase(prompt, id);
+        index_.erase(id);
         throw;
     }
     metrics_.resident_bytes += entries_.at(id)->resident_bytes;
@@ -232,9 +212,8 @@ bool CpuPrefixCacheManager::insert(
             auto inserted = entries_.find(id);
             if (inserted != entries_.end()) {
                 const size_t bytes = inserted->second->resident_bytes;
-                lru_index_.erase({inserted->second->last_used, id});
                 release_snapshot(inserted->second->snapshot);
-                radix_.erase(inserted->second->prompt, id);
+                index_.erase(id);
                 entries_.erase(inserted);
                 metrics_.resident_bytes = metrics_.resident_bytes > bytes
                     ? metrics_.resident_bytes - bytes : 0;
@@ -248,8 +227,7 @@ bool CpuPrefixCacheManager::insert(
 void CpuPrefixCacheManager::clear() {
     for (auto& [_, entry] : entries_) release_snapshot(entry->snapshot);
     entries_.clear();
-    lru_index_.clear();
-    radix_.clear();
+    index_.clear();
     metrics_.resident_bytes = 0;
 }
 

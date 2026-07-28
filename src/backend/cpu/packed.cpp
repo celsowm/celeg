@@ -10,30 +10,13 @@
 
 namespace lfm {
 
-struct CpuModel::Impl::BatchScratch {
+struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
     using State = CpuModel::Impl;
     using SharedWeights = State::Shared;
     using LayerWeights = State::WeightLayer;
     using CommonWeights = State::CommonWeights;
     using AttentionWeights = State::AttentionWeights;
     using ConvolutionWeights = State::ConvolutionWeights;
-    void ensure(size_t batch, const ModelShape& shape) {
-        const size_t hidden_count = batch * shape.hidden;
-        const size_t qkv_count = batch * shape.qkv_width;
-        const size_t conv_count = batch * 3ULL * shape.hidden;
-        const size_t gate_count = batch * 2ULL * shape.intermediate;
-        const size_t intermediate_count = batch * shape.intermediate;
-        hidden.resize(hidden_count);
-        residual.resize(hidden_count);
-        normed.resize(hidden_count);
-        op_output.resize(hidden_count);
-        qkv.resize(qkv_count);
-        conv_projected.resize(conv_count);
-        gate_up.resize(gate_count);
-        activated.resize(intermediate_count);
-        mlp_output.resize(hidden_count);
-    }
-
     static void validate_shared(std::span<State* const> sessions) {
         if (sessions.empty()) throw std::invalid_argument("packed CPU batch is empty");
         const auto shared = sessions.front()->shared;
@@ -188,18 +171,6 @@ struct CpuModel::Impl::BatchScratch {
         }
     }
 
-    std::vector<float> hidden;
-    std::vector<float> residual;
-    std::vector<float> normed;
-    std::vector<float> op_output;
-    std::vector<float> qkv;
-    std::vector<float> conv_projected;
-    std::vector<float> gate_up;
-    std::vector<float> activated;
-    std::vector<float> mlp_output;
-    std::vector<size_t> terminal_rows;
-    std::vector<float> final_normed;
-    std::vector<float> final_logits;
 };
 
 void CpuModel::Impl::forward_batch(std::span<Impl* const> sessions,

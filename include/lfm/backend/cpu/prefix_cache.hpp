@@ -1,13 +1,12 @@
 #pragma once
 
 #include "lfm/backend/cpu/paged_kv.hpp"
-#include "lfm/runtime/cache/prefix_radix.hpp"
+#include "lfm/runtime/cache/prefix_cache_index.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -65,15 +64,12 @@ public:
     void clear();
 
     size_t size() const { return entries_.size(); }
-    size_t radix_nodes() const { return radix_.node_count(); }
+    size_t radix_nodes() const { return index_.radix_nodes(); }
     const CpuPrefixCacheMetrics& metrics() const { return metrics_; }
 
 private:
     struct Entry {
-        PrefixRadixIndex::EntryId id = 0;
-        std::vector<int32_t> prompt;
         CpuPrefixSnapshot snapshot;
-        uint64_t last_used = 0;
         size_t resident_bytes = 0;
     };
 
@@ -85,18 +81,14 @@ private:
     Entry* exact_entry(const std::vector<int32_t>& prompt);
     Entry* longest_entry(const std::vector<int32_t>& prompt,
                          size_t* matched_tokens);
-    bool evict_one(PrefixRadixIndex::EntryId protected_id);
+    bool evict_one(PrefixCacheIndex::EntryId protected_id);
     size_t snapshot_resident_bytes(const CpuPrefixSnapshot& snapshot) const;
 
     std::vector<std::shared_ptr<CpuKvPagePool>> pools_;
     size_t maximum_entries_ = 0;
     size_t maximum_bytes_ = 0;
-    PrefixRadixIndex radix_;
-    std::unordered_map<PrefixRadixIndex::EntryId, std::unique_ptr<Entry>> entries_;
-    // LRU index: (last_used, id) ascending — begin() is the oldest.
-    std::set<std::pair<uint64_t, PrefixRadixIndex::EntryId>> lru_index_;
-    PrefixRadixIndex::EntryId next_id_ = 1;
-    uint64_t clock_ = 0;
+    PrefixCacheIndex index_;
+    std::unordered_map<PrefixCacheIndex::EntryId, std::unique_ptr<Entry>> entries_;
     CpuPrefixCacheMetrics metrics_;
 };
 

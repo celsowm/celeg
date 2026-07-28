@@ -18,6 +18,7 @@ set(LFM_BASE_RUNTIME_SOURCES
     src/text/chat_template.cpp
     src/runtime/cache/pinned_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp
+    src/runtime/cache/prefix_cache_index.cpp
     src/runtime/cache/prefix_cache.cpp
     src/runtime/concurrency/policy.cpp
     src/runtime/concurrency/metrics.cpp

@@ -18,7 +18,32 @@
 
 namespace lfm {
 
-struct CpuModel::Impl {
+// Capacity-managed activation storage shared by all CPU execution modes.
+// The executor chooses the row count; buffers are retained between calls.
+struct CpuExecutionWorkspace {
+    void ensure(size_t rows, const ModelShape& shape) {
+        hidden.resize(rows * shape.hidden);
+        residual.resize(rows * shape.hidden);
+        normed.resize(rows * shape.hidden);
+        op_output.resize(rows * shape.hidden);
+        qkv.resize(rows * shape.qkv_width);
+        conv_projected.resize(rows * 3ULL * shape.hidden);
+        gate_up.resize(rows * 2ULL * shape.intermediate);
+        activated.resize(rows * shape.intermediate);
+        mlp_output.resize(rows * shape.hidden);
+    }
+
+    std::vector<float> hidden, residual, normed, op_output, qkv;
+    std::vector<float> conv_projected, gate_up, activated, mlp_output;
+    std::vector<float> logits;
+    std::vector<float> chunk_hidden, chunk_residual, chunk_normed, chunk_op;
+    std::vector<float> chunk_qkv, chunk_conv, chunk_gate_up;
+    std::vector<float> chunk_activated, chunk_mlp;
+    std::vector<float> final_normed, final_logits;
+    std::vector<size_t> terminal_rows;
+};
+
+struct CpuModel::Impl : CpuExecutionWorkspace {
     struct BatchScratch;
     struct CommonWeights {
         std::vector<float> operator_norm;
@@ -138,28 +163,7 @@ struct CpuModel::Impl {
     GenerationConfig generation;
     std::vector<LayerState> states;
 
-    std::vector<float> hidden;
-    std::vector<float> residual;
-    std::vector<float> normed;
-    std::vector<float> op_output;
-    std::vector<float> qkv;
-    std::vector<float> conv_projected;
-    std::vector<float> gate_up;
-    std::vector<float> activated;
-    std::vector<float> mlp_output;
-    std::vector<float> logits;
     std::vector<uint8_t> seen;
-
-    // Lazily sized and reused by layer-major single-prompt prefill.
-    std::vector<float> chunk_hidden;
-    std::vector<float> chunk_residual;
-    std::vector<float> chunk_normed;
-    std::vector<float> chunk_op;
-    std::vector<float> chunk_qkv;
-    std::vector<float> chunk_conv;
-    std::vector<float> chunk_gate_up;
-    std::vector<float> chunk_activated;
-    std::vector<float> chunk_mlp;
 
     int position_value = 0;
     int preferred_numa_node = -1;

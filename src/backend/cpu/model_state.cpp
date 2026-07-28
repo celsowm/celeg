@@ -48,15 +48,7 @@ void CpuModel::Impl::allocate_state() {
 }
 
 void CpuModel::Impl::allocate_activations() {
-    hidden.resize(shared->shape.hidden);
-    residual.resize(shared->shape.hidden);
-    normed.resize(shared->shape.hidden);
-    op_output.resize(shared->shape.hidden);
-    qkv.resize(shared->shape.qkv_width);
-    conv_projected.resize(3 * shared->shape.hidden);
-    gate_up.resize(2 * shared->shape.intermediate);
-    activated.resize(shared->shape.intermediate);
-    mlp_output.resize(shared->shape.hidden);
+    ensure(1, shared->shape);
     logits.resize(shared->shape.vocab_size);
     seen.resize(shared->shape.vocab_size);
 }

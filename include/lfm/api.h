@@ -45,7 +45,7 @@ typedef struct lfm25_generation_options {
     uint64_t seed;
 } lfm25_generation_options;
 
-typedef struct lfm25_cpu_model_options {
+typedef struct lfm25_cpu_model_config {
     int32_t threads;
     int32_t isa;
     int32_t q4_group_size;
@@ -59,7 +59,7 @@ typedef struct lfm25_cpu_model_options {
     uint32_t attention_parallel_threshold;
     uint32_t attention_page_tile;
     int32_t numa_mode;
-} lfm25_cpu_model_options;
+} lfm25_cpu_model_config;
 
 typedef struct lfm25_cuda_model_options {
     uint32_t flags;
@@ -73,13 +73,20 @@ typedef struct lfm25_cuda_model_options {
     int32_t lt_heuristics;
 } lfm25_cuda_model_options;
 
-typedef struct lfm25_model_options {
+typedef struct lfm25_engine_model_options {
     uint32_t struct_size;
     lfm25_backend backend;
     int32_t max_context;
-    union { lfm25_cpu_model_options cpu; lfm25_cuda_model_options cuda; } backend_options;
+    union { lfm25_cpu_model_config cpu; lfm25_cuda_model_options cuda; } backend_options;
     lfm25_generation_options generation;
-} lfm25_model_options;
+} lfm25_engine_model_options;
+
+typedef struct lfm25_cpu_model_options {
+    uint32_t struct_size;
+    int32_t max_context;
+    lfm25_cpu_model_config cpu;
+    lfm25_generation_options generation;
+} lfm25_cpu_model_options;
 
 typedef struct lfm25_cpu_engine_options {
     uint32_t max_active_requests;
@@ -107,7 +114,7 @@ typedef struct lfm25_engine_options {
     uint32_t struct_size;
     lfm25_backend backend;
     union { lfm25_cpu_engine_options cpu; lfm25_cuda_engine_options cuda; } backend_options;
-    lfm25_model_options model;
+    lfm25_engine_model_options model;
 } lfm25_engine_options;
 
 typedef struct lfm25_request_options {
@@ -126,12 +133,12 @@ typedef struct lfm25_runtime_metrics {
     uint64_t decode_tokens;
 } lfm25_runtime_metrics;
 
-LFM25_API void lfm25_model_options_init(lfm25_model_options* options, lfm25_backend backend);
+LFM25_API void lfm25_cpu_model_options_init(lfm25_cpu_model_options* options);
 LFM25_API void lfm25_engine_options_init(lfm25_engine_options* options, lfm25_backend backend);
 LFM25_API void lfm25_request_options_init(lfm25_request_options* options);
 LFM25_API const char* lfm25_backend_capabilities(lfm25_backend backend);
 
-LFM25_API lfm25_model* lfm25_model_create(const char* path, const lfm25_model_options* options);
+LFM25_API lfm25_model* lfm25_model_create(const char* path, const lfm25_cpu_model_options* options);
 LFM25_API void lfm25_model_destroy(lfm25_model* model);
 LFM25_API lfm25_status lfm25_model_prefill(lfm25_model* model, const int32_t* tokens, size_t count);
 LFM25_API lfm25_status lfm25_model_decode(lfm25_model* model, int32_t* token);

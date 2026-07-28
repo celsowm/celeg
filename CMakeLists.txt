@@ -45,6 +45,29 @@ include(cmake/sources/api.cmake)
 include(cmake/sources/apps.cmake)
 include(cmake/sources/tests.cmake)
 
+# Fail during a clean configure when a source manifest drifts from the
+# checkout. This is intentionally performed before any target is created so
+# the diagnostic names the broken manifest entry directly.
+foreach(_lfm_variable IN ITEMS
+        LFM_BASE_RUNTIME_SOURCES LFM_CPU_BACKEND_SOURCES
+        LFM_CUDA_BACKEND_SOURCES LFM_API_SOURCES)
+    foreach(_lfm_source IN LISTS ${_lfm_variable})
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_lfm_source}")
+            message(FATAL_ERROR
+                "${_lfm_variable} declares missing source: ${_lfm_source}")
+        endif()
+    endforeach()
+endforeach()
+
+file(GLOB_RECURSE _lfm_public_headers CONFIGURE_DEPENDS
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "include/lfm/*.h" "include/lfm/*.hpp" "include/lfm/*.cuh" "include/lfm/*.inl")
+foreach(_lfm_header IN LISTS _lfm_public_headers)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_lfm_header}")
+        message(FATAL_ERROR "Public header disappeared: ${_lfm_header}")
+    endif()
+endforeach()
+
 if(MSVC)
     add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/utf-8>)
     set(LFM_MSVC_SHOWINCLUDES_PREFIX "" CACHE STRING
@@ -385,6 +408,9 @@ if(LFM_BUILD_TESTS)
     add_executable(prefix_radix_test tests/prefix_radix_test.cpp src/runtime/cache/prefix_radix.cpp)
     target_include_directories(prefix_radix_test PRIVATE include)
     add_test(NAME prefix_radix_test COMMAND prefix_radix_test)
+    add_executable(page_lease_test tests/page_lease_test.cpp)
+    target_include_directories(page_lease_test PRIVATE include)
+    add_test(NAME page_lease_test COMMAND page_lease_test)
     add_executable(api_header_test tests/api_header_test.c)
     target_include_directories(api_header_test PRIVATE include)
     add_test(NAME api_header_test COMMAND api_header_test)

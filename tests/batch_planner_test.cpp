@@ -27,5 +27,10 @@ int main() {
     LFM_TEST_CHECK((prefill == std::vector<int>{1, 0}));
     const auto decode = planner.order_decode(lanes);
     LFM_TEST_CHECK((decode == std::vector<int>{3, 2}));
+    const std::vector<lfm::detail::RequestPriorityView> requests = {
+        {10, 1}, {11, 7}, {12, 7},
+    };
+    LFM_TEST_CHECK((planner.order_priority(requests) ==
+                    std::vector<size_t>{1, 2, 0}));
     std::cout << "batch_planner_test: ok\n";
 }

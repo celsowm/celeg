@@ -1,14 +1,13 @@
 #pragma once
 
 #include "lfm/runtime/cache/kv_page_allocator.hpp"
-#include "lfm/runtime/cache/prefix_radix.hpp"
+#include "lfm/runtime/cache/prefix_cache_index.hpp"
 #include "lfm/model/execution/runtime_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -65,16 +64,13 @@ public:
 
     bool enabled() const { return enabled_; }
     size_t size() const { return entries_.size(); }
-    size_t radix_nodes() const { return radix_.node_count(); }
+    size_t radix_nodes() const { return index_.radix_nodes(); }
     const PrefixCacheMetrics& metrics() const { return metrics_; }
 
 private:
     struct Entry {
-        PrefixRadixIndex::EntryId id = 0;
-        std::vector<int32_t> prompt;
         std::vector<uint32_t> pages;
         std::shared_ptr<const PrefixState> state;
-        uint64_t last_used = 0;
     };
 
     Entry* exact_entry(const std::vector<int32_t>& prompt);
@@ -82,19 +78,15 @@ private:
                          size_t* matched_tokens);
     std::optional<std::vector<uint32_t>> allocate_with_eviction(
         size_t token_count,
-        PrefixRadixIndex::EntryId protected_id = 0);
-    bool evict_one(PrefixRadixIndex::EntryId protected_id);
+        PrefixCacheIndex::EntryId protected_id = 0);
+    bool evict_one(PrefixCacheIndex::EntryId protected_id);
     void record_cow(size_t used_tokens);
 
     IKvPageAllocator& pages_;
     bool enabled_ = false;
     size_t maximum_entries_ = 0;
-    PrefixRadixIndex radix_;
-    std::unordered_map<PrefixRadixIndex::EntryId, std::unique_ptr<Entry>> entries_;
-    // LRU index: (last_used, id) ascending — begin() is the oldest.
-    std::set<std::pair<uint64_t, PrefixRadixIndex::EntryId>> lru_index_;
-    PrefixRadixIndex::EntryId next_id_ = 1;
-    uint64_t clock_ = 0;
+    PrefixCacheIndex index_;
+    std::unordered_map<PrefixCacheIndex::EntryId, std::unique_ptr<Entry>> entries_;
     PrefixCacheMetrics metrics_;
 };
 

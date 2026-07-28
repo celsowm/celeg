@@ -2,15 +2,15 @@
 
 #include "lfm/backend/cpu/prefix_cache.hpp"
 #include "lfm/backend/cpu/numa.hpp"
+#include "lfm/detail/runtime/concurrency/worker.hpp"
+#include "lfm/detail/runtime/concurrency/batch_planner.hpp"
 
 #include <algorithm>
 #include <chrono>
-#include <condition_variable>
 #include <deque>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -106,7 +106,7 @@ struct CpuConcurrentEngine::Impl {
         }
         // Start only after validation, so constructor failure cannot destroy a
         // joinable std::thread during stack unwinding.
-        worker = std::thread([this] { worker_loop(); });
+        engine_worker.start([this] { return worker_step(); }, 1000);
     }
 
     ~Impl() {
@@ -115,8 +115,7 @@ struct CpuConcurrentEngine::Impl {
             stopping = true;
             running = false;
         }
-        condition.notify_all();
-        if (worker.joinable()) worker.join();
+        engine_worker.stop();
     }
 
     size_t active_count_locked() const {
@@ -199,12 +198,16 @@ struct CpuConcurrentEngine::Impl {
             (void)id;
             if (request->status == CpuRequestStatus::Queued) queued.push_back(request);
         }
-        std::stable_sort(queued.begin(), queued.end(), [](const auto& a, const auto& b) {
-            if (a->options.priority != b->options.priority) {
-                return a->options.priority > b->options.priority;
-            }
-            return a->sequence < b->sequence;
-        });
+        std::vector<detail::RequestPriorityView> queued_views;
+        queued_views.reserve(queued.size());
+        for (const auto& request : queued) {
+            queued_views.push_back({request->id, request->options.priority});
+        }
+        const auto queued_order = planner.order_priority(queued_views);
+        std::vector<std::shared_ptr<Request>> ordered_queued;
+        ordered_queued.reserve(queued.size());
+        for (const size_t index : queued_order) ordered_queued.push_back(queued[index]);
+        queued = std::move(ordered_queued);
         for (const auto& request : queued) {
             if (available == 0) break;
             try {
@@ -240,12 +243,16 @@ struct CpuConcurrentEngine::Impl {
             (void)id;
             if (request->status == CpuRequestStatus::Decoding) result.push_back(request);
         }
-        std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
-            if (a->options.priority != b->options.priority) {
-                return a->options.priority > b->options.priority;
-            }
-            return a->sequence < b->sequence;
-        });
+        std::vector<detail::RequestPriorityView> views;
+        views.reserve(result.size());
+        for (const auto& request : result) {
+            views.push_back({request->id, request->options.priority});
+        }
+        const auto order = planner.order_priority(views);
+        std::vector<std::shared_ptr<Request>> ordered;
+        ordered.reserve(result.size());
+        for (const size_t index : order) ordered.push_back(result[index]);
+        result = std::move(ordered);
         if (result.size() > limit) result.resize(limit);
         return result;
     }
@@ -259,12 +266,16 @@ struct CpuConcurrentEngine::Impl {
                 result.push_back(request);
             }
         }
-        std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
-            if (a->options.priority != b->options.priority) {
-                return a->options.priority > b->options.priority;
-            }
-            return a->sequence < b->sequence;
-        });
+        std::vector<detail::RequestPriorityView> views;
+        views.reserve(result.size());
+        for (const auto& request : result) {
+            views.push_back({request->id, request->options.priority});
+        }
+        const auto order = planner.order_priority(views);
+        std::vector<std::shared_ptr<Request>> ordered;
+        ordered.reserve(result.size());
+        for (const size_t index : order) ordered.push_back(result[index]);
+        result = std::move(ordered);
         if (result.size() > limit) result.resize(limit);
         return result;
     }
@@ -473,21 +484,12 @@ struct CpuConcurrentEngine::Impl {
         return progressed;
     }
 
-    void worker_loop() {
-        std::unique_lock lock(mutex);
-        while (!stopping) {
-            condition.wait(lock, [&] {
-                return stopping || (running && (queued_count_locked() > 0 ||
-                    active_count_locked() > 0));
-            });
-            if (stopping) break;
-            lock.unlock();
-            const bool progressed = step_once();
-            lock.lock();
-            if (!progressed && !stopping) {
-                condition.wait_for(lock, std::chrono::milliseconds(1));
-            }
+    bool worker_step() {
+        {
+            std::lock_guard lock(mutex);
+            if (!running || stopping) return false;
         }
+        return step_once();
     }
 
     int max_context = 0;
@@ -497,10 +499,10 @@ struct CpuConcurrentEngine::Impl {
     size_t next_numa_node = 0;
     CpuModel base_model;
     std::unique_ptr<CpuPrefixCacheManager> prefix_cache;
+    detail::BatchPlanner planner;
 
     mutable std::mutex mutex;
     std::mutex execution_mutex;
-    std::condition_variable condition;
     std::unordered_map<CpuRequestId, std::shared_ptr<Request>> requests;
     CpuRequestId next_id = 1;
     uint64_t next_sequence = 1;
@@ -508,7 +510,7 @@ struct CpuConcurrentEngine::Impl {
     std::string last_error_text;
     bool running = false;
     bool stopping = false;
-    std::thread worker;
+    detail::EngineWorker engine_worker;
 };
 
 CpuConcurrentEngine::CpuConcurrentEngine(
@@ -547,7 +549,7 @@ CpuRequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
         ++impl_->metrics.submitted_requests;
         impl_->refresh_counts_locked();
     }
-    impl_->condition.notify_all();
+    impl_->engine_worker.notify();
     return request->id;
 }
 
@@ -608,7 +610,7 @@ void CpuConcurrentEngine::start() {
         std::lock_guard lock(impl_->mutex);
         impl_->running = true;
     }
-    impl_->condition.notify_all();
+    impl_->engine_worker.notify();
 }
 
 void CpuConcurrentEngine::stop() {

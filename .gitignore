@@ -11,10 +11,13 @@ out.txt
 # cache downloader (src/download_main.cpp). Do not commit them.
 model/
 
+# The CUDA model implementation is source code, not a checkpoint directory.
+!src/backend/cuda/model/
+!src/backend/cuda/model/**
+
 # Third-party sources cloned/built locally for reference benchmarking
 # (e.g. llama.cpp). Never committed. Benchmark model weights are not stored
 # under benchmarks/ at all -- both engines read from the user's default HF
 # hub cache (see benchmarks/run_bench.py).
 .externals/
 benchmarks/results/
-

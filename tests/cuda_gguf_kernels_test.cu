@@ -1,4 +1,5 @@
 #include "lfm/backend/cuda/kernels/gguf.cuh"
+#include "lfm/backend/cuda/gemm_dispatcher.hpp"
 #include "lfm/backend/cuda/utils.cuh"
 #include "lfm/detail/checkpoint/bootstrap.hpp"
 #include "lfm/model/model.hpp"
@@ -76,6 +77,37 @@ int main() {
     std::vector<__nv_bfloat16> gemm_y(2);
     check(cudaMemcpy(gemm_y.data(), d_y, 2 * sizeof(y), cudaMemcpyDeviceToHost), "copy y gemm");
     if (!close(host_bf16(gemm_y[0]), 512.0f) || !close(host_bf16(gemm_y[1]), 512.0f)) return 4;
+
+    // Exercise the dispatcher with disjoint GGUF segments. Every segment
+    // owns a separate output range, so each must receive the caller's beta.
+    lfm::ModelOptions dispatcher_options;
+    lfm::GemmDispatcher dispatcher(nullptr, dispatcher_options);
+    lfm::LinearWeight segmented;
+    segmented.kind = lfm::LinearStorageKind::Q4_K;
+    segmented.rows = 2;
+    segmented.cols = k;
+    segmented.gguf_segments = {
+        {d_q4, lfm::GgmlType::Q4_K, 0, 1, k, q4_bytes},
+        {d_q6, lfm::GgmlType::Q6_K, 1, 1, k, q6_bytes},
+    };
+    const lfm::ExecutionPlan dispatcher_plan =
+        lfm::ExecutionPlan::compile(dispatcher_options, 1024);
+    std::vector<__nv_bfloat16> segmented_y(2, __float2bfloat16(9.0f));
+    check(cudaMemcpy(d_y, segmented_y.data(), 2 * sizeof(*d_y),
+                     cudaMemcpyHostToDevice), "copy segmented y");
+    dispatcher.linear(d_x, segmented, d_y, 1, 2, k, 0.0f, dispatcher_plan);
+    check(cudaMemcpy(segmented_y.data(), d_y, 2 * sizeof(*d_y),
+                     cudaMemcpyDeviceToHost), "copy segmented result");
+    if (!close(host_bf16(segmented_y[0]), 512.0f) ||
+        !close(host_bf16(segmented_y[1]), 0.0f)) return 9;
+    segmented_y.assign(2, __float2bfloat16(3.0f));
+    check(cudaMemcpy(d_y, segmented_y.data(), 2 * sizeof(*d_y),
+                     cudaMemcpyHostToDevice), "copy segmented beta y");
+    dispatcher.linear(d_x, segmented, d_y, 1, 2, k, 2.0f, dispatcher_plan);
+    check(cudaMemcpy(segmented_y.data(), d_y, 2 * sizeof(*d_y),
+                     cudaMemcpyDeviceToHost), "copy segmented beta result");
+    if (!close(host_bf16(segmented_y[0]), 518.0f) ||
+        !close(host_bf16(segmented_y[1]), 6.0f)) return 10;
 
     lfm::GgufLinearSegment segment{d_q4, lfm::GgmlType::Q4_K, 0, 1, k, q4_bytes};
     __nv_bfloat16* d_embed = nullptr;
