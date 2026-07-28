@@ -70,6 +70,39 @@ LFM_GGUF_AVX2_TARGET int horizontal_sum(__m256i values) {
     return _mm_cvtsi128_si32(sum);
 }
 
+LFM_GGUF_AVX2_TARGET int horizontal_sum_128(__m128i values) {
+    values = _mm_hadd_epi32(values, values);
+    values = _mm_hadd_epi32(values, values);
+    return _mm_cvtsi128_si32(values);
+}
+
+// Dot 32 unsigned 4/6-bit values against signed Q8_K values.  Keeping the
+// packed values in bytes is important: expanding every element to epi32
+// costs several times more instructions than the maddubs/madd pair used by
+// ggml's AVX2 kernels.
+LFM_GGUF_AVX2_TARGET int dot_u8_i8_32(const uint8_t* weights,
+                                      const int8_t* activation,
+                                      bool high_nibble) {
+    const __m256i packed = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(weights));
+    const __m256i mask = _mm256_set1_epi8(15);
+    const __m256i unpacked = high_nibble
+        ? _mm256_and_si256(_mm256_srli_epi16(packed, 4), mask)
+        : _mm256_and_si256(packed, mask);
+    const __m256i x = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(activation));
+    const __m256i pair = _mm256_maddubs_epi16(unpacked, x);
+    return horizontal_sum(_mm256_madd_epi16(pair, _mm256_set1_epi16(1)));
+}
+
+LFM_GGUF_AVX2_TARGET int dot_u8_i8_16(const uint8_t* weights,
+                                      const int8_t* activation) {
+    const __m128i w = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights));
+    const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(activation));
+    const __m128i pair = _mm_maddubs_epi16(w, x);
+    return horizontal_sum_128(_mm_madd_epi16(pair, _mm_set1_epi16(1)));
+}
+
 LFM_GGUF_AVX2_TARGET int dot_i8_u4(const int8_t* activation,
                                   const uint8_t* packed,
                                   bool high_nibble) {
@@ -173,9 +206,9 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
                 scale_min(weight, sub, scale, minimum);
-                const int dot = dot_i8_u4(
-                    x.qs.data() + sub * 32,
-                    weight.qs + (sub >> 1) * 32, (sub & 1) != 0);
+                const int dot = dot_u8_i8_32(
+                    weight.qs + (sub >> 1) * 32,
+                    x.qs.data() + sub * 32, (sub & 1) != 0);
                 const int sum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
                 block_total += d * static_cast<float>(scale * dot) -
                                dmin * static_cast<float>(minimum * sum);
@@ -186,30 +219,50 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
     }
     if (type == GgmlType::Q6_K) {
         const auto* weights = reinterpret_cast<const BlockQ6K*>(packed_row);
-        alignas(16) int8_t decoded[16];
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ6K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
             int block_total = 0;
-            for (int sub = 0; sub < 16; ++sub) {
-                for (int i = 0; i < 16; ++i) {
-                    decoded[i] = static_cast<int8_t>(
-                        q6_value(weight, sub * 16 + i) - 32);
+            const __m256i m3 = _mm256_set1_epi8(3);
+            const __m256i m12 = _mm256_set1_epi8(12);
+            const __m256i m48 = _mm256_set1_epi8(48);
+            const __m256i mhi = _mm256_set1_epi8(static_cast<char>(0xc0));
+            const __m256i m15 = _mm256_set1_epi8(15);
+            for (int half = 0; half < 2; ++half) {
+                const uint8_t* ql = weight.ql + half * 64;
+                const uint8_t* qh = weight.qh + half * 32;
+                const int8_t* q8 = x.qs.data() + half * 128;
+                const __m256i low = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(ql));
+                const __m256i high = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(ql + 32));
+                const __m256i bits = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(qh));
+                const __m256i q0 = _mm256_or_si256(
+                    _mm256_and_si256(low, m15),
+                    _mm256_slli_epi16(_mm256_and_si256(bits, m3), 4));
+                const __m256i q1 = _mm256_or_si256(
+                    _mm256_and_si256(high, m15),
+                    _mm256_slli_epi16(_mm256_and_si256(bits, m12), 2));
+                const __m256i q2 = _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16(low, 4), m15),
+                    _mm256_and_si256(bits, m48));
+                const __m256i q3 = _mm256_or_si256(
+                    _mm256_and_si256(_mm256_srli_epi16(high, 4), m15),
+                    _mm256_srli_epi16(_mm256_and_si256(bits, mhi), 2));
+                alignas(32) uint8_t decoded[4][32];
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[0]), q0);
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[1]), q1);
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[2]), q2);
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[3]), q3);
+                for (int group = 0; group < 8; ++group) {
+                    const int sub = half * 8 + group;
+                    const int lane = group >> 1;
+                    const uint8_t* values = decoded[lane] + (group & 1) * 16;
+                    const int dot = dot_u8_i8_16(values, q8 + group * 16) -
+                        32 * (x.bsums[sub]);
+                    block_total += static_cast<int>(weight.scales[sub]) * dot;
                 }
-                __m256i dot = _mm256_setzero_si256();
-                for (int i = 0; i < 16; i += 8) {
-                    const __m128i q8 = _mm_loadl_epi64(
-                        reinterpret_cast<const __m128i*>(decoded + i));
-                    const __m128i x8 = _mm_loadl_epi64(
-                        reinterpret_cast<const __m128i*>(
-                            x.qs.data() + sub * 16 + i));
-                    dot = _mm256_add_epi32(
-                        dot, _mm256_mullo_epi32(
-                            _mm256_cvtepi8_epi32(q8),
-                            _mm256_cvtepi8_epi32(x8)));
-                }
-                block_total += static_cast<int>(weight.scales[sub]) *
-                               horizontal_sum(dot);
             }
             total += fp16_to_float(weight.d) * x.d *
                      static_cast<float>(block_total);

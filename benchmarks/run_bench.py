@@ -236,11 +236,34 @@ def load_row(path: Path) -> dict:
 def git_commit(repo: Path) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True)
+        capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        # Some Windows developer-shell wrappers terminate git after emitting
+        # its answer.  Read HEAD directly so the report still records the
+        # commit instead of silently losing provenance.
+        head = repo / ".git" / "HEAD"
+        try:
+            value = head.read_text(encoding="utf-8").strip()
+            if value.startswith("ref: "):
+                ref = value[5:]
+                ref_path = repo / ".git" / ref
+                if ref_path.is_file():
+                    value = ref_path.read_text(encoding="utf-8").strip()
+                else:
+                    packed = repo / ".git" / "packed-refs"
+                    for line in packed.read_text(encoding="utf-8").splitlines():
+                        if line and not line.startswith("#"):
+                            commit, name = line.split(" ", 1)
+                            if name == ref:
+                                value = commit
+                                break
+            return value + "+dirty"
+        except (OSError, ValueError):
+            return "unknown"
     commit = result.stdout.strip()
     dirty = subprocess.run(
         ["git", "-C", str(repo), "status", "--porcelain"],
-        capture_output=True, text=True, check=True).stdout.strip()
+        capture_output=True, text=True, check=False).stdout.strip()
     return commit + ("+dirty" if dirty else "")
 
 
