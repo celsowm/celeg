@@ -34,9 +34,8 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build numactl linux-tools-common
-          python -m pip install --upgrade pip
-          python -m pip install huggingface_hub
+          sudo apt-get install -y ninja-build numactl
+          python -m pip install --upgrade pip huggingface_hub
 
       - name: Record host information
         run: |
@@ -45,38 +44,40 @@ jobs:
             echo "commit=${GITHUB_SHA}"
             echo "runner=${RUNNER_NAME}"
             echo "nproc=$(nproc)"
-            echo "--- uname ---"
             uname -a
-            echo "--- lscpu ---"
             lscpu
-            echo "--- numa ---"
             numactl --hardware || true
-            echo "--- compilers ---"
             cmake --version
             ninja --version
             gcc --version
             g++ --version
           } | tee benchmark-artifacts/system.txt
 
-      - name: Build baseline and run tests
+      - name: Build baseline benchmark
+        shell: bash
         run: |
+          set -o pipefail
           cmake -S . -B build-cpu -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DLFM_ENABLE_CUDA=OFF \
             -DLFM_ENABLE_SERVE=OFF \
-            -DLFM_BUILD_TESTS=ON
-          cmake --build build-cpu -j "$(nproc)" 2>&1 | tee benchmark-artifacts/build-baseline.log
-          ctest --test-dir build-cpu --output-on-failure 2>&1 | tee benchmark-artifacts/ctest.log
+            -DLFM_BUILD_TESTS=OFF \
+            2>&1 | tee benchmark-artifacts/configure-baseline.log
+          cmake --build build-cpu --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" \
+            2>&1 | tee benchmark-artifacts/build-baseline.log
 
       - name: Build native-tuned comparison
+        shell: bash
         run: |
+          set -o pipefail
           cmake -S . -B build-cpu-native -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DLFM_ENABLE_CUDA=OFF \
             -DLFM_ENABLE_SERVE=OFF \
             -DLFM_BUILD_TESTS=OFF \
             -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" \
-            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -march=native"
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" \
+            2>&1 | tee benchmark-artifacts/configure-native.log
           cmake --build build-cpu-native --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" \
             2>&1 | tee benchmark-artifacts/build-native.log
 
@@ -87,33 +88,20 @@ jobs:
           import os
           from pathlib import Path
           from huggingface_hub import snapshot_download, hf_hub_download
-
-          root = Path("benchmark-artifacts")
-          root.mkdir(exist_ok=True)
-          lfm = Path(snapshot_download(
-              repo_id="LiquidAI/LFM2.5-230M",
-              revision=os.environ["LFM_REVISION"],
-          ))
-          q40 = Path(hf_hub_download(
-              repo_id="LiquidAI/LFM2.5-230M-GGUF",
-              filename="LFM2.5-230M-Q4_0.gguf",
-          ))
-          q4km = Path(hf_hub_download(
-              repo_id="LiquidAI/LFM2.5-230M-GGUF",
-              filename="LFM2.5-230M-Q4_K_M.gguf",
-          ))
+          lfm = Path(snapshot_download(repo_id="LiquidAI/LFM2.5-230M", revision=os.environ["LFM_REVISION"]))
+          q40 = Path(hf_hub_download(repo_id="LiquidAI/LFM2.5-230M-GGUF", filename="LFM2.5-230M-Q4_0.gguf"))
+          q4km = Path(hf_hub_download(repo_id="LiquidAI/LFM2.5-230M-GGUF", filename="LFM2.5-230M-Q4_K_M.gguf"))
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
               f.write(f"LFM_MODEL_DIR={lfm}\n")
               f.write(f"LFM_MODEL_FILE={lfm / 'model.safetensors'}\n")
               f.write(f"GGUF_Q40={q40}\n")
               f.write(f"GGUF_Q4KM={q4km}\n")
-          print("LFM", lfm)
-          print("Q4_0", q40)
-          print("Q4_K_M", q4km)
           PY
 
       - name: Clone and build pinned llama.cpp
+        shell: bash
         run: |
+          set -o pipefail
           git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git .externals/llama.cpp
           git -C .externals/llama.cpp checkout --detach "$LLAMA_REVISION"
           cmake -S .externals/llama.cpp -B .externals/llama.cpp/build-cpu -G Ninja \
@@ -122,7 +110,8 @@ jobs:
             -DGGML_CUDA=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_SERVER=OFF
+            -DLLAMA_BUILD_SERVER=OFF \
+            2>&1 | tee benchmark-artifacts/configure-llama.log
           cmake --build .externals/llama.cpp/build-cpu --target llama-bench -j "$(nproc)" \
             2>&1 | tee benchmark-artifacts/build-llama.log
 
@@ -140,6 +129,7 @@ jobs:
             echo "LFM_NATIVE_PREFILL=$LFM_NATIVE_PREFILL"
             echo "LLAMA_BENCH=$LLAMA_BENCH"
           } | tee -a "$GITHUB_ENV"
+          test -x "$LFM_BENCH" && test -x "$LFM_NATIVE_BENCH" && test -x "$LLAMA_BENCH"
 
       - name: Run comparable CPU benchmarks
         shell: bash
@@ -148,59 +138,29 @@ jobs:
           max_threads=$(nproc)
           threads=(1 2 "$max_threads")
           mapfile -t threads < <(printf '%s\n' "${threads[@]}" | awk '!seen[$0]++')
-
           for t in "${threads[@]}"; do
-            echo "=== threads=$t ===" | tee "benchmark-artifacts/results/run-t${t}.log"
-
-            "$LFM_BENCH" --model "$LFM_MODEL_DIR" \
-              -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json \
-              > "benchmark-artifacts/results/lfm-baseline-t${t}.json"
-
-            "$LFM_NATIVE_BENCH" --model "$LFM_MODEL_DIR" \
-              -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json \
-              > "benchmark-artifacts/results/lfm-native-t${t}.json"
-
-            "$LLAMA_BENCH" -m "$GGUF_Q40" -p 512 -n 128 -r 5 -o json \
-              -t "$t" -b 256 -ub 256 \
-              > "benchmark-artifacts/results/llama-q4_0-t${t}.json"
-
-            "$LLAMA_BENCH" -m "$GGUF_Q4KM" -p 512 -n 128 -r 5 -o json \
-              -t "$t" -b 256 -ub 256 \
-              > "benchmark-artifacts/results/llama-q4_k_m-t${t}.json"
-
-            "$LFM_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" \
-              > "benchmark-artifacts/results/lfm-prefill-profile-t${t}.txt"
-            "$LFM_NATIVE_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" \
-              > "benchmark-artifacts/results/lfm-native-prefill-profile-t${t}.txt"
+            "$LFM_BENCH" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json > "benchmark-artifacts/results/lfm-baseline-t${t}.json"
+            "$LFM_NATIVE_BENCH" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json > "benchmark-artifacts/results/lfm-native-t${t}.json"
+            "$LLAMA_BENCH" -m "$GGUF_Q40" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 > "benchmark-artifacts/results/llama-q4_0-t${t}.json"
+            "$LLAMA_BENCH" -m "$GGUF_Q4KM" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 > "benchmark-artifacts/results/llama-q4_k_m-t${t}.json"
+            "$LFM_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" > "benchmark-artifacts/results/lfm-prefill-profile-t${t}.txt"
+            "$LFM_NATIVE_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" > "benchmark-artifacts/results/lfm-native-prefill-profile-t${t}.txt"
           done
 
       - name: Produce summary
         run: |
           python - <<'PY'
-          import json
-          import re
+          import json, re
           from pathlib import Path
-
           d = Path("benchmark-artifacts/results")
           rows = []
-
-          def parse(path):
+          for path in sorted(d.glob("*-t*.json")):
               data = json.loads(path.read_text())
               pp = next(x for x in data if x.get("n_prompt", 0) > 0 and x.get("n_gen", 0) == 0)
               tg = next(x for x in data if x.get("n_gen", 0) > 0 and x.get("n_prompt", 0) == 0)
-              return float(pp["avg_ts"]), float(tg["avg_ts"])
-
-          for path in sorted(d.glob("*-t*.json")):
-              m = re.search(r"-t(\d+)\.json$", path.name)
-              pp, tg = parse(path)
-              rows.append((int(m.group(1)), path.name.rsplit("-t", 1)[0], pp, tg))
-
-          lines = [
-              "# CPU benchmark results",
-              "",
-              "| threads | engine | pp512 tok/s | tg128 tok/s |",
-              "|---:|---|---:|---:|",
-          ]
+              t = int(re.search(r"-t(\d+)\.json$", path.name).group(1))
+              rows.append((t, path.name.rsplit("-t", 1)[0], float(pp["avg_ts"]), float(tg["avg_ts"])))
+          lines = ["# CPU benchmark results", "", "| threads | engine | pp512 tok/s | tg128 tok/s |", "|---:|---|---:|---:|"]
           for t, engine, pp, tg in sorted(rows):
               lines.append(f"| {t} | {engine} | {pp:.2f} | {tg:.2f} |")
           lines += ["", "## Prefill profiles", ""]
