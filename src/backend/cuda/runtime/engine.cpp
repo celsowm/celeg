@@ -34,7 +34,7 @@ struct ConcurrentEngine::Impl {
         RequestId request_id = 0;
     };
 
-    Impl(std::string safetensors_path, int max_context,
+    Impl(std::string model_path, int max_context,
          ModelOptions model_options, ConcurrentEngineOptions engine_options);
     ~Impl();
 
@@ -60,7 +60,7 @@ private:
     Lane* find_free_lane_locked();
     std::vector<detail::LaneSnapshot> lane_snapshots_locked() const;
 
-    std::string safetensors_path_;
+    std::string model_path_;
     int max_context_;
     ModelOptions model_options_;
     ConcurrentEngineOptions engine_options_;
@@ -79,11 +79,11 @@ private:
     bool stopping_ = false;
 };
 
-ConcurrentEngine::Impl::Impl(std::string safetensors_path,
+ConcurrentEngine::Impl::Impl(std::string model_path,
                                    int max_context,
                                    ModelOptions model_options,
                                    ConcurrentEngineOptions engine_options)
-    : safetensors_path_(std::move(safetensors_path)),
+    : model_path_(std::move(model_path)),
       max_context_(max_context),
       model_options_(model_options),
       engine_options_(engine_options) {
@@ -117,7 +117,7 @@ ConcurrentEngine::Impl::Impl(std::string safetensors_path,
     // Load the model topology so the physical paged KV arena and the packed
     // executor can size per-attention-layer storage from the variant shape.
     shape_ = detail::load_model_bootstrap(
-        std::filesystem::path(safetensors_path_)).shape;
+        std::filesystem::path(model_path_)).shape;
     paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
         total_pages, engine_options_.page_tokens, max_context_,
         model_options_.kv_cache_mode, shape_);

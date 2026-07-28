@@ -11,7 +11,7 @@ namespace lfm::serve {
 
 class CudaInferenceService final : public IInferenceService {
 public:
-    CudaInferenceService(std::string safetensors_path,
+    CudaInferenceService(std::string model_path,
                          int max_context,
                          ModelOptions model_options = {},
                          ConcurrentEngineOptions engine_options = {});

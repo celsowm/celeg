@@ -1,8 +1,8 @@
-ConcurrentEngine::ConcurrentEngine(std::string safetensors_path,
+ConcurrentEngine::ConcurrentEngine(std::string model_path,
                                    int max_context,
                                    ModelOptions model_options,
                                    ConcurrentEngineOptions engine_options)
-    : impl_(std::make_unique<Impl>(std::move(safetensors_path), max_context,
+    : impl_(std::make_unique<Impl>(std::move(model_path), max_context,
                                    model_options, engine_options)) {}
 
 ConcurrentEngine::~ConcurrentEngine() = default;
@@ -32,6 +32,5 @@ ConcurrentMetrics ConcurrentEngine::metrics() const { return impl_->metrics(); }
 GroupedConcurrentMetrics ConcurrentEngine::grouped_metrics() const {
     return impl_->grouped_metrics();
 }
-
 
 

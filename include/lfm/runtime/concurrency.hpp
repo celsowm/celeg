@@ -50,7 +50,7 @@ class ConcurrentEngine {
 public:
     using RequestId = uint64_t;
 
-    ConcurrentEngine(std::string safetensors_path,
+    ConcurrentEngine(std::string model_path,
                      int max_context,
                      ModelOptions model_options = {},
                      ConcurrentEngineOptions engine_options = {});

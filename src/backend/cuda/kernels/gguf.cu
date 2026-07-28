@@ -110,7 +110,8 @@ template <typename BlockT, float (*ValueFn)(const BlockT*, int)>
 __global__ void gguf_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                  const uint8_t* __restrict__ blocks,
                                  __nv_bfloat16* __restrict__ y,
-                                 int m, int n, int k, float beta) {
+                                 int m, int n, int k, size_t row_bytes,
+                                 int output_stride, float beta) {
     constexpr int warps_per_block = 8;
     const int lane = threadIdx.x & 31;
     const int warp = threadIdx.x >> 5;
@@ -118,8 +119,6 @@ __global__ void gguf_gemv_kernel(const __nv_bfloat16* __restrict__ x,
     if (warp >= warps_per_block || output_row >= n) return;
 
     const int blocks_per_row = k / kSuperBlock;
-    const size_t row_bytes =
-        static_cast<size_t>(blocks_per_row) * sizeof(BlockT);
     const uint8_t* row_blocks =
         blocks + static_cast<size_t>(output_row) * row_bytes;
 
@@ -133,19 +132,102 @@ __global__ void gguf_gemv_kernel(const __nv_bfloat16* __restrict__ x,
             const BlockT* blk =
                 reinterpret_cast<const BlockT*>(row_blocks) + b;
             const int base = b * kSuperBlock;
-            for (int c = lane; c < kSuperBlock; c += 32) {
-                sum += __bfloat162float(input[base + c]) * ValueFn(blk, c);
+            for (int c = lane * 2; c < kSuperBlock; c += 64) {
+                const __nv_bfloat162 pair = *reinterpret_cast<const __nv_bfloat162*>(
+                    input + base + c);
+                sum += __bfloat162float(pair.x) * ValueFn(blk, c);
+                sum += __bfloat162float(pair.y) * ValueFn(blk, c + 1);
             }
         }
         sum = warp_reduce_sum(sum);
         if (lane == 0) {
             float value = sum;
             const size_t out_index =
-                static_cast<size_t>(activation_row) * n + output_row;
+                static_cast<size_t>(activation_row) * output_stride + output_row;
             if (beta != 0.0f) value += beta * __bfloat162float(y[out_index]);
             y[out_index] = __float2bfloat16(value);
         }
     }
+}
+
+template <typename BlockT, float (*ValueFn)(const BlockT*, int)>
+__global__ void gguf_gemm_kernel(const __nv_bfloat16* __restrict__ x,
+                                 const uint8_t* __restrict__ blocks,
+                                 __nv_bfloat16* __restrict__ y,
+                                 int m, int n, int k, size_t row_bytes,
+                                 int output_stride, float beta) {
+    constexpr int tile_m = 4;
+    const int row = blockIdx.y * tile_m + threadIdx.y;
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int blocks_per_row = k / kSuperBlock;
+    float sum = 0.0f;
+    __shared__ __nv_bfloat16 x_tile[tile_m][kSuperBlock];
+    for (int b = 0; b < blocks_per_row; ++b) {
+        const int base = b * kSuperBlock;
+        for (int c = threadIdx.x; c < kSuperBlock; c += blockDim.x) {
+            for (int r = threadIdx.y; r < tile_m; r += blockDim.y) {
+                const int input_row = blockIdx.y * tile_m + r;
+                x_tile[r][c] = input_row < m
+                    ? x[static_cast<size_t>(input_row) * k + base + c]
+                    : __float2bfloat16(0.0f);
+            }
+        }
+        __syncthreads();
+        if (row < m && col < n) {
+            const uint8_t* row_blocks = blocks + static_cast<size_t>(col) * row_bytes;
+            const BlockT* block = reinterpret_cast<const BlockT*>(row_blocks) + b;
+            for (int c = 0; c < kSuperBlock; ++c) {
+                sum += __bfloat162float(x_tile[threadIdx.y][c]) * ValueFn(block, c);
+            }
+        }
+        __syncthreads();
+    }
+    if (row >= m || col >= n) return;
+    const size_t out_index = static_cast<size_t>(row) * output_stride + col;
+    if (beta != 0.0f) sum += beta * __bfloat162float(y[out_index]);
+    y[out_index] = __float2bfloat16(sum);
+}
+
+template <typename BlockT, float (*ValueFn)(const BlockT*, int)>
+__global__ void gguf_embedding_value_kernel(int32_t token,
+                                            const uint8_t* blocks,
+                                            __nv_bfloat16* out, int hidden,
+                                            size_t row_bytes) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col >= hidden) return;
+    const BlockT* row = reinterpret_cast<const BlockT*>(
+        blocks + static_cast<size_t>(token) * row_bytes);
+    out[col] = __float2bfloat16(ValueFn(row + col / kSuperBlock,
+                                        col % kSuperBlock));
+}
+
+template <typename BlockT, float (*ValueFn)(const BlockT*, int)>
+__global__ void gguf_embedding_device_kernel(const int32_t* token,
+                                             const uint8_t* blocks,
+                                             __nv_bfloat16* out, int hidden,
+                                             size_t row_bytes) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col >= hidden) return;
+    const BlockT* row = reinterpret_cast<const BlockT*>(
+        blocks + static_cast<size_t>(*token) * row_bytes);
+    out[col] = __float2bfloat16(ValueFn(row + col / kSuperBlock,
+                                        col % kSuperBlock));
+}
+
+template <typename BlockT, float (*ValueFn)(const BlockT*, int)>
+__global__ void gguf_embedding_batch_kernel(const int32_t* tokens, int rows,
+                                            const uint8_t* blocks,
+                                            __nv_bfloat16* out, int hidden,
+                                            size_t row_bytes) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * hidden;
+    if (index >= total) return;
+    const int row_index = static_cast<int>(index / hidden);
+    const int col = static_cast<int>(index % hidden);
+    const BlockT* row = reinterpret_cast<const BlockT*>(
+        blocks + static_cast<size_t>(tokens[row_index]) * row_bytes);
+    out[index] = __float2bfloat16(ValueFn(row + col / kSuperBlock,
+                                          col % kSuperBlock));
 }
 
 // Dequantizes an entire quantized matrix [n, k] to BF16 (row-major). Used for
@@ -172,21 +254,80 @@ __global__ void gguf_dequant_kernel(const uint8_t* __restrict__ blocks,
 
 } // namespace
 
-void launch_gguf_linear(const __nv_bfloat16* x, const uint8_t* blocks,
-                        GgmlType type, __nv_bfloat16* y,
-                        int m, int n, int k, float beta,
-                        cudaStream_t stream) {
+void launch_gguf_linear_segment(const __nv_bfloat16* x, const uint8_t* blocks,
+                                GgmlType type, __nv_bfloat16* y,
+                                int m, int n, int k, size_t row_bytes,
+                                int output_stride, float beta, cudaStream_t stream) {
     constexpr int warps_per_block = 8;
-    const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);
-    const dim3 grid((n + warps_per_block - 1) / warps_per_block, grid_y);
-    const int threads = warps_per_block * 32;
-    if (type == GgmlType::Q4_K) {
-        gguf_gemv_kernel<BlockQ4K, q4k_value>
-            <<<grid, threads, 0, stream>>>(x, blocks, y, m, n, k, beta);
-    } else if (type == GgmlType::Q6_K) {
-        gguf_gemv_kernel<BlockQ6K, q6k_value>
-            <<<grid, threads, 0, stream>>>(x, blocks, y, m, n, k, beta);
+    if (m == 1) {
+        const unsigned grid_y = 1;
+        const dim3 grid((n + warps_per_block - 1) / warps_per_block, grid_y);
+        const int threads = warps_per_block * 32;
+        if (type == GgmlType::Q4_K) {
+            gguf_gemv_kernel<BlockQ4K, q4k_value>
+                <<<grid, threads, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
+        } else if (type == GgmlType::Q6_K) {
+            gguf_gemv_kernel<BlockQ6K, q6k_value>
+                <<<grid, threads, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
+        }
+    } else {
+        const dim3 block(32, 4);
+        const dim3 grid((n + 31) / 32, (m + 3) / 4);
+        if (type == GgmlType::Q4_K) {
+            gguf_gemm_kernel<BlockQ4K, q4k_value>
+                <<<grid, block, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
+        } else if (type == GgmlType::Q6_K) {
+            gguf_gemm_kernel<BlockQ6K, q6k_value>
+                <<<grid, block, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
+        }
     }
+    LFM_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_gguf_embedding(int32_t token, const GgufLinearSegment& segment,
+                           __nv_bfloat16* out, cudaStream_t stream) {
+    const int hidden = segment.cols;
+    const dim3 grid((hidden + 255) / 256);
+    if (segment.type == GgmlType::Q4_K) {
+        gguf_embedding_value_kernel<BlockQ4K, q4k_value>
+            <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
+    } else {
+        gguf_embedding_value_kernel<BlockQ6K, q6k_value>
+            <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
+    }
+    LFM_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_gguf_embedding_device(const int32_t* token,
+                                  const GgufLinearSegment& segment,
+                                  __nv_bfloat16* out, cudaStream_t stream) {
+    const int hidden = segment.cols;
+    const dim3 grid((hidden + 255) / 256);
+    if (segment.type == GgmlType::Q4_K) {
+        gguf_embedding_device_kernel<BlockQ4K, q4k_value>
+            <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
+    } else {
+        gguf_embedding_device_kernel<BlockQ6K, q6k_value>
+            <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
+    }
+    LFM_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_gguf_embedding_batch(const int32_t* tokens, int rows,
+                                 const GgufLinearSegment& segment,
+                                 __nv_bfloat16* out, cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * segment.cols;
+    const dim3 grid(static_cast<unsigned>((total + 255) / 256));
+    if (segment.type == GgmlType::Q4_K) {
+        gguf_embedding_batch_kernel<BlockQ4K, q4k_value>
+            <<<grid, 256, 0, stream>>>(tokens, rows, segment.blocks, out,
+                                         segment.cols, segment.row_bytes);
+    } else {
+        gguf_embedding_batch_kernel<BlockQ6K, q6k_value>
+            <<<grid, 256, 0, stream>>>(tokens, rows, segment.blocks, out,
+                                         segment.cols, segment.row_bytes);
+    }
+    LFM_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gguf_dequant(const uint8_t* blocks, GgmlType type,

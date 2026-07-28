@@ -42,6 +42,7 @@ struct Args {
     uint64_t seed = 1;
     int benchmark_decode = 0;
     int benchmark_warmup = 8;
+    int benchmark_prefill_tokens = 0;
     int lt_workspace_mb = 64;
     int lt_heuristics = 8;
     std::string gemm_backend = "cublas";
@@ -105,6 +106,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--seed") args.seed = static_cast<uint64_t>(std::stoull(value()));
         else if (key == "--benchmark-decode") args.benchmark_decode = std::stoi(value());
         else if (key == "--benchmark-warmup") args.benchmark_warmup = std::stoi(value());
+        else if (key == "--benchmark-prefill-tokens") args.benchmark_prefill_tokens = std::stoi(value());
         else if (key == "--gemm-backend") args.gemm_backend = value();
         else if (key == "--lt-workspace-mb") args.lt_workspace_mb = std::stoi(value());
         else if (key == "--lt-heuristics") args.lt_heuristics = std::stoi(value());
@@ -156,6 +158,7 @@ Args parse_args(int argc, char** argv) {
                 << "  [--attention-chunk-tokens N] [--attention-auto-threshold N]\n"
                 << "  [--memory-report] [--benchmark-decode N]\n"
                 << "  [--benchmark-warmup N]\n"
+                << "  [--benchmark-prefill-tokens N]\n"
                 << "  [--temperature F] [--top-k N] [--top-p F]\n"
                 << "  [--repetition-penalty F] [--seed N]\n"
                 << "  [--dump-logits FILE.f32] [--print-top N]\n"
@@ -192,6 +195,7 @@ Args parse_args(int argc, char** argv) {
         args.top_k <= 0 || args.temperature < 0.0f || args.top_p <= 0.0f ||
         args.top_p > 1.0f || args.repetition_penalty < 1.0f || args.seed == 0 ||
         args.benchmark_decode < 0 || args.benchmark_warmup < 0 ||
+        args.benchmark_prefill_tokens < 0 ||
         args.lt_workspace_mb < 0 || args.lt_heuristics <= 0 ||
         args.lt_heuristics > 64 || args.attention_chunk_tokens <= 0 ||
         args.attention_auto_threshold <= 0) {
@@ -319,18 +323,22 @@ int main(int argc, char** argv) {
                 repo_id = repo_id.substr(0, colon);
             }
         }
-        const bool is_gguf = !repo_id.empty() &&
+        const bool repo_is_gguf = !repo_id.empty() &&
             (repo_id.ends_with("-GGUF") || !quant_tag.empty());
+        const bool direct_gguf = !args.model_dir.empty() &&
+            std::filesystem::path(args.model_dir).extension() == ".gguf";
+        const bool is_gguf = repo_is_gguf || direct_gguf;
 
         std::filesystem::path model;        // checkpoint dir (safetensors)
         std::filesystem::path gguf_path;    // concrete .gguf file (GGUF)
-        if (is_gguf) {
+        if (repo_is_gguf) {
             gguf_path = lfm::resolve_hf_gguf(repo_id,
                 quant_tag.empty() ? "Q4_K_M" : quant_tag);
         } else if (!args.repo.empty()) {
             model = lfm::resolve_hf_model(args.repo);
         } else {
             model = std::filesystem::path(args.model_dir);
+            if (direct_gguf) gguf_path = model;
         }
 
         const lfm::detail::ModelBootstrap bootstrap =
@@ -368,6 +376,15 @@ int main(int argc, char** argv) {
                 ? args.prompt : tokenizer.format_chat(chat_messages);
             // Chat formatting contains <|startoftext|>; raw prompts receive BOS automatically.
             input = tokenizer.encode(formatted, args.raw_prompt);
+            if (args.benchmark_prefill_tokens > 0) {
+                if (input.empty()) throw std::runtime_error("benchmark prompt produced no tokens");
+                if (static_cast<int>(input.size()) > args.benchmark_prefill_tokens) {
+                    input.resize(static_cast<size_t>(args.benchmark_prefill_tokens));
+                } else {
+                    const int32_t fill = input.back();
+                    input.resize(static_cast<size_t>(args.benchmark_prefill_tokens), fill);
+                }
+            }
             if (args.tokens_only) {
                 for (size_t i = 0; i < input.size(); ++i) {
                     if (i) std::cout << ' ';
@@ -479,7 +496,7 @@ int main(int argc, char** argv) {
         // ship model.safetensors.index.json in the same directory. The model
         // constructor resolves the index when given the directory root. GGUF
         // checkpoints pass the concrete .gguf file path directly.
-        const std::string safetensors_path =
+        const std::string model_path =
             is_gguf ? gguf_path.string()
                     : [&] {
                           const std::filesystem::path single =
@@ -493,8 +510,12 @@ int main(int argc, char** argv) {
                                            : single.string();
                       }();
         lfm::LfmModel engine(
-            safetensors_path, args.context,
+            model_path, args.context,
             model_options, generation);
+        if (is_gguf) {
+            std::cerr << "weights=gguf-native(q4_k,q6_k)\n"
+                      << "pack_path=none\n";
+        }
         if (args.memory_report) print_memory_stats(engine.diagnostics().memory_stats());
 
         if (!args.load_session.empty()) {

@@ -479,6 +479,13 @@ if(LFM_BUILD_TESTS)
             add_test(NAME cuda_kernels_test COMMAND cuda_kernels_test)
         endif()
 
+        add_executable(cuda_gguf_kernels_test tests/cuda_gguf_kernels_test.cu)
+        target_link_libraries(cuda_gguf_kernels_test PRIVATE lfm_cuda_backend)
+        target_include_directories(cuda_gguf_kernels_test PRIVATE include)
+        if(LFM_RUN_CUDA_TESTS)
+            add_test(NAME cuda_gguf_kernels_test COMMAND cuda_gguf_kernels_test)
+        endif()
+
         add_executable(moe_route_test tests/moe_route_test.cu)
         target_link_libraries(moe_route_test PRIVATE lfm_cuda_backend)
         target_include_directories(moe_route_test PRIVATE include)

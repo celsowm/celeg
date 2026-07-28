@@ -18,7 +18,7 @@ int parse_positive(const char* text, const char* name) {
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::cerr << "usage: " << argv[0]
-                  << " MODEL_SAFETENSORS TOKENIZER_JSON PROMPT [requests=8] [max_new=64]\n";
+                  << " MODEL_PATH TOKENIZER_JSON PROMPT [requests=8] [max_new=64]\n";
         return 2;
     }
     try {

@@ -139,7 +139,7 @@ bool ConcurrentEngine::Impl::admit_requests_locked() {
                 lane_options.allocate_local_kv_cache =
                     !engine_options_.packed_decode;
                 lane->model = std::make_unique<LfmModel>(
-                    safetensors_path_, max_context_, lane_options,
+                    model_path_, max_context_, lane_options,
                     request.options.generation);
             } else {
                 lane->model->session().set_generation_config(request.options.generation);
@@ -216,4 +216,3 @@ void ConcurrentEngine::Impl::complete_prefill_locked(Request& request, Lane& lan
     }
     request.status = RequestStatus::Decoding;
 }
-

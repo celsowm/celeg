@@ -70,6 +70,7 @@ def run_capture(
         list(command),
         cwd=str(cwd) if cwd else None,
         env=dict(env) if env else None,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -147,6 +148,15 @@ def discover_vcvars(
         if candidate.is_file():
             return candidate.resolve()
 
+    # CUDA 13.x supports the VS 2022 host compiler but rejects the preview
+    # VS 2026 toolset that vswhere may otherwise report as "latest".
+    program_files = env_value(env, "ProgramFiles")
+    if program_files:
+        vs_2022 = pathlib.Path(program_files) / "Microsoft Visual Studio" / "2022"
+        candidates = sorted(vs_2022.glob("*/VC/Auxiliary/Build/vcvars64.bat"))
+        if candidates:
+            return candidates[-1].resolve()
+
     vswhere = find_vswhere(env)
     if not vswhere:
         return None
@@ -193,16 +203,24 @@ def capture_vcvars(
             delete=False,
         ) as script:
             script.write("@echo off\n")
-            script.write(f'call "{vcvars}" >nul\n')
+            # VS 2022's environment scripts probe the active console.  Sending
+            # their output to NUL makes that probe fail under redirected
+            # processes, producing repeated Ctrl-C prompts and no toolchain.
+            script.write(f'call "{vcvars}"\n')
             script.write("if errorlevel 1 exit /b %errorlevel%\n")
             script.write("set\n")
             script_path = pathlib.Path(script.name)
-        result = runner(["cmd.exe", "/d", "/c", str(script_path)], env=env)
+        result = runner(
+            ["cmd.exe", "/d", "/c", str(script_path)],
+            env=env,
+        )
     finally:
         if script_path:
             script_path.unlink(missing_ok=True)
     if result.returncode != 0:
-        detail = next((line.strip() for line in reversed(result.stdout.splitlines()) if line.strip()), "")
+        detail = (result.stdout or "").strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
         suffix = f": {detail}" if detail else ""
         raise DevError(f"vcvars64.bat failed with exit code {result.returncode}{suffix}")
     captured = dict(env)
@@ -212,6 +230,96 @@ def capture_vcvars(
         key, value = line.split("=", 1)
         if key:
             captured[key] = value
+    return captured
+
+
+def fallback_msvc_environment(
+    vcvars: pathlib.Path,
+    env: Mapping[str, str],
+) -> dict[str, str] | None:
+    """Build the x64 MSVC environment when vcvars cannot run headlessly."""
+    vc_root = vcvars.parents[2]
+    vs_root = vc_root.parent
+    tools_root = vc_root / "Tools" / "MSVC"
+    toolsets = sorted(
+        (path for path in tools_root.glob("*") if path.is_dir()),
+        key=version_key,
+        reverse=True,
+    )
+    if not toolsets:
+        return None
+    tools = toolsets[0]
+    compiler_dir = tools / "bin" / "Hostx64" / "x64"
+    if not (compiler_dir / "cl.exe").is_file():
+        return None
+
+    program_files_x86 = env_value(env, "ProgramFiles(x86)")
+    if not program_files_x86:
+        return None
+    sdk_root = pathlib.Path(program_files_x86) / "Windows Kits" / "10"
+    include_root = sdk_root / "Include"
+    versions = sorted(
+        (path for path in include_root.glob("*") if path.is_dir()),
+        key=version_key,
+        reverse=True,
+    )
+    if not versions:
+        return None
+    sdk_version = versions[0].name
+    sdk_include = include_root / sdk_version
+    sdk_lib = sdk_root / "Lib" / sdk_version
+    required = [
+        tools / "include",
+        tools / "lib" / "x64",
+        sdk_include / "ucrt",
+        sdk_include / "um",
+        sdk_include / "shared",
+        sdk_lib / "ucrt" / "x64",
+        sdk_lib / "um" / "x64",
+    ]
+    if not all(path.is_dir() for path in required):
+        return None
+
+    captured = dict(env)
+    captured["VSINSTALLDIR"] = str(vs_root) + "\\"
+    captured["VCINSTALLDIR"] = str(vc_root) + "\\"
+    captured["VCToolsInstallDir"] = str(tools) + "\\"
+    captured["VCToolsVersion"] = tools.name
+    captured["WindowsSdkDir"] = str(sdk_root) + "\\"
+    captured["WindowsSDKVersion"] = sdk_version + "\\"
+    captured["INCLUDE"] = os.pathsep.join(
+        str(path)
+        for path in [
+            tools / "include",
+            tools / "ATLMFC" / "include",
+            sdk_include / "ucrt",
+            sdk_include / "um",
+            sdk_include / "shared",
+            sdk_include / "winrt",
+            sdk_include / "cppwinrt",
+        ]
+        if path.is_dir()
+    )
+    captured["LIB"] = os.pathsep.join(
+        str(path)
+        for path in [
+            tools / "ATLMFC" / "lib" / "x64",
+            tools / "lib" / "x64",
+            sdk_lib / "ucrt" / "x64",
+            sdk_lib / "um" / "x64",
+        ]
+        if path.is_dir()
+    )
+    captured["LIBPATH"] = captured["LIB"]
+    prepend_path(
+        captured,
+        [
+            compiler_dir,
+            sdk_root / "Bin" / sdk_version / "x64",
+            sdk_root / "Bin" / "x64",
+            vs_root / "Common7" / "IDE",
+        ],
+    )
     return captured
 
 
@@ -400,7 +508,14 @@ def discover_environment(
                 values = capture_vcvars(vcvars, values, runner)
                 values["VSLANG"] = "1033"
             except DevError as error:
-                errors.append(str(error))
+                fallback = fallback_msvc_environment(vcvars, values)
+                if fallback is None:
+                    errors.append(str(error))
+                else:
+                    values = fallback
+                    warnings.append(
+                        "vcvars64.bat could not initialize headlessly; using the discovered MSVC x64 toolchain directly."
+                    )
         else:
             errors.append("Visual Studio C++ Build Tools were not found through the environment or vswhere.")
 
@@ -572,12 +687,16 @@ def configure_command(
             [
                 f"-DCMAKE_CUDA_COMPILER={environment.nvcc.path}",
                 f"-DCMAKE_CUDA_ARCHITECTURES={environment.gpu_arch}",
+                "-DCMAKE_CUDA_FLAGS_INIT=--use-local-env",
             ]
         )
         if allow_unsupported:
             command.append("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler")
     if environment.msvc_include_prefix:
         command.append(f"-DLFM_MSVC_SHOWINCLUDES_PREFIX={environment.msvc_include_prefix}")
+    serve = env_value(environment.values, "LFM_ENABLE_SERVE")
+    if serve:
+        command.append(f"-DLFM_ENABLE_SERVE={serve}")
     return command
 
 
