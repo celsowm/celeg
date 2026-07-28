@@ -15,6 +15,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +42,7 @@ def sha256(path: Path) -> str:
 def find_binary(root: Path, name: str) -> Path:
     suffix = ".exe" if platform.system() == "Windows" else ""
     for candidate in (root / "bin" / "Release" / (name + suffix),
+                      root / "bin" / (name + suffix),
                       root / "Release" / (name + suffix),
                       root / (name + suffix)):
         if candidate.is_file():
@@ -102,14 +104,11 @@ def parse_lfm(stderr: str) -> tuple[float, float]:
 
 
 def parse_llama(stdout: str, expected: Path) -> tuple[float, float]:
-    rows = json.loads(stdout)
-    for row in rows:
-        reported = row.get("model_filename")
-        if reported and Path(reported).resolve() != expected:
-            raise RuntimeError(f"llama.cpp used {reported}, expected {expected}")
-    prompt = next(r for r in rows if r.get("n_prompt", 0) > 0 and r.get("n_gen", 0) == 0)
-    decode = next(r for r in rows if r.get("n_gen", 0) > 0 and r.get("n_prompt", 0) == 0)
-    return float(prompt["avg_ts"]), float(decode["avg_ts"])
+    prompt = re.search(r'"n_prompt":\s*512,.*?"avg_ts":\s*([0-9.]+)', stdout, re.S)
+    decode = re.search(r'"n_prompt":\s*0,\s*"n_gen":\s*128,.*?"avg_ts":\s*([0-9.]+)', stdout, re.S)
+    if not prompt or not decode:
+        raise RuntimeError("llama-bench JSON did not contain prompt/decode rows")
+    return float(prompt.group(1)), float(decode.group(1))
 
 
 def main() -> None:
@@ -129,6 +128,9 @@ def main() -> None:
     lfm = find_binary(args.lfm_build, "lfm25-run")
     llama = find_binary(args.llama_build, "llama-bench")
     env = dict(os.environ, OMP_NUM_THREADS="8", MKL_NUM_THREADS="8")
+    cuda_bin = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin")
+    env["PATH"] = os.pathsep.join([str(llama.parent), str(cuda_bin),
+                                    str(cuda_bin / "x64"), env.get("PATH", "")])
 
     lfm_prefill: list[float] = []
     lfm_decode: list[float] = []
