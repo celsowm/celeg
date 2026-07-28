@@ -8,6 +8,8 @@ set(LFM_CPU_BACKEND_SOURCES
     src/backend/cpu/concurrent.cpp
     src/backend/cpu/kernels/quantized_dot.cpp
     src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
+    src/backend/cpu/kernels/gguf.cpp
+    src/backend/cpu/kernels/gguf_avx2.cpp
     src/backend/cpu/kernels/linear.cpp
     src/backend/cpu/kernels/elementwise.cpp
     src/backend/cpu/kernels/elementwise_avx2_msvc.cpp

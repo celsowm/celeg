@@ -34,7 +34,10 @@ struct Args {
     int reps = 5;
     int warmup = 1;
     int threads = 0;
+    int batch_size = 256;
+    int ubatch_size = 256;
     int group_size = 32;
+    bool group_size_explicit = false;
     int context = 0;
     uint64_t seed = 1;
     std::string output = "json";
@@ -54,7 +57,12 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--reps" || key == "-r") args.reps = std::stoi(value());
         else if (key == "--warmup") args.warmup = std::stoi(value());
         else if (key == "--threads" || key == "-t") args.threads = std::stoi(value());
-        else if (key == "--cpu-q4-group") args.group_size = std::stoi(value());
+        else if (key == "--batch-size" || key == "-b") args.batch_size = std::stoi(value());
+        else if (key == "--ubatch-size" || key == "-ub") args.ubatch_size = std::stoi(value());
+        else if (key == "--cpu-q4-group") {
+            args.group_size = std::stoi(value());
+            args.group_size_explicit = true;
+        }
         else if (key == "--cpu-isa") args.isa = value();
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--seed") args.seed = std::stoull(value());
@@ -67,6 +75,8 @@ Args parse_args(int argc, char** argv) {
                 << "  -r, --reps N         timed repetitions (default 5)\n"
                 << "  --warmup N           untimed warmup repetitions (default 1)\n"
                 << "  -t, --threads N      thread count (default 0 = auto)\n"
+                << "  -b, --batch-size N   prefill chunk size (default 256)\n"
+                << "  -ub, --ubatch-size N physical chunk size (must equal batch)\n"
                 << "  --cpu-q4-group 32|64 weight quantization group size\n"
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
                 << "  --context N          override context size\n"
@@ -74,12 +84,19 @@ Args parse_args(int argc, char** argv) {
             std::exit(0);
         } else throw std::runtime_error("unknown argument: " + key);
     }
-    if (args.model.empty()) throw std::runtime_error("--model (directory) is required");
+    if (args.model.empty()) throw std::runtime_error("--model is required");
     if (args.n_prompt < 0 || args.n_gen < 0 || args.reps <= 0 || args.warmup < 0 ||
-        args.threads < 0 || (args.group_size != 32 && args.group_size != 64)) {
+        args.threads < 0 || args.batch_size <= 0 || args.ubatch_size <= 0 ||
+        args.batch_size != args.ubatch_size ||
+        (args.group_size != 32 && args.group_size != 64)) {
         throw std::runtime_error("invalid numeric argument");
     }
     if (args.context <= 0) args.context = args.n_prompt + args.n_gen + 16;
+    if (args.group_size_explicit &&
+        std::filesystem::path(args.model).extension() == ".gguf") {
+        throw std::runtime_error(
+            "--cpu-q4-group is only valid for Safetensors checkpoints");
+    }
     return args;
 }
 
@@ -159,13 +176,12 @@ int main(int argc, char** argv) {
         options.weight_format = args.group_size == 64
             ? lfm::CpuWeightFormat::Q4Group64 : lfm::CpuWeightFormat::Q4Group32;
         options.threads = static_cast<size_t>(args.threads);
+        options.prefill_chunk_tokens = static_cast<size_t>(args.ubatch_size);
         lfm::GenerationConfig generation;
         generation.temperature = 0.0f;
         generation.top_k = 1;
 
-        const std::string weights_path =
-            (std::filesystem::path(args.model) / "model.safetensors").string();
-        lfm::CpuModel engine(weights_path, args.context, options, generation);
+        lfm::CpuModel engine(args.model, args.context, options, generation);
         const int vocab_size = engine.diagnostics().vocab_size();
         std::srand(static_cast<unsigned int>(args.seed));
 

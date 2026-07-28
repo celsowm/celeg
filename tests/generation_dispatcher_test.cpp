@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -144,12 +145,21 @@ int main() {
         for (std::int32_t i = 0; i < 5; ++i) LFM_TEST_CHECK(received[i] == i);
     }
 
+    // The callback is notified before the dispatcher performs its mandated
+    // post-callback release, so wait for that final step rather than assuming
+    // that notification and release are simultaneous.
+    const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (service.status(id) != RequestStatus::Failed &&
+           std::chrono::steady_clock::now() < release_deadline) {
+        std::this_thread::yield();
+    }
+
     // The dispatcher must have released the finished request on our behalf.
     LFM_TEST_CHECK(service.status(id) == RequestStatus::Failed);
 
     // unwatch() must stop delivery without releasing the request.
     GenerateRequest long_request;
-    long_request.max_output_tokens = 1'000'000;
+    long_request.max_output_tokens = std::numeric_limits<std::size_t>::max();
     const RequestId long_id = service.submit(long_request);
     int callback_count = 0;
     dispatcher.watch(long_id, [&](const GenerateEvent&) { ++callback_count; });

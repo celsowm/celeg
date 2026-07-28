@@ -35,6 +35,7 @@ struct Args {
     int max_new_tokens = 128;
     int threads = 0;
     int group_size = 32;
+    bool group_size_explicit = false;
     int kv_page_tokens = 32;
     int prefill_chunk_tokens = 256;
     int prefill_chunk_threshold = 16;
@@ -71,7 +72,10 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--max-new-tokens") args.max_new_tokens = std::stoi(value());
         else if (key == "--threads") args.threads = std::stoi(value());
-        else if (key == "--cpu-q4-group") args.group_size = std::stoi(value());
+        else if (key == "--cpu-q4-group") {
+            args.group_size = std::stoi(value());
+            args.group_size_explicit = true;
+        }
         else if (key == "--cpu-kv-page-tokens") args.kv_page_tokens = std::stoi(value());
         else if (key == "--cpu-prefill-chunk") args.prefill_chunk_tokens = std::stoi(value());
         else if (key == "--cpu-prefill-threshold") args.prefill_chunk_threshold = std::stoi(value());
@@ -137,9 +141,23 @@ int main(int argc, char** argv) {
                       << lfm::detect_cpu_topology().summary() << '\n';
             if (args.model_dir.empty() && args.repo.empty()) return 0;
         }
+        std::string repo_id = args.repo;
+        std::string quant_tag;
+        if (!repo_id.empty()) {
+            const size_t colon = repo_id.find(':');
+            if (colon != std::string::npos) {
+                quant_tag = repo_id.substr(colon + 1);
+                repo_id = repo_id.substr(0, colon);
+            }
+        }
+        const bool repo_is_gguf = !repo_id.empty() &&
+            (repo_id.ends_with("-GGUF") || !quant_tag.empty());
         std::filesystem::path model;
         if (!args.repo.empty()) {
-            model = lfm::resolve_hf_model(args.repo);
+            model = repo_is_gguf
+                ? lfm::resolve_hf_gguf(
+                      repo_id, quant_tag.empty() ? "Q4_K_M" : quant_tag)
+                : lfm::resolve_hf_model(args.repo);
         } else {
             model = std::filesystem::path(args.model_dir);
         }
@@ -147,11 +165,22 @@ int main(int argc, char** argv) {
             lfm::detail::load_model_bootstrap(model);
         const lfm::ModelConfig& config = bootstrap.config;
         const lfm::IModelVariant& variant = *bootstrap.variant;
+        if (bootstrap.is_gguf && args.group_size_explicit) {
+            throw std::runtime_error(
+                "--cpu-q4-group is only valid for Safetensors checkpoints");
+        }
         if (args.context > config.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
-        lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
-            lfm::make_chat_template(variant.chat_template_kind()));
+        const std::filesystem::path model_dir =
+            std::filesystem::is_directory(model) ? model : model.parent_path();
+        lfm::BpeTokenizer tokenizer = bootstrap.is_gguf
+            ? lfm::BpeTokenizer(
+                  lfm::BpeTokenizer::FromGguf{}, *bootstrap.gguf_file,
+                  lfm::make_chat_template(variant.chat_template_kind()))
+            : lfm::BpeTokenizer(
+                  (model_dir / "tokenizer.json").string(),
+                  lfm::make_chat_template(variant.chat_template_kind()));
         std::vector<lfm::ChatMessage> chat_messages;
         if (!args.system.empty()) {
             chat_messages.push_back({lfm::ChatRole::System, args.system});
@@ -184,8 +213,7 @@ int main(int argc, char** argv) {
         generation.top_p = args.top_p;
         generation.repetition_penalty = args.repetition_penalty;
         generation.seed = args.seed;
-        lfm::CpuModel engine((model / "model.safetensors").string(), args.context,
-                             options, generation);
+        lfm::CpuModel engine(model.string(), args.context, options, generation);
         std::cerr << "backend=" << engine.diagnostics().backend_description() << '\n';
         if (!engine.diagnostics().pack_path().empty()) std::cerr << "cpu.pack_path=" << engine.diagnostics().pack_path() << '\n';
         if (args.memory_report) {

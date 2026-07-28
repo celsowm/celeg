@@ -23,22 +23,22 @@ struct CpuModel::Impl {
     struct CommonWeights {
         std::vector<float> operator_norm;
         std::vector<float> ffn_norm;
-        Q4GroupMatrix w13;
-        Q4GroupMatrix w2;
+        CpuLinearWeight w13;
+        CpuLinearWeight w2;
     };
     struct AttentionWeights {
         CommonWeights common;
-        Q4GroupMatrix qkv;
-        Q4GroupMatrix out;
+        CpuLinearWeight qkv;
+        CpuLinearWeight out;
         std::vector<float> q_norm;
         std::vector<float> k_norm;
     };
     struct ConvolutionWeights {
         CommonWeights common;
-        Q4GroupMatrix in;
+        CpuLinearWeight in;
         // [tap][channel], so a tap is contiguous for SIMD/vector kernels.
         std::vector<float> weight_tap_major;
-        Q4GroupMatrix out;
+        CpuLinearWeight out;
     };
     using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights>;
 
@@ -48,29 +48,31 @@ struct CpuModel::Impl {
         static CpuIsa resolve_isa(CpuIsa requested);
         void prepare_pack_path();
         void load_weights();
-        CommonWeights load_common(class SafeTensorFile* file,
+        CommonWeights load_common(class IWeightRepository* repository,
                                   class CpuPackReader* reader,
                                   class CpuPackWriter* writer,
                                   int layer);
-        Q4GroupMatrix load_matrix(class SafeTensorFile* file,
-                                  class CpuPackReader* reader,
-                                  class CpuPackWriter* writer,
-                                  const std::string& name,
-                                  const std::vector<int64_t>& expected);
-        Q4GroupMatrix load_concat(
-            class SafeTensorFile* file,
+        CpuLinearWeight load_matrix(class IWeightRepository* repository,
+                                    class CpuPackReader* reader,
+                                    class CpuPackWriter* writer,
+                                    const std::string& name,
+                                    const std::vector<int64_t>& expected);
+        CpuLinearWeight load_concat(
+            class IWeightRepository* repository,
             class CpuPackReader* reader,
             class CpuPackWriter* writer,
             const std::string& synthetic,
             const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts);
-        std::vector<float> load_vector(class SafeTensorFile* file,
+        std::vector<float> load_vector(class IWeightRepository* repository,
                                        class CpuPackReader* reader,
                                        class CpuPackWriter* writer,
                                        const std::string& name,
                                        const std::vector<int64_t>& expected);
         size_t weights_memory_bytes() const;
 
-        std::string safetensors_path;
+        std::string model_path;
+        bool is_gguf = false;
+        std::shared_ptr<IWeightRepository> repository;
         int max_context = 0;
         CpuModelOptions options;
         CpuCapabilities capabilities;
@@ -82,7 +84,7 @@ struct CpuModel::Impl {
         bool loaded_pack = false;
         ModelShape shape;
         const IModelVariant* variant = nullptr;
-        Q4GroupMatrix embedding;
+        CpuLinearWeight embedding;
         std::vector<float> final_norm;
         std::vector<WeightLayer> layers;
         std::vector<std::shared_ptr<CpuKvPagePool>> kv_pools;

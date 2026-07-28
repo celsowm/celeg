@@ -84,7 +84,7 @@ struct CpuConcurrentMetrics {
 
 class CpuConcurrentEngine {
 public:
-    CpuConcurrentEngine(const std::string& safetensors_path,
+    CpuConcurrentEngine(const std::string& model_path,
                         int max_context,
                         CpuModelOptions model_options = {},
                         CpuConcurrentEngineOptions engine_options = {});

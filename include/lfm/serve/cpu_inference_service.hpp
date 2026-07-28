@@ -11,7 +11,7 @@ namespace lfm::serve {
 
 class CpuInferenceService final : public IInferenceService {
 public:
-    CpuInferenceService(const std::string& safetensors_path,
+    CpuInferenceService(const std::string& model_path,
                         int max_context,
                         CpuModelOptions model_options = {},
                         CpuConcurrentEngineOptions engine_options = {});

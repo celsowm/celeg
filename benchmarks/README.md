@@ -2,12 +2,12 @@
 
 Automated, reproducible comparison between this repo's native CPU engine and
 upstream [llama.cpp](https://github.com/ggml-org/llama.cpp), both running the
-same LFM2.5-230M weights.
+exact same pinned LFM2.5-230M Q4_K_M GGUF file.
 
 Everything is driven by one cross-platform script, `run_bench.py` (Windows,
 Linux, macOS -- no shell-specific scripts to keep in sync). llama.cpp is
 cloned into `.externals/llama.cpp` (gitignored, never committed) and built
-CPU-only in Release. Both engines read their weights straight out of the
+CPU-only in Release. Both engines read the same GGUF straight out of the
 user's **default Hugging Face hub cache** (`~/.cache/huggingface/hub`, or
 `$HF_HOME`/`$HF_HUB_CACHE` if set) via `huggingface_hub` -- the same cache
 layout and env-var resolution order used by this repo's own downloader
@@ -29,7 +29,7 @@ Decode timing uses direct evaluation of a predetermined token stream on the LFM
 side; it does not include greedy vocabulary sampling. The runner passes an
 explicit equal thread count to both engines, uses 256-token llama.cpp batch and
 microbatch sizes to match the LFM chunk size, and pins the llama.cpp and LFM
-checkpoint revisions used by the comparison.
+GGUF revisions used by the comparison. Both KV caches use BF16.
 
 ## Requirements
 
@@ -45,13 +45,13 @@ python benchmarks/run_bench.py
 ```
 
 With no subcommand this clones/builds llama.cpp, builds `lfm25-bench`,
-downloads both checkpoints into the HF cache if not already there, runs both
+downloads the pinned GGUF into the HF cache if it is not already there, runs both
 benchmarks, and writes `benchmarks/results/report.md`.
 
 ## Individual steps
 
 ```bash
-python benchmarks/run_bench.py setup   # clone/build llama.cpp, build lfm25-bench, fetch both models
+python benchmarks/run_bench.py setup   # clone/build both engines and fetch the GGUF
 python benchmarks/run_bench.py run     # run llama-bench + lfm25-bench, write report.md
 ```
 
@@ -65,13 +65,11 @@ All available on `setup`, `run`, and the no-subcommand form:
 
 | flag | default | meaning |
 |---|---|---|
-| `--quant` | `Q4_K_M` | llama.cpp GGUF quant to compare against |
+| `--quant` | `Q4_K_M` | fixed native GGUF quant supported by both engines |
 | `--prompt-tokens` | 512 | synthetic prefill tokens |
 | `--gen-tokens` | 128 | decode steps |
-| `--threads` | host logical CPUs | explicit thread count for both engines |
+| `--threads` | 8 | explicit thread count for both engines |
 | `--reps` | 5 | timed repetitions |
-| `--group` | 32 | lfm25-cpu weight quantization group size (32 or 64) |
-| `--revision` | pinned commit | `LiquidAI/LFM2.5-230M` revision |
 | `--jobs` | 12 | parallel build jobs (`setup` only) |
 
 `GENERATOR` env var overrides the CMake generator used to build llama.cpp
@@ -80,8 +78,11 @@ e.g. Visual Studio on Windows).
 
 ## Choosing a GGUF quant
 
-Available upstream at `LiquidAI/LFM2.5-230M-GGUF`: `BF16`, `F16`, `Q4_0`,
-`Q4_K_M` (default), `Q5_K_M`, `Q6_K`, `Q8_0`. Pass `--quant Q8_0` (etc.) to
-compare against a different quant -- lfm25-cpu's own quantization is a fixed
-groupwise-Q4 scheme (`--group`), so `Q4_K_M` or `Q4_0` are the closest
-apples-to-apples points; `F16`/`BF16` compare against full precision instead.
+The comparison intentionally accepts only `Q4_K_M`. That file contains native
+Q4_K and Q6_K tensors, both executed directly by lfm25-cpu and llama.cpp.
+Unsupported GGUF quantizations fail explicitly rather than being silently
+dequantized or requantized.
+
+Any comparison produced before native same-file GGUF support is invalid. Those
+older runs compared different checkpoint formats or quantizations; only reports
+whose JSON rows contain the same canonical path, size and SHA-256 are valid.

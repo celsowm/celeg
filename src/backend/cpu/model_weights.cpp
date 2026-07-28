@@ -1,11 +1,14 @@
 #include "detail/model_internal.hpp"
 
 #include "lfm/detail/checkpoint/bootstrap.hpp"
+#include "lfm/checkpoint/repositories/gguf.hpp"
+#include "lfm/checkpoint/repositories/safetensors.hpp"
 #include "lfm/model/config/variant.hpp"
 #include "lfm/model/weights/quantization.hpp"
-#include "lfm/checkpoint/formats/safetensors.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -34,30 +37,80 @@ size_t checked_elements(const std::vector<int64_t>& shape) {
     return result;
 }
 
-std::vector<float> bf16_vector(const HostTensorView& tensor,
+bool tensor_shape_matches(const std::vector<int64_t>& actual,
+                          const std::vector<int64_t>& expected) {
+    if (actual == expected) return true;
+    return actual.size() == 2 && expected.size() == 3 &&
+           expected[1] == 1 && actual[0] == expected[0] &&
+           actual[1] == expected[2];
+}
+
+float fp16_to_float(uint16_t bits) {
+    const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
+    uint32_t exponent = (bits >> 10) & 0x1fu;
+    uint32_t mantissa = bits & 0x03ffu;
+    uint32_t result = 0;
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            result = sign;
+        } else {
+            int shift = 0;
+            while ((mantissa & 0x0400u) == 0) {
+                mantissa <<= 1;
+                ++shift;
+            }
+            mantissa &= 0x03ffu;
+            result = sign |
+                static_cast<uint32_t>(127 - 15 - shift) << 23 |
+                mantissa << 13;
+        }
+    } else if (exponent == 31) {
+        result = sign | 0x7f800000u | mantissa << 13;
+    } else {
+        result = sign | (exponent + (127 - 15)) << 23 | mantissa << 13;
+    }
+    return std::bit_cast<float>(result);
+}
+
+std::vector<float> host_vector(const HostTensorView& tensor,
                                const std::vector<int64_t>& expected,
                                const std::string& name) {
-    if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected) {
+    if (!tensor_shape_matches(tensor.shape, expected)) {
         throw std::runtime_error("unexpected CPU tensor: " + name);
     }
     const size_t count = checked_elements(expected);
-    if (tensor.bytes != count * sizeof(uint16_t)) {
-        throw std::runtime_error("invalid BF16 bytes for " + name);
-    }
     std::vector<float> result(count);
-    for (size_t i = 0; i < count; ++i) {
-        uint16_t bits = 0;
-        std::memcpy(&bits, tensor.data + i * sizeof(uint16_t), sizeof(bits));
-        result[i] = bf16_bits_to_float(bits);
+    if (tensor.dtype == TensorDType::BF16 ||
+        tensor.dtype == TensorDType::F16) {
+        if (tensor.bytes != count * sizeof(uint16_t)) {
+            throw std::runtime_error("invalid 16-bit tensor bytes for " + name);
+        }
+        for (size_t i = 0; i < count; ++i) {
+            uint16_t bits = 0;
+            std::memcpy(&bits, tensor.data + i * sizeof(uint16_t), sizeof(bits));
+            result[i] = tensor.dtype == TensorDType::BF16
+                ? bf16_bits_to_float(bits) : fp16_to_float(bits);
+        }
+        return result;
     }
-    return result;
+    if (tensor.dtype == TensorDType::F32) {
+        if (tensor.bytes != count * sizeof(float)) {
+            throw std::runtime_error("invalid F32 tensor bytes for " + name);
+        }
+        std::memcpy(result.data(), tensor.data, tensor.bytes);
+        return result;
+    }
+    throw std::runtime_error(
+        "CPU vector requires F32, F16 or BF16 source: " + name);
 }
 
 std::string source_identity(const std::filesystem::path& path) {
     std::ostringstream out;
-    out << std::filesystem::weakly_canonical(path).string() << ':'
-        << std::filesystem::file_size(path) << ':'
-        << std::filesystem::last_write_time(path).time_since_epoch().count();
+    out << std::filesystem::weakly_canonical(path).string() << ':';
+    if (std::filesystem::is_regular_file(path)) {
+        out << std::filesystem::file_size(path) << ':';
+    }
+    out << std::filesystem::last_write_time(path).time_since_epoch().count();
     return out.str();
 }
 
@@ -74,7 +127,7 @@ std::filesystem::path default_cache_directory() {
 
 CpuModel::Impl::Shared::Shared(const std::string& path, int context,
                                CpuModelOptions requested)
-    : safetensors_path(path), max_context(context), options(std::move(requested)),
+    : model_path(path), max_context(context), options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
       pool(options.threads, options.affinity),
       linear(resolve_isa(options.isa), pool) {
@@ -95,12 +148,17 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     }
     options.isa = linear.isa();
     group_size = options.weight_format == CpuWeightFormat::Q4Group64 ? 64 : 32;
-    // Load model topology from config.json next to the safetensors file so the
-    // CPU runtime no longer depends on the 230M constexpr shape.
     const detail::ModelBootstrap bootstrap =
-        detail::load_model_bootstrap(std::filesystem::path(safetensors_path));
+        detail::load_model_bootstrap(std::filesystem::path(model_path));
+    is_gguf = bootstrap.is_gguf;
     shape = bootstrap.shape;
     variant = bootstrap.variant;
+    if (is_gguf) {
+        repository = std::make_shared<GgufRepository>(bootstrap.gguf_file);
+    } else {
+        repository = std::make_shared<SafeTensorRepository>(
+            std::filesystem::path(model_path));
+    }
     prepare_pack_path();
     load_weights();
     layer_to_kv_pool.assign(layers.size(), -1);
@@ -136,13 +194,13 @@ CpuIsa CpuModel::Impl::Shared::resolve_isa(CpuIsa requested) {
 }
 
 void CpuModel::Impl::Shared::prepare_pack_path() {
-    if (!options.use_pack_cache) return;
+    if (is_gguf || !options.use_pack_cache) return;
     std::filesystem::path directory = options.pack_cache_directory.empty()
         ? default_cache_directory() : options.pack_cache_directory;
     std::error_code error;
     std::filesystem::create_directories(directory, error);
     if (error) throw std::runtime_error("cannot create CPU pack cache: " + error.message());
-    const std::string source = source_identity(safetensors_path);
+    const std::string source = source_identity(model_path);
     const size_t id = std::hash<std::string>{}(source);
     const std::string variant_id = variant ? std::string(variant->id()) : "unknown";
     std::ostringstream filename;
@@ -153,21 +211,21 @@ void CpuModel::Impl::Shared::prepare_pack_path() {
 }
 
 CpuModel::Impl::CommonWeights CpuModel::Impl::Shared::load_common(
-    SafeTensorFile* file, CpuPackReader* reader, CpuPackWriter* writer,
+    IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     int layer) {
     CommonWeights common;
-    common.operator_norm = load_vector(file, reader, writer,
+    common.operator_norm = load_vector(source, reader, writer,
         layer_name(layer, "operator_norm.weight"), {shape.hidden});
-    common.ffn_norm = load_vector(file, reader, writer,
+    common.ffn_norm = load_vector(source, reader, writer,
         layer_name(layer, "ffn_norm.weight"), {shape.hidden});
-    common.w13 = load_concat(file, reader, writer,
+    common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {layer_name(layer, "feed_forward.w1.weight"),
              {shape.intermediate, shape.hidden}},
             {layer_name(layer, "feed_forward.w3.weight"),
              {shape.intermediate, shape.hidden}},
         });
-    common.w2 = load_matrix(file, reader, writer,
+    common.w2 = load_matrix(source, reader, writer,
         layer_name(layer, "feed_forward.w2.weight"),
         {shape.hidden, shape.intermediate});
     return common;
@@ -194,10 +252,8 @@ void CpuModel::Impl::Shared::load_weights() {
         }
     }
 
-    std::unique_ptr<SafeTensorFile> file;
     std::unique_ptr<CpuPackWriter> writer;
     if (!reader) {
-        file = std::make_unique<SafeTensorFile>(safetensors_path);
         if (!pack_file.empty()) {
             CpuPackMetadata metadata;
             metadata.source_id = source_id;
@@ -207,9 +263,10 @@ void CpuModel::Impl::Shared::load_weights() {
         }
     }
 
-    embedding = load_matrix(file.get(), reader.get(), writer.get(),
+    IWeightRepository* source = reader ? nullptr : repository.get();
+    embedding = load_matrix(source, reader.get(), writer.get(),
         "model.embed_tokens.weight", {shape.vocab_size, shape.hidden});
-    final_norm = load_vector(file.get(), reader.get(), writer.get(),
+    final_norm = load_vector(source, reader.get(), writer.get(),
         "model.embedding_norm.weight", {shape.hidden});
 
     if (shape.architecture == ArchitectureKind::MoeLfm2) {
@@ -220,12 +277,13 @@ void CpuModel::Impl::Shared::load_weights() {
 
     layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
     for (int index = 0; index < shape.num_hidden_layers; ++index) {
-        CommonWeights common = load_common(file.get(), reader.get(), writer.get(), index);
+        CommonWeights common =
+            load_common(source, reader.get(), writer.get(), index);
         const LayerType layer_type = shape.layer_types[static_cast<size_t>(index)];
         if (layer_type == LayerType::FullAttention) {
             AttentionWeights layer;
             layer.common = std::move(common);
-            layer.qkv = load_concat(file.get(), reader.get(), writer.get(),
+            layer.qkv = load_concat(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.qkv.weight"), {
                     {layer_name(index, "self_attn.q_proj.weight"),
                      {shape.q_width, shape.hidden}},
@@ -234,23 +292,24 @@ void CpuModel::Impl::Shared::load_weights() {
                     {layer_name(index, "self_attn.v_proj.weight"),
                      {shape.kv_width, shape.hidden}},
                 });
-            layer.out = load_matrix(file.get(), reader.get(), writer.get(),
+            layer.out = load_matrix(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.out_proj.weight"),
                 {shape.hidden, shape.hidden});
-            layer.q_norm = load_vector(file.get(), reader.get(), writer.get(),
+            layer.q_norm = load_vector(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.q_layernorm.weight"),
                 {shape.head_dim});
-            layer.k_norm = load_vector(file.get(), reader.get(), writer.get(),
+            layer.k_norm = load_vector(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.k_layernorm.weight"),
                 {shape.head_dim});
             layers.emplace_back(std::move(layer));
         } else {
             ConvolutionWeights layer;
             layer.common = std::move(common);
-            layer.in = load_matrix(file.get(), reader.get(), writer.get(),
+            layer.in = load_matrix(source, reader.get(), writer.get(),
                 layer_name(index, "conv.in_proj.weight"),
                 {3 * shape.hidden, shape.hidden});
-            const std::vector<float> channel_major = load_vector(file.get(), reader.get(), writer.get(),
+            const std::vector<float> channel_major =
+                load_vector(source, reader.get(), writer.get(),
                 layer_name(index, "conv.conv.weight"),
                 {shape.hidden, 1, shape.conv_cache});
             layer.weight_tap_major.resize(channel_major.size());
@@ -260,7 +319,7 @@ void CpuModel::Impl::Shared::load_weights() {
                         channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
                 }
             }
-            layer.out = load_matrix(file.get(), reader.get(), writer.get(),
+            layer.out = load_matrix(source, reader.get(), writer.get(),
                 layer_name(index, "conv.out_proj.weight"),
                 {shape.hidden, shape.hidden});
             layers.emplace_back(std::move(layer));
@@ -269,36 +328,111 @@ void CpuModel::Impl::Shared::load_weights() {
     if (writer) writer->commit();
 }
 
-Q4GroupMatrix CpuModel::Impl::Shared::load_matrix(
-    SafeTensorFile* file, CpuPackReader* reader, CpuPackWriter* writer,
+CpuLinearWeight CpuModel::Impl::Shared::load_matrix(
+    IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
-    if (reader) return reader->read_q4_matrix(name);
-    if (!file) throw std::logic_error("CPU weight source is missing");
-    const HostTensorView tensor = file->tensor(name);
-    if (tensor.dtype != TensorDType::BF16 || tensor.shape != expected ||
-        expected.size() != 2) {
+    if (reader) {
+        return CpuLinearWeight::from_q4(reader->read_q4_matrix(name));
+    }
+    if (!source) throw std::logic_error("CPU weight source is missing");
+    const HostTensorView tensor = source->tensor(name);
+    if (tensor.shape != expected || expected.size() != 2) {
         throw std::runtime_error("unexpected CPU linear tensor: " + name);
+    }
+    if (tensor.dtype == TensorDType::Quantized) {
+        if (tensor.ggml_type != GgmlType::Q4_K &&
+            tensor.ggml_type != GgmlType::Q6_K) {
+            throw std::runtime_error(
+                "CPU GGUF supports only Q4_K/Q6_K linear tensor: " + name);
+        }
+        CpuGgufMatrix matrix;
+        matrix.type = tensor.ggml_type;
+        matrix.rows = static_cast<uint32_t>(expected[0]);
+        matrix.cols = static_cast<uint32_t>(expected[1]);
+        matrix.data = tensor.data;
+        matrix.bytes = tensor.bytes;
+        return CpuLinearWeight::from_gguf(matrix);
+    }
+    if (tensor.dtype != TensorDType::BF16) {
+        throw std::runtime_error(
+            "Safetensors CPU linear tensor must be BF16: " + name);
     }
     Q4GroupMatrix matrix = quantize_bf16_groupwise_q4(
         tensor.data, static_cast<size_t>(expected[0]),
         static_cast<size_t>(expected[1]), group_size);
     if (writer) writer->add_q4_matrix(name, matrix);
-    return matrix;
+    return CpuLinearWeight::from_q4(std::move(matrix));
 }
 
-Q4GroupMatrix CpuModel::Impl::Shared::load_concat(
-    SafeTensorFile* file, CpuPackReader* reader, CpuPackWriter* writer,
+CpuLinearWeight CpuModel::Impl::Shared::load_concat(
+    IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& synthetic,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
-    if (reader) return reader->read_q4_matrix(synthetic);
-    if (!file || parts.empty()) throw std::logic_error("invalid CPU concat source");
+    if (reader) {
+        return CpuLinearWeight::from_q4(reader->read_q4_matrix(synthetic));
+    }
+    if (!source || parts.empty()) {
+        throw std::logic_error("invalid CPU concat source");
+    }
     const int64_t cols = parts.front().second[1];
     size_t total_rows = 0;
-    for (const auto& part : parts) total_rows += static_cast<size_t>(part.second[0]);
+    std::vector<HostTensorView> tensors;
+    tensors.reserve(parts.size());
+    bool quantized = true;
+    for (const auto& [name, expected] : parts) {
+        const HostTensorView tensor = source->tensor(name);
+        if (tensor.shape != expected || expected.size() != 2 ||
+            expected[1] != cols) {
+            throw std::runtime_error("unexpected CPU concat tensor: " + name);
+        }
+        total_rows += static_cast<size_t>(expected[0]);
+        quantized = quantized && tensor.dtype == TensorDType::Quantized;
+        tensors.push_back(tensor);
+    }
+
+    if (quantized) {
+        CpuLinearWeight result;
+        result.rows = static_cast<uint32_t>(total_rows);
+        result.cols = static_cast<uint32_t>(cols);
+        for (size_t index = 0; index < tensors.size(); ++index) {
+            const HostTensorView& tensor = tensors[index];
+            if (tensor.ggml_type != GgmlType::Q4_K &&
+                tensor.ggml_type != GgmlType::Q6_K) {
+                throw std::runtime_error(
+                    "CPU GGUF concat supports only Q4_K/Q6_K: " +
+                    parts[index].first);
+            }
+            CpuGgufMatrix matrix;
+            matrix.type = tensor.ggml_type;
+            matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
+            matrix.cols = static_cast<uint32_t>(tensor.shape[1]);
+            matrix.data = tensor.data;
+            matrix.bytes = tensor.bytes;
+            matrix.validate();
+            result.segments.emplace_back(matrix);
+        }
+        result.validate();
+        return result;
+    }
+    if (std::any_of(tensors.begin(), tensors.end(),
+                    [](const HostTensorView& tensor) {
+                        return tensor.dtype == TensorDType::Quantized;
+                    })) {
+        throw std::runtime_error(
+            "CPU GGUF concat cannot mix quantized and dense tensors: " +
+            synthetic);
+    }
+
     std::vector<float> joined(total_rows * static_cast<size_t>(cols));
     size_t row_offset = 0;
-    for (const auto& [name, expected] : parts) {
-        const std::vector<float> values = bf16_vector(file->tensor(name), expected, name);
+    for (size_t index = 0; index < parts.size(); ++index) {
+        const auto& [name, expected] = parts[index];
+        if (tensors[index].dtype != TensorDType::BF16) {
+            throw std::runtime_error(
+                "Safetensors CPU concat tensor must be BF16: " + name);
+        }
+        const std::vector<float> values =
+            host_vector(tensors[index], expected, name);
         std::copy(values.begin(), values.end(),
                   joined.begin() + static_cast<ptrdiff_t>(
                       row_offset * static_cast<size_t>(cols)));
@@ -307,17 +441,23 @@ Q4GroupMatrix CpuModel::Impl::Shared::load_concat(
     Q4GroupMatrix matrix = quantize_float_groupwise_q4(
         joined.data(), total_rows, static_cast<size_t>(cols), group_size);
     if (writer) writer->add_q4_matrix(synthetic, matrix);
-    return matrix;
+    return CpuLinearWeight::from_q4(std::move(matrix));
 }
 
 std::vector<float> CpuModel::Impl::Shared::load_vector(
-    SafeTensorFile* file, CpuPackReader* reader, CpuPackWriter* writer,
+    IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
     if (reader) return reader->read_bf16_vector(name);
-    if (!file) throw std::logic_error("CPU vector source is missing");
-    const HostTensorView tensor = file->tensor(name);
-    std::vector<float> result = bf16_vector(tensor, expected, name);
-    if (writer) writer->add_bf16_vector(name, tensor.data, result.size());
+    if (!source) throw std::logic_error("CPU vector source is missing");
+    const HostTensorView tensor = source->tensor(name);
+    std::vector<float> result = host_vector(tensor, expected, name);
+    if (writer) {
+        if (tensor.dtype != TensorDType::BF16) {
+            throw std::runtime_error(
+                "CPU pack vectors require BF16 source: " + name);
+        }
+        writer->add_bf16_vector(name, tensor.data, result.size());
+    }
     return result;
 }
 

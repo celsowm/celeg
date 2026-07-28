@@ -74,6 +74,13 @@ add_library(lfm_cpu_backend ${LFM_CPU_BACKEND_SOURCES})
 target_include_directories(lfm_cpu_backend PUBLIC include)
 if(NOT MSVC)
     target_compile_options(lfm_cpu_backend PRIVATE -Wall -Wextra -Wpedantic)
+else()
+    set_source_files_properties(
+        src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
+        src/backend/cpu/kernels/elementwise_avx2_msvc.cpp
+        src/backend/cpu/kernels/gguf_avx2.cpp
+        PROPERTIES COMPILE_FLAGS "/arch:AVX2"
+    )
 endif()
 target_link_libraries(lfm_cpu_backend PUBLIC lfm_runtime Threads::Threads)
 
@@ -435,6 +442,9 @@ if(LFM_BUILD_TESTS)
     add_executable(cpu_kernels_test tests/cpu_kernels_test.cpp)
     target_link_libraries(cpu_kernels_test PRIVATE lfm_cpu_backend)
     add_test(NAME cpu_kernels_test COMMAND cpu_kernels_test)
+    add_executable(cpu_gguf_kernels_test tests/cpu_gguf_kernels_test.cpp)
+    target_link_libraries(cpu_gguf_kernels_test PRIVATE lfm_cpu_backend)
+    add_test(NAME cpu_gguf_kernels_test COMMAND cpu_gguf_kernels_test)
     add_executable(cpu_kv_cache_test tests/cpu_kv_cache_test.cpp)
     target_link_libraries(cpu_kv_cache_test PRIVATE lfm_cpu_backend)
     add_test(NAME cpu_kv_cache_test COMMAND cpu_kv_cache_test)
@@ -456,10 +466,10 @@ if(LFM_BUILD_TESTS)
     add_executable(cpu_model_options_test tests/cpu_model_options_test.cpp)
     target_link_libraries(cpu_model_options_test PRIVATE lfm_cpu_backend)
     add_test(NAME cpu_model_options_test COMMAND cpu_model_options_test)
-    add_executable(api_smoke_test tests/api_smoke_test.c)
-    target_link_libraries(api_smoke_test PRIVATE lfm25)
-    target_include_directories(api_smoke_test PRIVATE include)
-    add_test(NAME api_smoke_test COMMAND api_smoke_test)
+    add_executable(cpu_c_api_smoke_test tests/api_smoke_test.c)
+    target_link_libraries(cpu_c_api_smoke_test PRIVATE lfm25)
+    target_include_directories(cpu_c_api_smoke_test PRIVATE include)
+    add_test(NAME cpu_c_api_smoke_test COMMAND cpu_c_api_smoke_test)
 
     if(LFM_CUDA_AVAILABLE)
         add_executable(cuda_kernels_test tests/cuda_kernels_test.cu)

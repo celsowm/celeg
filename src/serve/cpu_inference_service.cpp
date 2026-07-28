@@ -33,13 +33,13 @@ FinishReason finish_reason_for(RequestStatus status, bool saw_eos) {
 
 } // namespace
 
-CpuInferenceService::CpuInferenceService(const std::string& safetensors_path,
+CpuInferenceService::CpuInferenceService(const std::string& model_path,
                                          int max_context,
                                          CpuModelOptions model_options,
                                          CpuConcurrentEngineOptions engine_options)
-    : engine_(safetensors_path, max_context, std::move(model_options),
+    : engine_(model_path, max_context, std::move(model_options),
               std::move(engine_options)) {
-    model_info_.name = std::filesystem::path(safetensors_path).stem().string();
+    model_info_.name = std::filesystem::path(model_path).stem().string();
     model_info_.backend = "cpu";
     model_info_.max_context = max_context;
 }

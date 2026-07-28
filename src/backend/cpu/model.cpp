@@ -165,7 +165,12 @@ CpuKvCacheMode CpuModel::session_kv_cache_mode() const {
 std::string CpuModel::session_backend_description() const {
     std::ostringstream out;
     out << "cpu-native isa=" << cpu_isa_name(impl_->shared->options.isa)
-        << " q4-group=" << impl_->shared->group_size
+        << " weights="
+        << (impl_->shared->is_gguf
+                ? "gguf-native(q4_k,q6_k)"
+                : "q4-group")
+        << (impl_->shared->is_gguf
+                ? "" : ("-" + std::to_string(impl_->shared->group_size)))
         << " kv=" << cpu_kv_cache_mode_name(impl_->shared->options.kv_cache_mode)
         << " kv-page=" << impl_->shared->options.kv_page_tokens
         << " prefill-chunk=" << impl_->shared->options.prefill_chunk_tokens
@@ -175,7 +180,10 @@ std::string CpuModel::session_backend_description() const {
         << " attention-threshold=" << impl_->shared->options.attention_parallel_threshold
         << " attention-page-tile=" << impl_->shared->options.attention_page_tile
         << " pinned-workers=" << impl_->shared->pool.pinned_workers()
-        << " pack=" << (impl_->shared->loaded_pack ? "hit" : "built")
+        << " pack="
+        << (impl_->shared->is_gguf
+                ? "none"
+                : (impl_->shared->loaded_pack ? "hit" : "built"))
         << " hardware-best="
         << cpu_isa_name(impl_->shared->capabilities.best_isa());
     return out.str();

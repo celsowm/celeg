@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lfm/backend/cpu/isa.hpp"
+#include "lfm/backend/cpu/gguf.hpp"
 #include "lfm/backend/cpu/quantization.hpp"
 #include "lfm/backend/cpu/thread_pool.hpp"
 
@@ -53,12 +54,19 @@ public:
     void gemm(const Q4GroupMatrix& weight, const float* input, float* output,
               size_t rows, float beta = 0.0f) const;
     void embedding(const Q4GroupMatrix& table, int32_t token, float* output) const;
+    void gemv(const CpuLinearWeight& weight, const float* input, float* output,
+              float beta = 0.0f) const;
+    void gemm(const CpuLinearWeight& weight, const float* input, float* output,
+              size_t rows, float beta = 0.0f) const;
+    void embedding(const CpuLinearWeight& table, int32_t token,
+                   float* output) const;
 
 private:
     CpuIsa isa_;
     CpuThreadPool* pool_;
     Q4DotFunction dot_;
     Q4Q8DotFunction q8_dot_ = nullptr;
+    CpuGgufDotFunction gguf_dot_ = nullptr;
     bool dynamic_q8_ = false;
 };
 

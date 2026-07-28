@@ -118,7 +118,7 @@ private:
 
 class CpuModel {
 public:
-    CpuModel(const std::string& safetensors_path,
+    CpuModel(const std::string& model_path,
              int max_context = 4096,
              CpuModelOptions options = {},
              GenerationConfig generation = {});
