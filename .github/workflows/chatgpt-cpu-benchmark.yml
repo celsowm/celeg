@@ -3,8 +3,6 @@ name: ChatGPT CPU benchmark
 on:
   push:
     branches: [chatgpt-cpu-bench-20260727]
-  pull_request:
-    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -16,222 +14,134 @@ jobs:
     timeout-minutes: 90
     env:
       HF_HUB_DISABLE_XET: "1"
-      HF_HUB_ENABLE_HF_TRANSFER: "0"
       LFM_REVISION: 37b30cce3446f3f2e26a0d3f8c67c9167f5079d7
       LLAMA_REVISION: 0e4a0362239713ea95a6864a17a8de4b0ad90d62
-
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build numactl
           python -m pip install --upgrade pip huggingface_hub
-
-      - name: Record host information
+      - name: Record host
         run: |
           mkdir -p benchmark-artifacts/results
-          {
-            echo "commit=${GITHUB_SHA}"
-            echo "runner=${RUNNER_NAME}"
-            echo "nproc=$(nproc)"
-            uname -a
-            lscpu
-            numactl --hardware || true
-            cmake --version
-            ninja --version
-            gcc --version
-            g++ --version
-          } | tee benchmark-artifacts/system.txt
-
+          { echo "sha=$GITHUB_SHA"; echo "nproc=$(nproc)"; uname -a; lscpu; cmake --version; g++ --version; } | tee benchmark-artifacts/system.txt
       - name: Restore omitted moved sources in checkout only
-        shell: bash
         run: |
-          set -euo pipefail
           python - <<'PY' | tee benchmark-artifacts/ephemeral-restoration.log
           from pathlib import Path
           import subprocess
-
-          deleted_at = subprocess.check_output([
-              "git", "log", "--all", "--diff-filter=D", "--format=%H", "--", "src/config.cpp"
-          ], text=True).splitlines()[0]
-          legacy = subprocess.check_output(["git", "rev-parse", f"{deleted_at}^"], text=True).strip()
-          print(f"deletion_commit={deleted_at}")
-          print(f"restoration_source={legacy}")
-
-          mappings = {
-              "include/lfm/config.hpp": "include/lfm/model/config/config.hpp",
-              "include/lfm/model_shape.hpp": "include/lfm/model/config/shape.hpp",
-              "include/lfm/model_variant.hpp": "include/lfm/model/config/variant.hpp",
-              "include/lfm/runtime_types.hpp": "include/lfm/model/execution/runtime_types.hpp",
-              "include/lfm/execution_plan.hpp": "include/lfm/model/execution/plan.hpp",
-              "include/lfm/quantization.hpp": "include/lfm/model/weights/quantization.hpp",
-              "include/lfm/reference.hpp": "include/lfm/model/reference.hpp",
-              "src/config.cpp": "src/model/config/config.cpp",
-              "src/model_shape.cpp": "src/model/config/shape.cpp",
-              "src/model_variant.cpp": "src/model/config/variant.cpp",
-              "src/runtime_types.cpp": "src/model/execution/runtime_types.cpp",
-              "src/execution_plan.cpp": "src/model/execution/plan.cpp",
-              "src/quantization.cpp": "src/model/weights/quantization.cpp",
-              "src/reference.cpp": "src/model/reference.cpp",
+          deleted = subprocess.check_output(["git","log","--all","--diff-filter=D","--format=%H","--","src/config.cpp"], text=True).splitlines()[0]
+          legacy = subprocess.check_output(["git","rev-parse",f"{deleted}^"], text=True).strip()
+          print(f"deletion_commit={deleted}\nrestoration_source={legacy}")
+          files = {
+            "include/lfm/config.hpp":"include/lfm/model/config/config.hpp",
+            "include/lfm/model_shape.hpp":"include/lfm/model/config/shape.hpp",
+            "include/lfm/model_variant.hpp":"include/lfm/model/config/variant.hpp",
+            "include/lfm/runtime_types.hpp":"include/lfm/model/execution/runtime_types.hpp",
+            "include/lfm/execution_plan.hpp":"include/lfm/model/execution/plan.hpp",
+            "include/lfm/quantization.hpp":"include/lfm/model/weights/quantization.hpp",
+            "include/lfm/reference.hpp":"include/lfm/model/reference.hpp",
+            "src/config.cpp":"src/model/config/config.cpp",
+            "src/model_shape.cpp":"src/model/config/shape.cpp",
+            "src/model_variant.cpp":"src/model/config/variant.cpp",
+            "src/runtime_types.cpp":"src/model/execution/runtime_types.cpp",
+            "src/execution_plan.cpp":"src/model/execution/plan.cpp",
+            "src/quantization.cpp":"src/model/weights/quantization.cpp",
+            "src/reference.cpp":"src/model/reference.cpp",
           }
-          replacements = {
-              '"lfm/config.hpp"': '"lfm/model/config/config.hpp"',
-              '"lfm/model_shape.hpp"': '"lfm/model/config/shape.hpp"',
-              '"lfm/model_variant.hpp"': '"lfm/model/config/variant.hpp"',
-              '"lfm/runtime_types.hpp"': '"lfm/model/execution/runtime_types.hpp"',
-              '"lfm/execution_plan.hpp"': '"lfm/model/execution/plan.hpp"',
-              '"lfm/quantization.hpp"': '"lfm/model/weights/quantization.hpp"',
-              '"lfm/reference.hpp"': '"lfm/model/reference.hpp"',
-              '"lfm/json.hpp"': '"lfm/checkpoint/formats/json.hpp"',
+          repl = {
+            '"lfm/config.hpp"':'"lfm/model/config/config.hpp"',
+            '"lfm/model_shape.hpp"':'"lfm/model/config/shape.hpp"',
+            '"lfm/model_variant.hpp"':'"lfm/model/config/variant.hpp"',
+            '"lfm/runtime_types.hpp"':'"lfm/model/execution/runtime_types.hpp"',
+            '"lfm/execution_plan.hpp"':'"lfm/model/execution/plan.hpp"',
+            '"lfm/quantization.hpp"':'"lfm/model/weights/quantization.hpp"',
+            '"lfm/reference.hpp"':'"lfm/model/reference.hpp"',
+            '"lfm/json.hpp"':'"lfm/checkpoint/formats/json.hpp"',
+            '"lfm/policy.hpp"':'"lfm/runtime/concurrency/policy_types.hpp"',
           }
-          for old, new in mappings.items():
-              target = Path(new)
-              if target.exists() and target.stat().st_size:
-                  print(f"kept existing {new}")
-                  continue
-              raw = subprocess.check_output(["git", "show", f"{legacy}:{old}"])
-              text = raw.decode("utf-8")
-              for before, after in replacements.items():
-                  text = text.replace(before, after)
-              target.parent.mkdir(parents=True, exist_ok=True)
-              target.write_text(text, encoding="utf-8")
-              print(f"restored {old} -> {new} ({len(text)} bytes)")
+          for old,new in files.items():
+            p=Path(new)
+            if p.exists() and p.stat().st_size:
+              print(f"kept {new}"); continue
+            text=subprocess.check_output(["git","show",f"{legacy}:{old}"]).decode()
+            for a,b in repl.items(): text=text.replace(a,b)
+            p.parent.mkdir(parents=True,exist_ok=True); p.write_text(text)
+            print(f"restored {old} -> {new}")
           PY
-          git status --short | tee benchmark-artifacts/ephemeral-status.txt
-
-      - name: Build baseline benchmark
+      - name: Build LFM baseline
         shell: bash
         run: |
           set -o pipefail
-          cmake -S . -B build-cpu -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLFM_ENABLE_CUDA=OFF \
-            -DLFM_ENABLE_SERVE=OFF \
-            -DLFM_BUILD_TESTS=OFF \
-            2>&1 | tee benchmark-artifacts/configure-baseline.log
-          cmake --build build-cpu --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" \
-            2>&1 | tee benchmark-artifacts/build-baseline.log
-
-      - name: Build native-tuned comparison
+          cmake -S . -B build-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DLFM_ENABLE_CUDA=OFF -DLFM_ENABLE_SERVE=OFF -DLFM_BUILD_TESTS=OFF 2>&1 | tee benchmark-artifacts/configure-baseline.log
+          cmake --build build-cpu --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" 2>&1 | tee benchmark-artifacts/build-baseline.log
+      - name: Build LFM native
         shell: bash
         run: |
           set -o pipefail
-          cmake -S . -B build-cpu-native -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DLFM_ENABLE_CUDA=OFF \
-            -DLFM_ENABLE_SERVE=OFF \
-            -DLFM_BUILD_TESTS=OFF \
-            -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" \
-            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" \
-            2>&1 | tee benchmark-artifacts/configure-native.log
-          cmake --build build-cpu-native --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" \
-            2>&1 | tee benchmark-artifacts/build-native.log
-
-      - name: Download benchmark models
-        shell: bash
+          cmake -S . -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release -DLFM_ENABLE_CUDA=OFF -DLFM_ENABLE_SERVE=OFF -DLFM_BUILD_TESTS=OFF -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" 2>&1 | tee benchmark-artifacts/configure-native.log
+          cmake --build build-native --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" 2>&1 | tee benchmark-artifacts/build-native.log
+      - name: Download models
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
-          from huggingface_hub import snapshot_download, hf_hub_download
-          lfm = Path(snapshot_download(repo_id="LiquidAI/LFM2.5-230M", revision=os.environ["LFM_REVISION"]))
-          q40 = Path(hf_hub_download(repo_id="LiquidAI/LFM2.5-230M-GGUF", filename="LFM2.5-230M-Q4_0.gguf"))
-          q4km = Path(hf_hub_download(repo_id="LiquidAI/LFM2.5-230M-GGUF", filename="LFM2.5-230M-Q4_K_M.gguf"))
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-              f.write(f"LFM_MODEL_DIR={lfm}\n")
-              f.write(f"LFM_MODEL_FILE={lfm / 'model.safetensors'}\n")
-              f.write(f"GGUF_Q40={q40}\n")
-              f.write(f"GGUF_Q4KM={q4km}\n")
+          from huggingface_hub import snapshot_download,hf_hub_download
+          lfm=Path(snapshot_download("LiquidAI/LFM2.5-230M",revision=os.environ["LFM_REVISION"]))
+          q40=Path(hf_hub_download("LiquidAI/LFM2.5-230M-GGUF","LFM2.5-230M-Q4_0.gguf"))
+          q4km=Path(hf_hub_download("LiquidAI/LFM2.5-230M-GGUF","LFM2.5-230M-Q4_K_M.gguf"))
+          with open(os.environ["GITHUB_ENV"],"a") as f:
+            f.write(f"LFM_MODEL_DIR={lfm}\nLFM_MODEL_FILE={lfm/'model.safetensors'}\nGGUF_Q40={q40}\nGGUF_Q4KM={q4km}\n")
           PY
-
-      - name: Clone and build pinned llama.cpp
+      - name: Build pinned llama.cpp
         shell: bash
         run: |
           set -o pipefail
           git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git .externals/llama.cpp
           git -C .externals/llama.cpp checkout --detach "$LLAMA_REVISION"
-          cmake -S .externals/llama.cpp -B .externals/llama.cpp/build-cpu -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_NATIVE=ON \
-            -DGGML_CUDA=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_SERVER=OFF \
-            2>&1 | tee benchmark-artifacts/configure-llama.log
-          cmake --build .externals/llama.cpp/build-cpu --target llama-bench -j "$(nproc)" \
-            2>&1 | tee benchmark-artifacts/build-llama.log
-
-      - name: Locate binaries
-        run: |
-          LFM_BENCH=$(find build-cpu -type f -name lfm25-bench -perm -111 | head -1)
-          LFM_NATIVE_BENCH=$(find build-cpu-native -type f -name lfm25-bench -perm -111 | head -1)
-          LFM_PREFILL=$(find build-cpu -type f -name lfm25-cpu-prefill-benchmark -perm -111 | head -1)
-          LFM_NATIVE_PREFILL=$(find build-cpu-native -type f -name lfm25-cpu-prefill-benchmark -perm -111 | head -1)
-          LLAMA_BENCH=$(find .externals/llama.cpp/build-cpu -type f -name llama-bench -perm -111 | head -1)
-          {
-            echo "LFM_BENCH=$LFM_BENCH"
-            echo "LFM_NATIVE_BENCH=$LFM_NATIVE_BENCH"
-            echo "LFM_PREFILL=$LFM_PREFILL"
-            echo "LFM_NATIVE_PREFILL=$LFM_NATIVE_PREFILL"
-            echo "LLAMA_BENCH=$LLAMA_BENCH"
-          } | tee -a "$GITHUB_ENV"
-          test -x "$LFM_BENCH" && test -x "$LFM_NATIVE_BENCH" && test -x "$LLAMA_BENCH"
-
-      - name: Run comparable CPU benchmarks
+          cmake -S .externals/llama.cpp -B .externals/llama.cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DGGML_CUDA=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_SERVER=OFF 2>&1 | tee benchmark-artifacts/configure-llama.log
+          cmake --build .externals/llama.cpp/build --target llama-bench -j "$(nproc)" 2>&1 | tee benchmark-artifacts/build-llama.log
+      - name: Run benchmarks
         shell: bash
         run: |
           set -euo pipefail
-          max_threads=$(nproc)
-          threads=(1 2 "$max_threads")
-          mapfile -t threads < <(printf '%s\n' "${threads[@]}" | awk '!seen[$0]++')
-          for t in "${threads[@]}"; do
-            "$LFM_BENCH" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json > "benchmark-artifacts/results/lfm-baseline-t${t}.json"
-            "$LFM_NATIVE_BENCH" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json > "benchmark-artifacts/results/lfm-native-t${t}.json"
-            "$LLAMA_BENCH" -m "$GGUF_Q40" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 > "benchmark-artifacts/results/llama-q4_0-t${t}.json"
-            "$LLAMA_BENCH" -m "$GGUF_Q4KM" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 > "benchmark-artifacts/results/llama-q4_k_m-t${t}.json"
-            "$LFM_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" > "benchmark-artifacts/results/lfm-prefill-profile-t${t}.txt"
-            "$LFM_NATIVE_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" > "benchmark-artifacts/results/lfm-native-prefill-profile-t${t}.txt"
+          LFM=$(find build-cpu -type f -name lfm25-bench -perm -111 | head -1)
+          LFMN=$(find build-native -type f -name lfm25-bench -perm -111 | head -1)
+          PF=$(find build-cpu -type f -name lfm25-cpu-prefill-benchmark -perm -111 | head -1)
+          PFN=$(find build-native -type f -name lfm25-cpu-prefill-benchmark -perm -111 | head -1)
+          LLAMA=$(find .externals/llama.cpp/build -type f -name llama-bench -perm -111 | head -1)
+          for t in 1 2 4; do
+            "$LFM" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json > "benchmark-artifacts/results/lfm-baseline-t$t.json"
+            "$LFMN" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json > "benchmark-artifacts/results/lfm-native-t$t.json"
+            "$LLAMA" -m "$GGUF_Q40" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 > "benchmark-artifacts/results/llama-q4_0-t$t.json"
+            "$LLAMA" -m "$GGUF_Q4KM" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 > "benchmark-artifacts/results/llama-q4_k_m-t$t.json"
+            "$PF" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" > "benchmark-artifacts/results/lfm-profile-t$t.txt"
+            "$PFN" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" > "benchmark-artifacts/results/lfm-native-profile-t$t.txt"
           done
-
-      - name: Produce summary
+      - name: Summarize
         run: |
           python - <<'PY'
-          import json, re
+          import json,re
           from pathlib import Path
-          d = Path("benchmark-artifacts/results")
-          rows = []
-          for path in sorted(d.glob("*-t*.json")):
-              data = json.loads(path.read_text())
-              pp = next(x for x in data if x.get("n_prompt", 0) > 0 and x.get("n_gen", 0) == 0)
-              tg = next(x for x in data if x.get("n_gen", 0) > 0 and x.get("n_prompt", 0) == 0)
-              t = int(re.search(r"-t(\d+)\.json$", path.name).group(1))
-              rows.append((t, path.name.rsplit("-t", 1)[0], float(pp["avg_ts"]), float(tg["avg_ts"])))
-          lines = ["# CPU benchmark results", "", "| threads | engine | pp512 tok/s | tg128 tok/s |", "|---:|---|---:|---:|"]
-          for t, engine, pp, tg in sorted(rows):
-              lines.append(f"| {t} | {engine} | {pp:.2f} | {tg:.2f} |")
-          lines += ["", "## Prefill profiles", ""]
-          for path in sorted(d.glob("*prefill-profile*.txt")):
-              lines += [f"### {path.name}", "```", path.read_text().strip(), "```", ""]
-          out = Path("benchmark-artifacts/summary.md")
-          out.write_text("\n".join(lines), encoding="utf-8")
-          print(out.read_text())
+          d=Path("benchmark-artifacts/results"); rows=[]
+          for p in d.glob("*.json"):
+            x=json.loads(p.read_text()); pp=next(r for r in x if r.get("n_prompt",0)>0 and r.get("n_gen",0)==0); tg=next(r for r in x if r.get("n_gen",0)>0 and r.get("n_prompt",0)==0)
+            rows.append((int(re.search(r"-t(\d+)\.json",p.name).group(1)),p.name.rsplit("-t",1)[0],float(pp["avg_ts"]),float(tg["avg_ts"])))
+          lines=["# CPU benchmark","","| threads | engine | pp512 | tg128 |","|---:|---|---:|---:|"]+[f"| {t} | {e} | {pp:.2f} | {tg:.2f} |" for t,e,pp,tg in sorted(rows)]
+          for p in sorted(d.glob("*.txt")): lines += ["",f"## {p.name}","```",p.read_text().strip(),"```"]
+          Path("benchmark-artifacts/summary.md").write_text("\n".join(lines)+"\n"); print("\n".join(lines))
           PY
-
-      - name: Upload benchmark evidence
+      - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cpu-benchmark-${{ github.sha }}
           path: benchmark-artifacts/
-          if-no-files-found: error
           retention-days: 7
