@@ -101,3 +101,136 @@ jobs:
           name: doctor-windows-cuda
           path: doctor-windows-cuda.json
           if-no-files-found: ignore
+
+  cpu-benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      HF_HUB_DISABLE_XET: "1"
+      LFM_REVISION: 37b30cce3446f3f2e26a0d3f8c67c9167f5079d7
+      LLAMA_REVISION: 0e4a0362239713ea95a6864a17a8de4b0ad90d62
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install benchmark tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build numactl
+          python -m pip install --upgrade pip huggingface_hub
+      - name: Record system
+        run: |
+          mkdir -p benchmark-artifacts/results
+          {
+            echo "sha=$GITHUB_SHA"
+            echo "nproc=$(nproc)"
+            uname -a
+            lscpu
+            numactl --hardware || true
+            cmake --version
+            g++ --version
+          } | tee benchmark-artifacts/system.txt
+      - name: Build lfm25 baseline
+        run: |
+          cmake -S . -B build-cpu-bench -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFM_ENABLE_CUDA=OFF \
+            -DLFM_ENABLE_SERVE=OFF \
+            -DLFM_BUILD_TESTS=OFF
+          cmake --build build-cpu-bench --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" \
+            2>&1 | tee benchmark-artifacts/build-lfm-baseline.log
+      - name: Build lfm25 native
+        run: |
+          cmake -S . -B build-cpu-native -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFM_ENABLE_CUDA=OFF \
+            -DLFM_ENABLE_SERVE=OFF \
+            -DLFM_BUILD_TESTS=OFF \
+            -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -march=native" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -march=native"
+          cmake --build build-cpu-native --target lfm25-bench lfm25-cpu-prefill-benchmark -j "$(nproc)" \
+            2>&1 | tee benchmark-artifacts/build-lfm-native.log
+      - name: Download models
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download, hf_hub_download
+          lfm = Path(snapshot_download("LiquidAI/LFM2.5-230M", revision=os.environ["LFM_REVISION"]))
+          q40 = Path(hf_hub_download("LiquidAI/LFM2.5-230M-GGUF", "LFM2.5-230M-Q4_0.gguf"))
+          q4km = Path(hf_hub_download("LiquidAI/LFM2.5-230M-GGUF", "LFM2.5-230M-Q4_K_M.gguf"))
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"LFM_MODEL_DIR={lfm}\n")
+              f.write(f"LFM_MODEL_FILE={lfm / 'model.safetensors'}\n")
+              f.write(f"GGUF_Q40={q40}\n")
+              f.write(f"GGUF_Q4KM={q4km}\n")
+          PY
+      - name: Build pinned llama.cpp
+        run: |
+          git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git .externals/llama.cpp
+          git -C .externals/llama.cpp checkout --detach "$LLAMA_REVISION"
+          cmake -S .externals/llama.cpp -B .externals/llama.cpp/build-cpu -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=ON \
+            -DGGML_CUDA=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=OFF
+          cmake --build .externals/llama.cpp/build-cpu --target llama-bench -j "$(nproc)" \
+            2>&1 | tee benchmark-artifacts/build-llama.log
+      - name: Locate binaries
+        run: |
+          echo "LFM_BENCH=$(find build-cpu-bench -type f -name lfm25-bench -perm -111 | head -1)" >> "$GITHUB_ENV"
+          echo "LFM_NATIVE_BENCH=$(find build-cpu-native -type f -name lfm25-bench -perm -111 | head -1)" >> "$GITHUB_ENV"
+          echo "LFM_PREFILL=$(find build-cpu-bench -type f -name lfm25-cpu-prefill-benchmark -perm -111 | head -1)" >> "$GITHUB_ENV"
+          echo "LFM_NATIVE_PREFILL=$(find build-cpu-native -type f -name lfm25-cpu-prefill-benchmark -perm -111 | head -1)" >> "$GITHUB_ENV"
+          echo "LLAMA_BENCH=$(find .externals/llama.cpp/build-cpu -type f -name llama-bench -perm -111 | head -1)" >> "$GITHUB_ENV"
+      - name: Run benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t threads < <(printf '%s\n' 1 2 "$(nproc)" | awk '!seen[$0]++')
+          for t in "${threads[@]}"; do
+            "$LFM_BENCH" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json \
+              > "benchmark-artifacts/results/lfm-baseline-t${t}.json"
+            "$LFM_NATIVE_BENCH" --model "$LFM_MODEL_DIR" -p 512 -n 128 -r 5 --warmup 1 -t "$t" --cpu-q4-group 32 -o json \
+              > "benchmark-artifacts/results/lfm-native-t${t}.json"
+            "$LLAMA_BENCH" -m "$GGUF_Q40" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 \
+              > "benchmark-artifacts/results/llama-q4_0-t${t}.json"
+            "$LLAMA_BENCH" -m "$GGUF_Q4KM" -p 512 -n 128 -r 5 -o json -t "$t" -b 256 -ub 256 \
+              > "benchmark-artifacts/results/llama-q4_k_m-t${t}.json"
+            "$LFM_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" \
+              > "benchmark-artifacts/results/lfm-prefill-profile-t${t}.txt"
+            "$LFM_NATIVE_PREFILL" "$LFM_MODEL_FILE" 512 256 32 bf16 auto "$t" \
+              > "benchmark-artifacts/results/lfm-native-prefill-profile-t${t}.txt"
+          done
+      - name: Summarize
+        run: |
+          python - <<'PY'
+          import json, re
+          from pathlib import Path
+          d = Path("benchmark-artifacts/results")
+          rows = []
+          for p in d.glob("*-t*.json"):
+              data = json.loads(p.read_text())
+              pp = next(x for x in data if x.get("n_prompt", 0) and not x.get("n_gen", 0))
+              tg = next(x for x in data if x.get("n_gen", 0) and not x.get("n_prompt", 0))
+              t = int(re.search(r"-t(\d+)\.json$", p.name).group(1))
+              rows.append((t, p.name.rsplit("-t", 1)[0], float(pp["avg_ts"]), float(tg["avg_ts"])))
+          lines = ["# CPU benchmark", "", "| threads | engine | pp512 tok/s | tg128 tok/s |", "|---:|---|---:|---:|"]
+          for t, e, pp, tg in sorted(rows):
+              lines.append(f"| {t} | {e} | {pp:.2f} | {tg:.2f} |")
+          for p in sorted(d.glob("*prefill-profile*.txt")):
+              lines += ["", f"## {p.name}", "```", p.read_text().strip(), "```"]
+          Path("benchmark-artifacts/summary.md").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-benchmark-${{ github.sha }}
+          path: benchmark-artifacts/
+          if-no-files-found: error
+          retention-days: 7
