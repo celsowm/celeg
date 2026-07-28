@@ -30,8 +30,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build numactl
           python -m pip install --upgrade pip huggingface_hub
-      - name: Run comparative CPU benchmark
-        run: bash benchmarks/chatgpt_temp_cpu_bench.sh
+      - name: Run quick comparative CPU benchmark
+        run: bash benchmarks/chatgpt_temp_cpu_bench_quick.sh
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
