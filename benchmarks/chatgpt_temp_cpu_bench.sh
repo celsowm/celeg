@@ -58,6 +58,14 @@ for old, new in files.items():
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
     print(f"restored {old} -> {new}")
+
+p = Path("src/backend/cpu/model_weights.cpp")
+text = p.read_text(encoding="utf-8")
+if "#include <cstring>" not in text:
+    marker = "#include <algorithm>\n"
+    text = text.replace(marker, marker + "#include <cstring>\n")
+    p.write_text(text, encoding="utf-8")
+    print("patched src/backend/cpu/model_weights.cpp: add <cstring>")
 PY
 
 set -o pipefail
