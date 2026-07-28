@@ -24,7 +24,7 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,6 +52,62 @@ jobs:
             gcc --version
             g++ --version
           } | tee benchmark-artifacts/system.txt
+
+      - name: Restore omitted moved sources in checkout only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee benchmark-artifacts/ephemeral-restoration.log
+          from pathlib import Path
+          import subprocess
+
+          deleted_at = subprocess.check_output([
+              "git", "log", "--all", "--diff-filter=D", "--format=%H", "--", "src/config.cpp"
+          ], text=True).splitlines()[0]
+          legacy = subprocess.check_output(["git", "rev-parse", f"{deleted_at}^"], text=True).strip()
+          print(f"deletion_commit={deleted_at}")
+          print(f"restoration_source={legacy}")
+
+          mappings = {
+              "include/lfm/config.hpp": "include/lfm/model/config/config.hpp",
+              "include/lfm/model_shape.hpp": "include/lfm/model/config/shape.hpp",
+              "include/lfm/model_variant.hpp": "include/lfm/model/config/variant.hpp",
+              "include/lfm/runtime_types.hpp": "include/lfm/model/execution/runtime_types.hpp",
+              "include/lfm/execution_plan.hpp": "include/lfm/model/execution/plan.hpp",
+              "include/lfm/quantization.hpp": "include/lfm/model/weights/quantization.hpp",
+              "include/lfm/reference.hpp": "include/lfm/model/reference.hpp",
+              "src/config.cpp": "src/model/config/config.cpp",
+              "src/model_shape.cpp": "src/model/config/shape.cpp",
+              "src/model_variant.cpp": "src/model/config/variant.cpp",
+              "src/runtime_types.cpp": "src/model/execution/runtime_types.cpp",
+              "src/execution_plan.cpp": "src/model/execution/plan.cpp",
+              "src/quantization.cpp": "src/model/weights/quantization.cpp",
+              "src/reference.cpp": "src/model/reference.cpp",
+          }
+          replacements = {
+              '"lfm/config.hpp"': '"lfm/model/config/config.hpp"',
+              '"lfm/model_shape.hpp"': '"lfm/model/config/shape.hpp"',
+              '"lfm/model_variant.hpp"': '"lfm/model/config/variant.hpp"',
+              '"lfm/runtime_types.hpp"': '"lfm/model/execution/runtime_types.hpp"',
+              '"lfm/execution_plan.hpp"': '"lfm/model/execution/plan.hpp"',
+              '"lfm/quantization.hpp"': '"lfm/model/weights/quantization.hpp"',
+              '"lfm/reference.hpp"': '"lfm/model/reference.hpp"',
+              '"lfm/json.hpp"': '"lfm/checkpoint/formats/json.hpp"',
+          }
+          for old, new in mappings.items():
+              target = Path(new)
+              if target.exists() and target.stat().st_size:
+                  print(f"kept existing {new}")
+                  continue
+              raw = subprocess.check_output(["git", "show", f"{legacy}:{old}"])
+              text = raw.decode("utf-8")
+              for before, after in replacements.items():
+                  text = text.replace(before, after)
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(text, encoding="utf-8")
+              print(f"restored {old} -> {new} ({len(text)} bytes)")
+          PY
+          git status --short | tee benchmark-artifacts/ephemeral-status.txt
 
       - name: Build baseline benchmark
         shell: bash
