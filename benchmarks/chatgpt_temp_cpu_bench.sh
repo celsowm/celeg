@@ -45,6 +45,7 @@ repl = {
     '"lfm/reference.hpp"': '"lfm/model/reference.hpp"',
     '"lfm/json.hpp"': '"lfm/checkpoint/formats/json.hpp"',
     '"lfm/policy.hpp"': '"lfm/runtime/concurrency/policy_types.hpp"',
+    '"lfm/expert_offload.hpp"': '"lfm/runtime/moe/offload.hpp"',
 }
 for old, new in files.items():
     target = Path(new)
