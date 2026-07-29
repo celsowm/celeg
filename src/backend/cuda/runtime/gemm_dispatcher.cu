@@ -273,12 +273,28 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             if (!weight.int4_quantized()) {
                 throw std::runtime_error("execution plan requires INT4 weights");
             }
+            if (m > 1 && weight.bf16) {
+                if (options_.gemm_backend == GemmBackend::CublasLt) {
+                    linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
+                } else {
+                    linear_cublas(x, weight.bf16, y, m, n, k, beta);
+                }
+                return;
+            }
             launch_w4a16_linear(x, weight.int4, weight.scales, y,
                                 m, n, k, beta, stream_);
             return;
         case LinearKernelKind::W8A16:
             if (!weight.int8_quantized()) {
                 throw std::runtime_error("execution plan requires INT8 weights");
+            }
+            if (m > 1 && weight.bf16) {
+                if (options_.gemm_backend == GemmBackend::CublasLt) {
+                    linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
+                } else {
+                    linear_cublas(x, weight.bf16, y, m, n, k, beta);
+                }
+                return;
             }
             launch_w8a16_linear(x, weight.int8, weight.scales, y,
                                 m, n, k, beta, stream_);

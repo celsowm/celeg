@@ -48,12 +48,12 @@ void LinearWeight::validate_storage() const {
             }
             break;
         case LinearStorageKind::Int8:
-            if (bf16 || !int8 || int4 || !scales) {
+            if (!int8 || int4 || !scales) {
                 throw std::runtime_error("invalid INT8 linear weight storage");
             }
             break;
         case LinearStorageKind::Int4:
-            if (bf16 || int8 || !int4 || !scales) {
+            if (int8 || !int4 || !scales) {
                 throw std::runtime_error("invalid INT4 linear weight storage");
             }
             break;

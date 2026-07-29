@@ -270,7 +270,9 @@ const LinearWeight* WeightLoader::load_linear_weight(
                                 weight.bf16_storage.data(),
                                 host_bf16.size() * sizeof(__nv_bfloat16),
                                 cudaMemcpyDeviceToHost));
-            weight.bf16_storage.reset(0);
+            // Keep the BF16 device buffer as a prefill fallback: the W8A16
+            // kernel is a scalar GEMV (m=1 decode), so prefill (m>1) dispatches
+            // to BF16 cuBLAS tensor-core GEMM via weight.linear.bf16.
             const std::byte* dense_data =
                 reinterpret_cast<const std::byte*>(host_bf16.data());
             const size_t count = static_cast<size_t>(rows) * cols;
@@ -291,6 +293,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                 weight.linear.kind = LinearStorageKind::Int8;
                 weight.linear.int8 = weight.int8_storage.data();
                 weight.linear.scales = weight.scales_storage.data();
+                weight.linear.bf16 = weight.bf16_storage.data();
             } else {
                 Int4RowwisePack pack = quantize_bf16_rows_int4(
                     dense_data, static_cast<size_t>(rows),
@@ -308,6 +311,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                 weight.linear.kind = LinearStorageKind::Int4;
                 weight.linear.int4 = weight.int4_storage.data();
                 weight.linear.scales = weight.scales_storage.data();
+                weight.linear.bf16 = weight.bf16_storage.data();
             }
             weight.linear.rows = rows;
             weight.linear.cols = cols;
@@ -525,7 +529,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                                 weight.bf16_storage.data(),
                                 count * sizeof(__nv_bfloat16),
                                 cudaMemcpyDeviceToHost));
-            weight.bf16_storage.reset(0);
+            // Keep BF16 device buffer as prefill fallback (see load_linear_weight).
             const std::byte* dense_data =
                 reinterpret_cast<const std::byte*>(host_bf16.data());
             if (weight_mode_ == WeightMode::Int8) {
@@ -545,6 +549,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 weight.linear.kind = LinearStorageKind::Int8;
                 weight.linear.int8 = weight.int8_storage.data();
                 weight.linear.scales = weight.scales_storage.data();
+                weight.linear.bf16 = weight.bf16_storage.data();
             } else {
                 Int4RowwisePack pack = quantize_bf16_rows_int4(
                     dense_data, static_cast<size_t>(total_rows),
@@ -562,6 +567,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 weight.linear.kind = LinearStorageKind::Int4;
                 weight.linear.int4 = weight.int4_storage.data();
                 weight.linear.scales = weight.scales_storage.data();
+                weight.linear.bf16 = weight.bf16_storage.data();
             }
             weight.linear.rows = static_cast<int>(total_rows);
             weight.linear.cols = static_cast<int>(common_width);
