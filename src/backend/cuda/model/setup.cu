@@ -508,6 +508,9 @@ LfmModel::Impl::Impl(const std::string& model_path,
         options_.gemm_backend == GemmBackend::CublasLt) {
         warmup_decode_gemms();
     }
+    if (options_.fast_attention) {
+        warmup_prefill_attention_gemm();
+    }
     local_kv_cache_available_ = options_.allocate_local_kv_cache;
     reset(options_.allocate_local_kv_cache);
 }
@@ -623,6 +626,35 @@ void LfmModel::Impl::warmup_decode_gemms() {
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
+// launch_gqa_prefill_gemm's cublasGemmStridedBatchedEx calls go through the
+// plain cublas handle, never touched by warmup_decode_gemms() (which only
+// exercises cublasLt via linear()). The very first call into a new cuBLAS
+// GEMM/algo combination pays a one-time JIT/lazy-load cost - benign in a
+// long-running server, but if left to happen on the first real prefill it
+// inflates that call's measured latency by ~35ms on this GPU. Run one throw-
+// away 2-row batched-GEMM attention pass here, off the timed path, exactly
+// as warmup_decode_gemms() already does for the decode cuBLASLt calls.
+void LfmModel::Impl::warmup_prefill_attention_gemm() {
+    constexpr int kRows = 2;
+    DeviceBuffer<__nv_bfloat16> q(static_cast<size_t>(kRows) * shape_.q_width);
+    DeviceBuffer<__nv_bfloat16> k(static_cast<size_t>(kRows) * shape_.kv_width);
+    DeviceBuffer<__nv_bfloat16> v(static_cast<size_t>(kRows) * shape_.kv_width);
+    DeviceBuffer<__nv_bfloat16> out(static_cast<size_t>(kRows) * shape_.q_width);
+    DeviceBuffer<float> scores(
+        static_cast<size_t>(shape_.num_attention_heads) * kRows * kRows);
+    DeviceBuffer<__nv_bfloat16> probs(
+        static_cast<size_t>(shape_.num_attention_heads) * kRows * kRows);
+    q.zero_async(stream_.get());
+    k.zero_async(stream_.get());
+    v.zero_async(stream_.get());
+    launch_gqa_prefill_gemm(
+        gemm_->cublas().get(), q.data(), k.data(), v.data(), out.data(),
+        scores.data(), probs.data(), kRows, shape_.num_attention_heads,
+        shape_.num_key_value_heads, shape_.head_dim, shape_.q_width,
+        shape_.kv_width, shape_.q_width, stream_.get());
+    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+}
+
 void LfmModel::Impl::reset(bool allocate_local_kv) {
     allocate_local_kv = allocate_local_kv && options_.allocate_local_kv_cache;
     if (allocate_local_kv && !local_kv_cache_available_) {
@@ -690,6 +722,19 @@ void LfmModel::Impl::allocate_prefill_workspace(int rows) {
     prefill_gate_up_.reserve(r * 2 * shape_.intermediate);
     prefill_activated_.reserve(r * shape_.intermediate);
     prefill_mlp_output_.reserve(r * shape_.hidden);
+
+    if (rows <= kMaxGemmAttentionRows) {
+        const size_t scores_elems =
+            static_cast<size_t>(shape_.num_attention_heads) * r * r;
+        prefill_attn_scores_.reserve(scores_elems);
+        prefill_attn_probs_.reserve(scores_elems);
+    } else {
+        const size_t chunks = (r + kPrefillAttnChunkTokens - 1) / kPrefillAttnChunkTokens;
+        const size_t partials = r * shape_.num_attention_heads * chunks;
+        prefill_attn_partial_max_.reserve(partials);
+        prefill_attn_partial_denom_.reserve(partials);
+        prefill_attn_partial_accum_.reserve(partials * shape_.head_dim);
+    }
 }
 
 void LfmModel::Impl::release_prefill_workspace() {

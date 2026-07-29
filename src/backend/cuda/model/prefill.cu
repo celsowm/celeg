@@ -112,11 +112,32 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                     attention->key_cache.data(), attention->value_cache.data(),
                     rows, shape_.kv_width, stream_.get());
                 if (options_.fast_attention) {
-                    launch_gqa_prefill_online(
-                        prefill_q_.data(), attention->key_cache.data(),
-                        attention->value_cache.data(), prefill_op_output_.data(),
-                        rows, shape_.num_attention_heads, shape_.num_key_value_heads,
-                        shape_.head_dim, stream_.get());
+                    // The batched-GEMM path (below) needs O(q_heads*rows^2)
+                    // scratch for the dense score matrix; beyond
+                    // kMaxGemmAttentionRows that outgrows what a single
+                    // prefill_batched call should allocate, so fall back to
+                    // the chunked online-softmax kernel (O(rows) scratch).
+                    if (rows <= kMaxGemmAttentionRows) {
+                        launch_gqa_prefill_gemm(
+                            gemm_->cublas().get(), prefill_q_.data(),
+                            attention->key_cache.data(), attention->value_cache.data(),
+                            prefill_op_output_.data(), prefill_attn_scores_.data(),
+                            prefill_attn_probs_.data(), rows,
+                            shape_.num_attention_heads, shape_.num_key_value_heads,
+                            shape_.head_dim, shape_.q_width, shape_.kv_width,
+                            shape_.q_width, stream_.get());
+                    } else {
+                        const int chunks = (rows + kPrefillAttnChunkTokens - 1) /
+                            kPrefillAttnChunkTokens;
+                        launch_gqa_prefill_segmented(
+                            prefill_q_.data(), attention->key_cache.data(),
+                            attention->value_cache.data(), prefill_op_output_.data(),
+                            rows, shape_.num_attention_heads, shape_.num_key_value_heads,
+                            shape_.head_dim, kPrefillAttnChunkTokens, chunks,
+                            prefill_attn_partial_max_.data(),
+                            prefill_attn_partial_denom_.data(),
+                            prefill_attn_partial_accum_.data(), stream_.get());
+                    }
                 } else {
                     launch_gqa_prefill_strict(
                         prefill_q_.data(), attention->key_cache.data(),

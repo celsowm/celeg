@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cublas_v2.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <cstdint>
@@ -51,6 +52,36 @@ void launch_gqa_prefill_online(const __nv_bfloat16* q,
                                __nv_bfloat16* out, int rows,
                                int q_heads, int kv_heads, int head_dim,
                                cudaStream_t stream);
+
+// Chunked/segmented causal prefill attention. Each (row, head, chunk) block
+// handles at most `chunk_tokens` KV positions (causally clamped to the row's
+// own position) instead of the single serial per-row loop in
+// launch_gqa_prefill_online, then a reduce kernel combines the chunk-local
+// online-softmax partials per row/head. Trades one extra kernel + O(rows *
+// q_heads * chunks) scratch for far more block-level parallelism and a much
+// shorter per-block critical path. `chunks` must equal
+// ceil(rows / chunk_tokens); `partial_max`/`partial_denom` must hold
+// rows*q_heads*chunks floats and `partial_accum`
+// rows*q_heads*chunks*head_dim floats.
+void launch_gqa_prefill_segmented(
+    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
+    const __nv_bfloat16* value_cache, __nv_bfloat16* out, int rows,
+    int q_heads, int kv_heads, int head_dim, int chunk_tokens, int chunks,
+    float* partial_max, float* partial_denom, float* partial_accum,
+    cudaStream_t stream);
+
+// Batched-GEMM causal prefill attention (see attention_compute.inl for the
+// rationale). `scores_scratch` needs q_heads*rows*rows floats,
+// `probs_scratch` the same element count in BF16. `q_width`/`kv_width` are
+// the interleaved-head row strides of `q`/`k`/`v`; `out_width` is the row
+// stride of `out` (the attention-output buffer consumed by the out-proj
+// linear layer).
+void launch_gqa_prefill_gemm(
+    cublasHandle_t cublas, const __nv_bfloat16* q, const __nv_bfloat16* k,
+    const __nv_bfloat16* v, __nv_bfloat16* out, float* scores_scratch,
+    __nv_bfloat16* probs_scratch, int rows, int q_heads, int kv_heads,
+    int head_dim, int q_width, int kv_width, int out_width,
+    cudaStream_t stream);
 
 void launch_gqa_decode_strict_int8(
     const __nv_bfloat16* q, const int8_t* key_cache,
