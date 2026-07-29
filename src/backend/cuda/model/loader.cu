@@ -1,6 +1,7 @@
 #include "lfm/model/weights/loader.hpp"
 #include "lfm/model/weights/quantization.hpp"
 #include "lfm/runtime/moe/expert_residency.hpp"
+#include "lfm/backend/cuda/kernels/gguf.cuh"
 
 #include <cstring>
 #include <cstddef>
@@ -202,8 +203,12 @@ const LinearWeight* WeightLoader::load_linear_weight(
     DeviceWeight weight;
     weight.shape = tensor.shape;
 
-    // Native GGUF block-quantized weights stay packed; the matmul kernel
-    // dequantizes on the fly. Upload the raw super-block bytes verbatim.
+    // Native GGUF block-quantized weights are dequantized to BF16 once here
+    // (at load time, off the hot path) so every GEMM - prefill and decode
+    // alike - runs through the tensor-core cuBLAS/cuBLASLt path instead of
+    // the scalar, per-element dequantizing GEMV/GEMM kernels. The one-time
+    // dequant cost is bandwidth-bound (~1-2ms for this model's full weight
+    // set); the matmul speedup is 1-2 orders of magnitude.
     if (tensor.dtype == TensorDType::Quantized) {
         if (tensor.ggml_type != GgmlType::Q4_K && tensor.ggml_type != GgmlType::Q6_K) {
             throw std::runtime_error("unsupported GGUF linear quantization (CUDA supports Q4_K/Q6_K only): " + name);
@@ -219,15 +224,16 @@ const LinearWeight* WeightLoader::load_linear_weight(
             throw std::runtime_error(
                 "GGUF quantized byte count mismatch for " + name);
         }
-        weight.gguf_segment_storage.emplace_back(tensor.bytes);
-        LFM_CUDA(cudaMemcpy(weight.gguf_segment_storage.back().data(), tensor.data,
+        DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
+        LFM_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                             tensor.bytes, cudaMemcpyHostToDevice));
-        weight.linear.kind = (tensor.ggml_type == GgmlType::Q4_K)
-                                ? LinearStorageKind::Q4_K
-                                : LinearStorageKind::Q6_K;
-        weight.linear.gguf_segments.push_back({
-            weight.gguf_segment_storage.back().data(), tensor.ggml_type, 0,
-            rows, cols, static_cast<size_t>(cols / trait.block_size) * trait.type_size});
+        weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
+        launch_gguf_dequant(raw_blocks.data(), tensor.ggml_type,
+                           weight.bf16_storage.data(), rows, cols,
+                           nullptr);
+        LFM_CUDA(cudaStreamSynchronize(nullptr));
+        weight.linear.kind = LinearStorageKind::Bf16;
+        weight.linear.bf16 = weight.bf16_storage.data();
         weight.linear.rows = rows;
         weight.linear.cols = cols;
         weight.linear.validate_storage();
@@ -351,9 +357,11 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         throw std::runtime_error("mixed dense/quantized concat is not supported: " + synthetic_name);
     }
 
-    // GGUF block-quantized concat: preserve every source stream natively. A
-    // single LinearWeight can therefore represent Q4_K/Q6_K QKV projections
-    // without materializing a BF16 copy.
+    // GGUF block-quantized concat: dequantize every source stream straight
+    // into its row-offset slice of one combined BF16 buffer (see the
+    // load_linear_weight comment above for why: tensor-core GEMM on BF16
+    // beats the scalar dequantizing GEMV/GEMM kernels by 1-2 orders of
+    // magnitude, and the one-time load cost is negligible).
     if (views.front().dtype == TensorDType::Quantized) {
         for (const auto& v : views) {
             if (v.dtype != TensorDType::Quantized ||
@@ -363,6 +371,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         }
         DeviceWeight weight;
         weight.shape = {total_rows, common_width};
+        weight.bf16_storage.reset(static_cast<size_t>(total_rows) * common_width);
         int row_offset = 0;
         for (const auto& v : views) {
             const GgmlTypeTrait trait = ggml_type_trait(v.ggml_type);
@@ -371,17 +380,20 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             }
             const size_t row_bytes = static_cast<size_t>(common_width / trait.block_size) * trait.type_size;
             const size_t bytes = static_cast<size_t>(v.shape[0]) * row_bytes;
-            weight.gguf_segment_storage.emplace_back(bytes);
-            LFM_CUDA(cudaMemcpy(weight.gguf_segment_storage.back().data(), v.data,
+            DeviceBuffer<uint8_t> raw_blocks(bytes);
+            LFM_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
                                 bytes, cudaMemcpyHostToDevice));
-            weight.linear.gguf_segments.push_back({
-                weight.gguf_segment_storage.back().data(), v.ggml_type,
-                row_offset, static_cast<int>(v.shape[0]),
-                static_cast<int>(common_width), row_bytes});
+            launch_gguf_dequant(
+                raw_blocks.data(), v.ggml_type,
+                weight.bf16_storage.data() +
+                    static_cast<size_t>(row_offset) * common_width,
+                static_cast<int>(v.shape[0]), static_cast<int>(common_width),
+                nullptr);
+            LFM_CUDA(cudaStreamSynchronize(nullptr));
             row_offset += static_cast<int>(v.shape[0]);
         }
-        weight.linear.kind = weight.linear.gguf_segments.front().type == GgmlType::Q4_K
-            ? LinearStorageKind::Q4_K : LinearStorageKind::Q6_K;
+        weight.linear.kind = LinearStorageKind::Bf16;
+        weight.linear.bf16 = weight.bf16_storage.data();
         weight.linear.rows = static_cast<int>(total_rows);
         weight.linear.cols = static_cast<int>(common_width);
         weight.linear.validate_storage();
