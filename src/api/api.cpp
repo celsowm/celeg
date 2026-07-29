@@ -290,8 +290,8 @@ void lfm25_engine_options_init(lfm25_engine_options* options, lfm25_backend back
         options->model.backend_options.cuda.kv_cache_mode = 0;
         options->model.backend_options.cuda.gemm_backend = 0;
         options->model.backend_options.cuda.attention_mode = 2;
-        options->model.backend_options.cuda.attention_chunk_tokens = 256;
-        options->model.backend_options.cuda.attention_auto_threshold = 4096;
+        options->model.backend_options.cuda.attention_chunk_tokens = 32;
+        options->model.backend_options.cuda.attention_auto_threshold = 1;
         options->model.backend_options.cuda.lt_workspace_mb = 64;
         options->model.backend_options.cuda.lt_heuristics = 8;
     }

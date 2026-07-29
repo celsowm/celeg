@@ -49,8 +49,8 @@ struct Args {
     std::string weight_mode = "bf16";
     std::string kv_cache_mode = "bf16";
     std::string attention_mode = "auto";
-    int attention_chunk_tokens = 256;
-    int attention_auto_threshold = 4096;
+    int attention_chunk_tokens = 32;
+    int attention_auto_threshold = 1;
     bool raw_prompt = false;
     bool fused_residuals = false;
     bool fast_attention = true;

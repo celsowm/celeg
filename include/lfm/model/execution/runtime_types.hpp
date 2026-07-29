@@ -42,9 +42,20 @@ struct ModelOptions {
     bool lt_autotune = false;
     WeightMode weight_mode = WeightMode::Bf16;
     KvCacheMode kv_cache_mode = KvCacheMode::Bf16;
+    // Segmented (chunked, parallel-reduce) decode attention beats the
+    // single serial per-KV-token kernel across the whole range measured
+    // (position 16 through 1500+, chunk 32-64): decode has far less
+    // baseline block parallelism than prefill (q_heads blocks, not
+    // rows*q_heads), so splitting the KV history into chunks increases
+    // occupancy rather than just reshuffling already-hidden latency.
+    // Callers that want it must also set fast_attention = true (Auto and
+    // Segmented both require it - see ExecutionPlan::compile); the mode
+    // itself stays Single by default so a default-constructed ModelOptions
+    // remains valid without that extra requirement. The CLI opts in
+    // explicitly (attention_mode "auto" + fast_attention true by default).
     AttentionMode attention_mode = AttentionMode::Single;
-    int attention_chunk_tokens = 256;
-    int attention_auto_threshold = 4096;
+    int attention_chunk_tokens = 32;
+    int attention_auto_threshold = 1;
     bool allocate_local_kv_cache = true;
     ExpertOffloadOptions expert_offload;
 };

@@ -7,6 +7,66 @@
 #include <stdexcept>
 
 namespace lfm {
+namespace {
+
+__inline__ __device__ float warp_sum(float value) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        value += __shfl_down_sync(0xffffffffu, value, offset);
+    }
+    return value;
+}
+
+// Dedicated m=1 (decode) BF16xBF16 GEMV: one warp per output row, 2-wide
+// __nv_bfloat162 loads. cublas/cublasLt's generic GEMM path (used for
+// m>1 prefill/MLP shapes, where it is excellent) turns out not to reach
+// good memory bandwidth for this skinny m=1 shape - measured at ~30GB/s
+// on a GPU with ~360GB/s peak, regardless of cublas vs cublasLt. Decode is
+// almost entirely bandwidth-bound (one full weight-matrix read per token),
+// so this dedicated kernel targets bandwidth, not FLOPs.
+__global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
+                                 const __nv_bfloat16* __restrict__ weight,
+                                 __nv_bfloat16* __restrict__ y,
+                                 int n, int k, float beta) {
+    constexpr int warps_per_block = 8;
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    const int row = blockIdx.x * warps_per_block + warp;
+    if (row >= n) return;
+
+    const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x);
+    const __nv_bfloat162* w2 = reinterpret_cast<const __nv_bfloat162*>(
+        weight + static_cast<size_t>(row) * k);
+    const int k2 = k >> 1;
+    float sum = 0.0f;
+    for (int i = lane; i < k2; i += 32) {
+        const __nv_bfloat162 xv = x2[i];
+        const __nv_bfloat162 wv = w2[i];
+        sum += __bfloat162float(xv.x) * __bfloat162float(wv.x) +
+               __bfloat162float(xv.y) * __bfloat162float(wv.y);
+    }
+    sum = warp_sum(sum);
+    if (lane == 0) {
+        float value = sum;
+        if (k & 1) {
+            const int last = k - 1;
+            value += __bfloat162float(x[last]) *
+                     __bfloat162float(weight[static_cast<size_t>(row) * k + last]);
+        }
+        if (beta != 0.0f) value += beta * __bfloat162float(y[row]);
+        y[row] = __float2bfloat16(value);
+    }
+}
+
+void launch_bf16_gemv(const __nv_bfloat16* x, const __nv_bfloat16* weight,
+                      __nv_bfloat16* y, int n, int k, float beta,
+                      cudaStream_t stream) {
+    constexpr int warps_per_block = 8;
+    const dim3 grid(static_cast<unsigned>((n + warps_per_block - 1) / warps_per_block));
+    bf16_gemv_kernel<<<grid, warps_per_block * 32, 0, stream>>>(x, weight, y, n, k, beta);
+    LFM_KERNEL_DEBUG_SYNC(stream);
+}
+
+} // namespace
 
 GemmDispatcher::GemmDispatcher(cudaStream_t stream,
                                const ModelOptions& options)
@@ -215,11 +275,19 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             if (weight.kind != LinearStorageKind::Bf16) {
                 throw std::runtime_error("execution plan requires BF16 weights");
             }
+            if (m == 1) {
+                launch_bf16_gemv(x, weight.bf16, y, n, k, beta, stream_);
+                return;
+            }
             linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
             return;
         case LinearKernelKind::Bf16Cublas:
             if (weight.kind != LinearStorageKind::Bf16) {
                 throw std::runtime_error("execution plan requires BF16 weights");
+            }
+            if (m == 1) {
+                launch_bf16_gemv(x, weight.bf16, y, n, k, beta, stream_);
+                return;
             }
             linear_cublas(x, weight.bf16, y, m, n, k, beta);
             return;
