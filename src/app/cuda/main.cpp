@@ -46,7 +46,7 @@ struct Args {
     int lt_workspace_mb = 64;
     int lt_heuristics = 8;
     std::string gemm_backend = "cublas";
-    std::string weight_mode = "bf16";
+    std::string weight_mode = "auto";
     std::string kv_cache_mode = "bf16";
     std::string attention_mode = "auto";
     int attention_chunk_tokens = 32;
@@ -153,7 +153,7 @@ Args parse_args(int argc, char** argv) {
                 << "  [--legacy-sampling] [--no-cuda-graph]\n"
                 << "  [--gemm-backend cublas|cublaslt] [--lt-autotune]\n"
                 << "  [--lt-workspace-mb N] [--lt-heuristics N]\n"
-                << "  [--weight-mode bf16|int8|int4|native] [--kv-cache bf16|int8]\n"
+                << "  [--weight-mode auto|bf16|int8|int4|native] [--kv-cache bf16|int8]\n"
                 << "  [--attention-mode single|segmented|auto]\n"
                 << "  [--attention-chunk-tokens N] [--attention-auto-threshold N]\n"
                 << "  [--memory-report] [--benchmark-decode N]\n"
@@ -204,9 +204,10 @@ Args parse_args(int argc, char** argv) {
     if (args.gemm_backend != "cublas" && args.gemm_backend != "cublaslt") {
         throw std::runtime_error("--gemm-backend must be cublas or cublaslt");
     }
-    if (args.weight_mode != "bf16" && args.weight_mode != "int8" &&
-        args.weight_mode != "int4" && args.weight_mode != "native") {
-        throw std::runtime_error("--weight-mode must be bf16, int8, int4 or native");
+    if (args.weight_mode != "auto" && args.weight_mode != "bf16" &&
+        args.weight_mode != "int8" && args.weight_mode != "int4" &&
+        args.weight_mode != "native") {
+        throw std::runtime_error("--weight-mode must be auto, bf16, int8, int4 or native");
     }
     if (args.kv_cache_mode != "bf16" && args.kv_cache_mode != "int8") {
         throw std::runtime_error("--kv-cache must be bf16 or int8");
@@ -414,7 +415,14 @@ int main(int argc, char** argv) {
             static_cast<size_t>(args.lt_workspace_mb) * 1024ULL * 1024ULL;
         model_options.lt_heuristics = args.lt_heuristics;
         model_options.lt_autotune = args.lt_autotune;
-        if (args.weight_mode == "int8") {
+        if (args.weight_mode == "auto") {
+            // GGUF checkpoints benefit from INT8 re-quantization: decode reads
+            // 2x less weight traffic than BF16 while prefill falls back to
+            // BF16 cuBLAS tensor-core GEMM via the kept BF16 device buffer.
+            model_options.weight_mode = is_gguf
+                ? lfm::WeightMode::Int8
+                : lfm::WeightMode::Bf16;
+        } else if (args.weight_mode == "int8") {
             model_options.weight_mode = lfm::WeightMode::Int8;
         } else if (args.weight_mode == "int4") {
             model_options.weight_mode = lfm::WeightMode::Int4;
@@ -515,7 +523,8 @@ int main(int argc, char** argv) {
             model_path, args.context,
             model_options, generation);
         if (is_gguf) {
-            std::cerr << "weights=gguf-native(q4_k,q6_k)\n"
+            std::cerr << "source=gguf(q4_k,q6_k)\n"
+                      << "weight_mode=" << args.weight_mode << "\n"
                       << "pack_path=none\n";
         }
         if (args.memory_report) print_memory_stats(engine.diagnostics().memory_stats());
