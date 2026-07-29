@@ -1,16 +1,20 @@
 #include "lfm/backend/cuda/kernels/gguf.cuh"
+#include "lfm/backend/cuda/kernels/mmq.hpp"
 #include "lfm/backend/cuda/gemm_dispatcher.hpp"
 #include "lfm/backend/cuda/utils.cuh"
 #include "lfm/detail/checkpoint/bootstrap.hpp"
 #include "lfm/model/model.hpp"
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <random>
 #include <vector>
 
 namespace {
@@ -115,6 +119,115 @@ int main() {
     lfm::launch_gguf_embedding(0, segment, d_embed, nullptr);
     check(cudaMemcpy(hy.data(), d_embed, 2 * sizeof(*d_embed), cudaMemcpyDeviceToHost), "copy embed");
     if (!close(host_bf16(hy[0]), 1.0f)) return 5;
+
+    // MMQ (Q8_1 x __dp4a) correctness: dequantize a randomized multi-super-
+    // block Q4_K row via the already-validated launch_gguf_dequant (same
+    // q4k_value math the whole model pipeline depends on) for a float
+    // reference, then compare launch_q4k_mmq's int8-quantized-activation
+    // result against a plain double-precision dot product of that
+    // reference weight with the unquantized activation. int8 quantization
+    // is lossy, so the tolerance here is a relative error bound, not
+    // bit-exactness.
+    {
+        std::mt19937 rng(12345);
+        std::uniform_int_distribution<int> byte_dist(0, 255);
+        constexpr int mmq_n = 3;
+        constexpr int mmq_k = 512; // 2 super-blocks
+        constexpr int mmq_super_blocks = mmq_k / 256;
+        const size_t mmq_row_bytes = static_cast<size_t>(mmq_super_blocks) * q4_bytes;
+        std::vector<uint8_t> mmq_weight(static_cast<size_t>(mmq_n) * mmq_row_bytes);
+        for (auto& byte : mmq_weight) byte = static_cast<uint8_t>(byte_dist(rng));
+        // Keep d/dmin (the first 4 bytes of every super-block) in a sane
+        // magnitude range instead of arbitrary half bit patterns (which can
+        // land on inf/nan and blow up the reference dot product).
+        for (int row = 0; row < mmq_n; ++row) {
+            for (int sb = 0; sb < mmq_super_blocks; ++sb) {
+                uint8_t* blk = mmq_weight.data() +
+                    (static_cast<size_t>(row) * mmq_super_blocks + sb) * q4_bytes;
+                const __half d = __float2half(0.01f + 0.02f * (byte_dist(rng) % 100));
+                const __half dmin = __float2half(0.01f + 0.01f * (byte_dist(rng) % 100));
+                std::memcpy(blk, &d, sizeof(d));
+                std::memcpy(blk + sizeof(d), &dmin, sizeof(dmin));
+            }
+        }
+
+        uint8_t* d_mmq_weight = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_weight), mmq_weight.size()),
+              "cudaMalloc mmq weight");
+        check(cudaMemcpy(d_mmq_weight, mmq_weight.data(), mmq_weight.size(),
+                         cudaMemcpyHostToDevice), "copy mmq weight");
+
+        __nv_bfloat16* d_mmq_dequant = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_dequant),
+                         static_cast<size_t>(mmq_n) * mmq_k * sizeof(__nv_bfloat16)),
+              "cudaMalloc mmq dequant");
+        lfm::launch_gguf_dequant(d_mmq_weight, lfm::GgmlType::Q4_K, d_mmq_dequant,
+                                 mmq_n, mmq_k, nullptr);
+        std::vector<__nv_bfloat16> mmq_weight_dequant(static_cast<size_t>(mmq_n) * mmq_k);
+        check(cudaMemcpy(mmq_weight_dequant.data(), d_mmq_dequant,
+                         mmq_weight_dequant.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyDeviceToHost), "copy mmq dequant");
+
+        std::uniform_real_distribution<float> act_dist(-3.0f, 3.0f);
+        std::vector<__nv_bfloat16> mmq_activation(mmq_k);
+        std::vector<float> mmq_activation_f(mmq_k);
+        for (int i = 0; i < mmq_k; ++i) {
+            const float value = act_dist(rng);
+            mmq_activation_f[static_cast<size_t>(i)] = value;
+            mmq_activation[static_cast<size_t>(i)] = __float2bfloat16(value);
+        }
+        __nv_bfloat16* d_mmq_activation = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_activation),
+                         mmq_activation.size() * sizeof(__nv_bfloat16)),
+              "cudaMalloc mmq activation");
+        check(cudaMemcpy(d_mmq_activation, mmq_activation.data(),
+                         mmq_activation.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyHostToDevice), "copy mmq activation");
+
+        const int mmq_blocks_per_row = mmq_k / lfm::kMmqQ8_1BlockSize;
+        int8_t* d_q8 = nullptr;
+        float* d_q8_scale = nullptr;
+        float* d_q8_sum = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_q8), mmq_activation.size()),
+              "cudaMalloc q8");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_q8_scale),
+                         static_cast<size_t>(mmq_blocks_per_row) * sizeof(float)),
+              "cudaMalloc q8 scale");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_q8_sum),
+                         static_cast<size_t>(mmq_blocks_per_row) * sizeof(float)),
+              "cudaMalloc q8 sum");
+        lfm::launch_quantize_q8_1(d_mmq_activation, d_q8, d_q8_scale, d_q8_sum,
+                                  1, mmq_k, nullptr);
+
+        __nv_bfloat16* d_mmq_y = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_y),
+                         static_cast<size_t>(mmq_n) * sizeof(__nv_bfloat16)),
+              "cudaMalloc mmq y");
+        lfm::launch_q4k_mmq(d_q8, d_q8_scale, d_q8_sum, d_mmq_weight, d_mmq_y,
+                            1, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
+        std::vector<__nv_bfloat16> mmq_y(mmq_n);
+        check(cudaMemcpy(mmq_y.data(), d_mmq_y, mmq_y.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyDeviceToHost), "copy mmq y");
+
+        for (int row = 0; row < mmq_n; ++row) {
+            double reference = 0.0;
+            for (int i = 0; i < mmq_k; ++i) {
+                reference += static_cast<double>(
+                                 host_bf16(mmq_weight_dequant[static_cast<size_t>(row) * mmq_k + i])) *
+                             static_cast<double>(mmq_activation_f[static_cast<size_t>(i)]);
+            }
+            const float mmq_value = host_bf16(mmq_y[static_cast<size_t>(row)]);
+            const double relative_error =
+                std::abs(mmq_value - reference) / std::max(1.0, std::abs(reference));
+            // Q8_1 quantizes each 32-element activation block to 127 levels;
+            // a few percent relative error against the unquantized-activation
+            // reference is expected quantization noise, not a bug.
+            if (relative_error > 0.05) return 11;
+        }
+
+        cudaFree(d_mmq_y); cudaFree(d_q8_sum); cudaFree(d_q8_scale); cudaFree(d_q8);
+        cudaFree(d_mmq_activation); cudaFree(d_mmq_dequant); cudaFree(d_mmq_weight);
+    }
 
     if (const char* real_path = std::getenv("LFM_GGUF_TEST_FILE");
         real_path != nullptr && *real_path != '\0') {

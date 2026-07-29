@@ -5,6 +5,7 @@ set(LFM_CUDA_BACKEND_SOURCES
     src/backend/cuda/kernels/sampling.cu
     src/backend/cuda/kernels/packed.cu
     src/backend/cuda/kernels/gguf.cu
+    src/backend/cuda/kernels/mmq.cu
     src/backend/cuda/model/setup.cu
     src/backend/cuda/model/residency.cu
     src/backend/cuda/model/execution.cu
