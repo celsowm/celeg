@@ -3,6 +3,9 @@
 #include "lfm/detail/checkpoint/bootstrap.hpp"
 #include "lfm/model/config/config.hpp"
 #include "lfm/serve/cpu_inference_service.hpp"
+#ifdef LFM_SERVE_CUDA
+#include "lfm/serve/cuda_inference_service.hpp"
+#endif
 #include "lfm/serve/generation_dispatcher.hpp"
 #include "lfm/text/tokenizer.hpp"
 #include "routes/chat_completions.hpp"
@@ -15,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -28,6 +32,7 @@ struct Args {
     int port = 8080;
     int context = 4096;
     int threads = 0;
+    std::string backend = "cpu";
 };
 
 Args parse_args(int argc, char** argv) {
@@ -43,9 +48,10 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--port") args.port = std::stoi(value());
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--threads") args.threads = std::stoi(value());
+        else if (key == "--backend") args.backend = value();
         else if (key == "--help") {
             std::cout << "lfm25-serve --model DIR [--port 8080] [--context 4096] "
-                         "[--threads N] [--served-model-name NAME]\n";
+                         "[--threads N] [--backend cpu|cuda] [--served-model-name NAME]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + key);
@@ -76,14 +82,29 @@ int main(int argc, char** argv) {
             args.served_model_name.empty() ? std::string(variant.id()) : args.served_model_name;
         const std::int32_t eos_token_id = config.eos_token_id;
 
-        lfm::CpuModelOptions model_options;
-        model_options.threads = static_cast<std::size_t>(args.threads);
-        lfm::CpuConcurrentEngineOptions engine_options;
+        std::unique_ptr<lfm::serve::IInferenceService> service;
+        if (args.backend == "cpu") {
+            lfm::CpuModelOptions model_options;
+            model_options.threads = static_cast<std::size_t>(args.threads);
+            lfm::CpuConcurrentEngineOptions engine_options;
+            engine_options.worker_thread = false;
+            service = std::make_unique<lfm::serve::CpuInferenceService>(
+                (model / "model.safetensors").string(), args.context,
+                model_options, engine_options);
+        } else if (args.backend == "cuda") {
+#ifdef LFM_SERVE_CUDA
+            lfm::ConcurrentEngineOptions engine_options;
+            engine_options.worker_thread = false;
+            service = std::make_unique<lfm::serve::CudaInferenceService>(
+                model.string(), args.context, lfm::ModelOptions{}, engine_options);
+#else
+            throw std::runtime_error("CUDA serving is not available in this build");
+#endif
+        } else {
+            throw std::runtime_error("--backend must be cpu or cuda");
+        }
 
-        lfm::serve::CpuInferenceService service(
-            (model / "model.safetensors").string(), args.context, model_options, engine_options);
-
-        GenerationDispatcher dispatcher(service);
+        GenerationDispatcher dispatcher(*service);
         dispatcher.start();
 
         uWS::Loop* loop = uWS::Loop::get();
@@ -94,7 +115,7 @@ int main(int argc, char** argv) {
         lfm::app::serve::register_models_route(app, model_name);
         lfm::app::serve::register_tokenize_route(app, tokenizer, static_cast<std::size_t>(args.context));
         lfm::app::serve::register_chat_completions_route(
-            app, dispatcher, service, tokenizer, model_name, eos_token_id, loop);
+            app, dispatcher, *service, tokenizer, model_name, eos_token_id, loop);
 
         app.listen(args.port, [&](auto* listen_socket) {
               if (listen_socket) {

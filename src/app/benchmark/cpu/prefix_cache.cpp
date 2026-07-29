@@ -45,9 +45,9 @@ int main(int argc, char** argv) {
             std::min(config.max_position_embeddings,
                      static_cast<int>(longer.size()) + 16),
             model_options, engine_options);
-        lfm::CpuRequestOptions request_options;
+        lfm::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = 1;
-        request_options.eos_token_id = config.eos_token_id;
+        request_options.eos_token = config.eos_token_id;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
         for (int run = 0; run < repeats; ++run) {
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
             bool finished = false;
             while (!finished) {
                 engine.step();
-                (void)engine.poll(id, 8, &finished);
+                finished = engine.poll(id, 8).finished;
             }
         }
         const auto metrics = engine.metrics();

@@ -12,6 +12,10 @@
 
 namespace lfm {
 
+using RequestId = uint64_t;
+
+const char* request_status_name(RequestStatus status);
+
 struct ConcurrentEngineOptions {
     int max_active_requests = 8;
     int max_batched_tokens = 512;
@@ -48,7 +52,7 @@ struct PollResult {
 // CUDA execution live behind Impl and can evolve independently of callers.
 class ConcurrentEngine {
 public:
-    using RequestId = uint64_t;
+    using RequestId = lfm::RequestId;
 
     ConcurrentEngine(std::string model_path,
                      int max_context,

@@ -5,9 +5,6 @@
 
 namespace lfm {
 
-PrefixCacheIndex::PrefixCacheIndex(size_t maximum_entries)
-    : maximum_entries_(maximum_entries) {}
-
 PrefixCacheIndex::EntryId PrefixCacheIndex::insert(
     const std::vector<int32_t>& prompt) {
     if (prompt.empty()) throw std::invalid_argument("cannot index an empty prefix");

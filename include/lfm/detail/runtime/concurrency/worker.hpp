@@ -31,6 +31,7 @@ private:
     std::function<bool()> step_;
     int idle_sleep_microseconds_ = 100;
     bool stopping_ = false;
+    bool work_pending_ = false;
 };
 
 } // namespace lfm::detail

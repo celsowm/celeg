@@ -51,6 +51,7 @@ bool PrefixCacheManager::evict_one(PrefixCacheIndex::EntryId protected_id) {
         [this](const std::vector<uint32_t>& pages) { pages_.release(pages); });
     index_.erase(*id);
     entries_.erase(*id);
+    lease.release_now();
     ++metrics_.evictions;
     return true;
 }

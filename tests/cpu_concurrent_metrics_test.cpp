@@ -23,8 +23,8 @@ int main() {
     LFM_TEST_CHECK(metrics.chunked_prefill_steps == 2);
     LFM_TEST_CHECK(metrics.chunked_prefill_tokens == 512);
     LFM_TEST_CHECK(metrics.maximum_prefill_chunk == 256);
-    LFM_TEST_CHECK(std::string(lfm::cpu_request_status_name(
-        lfm::CpuRequestStatus::Decoding)) == "decoding");
+    LFM_TEST_CHECK(std::string(lfm::request_status_name(
+        lfm::RequestStatus::Decoding)) == "decoding");
     std::cout << "cpu_concurrent_metrics_test: ok\n";
     return 0;
 }

@@ -1,11 +1,21 @@
 set(LFM_CUDA_BACKEND_SOURCES
-    src/backend/cuda/kernels/kernels.cu
+    src/backend/cuda/kernels/embedding.cu
+    src/backend/cuda/kernels/transform.cu
+    src/backend/cuda/kernels/attention.cu
+    src/backend/cuda/kernels/sampling.cu
+    src/backend/cuda/kernels/packed.cu
     src/backend/cuda/kernels/gguf.cu
-    src/backend/cuda/model/model.cu
-    src/backend/cuda/model/packed.cu
-    src/backend/cuda/model/session_store.cu
+    src/backend/cuda/model/setup.cu
+    src/backend/cuda/model/residency.cu
+    src/backend/cuda/model/execution.cu
+    src/backend/cuda/model/weights.cu
+    src/backend/cuda/model/packed_execution.cu
+    src/backend/cuda/model/persistence.cu
+    src/backend/cuda/model/facade.cu
     src/backend/cuda/model/weight_layout.cu
-    src/backend/cuda/model/weight_loader.cu
+    src/backend/cuda/model/loader.cu
+    src/backend/cuda/model/experts.cu
+    src/backend/cuda/model/loader_cache.cu
     src/backend/cuda/memory/paged_kv.cu
     src/backend/cuda/moe/host_expert_store.cu
     src/backend/cuda/moe/expert_layer_cache.cu

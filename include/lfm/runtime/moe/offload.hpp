@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <sstream>
 #include <vector>
 
 namespace lfm {
@@ -192,6 +193,20 @@ struct ExpertOffloadOptions {
     std::string usage_profile_path;
 
     bool enabled() const { return mode != ExpertOffloadMode::None; }
+
+    std::string fingerprint() const {
+        std::ostringstream out;
+        out << static_cast<int>(mode) << ':' << gpu_memory_reserve_bytes << ':'
+            << gpu_expert_cache_bytes << ':' << maximum_pinned_host_bytes << ':'
+            << experts_per_layer << ':' << prefill_chunk_tokens << ':'
+            << minimum_experts_per_layer << ':' << prefetch_experts << ':'
+            << static_cast<int>(host_mode) << ':' << static_cast<int>(policy) << ':'
+            << static_cast<int>(backing) << ':' << host_expert_cache_bytes << ':'
+            << static_cast<int>(io_backend) << ':' << io_queue_depth << ':'
+            << io_workers << ':' << direct_io << ':' << expert_sidecar_path << ':'
+            << mirror_path << ':' << usage_profile_path;
+        return out.str();
+    }
 };
 
 // Per-expert BF16 byte size for the given topology:

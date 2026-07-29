@@ -72,7 +72,8 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
     if (compute_logits) {
         cpu_rmsnorm(hidden.data(), shared->final_norm.data(), normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
-        shared->linear.gemv(shared->embedding, normed.data(), logits.data());
+        shared->linear.gemv(shared->tie_word_embeddings ? shared->embedding :
+                            shared->lm_head, normed.data(), logits.data());
     }
     ++position_value;
 }
@@ -213,7 +214,8 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
         const float* last = chunk_hidden.data() + (rows - 1) * shared->shape.hidden;
         cpu_rmsnorm(last, shared->final_norm.data(), normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
-        shared->linear.gemv(shared->embedding, normed.data(), logits.data());
+        shared->linear.gemv(shared->tie_word_embeddings ? shared->embedding :
+                            shared->lm_head, normed.data(), logits.data());
     }
     position_value += static_cast<int>(rows);
     prefill_profile.total_ms += milliseconds_since(chunk_started);

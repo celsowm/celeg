@@ -15,8 +15,10 @@ uint64_t xorshift64star(uint64_t& state) {
 }
 
 float random_unit(uint64_t& state) {
-    return static_cast<float>((xorshift64star(state) >> 40) *
-                              (1.0 / 16777216.0));
+    const uint64_t bits = xorshift64star(state);
+    const double unit = (static_cast<double>(bits >> 11) + 0.5) *
+                        (1.0 / 9007199254740992.0);
+    return static_cast<float>(unit);
 }
 } // namespace
 

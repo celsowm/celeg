@@ -1,6 +1,6 @@
 set(LFM_CPU_BACKEND_SOURCES
     src/backend/cpu/model.cpp
-    src/backend/cpu/model_weights.cpp
+    src/backend/cpu/weights.cpp
     src/backend/cpu/model_state.cpp
     src/backend/cpu/model_forward.cpp
     src/backend/cpu/model_sampling.cpp

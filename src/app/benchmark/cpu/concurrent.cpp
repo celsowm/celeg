@@ -61,13 +61,13 @@ int main(int argc, char** argv) {
                      static_cast<int>(tokens.size()) + max_new + 8),
             model_options, engine_options);
 
-        lfm::CpuRequestOptions request_options;
+        lfm::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = static_cast<size_t>(max_new);
-        request_options.eos_token_id = config.eos_token_id;
+        request_options.eos_token = config.eos_token_id;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
 
-        std::vector<lfm::CpuRequestId> ids;
+        std::vector<lfm::RequestId> ids;
         ids.reserve(static_cast<size_t>(requests));
         const auto started = std::chrono::steady_clock::now();
         for (int i = 0; i < requests; ++i) {
@@ -83,9 +83,8 @@ int main(int argc, char** argv) {
             }
             for (size_t i = 0; i < ids.size(); ++i) {
                 if (done[i]) continue;
-                bool terminal = false;
-                (void)engine.poll(ids[i], 4096, &terminal);
-                if (terminal) {
+                const auto result = engine.poll(ids[i], 4096);
+                if (result.finished) {
                     done[i] = 1;
                     ++finished;
                 }

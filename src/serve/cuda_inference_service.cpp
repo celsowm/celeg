@@ -44,6 +44,9 @@ CudaInferenceService::CudaInferenceService(std::string model_path,
 }
 
 RequestId CudaInferenceService::submit(GenerateRequest request) {
+    if (request.max_output_tokens > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument("max_output_tokens exceeds CUDA request limit");
+    }
     ConcurrentRequestOptions options;
     options.max_new_tokens = static_cast<int>(request.max_output_tokens);
     options.eos_token = request.eos_token_id;

@@ -42,6 +42,9 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
     GenerateRequest generate_request;
     generate_request.prompt_tokens = tokenizer.encode(prompt_text, /*add_bos=*/false);
     generate_request.eos_token_id = eos_token_id;
+    if (request.max_tokens && *request.max_tokens <= 0) {
+        throw std::invalid_argument("max_tokens must be positive");
+    }
     generate_request.max_output_tokens =
         request.max_tokens ? static_cast<std::size_t>(*request.max_tokens) : 128;
     if (request.temperature) generate_request.generation.temperature = static_cast<float>(*request.temperature);

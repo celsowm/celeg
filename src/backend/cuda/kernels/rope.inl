@@ -82,12 +82,6 @@ __global__ void qk_norm_rope_fast_kernel(__nv_bfloat16* data,
     }
 }
 
-int attention_threads(int head_dim) {
-    int threads = 32;
-    while (threads < head_dim && threads < 1024) threads <<= 1;
-    return threads;
-}
-
 void launch_qk_common(__nv_bfloat16* q,
                       __nv_bfloat16* k,
                       const __nv_bfloat16* q_norm,
@@ -209,4 +203,3 @@ void launch_qk_norm_rope_prefill_fast(__nv_bfloat16* q, __nv_bfloat16* k,
                      rows, q_heads, kv_heads, head_dim, 0, nullptr,
                      2, eps, true, stream);
 }
-

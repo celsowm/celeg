@@ -484,3 +484,4 @@ size_t CpuModel::Impl::Shared::weights_memory_bytes() const {
 }
 
 } // namespace lfm
+

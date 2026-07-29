@@ -39,6 +39,12 @@ public:
         release_ = {};
         return std::move(pages_);
     }
+    void release_now() {
+        if (pages_.empty() || !release_) return;
+        release_(pages_);
+        pages_.clear();
+        release_ = {};
+    }
     void reset() noexcept {
         if (!pages_.empty() && release_) {
             try { release_(pages_); } catch (...) { /* no-throw destructor */ }

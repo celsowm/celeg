@@ -18,6 +18,7 @@ void EngineWorker::start(std::function<bool()> step,
     step_ = std::move(step);
     idle_sleep_microseconds_ = idle_sleep_microseconds;
     stopping_ = false;
+    work_pending_ = true;
     thread_ = std::thread([this] { loop(); });
 }
 
@@ -35,6 +36,7 @@ void EngineWorker::stop() {
 
 void EngineWorker::notify() {
     std::lock_guard<std::mutex> lock(mutex_);
+    work_pending_ = true;
     cv_.notify_all();
 }
 
@@ -57,8 +59,9 @@ void EngineWorker::loop() {
         std::unique_lock<std::mutex> lock(mutex_);
         if (stopping_) break;
         if (!worked) {
+            work_pending_ = false;
             cv_.wait_for(lock, std::chrono::microseconds(sleep_us),
-                         [this] { return stopping_; });
+                         [this] { return stopping_ || work_pending_; });
         }
     }
 }

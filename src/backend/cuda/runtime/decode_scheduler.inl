@@ -36,6 +36,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     // Phase 1b: allocate pages outside the lock, then commit.
     if (!page_needed.empty()) {
         std::vector<std::optional<std::vector<uint32_t>>> allocations;
+        std::vector<RequestId> page_failed;
         allocations.reserve(page_needed.size());
         for (size_t i = 0; i < page_needed.size(); ++i) {
             allocations.push_back(prefix_cache_->allocate_request_pages(1));
@@ -47,9 +48,18 @@ bool ConcurrentEngine::Impl::run_decode_work() {
                 request.pages.insert(request.pages.end(),
                                      allocations[i]->begin(),
                                      allocations[i]->end());
+            } else {
+                page_failed.push_back(page_needed[i]);
             }
         }
         metrics_.logical_pages_used = paged_kv_->used_pages();
+        if (!page_failed.empty()) {
+            work.erase(std::remove_if(work.begin(), work.end(),
+                [&page_failed](const Work& item) {
+                    return std::find(page_failed.begin(), page_failed.end(),
+                                     item.id) != page_failed.end();
+                }), work.end());
+        }
     }
 
     auto accept_token = [&](const Work& item, int32_t token,
@@ -92,7 +102,7 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     for (const Work& item : work) {
         std::string reason;
         if (item.paged_ready && packed_executor_ &&
-            packed_executor_->eligible(*item.lane->model, &reason)) {
+            packed_executor_->eligible(item.lane->model->packed_session(), &reason)) {
             packed_work.push_back(item);
         } else {
             lane_work.push_back(item);
@@ -114,14 +124,14 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     }
 
     if (!packed_work.empty()) {
-        std::vector<LfmModel*> models;
+        std::vector<IPackedSession*> models;
         std::vector<std::vector<uint32_t>> page_tables;
         models.reserve(packed_work.size());
         page_tables.reserve(packed_work.size());
         {
             std::lock_guard<std::mutex> lock(mutex_);
             for (const Work& item : packed_work) {
-                models.push_back(item.lane->model.get());
+                models.push_back(&item.lane->model->packed_session());
                 page_tables.push_back(registry_.at(item.id).pages);
             }
         }
@@ -208,4 +218,3 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     }
     return !work.empty();
 }
-

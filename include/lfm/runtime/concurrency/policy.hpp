@@ -16,6 +16,12 @@ enum class RequestStatus : uint8_t {
     Failed,
 };
 
+inline constexpr bool is_terminal(RequestStatus status) {
+    return status == RequestStatus::Finished ||
+           status == RequestStatus::Cancelled ||
+           status == RequestStatus::Failed;
+}
+
 enum class SchedulerPolicy : uint8_t {
     GuaranteedNoEvict,
     MaxUtilization,

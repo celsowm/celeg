@@ -39,7 +39,7 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
     if (packed_executor_ && engine_options_.ragged_packed_prefill &&
         work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)) {
         std::vector<Work> active;
-        std::vector<LfmModel*> models;
+        std::vector<IPackedSession*> models;
         std::vector<std::vector<uint32_t>> page_tables;
         std::vector<int32_t> tokens;
         std::vector<PackedPrefillRow> rows;
@@ -50,7 +50,7 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
                 if (request.status != RequestStatus::Prefill ||
                     request.cancel_requested) continue;
                 active.push_back(item);
-                models.push_back(item.lane->model.get());
+                models.push_back(&item.lane->model->packed_session());
                 page_tables.push_back(request.pages);
                 rows.push_back(PackedPrefillRow{
                     tokens.size(),
@@ -143,4 +143,3 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
     }
     return !work.empty();
 }
-

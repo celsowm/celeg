@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lfm/model/execution/runtime_types.hpp"
+#include "lfm/runtime/concurrency.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,18 +10,10 @@
 
 namespace lfm::serve {
 
-using RequestId = std::uint64_t;
+using RequestId = lfm::RequestId;
 
-// Backend-neutral request lifecycle. Mirrors lfm::RequestStatus (CUDA)
-// naming; CPU's CpuRequestStatus is mapped onto this set by the CPU service.
-enum class RequestStatus : std::uint8_t {
-    Queued,
-    Prefill,
-    Decoding,
-    Finished,
-    Cancelled,
-    Failed,
-};
+// Backend-neutral request lifecycle shared by both inference backends.
+using RequestStatus = lfm::RequestStatus;
 
 enum class FinishReason : std::uint8_t {
     None,

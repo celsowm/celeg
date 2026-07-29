@@ -1,25 +1,12 @@
 #include "lfm/serve/cpu_inference_service.hpp"
 
 #include <filesystem>
-#include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace lfm::serve {
 
 namespace {
-
-RequestStatus map_status(CpuRequestStatus status) {
-    switch (status) {
-        case CpuRequestStatus::Queued: return RequestStatus::Queued;
-        case CpuRequestStatus::Prefilling: return RequestStatus::Prefill;
-        case CpuRequestStatus::Decoding: return RequestStatus::Decoding;
-        case CpuRequestStatus::Completed: return RequestStatus::Finished;
-        case CpuRequestStatus::Cancelled: return RequestStatus::Cancelled;
-        case CpuRequestStatus::Failed: return RequestStatus::Failed;
-    }
-    return RequestStatus::Failed;
-}
 
 FinishReason finish_reason_for(RequestStatus status, bool saw_eos) {
     switch (status) {
@@ -45,13 +32,13 @@ CpuInferenceService::CpuInferenceService(const std::string& model_path,
 }
 
 RequestId CpuInferenceService::submit(GenerateRequest request) {
-    CpuRequestOptions options;
+    ConcurrentRequestOptions options;
     options.max_new_tokens = request.max_output_tokens;
-    options.eos_token_id = request.eos_token_id;
+    options.eos_token = request.eos_token_id;
     options.priority = request.priority;
     options.generation = request.generation;
 
-    const CpuRequestId id =
+    const RequestId id =
         engine_.submit(std::move(request.prompt_tokens), options);
 
     std::lock_guard<std::mutex> lock(meta_mutex_);
@@ -60,17 +47,13 @@ RequestId CpuInferenceService::submit(GenerateRequest request) {
 }
 
 GenerateEvent CpuInferenceService::poll(RequestId id, std::size_t max_tokens) {
-    // The CPU engine treats max_tokens == 0 as an invalid argument, whereas
-    // this interface treats it as "drain everything currently buffered".
-    const std::size_t query =
-        max_tokens == 0 ? std::numeric_limits<std::size_t>::max() : max_tokens;
-
     GenerateEvent event;
     event.request_id = id;
-    bool finished = false;
-    event.tokens = engine_.poll(id, query, &finished);
-    event.finished = finished;
-    event.status = map_status(engine_.status(id));
+    const PollResult result = engine_.poll(id, max_tokens);
+    event.tokens = result.tokens;
+    event.finished = result.finished;
+    event.status = result.status;
+    event.error = result.error;
 
     std::lock_guard<std::mutex> lock(meta_mutex_);
     auto it = meta_.find(id);
@@ -85,16 +68,11 @@ GenerateEvent CpuInferenceService::poll(RequestId id, std::size_t max_tokens) {
 }
 
 RequestStatus CpuInferenceService::status(RequestId id) const {
-    return map_status(engine_.status(id));
+    return engine_.status(id);
 }
 
 bool CpuInferenceService::cancel(RequestId id) {
-    try {
-        engine_.cancel(id);
-    } catch (const std::out_of_range&) {
-        return false;
-    }
-    return true;
+    return engine_.cancel(id);
 }
 
 bool CpuInferenceService::release(RequestId id) {

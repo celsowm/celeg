@@ -77,7 +77,7 @@ int main() {
     LFM_TEST_CHECK(repo.contains("bias"));
 
     auto weights = lfm::WeightLoader::acquire((dir / "model.safetensors").string(),
-                                             lfm::WeightMode::Bf16);
+                                             lfm::WeightMode::Bf16, "test");
     lfm::WeightLoader loader(weights, lfm::WeightMode::Bf16);
 
     const lfm::ExpertLinearWeight* ew =

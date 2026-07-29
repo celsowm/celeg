@@ -125,8 +125,11 @@ class DevCliTest(unittest.TestCase):
         )
         args = mock.Mock(build_type="RelWithDebInfo", runtime_tests="on")
         command = dev.configure_command(args, environment, pathlib.Path("out"))
+        self.assertIn("-DCMAKE_C_COMPILER=cl.exe", command)
+        self.assertIn("-DCMAKE_CXX_COMPILER=cl.exe", command)
         self.assertFalse(any(value.startswith("-DCMAKE_CUDA_HOST_COMPILER=") for value in command))
         self.assertIn("-DCMAKE_CUDA_ARCHITECTURES=86", command)
+        self.assertIn("-DCMAKE_CUDA_FLAGS_INIT=--use-local-env", command)
         self.assertIn("-DLFM_MSVC_SHOWINCLUDES_PREFIX=Note: including file: ", command)
         self.assertNotIn("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler", command)
 

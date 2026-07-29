@@ -1111,24 +1111,9 @@ bool PackedDecodeExecutor::eligible(const IPackedSession& model,
     return impl_->eligible(model, reason);
 }
 
-bool PackedDecodeExecutor::eligible(const LfmModel& model,
-                                    std::string* reason) const {
-    return eligible(model.packed_session(), reason);
-}
-
 std::vector<int32_t> PackedDecodeExecutor::decode(
     const std::vector<IPackedSession*>& models) {
     return impl_->decode(models, nullptr);
-}
-
-std::vector<int32_t> PackedDecodeExecutor::decode(
-    const std::vector<LfmModel*>& models) {
-    std::vector<IPackedSession*> sessions;
-    sessions.reserve(models.size());
-    for (LfmModel* model : models) {
-        sessions.push_back(&model->packed_session());
-    }
-    return decode(sessions);
 }
 
 std::vector<int32_t> PackedDecodeExecutor::decode(
@@ -1137,36 +1122,12 @@ std::vector<int32_t> PackedDecodeExecutor::decode(
     return impl_->decode(models, &page_tables);
 }
 
-std::vector<int32_t> PackedDecodeExecutor::decode(
-    const std::vector<LfmModel*>& models,
-    const std::vector<std::vector<uint32_t>>& page_tables) {
-    std::vector<IPackedSession*> sessions;
-    sessions.reserve(models.size());
-    for (LfmModel* model : models) {
-        sessions.push_back(&model->packed_session());
-    }
-    return decode(sessions, page_tables);
-}
-
 void PackedDecodeExecutor::prefill(
     const std::vector<IPackedSession*>& models,
     const std::vector<std::vector<uint32_t>>& page_tables,
     const std::vector<int32_t>& tokens,
     const std::vector<PackedPrefillRow>& rows) {
     impl_->prefill(models, &page_tables, tokens, rows);
-}
-
-void PackedDecodeExecutor::prefill(
-    const std::vector<LfmModel*>& models,
-    const std::vector<std::vector<uint32_t>>& page_tables,
-    const std::vector<int32_t>& tokens,
-    const std::vector<PackedPrefillRow>& rows) {
-    std::vector<IPackedSession*> sessions;
-    sessions.reserve(models.size());
-    for (LfmModel* model : models) {
-        sessions.push_back(&model->packed_session());
-    }
-    prefill(sessions, page_tables, tokens, rows);
 }
 
 size_t PackedDecodeExecutor::maximum_batch() const {
@@ -1182,3 +1143,7 @@ PackedDecodeMetrics PackedDecodeExecutor::metrics() const {
 }
 
 } // namespace lfm
+
+
+
+

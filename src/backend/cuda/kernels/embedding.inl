@@ -77,14 +77,6 @@ __global__ void embedding_int8_batch_kernel(const int32_t* tokens,
 // output rows for one activation row. The decode path (m=1) is therefore a
 // true GEMV; prefill reuses the same kernel across activation rows.
 
-__device__ __forceinline__ int unpack_int4(const uint8_t* packed,
-                                           int column) {
-    const uint8_t byte = packed[column >> 1];
-    const uint8_t nibble = (column & 1) == 0 ? byte & 0x0fU : byte >> 4;
-    return nibble >= 8U ? static_cast<int>(nibble) - 16
-                        : static_cast<int>(nibble);
-}
-
 __global__ void embedding_int4_value_kernel(int32_t token,
                                              const uint8_t* table,
                                              const float* scales,

@@ -1,11 +1,103 @@
 #include "lfm/backend/cuda/session_store.hpp"
+#include "lfm/detail/model/impl.hpp"
 
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 namespace lfm {
+
+SessionStore::SessionState LfmModel::Impl::make_session_state() {
+    SessionStore::SessionState state{
+        .shape = shape_, .max_context = max_context_, .position = position_,
+        .kv_cache_mode = options_.kv_cache_mode, .variant = variant_,
+        .stream = stream_.get(), .seen_tokens = &seen_tokens_,
+        .logits = &logits_, .rng_state = &rng_state_};
+    state.layer_buffers.reserve(layers_.size());
+    for (Layer& layer : layers_) {
+        SessionStore::SessionState::LayerBuffers buffers{};
+        if (AttentionLayer* attention = as_attention(layer)) {
+            buffers.is_attention = true;
+            buffers.key_cache_bf16 = attention->key_cache.data();
+            buffers.value_cache_bf16 = attention->value_cache.data();
+            buffers.key_cache_int8 = attention->key_cache_int8.data();
+            buffers.value_cache_int8 = attention->value_cache_int8.data();
+            buffers.key_cache_scales = attention->key_cache_scales.data();
+            buffers.value_cache_scales = attention->value_cache_scales.data();
+        } else if (ConvolutionLayer* convolution = as_convolution(layer)) {
+            buffers.conv_state = convolution->conv_state.data();
+            buffers.conv_state_elements = convolution->conv_state.size();
+        }
+        state.layer_buffers.push_back(buffers);
+    }
+    return state;
+}
+
+void LfmModel::Impl::save_session(const std::string& path) {
+    if (!local_kv_cache_available_)
+        throw std::runtime_error("save_session requires a model with a local contiguous KV cache");
+    if (phase_ != SessionPhase::Ready)
+        throw std::runtime_error("cannot save a session before prefill or load_session");
+    auto state = make_session_state();
+    SessionStore::save(path, state);
+}
+
+void LfmModel::Impl::load_session(const std::string& path) {
+    reset();
+    auto state = make_session_state();
+    SessionStore::load(path, state);
+    position_ = state.position;
+    LFM_CUDA(cudaMemcpy(position_device_.data(), &position_, sizeof(position_), cudaMemcpyHostToDevice));
+    phase_ = SessionPhase::Ready;
+    active_segmented_attention_ = use_segmented_attention(position_);
+    metrics_ = {};
+}
+
+PrefixState LfmModel::Impl::export_prefix_state() const {
+    if (phase_ != SessionPhase::Ready)
+        throw std::runtime_error("cannot export prefix state before prefill");
+    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    auto state = const_cast<Impl*>(this)->make_session_state();
+    auto snapshot = SessionStore::export_prefix(state);
+    PrefixState out;
+    out.position = snapshot.position;
+    out.seen_tokens = std::move(snapshot.seen_tokens);
+    out.logits_bf16 = std::move(snapshot.logits_bf16);
+    out.conv_state_bf16 = std::move(snapshot.conv_state_bf16);
+    return out;
+}
+
+void LfmModel::Impl::restore_prefix_state(const PrefixState& state) {
+    SessionStore::PrefixSnapshot snapshot;
+    snapshot.position = state.position;
+    snapshot.seen_tokens = state.seen_tokens;
+    snapshot.logits_bf16 = state.logits_bf16;
+    snapshot.conv_state_bf16 = state.conv_state_bf16;
+    auto session = make_session_state();
+    SessionStore::restore_prefix(snapshot, session, generation_.seed);
+    phase_ = SessionPhase::Prefilling;
+    position_ = session.position;
+    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
+                             cudaMemcpyHostToDevice, stream_.get()));
+    phase_ = SessionPhase::Ready;
+    active_segmented_attention_ = use_segmented_attention(position_);
+    metrics_ = {};
+}
+
+void LfmPersistence::save_session(const std::string& path) const {
+    owner_->impl_->save_session(path);
+}
+void LfmPersistence::load_session(const std::string& path) {
+    owner_->impl_->load_session(path);
+}
+PrefixState LfmPersistence::export_prefix_state() const {
+    return owner_->impl_->export_prefix_state();
+}
+void LfmPersistence::restore_prefix_state(const PrefixState& state) {
+    owner_->impl_->restore_prefix_state(state);
+}
 
 namespace {
 
@@ -287,3 +379,5 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
 }
 
 } // namespace lfm
+
+

@@ -109,7 +109,9 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
         bool loaded_pack = false;
         ModelShape shape;
         const IModelVariant* variant = nullptr;
+        bool tie_word_embeddings = true;
         CpuLinearWeight embedding;
+        CpuLinearWeight lm_head;
         std::vector<float> final_norm;
         std::vector<WeightLayer> layers;
         std::vector<std::shared_ptr<CpuKvPagePool>> kv_pools;

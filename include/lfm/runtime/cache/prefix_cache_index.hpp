@@ -22,7 +22,7 @@ public:
         size_t matched_tokens = 0;
     };
 
-    explicit PrefixCacheIndex(size_t maximum_entries = 0);
+    PrefixCacheIndex() = default;
 
     PrefixCacheIndex(const PrefixCacheIndex&) = delete;
     PrefixCacheIndex& operator=(const PrefixCacheIndex&) = delete;
@@ -45,7 +45,6 @@ private:
         uint64_t last_used = 0;
     };
 
-    size_t maximum_entries_ = 0;
     PrefixRadixIndex radix_;
     std::unordered_map<EntryId, Entry> entries_;
     std::set<std::pair<uint64_t, EntryId>> lru_;

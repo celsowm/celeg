@@ -681,12 +681,25 @@ def configure_command(
         "-DLFM_BUILD_TESTS=ON",
         f"-DLFM_RUN_CUDA_TESTS={'ON' if args.runtime_tests == 'on' else 'OFF'}",
     ]
+    # Do not let CMake rediscover a newer preview toolset from the global
+    # machine when the harness already selected a CUDA-compatible MSVC host.
+    # This also makes --fresh deterministic after a prior build cached a
+    # different compiler.
+    if environment.platform_name == "windows" and environment.compiler:
+        command.extend(
+            [
+                f"-DCMAKE_C_COMPILER={environment.compiler.path}",
+                f"-DCMAKE_CXX_COMPILER={environment.compiler.path}",
+            ]
+        )
     if environment.backend == "cuda":
         assert environment.nvcc
         command.extend(
             [
                 f"-DCMAKE_CUDA_COMPILER={environment.nvcc.path}",
                 f"-DCMAKE_CUDA_ARCHITECTURES={environment.gpu_arch}",
+                # NVCC must use the already activated PATH. Supplying
+                # -ccbin makes it re-run vcvars and fails in headless shells.
                 "-DCMAKE_CUDA_FLAGS_INIT=--use-local-env",
             ]
         )
@@ -817,7 +830,7 @@ def run_smoke(args: argparse.Namespace, environment: Environment, directory: pat
         runner = executable(directory, "lfm25-run", environment)
         smoke_tests = [
             [str(runner), "--help"],
-            [str(executable(directory, "c_api_smoke_test", environment))],
+            [str(executable(directory, "cpu_c_api_smoke_test", environment))],
         ]
         if args.runtime_tests == "on":
             smoke_tests.append([str(executable(directory, "expert_residency_test", environment))])

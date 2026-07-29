@@ -56,9 +56,6 @@ PollResult ConcurrentEngine::Impl::poll(RequestId id, size_t max_tokens) {
     Request& request = registry_.at(id);
     PollResult result;
     result.status = request.status;
-    result.finished = request.status == RequestStatus::Finished ||
-                      request.status == RequestStatus::Cancelled ||
-                      request.status == RequestStatus::Failed;
     result.error = request.error;
     const size_t count = max_tokens == 0
         ? request.output.size()
@@ -68,6 +65,7 @@ PollResult ConcurrentEngine::Impl::poll(RequestId id, size_t max_tokens) {
         result.tokens.push_back(request.output.front());
         request.output.pop_front();
     }
+    result.finished = is_terminal(request.status) && request.output.empty();
     return result;
 }
 

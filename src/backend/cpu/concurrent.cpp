@@ -22,11 +22,6 @@ double milliseconds(Clock::duration duration) {
     return std::chrono::duration<double, std::milli>(duration).count();
 }
 
-bool terminal(CpuRequestStatus status) {
-    return status == CpuRequestStatus::Completed ||
-           status == CpuRequestStatus::Cancelled ||
-           status == CpuRequestStatus::Failed;
-}
 } // namespace
 
 double CpuConcurrentMetrics::prefill_tokens_per_second() const {
@@ -49,26 +44,27 @@ double CpuConcurrentMetrics::average_itl_ms() const {
     return itl_samples ? cumulative_itl_ms / static_cast<double>(itl_samples) : 0.0;
 }
 
-const char* cpu_request_status_name(CpuRequestStatus status) {
+const char* request_status_name(RequestStatus status) {
     switch (status) {
-        case CpuRequestStatus::Queued: return "queued";
-        case CpuRequestStatus::Prefilling: return "prefilling";
-        case CpuRequestStatus::Decoding: return "decoding";
-        case CpuRequestStatus::Completed: return "completed";
-        case CpuRequestStatus::Cancelled: return "cancelled";
-        case CpuRequestStatus::Failed: return "failed";
+        case RequestStatus::Queued: return "queued";
+        case RequestStatus::Prefill: return "prefilling";
+        case RequestStatus::Decoding: return "decoding";
+        case RequestStatus::Finished: return "completed";
+        case RequestStatus::Cancelled: return "cancelled";
+        case RequestStatus::Failed: return "failed";
     }
     return "unknown";
 }
 
 struct CpuConcurrentEngine::Impl {
     struct Request {
-        CpuRequestId id = 0;
-        CpuRequestStatus status = CpuRequestStatus::Queued;
+        RequestId id = 0;
+        RequestStatus status = RequestStatus::Queued;
         std::vector<int32_t> prompt;
         size_t prompt_offset = 0;
-        CpuRequestOptions options;
+        ConcurrentRequestOptions options;
         std::unique_ptr<CpuModel> session;
+        bool cancel_requested = false;
         std::vector<int32_t> generated;
         size_t poll_offset = 0;
         uint64_t sequence = 0;
@@ -106,7 +102,9 @@ struct CpuConcurrentEngine::Impl {
         }
         // Start only after validation, so constructor failure cannot destroy a
         // joinable std::thread during stack unwinding.
-        engine_worker.start([this] { return worker_step(); }, 1000);
+        if (engine_options.worker_thread) {
+            engine_worker.start([this] { return worker_step(); }, 1000);
+        }
     }
 
     ~Impl() {
@@ -122,8 +120,8 @@ struct CpuConcurrentEngine::Impl {
         size_t count = 0;
         for (const auto& [id, request] : requests) {
             (void)id;
-            if (request->status == CpuRequestStatus::Prefilling ||
-                request->status == CpuRequestStatus::Decoding) {
+            if (request->status == RequestStatus::Prefill ||
+                request->status == RequestStatus::Decoding) {
                 ++count;
             }
         }
@@ -134,7 +132,7 @@ struct CpuConcurrentEngine::Impl {
         size_t count = 0;
         for (const auto& [id, request] : requests) {
             (void)id;
-            if (request->status == CpuRequestStatus::Queued) ++count;
+            if (request->status == RequestStatus::Queued) ++count;
         }
         return count;
     }
@@ -196,7 +194,7 @@ struct CpuConcurrentEngine::Impl {
         std::vector<std::shared_ptr<Request>> queued;
         for (const auto& [id, request] : requests) {
             (void)id;
-            if (request->status == CpuRequestStatus::Queued) queued.push_back(request);
+            if (request->status == RequestStatus::Queued) queued.push_back(request);
         }
         std::vector<detail::RequestPriorityView> queued_views;
         queued_views.reserve(queued.size());
@@ -214,7 +212,7 @@ struct CpuConcurrentEngine::Impl {
                 request->numa_node = choose_numa_node_locked();
                 request->session = base_model.clone_session_on_node(request->numa_node);
                 request->session->session().set_generation_config(request->options.generation);
-                request->status = CpuRequestStatus::Prefilling;
+                request->status = RequestStatus::Prefill;
                 if (prefix_cache) {
                     if (auto match = prefix_cache->acquire(
                             request->prompt, request->numa_node)) {
@@ -222,14 +220,14 @@ struct CpuConcurrentEngine::Impl {
                         request->session->persistence().restore_prefix_snapshot(
                             std::move(match->snapshot), exact);
                         request->prompt_offset = match->matched_tokens;
-                        request->status = exact ? CpuRequestStatus::Decoding
-                                                : CpuRequestStatus::Prefilling;
+                        request->status = exact ? RequestStatus::Decoding
+                                                : RequestStatus::Prefill;
                     }
                     sync_prefix_metrics_locked();
                 }
                 --available;
             } catch (const std::exception& error) {
-                request->status = CpuRequestStatus::Failed;
+                request->status = RequestStatus::Failed;
                 request->error = error.what();
                 ++metrics.failed_requests;
             }
@@ -241,7 +239,7 @@ struct CpuConcurrentEngine::Impl {
         std::vector<std::shared_ptr<Request>> result;
         for (const auto& [id, request] : requests) {
             (void)id;
-            if (request->status == CpuRequestStatus::Decoding) result.push_back(request);
+            if (request->status == RequestStatus::Decoding) result.push_back(request);
         }
         std::vector<detail::RequestPriorityView> views;
         views.reserve(result.size());
@@ -261,7 +259,7 @@ struct CpuConcurrentEngine::Impl {
         std::vector<std::shared_ptr<Request>> result;
         for (const auto& [id, request] : requests) {
             (void)id;
-            if (request->status == CpuRequestStatus::Prefilling &&
+            if (request->status == RequestStatus::Prefill &&
                 request->prompt_offset < request->prompt.size()) {
                 result.push_back(request);
             }
@@ -303,7 +301,13 @@ struct CpuConcurrentEngine::Impl {
             metrics.cumulative_decode_ms += step_metrics.elapsed_ms;
             for (size_t index = 0; index < plan.size(); ++index) {
                 Request& request = *plan[index];
-                if (request.status == CpuRequestStatus::Cancelled) continue;
+                if (request.status == RequestStatus::Cancelled) continue;
+                if (request.cancel_requested) {
+                    request.status = RequestStatus::Cancelled;
+                    request.session.reset();
+                    ++metrics.cancelled_requests;
+                    continue;
+                }
                 const int32_t token = tokens[index];
                 request.generated.push_back(token);
                 if (!request.first_token_recorded) {
@@ -316,9 +320,9 @@ struct CpuConcurrentEngine::Impl {
                 }
                 request.last_token_at = now;
                 record_attention_parallel_locked(request);
-                if (token == request.options.eos_token_id ||
+                if (token == request.options.eos_token ||
                     request.generated.size() >= request.options.max_new_tokens) {
-                    request.status = CpuRequestStatus::Completed;
+                    request.status = RequestStatus::Finished;
                     request.session.reset();
                     ++metrics.completed_requests;
                 }
@@ -328,11 +332,18 @@ struct CpuConcurrentEngine::Impl {
             std::lock_guard lock(mutex);
             last_error_text = error.what();
             for (const auto& request : plan) {
-                if (!terminal(request->status)) {
-                    request->status = CpuRequestStatus::Failed;
-                    request->error = error.what();
+                if (!is_terminal(request->status)) {
+                    request->status = request->cancel_requested
+                        ? RequestStatus::Cancelled : RequestStatus::Failed;
+                    if (request->status == RequestStatus::Failed) {
+                        request->error = error.what();
+                    }
                     request->session.reset();
-                    ++metrics.failed_requests;
+                    if (request->status == RequestStatus::Failed) {
+                        ++metrics.failed_requests;
+                    } else {
+                        ++metrics.cancelled_requests;
+                    }
                 }
             }
             refresh_counts_locked();
@@ -387,10 +398,14 @@ struct CpuConcurrentEngine::Impl {
                     metrics.maximum_prefill_chunk, chunk_tokens);
                 metrics.cumulative_prefill_ms += step_metrics.elapsed_ms;
                 record_attention_parallel_locked(*request);
-                if (request->status != CpuRequestStatus::Cancelled) {
+                if (request->cancel_requested) {
+                    request->status = RequestStatus::Cancelled;
+                    request->session.reset();
+                    ++metrics.cancelled_requests;
+                } else if (request->status != RequestStatus::Cancelled) {
                     request->prompt_offset += chunk_tokens;
                     if (request->prompt_offset == request->prompt.size()) {
-                        request->status = CpuRequestStatus::Decoding;
+                        request->status = RequestStatus::Decoding;
                         cache_completed_prefix_locked(*request);
                     }
                 }
@@ -398,11 +413,18 @@ struct CpuConcurrentEngine::Impl {
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex);
                 last_error_text = error.what();
-                if (!terminal(request->status)) {
-                    request->status = CpuRequestStatus::Failed;
-                    request->error = error.what();
+                if (!is_terminal(request->status)) {
+                    request->status = request->cancel_requested
+                        ? RequestStatus::Cancelled : RequestStatus::Failed;
+                    if (request->status == RequestStatus::Failed) {
+                        request->error = error.what();
+                    }
                     request->session.reset();
-                    ++metrics.failed_requests;
+                    if (request->status == RequestStatus::Failed) {
+                        ++metrics.failed_requests;
+                    } else {
+                        ++metrics.cancelled_requests;
+                    }
                 }
                 refresh_counts_locked();
             }
@@ -426,11 +448,17 @@ struct CpuConcurrentEngine::Impl {
                 metrics.maximum_prefill_batch, items.size());
             metrics.cumulative_prefill_ms += step_metrics.elapsed_ms;
             for (const auto& request : plan) {
-                if (request->status == CpuRequestStatus::Cancelled) continue;
+                if (request->status == RequestStatus::Cancelled) continue;
+                if (request->cancel_requested) {
+                    request->status = RequestStatus::Cancelled;
+                    request->session.reset();
+                    ++metrics.cancelled_requests;
+                    continue;
+                }
                 record_attention_parallel_locked(*request);
                 ++request->prompt_offset;
                 if (request->prompt_offset == request->prompt.size()) {
-                    request->status = CpuRequestStatus::Decoding;
+                    request->status = RequestStatus::Decoding;
                     cache_completed_prefix_locked(*request);
                 }
             }
@@ -439,11 +467,18 @@ struct CpuConcurrentEngine::Impl {
             std::lock_guard lock(mutex);
             last_error_text = error.what();
             for (const auto& request : plan) {
-                if (!terminal(request->status)) {
-                    request->status = CpuRequestStatus::Failed;
-                    request->error = error.what();
+                if (!is_terminal(request->status)) {
+                    request->status = request->cancel_requested
+                        ? RequestStatus::Cancelled : RequestStatus::Failed;
+                    if (request->status == RequestStatus::Failed) {
+                        request->error = error.what();
+                    }
                     request->session.reset();
-                    ++metrics.failed_requests;
+                    if (request->status == RequestStatus::Failed) {
+                        ++metrics.failed_requests;
+                    } else {
+                        ++metrics.cancelled_requests;
+                    }
                 }
             }
             refresh_counts_locked();
@@ -503,8 +538,8 @@ struct CpuConcurrentEngine::Impl {
 
     mutable std::mutex mutex;
     std::mutex execution_mutex;
-    std::unordered_map<CpuRequestId, std::shared_ptr<Request>> requests;
-    CpuRequestId next_id = 1;
+    std::unordered_map<RequestId, std::shared_ptr<Request>> requests;
+    RequestId next_id = 1;
     uint64_t next_sequence = 1;
     CpuConcurrentMetrics metrics;
     std::string last_error_text;
@@ -521,11 +556,11 @@ CpuConcurrentEngine::CpuConcurrentEngine(
 
 CpuConcurrentEngine::~CpuConcurrentEngine() = default;
 
-CpuRequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
-                                         CpuRequestOptions options) {
+RequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
+                                      ConcurrentRequestOptions options) {
     options.generation.validate();
     if (prompt.empty()) throw std::invalid_argument("CPU request prompt is empty");
-    if (options.max_new_tokens == 0) {
+    if (options.max_new_tokens <= 0) {
         throw std::invalid_argument("CPU request max_new_tokens must be positive");
     }
     if (prompt.size() + options.max_new_tokens >
@@ -553,52 +588,55 @@ CpuRequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
     return request->id;
 }
 
-std::vector<int32_t> CpuConcurrentEngine::poll(CpuRequestId id,
-                                               size_t max_tokens,
-                                               bool* finished) {
-    if (max_tokens == 0) throw std::invalid_argument("poll max_tokens must be positive");
+PollResult CpuConcurrentEngine::poll(RequestId id, size_t max_tokens) {
     std::lock_guard lock(impl_->mutex);
     auto it = impl_->requests.find(id);
     if (it == impl_->requests.end()) throw std::out_of_range("unknown CPU request id");
     Impl::Request& request = *it->second;
     const size_t available = request.generated.size() - request.poll_offset;
-    const size_t count = std::min(max_tokens, available);
+    const size_t count = max_tokens == 0 ? available : std::min(max_tokens, available);
     std::vector<int32_t> result(
         request.generated.begin() + static_cast<ptrdiff_t>(request.poll_offset),
         request.generated.begin() + static_cast<ptrdiff_t>(request.poll_offset + count));
     request.poll_offset += count;
-    if (finished) {
-        *finished = terminal(request.status) &&
-                    request.poll_offset == request.generated.size();
-    }
-    return result;
+    PollResult result_value;
+    result_value.status = request.status;
+    result_value.tokens = std::move(result);
+    result_value.finished = is_terminal(request.status) &&
+                            request.poll_offset == request.generated.size();
+    result_value.error = request.error;
+    return result_value;
 }
 
-CpuRequestStatus CpuConcurrentEngine::status(CpuRequestId id) const {
+RequestStatus CpuConcurrentEngine::status(RequestId id) const {
     std::lock_guard lock(impl_->mutex);
     auto it = impl_->requests.find(id);
     if (it == impl_->requests.end()) throw std::out_of_range("unknown CPU request id");
     return it->second->status;
 }
 
-void CpuConcurrentEngine::cancel(CpuRequestId id) {
-    std::lock_guard lock(impl_->mutex);
-    auto it = impl_->requests.find(id);
-    if (it == impl_->requests.end()) throw std::out_of_range("unknown CPU request id");
-    Impl::Request& request = *it->second;
-    if (!terminal(request.status)) {
-        request.status = CpuRequestStatus::Cancelled;
-        request.session.reset();
-        ++impl_->metrics.cancelled_requests;
-        impl_->refresh_counts_locked();
-    }
-}
-
-bool CpuConcurrentEngine::release(CpuRequestId id) {
+bool CpuConcurrentEngine::cancel(RequestId id) {
     std::lock_guard lock(impl_->mutex);
     auto it = impl_->requests.find(id);
     if (it == impl_->requests.end()) return false;
-    if (!terminal(it->second->status)) return false;
+    Impl::Request& request = *it->second;
+    if (is_terminal(request.status)) return false;
+    if (request.status == RequestStatus::Queued) {
+        request.status = RequestStatus::Cancelled;
+        ++impl_->metrics.cancelled_requests;
+        impl_->refresh_counts_locked();
+    } else {
+        // Active execution owns the session until the scheduler returns.
+        request.cancel_requested = true;
+    }
+    return true;
+}
+
+bool CpuConcurrentEngine::release(RequestId id) {
+    std::lock_guard lock(impl_->mutex);
+    auto it = impl_->requests.find(id);
+    if (it == impl_->requests.end()) return false;
+    if (!is_terminal(it->second->status)) return false;
     impl_->requests.erase(it);
     return true;
 }

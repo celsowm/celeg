@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lfm/backend/cpu/model.hpp"
+#include "lfm/runtime/concurrency.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,17 +11,6 @@
 
 namespace lfm {
 
-using CpuRequestId = uint64_t;
-
-enum class CpuRequestStatus : uint8_t {
-    Queued,
-    Prefilling,
-    Decoding,
-    Completed,
-    Cancelled,
-    Failed,
-};
-
 struct CpuConcurrentEngineOptions {
     size_t max_active_requests = 16;
     size_t max_batched_tokens = 256;
@@ -29,16 +19,10 @@ struct CpuConcurrentEngineOptions {
     size_t long_prefill_chunk_tokens = 256;
     size_t long_prefill_threshold = 32;
     bool decode_first = true;
+    bool worker_thread = true;
     bool prefix_cache = true;
     size_t prefix_cache_max_entries = 256;
     size_t prefix_cache_max_bytes = 512ULL * 1024ULL * 1024ULL;
-};
-
-struct CpuRequestOptions {
-    size_t max_new_tokens = 128;
-    int32_t eos_token_id = 7;
-    int priority = 0;
-    GenerationConfig generation;
 };
 
 struct CpuConcurrentMetrics {
@@ -93,17 +77,15 @@ public:
     CpuConcurrentEngine(const CpuConcurrentEngine&) = delete;
     CpuConcurrentEngine& operator=(const CpuConcurrentEngine&) = delete;
 
-    CpuRequestId submit(std::vector<int32_t> prompt,
-                        CpuRequestOptions options = {});
-    std::vector<int32_t> poll(CpuRequestId request_id,
-                              size_t max_tokens,
-                              bool* finished = nullptr);
-    CpuRequestStatus status(CpuRequestId request_id) const;
-    void cancel(CpuRequestId request_id);
+    RequestId submit(std::vector<int32_t> prompt,
+                     ConcurrentRequestOptions options = {});
+    PollResult poll(RequestId request_id, size_t max_tokens = 0);
+    RequestStatus status(RequestId request_id) const;
+    bool cancel(RequestId request_id);
 
     // Frees the request record. Only valid once the request has reached a
     // terminal status; returns false otherwise or if the id is unknown.
-    bool release(CpuRequestId request_id);
+    bool release(RequestId request_id);
 
     // Runs one scheduling iteration. Returns true when any request advanced.
     bool step();
@@ -118,7 +100,5 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
-
-const char* cpu_request_status_name(CpuRequestStatus status);
 
 } // namespace lfm

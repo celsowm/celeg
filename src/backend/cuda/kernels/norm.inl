@@ -50,40 +50,6 @@ __global__ void swiglu_fused_kernel(const __nv_bfloat16* gate_up,
     }
 }
 
-__global__ void head_rmsnorm_kernel(__nv_bfloat16* data,
-                                    const __nv_bfloat16* norm_weight,
-                                    int rows,
-                                    int heads,
-                                    int head_dim,
-                                    float eps) {
-    const int block = blockIdx.x;
-    const int row = block / heads;
-    const int head = block % heads;
-    if (row >= rows) return;
-    __nv_bfloat16* vector = data +
-        (static_cast<size_t>(row) * heads + head) * head_dim;
-
-    float sum = 0.0f;
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        const float value = bf16_float(vector[i]);
-        sum += value * value;
-    }
-    __shared__ float warp_sums[32];
-    __shared__ float total;
-    sum = block_sum(sum, warp_sums, &total);
-
-    __shared__ float inv;
-    if (threadIdx.x == 0) {
-        inv = rsqrtf(sum / static_cast<float>(head_dim) + eps);
-    }
-    __syncthreads();
-
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        const float normalized = rounded_bf16_float(bf16_float(vector[i]) * inv);
-        vector[i] = __float2bfloat16(normalized * bf16_float(norm_weight[i]));
-    }
-}
-
 void launch_rmsnorm(const __nv_bfloat16* x, const __nv_bfloat16* weight,
                     __nv_bfloat16* out, int rows, int width, float eps,
                     cudaStream_t stream) {
@@ -102,5 +68,4 @@ void launch_swiglu_fused(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
     swiglu_fused_kernel<<<(count + 255) / 256, 256, 0, stream>>>(gate_up, out, count);
     LFM_KERNEL_DEBUG_SYNC(stream);
 }
-
 
