@@ -327,6 +327,8 @@ if(LFM_CUDA_AVAILABLE)
     target_link_libraries(lfm25-concurrent-benchmark PRIVATE lfm_cuda_backend)
     add_executable(lfm25-prefix-cache-benchmark src/app/benchmark/cuda/prefix_cache.cpp)
     target_link_libraries(lfm25-prefix-cache-benchmark PRIVATE lfm_cuda_backend)
+    add_executable(lfm25-decode-gemv-benchmark src/app/benchmark/cuda/decode_gemv.cu)
+    target_link_libraries(lfm25-decode-gemv-benchmark PRIVATE lfm_cuda_backend)
 
     add_library(lfm_serve_cuda src/serve/cuda_inference_service.cpp)
     target_include_directories(lfm_serve_cuda PUBLIC include)

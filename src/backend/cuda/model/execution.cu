@@ -1,4 +1,5 @@
 #include "lfm/detail/model/impl.hpp"
+#include "lfm/backend/cuda/phase_profile.hpp"
 #include "lfm/backend/cuda/kernels/kernels.cuh"
 #include "lfm/backend/cuda/paged_kv.hpp"
 #include "lfm/model/weights/layout.hpp"
@@ -22,6 +23,11 @@ void LfmModel::Impl::set_generation_config(GenerationConfig generation) {
     generation_ = generation;
     decode_graph_.reset();
     segmented_decode_graph_.reset();
+}
+
+PhaseProfile& decode_phase_profile() {
+    static PhaseProfile instance;
+    return instance;
 }
 
 void LfmModel::Impl::enqueue_sampling() {
@@ -57,9 +63,11 @@ void LfmModel::Impl::enqueue_sampling() {
 }
 
 void LfmModel::Impl::enqueue_decode_forward() {
+    decode_phase_profile().begin(stream_.get());
     weight_layout_->embed_token_device(
         sampled_device_.data(), hidden_.data(), shape_.hidden,
         stream_.get());
+    decode_phase_profile().end(DecodePhase::Embed, stream_.get());
 
     int layer_idx = 0;
     for (Layer& layer : layers_) {
@@ -69,13 +77,16 @@ void LfmModel::Impl::enqueue_decode_forward() {
                 residual_.data(), hidden_.data(), hidden_.bytes(),
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
+        decode_phase_profile().begin(stream_.get());
         launch_rmsnorm(hidden_.data(), common_layer.operator_norm, normed_.data(),
                        1, shape_.hidden, shape_.norm_eps,
                        stream_.get());
+        decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
             __nv_bfloat16* q = qkv_output_.data();
             __nv_bfloat16* k = q + shape_.q_width;
             __nv_bfloat16* v = k + shape_.kv_width;
+            decode_phase_profile().begin(stream_.get());
             if (options_.fused_projections) {
                 linear(normed_.data(), *attention->qkv, qkv_output_.data(),
                        1, shape_.qkv_width, shape_.hidden);
@@ -94,6 +105,8 @@ void LfmModel::Impl::enqueue_decode_forward() {
                 linear(normed_.data(), v_weight, v,
                        1, shape_.kv_width, shape_.hidden);
             }
+            decode_phase_profile().end(DecodePhase::Projection, stream_.get());
+            decode_phase_profile().begin(stream_.get());
             if (options_.fast_attention) {
                 launch_qk_norm_rope_fast_device(
                     q, k, attention->q_norm, attention->k_norm,
@@ -109,6 +122,8 @@ void LfmModel::Impl::enqueue_decode_forward() {
                     shape_.head_dim, position_device_.data(),
                     shape_.norm_eps, stream_.get());
             }
+            decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
+            decode_phase_profile().begin(stream_.get());
             if (options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8_device(
                     k, v, attention->key_cache_int8.data(),
@@ -172,6 +187,7 @@ void LfmModel::Impl::enqueue_decode_forward() {
                         shape_.head_dim, stream_.get());
                 }
             }
+            decode_phase_profile().end(DecodePhase::Attention, stream_.get());
             linear(op_output_.data(), *attention->out, hidden_.data(),
                    1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
@@ -192,18 +208,25 @@ void LfmModel::Impl::enqueue_decode_forward() {
             launch_residual_add(hidden_.data(), residual_.data(),
                                 shape_.hidden, stream_.get());
         }
+        decode_phase_profile().begin(stream_.get());
         run_mlp_decode(common_layer, layer_idx);
+        decode_phase_profile().end(DecodePhase::Mlp, stream_.get());
         ++layer_idx;
     }
+    decode_phase_profile().begin(stream_.get());
     launch_rmsnorm(hidden_.data(), final_norm_, normed_.data(),
                     1, shape_.hidden, shape_.norm_eps,
                     stream_.get());
     linear(normed_.data(), *logits_weight(), logits_.data(),
             1, shape_.vocab_size, shape_.hidden);
+    decode_phase_profile().end(DecodePhase::Logits, stream_.get());
 }
 
 void LfmModel::Impl::enqueue_decode_step() {
+    decode_phase_profile().begin(stream_.get());
     enqueue_sampling();
+    decode_phase_profile().end(DecodePhase::Sampling, stream_.get());
+    decode_phase_profile().count_step();
     enqueue_decode_forward();
     launch_increment_position(position_device_.data(), stream_.get());
 }

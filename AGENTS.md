@@ -48,6 +48,30 @@ resolved through `SafeTensorRepository`.
 Prefer `--repo` over `--model` in smoke checks and tests so runs work against
 the cached checkpoints already present on the machine.
 
+## Performance investigation
+
+**Measure before optimizing a kernel.** Nsight Compute usually cannot run here
+(`ERR_NVGPUCTRPERM` needs elevated GPU counter permissions), and CUDA decode is
+captured into one graph, so per-kernel attribution is not free. Use these:
+
+```text
+python scripts/profile_decode.py --model <gguf>            # per-phase breakdown
+python scripts/profile_decode.py --model <gguf> --sweep    # config A/B, graph on
+python scripts/gguf_census.py <gguf>                       # tensor types + traffic
+./out/<build>/lfm25-decode-gemv-benchmark 200              # GEMV vs peak bandwidth
+```
+
+`profile_decode.py` drives the in-tree profiler in
+`include/lfm/backend/cuda/phase_profile.hpp` (env `LFM_PROFILE_DECODE=1`, needs
+`--no-cuda-graph`; it is a no-op branch otherwise, so it stays in the hot path).
+
+Why this section exists: a plausible weight-bandwidth argument once concluded
+the decode GEMV path ran at ~17% of peak and that native-quantized weights would
+give a ~3x decode win. Measuring showed the GEMV path was already at 76% of peak
+and only ~22% of a decode step, while 66% was a single-threaded top-k loop in
+the sampler. The arithmetic was right; the attribution was wrong. Get a profile
+first.
+
 ## Smoke checks
 
 ```text
