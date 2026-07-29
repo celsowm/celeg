@@ -1,5 +1,6 @@
 #include "lfm/backend/cuda/gemm_dispatcher.hpp"
 #include "lfm/backend/cuda/kernels/gguf.cuh"
+#include "lfm/backend/cuda/kernels/mmq.hpp"
 #include "lfm/backend/cuda/kernels/embedding.hpp"
 
 #include <algorithm>
@@ -245,14 +246,25 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
     }
     weight.validate_storage();
     if (weight.gguf_quantized()) {
+        ensure_mmq_capacity(m, k);
+        launch_quantize_q8_1(x, mmq_q8_.data(), mmq_scales_.data(),
+                             mmq_sums_.data(), m, k, stream_);
         for (const GgufLinearSegment& segment : weight.gguf_segments) {
             if (segment.cols != k) {
                 throw std::runtime_error("GGUF segment width does not match GEMM");
             }
-            launch_gguf_linear_segment(
-                x, segment.blocks, segment.type,
-                y + static_cast<size_t>(segment.row_offset), m, segment.rows, k,
-                segment.row_bytes, n, beta, stream_);
+            __nv_bfloat16* seg_y = y + static_cast<size_t>(segment.row_offset);
+            if (segment.type == GgmlType::Q4_K) {
+                launch_q4k_mmq(mmq_q8_.data(), mmq_scales_.data(),
+                               mmq_sums_.data(), segment.blocks,
+                               seg_y, m, segment.rows, k,
+                               segment.row_bytes, n, beta, stream_);
+            } else {
+                launch_q6k_mmq(mmq_q8_.data(), mmq_scales_.data(),
+                               mmq_sums_.data(), segment.blocks,
+                               seg_y, m, segment.rows, k,
+                               segment.row_bytes, n, beta, stream_);
+            }
         }
         return;
     }
@@ -291,8 +303,22 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             }
             linear_cublas(x, weight.bf16, y, m, n, k, beta);
             return;
+        case LinearKernelKind::Q4kMmq:
+        case LinearKernelKind::Q6kMmq:
+            throw std::runtime_error("MMQ kernels are dispatched via gguf_quantized(), not the plan switch");
     }
     throw std::runtime_error("unknown linear execution plan");
+}
+
+void GemmDispatcher::ensure_mmq_capacity(int m, int k) {
+    if (m <= mmq_capacity_m_ && k <= mmq_capacity_k_) return;
+    mmq_capacity_m_ = std::max(mmq_capacity_m_, m);
+    mmq_capacity_k_ = std::max(mmq_capacity_k_, k);
+    mmq_q8_.reset(static_cast<size_t>(mmq_capacity_m_) * mmq_capacity_k_);
+    const size_t blocks = static_cast<size_t>(mmq_capacity_m_) *
+                          (mmq_capacity_k_ / kMmqQ8_1BlockSize);
+    mmq_scales_.reset(blocks);
+    mmq_sums_.reset(blocks);
 }
 
 } // namespace lfm

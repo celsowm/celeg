@@ -77,6 +77,18 @@ private:
     CublasLtHandle cublas_lt_;
     DeviceBuffer<std::byte> lt_workspace_;
     std::unordered_map<MatmulKey, std::unique_ptr<LtPlan>, MatmulKeyHash> lt_plans_;
+
+    // Scratch buffers for the MMQ (native-quant) path. Lazily resized to
+    // the largest (m, k) seen across linear() calls. `mmq_q8_` holds the
+    // Q8_1-quantized activations, `mmq_scales_` and `mmq_sums_` hold the
+    // per-32-element block scales and integer sums.
+    DeviceBuffer<int8_t> mmq_q8_;
+    DeviceBuffer<float> mmq_scales_;
+    DeviceBuffer<float> mmq_sums_;
+    int mmq_capacity_m_ = 0;
+    int mmq_capacity_k_ = 0;
+
+    void ensure_mmq_capacity(int m, int k);
 };
 
 } // namespace lfm

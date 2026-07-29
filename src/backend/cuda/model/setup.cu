@@ -93,9 +93,9 @@ LfmModel::Impl::Impl(const std::string& model_path,
     const detail::ModelBootstrap bootstrap =
         detail::load_model_bootstrap(std::filesystem::path(model_path));
     const bool is_gguf = bootstrap.is_gguf;
-    if (is_gguf && options_.weight_mode != WeightMode::Bf16) {
-        throw std::invalid_argument(
-            "GGUF CUDA weights are natively Q4_K/Q6_K; INT4/INT8 requantization is unsupported");
+    if (is_gguf && options_.weight_mode == WeightMode::NativeGguf) {
+        // Native GGUF keeps raw Q4_K/Q6_K blocks on-device. INT8/INT4
+        // requantize the dequantized BF16, which is supported.
     }
     std::shared_ptr<GgufFile> gguf_file = bootstrap.gguf_file;
     const ModelConfig& config = bootstrap.config;

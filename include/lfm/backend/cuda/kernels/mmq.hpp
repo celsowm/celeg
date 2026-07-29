@@ -35,4 +35,14 @@ void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
                     int output_stride, float beta, cudaStream_t stream);
 
+// Q6_K x Q8_1 matmul via __dp4a: same strategy as Q4_K but adapted for the
+// Q6_K super-block (6-bit values, per-16-element scales). Each 32-element
+// Q8_1 block spans two Q6_K scale sub-blocks, so the dot product is split
+// into two 16-element halves with separate scale application. The -32
+// weight offset is folded in via the per-16-element activation sum.
+void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
+                    const float* q8_sums, const uint8_t* blocks,
+                    __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
+                    int output_stride, float beta, cudaStream_t stream);
+
 } // namespace lfm

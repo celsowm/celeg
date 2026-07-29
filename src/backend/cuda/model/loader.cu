@@ -203,12 +203,12 @@ const LinearWeight* WeightLoader::load_linear_weight(
     DeviceWeight weight;
     weight.shape = tensor.shape;
 
-    // Native GGUF block-quantized weights are dequantized to BF16 once here
-    // (at load time, off the hot path) so every GEMM - prefill and decode
-    // alike - runs through the tensor-core cuBLAS/cuBLASLt path instead of
-    // the scalar, per-element dequantizing GEMV/GEMM kernels. The one-time
-    // dequant cost is bandwidth-bound (~1-2ms for this model's full weight
-    // set); the matmul speedup is 1-2 orders of magnitude.
+    // Native GGUF block-quantized weights: by default they are dequantized to
+    // BF16 once here (at load time, off the hot path) so every GEMM runs
+    // through the tensor-core cuBLAS/cuBLASLt path. With --weight-mode native
+    // the raw blocks are kept on-device in their on-disk super-block layout;
+    // the matmul kernels dequantize on the fly, reading ~3x less memory per
+    // decode token at the cost of scalar dequant inside the kernel.
     if (tensor.dtype == TensorDType::Quantized) {
         if (tensor.ggml_type != GgmlType::Q4_K && tensor.ggml_type != GgmlType::Q6_K) {
             throw std::runtime_error("unsupported GGUF linear quantization (CUDA supports Q4_K/Q6_K only): " + name);
@@ -224,6 +224,35 @@ const LinearWeight* WeightLoader::load_linear_weight(
             throw std::runtime_error(
                 "GGUF quantized byte count mismatch for " + name);
         }
+        const size_t row_bytes =
+            static_cast<size_t>(cols) / trait.block_size * trait.type_size;
+
+        if (weight_mode_ == WeightMode::NativeGguf) {
+            DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
+            LFM_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
+                                tensor.bytes, cudaMemcpyHostToDevice));
+            GgufLinearSegment segment;
+            segment.blocks = raw_blocks.data();
+            segment.type = tensor.ggml_type;
+            segment.row_offset = 0;
+            segment.rows = rows;
+            segment.cols = cols;
+            segment.row_bytes = row_bytes;
+            weight.gguf_segment_storage.push_back(std::move(raw_blocks));
+            weight.linear.gguf_segments.push_back(segment);
+            weight.linear.kind =
+                tensor.ggml_type == GgmlType::Q4_K
+                    ? LinearStorageKind::Q4_K
+                    : LinearStorageKind::Q6_K;
+            weight.linear.rows = rows;
+            weight.linear.cols = cols;
+            weight.linear.validate_storage();
+            auto [it, inserted] =
+                weights_->tensors.emplace(name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+            return &it->second.linear;
+        }
+
         DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
         LFM_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                             tensor.bytes, cudaMemcpyHostToDevice));
@@ -232,6 +261,63 @@ const LinearWeight* WeightLoader::load_linear_weight(
                            weight.bf16_storage.data(), rows, cols,
                            nullptr);
         LFM_CUDA(cudaStreamSynchronize(nullptr));
+
+        if (weight_mode_ == WeightMode::Int8 ||
+            weight_mode_ == WeightMode::Int4) {
+            std::vector<__nv_bfloat16> host_bf16(
+                static_cast<size_t>(rows) * cols);
+            LFM_CUDA(cudaMemcpy(host_bf16.data(),
+                                weight.bf16_storage.data(),
+                                host_bf16.size() * sizeof(__nv_bfloat16),
+                                cudaMemcpyDeviceToHost));
+            weight.bf16_storage.reset(0);
+            const std::byte* dense_data =
+                reinterpret_cast<const std::byte*>(host_bf16.data());
+            const size_t count = static_cast<size_t>(rows) * cols;
+            if (weight_mode_ == WeightMode::Int8) {
+                Int8RowwisePack pack = quantize_bf16_rows(
+                    dense_data, static_cast<size_t>(rows),
+                    static_cast<size_t>(cols));
+                weight.int8_storage.reset(count);
+                weight.scales_storage.reset(pack.scales.size());
+                LFM_CUDA(cudaMemcpy(weight.int8_storage.data(),
+                                    pack.values.data(),
+                                    pack.values.size() * sizeof(int8_t),
+                                    cudaMemcpyHostToDevice));
+                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                                    pack.scales.data(),
+                                    pack.scales.size() * sizeof(float),
+                                    cudaMemcpyHostToDevice));
+                weight.linear.kind = LinearStorageKind::Int8;
+                weight.linear.int8 = weight.int8_storage.data();
+                weight.linear.scales = weight.scales_storage.data();
+            } else {
+                Int4RowwisePack pack = quantize_bf16_rows_int4(
+                    dense_data, static_cast<size_t>(rows),
+                    static_cast<size_t>(cols));
+                weight.int4_storage.reset(pack.values.size());
+                weight.scales_storage.reset(pack.scales.size());
+                LFM_CUDA(cudaMemcpy(weight.int4_storage.data(),
+                                    pack.values.data(),
+                                    pack.values.size() * sizeof(uint8_t),
+                                    cudaMemcpyHostToDevice));
+                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                                    pack.scales.data(),
+                                    pack.scales.size() * sizeof(float),
+                                    cudaMemcpyHostToDevice));
+                weight.linear.kind = LinearStorageKind::Int4;
+                weight.linear.int4 = weight.int4_storage.data();
+                weight.linear.scales = weight.scales_storage.data();
+            }
+            weight.linear.rows = rows;
+            weight.linear.cols = cols;
+            weight.linear.validate_storage();
+            auto [it, inserted] =
+                weights_->tensors.emplace(name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+            return &it->second.linear;
+        }
+
         weight.linear.kind = LinearStorageKind::Bf16;
         weight.linear.bf16 = weight.bf16_storage.data();
         weight.linear.rows = rows;
@@ -357,11 +443,11 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         throw std::runtime_error("mixed dense/quantized concat is not supported: " + synthetic_name);
     }
 
-    // GGUF block-quantized concat: dequantize every source stream straight
-    // into its row-offset slice of one combined BF16 buffer (see the
-    // load_linear_weight comment above for why: tensor-core GEMM on BF16
-    // beats the scalar dequantizing GEMV/GEMM kernels by 1-2 orders of
-    // magnitude, and the one-time load cost is negligible).
+    // GGUF block-quantized concat: by default dequantize every source stream
+    // straight into its row-offset slice of one combined BF16 buffer (tensor-
+    // core GEMM on BF16 beats the scalar dequantizing GEMV/GEMM kernels).
+    // With --weight-mode native, keep each source's raw blocks as a separate
+    // GGUF segment so the matmul kernels dequantize on the fly.
     if (views.front().dtype == TensorDType::Quantized) {
         for (const auto& v : views) {
             if (v.dtype != TensorDType::Quantized ||
@@ -369,6 +455,44 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " + synthetic_name);
             }
         }
+
+        if (weight_mode_ == WeightMode::NativeGguf) {
+            DeviceWeight weight;
+            weight.shape = {total_rows, common_width};
+            int row_offset = 0;
+            for (const auto& v : views) {
+                const GgmlTypeTrait trait = ggml_type_trait(v.ggml_type);
+                if (common_width % trait.block_size != 0) {
+                    throw std::runtime_error("GGUF concat width is not block-aligned: " + synthetic_name);
+                }
+                const size_t row_bytes = static_cast<size_t>(common_width / trait.block_size) * trait.type_size;
+                const size_t bytes = static_cast<size_t>(v.shape[0]) * row_bytes;
+                DeviceBuffer<uint8_t> raw_blocks(bytes);
+                LFM_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
+                                    bytes, cudaMemcpyHostToDevice));
+                GgufLinearSegment segment;
+                segment.blocks = raw_blocks.data();
+                segment.type = v.ggml_type;
+                segment.row_offset = row_offset;
+                segment.rows = static_cast<int>(v.shape[0]);
+                segment.cols = static_cast<int>(common_width);
+                segment.row_bytes = row_bytes;
+                weight.gguf_segment_storage.push_back(std::move(raw_blocks));
+                weight.linear.gguf_segments.push_back(segment);
+                row_offset += static_cast<int>(v.shape[0]);
+            }
+            weight.linear.kind = views.front().ggml_type == GgmlType::Q4_K
+                ? LinearStorageKind::Q4_K
+                : LinearStorageKind::Q6_K;
+            weight.linear.rows = static_cast<int>(total_rows);
+            weight.linear.cols = static_cast<int>(common_width);
+            weight.linear.validate_storage();
+            auto [it, inserted] =
+                weights_->tensors.emplace(synthetic_name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
+            return &it->second.linear;
+        }
+
         DeviceWeight weight;
         weight.shape = {total_rows, common_width};
         weight.bf16_storage.reset(static_cast<size_t>(total_rows) * common_width);
@@ -392,6 +516,62 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             LFM_CUDA(cudaStreamSynchronize(nullptr));
             row_offset += static_cast<int>(v.shape[0]);
         }
+
+        if (weight_mode_ == WeightMode::Int8 ||
+            weight_mode_ == WeightMode::Int4) {
+            const size_t count = static_cast<size_t>(total_rows) * common_width;
+            std::vector<__nv_bfloat16> host_bf16(count);
+            LFM_CUDA(cudaMemcpy(host_bf16.data(),
+                                weight.bf16_storage.data(),
+                                count * sizeof(__nv_bfloat16),
+                                cudaMemcpyDeviceToHost));
+            weight.bf16_storage.reset(0);
+            const std::byte* dense_data =
+                reinterpret_cast<const std::byte*>(host_bf16.data());
+            if (weight_mode_ == WeightMode::Int8) {
+                Int8RowwisePack pack = quantize_bf16_rows(
+                    dense_data, static_cast<size_t>(total_rows),
+                    static_cast<size_t>(common_width));
+                weight.int8_storage.reset(count);
+                weight.scales_storage.reset(pack.scales.size());
+                LFM_CUDA(cudaMemcpy(weight.int8_storage.data(),
+                                    pack.values.data(),
+                                    pack.values.size() * sizeof(int8_t),
+                                    cudaMemcpyHostToDevice));
+                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                                    pack.scales.data(),
+                                    pack.scales.size() * sizeof(float),
+                                    cudaMemcpyHostToDevice));
+                weight.linear.kind = LinearStorageKind::Int8;
+                weight.linear.int8 = weight.int8_storage.data();
+                weight.linear.scales = weight.scales_storage.data();
+            } else {
+                Int4RowwisePack pack = quantize_bf16_rows_int4(
+                    dense_data, static_cast<size_t>(total_rows),
+                    static_cast<size_t>(common_width));
+                weight.int4_storage.reset(pack.values.size());
+                weight.scales_storage.reset(pack.scales.size());
+                LFM_CUDA(cudaMemcpy(weight.int4_storage.data(),
+                                    pack.values.data(),
+                                    pack.values.size() * sizeof(uint8_t),
+                                    cudaMemcpyHostToDevice));
+                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                                    pack.scales.data(),
+                                    pack.scales.size() * sizeof(float),
+                                    cudaMemcpyHostToDevice));
+                weight.linear.kind = LinearStorageKind::Int4;
+                weight.linear.int4 = weight.int4_storage.data();
+                weight.linear.scales = weight.scales_storage.data();
+            }
+            weight.linear.rows = static_cast<int>(total_rows);
+            weight.linear.cols = static_cast<int>(common_width);
+            weight.linear.validate_storage();
+            auto [it, inserted] =
+                weights_->tensors.emplace(synthetic_name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
+            return &it->second.linear;
+        }
+
         weight.linear.kind = LinearStorageKind::Bf16;
         weight.linear.bf16 = weight.bf16_storage.data();
         weight.linear.rows = static_cast<int>(total_rows);

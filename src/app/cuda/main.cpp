@@ -153,7 +153,7 @@ Args parse_args(int argc, char** argv) {
                 << "  [--legacy-sampling] [--no-cuda-graph]\n"
                 << "  [--gemm-backend cublas|cublaslt] [--lt-autotune]\n"
                 << "  [--lt-workspace-mb N] [--lt-heuristics N]\n"
-                << "  [--weight-mode bf16|int8|int4] [--kv-cache bf16|int8]\n"
+                << "  [--weight-mode bf16|int8|int4|native] [--kv-cache bf16|int8]\n"
                 << "  [--attention-mode single|segmented|auto]\n"
                 << "  [--attention-chunk-tokens N] [--attention-auto-threshold N]\n"
                 << "  [--memory-report] [--benchmark-decode N]\n"
@@ -205,8 +205,8 @@ Args parse_args(int argc, char** argv) {
         throw std::runtime_error("--gemm-backend must be cublas or cublaslt");
     }
     if (args.weight_mode != "bf16" && args.weight_mode != "int8" &&
-        args.weight_mode != "int4") {
-        throw std::runtime_error("--weight-mode must be bf16, int8 or int4");
+        args.weight_mode != "int4" && args.weight_mode != "native") {
+        throw std::runtime_error("--weight-mode must be bf16, int8, int4 or native");
     }
     if (args.kv_cache_mode != "bf16" && args.kv_cache_mode != "int8") {
         throw std::runtime_error("--kv-cache must be bf16 or int8");
@@ -418,6 +418,8 @@ int main(int argc, char** argv) {
             model_options.weight_mode = lfm::WeightMode::Int8;
         } else if (args.weight_mode == "int4") {
             model_options.weight_mode = lfm::WeightMode::Int4;
+        } else if (args.weight_mode == "native") {
+            model_options.weight_mode = lfm::WeightMode::NativeGguf;
         } else {
             model_options.weight_mode = lfm::WeightMode::Bf16;
         }

@@ -22,6 +22,11 @@ enum class WeightMode {
     Bf16,
     Int8,
     Int4,
+    // Keep GGUF block-quantized weights in their native on-disk format
+    // (Q4_K / Q6_K) on the device instead of dequantizing to BF16 at load
+    // time. The matmul kernels dequantize on the fly, reading ~3x less
+    // memory per decode token than the BF16 path.
+    NativeGguf,
 };
 
 enum class KvCacheMode {

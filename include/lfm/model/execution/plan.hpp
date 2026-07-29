@@ -11,6 +11,8 @@ enum class LinearKernelKind : uint8_t {
     Bf16CublasLt,
     W8A16,
     W4A16,
+    Q4kMmq,
+    Q6kMmq,
 };
 
 enum class SamplingKernelKind : uint8_t {

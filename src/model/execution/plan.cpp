@@ -60,6 +60,9 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
         case WeightMode::Int4:
             plan.linear_kernel_ = LinearKernelKind::W4A16;
             break;
+        case WeightMode::NativeGguf:
+            plan.linear_kernel_ = LinearKernelKind::Bf16CublasLt;
+            break;
     }
     plan.sampling_kernel_ = requested.fused_sampling
         ? SamplingKernelKind::Fused
@@ -85,6 +88,8 @@ std::string ExecutionPlan::description() const {
         case LinearKernelKind::Bf16CublasLt: out << "bf16-cublaslt"; break;
         case LinearKernelKind::W8A16: out << "w8a16"; break;
         case LinearKernelKind::W4A16: out << "w4a16"; break;
+        case LinearKernelKind::Q4kMmq: out << "q4k-mmq"; break;
+        case LinearKernelKind::Q6kMmq: out << "q6k-mmq"; break;
     }
     out << ", sampling="
         << (sampling_kernel_ == SamplingKernelKind::Fused ? "fused" : "legacy")
