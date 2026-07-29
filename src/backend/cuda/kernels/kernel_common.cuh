@@ -4,6 +4,7 @@
 #include "lfm/backend/cuda/utils.cuh"
 
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 

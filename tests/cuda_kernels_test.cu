@@ -5,9 +5,11 @@
 #include "lfm/backend/cuda/paged_kv.hpp"
 #include "lfm/model/config/shape.hpp"
 #include "lfm/model/config/variant.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <random>
 #include <vector>
 
 namespace {
@@ -650,6 +652,89 @@ int main() {
                                  cudaMemcpyDeviceToHost, stream.get()));
         LFM_CUDA(cudaStreamSynchronize(stream.get()));
         LFM_TEST_CHECK(legacy_token == fused_token);
+    }
+
+    // Fused sampler produces the exact ordered top-k at realistic vocabulary
+    // size, including the tie-break rule.
+    //
+    // The check above only compares the finally sampled token on a 6-entry
+    // vocabulary, which cannot detect a mis-ordered top-k array. The selection
+    // is a block-parallel argmax drain, so it has to reproduce the ordering the
+    // original single-threaded insertion sort produced -- descending score, and
+    // on an exact tie the *lower* vocabulary index first. Duplicated logits below
+    // force many exact ties (bf16 has only 8 mantissa bits, so ties are common in
+    // practice, not a synthetic worry), and they are seeded across the whole
+    // vocabulary so ties land in different threads' strided slices.
+    {
+        constexpr int vocab = 65536;
+        constexpr int top_k = 50;
+        std::vector<__nv_bfloat16> logits(vocab);
+        std::vector<uint8_t> seen(vocab, 0);
+        std::mt19937 rng(20260729);
+        std::uniform_real_distribution<float> dist(-6.0f, 6.0f);
+        for (int i = 0; i < vocab; ++i) logits[i] = to_bf16(dist(rng));
+        // Plant a plateau of exactly-equal top values spread far apart, so the
+        // correct answer is "these indices, in ascending order".
+        const int tie_positions[] = {5, 999, 1024, 1025, 40000, 65535, 257, 258};
+        for (int p : tie_positions) logits[p] = to_bf16(9.5f);
+        for (int i = 0; i < vocab; i += 977) seen[i] = 1;
+
+        constexpr float temperature = 0.75f;
+        constexpr float penalty = 1.1f;
+
+        // CPU reference: the exact semantics of the replaced insertion sort.
+        std::vector<float> ref_scores(vocab);
+        for (int i = 0; i < vocab; ++i) {
+            float v = __bfloat162float(logits[i]);
+            if (seen[i]) v = v < 0.0f ? v * penalty : v / penalty;
+            ref_scores[i] = v / temperature;
+        }
+        std::vector<int> order(vocab);
+        for (int i = 0; i < vocab; ++i) order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            if (ref_scores[a] != ref_scores[b]) return ref_scores[a] > ref_scores[b];
+            return a < b;
+        });
+
+        lfm::DeviceBuffer<__nv_bfloat16> dlogits(vocab);
+        lfm::DeviceBuffer<uint8_t> dseen(vocab);
+        lfm::DeviceBuffer<float> dscores(vocab);
+        lfm::DeviceBuffer<float> dvalues(top_k);
+        lfm::DeviceBuffer<int32_t> dindices(top_k);
+        lfm::DeviceBuffer<int32_t> dresult(1);
+        lfm::DeviceBuffer<uint64_t> drng(1);
+        uint64_t seed = 4242;
+        LFM_CUDA(cudaMemcpy(dlogits.data(), logits.data(), dlogits.bytes(),
+                            cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(dseen.data(), seen.data(), dseen.bytes(),
+                            cudaMemcpyHostToDevice));
+        LFM_CUDA(cudaMemcpy(drng.data(), &seed, sizeof(seed), cudaMemcpyHostToDevice));
+
+        lfm::launch_fused_sample_topk(
+            dlogits.data(), dseen.data(), dscores.data(), dvalues.data(),
+            dindices.data(), vocab, temperature, penalty, top_k, 1.0f,
+            drng.data(), dresult.data(), stream.get());
+
+        std::vector<int32_t> got_indices(top_k);
+        std::vector<float> got_values(top_k);
+        LFM_CUDA(cudaMemcpyAsync(got_indices.data(), dindices.data(),
+                                 top_k * sizeof(int32_t), cudaMemcpyDeviceToHost,
+                                 stream.get()));
+        LFM_CUDA(cudaMemcpyAsync(got_values.data(), dvalues.data(),
+                                 top_k * sizeof(float), cudaMemcpyDeviceToHost,
+                                 stream.get()));
+        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+
+        for (int r = 0; r < top_k; ++r) {
+            LFM_TEST_CHECK(got_indices[r] == order[r]);
+            LFM_TEST_CHECK(got_values[r] == ref_scores[order[r]]);
+        }
+        // The planted plateau must come out first, in ascending index order.
+        std::vector<int> ties(std::begin(tie_positions), std::end(tie_positions));
+        std::sort(ties.begin(), ties.end());
+        for (size_t t = 0; t < ties.size(); ++t) {
+            LFM_TEST_CHECK(got_indices[t] == ties[t]);
+        }
     }
 
     // Weight-only INT8 linear supports both GEMV and batched rows.

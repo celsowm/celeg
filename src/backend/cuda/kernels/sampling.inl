@@ -168,6 +168,94 @@ __global__ void sample_topk_kernel(const float* selected_values,
     *result = selected_indices[chosen];
 }
 
+// Candidate ordering shared by the top-k selection below: higher score wins,
+// and on an exact tie the lower vocabulary index wins. This is the ordering the
+// original single-threaded insertion sort produced, and callers (and the
+// determinism tests) depend on it, so any parallel selection must reproduce it
+// exactly rather than merely picking "a" maximum.
+__device__ __forceinline__ bool sampling_candidate_better(float va, int ia,
+                                                          float vb, int ib) {
+    return va > vb || (va == vb && ia < ib);
+}
+
+// Block-parallel ordered top-k selection over scores[0, vocab).
+//
+// This replaced a single-threaded (`threadIdx.x == 0`) insertion sort over the
+// whole vocabulary. Measured on LFM2.5-230M (vocab 65536) that one loop was
+// 5.47 ms of an 8.34 ms decode step -- 66% of decode, more than every GEMM in
+// the model combined -- because one lane walked 65536 dependent global loads
+// with no parallelism to hide the latency.
+//
+// Strategy: every thread reduces its own strided slice to a single best
+// candidate, then each rank is drained by a block-wide argmax over those
+// blockDim.x candidates. Only the thread that owned the winner has to refill,
+// and it rescans just its own slice (vocab/blockDim.x elements) for its
+// next-best strictly below what was just emitted. So the serial work per rank
+// is one slice, not the whole vocabulary.
+//
+// Ordering is descending score, ties broken by *lower* vocabulary index --
+// identical to what the insertion sort produced. Callers depend on this, so it
+// is asserted directly in cuda_kernels_test.cu rather than left implicit.
+//
+// `best_*` / `reduce_*` are caller-provided shared scratch, blockDim.x wide.
+// blockDim.x must be a power of two (the reduction halves it).
+__device__ void block_select_topk(const float* scores, int vocab, int ranks,
+                                  float* out_values, int32_t* out_indices,
+                                  float* best_values, int* best_indices,
+                                  float* reduce_values, int* reduce_indices) {
+    const int stride = blockDim.x;
+    {
+        float bv = -FLT_MAX;
+        int bi = INT_MAX;
+        for (int i = threadIdx.x; i < vocab; i += stride) {
+            if (sampling_candidate_better(scores[i], i, bv, bi)) { bv = scores[i]; bi = i; }
+        }
+        best_values[threadIdx.x] = bv;
+        best_indices[threadIdx.x] = bi;
+    }
+    __syncthreads();
+
+    for (int rank = 0; rank < ranks; ++rank) {
+        reduce_values[threadIdx.x] = best_values[threadIdx.x];
+        reduce_indices[threadIdx.x] = best_indices[threadIdx.x];
+        __syncthreads();
+        for (int step = stride >> 1; step > 0; step >>= 1) {
+            if (threadIdx.x < step &&
+                sampling_candidate_better(reduce_values[threadIdx.x + step],
+                                          reduce_indices[threadIdx.x + step],
+                                          reduce_values[threadIdx.x],
+                                          reduce_indices[threadIdx.x])) {
+                reduce_values[threadIdx.x] = reduce_values[threadIdx.x + step];
+                reduce_indices[threadIdx.x] = reduce_indices[threadIdx.x + step];
+            }
+            __syncthreads();
+        }
+        const float won_value = reduce_values[0];
+        const int won_index = reduce_indices[0];
+        if (threadIdx.x == 0) {
+            out_values[rank] = won_value;
+            out_indices[rank] = won_index;
+        }
+        // Refill only the owning thread; thread t owns vocabulary indices
+        // t, t+stride, ..., so ownership is recoverable from the index alone.
+        if (rank + 1 < ranks && won_index != INT_MAX &&
+            threadIdx.x == won_index % stride) {
+            float nv = -FLT_MAX;
+            int ni = INT_MAX;
+            for (int i = threadIdx.x; i < vocab; i += stride) {
+                if (sampling_candidate_better(scores[i], i, nv, ni) &&
+                    sampling_candidate_better(won_value, won_index, scores[i], i)) {
+                    nv = scores[i];
+                    ni = i;
+                }
+            }
+            best_values[threadIdx.x] = nv;
+            best_indices[threadIdx.x] = ni;
+        }
+        __syncthreads();
+    }
+}
+
 __global__ void fused_sample_topk_kernel(const __nv_bfloat16* logits,
                                                 uint8_t* seen,
                                                 float* scores,
@@ -182,6 +270,8 @@ __global__ void fused_sample_topk_kernel(const __nv_bfloat16* logits,
                                                 int32_t* result) {
     __shared__ float best_values[256];
     __shared__ int best_indices[256];
+    __shared__ float reduce_values[256];
+    __shared__ int reduce_indices[256];
 
     for (int i = threadIdx.x; i < vocab; i += blockDim.x) {
         float value = bf16_float(logits[i]);
@@ -193,37 +283,8 @@ __global__ void fused_sample_topk_kernel(const __nv_bfloat16* logits,
     }
     __syncthreads();
 
-    // Keep the score preparation parallel, then select the ordered top-k in
-    // one vocabulary pass. The previous implementation rescanned the entire
-    // vocabulary once per rank and mutated scores between passes.
-    if (threadIdx.x == 0) {
-        int count = 0;
-        for (int i = 0; i < vocab; ++i) {
-            const float value = scores[i];
-            if (count == top_k &&
-                !(value > selected_values[count - 1] ||
-                  (value == selected_values[count - 1] &&
-                   i < selected_indices[count - 1]))) {
-                continue;
-            }
-            int slot = count < top_k ? count++ : top_k;
-            while (slot > 0 &&
-                   (value > selected_values[slot - 1] ||
-                    (value == selected_values[slot - 1] &&
-                     i < selected_indices[slot - 1]))) {
-                if (slot < top_k) {
-                    selected_values[slot] = selected_values[slot - 1];
-                    selected_indices[slot] = selected_indices[slot - 1];
-                }
-                --slot;
-            }
-            if (slot < top_k) {
-                selected_values[slot] = value;
-                selected_indices[slot] = i;
-            }
-        }
-    }
-    __syncthreads();
+    block_select_topk(scores, vocab, top_k, selected_values, selected_indices,
+                      best_values, best_indices, reduce_values, reduce_indices);
 
     if (threadIdx.x == 0) {
         const float maximum = selected_values[0];
@@ -299,6 +360,11 @@ __global__ void packed_sample_topk_kernel(
     const float top_p = top_p_values[row];
     const bool greedy = temperature <= 0.0f || top_k == 1;
 
+    __shared__ float best_values[256];
+    __shared__ int best_indices[256];
+    __shared__ float reduce_values[256];
+    __shared__ int reduce_indices[256];
+
     for (int i = threadIdx.x; i < vocab; i += blockDim.x) {
         float value = bf16_float(row_logits[i]);
         if (row_seen[i]) {
@@ -309,34 +375,9 @@ __global__ void packed_sample_topk_kernel(
     }
     __syncthreads();
 
-    if (threadIdx.x == 0) {
-        const int ranks = greedy ? 1 : top_k;
-        int count = 0;
-        for (int i = 0; i < vocab; ++i) {
-            const float value = row_scores[i];
-            if (count == ranks &&
-                !(value > row_selected_values[count - 1] ||
-                  (value == row_selected_values[count - 1] &&
-                   i < row_selected_indices[count - 1]))) {
-                continue;
-            }
-            int slot = count < ranks ? count++ : ranks;
-            while (slot > 0 &&
-                   (value > row_selected_values[slot - 1] ||
-                    (value == row_selected_values[slot - 1] &&
-                     i < row_selected_indices[slot - 1]))) {
-                if (slot < ranks) {
-                    row_selected_values[slot] = row_selected_values[slot - 1];
-                    row_selected_indices[slot] = row_selected_indices[slot - 1];
-                }
-                --slot;
-            }
-            if (slot < ranks) {
-                row_selected_values[slot] = value;
-                row_selected_indices[slot] = i;
-            }
-        }
-    }
+    block_select_topk(row_scores, vocab, greedy ? 1 : top_k,
+                      row_selected_values, row_selected_indices,
+                      best_values, best_indices, reduce_values, reduce_indices);
     __syncthreads();
 
     if (threadIdx.x == 0) {
