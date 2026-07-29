@@ -188,11 +188,14 @@ void LfmModel::Impl::enqueue_decode_forward() {
                 }
             }
             decode_phase_profile().end(DecodePhase::Attention, stream_.get());
+            decode_phase_profile().begin(stream_.get());
             linear(op_output_.data(), *attention->out, hidden_.data(),
                    1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
+            decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
+            decode_phase_profile().begin(stream_.get());
             linear(normed_.data(), *convolution.conv_in, conv_projected_.data(),
                    1, 3 * shape_.hidden, shape_.hidden);
             launch_conv_decode_device(
@@ -203,10 +206,13 @@ void LfmModel::Impl::enqueue_decode_forward() {
             linear(op_output_.data(), *convolution.conv_out, hidden_.data(),
                    1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
+            decode_phase_profile().end(DecodePhase::Conv, stream_.get());
         }
         if (!options_.fused_residuals) {
+            decode_phase_profile().begin(stream_.get());
             launch_residual_add(hidden_.data(), residual_.data(),
                                 shape_.hidden, stream_.get());
+            decode_phase_profile().end(DecodePhase::Other, stream_.get());
         }
         decode_phase_profile().begin(stream_.get());
         run_mlp_decode(common_layer, layer_idx);
@@ -228,7 +234,9 @@ void LfmModel::Impl::enqueue_decode_step() {
     decode_phase_profile().end(DecodePhase::Sampling, stream_.get());
     decode_phase_profile().count_step();
     enqueue_decode_forward();
+    decode_phase_profile().begin(stream_.get());
     launch_increment_position(position_device_.data(), stream_.get());
+    decode_phase_profile().end(DecodePhase::Other, stream_.get());
 }
 
 bool LfmModel::Impl::use_segmented_attention(int host_position) const {

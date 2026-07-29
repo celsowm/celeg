@@ -28,6 +28,14 @@
 namespace lfm {
 
 // Fixed phase list. Keep names short -- they are column headers in the report.
+// Order follows the decode step so the report reads top-to-bottom.
+//   - AttnOut: the attention output projection (line 191 in execution.cu),
+//     previously unattributed between the Attention and Mlp regions.
+//   - Conv: the conv_in / conv_decode / conv_out block (conv branch of the
+//     per-layer loop), previously unattributed entirely.
+//   - Other: residual/unattributed bucket -- launch_increment_position and the
+//     optional launch_residual_add when !options_.fused_residuals. Lets the
+//     report expose work that would otherwise be hidden between regions.
 enum class DecodePhase : int {
     Sampling = 0,
     Embed,
@@ -35,8 +43,11 @@ enum class DecodePhase : int {
     Projection,
     RopeKv,
     Attention,
+    AttnOut,
+    Conv,
     Mlp,
     Logits,
+    Other,
     kCount
 };
 
@@ -90,7 +101,8 @@ public:
             return;
         }
         static const char* kNames[] = {"sampling", "embed", "rmsnorm", "qkv+proj",
-                                       "rope+kv", "attention", "mlp", "logits"};
+                                       "rope+kv", "attention", "attn_out", "conv",
+                                       "mlp", "logits", "other"};
         double total = 0.0;
         for (int i = 0; i < static_cast<int>(DecodePhase::kCount); ++i) total += totals_[i];
         std::fprintf(stderr, "\n=== decode phase profile (%lld steps) ===\n", steps_);
@@ -102,8 +114,10 @@ public:
         std::fprintf(stderr, "  %-10s %8.4f ms/token\n", "TOTAL",
                      total / static_cast<double>(steps_));
         std::fprintf(stderr,
-                     "  (phase sum excludes work between regions, so it runs slightly\n"
-                     "   under the end-to-end ms/token the benchmark reports)\n");
+                     "  (phase sum excludes tiny inter-region work such as the position\n"
+                     "   increment; the residual-add and conv block are now attributed.\n"
+                     "   Percentages are of the phase sum, not the end-to-end benchmark\n"
+                     "   ms/token, so they sum to ~100%%)\n");
     }
 
 private:
