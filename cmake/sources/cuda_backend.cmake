@@ -8,6 +8,7 @@ set(LFM_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/setup.cu
     src/backend/cuda/model/residency.cu
     src/backend/cuda/model/execution.cu
+    src/backend/cuda/model/prefill.cu
     src/backend/cuda/model/weights.cu
     src/backend/cuda/model/packed_execution.cu
     src/backend/cuda/model/persistence.cu
