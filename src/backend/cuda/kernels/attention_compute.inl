@@ -22,6 +22,25 @@ __device__ float attention_dot(const __nv_bfloat16* query,
     return block_sum(partial, warp_sums, total);
 }
 
+// Maximum head_dim this file's warp-only decode-attention kernels support
+// (32 lanes * kMaxHeadDimPerLane each); LFM2/LFM2.5 head dims (64-128) are
+// well within this.
+constexpr int kMaxHeadDimPerLane = 8;
+
+// One warp handles one (query row, query head) pair for the whole KV loop,
+// with no block-wide synchronization at all: the Q.K dot product is reduced
+// with warp_sum + a __shfl_sync broadcast (every lane ends up with the same
+// scalar), so every lane can independently recompute the online-softmax
+// running max/denominator from that broadcast value and keep its own slice
+// of the V-weighted accumulator in registers. Contrast with the block-wide
+// design below (attention_dot + block_sum), which pays two __syncthreads()
+// per KV token; for a 512-token context that is over a thousand block-wide
+// barriers per decode step, serializing every warp in the block against the
+// slowest one on every single token.
+__device__ __forceinline__ float warp_broadcast_sum(float partial) {
+    return __shfl_sync(0xffffffffu, warp_sum(partial), 0);
+}
+
 __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
                                          const __nv_bfloat16* key_cache,
                                          const __nv_bfloat16* value_cache,
@@ -101,6 +120,9 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
     }
 }
 
+// Warp-only online-softmax decode/prefill-fallback attention. One warp (32
+// lanes, blockDim.x == 32) per (query_row, query_head): see
+// warp_broadcast_sum above for why this has no __syncthreads() at all.
 __global__ void gqa_decode_online_kernel(const __nv_bfloat16* q,
                                          const __nv_bfloat16* key_cache,
                                          const __nv_bfloat16* value_cache,
@@ -125,42 +147,39 @@ __global__ void gqa_decode_online_kernel(const __nv_bfloat16* q,
 
     float running_max = -FLT_MAX;
     float denominator = 0.0f;
-    float accumulator = 0.0f;
+    float accumulator[kMaxHeadDimPerLane];
+#pragma unroll
+    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
     const float scale = rsqrtf(static_cast<float>(head_dim));
-
-    __shared__ float warp_sums[32];
-    __shared__ float dot_total;
-    __shared__ float alpha;
-    __shared__ float beta;
-    __shared__ float next_max;
-    __shared__ float shared_denominator;
 
     for (int token = 0; token < seq_len; ++token) {
         const __nv_bfloat16* key = key_cache +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = dot * scale;
-            next_max = fmaxf(running_max, score);
-            alpha = expf(running_max - next_max);
-            beta = expf(score - next_max);
-            shared_denominator = denominator * alpha + beta;
+        float partial = 0.0f;
+        for (int d = lane; d < head_dim; d += 32) {
+            partial += bf16_float(query[d]) * bf16_float(key[d]);
         }
-        __syncthreads();
+        const float dot = warp_broadcast_sum(partial);
+        const float score = dot * scale;
+        const float next_max = fmaxf(running_max, score);
+        const float alpha = expf(running_max - next_max);
+        const float beta = expf(score - next_max);
+        denominator = denominator * alpha + beta;
 
-        if (lane < head_dim) {
-            const __nv_bfloat16* value = value_cache +
-                (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-            accumulator = accumulator * alpha + bf16_float(value[lane]) * beta;
+        const __nv_bfloat16* value = value_cache +
+            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
+        int idx = 0;
+        for (int d = lane; d < head_dim; d += 32, ++idx) {
+            accumulator[idx] = accumulator[idx] * alpha + bf16_float(value[d]) * beta;
         }
-        denominator = shared_denominator;
         running_max = next_max;
-        __syncthreads();
     }
 
-    if (lane < head_dim) {
-        out[(static_cast<size_t>(query_row) * q_heads + query_head) * head_dim + lane] =
-            __float2bfloat16(accumulator / denominator);
+    __nv_bfloat16* out_row = out +
+        (static_cast<size_t>(query_row) * q_heads + query_head) * head_dim;
+    int idx = 0;
+    for (int d = lane; d < head_dim; d += 32, ++idx) {
+        out_row[d] = __float2bfloat16(accumulator[idx] / denominator);
     }
 }
 
@@ -236,6 +255,8 @@ __global__ void gqa_decode_strict_int8_kernel(
     }
 }
 
+// Warp-only variant of gqa_decode_online_kernel for int8 KV cache; see
+// warp_broadcast_sum above for the no-__syncthreads() reduction strategy.
 __global__ void gqa_decode_online_int8_kernel(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
@@ -254,42 +275,47 @@ __global__ void gqa_decode_online_int8_kernel(
         (static_cast<size_t>(query_row) * q_heads + query_head) * head_dim;
     float running_max = -FLT_MAX;
     float denominator = 0.0f;
-    float accumulator = 0.0f;
+    float accumulator[kMaxHeadDimPerLane];
+#pragma unroll
+    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
     const float scale = rsqrtf(static_cast<float>(head_dim));
-    __shared__ float warp_sums[32];
-    __shared__ float dot_total;
-    __shared__ float alpha;
-    __shared__ float beta;
-    __shared__ float next_max;
-    __shared__ float shared_denominator;
+
     for (int token = 0; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = key_cache + scale_index * head_dim;
-        const float dot = attention_dot_int8(query, key, key_scales[scale_index],
-                                             head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = dot * scale;
-            next_max = fmaxf(running_max, score);
-            alpha = expf(running_max - next_max);
-            beta = expf(score - next_max);
-            shared_denominator = denominator * alpha + beta;
+        const float key_scale = key_scales[scale_index];
+        float partial = 0.0f;
+        for (int d = lane; d < head_dim; d += 32) {
+            partial += bf16_float(query[d]) * (static_cast<float>(key[d]) * key_scale);
         }
-        __syncthreads();
-        if (lane < head_dim) {
-            const int8_t* value = value_cache + scale_index * head_dim;
-            accumulator = accumulator * alpha +
-                static_cast<float>(value[lane]) * value_scales[scale_index] * beta;
+        const float dot = warp_broadcast_sum(partial);
+        const float score = dot * scale;
+        const float next_max = fmaxf(running_max, score);
+        const float alpha = expf(running_max - next_max);
+        const float beta = expf(score - next_max);
+        denominator = denominator * alpha + beta;
+
+        const int8_t* value = value_cache + scale_index * head_dim;
+        const float value_scale = value_scales[scale_index];
+        int idx = 0;
+        for (int d = lane; d < head_dim; d += 32, ++idx) {
+            accumulator[idx] = accumulator[idx] * alpha +
+                static_cast<float>(value[d]) * value_scale * beta;
         }
-        denominator = shared_denominator;
         running_max = next_max;
-        __syncthreads();
     }
-    if (lane < head_dim) {
-        out[(static_cast<size_t>(query_row) * q_heads + query_head) * head_dim + lane] =
-            __float2bfloat16(accumulator / denominator);
+
+    __nv_bfloat16* out_row = out +
+        (static_cast<size_t>(query_row) * q_heads + query_head) * head_dim;
+    int idx = 0;
+    for (int d = lane; d < head_dim; d += 32, ++idx) {
+        out_row[d] = __float2bfloat16(accumulator[idx] / denominator);
     }
 }
 
+// Warp-only variant: one warp (blockDim.x == 32) per (query_head, chunk).
+// This is the actual hot decode-attention path once a context crosses
+// attention_auto_threshold (segmented mode); see warp_broadcast_sum above.
 __global__ void gqa_decode_segment_partial_kernel(
     const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
     const __nv_bfloat16* value_cache, const int32_t* position,
@@ -310,7 +336,7 @@ __global__ void gqa_decode_segment_partial_kernel(
             partial_max[partial_index] = -FLT_MAX;
             partial_denom[partial_index] = 0.0f;
         }
-        if (lane < head_dim) partial_accum[accum_base + lane] = 0.0f;
+        for (int d = lane; d < head_dim; d += 32) partial_accum[accum_base + d] = 0.0f;
         return;
     }
 
@@ -319,43 +345,43 @@ __global__ void gqa_decode_segment_partial_kernel(
     const float scale = rsqrtf(static_cast<float>(head_dim));
     float running_max = -FLT_MAX;
     float denominator = 0.0f;
-    float accumulator = 0.0f;
-    __shared__ float warp_sums[32];
-    __shared__ float dot_total;
-    __shared__ float alpha;
-    __shared__ float beta_value;
-    __shared__ float next_max;
-    __shared__ float shared_denom;
+    float accumulator[kMaxHeadDimPerLane];
+#pragma unroll
+    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
 
     for (int token = begin; token < end; ++token) {
         const __nv_bfloat16* key = key_cache +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-        const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = dot * scale;
-            next_max = fmaxf(running_max, score);
-            alpha = expf(running_max - next_max);
-            beta_value = expf(score - next_max);
-            shared_denom = denominator * alpha + beta_value;
+        float partial = 0.0f;
+        for (int d = lane; d < head_dim; d += 32) {
+            partial += bf16_float(query[d]) * bf16_float(key[d]);
         }
-        __syncthreads();
-        if (lane < head_dim) {
-            const __nv_bfloat16* value = value_cache +
-                (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
-            accumulator = accumulator * alpha +
-                bf16_float(value[lane]) * beta_value;
+        const float dot = warp_broadcast_sum(partial);
+        const float score = dot * scale;
+        const float next_max = fmaxf(running_max, score);
+        const float alpha = expf(running_max - next_max);
+        const float beta_value = expf(score - next_max);
+        denominator = denominator * alpha + beta_value;
+
+        const __nv_bfloat16* value = value_cache +
+            (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
+        int idx = 0;
+        for (int d = lane; d < head_dim; d += 32, ++idx) {
+            accumulator[idx] = accumulator[idx] * alpha + bf16_float(value[d]) * beta_value;
         }
         running_max = next_max;
-        denominator = shared_denom;
-        __syncthreads();
     }
     if (lane == 0) {
         partial_max[partial_index] = running_max;
         partial_denom[partial_index] = denominator;
     }
-    if (lane < head_dim) partial_accum[accum_base + lane] = accumulator;
+    int idx = 0;
+    for (int d = lane; d < head_dim; d += 32, ++idx) {
+        partial_accum[accum_base + d] = accumulator[idx];
+    }
 }
 
+// Warp-only variant of the segmented partial kernel for int8 KV cache.
 __global__ void gqa_decode_segment_partial_int8_kernel(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
@@ -377,7 +403,7 @@ __global__ void gqa_decode_segment_partial_int8_kernel(
             partial_max[partial_index] = -FLT_MAX;
             partial_denom[partial_index] = 0.0f;
         }
-        if (lane < head_dim) partial_accum[accum_base + lane] = 0.0f;
+        for (int d = lane; d < head_dim; d += 32) partial_accum[accum_base + d] = 0.0f;
         return;
     }
     const int kv_head = query_head / (q_heads / kv_heads);
@@ -385,40 +411,42 @@ __global__ void gqa_decode_segment_partial_int8_kernel(
     const float scale = rsqrtf(static_cast<float>(head_dim));
     float running_max = -FLT_MAX;
     float denominator = 0.0f;
-    float accumulator = 0.0f;
-    __shared__ float warp_sums[32];
-    __shared__ float dot_total;
-    __shared__ float alpha;
-    __shared__ float beta_value;
-    __shared__ float next_max;
-    __shared__ float shared_denom;
+    float accumulator[kMaxHeadDimPerLane];
+#pragma unroll
+    for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
+
     for (int token = begin; token < end; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = key_cache + scale_index * head_dim;
-        const float dot = attention_dot_int8(query, key, key_scales[scale_index],
-                                             head_dim, warp_sums, &dot_total);
-        if (lane == 0) {
-            const float score = dot * scale;
-            next_max = fmaxf(running_max, score);
-            alpha = expf(running_max - next_max);
-            beta_value = expf(score - next_max);
-            shared_denom = denominator * alpha + beta_value;
+        const float key_scale = key_scales[scale_index];
+        float partial = 0.0f;
+        for (int d = lane; d < head_dim; d += 32) {
+            partial += bf16_float(query[d]) * (static_cast<float>(key[d]) * key_scale);
         }
-        __syncthreads();
-        if (lane < head_dim) {
-            const int8_t* value = value_cache + scale_index * head_dim;
-            accumulator = accumulator * alpha +
-                static_cast<float>(value[lane]) * value_scales[scale_index] * beta_value;
+        const float dot = warp_broadcast_sum(partial);
+        const float score = dot * scale;
+        const float next_max = fmaxf(running_max, score);
+        const float alpha = expf(running_max - next_max);
+        const float beta_value = expf(score - next_max);
+        denominator = denominator * alpha + beta_value;
+
+        const int8_t* value = value_cache + scale_index * head_dim;
+        const float value_scale = value_scales[scale_index];
+        int idx = 0;
+        for (int d = lane; d < head_dim; d += 32, ++idx) {
+            accumulator[idx] = accumulator[idx] * alpha +
+                static_cast<float>(value[d]) * value_scale * beta_value;
         }
         running_max = next_max;
-        denominator = shared_denom;
-        __syncthreads();
     }
     if (lane == 0) {
         partial_max[partial_index] = running_max;
         partial_denom[partial_index] = denominator;
     }
-    if (lane < head_dim) partial_accum[accum_base + lane] = accumulator;
+    int idx = 0;
+    for (int d = lane; d < head_dim; d += 32, ++idx) {
+        partial_accum[accum_base + d] = accumulator[idx];
+    }
 }
 
 __global__ void gqa_decode_segment_reduce_kernel(
@@ -870,8 +898,7 @@ void launch_gqa_decode_online(const __nv_bfloat16* q,
                               __nv_bfloat16* out, int seq_len,
                               int q_heads, int kv_heads, int head_dim,
                               cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_online_kernel<<<q_heads, threads, 0, stream>>>(
+    gqa_decode_online_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, 1, seq_len, nullptr, 0,
         q_heads, kv_heads, head_dim);
     LFM_KERNEL_DEBUG_SYNC(stream);
@@ -884,8 +911,7 @@ void launch_gqa_decode_online_device(const __nv_bfloat16* q,
                                      const int32_t* position,
                                      int q_heads, int kv_heads, int head_dim,
                                      cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_online_kernel<<<q_heads, threads, 0, stream>>>(
+    gqa_decode_online_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, 1, 0, position, 1,
         q_heads, kv_heads, head_dim);
     LFM_KERNEL_DEBUG_SYNC(stream);
@@ -898,7 +924,7 @@ void launch_gqa_decode_segmented_device(
     int chunk_tokens, int chunks, float* partial_max,
     float* partial_denom, float* partial_accum, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
-    gqa_decode_segment_partial_kernel<<<q_heads * chunks, threads, 0, stream>>>(
+    gqa_decode_segment_partial_kernel<<<q_heads * chunks, 32, 0, stream>>>(
         q, key_cache, value_cache, position, q_heads, kv_heads, head_dim,
         chunk_tokens, chunks, partial_max, partial_denom, partial_accum);
     LFM_KERNEL_DEBUG_SYNC(stream);
@@ -926,8 +952,7 @@ void launch_gqa_prefill_online(const __nv_bfloat16* q,
                                __nv_bfloat16* out, int rows,
                                int q_heads, int kv_heads, int head_dim,
                                cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_online_kernel<<<rows * q_heads, threads, 0, stream>>>(
+    gqa_decode_online_kernel<<<rows * q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, rows, 0, nullptr, 2,
         q_heads, kv_heads, head_dim);
     LFM_KERNEL_DEBUG_SYNC(stream);
@@ -967,8 +992,7 @@ void launch_gqa_decode_online_int8(
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int seq_len,
     int q_heads, int kv_heads, int head_dim, cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_online_int8_kernel<<<q_heads, threads, 0, stream>>>(
+    gqa_decode_online_int8_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
         seq_len, nullptr, 0, q_heads, kv_heads, head_dim);
     LFM_KERNEL_DEBUG_SYNC(stream);
@@ -993,8 +1017,7 @@ void launch_gqa_decode_online_int8_device(
     const float* value_scales, __nv_bfloat16* out,
     const int32_t* position, int q_heads, int kv_heads, int head_dim,
     cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_online_int8_kernel<<<q_heads, threads, 0, stream>>>(
+    gqa_decode_online_int8_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
         0, position, 1, q_heads, kv_heads, head_dim);
     LFM_KERNEL_DEBUG_SYNC(stream);
@@ -1008,7 +1031,7 @@ void launch_gqa_decode_segmented_int8_device(
     int chunk_tokens, int chunks, float* partial_max,
     float* partial_denom, float* partial_accum, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
-    gqa_decode_segment_partial_int8_kernel<<<q_heads * chunks, threads, 0, stream>>>(
+    gqa_decode_segment_partial_int8_kernel<<<q_heads * chunks, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, position,
         q_heads, kv_heads, head_dim, chunk_tokens, chunks, partial_max,
         partial_denom, partial_accum);
@@ -1036,8 +1059,7 @@ void launch_gqa_prefill_online_int8(
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int rows,
     int q_heads, int kv_heads, int head_dim, cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_online_int8_kernel<<<rows * q_heads, threads, 0, stream>>>(
+    gqa_decode_online_int8_kernel<<<rows * q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, rows,
         0, nullptr, 2, q_heads, kv_heads, head_dim);
     LFM_KERNEL_DEBUG_SYNC(stream);
