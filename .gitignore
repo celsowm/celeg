@@ -8,12 +8,21 @@ __pycache__/
 err.txt
 out.txt
 # Model weights / tokenizer artifacts are fetched at runtime by the C++ HF
-# cache downloader (src/download_main.cpp). Do not commit them.
+# cache downloader (src/download_main.cpp). Do not commit them. This pattern
+# also matches directories merely *named* "model" that hold source code, not
+# checkpoints (src/model, src/backend/cuda/model, include/lfm/model,
+# include/lfm/detail/model) -- each is re-included below.
 model/
 
-# The CUDA model implementation is source code, not a checkpoint directory.
+# These are source code, not checkpoint directories.
 !src/backend/cuda/model/
 !src/backend/cuda/model/**
+!src/model/
+!src/model/**
+!include/lfm/model/
+!include/lfm/model/**
+!include/lfm/detail/model/
+!include/lfm/detail/model/**
 
 # Third-party sources cloned/built locally for reference benchmarking
 # (e.g. llama.cpp). Never committed. Benchmark model weights are not stored
