@@ -682,6 +682,7 @@ void LfmModel::Impl::allocate_prefill_workspace(int rows) {
     prefill_residual_.reserve(r * shape_.hidden);
     prefill_normed_.reserve(r * shape_.hidden);
     prefill_op_output_.reserve(r * shape_.hidden);
+    prefill_qkv_.reserve(r * shape_.qkv_width);
     prefill_q_.reserve(r * shape_.q_width);
     prefill_k_.reserve(r * shape_.kv_width);
     prefill_v_.reserve(r * shape_.kv_width);

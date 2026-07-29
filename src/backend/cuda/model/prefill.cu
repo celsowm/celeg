@@ -41,19 +41,29 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                        shape_.norm_eps, stream_.get());
 
         if (AttentionLayer* attention = as_attention(layer)) {
-            const LinearWeight q_weight =
-                slice_rows(*attention->qkv, 0, shape_.q_width);
-            const LinearWeight k_weight = slice_rows(
-                *attention->qkv, shape_.q_width, shape_.kv_width);
-            const LinearWeight v_weight = slice_rows(
-                *attention->qkv, shape_.q_width + shape_.kv_width,
-                shape_.kv_width);
-            linear(prefill_normed_.data(), q_weight, prefill_q_.data(),
-                   rows, shape_.q_width, shape_.hidden);
-            linear(prefill_normed_.data(), k_weight, prefill_k_.data(),
-                   rows, shape_.kv_width, shape_.hidden);
-            linear(prefill_normed_.data(), v_weight, prefill_v_.data(),
-                   rows, shape_.kv_width, shape_.hidden);
+            if (options_.fused_projections) {
+                linear(prefill_normed_.data(), *attention->qkv,
+                       prefill_qkv_.data(), rows, shape_.qkv_width,
+                       shape_.hidden);
+                launch_split_qkv_rows(
+                    prefill_qkv_.data(), prefill_q_.data(), prefill_k_.data(),
+                    prefill_v_.data(), rows, shape_.q_width, shape_.kv_width,
+                    stream_.get());
+            } else {
+                const LinearWeight q_weight =
+                    slice_rows(*attention->qkv, 0, shape_.q_width);
+                const LinearWeight k_weight = slice_rows(
+                    *attention->qkv, shape_.q_width, shape_.kv_width);
+                const LinearWeight v_weight = slice_rows(
+                    *attention->qkv, shape_.q_width + shape_.kv_width,
+                    shape_.kv_width);
+                linear(prefill_normed_.data(), q_weight, prefill_q_.data(),
+                       rows, shape_.q_width, shape_.hidden);
+                linear(prefill_normed_.data(), k_weight, prefill_k_.data(),
+                       rows, shape_.kv_width, shape_.hidden);
+                linear(prefill_normed_.data(), v_weight, prefill_v_.data(),
+                       rows, shape_.kv_width, shape_.hidden);
+            }
 
             if (options_.fast_attention) {
                 launch_qk_norm_rope_prefill_fast(

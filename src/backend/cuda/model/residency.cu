@@ -56,6 +56,12 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows,
     if (options_.fused_projections) {
         linear(prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, prefill_gate_up_.data(),
                rows, 2 * shape_.intermediate, shape_.hidden);
+        // The fused GEMM writes one contiguous [gate|up] pair per row
+        // (row stride 2*intermediate), unlike the split-call path below
+        // which writes all gates then all ups as two separate planes.
+        launch_swiglu_interleaved(prefill_gate_up_.data(),
+                                  prefill_activated_.data(), rows,
+                                  shape_.intermediate, stream_.get());
     } else {
         const LinearWeight w1 =
             slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, shape_.intermediate);
@@ -66,9 +72,9 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows,
         linear(prefill_normed_.data(), w3,
                prefill_gate_up_.data() + matrix_elements,
                rows, shape_.intermediate, shape_.hidden);
+        launch_swiglu_fused(prefill_gate_up_.data(), prefill_activated_.data(),
+                            static_cast<int>(matrix_elements), stream_.get());
     }
-    launch_swiglu_fused(prefill_gate_up_.data(), prefill_activated_.data(),
-                        static_cast<int>(matrix_elements), stream_.get());
     if (options_.fused_residuals) {
         linear(prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, prefill_hidden_.data(),
                rows, shape_.hidden, shape_.intermediate, 1.0f);
