@@ -1,6 +1,7 @@
 #include "lfm/detail/model/impl.hpp"
 #include "lfm/backend/cuda/kernels/kernels.cuh"
 #include "lfm/backend/cuda/paged_kv.hpp"
+#include "lfm/backend/cuda/phase_profile.hpp"
 #include "lfm/model/weights/layout.hpp"
 #include "lfm/runtime/moe.hpp"
 #include <algorithm>
@@ -13,19 +14,29 @@
 #include <vector>
 
 namespace lfm {
+
+namespace {
+PrefillPhaseProfile g_prefill_profile;
+}
+PrefillPhaseProfile& prefill_phase_profile() { return g_prefill_profile; }
+
 void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
     reset();
     const int rows = static_cast<int>(tokens.size());
     allocate_prefill_workspace(rows);
+    auto& prof = prefill_phase_profile();
+    prof.count_step();
 
     LFM_CUDA(cudaMemcpyAsync(prefill_tokens_.data(), tokens.data(),
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
+    prof.begin(stream_.get());
     launch_mark_seen_batch(prefill_tokens_.data(), rows, seen_tokens_.data(),
                            shape_.vocab_size, stream_.get());
     weight_layout_->embed_batch(
         prefill_tokens_.data(), rows, prefill_hidden_.data(),
         shape_.hidden, stream_.get());
+    prof.end(PrefillPhase::Embed, stream_.get());
 
     int layer_idx = 0;
     for (Layer& layer : layers_) {
@@ -36,11 +47,14 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                 prefill_hidden_.bytes(), cudaMemcpyDeviceToDevice,
                 stream_.get()));
         }
+        prof.begin(stream_.get());
         launch_rmsnorm(prefill_hidden_.data(), common_layer.operator_norm,
                        prefill_normed_.data(), rows, shape_.hidden,
                        shape_.norm_eps, stream_.get());
+        prof.end(PrefillPhase::Norm, stream_.get());
 
         if (AttentionLayer* attention = as_attention(layer)) {
+            prof.begin(stream_.get());
             if (options_.fused_projections) {
                 linear(prefill_normed_.data(), *attention->qkv,
                        prefill_qkv_.data(), rows, shape_.qkv_width,
@@ -64,7 +78,9 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                 linear(prefill_normed_.data(), v_weight, prefill_v_.data(),
                        rows, shape_.kv_width, shape_.hidden);
             }
+            prof.end(PrefillPhase::QkvProj, stream_.get());
 
+            prof.begin(stream_.get());
             if (options_.fast_attention) {
                 launch_qk_norm_rope_prefill_fast(
                     prefill_q_.data(), prefill_k_.data(),
@@ -82,6 +98,9 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                     shape_.head_dim, shape_.norm_eps,
                     stream_.get());
             }
+            prof.end(PrefillPhase::RopeKv, stream_.get());
+
+            prof.begin(stream_.get());
             if (options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8_prefill(
                     prefill_k_.data(), prefill_v_.data(),
@@ -112,12 +131,19 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                     attention->key_cache.data(), attention->value_cache.data(),
                     rows, shape_.kv_width, stream_.get());
                 if (options_.fast_attention) {
-                    // The batched-GEMM path (below) needs O(q_heads*rows^2)
-                    // scratch for the dense score matrix; beyond
-                    // kMaxGemmAttentionRows that outgrows what a single
-                    // prefill_batched call should allocate, so fall back to
-                    // the chunked online-softmax kernel (O(rows) scratch).
-                    if (rows <= kMaxGemmAttentionRows) {
+                    static const bool use_flash = []{
+                        const char* f = std::getenv("LFM_FLASH_ATTN");
+                        return f != nullptr && f[0] != '\0' && f[0] != '0';
+                    }();
+                    if (use_flash) {
+                        launch_gqa_prefill_flash(
+                            prefill_q_.data(),
+                            attention->key_cache.data(), attention->value_cache.data(),
+                            prefill_op_output_.data(), rows,
+                            shape_.num_attention_heads, shape_.num_key_value_heads,
+                            shape_.head_dim, shape_.q_width, shape_.kv_width,
+                            shape_.q_width, stream_.get());
+                    } else if (rows <= kMaxGemmAttentionRows) {
                         launch_gqa_prefill_gemm(
                             gemm_->cublas().get(), prefill_q_.data(),
                             attention->key_cache.data(), attention->value_cache.data(),
@@ -146,11 +172,16 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                         shape_.head_dim, stream_.get());
                 }
             }
+            prof.end(PrefillPhase::Attention, stream_.get());
+
+            prof.begin(stream_.get());
             linear(prefill_op_output_.data(), *attention->out,
                    prefill_hidden_.data(), rows, shape_.hidden,
                    shape_.hidden, options_.fused_residuals ? 1.0f : 0.0f);
+            prof.end(PrefillPhase::AttnOut, stream_.get());
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
+            prof.begin(stream_.get());
             linear(prefill_normed_.data(), *convolution.conv_in,
                    prefill_conv_projected_.data(), rows,
                    3 * shape_.hidden, shape_.hidden);
@@ -162,16 +193,22 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
             linear(prefill_op_output_.data(), *convolution.conv_out,
                    prefill_hidden_.data(), rows, shape_.hidden,
                    shape_.hidden, options_.fused_residuals ? 1.0f : 0.0f);
+            prof.end(PrefillPhase::Conv, stream_.get());
         }
 
         if (!options_.fused_residuals) {
+            prof.begin(stream_.get());
             launch_residual_add(prefill_hidden_.data(), prefill_residual_.data(),
                                 rows * shape_.hidden, stream_.get());
+            prof.end(PrefillPhase::Other, stream_.get());
         }
+        prof.begin(stream_.get());
         run_mlp_prefill(common_layer, rows, layer_idx);
+        prof.end(PrefillPhase::Mlp, stream_.get());
         ++layer_idx;
     }
 
+    prof.begin(stream_.get());
     const __nv_bfloat16* last_hidden = prefill_hidden_.data() +
         static_cast<size_t>(rows - 1) * shape_.hidden;
     launch_rmsnorm(last_hidden, final_norm_, normed_.data(),
@@ -179,6 +216,7 @@ void LfmModel::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                    stream_.get());
     linear(normed_.data(), *logits_weight(), logits_.data(),
            1, shape_.vocab_size, shape_.hidden);
+    prof.end(PrefillPhase::Logits, stream_.get());
 
     position_ = rows;
     LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,

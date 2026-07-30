@@ -535,6 +535,11 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("loaded session plus output exceeds --context");
             }
         } else {
+            if (args.benchmark_prefill_tokens > 0 && args.lt_autotune) {
+                std::vector<int32_t> warmup(
+                    static_cast<size_t>(args.benchmark_prefill_tokens), input[0]);
+                engine.session().prefill(warmup);
+            }
             engine.session().prefill(input);
         }
         if (args.benchmark_decode > 0) {

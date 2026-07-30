@@ -162,10 +162,11 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
 
         if (!valid.empty()) {
             int selected = valid.front();
-            // Autotuning is intentionally restricted to decode shapes. Large
-            // prefill outputs would require an excessive temporary buffer.
-            if (options_.lt_autotune && m == 1 && valid.size() > 1) {
-                DeviceBuffer<__nv_bfloat16> scratch(static_cast<size_t>(n));
+            // Autotune: try each candidate algorithm and pick the fastest.
+            // For decode (m=1) the scratch is just n elements; for prefill
+            // (m>1) we need m*n for the full output.
+            if (options_.lt_autotune && valid.size() > 1) {
+                DeviceBuffer<__nv_bfloat16> scratch(static_cast<size_t>(m) * n);
                 const float alpha = 1.0f;
                 const float beta = 0.0f;
                 float best_ms = std::numeric_limits<float>::infinity();

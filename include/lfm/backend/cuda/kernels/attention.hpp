@@ -83,6 +83,14 @@ void launch_gqa_prefill_gemm(
     int head_dim, int q_width, int kv_width, int out_width,
     cudaStream_t stream);
 
+// Flash attention prefill (tiled online-softmax, no score matrix materialization).
+void launch_gqa_prefill_flash(
+    const __nv_bfloat16* q, const __nv_bfloat16* k,
+    const __nv_bfloat16* v, __nv_bfloat16* out, int rows,
+    int q_heads, int kv_heads, int head_dim,
+    int q_width, int kv_width, int out_width,
+    cudaStream_t stream);
+
 void launch_gqa_decode_strict_int8(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
