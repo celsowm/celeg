@@ -32,7 +32,7 @@ void CpuModel::Impl::allocate_state() {
     states.reserve(shared->layers.size());
     for (size_t index = 0; index < shared->layers.size(); ++index) {
         const WeightLayer& layer = shared->layers[index];
-        if (std::holds_alternative<AttentionWeights>(layer)) {
+        if (attention_operator(layer)) {
             const int pool = shared->layer_to_kv_pool.at(index);
             if (pool < 0) throw std::logic_error("attention layer has no CPU KV page pool");
             AttentionState state;
@@ -58,6 +58,28 @@ const CpuModel::Impl::CommonWeights& CpuModel::Impl::common_weights(
     return std::visit([](const auto& value) -> const CommonWeights& {
         return value.common;
     }, shared->layers.at(layer));
+}
+
+const CpuModel::Impl::AttentionWeights* CpuModel::Impl::attention_operator(
+    const WeightLayer& layer) {
+    if (const auto* attention = std::get_if<AttentionWeights>(&layer)) {
+        return attention;
+    }
+    if (const auto* moe = std::get_if<MoeWeights>(&layer)) {
+        return std::get_if<AttentionWeights>(&moe->operator_layer);
+    }
+    return nullptr;
+}
+
+const CpuModel::Impl::ConvolutionWeights* CpuModel::Impl::convolution_operator(
+    const WeightLayer& layer) {
+    if (const auto* convolution = std::get_if<ConvolutionWeights>(&layer)) {
+        return convolution;
+    }
+    if (const auto* moe = std::get_if<MoeWeights>(&layer)) {
+        return std::get_if<ConvolutionWeights>(&moe->operator_layer);
+    }
+    return nullptr;
 }
 
 CpuModel::Impl::AttentionState& CpuModel::Impl::attention_state(size_t layer) {

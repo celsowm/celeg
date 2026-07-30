@@ -163,7 +163,7 @@ int main() {
         shape_8b.num_experts = 32;
         shape_8b.experts_per_token = 4;
         shape_8b.normalize_topk = true;
-        shape_8b.use_expert_bias = true;
+        shape_8b.use_expert_bias = false;
         shape_8b.routed_scaling_factor = 1.0f;
         // layer_types: 6 full_attention + 18 conv (matching the official
         // checkpoint ordering).
@@ -203,6 +203,8 @@ int main() {
         lfm::ModelShape shape_lfm2 = shape_8b;
         shape_lfm2.vocab_size = 65536;
         shape_lfm2.rope_theta = 1'000'000.0f;
+        shape_lfm2.num_dense_layers = 2;
+        shape_lfm2.use_expert_bias = true;
         shape_lfm2.compute_derived();
         shape_lfm2.validate();
         LFM_TEST_CHECK(!registry.select(shape_lfm2).matches(shape_8b));

@@ -103,6 +103,13 @@ int main() {
         const float optimized = selected(
             matrix->data, matrix->type, activation.data(), matrix->cols);
         LFM_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
+        if (const auto dot4 = lfm::select_cpu_gguf_dot4_kernel(isa)) {
+            std::array<lfm::CpuQ8KBlock, 4> batch{};
+            for (size_t lane = 0; lane < batch.size(); ++lane) batch[lane] = activation[0];
+            std::array<float, 4> values{};
+            dot4(matrix->data, matrix->type, batch.data(), matrix->cols, values.data());
+            for (float value : values) LFM_TEST_CHECK(std::abs(value - scalar) < 1e-4f);
+        }
     }
 
     BlockQ4K known_q4;
@@ -181,6 +188,27 @@ int main() {
         LFM_TEST_CHECK(
             std::abs(gemm[r * 4 + 3] -
                      (2.0f * gemm[r * 4] - 0.5f)) < 1e-3f);
+    }
+
+    lfm::CpuLinearWeight q4_weight = lfm::CpuLinearWeight::from_gguf(q4);
+    lfm::CpuLinearWeight q6_weight = lfm::CpuLinearWeight::from_gguf(q6);
+    std::vector<float> grouped_input(4 * input.size());
+    for (size_t row_index = 0; row_index < 4; ++row_index) {
+        for (size_t col = 0; col < input.size(); ++col) {
+            grouped_input[row_index * input.size() + col] =
+                input[col] * static_cast<float>(row_index + 1) * 0.25f;
+        }
+    }
+    std::vector<float> grouped_expected(8), grouped_actual(8);
+    linear.gemm(q4_weight, grouped_input.data(), grouped_expected.data(), 2);
+    linear.gemm(q6_weight, grouped_input.data() + 2 * input.size(),
+                grouped_expected.data() + 4, 2);
+    const std::array<lfm::CpuGroupedGemmJob, 2> grouped_jobs{{
+        {&q4_weight, 0, 2}, {&q6_weight, 2, 2},
+    }};
+    linear.gemm_grouped(grouped_jobs, grouped_input.data(), grouped_actual.data());
+    for (size_t value = 0; value < grouped_actual.size(); ++value) {
+        LFM_TEST_CHECK(std::abs(grouped_actual[value] - grouped_expected[value]) < 1e-4f);
     }
 
     const char* real_gguf = std::getenv("LFM_GGUF_TEST_FILE");

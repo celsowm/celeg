@@ -1,4 +1,5 @@
 #include "lfm/backend/cpu/gguf.hpp"
+#include "lfm/checkpoint/gguf_blocks.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -13,6 +14,8 @@
 
 namespace lfm {
 namespace {
+
+using lfm::gguf_blocks::q4k_scale_min;
 
 #pragma pack(push, 1)
 struct BlockQ4K {
@@ -58,21 +61,6 @@ float fp16_to_float(uint16_t bits) {
         result = sign | (exponent + (127 - 15)) << 23 | mantissa << 13;
     }
     return std::bit_cast<float>(result);
-}
-
-void q4k_scale_min(const BlockQ4K& block, int sub, uint8_t& scale,
-                   uint8_t& minimum) {
-    if (sub < 4) {
-        scale = block.scales[sub] & 63;
-        minimum = block.scales[sub + 4] & 63;
-    } else {
-        scale = static_cast<uint8_t>(
-            (block.scales[sub + 4] & 0x0f) |
-            ((block.scales[sub - 4] >> 6) << 4));
-        minimum = static_cast<uint8_t>(
-            (block.scales[sub + 4] >> 4) |
-            ((block.scales[sub] >> 6) << 4));
-    }
 }
 
 int q4k_value(const BlockQ4K& block, int col) {
@@ -241,7 +229,7 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
-                q4k_scale_min(weight, sub, scale, minimum);
+                q4k_scale_min(sub, weight.scales, scale, minimum);
                 int dot = 0;
                 const int base = sub * 32;
                 for (int i = 0; i < 32; ++i) {
@@ -286,6 +274,15 @@ CpuGgufDotFunction select_cpu_gguf_dot_kernel(CpuIsa isa) {
     return cpu_gguf_dot_scalar;
 }
 
+CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa) {
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+    if (isa != CpuIsa::Scalar) return detail::cpu_gguf_dot4_avx2;
+#else
+    (void)isa;
+#endif
+    return nullptr;
+}
+
 void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
                              float* output) {
     matrix.validate();
@@ -302,7 +299,7 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
             const float dmin = fp16_to_float(weight.dmin);
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
-                q4k_scale_min(weight, sub, scale, minimum);
+                q4k_scale_min(sub, weight.scales, scale, minimum);
                 for (int i = 0; i < 32; ++i) {
                     const int col = sub * 32 + i;
                     output[b * 256 + static_cast<size_t>(col)] =

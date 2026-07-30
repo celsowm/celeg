@@ -1,9 +1,12 @@
 #include "lfm/backend/cuda/kernels/gguf.cuh"
+#include "lfm/checkpoint/gguf_blocks.hpp"
 
 #include <cuda_fp16.h>
 
 namespace lfm {
 namespace {
+
+using lfm::gguf_blocks::q4k_scale_min;
 
 __device__ __forceinline__ float warp_reduce_sum(float v) {
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -29,17 +32,8 @@ struct BlockQ4K {
 };
 
 // Decodes the 6-bit scale/min for sub-block j (0..7) from the packed 12 bytes.
-// This matches ggml's get_scale_min_k4.
-__device__ __forceinline__ void q4k_scale_min(int j, const uint8_t* q,
-                                              uint8_t& sc, uint8_t& m) {
-    if (j < 4) {
-        sc = q[j] & 63;
-        m = q[j + 4] & 63;
-    } else {
-        sc = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-        m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
-    }
-}
+// Delegates to the shared gguf_blocks helper (identical on CPU and CUDA).
+// (q4k_scale_min brought in via `using` above.)
 
 // Returns the dequantized value at logical index `col` (0..255) of one Q4_K
 // super-block.

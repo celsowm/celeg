@@ -199,7 +199,7 @@ bool Lfm25_8B_A1B_Variant::matches(const ModelShape& shape) const {
            shape.num_experts == 32 &&
            shape.experts_per_token == 4 &&
            shape.moe_intermediate == 1792 &&
-           shape.use_expert_bias &&
+           !shape.use_expert_bias &&
            shape.normalize_topk &&
            close_float(shape.routed_scaling_factor, 1.0f, 1.0e-6f) &&
            close_float(shape.norm_eps, 1.0e-5f, 1.0e-12f) &&

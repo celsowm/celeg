@@ -22,7 +22,7 @@ static __inline__ __device__ float gemv_warp_sum(float value) {
 
 // BF16 weight x BF16 activation GEMV (m=1 decode). One warp per output row,
 // 2-wide __nv_bfloat162 loads for coalesced 16-byte accesses.
-__global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
+static __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                  const __nv_bfloat16* __restrict__ weight,
                                  __nv_bfloat16* __restrict__ y,
                                  int n, int k, float beta) {
@@ -60,7 +60,7 @@ __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
 // m>1 (batched). One warp per output row. Vectorized: char4 weight loads
 // (4 int8 per 4-byte read) + __nv_bfloat162 activation loads for 4 elements
 // per lane iteration, keeping both memory paths fully coalesced.
-__global__ void w8a16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
+static __global__ void w8a16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                    const int8_t* __restrict__ weight,
                                    const float* __restrict__ scales,
                                    __nv_bfloat16* __restrict__ y,

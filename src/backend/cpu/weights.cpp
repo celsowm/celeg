@@ -3,6 +3,7 @@
 #include "lfm/detail/checkpoint/bootstrap.hpp"
 #include "lfm/checkpoint/repositories/gguf.hpp"
 #include "lfm/checkpoint/repositories/safetensors.hpp"
+#include "lfm/checkpoint/tensor_names.hpp"
 #include "lfm/model/config/variant.hpp"
 #include "lfm/model/weights/quantization.hpp"
 
@@ -21,10 +22,6 @@
 
 namespace lfm {
 namespace {
-std::string layer_name(int index, const std::string& suffix) {
-    return "model.layers." + std::to_string(index) + "." + suffix;
-}
-
 size_t checked_elements(const std::vector<int64_t>& shape) {
     size_t result = 1;
     for (int64_t dim : shape) {
@@ -163,7 +160,7 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     load_weights();
     layer_to_kv_pool.assign(layers.size(), -1);
     for (size_t layer = 0; layer < layers.size(); ++layer) {
-        if (std::holds_alternative<AttentionWeights>(layers[layer])) {
+        if (Impl::attention_operator(layers[layer])) {
             layer_to_kv_pool[layer] = static_cast<int>(kv_pools.size());
             kv_pools.push_back(std::make_shared<CpuKvPagePool>(
                 options.kv_cache_mode, options.kv_page_tokens,
@@ -269,20 +266,13 @@ void CpuModel::Impl::Shared::load_weights() {
     final_norm = load_vector(source, reader.get(), writer.get(),
         "model.embedding_norm.weight", {shape.hidden});
 
-    if (shape.architecture == ArchitectureKind::MoeLfm2) {
-        throw std::runtime_error(
-            "LFM2 MoE CPU execution is not implemented in this release. "
-            "Use the CUDA backend to run MoE checkpoints such as LFM2.5-8B-A1B.");
-    }
-
-    layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
-    for (int index = 0; index < shape.num_hidden_layers; ++index) {
-        CommonWeights common =
-            load_common(source, reader.get(), writer.get(), index);
-        const LayerType layer_type = shape.layer_types[static_cast<size_t>(index)];
+    // Attention and short-convolution are identical between dense and MoE
+    // layers. Keeping their loader in one place prevents the two checkpoint
+    // paths from drifting when an operator tensor changes.
+    const auto load_operator = [&](int index, LayerType layer_type)
+        -> std::variant<AttentionWeights, ConvolutionWeights> {
         if (layer_type == LayerType::FullAttention) {
             AttentionWeights layer;
-            layer.common = std::move(common);
             layer.qkv = load_concat(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.qkv.weight"), {
                     {layer_name(index, "self_attn.q_proj.weight"),
@@ -301,28 +291,105 @@ void CpuModel::Impl::Shared::load_weights() {
             layer.k_norm = load_vector(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.k_layernorm.weight"),
                 {shape.head_dim});
-            layers.emplace_back(std::move(layer));
-        } else {
-            ConvolutionWeights layer;
-            layer.common = std::move(common);
-            layer.in = load_matrix(source, reader.get(), writer.get(),
-                layer_name(index, "conv.in_proj.weight"),
-                {3 * shape.hidden, shape.hidden});
-            const std::vector<float> channel_major =
-                load_vector(source, reader.get(), writer.get(),
-                layer_name(index, "conv.conv.weight"),
-                {shape.hidden, 1, shape.conv_cache});
-            layer.weight_tap_major.resize(channel_major.size());
-            for (int tap = 0; tap < shape.conv_cache; ++tap) {
-                for (int channel = 0; channel < shape.hidden; ++channel) {
-                    layer.weight_tap_major[static_cast<size_t>(tap) * shape.hidden + channel] =
-                        channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
-                }
+            return layer;
+        }
+
+        ConvolutionWeights layer;
+        layer.in = load_matrix(source, reader.get(), writer.get(),
+            layer_name(index, "conv.in_proj.weight"),
+            {3 * shape.hidden, shape.hidden});
+        const std::vector<float> channel_major =
+            load_vector(source, reader.get(), writer.get(),
+            layer_name(index, "conv.conv.weight"),
+            {shape.hidden, 1, shape.conv_cache});
+        layer.weight_tap_major.resize(channel_major.size());
+        for (int tap = 0; tap < shape.conv_cache; ++tap) {
+            for (int channel = 0; channel < shape.hidden; ++channel) {
+                layer.weight_tap_major[static_cast<size_t>(tap) * shape.hidden + channel] =
+                    channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
             }
-            layer.out = load_matrix(source, reader.get(), writer.get(),
-                layer_name(index, "conv.out_proj.weight"),
-                {shape.hidden, shape.hidden});
-            layers.emplace_back(std::move(layer));
+        }
+        layer.out = load_matrix(source, reader.get(), writer.get(),
+            layer_name(index, "conv.out_proj.weight"),
+            {shape.hidden, shape.hidden});
+        return layer;
+    };
+
+    if (shape.architecture == ArchitectureKind::MoeLfm2) {
+        // MoE checkpoints begin with ordinary dense FFN blocks. Keep them as
+        // dense layers, then load only the remaining routed blocks as MoE.
+        layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
+        for (int index = 0; index < shape.num_hidden_layers; ++index) {
+            const LayerType layer_type = shape.layer_types[static_cast<size_t>(index)];
+            if (!shape.layer_uses_moe(index)) {
+                CommonWeights common =
+                    load_common(source, reader.get(), writer.get(), index);
+                auto layer = load_operator(index, layer_type);
+                std::visit([&](auto& value) {
+                    value.common = std::move(common);
+                    layers.emplace_back(std::move(value));
+                }, layer);
+                continue;
+            }
+
+            MoeWeights layer;
+            layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
+                layer_name(index, "operator_norm.weight"), {shape.hidden});
+            layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
+                layer_name(index, "ffn_norm.weight"), {shape.hidden});
+            layer.operator_layer = load_operator(index, layer_type);
+
+            // Load MoE-specific weights: router + per-expert gate_up (w1+w3) and down (w2).
+            layer.num_experts = shape.num_experts;
+            layer.experts_per_token = shape.experts_per_token;
+            layer.normalize_topk = shape.normalize_topk;
+            layer.use_expert_bias = shape.use_expert_bias;
+            layer.routed_scaling_factor = shape.routed_scaling_factor;
+
+            // Router weight: [num_experts, hidden]
+            layer.router = load_vector(source, reader.get(), writer.get(),
+                layer_name(index, "feed_forward.gate.weight"),
+                {shape.num_experts, shape.hidden});
+
+            // Optional expert bias.
+            if (source && source->contains(layer_name(index, "feed_forward.expert_bias.weight"))) {
+                layer.router_bias = load_vector(source, reader.get(), writer.get(),
+                    layer_name(index, "feed_forward.expert_bias.weight"),
+                    {shape.num_experts});
+            }
+
+            layer.expert_w13.resize(static_cast<size_t>(shape.num_experts));
+            layer.expert_w2.resize(static_cast<size_t>(shape.num_experts));
+            for (int e = 0; e < shape.num_experts; ++e) {
+                const int moe_inter = shape.moe_intermediate > 0
+                    ? shape.moe_intermediate : shape.intermediate;
+                layer.expert_w13[static_cast<size_t>(e)] = load_concat(
+                    source, reader.get(), writer.get(),
+                    layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w13.weight"),
+                    {
+                        {layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w1.weight"),
+                         {moe_inter, shape.hidden}},
+                        {layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w3.weight"),
+                         {moe_inter, shape.hidden}},
+                    });
+                layer.expert_w2[static_cast<size_t>(e)] = load_matrix(
+                    source, reader.get(), writer.get(),
+                    layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w2.weight"),
+                    {shape.hidden, moe_inter});
+            }
+            layers.push_back(std::move(layer));
+        }
+    } else {
+        layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
+        for (int index = 0; index < shape.num_hidden_layers; ++index) {
+            CommonWeights common =
+                load_common(source, reader.get(), writer.get(), index);
+            auto layer = load_operator(
+                index, shape.layer_types[static_cast<size_t>(index)]);
+            std::visit([&](auto& value) {
+                value.common = std::move(common);
+                layers.emplace_back(std::move(value));
+            }, layer);
         }
     }
     if (writer) writer->commit();
@@ -474,9 +541,30 @@ size_t CpuModel::Impl::Shared::weights_memory_bytes() const {
                 bytes += value.qkv.memory_bytes() + value.out.memory_bytes() +
                          value.q_norm.size() * sizeof(float) +
                          value.k_norm.size() * sizeof(float);
-            } else {
+            } else if constexpr (std::is_same_v<T, ConvolutionWeights>) {
                 bytes += value.in.memory_bytes() + value.out.memory_bytes() +
                          value.weight_tap_major.size() * sizeof(float);
+            } else {
+                bytes += (value.router.size() + value.router_bias.size()) * sizeof(float);
+                std::visit([&](const auto& operator_weights) {
+                    using Operator = std::decay_t<decltype(operator_weights)>;
+                    if constexpr (std::is_same_v<Operator, AttentionWeights>) {
+                        bytes += operator_weights.qkv.memory_bytes() +
+                                 operator_weights.out.memory_bytes() +
+                                 (operator_weights.q_norm.size() +
+                                  operator_weights.k_norm.size()) * sizeof(float);
+                    } else {
+                        bytes += operator_weights.in.memory_bytes() +
+                                 operator_weights.out.memory_bytes() +
+                                 operator_weights.weight_tap_major.size() * sizeof(float);
+                    }
+                }, value.operator_layer);
+                for (const CpuLinearWeight& weight : value.expert_w13) {
+                    bytes += weight.memory_bytes();
+                }
+                for (const CpuLinearWeight& weight : value.expert_w2) {
+                    bytes += weight.memory_bytes();
+                }
             }
         }, layer);
     }
@@ -484,4 +572,3 @@ size_t CpuModel::Impl::Shared::weights_memory_bytes() const {
 }
 
 } // namespace lfm
-

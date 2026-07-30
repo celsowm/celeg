@@ -228,6 +228,16 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (std::getenv("LFM_PRINT_PROFILE") && args.n_prompt > 0) {
+            const auto profile = engine.diagnostics().prefill_profile();
+            std::cerr << "profile.linear_ms=" << profile.linear_ms << '\n'
+                      << "profile.attention_ms=" << profile.attention_ms << '\n'
+                      << "profile.shortconv_ms=" << profile.shortconv_ms << '\n'
+                      << "profile.moe_router_ms=" << profile.moe_router_ms << '\n'
+                      << "profile.moe_expert_ms=" << profile.moe_expert_ms << '\n'
+                      << "profile.total_ms=" << profile.total_ms << '\n';
+        }
+
         const std::string model_filename = escape_json(args.model);
         if (args.output == "json") {
             std::cout << "[\n";

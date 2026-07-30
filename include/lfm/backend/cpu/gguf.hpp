@@ -54,6 +54,10 @@ using CpuGgufDotFunction = float (*)(const std::byte* packed_row,
                                      GgmlType type,
                                      const CpuQ8KBlock* activation,
                                      size_t cols);
+using CpuGgufDot4Function = void (*)(const std::byte* packed_row,
+                                     GgmlType type,
+                                     const CpuQ8KBlock* activation,
+                                     size_t cols, float* output4);
 
 std::vector<CpuQ8KBlock> cpu_quantize_q8k(const float* input, size_t cols,
                                           CpuIsa isa);
@@ -62,6 +66,7 @@ void cpu_quantize_q8k_into(const float* input, size_t cols, CpuIsa isa,
 float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
                           const CpuQ8KBlock* activation, size_t cols);
 CpuGgufDotFunction select_cpu_gguf_dot_kernel(CpuIsa isa);
+CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa);
 void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
                              float* output);
 

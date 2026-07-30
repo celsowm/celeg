@@ -7,11 +7,7 @@ namespace lfm {
 
 namespace {
 
-__device__ inline float moe_sigmoid(float x) {
-    if (x >= 0.0f) return 1.0f / (1.0f + expf(-x));
-    const float e = expf(x);
-    return e / (1.0f + e);
-}
+using lfm::moe_sigmoid;
 
 // One block per row (token). Consumes GEMM-produced router logits, computes
 // probabilities/scores in shared memory, performs a small-K top-K selection
@@ -49,21 +45,21 @@ __global__ void moe_router_kernel(const float* expert_bias,
     // Deterministic top-K over the shared scores array. Slot k (0..K-1) is
     // filled in order: thread k picks the highest-scoring expert not yet taken
     // (ties broken by smaller expert id) and publishes it; a sync after each
-    // slot guarantees later slots observe earlier selections. -1 marks an
-    // unfilled slot (must not collide with a valid expert id, which start at 0).
+    // slot guarantees later slots observe earlier selections. A bitmask
+    // replaces the O(K)-per-check scan of a taken[] array, making selection
+    // O(E*K) instead of O(E*K^2).
     __shared__ int taken[64];
+    __shared__ unsigned taken_mask;
+    if (threadIdx.x == 0) taken_mask = 0u;
     if (threadIdx.x < K) taken[threadIdx.x] = -1;
     __syncthreads();
     for (int k = 0; k < K; ++k) {
         int best = -1;
         float best_s = -1e30f;
         if (threadIdx.x == k) {
+            const unsigned mask = taken_mask;
             for (int e = 0; e < E; ++e) {
-                bool is_taken = false;
-                for (int t = 0; t < K; ++t) {
-                    if (taken[t] == e) { is_taken = true; break; }
-                }
-                if (is_taken) continue;
+                if (mask & (1u << e)) continue;
                 const float s = scores[e];
                 bool better = false;
                 if (s != best_s) better = s > best_s;
@@ -71,6 +67,7 @@ __global__ void moe_router_kernel(const float* expert_bias,
                 if (better) { best = e; best_s = s; }
             }
             taken[k] = best;
+            taken_mask = mask | (1u << best);
         }
         __syncthreads();
     }

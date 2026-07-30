@@ -137,51 +137,36 @@ int ExpertLayerCache::resolve_on_device(
         sel_dev, expert_slot_dev_.data(), cold_flags_dev_.data(),
         cold_list_dev_.data(), cold_count_dev_.data(), total);
 
-    // Read back the cold count.
+    // Batch cold_count + scores + selection into one D2H transfer to minimize
+    // stream synchronization. The selection data is small (rows*K*sizeof(int))
+    // and always read; for the fast path this avoids a second sync.
     int cold_count = 0;
+    cold_host.resize(static_cast<size_t>(total));
+    LFM_CUDA(cudaMemcpyAsync(cold_host.data(), sel_dev,
+                             static_cast<size_t>(total) * sizeof(int),
+                             cudaMemcpyDeviceToHost, stream));
     LFM_CUDA(cudaMemcpyAsync(&cold_count, cold_count_dev_.data(), sizeof(int),
                              cudaMemcpyDeviceToHost, stream));
-    LFM_CUDA(cudaStreamSynchronize(stream));
-
-    if (cold_count == 0) {
-        // All selected experts are GPU-resident. Touch them on host.
-        // We still need the selection to update LRU/score, but only for
-        // resident experts. Read the selection back for the small K*rows set.
-        cold_host.resize(static_cast<size_t>(total));
-        LFM_CUDA(cudaMemcpyAsync(cold_host.data(), sel_dev,
-                                 static_cast<size_t>(total) * sizeof(int),
-                                 cudaMemcpyDeviceToHost, stream));
-        if (route_scores_dev != nullptr) {
-            // For decode (rows==1), read scores for resident experts.
-            const int E = num_experts_;
-            cold_scores_host.resize(static_cast<size_t>(E));
-            LFM_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
-                                     static_cast<size_t>(E) * sizeof(float),
-                                     cudaMemcpyDeviceToHost, stream));
-        }
-        LFM_CUDA(cudaStreamSynchronize(stream));
-        return 0;  // 0 cold experts
-    }
-
-    // Read back the cold list and their scores.
-    cold_host.resize(static_cast<size_t>(cold_count));
-    LFM_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
-                             static_cast<size_t>(cold_count) * sizeof(int),
-                             cudaMemcpyDeviceToHost, stream));
-
     if (route_scores_dev != nullptr) {
-        cold_scores_host.resize(static_cast<size_t>(cold_count));
-        // Read scores for just the cold experts from device.
-        // We need to gather them: cold_list_dev_ has the expert indices,
-        // and route_scores_dev has per-expert scores. Use a small kernel or
-        // just read the full score array (E floats, small for E=32).
         const int E = num_experts_;
         cold_scores_host.resize(static_cast<size_t>(E));
         LFM_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
                                  static_cast<size_t>(E) * sizeof(float),
                                  cudaMemcpyDeviceToHost, stream));
     }
+    LFM_CUDA(cudaStreamSynchronize(stream));
 
+    if (cold_count == 0) {
+        // All selected experts are GPU-resident; cold_host has the selection.
+        return 0;
+    }
+
+    // Cold path: cold_host already has the full selection, but the caller
+    // expects the compact cold list. Overwrite with cold_list_dev_ data.
+    cold_host.resize(static_cast<size_t>(cold_count));
+    LFM_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
+                             static_cast<size_t>(cold_count) * sizeof(int),
+                             cudaMemcpyDeviceToHost, stream));
     LFM_CUDA(cudaStreamSynchronize(stream));
     return cold_count;
 }

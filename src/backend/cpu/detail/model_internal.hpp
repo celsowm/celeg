@@ -13,6 +13,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -41,6 +42,17 @@ struct CpuExecutionWorkspace {
     std::vector<float> chunk_activated, chunk_mlp;
     std::vector<float> final_normed, final_logits;
     std::vector<size_t> terminal_rows;
+    std::vector<float> moe_router_logits, moe_router_probs;
+    std::vector<std::pair<float, int>> moe_router_scored;
+    std::vector<int> moe_selected;
+    std::vector<float> moe_weights;
+    std::vector<size_t> moe_group_offsets, moe_group_cursor;
+    std::vector<size_t> moe_route_order;
+    std::vector<int> moe_route_rows, moe_route_experts;
+    std::vector<float> moe_route_weights;
+    std::vector<float> moe_gathered_normed, moe_gathered_gate_up;
+    std::vector<float> moe_gathered_activated, moe_gathered_output;
+    std::vector<CpuGroupedGemmJob> moe_gemm_jobs;
 };
 
 struct CpuModel::Impl : CpuExecutionWorkspace {
@@ -65,7 +77,22 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
         std::vector<float> weight_tap_major;
         CpuLinearWeight out;
     };
-    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights>;
+    struct MoeWeights {
+        CommonWeights common;
+        // Every MoE layer still has an LFM operator (attention or
+        // short-convolution) before its routed FFN.
+        std::variant<AttentionWeights, ConvolutionWeights> operator_layer;
+        std::vector<float> router;            // [num_experts * hidden]
+        std::vector<float> router_bias;       // [num_experts] (empty if unused)
+        std::vector<CpuLinearWeight> expert_w13;  // [num_experts]
+        std::vector<CpuLinearWeight> expert_w2;   // [num_experts]
+        int num_experts = 0;
+        int experts_per_token = 0;
+        bool normalize_topk = false;
+        bool use_expert_bias = false;
+        float routed_scaling_factor = 1.0f;
+    };
+    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights, MoeWeights>;
 
     struct Shared {
         Shared(const std::string& path, int context, CpuModelOptions requested);
@@ -146,6 +173,8 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
     CpuModelMemoryStats memory_stats() const;
 
     const CommonWeights& common_weights(size_t layer) const;
+    static const AttentionWeights* attention_operator(const WeightLayer& layer);
+    static const ConvolutionWeights* convolution_operator(const WeightLayer& layer);
     AttentionState& attention_state(size_t layer);
     const AttentionState& attention_state(size_t layer) const;
     ConvolutionState& convolution_state(size_t layer);

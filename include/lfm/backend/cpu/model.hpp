@@ -57,6 +57,8 @@ struct CpuPrefillProfile {
     double linear_ms = 0.0;
     double attention_ms = 0.0;
     double shortconv_ms = 0.0;
+    double moe_router_ms = 0.0;
+    double moe_expert_ms = 0.0;
     double total_ms = 0.0;
 };
 

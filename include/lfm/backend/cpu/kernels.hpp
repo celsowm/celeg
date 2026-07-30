@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 namespace lfm {
 
@@ -44,6 +46,14 @@ float q4_dot_scalar(const uint8_t* packed_row,
                     size_t group_size,
                     size_t groups_per_row);
 
+// Internal routed-MoE GEMM descriptor. Rows are packed contiguously across
+// jobs; all jobs in one invocation must have identical matrix dimensions.
+struct CpuGroupedGemmJob {
+    const CpuLinearWeight* weight = nullptr;
+    size_t row_offset = 0;
+    size_t rows = 0;
+};
+
 class CpuLinearEngine {
 public:
     CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool);
@@ -58,8 +68,16 @@ public:
               float beta = 0.0f) const;
     void gemm(const CpuLinearWeight& weight, const float* input, float* output,
               size_t rows, float beta = 0.0f) const;
+    void gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
+                      const float* input, float* output) const;
     void embedding(const CpuLinearWeight& table, int32_t token,
                    float* output) const;
+    // Raw GEMV for pre-packed weight buffers (e.g. MoE router): output[n] = weight[n,k] @ input[k].
+    void gemv_raw(const float* weight, const float* input, float* output,
+                  int n, int k) const;
+    // Batched raw router projection. Input is [rows,k], output is [rows,n].
+    void gemm_raw(const float* weight, const float* input, float* output,
+                  size_t rows, int n, int k) const;
 
 private:
     CpuIsa isa_;
@@ -67,6 +85,7 @@ private:
     Q4DotFunction dot_;
     Q4Q8DotFunction q8_dot_ = nullptr;
     CpuGgufDotFunction gguf_dot_ = nullptr;
+    CpuGgufDot4Function gguf_dot4_ = nullptr;
     bool dynamic_q8_ = false;
 };
 

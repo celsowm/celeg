@@ -8,6 +8,9 @@ namespace lfm::detail {
 
 float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
                         const CpuQ8KBlock* activation, size_t cols);
+void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
+                        const CpuQ8KBlock* activation, size_t cols,
+                        float* output4);
 void cpu_quantize_q8k_avx2(const float* input, size_t cols,
                            CpuQ8KBlock* output);
 

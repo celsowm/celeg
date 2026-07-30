@@ -1,13 +1,14 @@
 #include "lfm/backend/cuda/kernels/mmq.hpp"
 #include "kernel_common.cuh"
+#include "lfm/checkpoint/gguf_blocks.hpp"
 
 #include <cstring>
 
 namespace lfm {
 namespace {
 
-// Mirrors gguf.cu's BlockQ4K / q4k_scale_min exactly (super-block layout is
-// GGUF's on-disk format, not something this file gets to choose).
+// Mirrors gguf.cu's BlockQ4K layout (super-block layout is GGUF's on-disk
+// format, not something this file gets to choose).
 struct BlockQ4K {
     __half d;
     __half dmin;
@@ -15,16 +16,7 @@ struct BlockQ4K {
     uint8_t qs[128];
 };
 
-__device__ __forceinline__ void q4k_scale_min(int j, const uint8_t* q,
-                                              uint8_t& sc, uint8_t& m) {
-    if (j < 4) {
-        sc = q[j] & 63;
-        m = q[j + 4] & 63;
-    } else {
-        sc = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-        m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
-    }
-}
+using lfm::gguf_blocks::q4k_scale_min;
 
 constexpr int kSuperBlock = 256;
 constexpr int kSubBlocksPerSuperBlock = kSuperBlock / kMmqQ8_1BlockSize;

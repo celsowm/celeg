@@ -52,6 +52,8 @@ int main(int argc, char** argv) {
                   << "prefill.profile.linear_ms=" << profile.linear_ms << '\n'
                   << "prefill.profile.attention_ms=" << profile.attention_ms << '\n'
                   << "prefill.profile.shortconv_ms=" << profile.shortconv_ms << '\n'
+                  << "prefill.profile.moe_router_ms=" << profile.moe_router_ms << '\n'
+                  << "prefill.profile.moe_expert_ms=" << profile.moe_expert_ms << '\n'
                   << "prefill.profile.total_ms=" << profile.total_ms << '\n'
                   << "kv.pages.used=" << memory.kv_pages_used << '\n'
                   << "kv.pages.total=" << memory.kv_pages_total << '\n'

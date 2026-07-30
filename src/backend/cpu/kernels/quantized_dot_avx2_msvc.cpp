@@ -52,6 +52,19 @@ inline float hsum256_ps(__m256 value) {
 
 } // namespace
 
+float f32_dot_avx2_msvc(const float* weight, const float* activation,
+                         size_t cols) {
+    __m256 total = _mm256_setzero_ps();
+    size_t col = 0;
+    for (; col + 8 <= cols; col += 8) {
+        total = _mm256_fmadd_ps(_mm256_loadu_ps(weight + col),
+                                _mm256_loadu_ps(activation + col), total);
+    }
+    float sum = hsum256_ps(total);
+    for (; col < cols; ++col) sum += weight[col] * activation[col];
+    return sum;
+}
+
 float q4_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* scales_bf16,
                        const float* activation, size_t cols, size_t group_size,
                        size_t groups_per_row) {

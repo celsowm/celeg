@@ -206,7 +206,7 @@ std::string ModelConfig::summary() const {
         << " dtype=" << dtype
         << " hidden=" << hidden_size;
     if (architecture == ArchitectureKind::MoeLfm2 && moe) {
-        out << " moe_intermediate=" << moe->intermediate_size
+        out << " moe_intermediate=" << moe->moe_intermediate_size
             << " num_dense_layers=" << moe->num_dense_layers
             << " num_experts=" << moe->num_experts
             << " experts_per_token=" << moe->experts_per_token

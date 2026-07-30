@@ -1,15 +1,11 @@
 #include "lfm/model/weights/loader.hpp"
 #include "lfm/runtime/moe/expert_residency.hpp"
+#include "lfm/checkpoint/tensor_names.hpp"
 #include <cstring>
 #include <stdexcept>
 #include <vector>
 
 namespace lfm {
-namespace {
-std::string layer_name(int index, const std::string& suffix) {
-    return "model.layers." + std::to_string(index) + "." + suffix;
-}
-} // namespace
 WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     const IWeightRepository& repo, int layer,
     int num_experts, int moe_intermediate, int hidden,
@@ -58,6 +54,7 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     // (gate_up = [w1; w3], down = [w2]).
     std::vector<__nv_bfloat16> gate_up_stage(gate_up_elems);
     std::vector<__nv_bfloat16> down_stage(down_elems);
+    std::vector<__nv_bfloat16> decoded_stage;
 
     for (int e = 0; e < num_experts; ++e) {
         const std::string w1_name = layer_name(
@@ -69,18 +66,36 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
         const HostTensorView w1 = repo.tensor(w1_name);
         const HostTensorView w3 = repo.tensor(w3_name);
         const HostTensorView w2 = repo.tensor(w2_name);
-        if (w1.dtype != TensorDType::BF16 || w3.dtype != TensorDType::BF16 ||
-            w2.dtype != TensorDType::BF16) {
-            throw std::runtime_error("MoE expert weights must be BF16: " + w1_name);
-        }
         if (w1.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
             w3.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
             w2.shape != std::vector<int64_t>{hidden, moe_intermediate}) {
             throw std::runtime_error("unexpected MoE expert tensor shape for " + w1_name);
         }
-        std::memcpy(gate_up_stage.data(), w1.data, w_bytes);
-        std::memcpy(gate_up_stage.data() + moe_inter * hidden_c, w3.data, w_bytes);
-        std::memcpy(down_stage.data(), w2.data, down_bytes);
+        const auto copy_or_dequantize = [&](const HostTensorView& tensor,
+                                            __nv_bfloat16* destination,
+                                            size_t bytes,
+                                            const std::string& name) {
+            if (tensor.dtype == TensorDType::BF16) {
+                if (tensor.bytes != bytes) {
+                    throw std::runtime_error("invalid BF16 MoE expert bytes: " + name);
+                }
+                std::memcpy(destination, tensor.data, bytes);
+                return;
+            }
+            if (tensor.dtype == TensorDType::Quantized) {
+                dequantize_gguf_to_bf16(tensor, decoded_stage);
+                if (decoded_stage.size() * sizeof(__nv_bfloat16) != bytes) {
+                    throw std::runtime_error("invalid GGUF MoE expert size: " + name);
+                }
+                std::memcpy(destination, decoded_stage.data(), bytes);
+                return;
+            }
+            throw std::runtime_error("unsupported MoE expert dtype: " + name);
+        };
+        copy_or_dequantize(w1, gate_up_stage.data(), w_bytes, w1_name);
+        copy_or_dequantize(w3, gate_up_stage.data() + moe_inter * hidden_c,
+                           w_bytes, w3_name);
+        copy_or_dequantize(w2, down_stage.data(), down_bytes, w2_name);
 
         if (host_mode == ExpertHostMode::Mapped) {
             // Copy the packed expert into its slot in the persistent arena.
@@ -135,6 +150,4 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
 
 
 } // namespace lfm
-
-
 

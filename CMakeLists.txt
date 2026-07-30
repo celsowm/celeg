@@ -70,6 +70,12 @@ endforeach()
 
 if(MSVC)
     add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/utf-8>)
+    # CUDA 13.1's host-config guard predates the currently installed MSVC
+    # 19.50 toolset.  Keep the override limited to CUDA translation units and
+    # only newer toolsets; supported MSVC versions retain CUDA's normal check.
+    if(LFM_ENABLE_CUDA AND MSVC_VERSION GREATER 1949)
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-allow-unsupported-compiler>)
+    endif()
     set(LFM_MSVC_SHOWINCLUDES_PREFIX "" CACHE STRING
         "Exact localized MSVC /showIncludes prefix detected by scripts/dev.py")
     if(LFM_MSVC_SHOWINCLUDES_PREFIX)

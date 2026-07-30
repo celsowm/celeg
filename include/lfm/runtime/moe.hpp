@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 #include <vector>
 
 // Make __nv_bfloat16 available to this header in both CUDA and host-only
@@ -21,6 +22,23 @@ using cudaStream_t = struct CUstream_st*;
 #endif
 
 namespace lfm {
+
+// Numerically stable sigmoid shared by the host reference, the CUDA router
+// kernel, and the MoE parity tests. Previously duplicated in four sites.
+#if defined(__CUDACC__)
+__host__ __device__
+#endif
+inline float moe_sigmoid(float x) {
+#if defined(__CUDACC__)
+    if (x >= 0.0f) return 1.0f / (1.0f + expf(-x));
+    const float e = expf(x);
+    return e / (1.0f + e);
+#else
+    if (x >= 0.0f) return 1.0f / (1.0f + std::exp(-x));
+    const float e = std::exp(x);
+    return e / (1.0f + e);
+#endif
+}
 
 // Router configuration for the LFM2 MoE feed-forward block.
 struct MoeRouterConfig {

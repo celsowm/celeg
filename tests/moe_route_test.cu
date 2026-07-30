@@ -8,11 +8,7 @@
 
 namespace {
 
-float sigmoid(float x) {
-    if (x >= 0.0f) return 1.0f / (1.0f + std::exp(-x));
-    const float e = std::exp(x);
-    return e / (1.0f + e);
-}
+using lfm::moe_sigmoid;
 
 void build_problem(int rows, int hidden, int experts,
                    std::vector<float>& hidden_vec,
@@ -101,7 +97,7 @@ int main() {
                     for (int hh = 0; hh < hidden; ++hh)
                         logit += hv[static_cast<size_t>(r) * hidden + hh] *
                                  rw[static_cast<size_t>(ex) * hidden + hh];
-                    float expected = sigmoid(logit);
+                    float expected = moe_sigmoid(logit);
                     if (cfg.normalize_topk) {
                         float sum = 0.0f;
                         for (int kk = 0; kk < K; ++kk) {
@@ -110,7 +106,7 @@ int main() {
                             for (int hh = 0; hh < hidden; ++hh)
                                 l2 += hv[static_cast<size_t>(r) * hidden + hh] *
                                       rw[static_cast<size_t>(exx) * hidden + hh];
-                            sum += sigmoid(l2);
+                            sum += moe_sigmoid(l2);
                         }
                         expected /= (sum + 1e-6f);
                     }

@@ -1,5 +1,7 @@
 #include "detail/model_internal.hpp"
 
+#include "lfm/runtime/moe.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
@@ -36,7 +38,7 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
         std::copy(hidden.begin(), hidden.end(), residual.begin());
         cpu_rmsnorm(hidden.data(), common.operator_norm.data(), normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
-        if (const auto* attention = std::get_if<AttentionWeights>(&layer_variant)) {
+        if (const auto* attention = attention_operator(layer_variant)) {
             shared->linear.gemv(attention->qkv, normed.data(), qkv.data());
             float* q = qkv.data();
             float* k = q + shared->shape.q_width;
@@ -52,22 +54,105 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
             run_attention(state, q, op_output.data(), position_value + 1);
             shared->linear.gemv(attention->out, op_output.data(), hidden.data());
         } else {
-            const auto& convolution = std::get<ConvolutionWeights>(layer_variant);
+            const auto* convolution = convolution_operator(layer_variant);
+            if (!convolution) throw std::logic_error("CPU layer has no operator");
             ConvolutionState& state = convolution_state(index);
-            shared->linear.gemv(convolution.in, normed.data(), conv_projected.data());
-            cpu_conv_decode(conv_projected.data(), convolution.weight_tap_major.data(),
+            shared->linear.gemv(convolution->in, normed.data(), conv_projected.data());
+            cpu_conv_decode(conv_projected.data(), convolution->weight_tap_major.data(),
                 state.state.data(), op_output.data(), shared->shape.hidden,
                 shared->shape.conv_cache, position_value);
-            shared->linear.gemv(convolution.out, op_output.data(), hidden.data());
+            shared->linear.gemv(convolution->out, op_output.data(), hidden.data());
         }
         cpu_residual_add(hidden.data(), residual.data(), shared->shape.hidden);
 
         cpu_rmsnorm(hidden.data(), common.ffn_norm.data(), normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
-        shared->linear.gemv(common.w13, normed.data(), gate_up.data());
-        cpu_swiglu(gate_up.data(), activated.data(), shared->shape.intermediate);
-        shared->linear.gemv(common.w2, activated.data(), mlp_output.data());
-        cpu_residual_add(hidden.data(), mlp_output.data(), shared->shape.hidden);
+
+        if (const auto* moe = std::get_if<MoeWeights>(&layer_variant)) {
+            // MoE FFN: router -> top-K expert selection -> per-expert FFN GEMVs.
+            const int E = moe->num_experts;
+            const int K = moe->experts_per_token;
+            const int moe_inter = shared->shape.moe_intermediate > 0
+                ? shared->shape.moe_intermediate : shared->shape.intermediate;
+
+            const bool profile_moe = phase == SessionPhase::Prefilling;
+            auto started = Clock::now();
+            moe_router_logits.resize(static_cast<size_t>(E));
+            moe_router_probs.resize(static_cast<size_t>(E));
+            moe_router_scored.resize(static_cast<size_t>(E));
+            moe_selected.resize(static_cast<size_t>(K));
+            moe_weights.resize(static_cast<size_t>(K));
+
+            // Router GEMV: normed @ router^T -> logits [E]
+            shared->linear.gemv_raw(moe->router.data(), normed.data(), moe_router_logits.data(),
+                                    E, shared->shape.hidden);
+
+            // Sigmoid + optional expert bias + top-K selection.
+            for (int e = 0; e < E; ++e) {
+                moe_router_probs[static_cast<size_t>(e)] =
+                    moe_sigmoid(moe_router_logits[static_cast<size_t>(e)]);
+                float score = moe_router_probs[static_cast<size_t>(e)];
+                if (moe->use_expert_bias && e < static_cast<int>(moe->router_bias.size())) {
+                    score += moe->router_bias[static_cast<size_t>(e)];
+                }
+                moe_router_scored[static_cast<size_t>(e)] = {score, e};
+            }
+            std::partial_sort(moe_router_scored.begin(), moe_router_scored.begin() + K,
+                moe_router_scored.end(),
+                [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                    if (a.first != b.first) return a.first > b.first;
+                    return a.second < b.second;
+                });
+
+            // Gather selected experts and routing weights.
+            float weight_sum = 0.0f;
+            for (int k = 0; k < K; ++k) {
+                moe_selected[static_cast<size_t>(k)] =
+                    moe_router_scored[static_cast<size_t>(k)].second;
+                moe_weights[static_cast<size_t>(k)] =
+                    moe_router_probs[static_cast<size_t>(moe_selected[static_cast<size_t>(k)])];
+                weight_sum += moe_weights[static_cast<size_t>(k)];
+            }
+            if (moe->normalize_topk) {
+                const float inv = 1.0f / (weight_sum + 1e-6f);
+                for (int k = 0; k < K; ++k) {
+                    moe_weights[static_cast<size_t>(k)] *= inv;
+                }
+            }
+            for (int k = 0; k < K; ++k) {
+                moe_weights[static_cast<size_t>(k)] *= moe->routed_scaling_factor;
+            }
+            if (profile_moe) prefill_profile.moe_router_ms += milliseconds_since(started);
+
+            // Per-expert FFN GEMVs with routing-weighted accumulation.
+            started = Clock::now();
+            std::fill(mlp_output.begin(), mlp_output.end(), 0.0f);
+            for (int k = 0; k < K; ++k) {
+                const int expert = moe_selected[static_cast<size_t>(k)];
+                const float rw = moe_weights[static_cast<size_t>(k)];
+                if (expert < 0 || expert >= E) continue;
+
+                // gate_up = expert_w13[expert] @ normed  [2 * moe_inter]
+                shared->linear.gemv(moe->expert_w13[static_cast<size_t>(expert)],
+                                    normed.data(), gate_up.data());
+                // SwiGLU: activated[i] = swiglu(gate_up[i], gate_up[moe_inter + i])
+                cpu_swiglu(gate_up.data(), activated.data(), moe_inter);
+                // mlp_output += rw * expert_w2[expert] @ activated
+                shared->linear.gemv(moe->expert_w2[static_cast<size_t>(expert)],
+                                    activated.data(), op_output.data());
+                for (int j = 0; j < shared->shape.hidden; ++j) {
+                    mlp_output[static_cast<size_t>(j)] += rw * op_output[static_cast<size_t>(j)];
+                }
+            }
+            cpu_residual_add(hidden.data(), mlp_output.data(), shared->shape.hidden);
+            if (profile_moe) prefill_profile.moe_expert_ms += milliseconds_since(started);
+        } else {
+            // Dense FFN path.
+            shared->linear.gemv(common.w13, normed.data(), gate_up.data());
+            cpu_swiglu(gate_up.data(), activated.data(), shared->shape.intermediate);
+            shared->linear.gemv(common.w2, activated.data(), mlp_output.data());
+            cpu_residual_add(hidden.data(), mlp_output.data(), shared->shape.hidden);
+        }
     }
     if (compute_logits) {
         cpu_rmsnorm(hidden.data(), shared->final_norm.data(), normed.data(),
@@ -84,6 +169,20 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
     if (position_value < 0 ||
         tokens.size() > static_cast<size_t>(shared->max_context - position_value)) {
         throw std::runtime_error("CPU chunked prefill exceeds context limit");
+    }
+    // A 32-expert MoE prompt shorter than this produces only a handful of
+    // routes per expert. The decode GEMV path is faster for that sparse case;
+    // grouped GEMM is reserved for chunks large enough to amortize its setup.
+    constexpr size_t kGroupedMoeMinimumRows = 32;
+    if (tokens.size() < kGroupedMoeMinimumRows &&
+        std::any_of(shared->layers.begin(), shared->layers.end(),
+                    [](const WeightLayer& layer) {
+                        return std::holds_alternative<MoeWeights>(layer);
+                    })) {
+        for (size_t row = 0; row < tokens.size(); ++row) {
+            forward_token(tokens[row], compute_logits && row + 1 == tokens.size());
+        }
+        return;
     }
     const size_t rows = tokens.size();
     const auto chunk_started = Clock::now();
@@ -120,7 +219,7 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                         shared->shape.hidden, shared->shape.norm_eps);
         });
 
-        if (const auto* attention = std::get_if<AttentionWeights>(&layer)) {
+        if (const auto* attention = attention_operator(layer)) {
             auto started = Clock::now();
             shared->linear.gemm(attention->qkv, chunk_normed.data(),
                                 chunk_qkv.data(), rows);
@@ -163,20 +262,21 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                                 chunk_hidden.data(), rows);
             prefill_profile.linear_ms += milliseconds_since(started);
         } else {
-            const auto& convolution = std::get<ConvolutionWeights>(layer);
+            const auto* convolution = convolution_operator(layer);
+            if (!convolution) throw std::logic_error("CPU layer has no operator");
             auto started = Clock::now();
-            shared->linear.gemm(convolution.in, chunk_normed.data(),
+            shared->linear.gemm(convolution->in, chunk_normed.data(),
                                 chunk_conv.data(), rows);
             prefill_profile.linear_ms += milliseconds_since(started);
             ConvolutionState& conv_state = convolution_state(layer_index);
             started = Clock::now();
-            cpu_conv_prefill(chunk_conv.data(), convolution.weight_tap_major.data(),
+            cpu_conv_prefill(chunk_conv.data(), convolution->weight_tap_major.data(),
                              conv_state.state.data(), chunk_op.data(), rows,
                              shared->shape.hidden, shared->shape.conv_cache,
                              base_position, shared->pool);
             prefill_profile.shortconv_ms += milliseconds_since(started);
             started = Clock::now();
-            shared->linear.gemm(convolution.out, chunk_op.data(),
+            shared->linear.gemm(convolution->out, chunk_op.data(),
                                 chunk_hidden.data(), rows);
             prefill_profile.linear_ms += milliseconds_since(started);
         }
@@ -190,19 +290,150 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                 chunk_normed.data() + row * shared->shape.hidden,
                 shared->shape.hidden, shared->shape.norm_eps);
         });
-        auto started = Clock::now();
-        shared->linear.gemm(common.w13, chunk_normed.data(),
-                            chunk_gate_up.data(), rows);
-        prefill_profile.linear_ms += milliseconds_since(started);
-        parallel_rows(shared->pool, rows, [&](size_t row) {
-            cpu_swiglu(chunk_gate_up.data() + row * 2ULL * shared->shape.intermediate,
-                       chunk_activated.data() + row * shared->shape.intermediate,
-                       shared->shape.intermediate);
-        });
-        started = Clock::now();
-        shared->linear.gemm(common.w2, chunk_activated.data(),
-                            chunk_mlp.data(), rows);
-        prefill_profile.linear_ms += milliseconds_since(started);
+        if (const auto* moe = std::get_if<MoeWeights>(&layer)) {
+            const int E = moe->num_experts;
+            const int K = moe->experts_per_token;
+            const int moe_inter = shared->shape.moe_intermediate > 0
+                ? shared->shape.moe_intermediate : shared->shape.intermediate;
+            if (E <= 0 || K <= 0 || K > E) {
+                throw std::logic_error("CPU MoE layer has invalid routing dimensions");
+            }
+
+            auto started = Clock::now();
+            moe_router_logits.resize(rows * static_cast<size_t>(E));
+            shared->linear.gemm_raw(moe->router.data(), chunk_normed.data(),
+                                    moe_router_logits.data(), rows, E,
+                                    shared->shape.hidden);
+            moe_router_probs.resize(static_cast<size_t>(E));
+            moe_router_scored.resize(static_cast<size_t>(E));
+            moe_route_rows.resize(rows * static_cast<size_t>(K));
+            moe_route_experts.resize(rows * static_cast<size_t>(K));
+            moe_route_weights.resize(rows * static_cast<size_t>(K));
+            for (size_t row = 0; row < rows; ++row) {
+                const float* logits = moe_router_logits.data() + row * static_cast<size_t>(E);
+                for (int expert = 0; expert < E; ++expert) {
+                    const float probability = moe_sigmoid(logits[expert]);
+                    moe_router_probs[static_cast<size_t>(expert)] = probability;
+                    const float bias = moe->use_expert_bias &&
+                        expert < static_cast<int>(moe->router_bias.size())
+                        ? moe->router_bias[static_cast<size_t>(expert)] : 0.0f;
+                    moe_router_scored[static_cast<size_t>(expert)] = {probability + bias, expert};
+                }
+                std::partial_sort(moe_router_scored.begin(),
+                    moe_router_scored.begin() + K, moe_router_scored.end(),
+                    [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                        return a.first != b.first ? a.first > b.first : a.second < b.second;
+                    });
+                float weight_sum = 0.0f;
+                const size_t route_base = row * static_cast<size_t>(K);
+                for (int slot = 0; slot < K; ++slot) {
+                    const int expert = moe_router_scored[static_cast<size_t>(slot)].second;
+                    moe_route_rows[route_base + static_cast<size_t>(slot)] = static_cast<int>(row);
+                    moe_route_experts[route_base + static_cast<size_t>(slot)] = expert;
+                    moe_route_weights[route_base + static_cast<size_t>(slot)] =
+                        moe_router_probs[static_cast<size_t>(expert)];
+                    weight_sum += moe_route_weights[route_base + static_cast<size_t>(slot)];
+                }
+                const float scale = moe->routed_scaling_factor *
+                    (moe->normalize_topk ? 1.0f / (weight_sum + 1e-6f) : 1.0f);
+                for (int slot = 0; slot < K; ++slot) {
+                    moe_route_weights[route_base + static_cast<size_t>(slot)] *= scale;
+                }
+            }
+            prefill_profile.moe_router_ms += milliseconds_since(started);
+
+            started = Clock::now();
+            const size_t route_count = rows * static_cast<size_t>(K);
+            moe_group_offsets.assign(static_cast<size_t>(E) + 1, 0);
+            for (int expert : moe_route_experts) ++moe_group_offsets[static_cast<size_t>(expert) + 1];
+            for (int expert = 0; expert < E; ++expert) {
+                moe_group_offsets[static_cast<size_t>(expert) + 1] +=
+                    moe_group_offsets[static_cast<size_t>(expert)];
+            }
+            moe_group_cursor = moe_group_offsets;
+            moe_route_order.resize(route_count);
+            for (size_t route = 0; route < route_count; ++route) {
+                const int expert = moe_route_experts[route];
+                moe_route_order[moe_group_cursor[static_cast<size_t>(expert)]++] = route;
+            }
+
+            // Pack every routed row once in expert-group order. The two FFN
+            // stages then share one cross-expert work queue instead of paying
+            // a thread-pool barrier for each sparse expert group.
+            moe_gathered_normed.resize(route_count * static_cast<size_t>(shared->shape.hidden));
+            moe_gathered_gate_up.resize(route_count * 2ULL * static_cast<size_t>(moe_inter));
+            moe_gathered_activated.resize(route_count * static_cast<size_t>(moe_inter));
+            moe_gathered_output.resize(route_count * static_cast<size_t>(shared->shape.hidden));
+            moe_gemm_jobs.clear();
+            moe_gemm_jobs.reserve(static_cast<size_t>(E));
+            std::fill(chunk_mlp.begin(), chunk_mlp.end(), 0.0f);
+            for (int expert = 0; expert < E; ++expert) {
+                const size_t begin = moe_group_offsets[static_cast<size_t>(expert)];
+                const size_t end = moe_group_offsets[static_cast<size_t>(expert) + 1];
+                const size_t group_rows = end - begin;
+                if (group_rows == 0) continue;
+                for (size_t group_row = 0; group_row < group_rows; ++group_row) {
+                    const size_t route = moe_route_order[begin + group_row];
+                    const int row = moe_route_rows[route];
+                    std::copy_n(chunk_normed.data() + static_cast<size_t>(row) * shared->shape.hidden,
+                                shared->shape.hidden,
+                                moe_gathered_normed.data() + (begin + group_row) * shared->shape.hidden);
+                }
+                moe_gemm_jobs.push_back({&moe->expert_w13[static_cast<size_t>(expert)],
+                                         begin, group_rows});
+            }
+            auto linear_started = Clock::now();
+            shared->linear.gemm_grouped(moe_gemm_jobs, moe_gathered_normed.data(),
+                                        moe_gathered_gate_up.data());
+            parallel_rows(shared->pool, route_count, [&](size_t group_row) {
+                cpu_swiglu(moe_gathered_gate_up.data() + group_row * 2ULL * moe_inter,
+                           moe_gathered_activated.data() + group_row * moe_inter, moe_inter);
+            });
+            size_t job_index = 0;
+            for (int expert = 0; expert < E; ++expert) {
+                const size_t begin = moe_group_offsets[static_cast<size_t>(expert)];
+                const size_t end = moe_group_offsets[static_cast<size_t>(expert) + 1];
+                if (begin != end) {
+                    moe_gemm_jobs[job_index++].weight =
+                        &moe->expert_w2[static_cast<size_t>(expert)];
+                }
+            }
+            shared->linear.gemm_grouped(moe_gemm_jobs, moe_gathered_activated.data(),
+                                        moe_gathered_output.data());
+            prefill_profile.linear_ms += milliseconds_since(linear_started);
+            for (int expert = 0; expert < E; ++expert) {
+                const size_t begin = moe_group_offsets[static_cast<size_t>(expert)];
+                const size_t end = moe_group_offsets[static_cast<size_t>(expert) + 1];
+                const size_t group_rows = end - begin;
+                if (group_rows == 0) continue;
+                for (size_t group_row = 0; group_row < group_rows; ++group_row) {
+                    const size_t route = moe_route_order[begin + group_row];
+                    float* output = chunk_mlp.data() +
+                        static_cast<size_t>(moe_route_rows[route]) * shared->shape.hidden;
+                    const float* expert_output = moe_gathered_output.data() +
+                        (begin + group_row) * shared->shape.hidden;
+                    const float weight = moe_route_weights[route];
+                    for (int column = 0; column < shared->shape.hidden; ++column) {
+                        output[column] += weight * expert_output[column];
+                    }
+                }
+            }
+            prefill_profile.moe_expert_ms += milliseconds_since(started);
+        } else {
+            auto started = Clock::now();
+            shared->linear.gemm(common.w13, chunk_normed.data(),
+                                chunk_gate_up.data(), rows);
+            prefill_profile.linear_ms += milliseconds_since(started);
+            parallel_rows(shared->pool, rows, [&](size_t row) {
+                cpu_swiglu(chunk_gate_up.data() + row * 2ULL * shared->shape.intermediate,
+                           chunk_activated.data() + row * shared->shape.intermediate,
+                           shared->shape.intermediate);
+            });
+            started = Clock::now();
+            shared->linear.gemm(common.w2, chunk_activated.data(),
+                                chunk_mlp.data(), rows);
+            prefill_profile.linear_ms += milliseconds_since(started);
+        }
         parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_residual_add(chunk_hidden.data() + row * shared->shape.hidden,
                              chunk_mlp.data() + row * shared->shape.hidden,

@@ -7,11 +7,7 @@
 
 namespace {
 
-float sigmoid(float x) {
-    if (x >= 0.0f) return 1.0f / (1.0f + std::exp(-x));
-    const float e = std::exp(x);
-    return e / (1.0f + e);
-}
+using lfm::moe_sigmoid;
 
 // Builds a router weight [E, H] that is the identity-ish projection so each
 // hidden coordinate maps to one expert's logit, plus a per-expert bias.
@@ -66,7 +62,7 @@ int main() {
                 logit += hv[hh] * rw[static_cast<size_t>(e) * hidden + hh];
             }
             logits[e] = logit;
-            probs[e] = sigmoid(logit);
+            probs[e] = moe_sigmoid(logit);
             // Large positive logits -> sigmoid near 1.
             if (logit > 5.0f) LFM_TEST_CHECK(probs[e] > 0.99f);
         }
@@ -107,7 +103,7 @@ int main() {
             float logit = 0.0f;
             for (int hh = 0; hh < hidden; ++hh)
                 logit += hv[hh] * rw[static_cast<size_t>(e) * hidden + hh];
-            probs[e] = sigmoid(logit);
+            probs[e] = moe_sigmoid(logit);
         }
         for (int k = 0; k < K; ++k) {
             const int ex = sel_b[static_cast<size_t>(k)];

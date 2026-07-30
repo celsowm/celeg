@@ -6,19 +6,6 @@
 
 namespace lfm {
 
-namespace {
-
-inline float sigmoid(float x) {
-    // Numerically stable sigmoid.
-    if (x >= 0.0f) {
-        return 1.0f / (1.0f + std::exp(-x));
-    }
-    const float e = std::exp(x);
-    return e / (1.0f + e);
-}
-
-} // namespace
-
 void compute_moe_router(const std::vector<float>& hidden,
                         const std::vector<float>& router_weight,
                         const std::vector<float>* expert_bias,
@@ -52,7 +39,7 @@ void compute_moe_router(const std::vector<float>& hidden,
             float logit = 0.0f;
             for (int h = 0; h < hidden_dim; ++h) logit += row[h] * w[h];
             logits[e] = logit;
-            const float prob = sigmoid(logit);
+            const float prob = moe_sigmoid(logit);
             probs[e] = prob;
             scores[e] = config.use_expert_bias ? prob + (*expert_bias)[e] : prob;
         }
@@ -88,16 +75,6 @@ void compute_moe_router(const std::vector<float>& hidden,
         }
     }
 }
-
-namespace {
-
-inline float sigmoid_ref(float x) {
-    if (x >= 0.0f) return 1.0f / (1.0f + std::exp(-x));
-    const float e = std::exp(x);
-    return e / (1.0f + e);
-}
-
-} // namespace
 
 void compute_moe_ffn(const std::vector<float>& hidden,
                      const std::vector<float>& gate_up,

@@ -2,6 +2,8 @@
 #include "lfm/model/weights/quantization.hpp"
 #include "lfm/runtime/moe/expert_residency.hpp"
 #include "lfm/backend/cuda/kernels/gguf.cuh"
+#include "lfm/checkpoint/gguf_blocks.hpp"
+#include "lfm/checkpoint/tensor_names.hpp"
 
 #include <cstring>
 #include <cstddef>
@@ -30,10 +32,6 @@ size_t checked_element_count(const std::vector<int64_t>& shape) {
     return count;
 }
 
-std::string layer_name(int index, const std::string& suffix) {
-    return "model.layers." + std::to_string(index) + "." + suffix;
-}
-
 // Host-side dequantization of a GGUF Q4_K / Q6_K tensor to row-major BF16. Used
 // as a fallback when a concatenation mixes quant formats (e.g. attention q/k/v
 // where value projection is Q6_K while query/key are Q4_K) and cannot stay
@@ -47,11 +45,7 @@ void q4k_decode(const Q4KHost* blk, int col, float& out) {
     const float dmin = __half2float(blk->dmin);
     const int sub = col >> 5, within = col & 31;
     uint8_t sc, m;
-    if (sub < 4) { sc = blk->scales[sub] & 63; m = blk->scales[sub + 4] & 63; }
-    else {
-        sc = (blk->scales[sub + 4] & 0xF) | ((blk->scales[sub - 4] >> 6) << 4);
-        m = (blk->scales[sub + 4] >> 4) | ((blk->scales[sub] >> 6) << 4);
-    }
+    lfm::gguf_blocks::q4k_scale_min(sub, blk->scales, sc, m);
     const uint8_t* qs = blk->qs + (sub >> 1) * 32;
     const int q = (sub & 1) ? (qs[within] >> 4) : (qs[within] & 0xF);
     out = d * sc * static_cast<float>(q) - dmin * m;
@@ -72,8 +66,8 @@ void q6k_decode(const Q6KHost* blk, int col, float& out) {
 }
 } // namespace
 
-void dequantize_gguf_to_bf16(const HostTensorView& tensor,
-                             std::vector<__nv_bfloat16>& out) {
+void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
+                                  std::vector<__nv_bfloat16>& out) {
     if (tensor.ggml_type != GgmlType::Q4_K && tensor.ggml_type != GgmlType::Q6_K) {
         throw std::runtime_error("unsupported GGUF quantization for CUDA dequantization");
     }
@@ -174,6 +168,11 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
 }
 
 } // namespace
+
+void dequantize_gguf_to_bf16(const HostTensorView& tensor,
+                             std::vector<__nv_bfloat16>& out) {
+    dequantize_gguf_to_bf16_impl(tensor, out);
+}
 
 const __nv_bfloat16* WeightLoader::load_weight(
     const IWeightRepository& repo,
@@ -333,22 +332,34 @@ const LinearWeight* WeightLoader::load_linear_weight(
         return &it->second.linear;
     }
 
-    if (tensor.dtype != TensorDType::BF16 && tensor.dtype != TensorDType::F16) {
+    if (tensor.dtype != TensorDType::BF16 && tensor.dtype != TensorDType::F16 &&
+        tensor.dtype != TensorDType::F32) {
         throw std::runtime_error("unexpected linear tensor dtype: " + name);
     }
     const size_t count = checked_element_count(tensor.shape);
-    if (tensor.bytes != count * (tensor.dtype == TensorDType::F16 ? sizeof(__half) : sizeof(__nv_bfloat16))) {
+    const size_t element_bytes = tensor.dtype == TensorDType::F32
+        ? sizeof(float)
+        : (tensor.dtype == TensorDType::F16 ? sizeof(__half) : sizeof(__nv_bfloat16));
+    if (tensor.bytes != count * element_bytes) {
         throw std::runtime_error("invalid linear tensor byte count: " + name);
     }
 
     std::vector<__nv_bfloat16> dense;
-    if (tensor.dtype == TensorDType::F16) {
+    if (tensor.dtype == TensorDType::F16 || tensor.dtype == TensorDType::F32) {
         dense.resize(count);
-        const __half* src = reinterpret_cast<const __half*>(tensor.data);
-        for (size_t i = 0; i < count; ++i) dense[i] = __float2bfloat16(__half2float(src[i]));
+        if (tensor.dtype == TensorDType::F16) {
+            const __half* src = reinterpret_cast<const __half*>(tensor.data);
+            for (size_t i = 0; i < count; ++i) {
+                dense[i] = __float2bfloat16(__half2float(src[i]));
+            }
+        } else {
+            const float* src = reinterpret_cast<const float*>(tensor.data);
+            for (size_t i = 0; i < count; ++i) dense[i] = __float2bfloat16(src[i]);
+        }
     }
-    const std::byte* dense_data = tensor.dtype == TensorDType::F16
-        ? reinterpret_cast<const std::byte*>(dense.data()) : tensor.data;
+    const std::byte* dense_data = tensor.dtype == TensorDType::BF16
+        ? tensor.data
+        : reinterpret_cast<const std::byte*>(dense.data());
 
     if (weight_mode_ == WeightMode::Int8) {
         Int8RowwisePack pack = quantize_bf16_rows(

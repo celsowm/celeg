@@ -52,9 +52,9 @@ struct Args {
     int attention_chunk_tokens = 32;
     int attention_auto_threshold = 1;
     bool raw_prompt = false;
-    bool fused_residuals = false;
+    bool fused_residuals = true;
     bool fast_attention = true;
-    bool fused_projections = false;
+    bool fused_projections = true;
     bool print_config = false;
     bool tokens_only = false;
     bool no_cuda_graph = false;

@@ -17,6 +17,7 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
     using CommonWeights = State::CommonWeights;
     using AttentionWeights = State::AttentionWeights;
     using ConvolutionWeights = State::ConvolutionWeights;
+    using MoeWeights = State::MoeWeights;
     static void validate_shared(std::span<State* const> sessions) {
         if (sessions.empty()) throw std::invalid_argument("packed CPU batch is empty");
         const auto shared = sessions.front()->shared;
@@ -38,6 +39,16 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
             throw std::invalid_argument("packed CPU metadata size mismatch");
         }
         validate_shared(sessions);
+        if (std::any_of(sessions.front()->shared->layers.begin(),
+                        sessions.front()->shared->layers.end(),
+                        [](const LayerWeights& layer) {
+                            return std::holds_alternative<MoeWeights>(layer);
+                        })) {
+            for (size_t row = 0; row < sessions.size(); ++row) {
+                sessions[row]->forward_token(tokens[row], compute_logits[row] != 0);
+            }
+            return;
+        }
         const size_t batch = sessions.size();
         SharedWeights& shared = *sessions.front()->shared;
         const ModelShape& shape = shared.shape;

@@ -7,6 +7,10 @@
 
 namespace lfm::detail {
 
+// FP32 router projection used by CPU MoE: contiguous dot product with AVX2/FMA.
+float f32_dot_avx2_msvc(const float* weight, const float* activation,
+                         size_t cols);
+
 float q4_dot_avx2_msvc(const uint8_t* packed_row,
                        const uint16_t* scales_bf16,
                        const float* activation,
