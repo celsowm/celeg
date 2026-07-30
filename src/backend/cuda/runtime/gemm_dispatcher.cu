@@ -17,13 +17,6 @@ __inline__ __device__ float warp_sum(float value) {
     return value;
 }
 
-// Dedicated m=1 (decode) BF16xBF16 GEMV: one warp per output row, 2-wide
-// __nv_bfloat162 loads. cublas/cublasLt's generic GEMM path (used for
-// m>1 prefill/MLP shapes, where it is excellent) turns out not to reach
-// good memory bandwidth for this skinny m=1 shape - measured at ~30GB/s
-// on a GPU with ~360GB/s peak, regardless of cublas vs cublasLt. Decode is
-// almost entirely bandwidth-bound (one full weight-matrix read per token),
-// so this dedicated kernel targets bandwidth, not FLOPs.
 __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                  const __nv_bfloat16* __restrict__ weight,
                                  __nv_bfloat16* __restrict__ y,
