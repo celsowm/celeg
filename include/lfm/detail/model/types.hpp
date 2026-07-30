@@ -135,6 +135,10 @@ struct ExpertLinearWeight {
     const int8_t* int8 = nullptr;
     const uint8_t* int4 = nullptr;
     const float* scales = nullptr;
+    const uint8_t* gguf_blocks = nullptr;
+    GgmlType gguf_type = GgmlType::Unknown;
+    size_t gguf_row_bytes = 0;
+    size_t gguf_expert_stride = 0;
     int experts = 0;
     int rows_per_expert = 0;
     int cols = 0;
@@ -192,10 +196,22 @@ inline LinearWeight ExpertLinearWeight::expert_view(int expert_id) const {
     } else if (kind == LinearStorageKind::Int8) {
         view.int8 = int8 + expert_offset;
         view.scales = scales + scale_offset;
-    } else {
+    } else if (kind == LinearStorageKind::Int4) {
         const size_t packed_cols = (static_cast<size_t>(cols) + 1) / 2;
         view.int4 = int4 + expert_offset / static_cast<size_t>(cols) * packed_cols;
         view.scales = scales + scale_offset;
+    } else if (kind == LinearStorageKind::Q4_K || kind == LinearStorageKind::Q6_K) {
+        if (!gguf_blocks || gguf_row_bytes == 0 || gguf_expert_stride == 0) {
+            throw std::logic_error("invalid GGUF expert storage");
+        }
+        GgufLinearSegment segment;
+        segment.blocks = gguf_blocks +
+            static_cast<size_t>(expert_id) * gguf_expert_stride;
+        segment.type = gguf_type;
+        segment.rows = rows_per_expert;
+        segment.cols = cols;
+        segment.row_bytes = gguf_row_bytes;
+        view.gguf_segments.push_back(segment);
     }
     return view;
 }
@@ -204,6 +220,7 @@ struct DeviceWeight {
     DeviceBuffer<__nv_bfloat16> bf16_storage;
     DeviceBuffer<int8_t> int8_storage;
     DeviceBuffer<uint8_t> int4_storage;
+    DeviceBuffer<uint8_t> gguf_expert_storage;
     std::vector<DeviceBuffer<uint8_t>> gguf_segment_storage;
     DeviceBuffer<float> scales_storage;
     std::vector<int64_t> shape;
@@ -356,12 +373,24 @@ inline lfm::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const ModelSha
         fdev.gate_up_ptrs = moe.gate_up_ptrs;
         fdev.down_ptrs = moe.down_ptrs;
     } else {
-        fdev.gate_up = moe.gate_up->bf16;
-        fdev.down = moe.down->bf16;
-        fdev.expert_gate_up_stride =
-            static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
-        fdev.expert_down_stride =
-            static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+        if (moe.gate_up->kind == LinearStorageKind::Q4_K ||
+            moe.gate_up->kind == LinearStorageKind::Q6_K) {
+            fdev.gate_up_gguf = moe.gate_up->gguf_blocks;
+            fdev.down_gguf = moe.down->gguf_blocks;
+            fdev.gate_up_gguf_type = moe.gate_up->gguf_type;
+            fdev.down_gguf_type = moe.down->gguf_type;
+            fdev.expert_gate_up_row_bytes = moe.gate_up->gguf_row_bytes;
+            fdev.expert_down_row_bytes = moe.down->gguf_row_bytes;
+            fdev.expert_gate_up_byte_stride = moe.gate_up->gguf_expert_stride;
+            fdev.expert_down_byte_stride = moe.down->gguf_expert_stride;
+        } else {
+            fdev.gate_up = moe.gate_up->bf16;
+            fdev.down = moe.down->bf16;
+            fdev.expert_gate_up_stride =
+                static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
+            fdev.expert_down_stride =
+                static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+        }
     }
     return fdev;
 }

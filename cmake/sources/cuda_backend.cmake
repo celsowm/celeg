@@ -16,6 +16,7 @@ set(LFM_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/facade.cu
     src/backend/cuda/model/weight_layout.cu
     src/backend/cuda/model/loader.cu
+    src/backend/cuda/model/loader_experts.cu
     src/backend/cuda/model/experts.cu
     src/backend/cuda/model/loader_cache.cu
     src/backend/cuda/memory/paged_kv.cu

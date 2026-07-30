@@ -12,11 +12,11 @@ size_t SharedModelWeights::memory_bytes() const {
         total += weight.bf16_storage.bytes() +
                  weight.int8_storage.bytes() +
                  weight.int4_storage.bytes() +
+                 weight.gguf_expert_storage.bytes() +
                  weight.scales_storage.bytes();
     }
     return total;
 }
 
 } // namespace lfm
-
 

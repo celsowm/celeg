@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include <lfm/checkpoint/formats/gguf.hpp>
+
 // Make __nv_bfloat16 available to this header in both CUDA and host-only
 // translation units. Under CUDA it comes from cuda_bf16.h; in host-only TUs
 // (e.g. moe_router_test) we define a minimal placeholder since the type is
@@ -117,6 +119,18 @@ struct MoeFfnDevice {
     int hidden_dim = 0;
     size_t expert_gate_up_stride = 0;  // elements per expert in gate_up
     size_t expert_down_stride = 0;      // elements per expert in down
+
+    // Native GGUF expert storage. When gate_up_gguf is non-null, the FFN
+    // launcher consumes packed Q4_K/Q6_K rows directly and ignores the BF16
+    // pointers/strides above. Each expert is contiguous at its byte stride.
+    const uint8_t* gate_up_gguf = nullptr;
+    const uint8_t* down_gguf = nullptr;
+    GgmlType gate_up_gguf_type = GgmlType::Unknown;
+    GgmlType down_gguf_type = GgmlType::Unknown;
+    size_t expert_gate_up_row_bytes = 0;
+    size_t expert_down_row_bytes = 0;
+    size_t expert_gate_up_byte_stride = 0;
+    size_t expert_down_byte_stride = 0;
 
     // Optional per-expert indirection tables for MoE expert offload. When both
     // are non-null the kernel resolves each expert's weights through these

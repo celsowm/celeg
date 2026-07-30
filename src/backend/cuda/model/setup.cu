@@ -343,6 +343,13 @@ LfmModel::Impl::Impl(const std::string& model_path,
             moe_weights.router_float = router_float.data();
 
             if (expert_offload_plan_.enabled) {
+                const HostTensorView expert_probe = repo.tensor(
+                    layer_name(i, "feed_forward.experts.0.w1.weight"));
+                if (expert_probe.dtype == TensorDType::Quantized) {
+                    throw std::invalid_argument(
+                        "native GGUF MoE experts do not support BF16 offload; "
+                        "disable expert offload to keep packed Q4/Q6 weights resident");
+                }
                 if (options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
                     std::vector<ExpertLocation> catalog =
                         weight_loader_->build_expert_catalog(repo, i, E, inter, shape_.hidden);

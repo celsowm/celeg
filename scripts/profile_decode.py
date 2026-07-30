@@ -59,7 +59,8 @@ def find_binary(build: Path, name: str) -> Path:
 
 def run(binary: Path, model: Path, extra: list[str], profile: bool,
         prefill: int, decode: int, context: int) -> str:
-    cmd = [str(binary), "--model", str(model), *BASE_FLAGS,
+    weight_flags = ["--weight-mode", "native"] if model.suffix.lower() == ".gguf" else []
+    cmd = [str(binary), "--model", str(model), *weight_flags, *BASE_FLAGS,
            "--benchmark-prefill-tokens", str(prefill),
            "--benchmark-decode", str(decode), "--benchmark-warmup", "1",
            "--max-new-tokens", str(decode), "--context", str(context), *extra]
