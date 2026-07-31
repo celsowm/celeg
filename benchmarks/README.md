@@ -86,3 +86,64 @@ dequantized or requantized.
 Any comparison produced before native same-file GGUF support is invalid. Those
 older runs compared different checkpoint formats or quantizations; only reports
 whose JSON rows contain the same canonical path, size and SHA-256 are valid.
+
+---
+
+# Benchmark manifests (Phase 0 reference fixtures)
+
+In addition to the CPU-vs-llama.cpp comparison above, this directory stores
+**benchmark configuration** for reference fixtures, separated from
+**benchmark results** (which live in `benchmarks/results/` and are gitignored).
+
+A manifest describes how to reproduce a deterministic reference run: the
+checkpoint, the runtime options, the prompt, and the sampling parameters. A
+result is the captured output of executing a manifest (a token sequence, a
+logits snapshot, or both). Storing them apart is Phase 0 task 0.2 of
+`lfm25_multi_stage_refactoring_plan.md`.
+
+## Manifest files
+
+`benchmarks/manifests/*.json` — one file per reference scenario:
+
+| file | checkpoint | mode |
+|---|---|---|
+| `dense_bf16.json` | `LiquidAI/LFM2.5-230M` | BF16 dense |
+| `dense_int8.json` | `LiquidAI/LFM2.5-230M` | INT8 per-output-channel dense |
+| `dense_int4.json` | `LiquidAI/LFM2.5-230M` | INT4 per-output-channel dense |
+| `gguf_q4k.json` | `LiquidAI/LFM2.5-230M-GGUF:Q4_K_M` | native GGUF MMQ |
+| `gguf_q6k.json` | `LiquidAI/LFM2.5-230M-GGUF:Q6_K` | native GGUF MMQ |
+| `moe_bf16.json` | `LiquidAI/LFM2.5-8B-A1B` | BF16 MoE (needs >12 GB VRAM) |
+
+Manifest schema and tolerance classes are documented inline in each manifest;
+tolerances are model- and format-specific, never one global number (Phase 0
+task 0.3). Each manifest declares its own threshold for cosine similarity,
+RMSE, max absolute error, top-k agreement, and end-to-end token agreement.
+
+## Reproducing a manifest
+
+```bash
+python benchmarks/run_manifest.py benchmarks/manifests/dense_bf16.json
+python benchmarks/run_manifest.py --all                          # every manifest
+python benchmarks/run_manifest.py <path> --update-expected       # refresh the recorded baseline
+```
+
+`run_manifest.py` resolves the checkpoint from the local HF cache (downloading
+if missing, via `lfm25-download`), invokes `lfm25-run` against the build
+discovered by `scripts/dev.py`, and writes the captured output to
+`benchmarks/results/<name>.json`. When the manifest records an
+`expected_sequence` (greedy `top_k == 1`), the runner compares the captured
+sequence against it; when only `expected_stdout_sha256` is recorded (the
+common case while token-id capture is not yet wired), the runner compares the
+output hash.
+
+## Compile-time baseline
+
+```bash
+python scripts/measure_compile.py          # clean + 2 incremental + binary size
+python scripts/measure_compile.py --skip-clean   # incremental rebuilds only
+```
+
+Writes `benchmarks/compile_baseline.json` (gitignored) with clean build time,
+two incremental rebuild times (one after touching an attention kernel, one
+after touching a model orchestration file), and the final `lfm25-run` binary
+size.
