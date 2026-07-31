@@ -46,7 +46,7 @@ jobs:
       - name: Diagnose
         run: python3 scripts/dev.py doctor --backend cuda --arch 80 --json > doctor-linux-cuda.json
       - name: Compile and run host tests
-        run: python3 scripts/dev.py verify --backend cuda --arch 80 --runtime-tests off --build-type Release --jobs 2
+        run: python3 scripts/dev.py verify --backend cuda --arch 80 --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,7 +93,7 @@ jobs:
       - name: Diagnose
         run: python scripts/dev.py doctor --backend cuda --arch 80 --json > doctor-windows-cuda.json
       - name: Compile with MSVC and NVCC
-        run: python scripts/dev.py build --backend cuda --arch 80 --runtime-tests off --build-type Release --jobs 2
+        run: python scripts/dev.py build --backend cuda --arch 80 --celeg-tests off --build-type Release --jobs 2
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
