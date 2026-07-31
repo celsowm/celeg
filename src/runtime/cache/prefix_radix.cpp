@@ -1,9 +1,9 @@
-#include "lfm/runtime/cache/prefix_radix.hpp"
+#include "celeg/runtime/cache/prefix_radix.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 PrefixRadixIndex::PrefixRadixIndex() : root_(std::make_unique<Node>()) {}
 PrefixRadixIndex::~PrefixRadixIndex() = default;
@@ -90,4 +90,4 @@ void PrefixRadixIndex::clear() {
     nodes_ = 1;
 }
 
-} // namespace lfm
+} // namespace celeg

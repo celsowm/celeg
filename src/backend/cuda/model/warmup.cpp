@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/model/weights/layout.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/model/weights/layout.hpp"
 
 #include <stdexcept>
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::warmup_decode_gemms() {
     hidden_.zero_async(stream_.get());
@@ -70,7 +70,7 @@ void Model::Impl::warmup_decode_gemms() {
            options_.fused_residuals ? 1.0f : 0.0f);
     linear(normed_.data(), *logits_weight(), logits_.data(),
            1, shape_.vocab_size, shape_.hidden);
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
 void Model::Impl::warmup_prefill_attention_gemm() {
@@ -91,8 +91,8 @@ void Model::Impl::warmup_prefill_attention_gemm() {
         scores.data(), probs.data(), kRows, shape_.num_attention_heads,
         shape_.num_key_value_heads, shape_.head_dim, shape_.q_width,
         shape_.kv_width, shape_.q_width, stream_.get());
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
-} // namespace lfm
+} // namespace celeg
 

@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/backend/cuda/phase_profile.hpp"
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/backend/cuda/phase_profile.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::prefill_chunk_paged(
     const std::vector<int32_t>& tokens, bool begin, bool finalize,
@@ -48,13 +48,13 @@ void Model::Impl::prefill_chunk_paged(
     if (paged_page_table_.size() < page_table.size()) {
         paged_page_table_.reset(page_table.size());
     }
-    LFM_CUDA(cudaMemcpyAsync(paged_page_table_.data(), page_table.data(),
+    CELEG_CUDA(cudaMemcpyAsync(paged_page_table_.data(), page_table.data(),
                              page_table.size() * sizeof(uint32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     if (paged_prefill_tokens_.size() < tokens.size()) {
         paged_prefill_tokens_.reset(tokens.size());
     }
-    LFM_CUDA(cudaMemcpyAsync(paged_prefill_tokens_.data(), tokens.data(),
+    CELEG_CUDA(cudaMemcpyAsync(paged_prefill_tokens_.data(), tokens.data(),
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(paged_prefill_tokens_.data(),
@@ -67,7 +67,7 @@ void Model::Impl::prefill_chunk_paged(
                                  paged_kv, paged_page_table_.data(),
                                  static_cast<int>(page_table.size()));
     }
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     const auto ended = std::chrono::steady_clock::now();
     metrics_.last_prefill_ms +=
         std::chrono::duration<double, std::milli>(ended - started).count();
@@ -78,5 +78,5 @@ void Model::Impl::prefill_chunk_paged(
     }
 }
 
-} // namespace lfm
+} // namespace celeg
 

@@ -305,7 +305,7 @@ void launch_gqa_decode_batch_ptrs(
             q, key_cache, value_cache, out, positions,
             rows, q_heads, kv_heads, head_dim);
     }
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_int8_batch_ptrs(
@@ -332,5 +332,5 @@ void launch_gqa_decode_int8_batch_ptrs(
             q, key_cache, value_cache, key_scales, value_scales,
             out, positions, rows, q_heads, kv_heads, head_dim);
     }
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }

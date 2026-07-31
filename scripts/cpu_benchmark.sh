@@ -8,8 +8,8 @@ THREADS="${THREADS:-0}"
 GROUP="${GROUP:-32}"
 TOKENS="${TOKENS:-32}"
 
-if [[ ! -x "$BUILD/lfm25-cpu-run" ]]; then
-  echo "missing $BUILD/lfm25-cpu-run; build the CPU target first" >&2
+if [[ ! -x "$BUILD/celeg-cpu-run" ]]; then
+  echo "missing $BUILD/celeg-cpu-run; build the CPU target first" >&2
   exit 1
 fi
 for file in model.safetensors tokenizer.json config.json; do
@@ -19,7 +19,7 @@ for file in model.safetensors tokenizer.json config.json; do
   fi
 done
 
-"$BUILD/lfm25-cpu-run" \
+"$BUILD/celeg-cpu-run" \
   --model "$MODEL_DIR" \
   --prompt "$PROMPT" \
   --max-new-tokens "$TOKENS" \

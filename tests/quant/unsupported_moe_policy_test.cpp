@@ -15,12 +15,12 @@
 //   * GGUF      + MoE + --weight-mode native   -> supported (Q4_K/Q6_K experts).
 //
 // This test simulates the construction-time decision in isolation by exercising
-// the helper introduced in PR 2 (`lfm::check_moe_quantization_policy`) against
+// the helper introduced in PR 2 (`celeg::check_moe_quantization_policy`) against
 // the four combinations above and asserting that the supported pairs pass while
 // the unsupported pairs throw `std::invalid_argument` whose message mentions
 // the offending weight mode and the word "MoE".
 
-#include "lfm/model/weights/policy.hpp"
+#include "celeg/model/weights/policy.hpp"
 
 #include "support/assertions.hpp"
 
@@ -29,31 +29,31 @@
 
 namespace {
 
-void expect_rejected(lfm::WeightMode mode, bool is_moe,
+void expect_rejected(celeg::WeightMode mode, bool is_moe,
                      const char* why_must_mention) {
     bool threw = false;
     std::string message;
     try {
-        lfm::check_moe_quantization_policy(mode, is_moe);
+        celeg::check_moe_quantization_policy(mode, is_moe);
     } catch (const std::invalid_argument& e) {
         threw = true;
         message = e.what();
     }
-    LFM_TEST_CHECK(threw);
+    CELEG_TEST_CHECK(threw);
     // The diagnostic must name MoE and the weight mode so the user can act.
-    LFM_TEST_CHECK(message.find("MoE") != std::string::npos);
-    LFM_TEST_CHECK(message.find(why_must_mention) != std::string::npos);
+    CELEG_TEST_CHECK(message.find("MoE") != std::string::npos);
+    CELEG_TEST_CHECK(message.find(why_must_mention) != std::string::npos);
 }
 
-void expect_accepted(lfm::WeightMode mode, bool is_moe) {
-    lfm::check_moe_quantization_policy(mode, is_moe);  // must not throw.
+void expect_accepted(celeg::WeightMode mode, bool is_moe) {
+    celeg::check_moe_quantization_policy(mode, is_moe);  // must not throw.
 }
 
 void expect_not_moe_short_circuits() {
     // Non-MoE models never reach the MoE policy check; any mode is fine.
-    for (auto mode : {lfm::WeightMode::Bf16, lfm::WeightMode::Int8,
-                      lfm::WeightMode::Int4, lfm::WeightMode::NativeGguf}) {
-        lfm::check_moe_quantization_policy(mode, /*is_moe=*/false);
+    for (auto mode : {celeg::WeightMode::Bf16, celeg::WeightMode::Int8,
+                      celeg::WeightMode::Int4, celeg::WeightMode::NativeGguf}) {
+        celeg::check_moe_quantization_policy(mode, /*is_moe=*/false);
     }
 }
 
@@ -64,14 +64,14 @@ int main() {
     expect_not_moe_short_circuits();
 
     // MoE + safetensors BF16: supported.
-    expect_accepted(lfm::WeightMode::Bf16, /*is_moe=*/true);
+    expect_accepted(celeg::WeightMode::Bf16, /*is_moe=*/true);
 
     // MoE + safetensors INT8 / INT4: rejected.
-    expect_rejected(lfm::WeightMode::Int8, /*is_moe=*/true, "int8");
-    expect_rejected(lfm::WeightMode::Int4, /*is_moe=*/true, "int4");
+    expect_rejected(celeg::WeightMode::Int8, /*is_moe=*/true, "int8");
+    expect_rejected(celeg::WeightMode::Int4, /*is_moe=*/true, "int4");
 
     // MoE + NativeGguf: supported (Q4_K / Q6_K experts).
-    expect_accepted(lfm::WeightMode::NativeGguf, /*is_moe=*/true);
+    expect_accepted(celeg::WeightMode::NativeGguf, /*is_moe=*/true);
 
     return 0;
 }

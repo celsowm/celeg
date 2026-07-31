@@ -1,14 +1,14 @@
 #pragma once
 
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/utils.cuh"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/utils.cuh"
 
 #include <cfloat>
 #include <climits>
 #include <cmath>
 #include <cstdint>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 __device__ __forceinline__ float bf16_float(__nv_bfloat16 value) {
@@ -116,4 +116,4 @@ __global__ void head_rmsnorm_kernel(__nv_bfloat16* data,
 }
 
 } // namespace
-} // namespace lfm
+} // namespace celeg

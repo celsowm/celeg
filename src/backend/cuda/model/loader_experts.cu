@@ -1,6 +1,6 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/checkpoint/formats/gguf.hpp"
-#include "lfm/checkpoint/tensor_names.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/checkpoint/tensor_names.hpp"
 
 #include <cuda_runtime.h>
 
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -81,8 +81,8 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
             }
             uint8_t* dst = weight.gguf_expert_storage.data() +
                 static_cast<size_t>(e) * expert_bytes;
-            LFM_CUDA(cudaMemcpy(dst, w1.data, w1.bytes, cudaMemcpyHostToDevice));
-            LFM_CUDA(cudaMemcpy(dst + w1.bytes, w3.data, w3.bytes,
+            CELEG_CUDA(cudaMemcpy(dst, w1.data, w1.bytes, cudaMemcpyHostToDevice));
+            CELEG_CUDA(cudaMemcpy(dst + w1.bytes, w3.data, w3.bytes,
                                 cudaMemcpyHostToDevice));
         }
         const LinearStorageKind kind = first_w1.ggml_type == GgmlType::Q4_K
@@ -118,8 +118,8 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
         }
         __nv_bfloat16* dst = weight.bf16_storage.data() +
             static_cast<size_t>(e) * per_expert;
-        LFM_CUDA(cudaMemcpy(dst, w1.data, source_bytes, cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(dst + static_cast<size_t>(moe_intermediate) * hidden,
+        CELEG_CUDA(cudaMemcpy(dst, w1.data, source_bytes, cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dst + static_cast<size_t>(moe_intermediate) * hidden,
                             w3.data, source_bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
@@ -161,7 +161,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
                 tensor.bytes != expert_bytes) {
                 throw std::runtime_error("inconsistent quantized MoE down tensor");
             }
-            LFM_CUDA(cudaMemcpy(weight.gguf_expert_storage.data() +
+            CELEG_CUDA(cudaMemcpy(weight.gguf_expert_storage.data() +
                                 static_cast<size_t>(e) * expert_bytes,
                                 tensor.data, tensor.bytes, cudaMemcpyHostToDevice));
         }
@@ -195,7 +195,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
             tensor.bytes != expert_bytes) {
             throw std::runtime_error("inconsistent BF16 MoE down tensor");
         }
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data() +
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data() +
                             static_cast<size_t>(e) * per_expert,
                             tensor.data, tensor.bytes, cudaMemcpyHostToDevice));
     }
@@ -211,4 +211,4 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
     return &expert_cache_.find(cache_key)->second;
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,1 +1,1 @@
-set(LFM_API_SOURCES src/api/api.cpp)
+set(CELEG_API_SOURCES src/api/api.cpp)

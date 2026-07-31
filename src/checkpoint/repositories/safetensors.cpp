@@ -1,10 +1,10 @@
-#include "lfm/checkpoint/repositories/safetensors.hpp"
-#include "lfm/checkpoint/formats/json.hpp"
+#include "celeg/checkpoint/repositories/safetensors.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 std::filesystem::path resolve_model_dir(const std::filesystem::path& model_dir) {
@@ -174,4 +174,4 @@ std::filesystem::path SafeTensorRepository::shard_path(std::uint32_t shard_id) c
     return dir_ / shard_filenames_[shard_id];
 }
 
-} // namespace lfm
+} // namespace celeg

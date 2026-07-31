@@ -1,14 +1,14 @@
-#include "lfm/backend/cuda/gemm_dispatcher.hpp"
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/backend/cuda/kernels/mmq.hpp"
-#include "lfm/backend/cuda/kernels/embedding.hpp"
-#include "lfm/backend/cuda/kernels/gemv_kernels.cuh"
+#include "celeg/backend/cuda/gemm_dispatcher.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/backend/cuda/kernels/mmq.hpp"
+#include "celeg/backend/cuda/kernels/embedding.hpp"
+#include "celeg/backend/cuda/kernels/gemv_kernels.cuh"
 
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 void launch_bf16_gemv(const __nv_bfloat16* x, const __nv_bfloat16* weight,
@@ -17,7 +17,7 @@ void launch_bf16_gemv(const __nv_bfloat16* x, const __nv_bfloat16* weight,
     constexpr int warps_per_block = 8;
     const dim3 grid(static_cast<unsigned>((n + warps_per_block - 1) / warps_per_block));
     bf16_gemv_kernel<<<grid, warps_per_block * 32, 0, stream>>>(x, weight, y, n, k, beta);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 } // namespace
@@ -42,7 +42,7 @@ void GemmDispatcher::linear_cublas(const __nv_bfloat16* x,
                                    int m, int n, int k,
                                    float beta) {
     const float alpha = 1.0f;
-    LFM_CUBLAS(cublasGemmEx(
+    CELEG_CUBLAS(cublasGemmEx(
         cublas_.get(), CUBLAS_OP_T, CUBLAS_OP_N,
         n, m, k, &alpha,
         weight, CUDA_R_16BF, k,
@@ -63,42 +63,42 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
     }
 
     auto plan = std::make_unique<LtPlan>();
-    LFM_CUBLAS(cublasLtMatmulDescCreate(
+    CELEG_CUBLAS(cublasLtMatmulDescCreate(
         &plan->operation, CUBLAS_COMPUTE_32F, CUDA_R_32F));
     const cublasOperation_t transa = CUBLAS_OP_T;
     const cublasOperation_t transb = CUBLAS_OP_N;
-    LFM_CUBLAS(cublasLtMatmulDescSetAttribute(
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
         plan->operation, CUBLASLT_MATMUL_DESC_TRANSA,
         &transa, sizeof(transa)));
-    LFM_CUBLAS(cublasLtMatmulDescSetAttribute(
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
         plan->operation, CUBLASLT_MATMUL_DESC_TRANSB,
         &transb, sizeof(transb)));
 
     // Buffers are row-major in the runtime. Interpreting them as column-major
     // transposes the logical matrices: W[n,k] -> A[k,n], X[m,k] -> B[k,m],
     // and Y[m,n] -> D[n,m]. TRANSA restores W to [n,k].
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(
         &plan->a, CUDA_R_16BF, k, n, k));
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(
         &plan->b, CUDA_R_16BF, k, m, k));
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(
         &plan->c, CUDA_R_16BF, n, m, n));
-    LFM_CUBLAS(cublasLtMatrixLayoutCreate(
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(
         &plan->d, CUDA_R_16BF, n, m, n));
 
     cublasLtMatmulPreference_t preference = nullptr;
-    LFM_CUBLAS(cublasLtMatmulPreferenceCreate(&preference));
+    CELEG_CUBLAS(cublasLtMatmulPreferenceCreate(&preference));
     try {
         const uint64_t workspace_limit =
             static_cast<uint64_t>(options_.lt_workspace_bytes);
-        LFM_CUBLAS(cublasLtMatmulPreferenceSetAttribute(
+        CELEG_CUBLAS(cublasLtMatmulPreferenceSetAttribute(
             preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
             &workspace_limit, sizeof(workspace_limit)));
 
         std::vector<cublasLtMatmulHeuristicResult_t> results(
             static_cast<size_t>(options_.lt_heuristics));
         int returned = 0;
-        LFM_CUBLAS(cublasLtMatmulAlgoGetHeuristic(
+        CELEG_CUBLAS(cublasLtMatmulAlgoGetHeuristic(
             cublas_lt_.get(), plan->operation,
             plan->a, plan->b, plan->c, plan->d,
             preference, options_.lt_heuristics,
@@ -125,7 +125,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
                 float best_ms = std::numeric_limits<float>::infinity();
                 for (const int candidate : valid) {
                     const auto& result = results[static_cast<size_t>(candidate)];
-                    LFM_CUBLAS(cublasLtMatmul(
+                    CELEG_CUBLAS(cublasLtMatmul(
                         cublas_lt_.get(), plan->operation,
                         &alpha, weight, plan->a, x, plan->b,
                         &beta, scratch.data(), plan->c,
@@ -137,7 +137,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
                     begin.record(stream_);
                     constexpr int iterations = 3;
                     for (int iteration = 0; iteration < iterations; ++iteration) {
-                        LFM_CUBLAS(cublasLtMatmul(
+                        CELEG_CUBLAS(cublasLtMatmul(
                             cublas_lt_.get(), plan->operation,
                             &alpha, weight, plan->a, x, plan->b,
                             &beta, scratch.data(), plan->c,
@@ -163,7 +163,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
         cublasLtMatmulPreferenceDestroy(preference);
         throw;
     }
-    LFM_CUBLAS(cublasLtMatmulPreferenceDestroy(preference));
+    CELEG_CUBLAS(cublasLtMatmulPreferenceDestroy(preference));
 
     auto [it, inserted] = lt_plans_.emplace(key, std::move(plan));
     if (!inserted) throw std::runtime_error("duplicate cuBLASLt plan");
@@ -181,7 +181,7 @@ void GemmDispatcher::linear_cublaslt(const __nv_bfloat16* x,
         return;
     }
     const float alpha = 1.0f;
-    LFM_CUBLAS(cublasLtMatmul(
+    CELEG_CUBLAS(cublasLtMatmul(
         cublas_lt_.get(), plan.operation,
         &alpha, weight, plan.a, x, plan.b,
         &beta, y, plan.c, y, plan.d,
@@ -291,4 +291,4 @@ void GemmDispatcher::ensure_mmq_capacity(int m, int k) {
     mmq_sums_.reset(blocks);
 }
 
-} // namespace lfm
+} // namespace celeg

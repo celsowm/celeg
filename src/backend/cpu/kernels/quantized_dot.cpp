@@ -1,26 +1,26 @@
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
 
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
-#define LFM_CPU_X86 1
+#define CELEG_CPU_X86 1
 #include <immintrin.h>
 #else
-#define LFM_CPU_X86 0
+#define CELEG_CPU_X86 0
 #endif
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
 #endif
 
-#if defined(_MSC_VER) && LFM_CPU_X86
+#if defined(_MSC_VER) && CELEG_CPU_X86
 #include "quantized_dot_avx2_msvc.hpp"
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 inline int decode_q4(const uint8_t* packed, size_t col) {
@@ -245,7 +245,7 @@ float q4_dot_scalar(const uint8_t* packed_row, const uint16_t* scales_bf16,
 Q4DotFunction select_q4_dot_kernel(CpuIsa isa) {
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni || isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8) return q4_dot_avx2;
-#elif defined(_MSC_VER) && LFM_CPU_X86
+#elif defined(_MSC_VER) && CELEG_CPU_X86
     if (isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni || isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8) return detail::q4_dot_avx2_msvc;
 #endif
 #if defined(__aarch64__)
@@ -277,10 +277,10 @@ Q4Q8DotFunction select_q4_q8_dot_kernel(CpuIsa isa) {
     if (isa == CpuIsa::Avx512Vnni) return q4_q8_dot_avx512_vnni;
     if (isa == CpuIsa::AvxVnni) return q4_q8_dot_avx_vnni;
     if (isa == CpuIsa::Avx2) return q4_q8_dot_avx2;
-#elif defined(_MSC_VER) && LFM_CPU_X86
+#elif defined(_MSC_VER) && CELEG_CPU_X86
     if (isa == CpuIsa::Avx2 || isa == CpuIsa::AvxVnni || isa == CpuIsa::Avx512Vnni || isa == CpuIsa::AmxInt8) return detail::q4_q8_dot_avx2_msvc;
 #endif
     return nullptr;
 }
 
-} // namespace lfm
+} // namespace celeg

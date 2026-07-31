@@ -1,21 +1,21 @@
-#include "lfm/serve/cuda_inference_service.hpp"
+#include "celeg/serve/cuda_inference_service.hpp"
 
 #include <filesystem>
 #include <limits>
 #include <utility>
 
-namespace lfm::serve {
+namespace celeg::serve {
 
 namespace {
 
-RequestStatus map_status(lfm::RequestStatus status) {
+RequestStatus map_status(celeg::RequestStatus status) {
     switch (status) {
-        case lfm::RequestStatus::Queued: return RequestStatus::Queued;
-        case lfm::RequestStatus::Prefill: return RequestStatus::Prefill;
-        case lfm::RequestStatus::Decoding: return RequestStatus::Decoding;
-        case lfm::RequestStatus::Finished: return RequestStatus::Finished;
-        case lfm::RequestStatus::Cancelled: return RequestStatus::Cancelled;
-        case lfm::RequestStatus::Failed: return RequestStatus::Failed;
+        case celeg::RequestStatus::Queued: return RequestStatus::Queued;
+        case celeg::RequestStatus::Prefill: return RequestStatus::Prefill;
+        case celeg::RequestStatus::Decoding: return RequestStatus::Decoding;
+        case celeg::RequestStatus::Finished: return RequestStatus::Finished;
+        case celeg::RequestStatus::Cancelled: return RequestStatus::Cancelled;
+        case celeg::RequestStatus::Failed: return RequestStatus::Failed;
     }
     return RequestStatus::Failed;
 }
@@ -118,4 +118,4 @@ bool CudaInferenceService::step() { return engine_.step(); }
 void CudaInferenceService::start() { engine_.start(); }
 void CudaInferenceService::stop() { engine_.stop(); }
 
-} // namespace lfm::serve
+} // namespace celeg::serve

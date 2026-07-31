@@ -1,9 +1,9 @@
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/backend/cuda/kernels/mmq.hpp"
-#include "lfm/backend/cuda/gemm_dispatcher.hpp"
-#include "lfm/backend/cuda/utils.cuh"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/model/model.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/backend/cuda/kernels/mmq.hpp"
+#include "celeg/backend/cuda/gemm_dispatcher.hpp"
+#include "celeg/backend/cuda/utils.cuh"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/model/model.hpp"
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -63,20 +63,20 @@ int main() {
     std::vector<__nv_bfloat16> hx2(2 * k, __float2bfloat16(2.0f));
     check(cudaMemcpy(d_x, hx2.data(), hx2.size() * sizeof(*d_x), cudaMemcpyHostToDevice), "copy x");
 
-    lfm::launch_gguf_linear_segment(d_x, d_q4, lfm::GgmlType::Q4_K, d_y,
+    celeg::launch_gguf_linear_segment(d_x, d_q4, celeg::GgmlType::Q4_K, d_y,
                                     1, 1, k, q4_bytes, 1, 0.0f, nullptr);
     __nv_bfloat16 y = 0;
     check(cudaMemcpy(&y, d_y, sizeof(y), cudaMemcpyDeviceToHost), "copy y q4");
     if (!close(host_bf16(y), 512.0f)) return 2;
 
-    lfm::launch_gguf_linear_segment(d_x, d_q6, lfm::GgmlType::Q6_K, d_y,
+    celeg::launch_gguf_linear_segment(d_x, d_q6, celeg::GgmlType::Q6_K, d_y,
                                     1, 1, k, q6_bytes, 1, 3.0f, nullptr);
     check(cudaMemcpy(&y, d_y, sizeof(y), cudaMemcpyDeviceToHost), "copy y q6");
     if (!close(host_bf16(y), 1536.0f)) return 3;
 
     // Exercise the m>1 path and row-local embedding gather.
     std::vector<__nv_bfloat16> hy(2, __float2bfloat16(0.0f));
-    lfm::launch_gguf_linear_segment(d_x, d_q4, lfm::GgmlType::Q4_K, d_y,
+    celeg::launch_gguf_linear_segment(d_x, d_q4, celeg::GgmlType::Q4_K, d_y,
                                     2, 1, k, q4_bytes, 1, 0.0f, nullptr);
     std::vector<__nv_bfloat16> gemm_y(2);
     check(cudaMemcpy(gemm_y.data(), d_y, 2 * sizeof(y), cudaMemcpyDeviceToHost), "copy y gemm");
@@ -84,18 +84,18 @@ int main() {
 
     // Exercise the dispatcher with disjoint GGUF segments. Every segment
     // owns a separate output range, so each must receive the caller's beta.
-    lfm::ModelOptions dispatcher_options;
-    lfm::GemmDispatcher dispatcher(nullptr, dispatcher_options);
-    lfm::LinearWeight segmented;
-    segmented.kind = lfm::LinearStorageKind::Q4_K;
+    celeg::ModelOptions dispatcher_options;
+    celeg::GemmDispatcher dispatcher(nullptr, dispatcher_options);
+    celeg::LinearWeight segmented;
+    segmented.kind = celeg::LinearStorageKind::Q4_K;
     segmented.rows = 2;
     segmented.cols = k;
     segmented.gguf_segments = {
-        {d_q4, lfm::GgmlType::Q4_K, 0, 1, k, q4_bytes},
-        {d_q6, lfm::GgmlType::Q6_K, 1, 1, k, q6_bytes},
+        {d_q4, celeg::GgmlType::Q4_K, 0, 1, k, q4_bytes},
+        {d_q6, celeg::GgmlType::Q6_K, 1, 1, k, q6_bytes},
     };
-    const lfm::ExecutionPlan dispatcher_plan =
-        lfm::ExecutionPlan::compile(dispatcher_options, 1024);
+    const celeg::ExecutionPlan dispatcher_plan =
+        celeg::ExecutionPlan::compile(dispatcher_options, 1024);
     std::vector<__nv_bfloat16> segmented_y(2, __float2bfloat16(9.0f));
     check(cudaMemcpy(d_y, segmented_y.data(), 2 * sizeof(*d_y),
                      cudaMemcpyHostToDevice), "copy segmented y");
@@ -113,10 +113,10 @@ int main() {
     if (!close(host_bf16(segmented_y[0]), 518.0f) ||
         !close(host_bf16(segmented_y[1]), 6.0f)) return 10;
 
-    lfm::GgufLinearSegment segment{d_q4, lfm::GgmlType::Q4_K, 0, 1, k, q4_bytes};
+    celeg::GgufLinearSegment segment{d_q4, celeg::GgmlType::Q4_K, 0, 1, k, q4_bytes};
     __nv_bfloat16* d_embed = nullptr;
     check(cudaMalloc(reinterpret_cast<void**>(&d_embed), k * sizeof(*d_embed)), "cudaMalloc embed");
-    lfm::launch_gguf_embedding(0, segment, d_embed, nullptr);
+    celeg::launch_gguf_embedding(0, segment, d_embed, nullptr);
     check(cudaMemcpy(hy.data(), d_embed, 2 * sizeof(*d_embed), cudaMemcpyDeviceToHost), "copy embed");
     if (!close(host_bf16(hy[0]), 1.0f)) return 5;
 
@@ -161,7 +161,7 @@ int main() {
         check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_dequant),
                          static_cast<size_t>(mmq_n) * mmq_k * sizeof(__nv_bfloat16)),
               "cudaMalloc mmq dequant");
-        lfm::launch_gguf_dequant(d_mmq_weight, lfm::GgmlType::Q4_K, d_mmq_dequant,
+        celeg::launch_gguf_dequant(d_mmq_weight, celeg::GgmlType::Q4_K, d_mmq_dequant,
                                  mmq_n, mmq_k, nullptr);
         std::vector<__nv_bfloat16> mmq_weight_dequant(static_cast<size_t>(mmq_n) * mmq_k);
         check(cudaMemcpy(mmq_weight_dequant.data(), d_mmq_dequant,
@@ -184,7 +184,7 @@ int main() {
                          mmq_activation.size() * sizeof(__nv_bfloat16),
                          cudaMemcpyHostToDevice), "copy mmq activation");
 
-        const int mmq_blocks_per_row = mmq_k / lfm::kMmqQ8_1BlockSize;
+        const int mmq_blocks_per_row = mmq_k / celeg::kMmqQ8_1BlockSize;
         int8_t* d_q8 = nullptr;
         float* d_q8_scale = nullptr;
         float* d_q8_sum = nullptr;
@@ -196,14 +196,14 @@ int main() {
         check(cudaMalloc(reinterpret_cast<void**>(&d_q8_sum),
                          static_cast<size_t>(mmq_blocks_per_row) * sizeof(float)),
               "cudaMalloc q8 sum");
-        lfm::launch_quantize_q8_1(d_mmq_activation, d_q8, d_q8_scale, d_q8_sum,
+        celeg::launch_quantize_q8_1(d_mmq_activation, d_q8, d_q8_scale, d_q8_sum,
                                   1, mmq_k, nullptr);
 
         __nv_bfloat16* d_mmq_y = nullptr;
         check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_y),
                          static_cast<size_t>(mmq_n) * sizeof(__nv_bfloat16)),
               "cudaMalloc mmq y");
-        lfm::launch_q4k_mmq(d_q8, d_q8_scale, d_q8_sum, d_mmq_weight, d_mmq_y,
+        celeg::launch_q4k_mmq(d_q8, d_q8_scale, d_q8_sum, d_mmq_weight, d_mmq_y,
                             1, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
         std::vector<__nv_bfloat16> mmq_y(mmq_n);
         check(cudaMemcpy(mmq_y.data(), d_mmq_y, mmq_y.size() * sizeof(__nv_bfloat16),
@@ -229,10 +229,10 @@ int main() {
         cudaFree(d_mmq_activation); cudaFree(d_mmq_dequant); cudaFree(d_mmq_weight);
     }
 
-    if (const char* real_path = std::getenv("LFM_GGUF_TEST_FILE");
+    if (const char* real_path = std::getenv("CELEG_GGUF_TEST_FILE");
         real_path != nullptr && *real_path != '\0') {
-        const auto bootstrap = lfm::detail::load_model_bootstrap(std::filesystem::path(real_path));
-        lfm::Model model(real_path, 1024);
+        const auto bootstrap = celeg::detail::load_model_bootstrap(std::filesystem::path(real_path));
+        celeg::Model model(real_path, 1024);
         model.session().prefill({bootstrap.config.bos_token_id});
         const std::vector<float> first = model.diagnostics().copy_logits();
         for (float value : first) if (!std::isfinite(value)) return 6;

@@ -1,5 +1,5 @@
-#include "lfm/backend/cuda/session_store.hpp"
-#include "lfm/detail/model/impl.hpp"
+#include "celeg/backend/cuda/session_store.hpp"
+#include "celeg/detail/model/impl.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 SessionStore::SessionState Model::Impl::make_session_state() {
     SessionStore::SessionState state{
@@ -49,7 +49,7 @@ void Model::Impl::load_session(const std::string& path) {
     auto state = make_session_state();
     SessionStore::load(path, state);
     position_ = state.position;
-    LFM_CUDA(cudaMemcpy(position_device_.data(), &position_, sizeof(position_), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(position_device_.data(), &position_, sizeof(position_), cudaMemcpyHostToDevice));
     phase_ = SessionPhase::Ready;
     active_segmented_attention_ = use_segmented_attention(position_);
     metrics_ = {};
@@ -58,7 +58,7 @@ void Model::Impl::load_session(const std::string& path) {
 PrefixState Model::Impl::export_prefix_state() const {
     if (phase_ != SessionPhase::Ready)
         throw std::runtime_error("cannot export prefix state before prefill");
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     auto state = const_cast<Impl*>(this)->make_session_state();
     auto snapshot = SessionStore::export_prefix(state);
     PrefixState out;
@@ -79,7 +79,7 @@ void Model::Impl::restore_prefix_state(const PrefixState& state) {
     SessionStore::restore_prefix(snapshot, session, generation_.seed);
     phase_ = SessionPhase::Prefilling;
     position_ = session.position;
-    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
                              cudaMemcpyHostToDevice, stream_.get()));
     phase_ = SessionPhase::Ready;
     active_segmented_attention_ = use_segmented_attention(position_);
@@ -119,7 +119,7 @@ void write_device(std::ofstream& out, const void* device, size_t bytes,
                   cudaStream_t stream) {
     if (bytes == 0) return;
     std::vector<std::byte> host(bytes);
-    LFM_CUDA(cudaMemcpy(host.data(), device, bytes, cudaMemcpyDeviceToHost));
+    CELEG_CUDA(cudaMemcpy(host.data(), device, bytes, cudaMemcpyDeviceToHost));
     out.write(reinterpret_cast<const char*>(host.data()),
               static_cast<std::streamsize>(bytes));
     if (!out) throw std::runtime_error("failed writing session payload");
@@ -131,14 +131,14 @@ void read_device(std::ifstream& in, void* device, size_t bytes) {
     in.read(reinterpret_cast<char*>(host.data()),
             static_cast<std::streamsize>(bytes));
     if (!in) throw std::runtime_error("truncated session payload");
-    LFM_CUDA(cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice));
 }
 
 } // namespace
 
 void SessionStore::save(const std::string& path, SessionState& state) {
     if (state.stream != nullptr) {
-        LFM_CUDA(cudaStreamSynchronize(state.stream));
+        CELEG_CUDA(cudaStreamSynchronize(state.stream));
     }
     Header header;
     header.kv_cache_mode =
@@ -151,7 +151,7 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     header.vocab = state.shape.vocab_size;
     header.attention_layers = state.shape.attention_layer_count;
     if (state.rng_state != nullptr) {
-        LFM_CUDA(cudaMemcpy(&header.rng_state, state.rng_state->data(),
+        CELEG_CUDA(cudaMemcpy(&header.rng_state, state.rng_state->data(),
                             sizeof(header.rng_state), cudaMemcpyDeviceToHost));
     }
     if (state.variant != nullptr) {
@@ -285,14 +285,14 @@ SessionStore::PrefixSnapshot SessionStore::export_prefix(const SessionState& sta
     snapshot.position = state.position;
     if (state.seen_tokens != nullptr) {
         snapshot.seen_tokens.resize(state.seen_tokens->size());
-        LFM_CUDA(cudaMemcpy(snapshot.seen_tokens.data(),
+        CELEG_CUDA(cudaMemcpy(snapshot.seen_tokens.data(),
                             state.seen_tokens->data(),
                             state.seen_tokens->bytes(),
                             cudaMemcpyDeviceToHost));
     }
     if (state.logits != nullptr) {
         snapshot.logits_bf16.resize(state.logits->size());
-        LFM_CUDA(cudaMemcpy(snapshot.logits_bf16.data(),
+        CELEG_CUDA(cudaMemcpy(snapshot.logits_bf16.data(),
                             state.logits->data(), state.logits->bytes(),
                             cudaMemcpyDeviceToHost));
     }
@@ -308,7 +308,7 @@ SessionStore::PrefixSnapshot SessionStore::export_prefix(const SessionState& sta
         if (layer.is_attention) continue;
         const size_t count = layer.conv_state_elements;
         if (count == 0) continue;
-        LFM_CUDA(cudaMemcpy(snapshot.conv_state_bf16.data() + offset,
+        CELEG_CUDA(cudaMemcpy(snapshot.conv_state_bf16.data() + offset,
                             layer.conv_state,
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyDeviceToHost));
@@ -343,13 +343,13 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
 
     state.position = snapshot.position;
     if (state.stream != nullptr && state.seen_tokens != nullptr) {
-        LFM_CUDA(cudaMemcpyAsync(state.seen_tokens->data(),
+        CELEG_CUDA(cudaMemcpyAsync(state.seen_tokens->data(),
                                  snapshot.seen_tokens.data(),
                                  state.seen_tokens->bytes(),
                                  cudaMemcpyHostToDevice, state.stream));
     }
     if (state.stream != nullptr && state.logits != nullptr) {
-        LFM_CUDA(cudaMemcpyAsync(state.logits->data(),
+        CELEG_CUDA(cudaMemcpyAsync(state.logits->data(),
                                  snapshot.logits_bf16.data(),
                                  state.logits->bytes(),
                                  cudaMemcpyHostToDevice, state.stream));
@@ -358,7 +358,7 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
     // to the receiving request. Never inherit the seed/RNG stream of the
     // request that populated the shared prefix cache.
     if (state.stream != nullptr && state.rng_state != nullptr) {
-        LFM_CUDA(cudaMemcpyAsync(state.rng_state->data(), &request_seed,
+        CELEG_CUDA(cudaMemcpyAsync(state.rng_state->data(), &request_seed,
                                  sizeof(request_seed), cudaMemcpyHostToDevice,
                                  state.stream));
     }
@@ -367,16 +367,16 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
         if (layer.is_attention) continue;
         const size_t count = layer.conv_state_elements;
         if (count == 0) continue;
-        LFM_CUDA(cudaMemcpyAsync(layer.conv_state,
+        CELEG_CUDA(cudaMemcpyAsync(layer.conv_state,
                                  snapshot.conv_state_bf16.data() + offset,
                                  count * sizeof(__nv_bfloat16),
                                  cudaMemcpyHostToDevice, state.stream));
         offset += count;
     }
     if (state.stream != nullptr) {
-        LFM_CUDA(cudaStreamSynchronize(state.stream));
+        CELEG_CUDA(cudaStreamSynchronize(state.stream));
     }
 }
 
-} // namespace lfm
+} // namespace celeg
 

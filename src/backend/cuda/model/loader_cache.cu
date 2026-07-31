@@ -1,4 +1,4 @@
-#include "lfm/model/weights/loader.hpp"
+#include "celeg/model/weights/loader.hpp"
 
 #include <filesystem>
 #include <mutex>
@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
     const std::string& model_path, WeightMode weight_mode,
@@ -15,7 +15,7 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
     static std::mutex cache_mutex;
     static std::unordered_map<std::string, std::weak_ptr<SharedModelWeights>> cache;
     int device_id = 0;
-    LFM_CUDA(cudaGetDevice(&device_id));
+    CELEG_CUDA(cudaGetDevice(&device_id));
     std::ostringstream key_builder;
     key_builder << device_id << ':' << static_cast<int>(weight_mode) << ':'
                 << std::filesystem::weakly_canonical(model_path).string();
@@ -40,6 +40,6 @@ WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
     if (!weights_) throw std::invalid_argument("WeightLoader requires non-null weights");
 }
 
-} // namespace lfm
+} // namespace celeg
 
 

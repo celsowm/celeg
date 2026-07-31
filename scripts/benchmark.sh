@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${BIN:-$ROOT/build/lfm25-run}"
+BIN="${BIN:-$ROOT/build/celeg-run}"
 MODEL="${MODEL:-$ROOT/model/LFM2.5-230M}"
 PROMPT="${PROMPT:-Explique o que é um Tensor Core.}"
 CONTEXT="${CONTEXT:-4096}"

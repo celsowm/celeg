@@ -1,10 +1,10 @@
-#include "lfm/runtime/concurrency/policy.hpp"
+#include "celeg/runtime/concurrency/policy.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 PagedBlockPool::PagedBlockPool(size_t pages, int page_tokens)
     : page_tokens_(page_tokens), ref_counts_(pages, 0) {
@@ -114,4 +114,4 @@ uint32_t PagedBlockPool::ref_count(uint32_t page) const {
     return ref_counts_[page];
 }
 
-} // namespace lfm
+} // namespace celeg

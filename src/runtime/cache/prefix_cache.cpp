@@ -1,11 +1,11 @@
-#include "lfm/runtime/cache/prefix_cache.hpp"
-#include "lfm/runtime/cache/page_lease.hpp"
+#include "celeg/runtime/cache/prefix_cache.hpp"
+#include "celeg/runtime/cache/page_lease.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 PrefixCacheManager::PrefixCacheManager(IKvPageAllocator& pages,
                                        bool enabled,
@@ -243,4 +243,4 @@ void PrefixCacheManager::clear() {
     index_.clear();
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,9 +1,9 @@
-#include "lfm/model/execution/runtime_types.hpp"
+#include "celeg/model/execution/runtime_types.hpp"
 
 #include <cmath>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 void GenerationConfig::validate() const {
     if (!std::isfinite(temperature) || temperature < 0.0f) {
@@ -23,4 +23,4 @@ void GenerationConfig::validate() const {
     }
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,4 +1,4 @@
-#include "lfm/runtime/cache/pinned_expert_cache.hpp"
+#include "celeg/runtime/cache/pinned_expert_cache.hpp"
 #include "support/assertions.hpp"
 
 #include <iostream>
@@ -9,8 +9,8 @@
 #include <atomic>
 #include <cstring>
 
-using lfm::ExpertHostLease;
-using lfm::PinnedExpertCache;
+using celeg::ExpertHostLease;
+using celeg::PinnedExpertCache;
 
 void test_basic_hits_misses() {
     // 3 slots (each 10 bytes)
@@ -19,32 +19,32 @@ void test_basic_hits_misses() {
     int load_count = 0;
     auto loader = [&](std::span<std::byte> gu, std::span<std::byte> dn) {
         load_count++;
-        LFM_TEST_CHECK(gu.size() == 5);
-        LFM_TEST_CHECK(dn.size() == 5);
+        CELEG_TEST_CHECK(gu.size() == 5);
+        CELEG_TEST_CHECK(dn.size() == 5);
         std::memset(gu.data(), 1, 5);
         std::memset(dn.data(), 2, 5);
     };
 
     // Miss 1
     ExpertHostLease lease1 = cache.acquire(0, 1, loader);
-    LFM_TEST_CHECK(lease1.valid());
-    LFM_TEST_CHECK(load_count == 1);
-    LFM_TEST_CHECK(cache.misses() == 1);
-    LFM_TEST_CHECK(cache.hits() == 0);
+    CELEG_TEST_CHECK(lease1.valid());
+    CELEG_TEST_CHECK(load_count == 1);
+    CELEG_TEST_CHECK(cache.misses() == 1);
+    CELEG_TEST_CHECK(cache.hits() == 0);
 
     // Hit 1
     ExpertHostLease lease2 = cache.acquire(0, 1, loader);
-    LFM_TEST_CHECK(lease2.valid());
-    LFM_TEST_CHECK(load_count == 1); // no new load
-    LFM_TEST_CHECK(cache.misses() == 1);
-    LFM_TEST_CHECK(cache.hits() == 1);
+    CELEG_TEST_CHECK(lease2.valid());
+    CELEG_TEST_CHECK(load_count == 1); // no new load
+    CELEG_TEST_CHECK(cache.misses() == 1);
+    CELEG_TEST_CHECK(cache.hits() == 1);
 
     // Miss 2
     ExpertHostLease lease3 = cache.acquire(0, 2, loader);
-    LFM_TEST_CHECK(lease3.valid());
-    LFM_TEST_CHECK(load_count == 2);
-    LFM_TEST_CHECK(cache.misses() == 2);
-    LFM_TEST_CHECK(cache.hits() == 1);
+    CELEG_TEST_CHECK(lease3.valid());
+    CELEG_TEST_CHECK(load_count == 2);
+    CELEG_TEST_CHECK(cache.misses() == 2);
+    CELEG_TEST_CHECK(cache.hits() == 1);
 }
 
 void test_eviction_and_lease_protection() {
@@ -63,15 +63,15 @@ void test_eviction_and_lease_protection() {
     } catch (const std::runtime_error&) {
         threw = true;
     }
-    LFM_TEST_CHECK(threw);
+    CELEG_TEST_CHECK(threw);
 
     // Release lease1
     lease1.release();
 
     // Now slot 1 can be evicted
     ExpertHostLease lease3 = cache.acquire(0, 3, loader);
-    LFM_TEST_CHECK(lease3.valid());
-    LFM_TEST_CHECK(cache.evictions() == 1);
+    CELEG_TEST_CHECK(lease3.valid());
+    CELEG_TEST_CHECK(cache.evictions() == 1);
 }
 
 void test_coalescing_and_concurrency() {
@@ -107,13 +107,13 @@ void test_coalescing_and_concurrency() {
         t.join();
     }
 
-    LFM_TEST_CHECK(errors == 0);
-    LFM_TEST_CHECK(load_starts == 1);
-    LFM_TEST_CHECK(load_completes == 1);
-    LFM_TEST_CHECK(cache.misses() == 4); // 1 true miss, 3 coalesced misses
+    CELEG_TEST_CHECK(errors == 0);
+    CELEG_TEST_CHECK(load_starts == 1);
+    CELEG_TEST_CHECK(load_completes == 1);
+    CELEG_TEST_CHECK(cache.misses() == 4); // 1 true miss, 3 coalesced misses
 
     for (int i = 0; i < 4; ++i) {
-        LFM_TEST_CHECK(leases[i].valid());
+        CELEG_TEST_CHECK(leases[i].valid());
     }
 }
 
@@ -131,7 +131,7 @@ void test_loader_failure() {
             threw = true;
         }
     }
-    LFM_TEST_CHECK(threw);
+    CELEG_TEST_CHECK(threw);
 
     // Slot should be clean and reusable
     int load_count = 0;
@@ -139,8 +139,8 @@ void test_loader_failure() {
         load_count++;
     };
     ExpertHostLease lease = cache.acquire(0, 1, loader);
-    LFM_TEST_CHECK(lease.valid());
-    LFM_TEST_CHECK(load_count == 1);
+    CELEG_TEST_CHECK(lease.valid());
+    CELEG_TEST_CHECK(load_count == 1);
 }
 
 void test_failure_propagation_to_waiters() {
@@ -170,7 +170,7 @@ void test_failure_propagation_to_waiters() {
     }
 
     // All 4 threads (1 loader, 3 waiters) should catch the exception!
-    LFM_TEST_CHECK(waiter_exceptions == 4);
+    CELEG_TEST_CHECK(waiter_exceptions == 4);
 }
 
 void test_slot_protection_and_generation() {
@@ -197,12 +197,12 @@ void test_slot_protection_and_generation() {
     std::thread t2([&]() {
         waiter_running = true;
         auto lease = cache.acquire(0, 1, [](std::span<std::byte>, std::span<std::byte>){});
-        LFM_TEST_CHECK(lease.valid());
-        LFM_TEST_CHECK(lease.expert() == 1);
+        CELEG_TEST_CHECK(lease.valid());
+        CELEG_TEST_CHECK(lease.expert() == 1);
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    LFM_TEST_CHECK(waiter_running);
+    CELEG_TEST_CHECK(waiter_running);
 
     // Thread 3: tries to evict the slot for expert (0, 2)
     // Since waiter has reserved ref_count, this eviction must throw because no slot is free or evictable!
@@ -212,7 +212,7 @@ void test_slot_protection_and_generation() {
     } catch (const std::runtime_error&) {
         threw = true;
     }
-    LFM_TEST_CHECK(threw); // Eviction is safely blocked!
+    CELEG_TEST_CHECK(threw); // Eviction is safely blocked!
 
     // Finish loader
     loader_running = false;

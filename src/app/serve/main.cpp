@@ -1,13 +1,13 @@
 #include "App.h"
 
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/model/config/config.hpp"
-#include "lfm/serve/cpu_inference_service.hpp"
-#ifdef LFM_SERVE_CUDA
-#include "lfm/serve/cuda_inference_service.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/serve/cpu_inference_service.hpp"
+#ifdef CELEG_SERVE_CUDA
+#include "celeg/serve/cuda_inference_service.hpp"
 #endif
-#include "lfm/serve/generation_dispatcher.hpp"
-#include "lfm/text/tokenizer.hpp"
+#include "celeg/serve/generation_dispatcher.hpp"
+#include "celeg/text/tokenizer.hpp"
 #include "routes/chat_completions.hpp"
 #include "routes/docs.hpp"
 #include "routes/health.hpp"
@@ -24,7 +24,7 @@
 
 namespace {
 
-using lfm::serve::GenerationDispatcher;
+using celeg::serve::GenerationDispatcher;
 
 struct Args {
     std::string model_dir;
@@ -50,7 +50,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--threads") args.threads = std::stoi(value());
         else if (key == "--backend") args.backend = value();
         else if (key == "--help") {
-            std::cout << "lfm25-serve --model DIR [--port 8080] [--context 4096] "
+            std::cout << "celeg-serve --model DIR [--port 8080] [--context 4096] "
                          "[--threads N] [--backend cpu|cuda] [--served-model-name NAME]\n";
             std::exit(0);
         } else {
@@ -68,35 +68,35 @@ int main(int argc, char** argv) {
         const Args args = parse_args(argc, argv);
         const std::filesystem::path model(args.model_dir);
 
-        const lfm::detail::ModelBootstrap bootstrap = lfm::detail::load_model_bootstrap(model);
-        const lfm::ModelConfig& config = bootstrap.config;
-        const lfm::IModelVariant& variant = *bootstrap.variant;
+        const celeg::detail::ModelBootstrap bootstrap = celeg::detail::load_model_bootstrap(model);
+        const celeg::ModelConfig& config = bootstrap.config;
+        const celeg::IModelVariant& variant = *bootstrap.variant;
         if (args.context > config.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
-        const lfm::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
-            lfm::make_chat_template(variant.chat_template_kind()));
+        const celeg::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
+            celeg::make_chat_template(variant.chat_template_kind()));
 
         const std::string model_name =
             args.served_model_name.empty() ? std::string(variant.id()) : args.served_model_name;
         const std::int32_t eos_token_id = config.eos_token_id;
 
-        std::unique_ptr<lfm::serve::IInferenceService> service;
+        std::unique_ptr<celeg::serve::IInferenceService> service;
         if (args.backend == "cpu") {
-            lfm::CpuModelOptions model_options;
+            celeg::CpuModelOptions model_options;
             model_options.threads = static_cast<std::size_t>(args.threads);
-            lfm::CpuConcurrentEngineOptions engine_options;
+            celeg::CpuConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
-            service = std::make_unique<lfm::serve::CpuInferenceService>(
+            service = std::make_unique<celeg::serve::CpuInferenceService>(
                 (model / "model.safetensors").string(), args.context,
                 model_options, engine_options);
         } else if (args.backend == "cuda") {
-#ifdef LFM_SERVE_CUDA
-            lfm::ConcurrentEngineOptions engine_options;
+#ifdef CELEG_SERVE_CUDA
+            celeg::ConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
-            service = std::make_unique<lfm::serve::CudaInferenceService>(
-                model.string(), args.context, lfm::ModelOptions{}, engine_options);
+            service = std::make_unique<celeg::serve::CudaInferenceService>(
+                model.string(), args.context, celeg::ModelOptions{}, engine_options);
 #else
             throw std::runtime_error("CUDA serving is not available in this build");
 #endif
@@ -110,16 +110,16 @@ int main(int argc, char** argv) {
         uWS::Loop* loop = uWS::Loop::get();
 
         uWS::App app;
-        lfm::app::serve::register_health_routes(app);
-        lfm::app::serve::register_docs_routes(app, model_name);
-        lfm::app::serve::register_models_route(app, model_name);
-        lfm::app::serve::register_tokenize_route(app, tokenizer, static_cast<std::size_t>(args.context));
-        lfm::app::serve::register_chat_completions_route(
+        celeg::app::serve::register_health_routes(app);
+        celeg::app::serve::register_docs_routes(app, model_name);
+        celeg::app::serve::register_models_route(app, model_name);
+        celeg::app::serve::register_tokenize_route(app, tokenizer, static_cast<std::size_t>(args.context));
+        celeg::app::serve::register_chat_completions_route(
             app, dispatcher, *service, tokenizer, model_name, eos_token_id, loop);
 
         app.listen(args.port, [&](auto* listen_socket) {
               if (listen_socket) {
-                  std::cout << "lfm25-serve listening on http://127.0.0.1:" << args.port
+                  std::cout << "celeg-serve listening on http://127.0.0.1:" << args.port
                             << " (model=" << model_name << ")" << std::endl;
               } else {
                   std::cerr << "failed to listen on port " << args.port << std::endl;
@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
         dispatcher.stop();
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "lfm25-serve: " << error.what() << std::endl;
+        std::cerr << "celeg-serve: " << error.what() << std::endl;
         return 1;
     }
 }

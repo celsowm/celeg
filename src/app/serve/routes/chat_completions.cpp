@@ -1,8 +1,8 @@
 #include "chat_completions.hpp"
 
-#include "lfm/serve/protocol/chat.hpp"
-#include "lfm/serve/protocol/json.hpp"
-#include "lfm/serve/protocol/mapping.hpp"
+#include "celeg/serve/protocol/chat.hpp"
+#include "celeg/serve/protocol/json.hpp"
+#include "celeg/serve/protocol/mapping.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -11,16 +11,16 @@
 #include <string>
 #include <vector>
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 namespace {
 
-namespace protocol = lfm::serve::protocol;
-using lfm::serve::GenerateEvent;
-using lfm::serve::GenerateRequest;
-using lfm::serve::GenerationDispatcher;
-using lfm::serve::IInferenceService;
-using lfm::serve::RequestId;
+namespace protocol = celeg::serve::protocol;
+using celeg::serve::GenerateEvent;
+using celeg::serve::GenerateRequest;
+using celeg::serve::GenerationDispatcher;
+using celeg::serve::IInferenceService;
+using celeg::serve::RequestId;
 
 std::int64_t now_seconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -48,7 +48,7 @@ void forget_after_abort(GenerationDispatcher& dispatcher, IInferenceService& ser
 void register_chat_completions_route(uWS::App& app,
                                      GenerationDispatcher& dispatcher,
                                      IInferenceService& service,
-                                     const lfm::BpeTokenizer& tokenizer,
+                                     const celeg::BpeTokenizer& tokenizer,
                                      const std::string& model_name,
                                      std::int32_t eos_token_id,
                                      uWS::Loop* loop) {
@@ -136,4 +136,4 @@ void register_chat_completions_route(uWS::App& app,
     });
 }
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

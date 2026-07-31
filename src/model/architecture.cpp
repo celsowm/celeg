@@ -1,13 +1,13 @@
-#include "lfm/model/architecture.hpp"
+#include "celeg/model/architecture.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
-const LfmTensorNamingPolicy& lfm_tensor_naming() {
-    static const LfmTensorNamingPolicy policy;
+const CelegTensorNamingPolicy& celeg_tensor_naming() {
+    static const CelegTensorNamingPolicy policy;
     return policy;
 }
 
@@ -87,20 +87,20 @@ std::vector<std::string_view> ArchitectureRegistry::ids() const {
     return result;
 }
 
-std::string_view LfmArchitectureProvider::id() const { return "lfm2"; }
+std::string_view CelegArchitectureProvider::id() const { return "lfm2"; }
 
-bool LfmArchitectureProvider::supports(const ModelConfig& config) const {
+bool CelegArchitectureProvider::supports(const ModelConfig& config) const {
     return config.model_type == "lfm2" || config.model_type == "lfm2_moe" ||
            config.architecture == ArchitectureKind::DenseLfm2 ||
            config.architecture == ArchitectureKind::MoeLfm2;
 }
 
-ModelDefinition LfmArchitectureProvider::inspect(const ModelConfig& config) const {
+ModelDefinition CelegArchitectureProvider::inspect(const ModelConfig& config) const {
     return common_definition(config, id());
 }
 
-const ITensorNamingPolicy& LfmArchitectureProvider::tensor_naming() const {
-    return lfm_tensor_naming();
+const ITensorNamingPolicy& CelegArchitectureProvider::tensor_naming() const {
+    return celeg_tensor_naming();
 }
 
 std::string_view GraniteArchitectureProvider::id() const { return "granite"; }
@@ -120,9 +120,9 @@ const ITensorNamingPolicy& GraniteArchitectureProvider::tensor_naming() const {
 void register_builtin_architecture_providers() {
     auto& registry = ArchitectureRegistry::instance();
     if (registry.find("lfm2") == nullptr)
-        registry.register_provider(std::make_unique<LfmArchitectureProvider>());
+        registry.register_provider(std::make_unique<CelegArchitectureProvider>());
     if (registry.find("granite") == nullptr)
         registry.register_provider(std::make_unique<GraniteArchitectureProvider>());
 }
 
-} // namespace lfm
+} // namespace celeg

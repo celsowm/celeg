@@ -1,8 +1,8 @@
-#include "lfm/serve/protocol/mapping.hpp"
+#include "celeg/serve/protocol/mapping.hpp"
 
 #include <stdexcept>
 
-namespace lfm::serve::protocol {
+namespace celeg::serve::protocol {
 
 ChatRole role_from_string(const std::string& role) {
     if (role == "system") return ChatRole::System;
@@ -25,13 +25,13 @@ std::string role_to_string(ChatRole role) {
 }
 
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
-                                    const lfm::BpeTokenizer& tokenizer,
+                                    const celeg::BpeTokenizer& tokenizer,
                                     std::int32_t eos_token_id) {
     if (request.messages.empty()) {
         throw std::invalid_argument("messages must not be empty");
     }
 
-    std::vector<lfm::ChatMessage> messages;
+    std::vector<celeg::ChatMessage> messages;
     messages.reserve(request.messages.size());
     for (const ChatMessageDto& message : request.messages) {
         messages.push_back({role_from_string(message.role), message.content});
@@ -71,7 +71,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    std::size_t prompt_token_count,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
-                                                   const lfm::BpeTokenizer& tokenizer) {
+                                                   const celeg::BpeTokenizer& tokenizer) {
     ChatCompletionResponse response;
     response.id = id;
     response.model = model;
@@ -95,7 +95,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              const std::vector<std::int32_t>& new_tokens,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
-                                             const lfm::BpeTokenizer& tokenizer) {
+                                             const celeg::BpeTokenizer& tokenizer) {
     ChatCompletionChunk chunk;
     chunk.id = id;
     chunk.model = model;
@@ -111,7 +111,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
 }
 
 TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
-                                      const lfm::BpeTokenizer& tokenizer,
+                                      const celeg::BpeTokenizer& tokenizer,
                                       std::size_t max_model_len) {
     if (static_cast<bool>(request.prompt) == static_cast<bool>(request.messages)) {
         throw std::invalid_argument("exactly one of prompt or messages must be set");
@@ -123,7 +123,7 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
     if (request.prompt) {
         response.tokens = tokenizer.encode(*request.prompt, /*add_bos=*/add_special_tokens);
     } else {
-        std::vector<lfm::ChatMessage> messages;
+        std::vector<celeg::ChatMessage> messages;
         messages.reserve(request.messages->size());
         for (const ChatMessageDto& message : *request.messages) {
             messages.push_back({role_from_string(message.role), message.content});
@@ -140,4 +140,4 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
     return response;
 }
 
-} // namespace lfm::serve::protocol
+} // namespace celeg::serve::protocol

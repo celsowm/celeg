@@ -59,23 +59,23 @@ void launch_rmsnorm(const __nv_bfloat16* x, const __nv_bfloat16* weight,
                     __nv_bfloat16* out, int rows, int width, float eps,
                     cudaStream_t stream) {
     rmsnorm_kernel<<<rows, 256, 0, stream>>>(x, weight, out, width, eps);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_residual_add(__nv_bfloat16* x, const __nv_bfloat16* residual,
                          int count, cudaStream_t stream) {
     residual_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, residual, count);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_scale(__nv_bfloat16* x, int count, float scale, cudaStream_t stream) {
     if (scale == 1.0f) return;
     scale_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, count, scale);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_swiglu_fused(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
                          int count, cudaStream_t stream) {
     swiglu_fused_kernel<<<(count + 255) / 256, 256, 0, stream>>>(gate_up, out, count);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }

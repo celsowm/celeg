@@ -1,11 +1,11 @@
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/runtime/cache/page_layout.hpp"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/runtime/cache/page_layout.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -108,18 +108,18 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
             for (int layer = 0; layer < attention_layer_count_; ++layer) {
                 const size_t layer_vector = layout_.layer_vector_offset(layer);
                 const size_t count = layout_.layer_vector_count(used_tokens);
-                LFM_CUDA(cudaMemcpy(key_int8_.data() + target_vector + layer_vector,
+                CELEG_CUDA(cudaMemcpy(key_int8_.data() + target_vector + layer_vector,
                                     key_int8_.data() + source_vector + layer_vector,
                                     count * sizeof(int8_t), cudaMemcpyDeviceToDevice));
-                LFM_CUDA(cudaMemcpy(value_int8_.data() + target_vector + layer_vector,
+                CELEG_CUDA(cudaMemcpy(value_int8_.data() + target_vector + layer_vector,
                                     value_int8_.data() + source_vector + layer_vector,
                                     count * sizeof(int8_t), cudaMemcpyDeviceToDevice));
                 const size_t layer_scale = layout_.layer_scale_offset(layer);
                 const size_t scale_count = layout_.layer_scale_count(used_tokens);
-                LFM_CUDA(cudaMemcpy(key_scales_.data() + target_scale + layer_scale,
+                CELEG_CUDA(cudaMemcpy(key_scales_.data() + target_scale + layer_scale,
                                     key_scales_.data() + source_scale + layer_scale,
                                     scale_count * sizeof(float), cudaMemcpyDeviceToDevice));
-                LFM_CUDA(cudaMemcpy(value_scales_.data() + target_scale + layer_scale,
+                CELEG_CUDA(cudaMemcpy(value_scales_.data() + target_scale + layer_scale,
                                     value_scales_.data() + source_scale + layer_scale,
                                     scale_count * sizeof(float), cudaMemcpyDeviceToDevice));
             }
@@ -127,10 +127,10 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
             for (int layer = 0; layer < attention_layer_count_; ++layer) {
                 const size_t layer_vector = layout_.layer_vector_offset(layer);
                 const size_t count = layout_.layer_vector_count(used_tokens);
-                LFM_CUDA(cudaMemcpy(key_bf16_.data() + target_vector + layer_vector,
+                CELEG_CUDA(cudaMemcpy(key_bf16_.data() + target_vector + layer_vector,
                                     key_bf16_.data() + source_vector + layer_vector,
                                     count * sizeof(__nv_bfloat16), cudaMemcpyDeviceToDevice));
-                LFM_CUDA(cudaMemcpy(value_bf16_.data() + target_vector + layer_vector,
+                CELEG_CUDA(cudaMemcpy(value_bf16_.data() + target_vector + layer_vector,
                                     value_bf16_.data() + source_vector + layer_vector,
                                     count * sizeof(__nv_bfloat16), cudaMemcpyDeviceToDevice));
             }
@@ -148,4 +148,4 @@ size_t PhysicalPagedKvCache::memory_bytes() const {
            key_scales_.bytes() + value_scales_.bytes();
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,6 +1,6 @@
-#include "lfm/text/tokenizer.hpp"
-#include "lfm/checkpoint/formats/gguf.hpp"
-#include "lfm/checkpoint/formats/json.hpp"
+#include "celeg/text/tokenizer.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 void append_utf8(std::string& out, uint32_t cp) {
@@ -459,4 +459,4 @@ std::string BpeTokenizer::format_chat(std::span<const ChatMessage> messages,
     return chat_template_->format(messages, add_generation_prompt);
 }
 
-} // namespace lfm
+} // namespace celeg

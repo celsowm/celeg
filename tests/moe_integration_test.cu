@@ -12,9 +12,9 @@
 // NOTE: the router/FFN run in BF16, so a float CPU reference is expected to
 // differ by a few percent (BF16 rounding). Tolerances below reflect that.
 
-#include "lfm/runtime/moe.hpp"
-#include "lfm/backend/cuda/utils.cuh"
-#include "lfm/backend/cuda/kernels/norm_conv.hpp"
+#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/utils.cuh"
+#include "celeg/backend/cuda/kernels/norm_conv.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -95,50 +95,50 @@ int main() {
     try {
         Problem p = build(8, 16, 6, 4);
 
-        lfm::MoeRouterConfig cfg;
+        celeg::MoeRouterConfig cfg;
         cfg.num_experts = p.experts;
         cfg.experts_per_token = p.K;
         cfg.normalize_topk = true;
         cfg.use_expert_bias = true;
         cfg.routed_scaling_factor = 1.0f;
 
-        lfm::CudaStream stream;
+        celeg::CudaStream stream;
 
         // Hidden state (BF16) and its float copy for the reference.
-        lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden);
+        celeg::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden);
         std::vector<__nv_bfloat16> h_bf16(p.hidden);
         for (int i = 0; i < p.hidden; ++i) h_bf16[i] = to_bf16(p.hidden_vec[i]);
-        LFM_CUDA(cudaMemcpy(d_hidden.data(), h_bf16.data(),
+        CELEG_CUDA(cudaMemcpy(d_hidden.data(), h_bf16.data(),
                             d_hidden.bytes(), cudaMemcpyHostToDevice));
 
         // ffn_norm (BF16) on device.
-        lfm::DeviceBuffer<__nv_bfloat16> d_ffn_norm(p.hidden);
+        celeg::DeviceBuffer<__nv_bfloat16> d_ffn_norm(p.hidden);
         std::vector<__nv_bfloat16> w_bf16(p.hidden);
         for (int i = 0; i < p.hidden; ++i) w_bf16[i] = to_bf16(p.ffn_norm[i]);
-        LFM_CUDA(cudaMemcpy(d_ffn_norm.data(), w_bf16.data(),
+        CELEG_CUDA(cudaMemcpy(d_ffn_norm.data(), w_bf16.data(),
                             d_ffn_norm.bytes(), cudaMemcpyHostToDevice));
 
         // Step 1: RMSNorm -> normed BF16.
-        lfm::DeviceBuffer<__nv_bfloat16> d_normed(p.hidden);
-        lfm::launch_rmsnorm(d_hidden.data(), d_ffn_norm.data(), d_normed.data(),
+        celeg::DeviceBuffer<__nv_bfloat16> d_normed(p.hidden);
+        celeg::launch_rmsnorm(d_hidden.data(), d_ffn_norm.data(), d_normed.data(),
                             1, p.hidden, p.norm_eps, stream.get());
 
         // Step 2: cast normed BF16 -> float (the router input path).
-        lfm::DeviceBuffer<float> d_hidden_float(p.hidden);
-        lfm::launch_cast_bf16_to_float(d_normed.data(), d_hidden_float.data(),
+        celeg::DeviceBuffer<float> d_hidden_float(p.hidden);
+        celeg::launch_cast_bf16_to_float(d_normed.data(), d_hidden_float.data(),
                                        p.hidden, stream.get());
 
         // Step 3: router.
-        lfm::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
-        lfm::DeviceBuffer<float> d_bias(p.experts);
-        lfm::DeviceBuffer<int> d_sel(p.K);
-        lfm::DeviceBuffer<float> d_wts(p.K);
-        lfm::DeviceBuffer<float> d_scratch(p.experts);
-        LFM_CUDA(cudaMemcpy(d_router.data(), p.router_w.data(),
+        celeg::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
+        celeg::DeviceBuffer<float> d_bias(p.experts);
+        celeg::DeviceBuffer<int> d_sel(p.K);
+        celeg::DeviceBuffer<float> d_wts(p.K);
+        celeg::DeviceBuffer<float> d_scratch(p.experts);
+        CELEG_CUDA(cudaMemcpy(d_router.data(), p.router_w.data(),
                             d_router.bytes(), cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(d_bias.data(), p.bias.data(),
+        CELEG_CUDA(cudaMemcpy(d_bias.data(), p.bias.data(),
                             d_bias.bytes(), cudaMemcpyHostToDevice));
-        lfm::MoeRouterDevice rdev;
+        celeg::MoeRouterDevice rdev;
         rdev.router_weight = d_router.data();
         rdev.expert_bias = d_bias.data();
         rdev.hidden_data = d_hidden_float.data();
@@ -146,31 +146,31 @@ int main() {
         rdev.routing_weights = d_wts.data();
         rdev.rows = 1;
         rdev.hidden_dim = p.hidden;
-        lfm::launch_moe_router(rdev, cfg, d_scratch.data(), stream.get());
+        celeg::launch_moe_router(rdev, cfg, d_scratch.data(), stream.get());
 
         // Step 4: expert FFN accumulate.
-        lfm::DeviceBuffer<__nv_bfloat16> d_gate_up(
+        celeg::DeviceBuffer<__nv_bfloat16> d_gate_up(
             static_cast<size_t>(p.experts) * 2 * p.inter * p.hidden);
-        lfm::DeviceBuffer<__nv_bfloat16> d_down(
+        celeg::DeviceBuffer<__nv_bfloat16> d_down(
             static_cast<size_t>(p.experts) * p.hidden * p.inter);
-        lfm::DeviceBuffer<__nv_bfloat16> d_output(p.hidden);
-        lfm::DeviceBuffer<float> d_accum(p.hidden);
-        lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
+        celeg::DeviceBuffer<__nv_bfloat16> d_output(p.hidden);
+        celeg::DeviceBuffer<float> d_accum(p.hidden);
+        celeg::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
             static_cast<size_t>(p.K) * 2 * p.inter);
-        lfm::DeviceBuffer<__nv_bfloat16> d_act_scratch(
+        celeg::DeviceBuffer<__nv_bfloat16> d_act_scratch(
             static_cast<size_t>(p.K) * p.inter);
         std::vector<__nv_bfloat16> gu_bf16(p.gate_up.size());
         std::vector<__nv_bfloat16> down_bf16(p.down.size());
         for (size_t i = 0; i < p.gate_up.size(); ++i) gu_bf16[i] = to_bf16(p.gate_up[i]);
         for (size_t i = 0; i < p.down.size(); ++i) down_bf16[i] = to_bf16(p.down[i]);
-        LFM_CUDA(cudaMemcpy(d_gate_up.data(), gu_bf16.data(),
+        CELEG_CUDA(cudaMemcpy(d_gate_up.data(), gu_bf16.data(),
                             d_gate_up.bytes(), cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(d_down.data(), down_bf16.data(),
+        CELEG_CUDA(cudaMemcpy(d_down.data(), down_bf16.data(),
                             d_down.bytes(), cudaMemcpyHostToDevice));
         d_output.zero_async(stream.get());
         d_accum.zero_async(stream.get());
 
-        lfm::MoeFfnDevice fdev;
+        celeg::MoeFfnDevice fdev;
         fdev.gate_up = d_gate_up.data();
         fdev.down = d_down.data();
         fdev.num_experts = p.experts;
@@ -178,11 +178,11 @@ int main() {
         fdev.hidden_dim = p.hidden;
         fdev.expert_gate_up_stride = static_cast<size_t>(2) * p.inter * p.hidden;
         fdev.expert_down_stride = static_cast<size_t>(p.hidden) * p.inter;
-        lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(),
+        celeg::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(),
                             d_normed.data(), d_accum.data(),
                             1, p.K, d_gu_scratch.data(),
                             d_act_scratch.data(), stream.get());
-        lfm::launch_finalize_moe_output(d_accum.data(), d_output.data(),
+        celeg::launch_finalize_moe_output(d_accum.data(), d_output.data(),
                                         p.hidden, stream.get());
 
         // CPU reference of the full pipeline (rmsnorm -> router -> ffn -> residual).
@@ -193,28 +193,28 @@ int main() {
 
         std::vector<int> sel_cpu;
         std::vector<float> wts_cpu;
-        lfm::compute_moe_router(normed_float, p.router_w, &p.bias, 1, p.hidden,
+        celeg::compute_moe_router(normed_float, p.router_w, &p.bias, 1, p.hidden,
                                 cfg, sel_cpu, wts_cpu);
 
         std::vector<float> ffn_cpu;
-        lfm::compute_moe_ffn(normed_float, p.gate_up, p.down, sel_cpu, wts_cpu,
+        celeg::compute_moe_ffn(normed_float, p.gate_up, p.down, sel_cpu, wts_cpu,
                              1, p.hidden, p.inter, p.experts, ffn_cpu);
 
         // Step 5: residual add into hidden.
-        lfm::launch_residual_add(d_hidden.data(), d_output.data(),
+        celeg::launch_residual_add(d_hidden.data(), d_output.data(),
                                  p.hidden, stream.get());
-        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
         std::vector<__nv_bfloat16> hidden_gpu(p.hidden);
-        LFM_CUDA(cudaMemcpy(hidden_gpu.data(), d_hidden.data(),
+        CELEG_CUDA(cudaMemcpy(hidden_gpu.data(), d_hidden.data(),
                             d_hidden.bytes(), cudaMemcpyDeviceToHost));
 
         // (a) The router selection/weights must match the reference exactly.
         std::vector<int> sel_gpu(p.K);
         std::vector<float> wts_gpu(p.K);
-        LFM_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(),
+        CELEG_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(),
                             d_sel.bytes(), cudaMemcpyDeviceToHost));
-        LFM_CUDA(cudaMemcpy(wts_gpu.data(), d_wts.data(),
+        CELEG_CUDA(cudaMemcpy(wts_gpu.data(), d_wts.data(),
                             d_wts.bytes(), cudaMemcpyDeviceToHost));
         for (int i = 0; i < p.K; ++i) {
             if (sel_gpu[i] != sel_cpu[i])

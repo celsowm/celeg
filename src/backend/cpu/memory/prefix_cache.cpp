@@ -1,12 +1,12 @@
-#include "lfm/backend/cpu/prefix_cache.hpp"
-#include "lfm/runtime/cache/page_lease.hpp"
+#include "celeg/backend/cpu/prefix_cache.hpp"
+#include "celeg/runtime/cache/page_lease.hpp"
 
 #include <algorithm>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 size_t CpuPrefixSnapshot::host_bytes() const {
     size_t bytes = logits.size() * sizeof(float) + seen_tokens.size();
@@ -231,4 +231,4 @@ void CpuPrefixCacheManager::clear() {
     metrics_.resident_bytes = 0;
 }
 
-} // namespace lfm
+} // namespace celeg

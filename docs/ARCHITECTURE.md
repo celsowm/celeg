@@ -8,7 +8,7 @@ checkpoint formats -> model definitions -> runtime scheduling -> backend operato
 ```
 
 Public model definitions and checkpoint contracts are backend-neutral. CUDA
-headers live under `lfm/backend/cuda` and are intentionally absent from the
+headers live under `celeg/backend/cuda` and are intentionally absent from the
 installed public header manifest. The CUDA model implementation owns device
 allocation and forwards compact operation contexts to the packed executor;
 public `Model` does not expose that executor or its context type.
@@ -42,6 +42,6 @@ not a general model interface or arbitrary implementation access.
 ## Adding a backend
 
 Add backend operators under `src/backend/<backend>`, keep backend types out of
-`lfm/model` and `lfm/checkpoint`, and register only the backend implementation
+`celeg/model` and `celeg/checkpoint`, and register only the backend implementation
 at model construction. The generic scheduler, checkpoint capabilities, and
 sampling contracts should remain unchanged.

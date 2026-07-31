@@ -1,4 +1,4 @@
-#include "lfm/checkpoint/downloader.hpp"
+#include "celeg/checkpoint/downloader.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -8,7 +8,7 @@
 
 int main(int argc, char** argv) {
     try {
-        lfm::DownloadOptions opts;
+        celeg::DownloadOptions opts;
         opts.repo_id = "LiquidAI/LFM2.5-230M";
         opts.revision = "main";
 
@@ -25,13 +25,13 @@ int main(int argc, char** argv) {
             else if (key == "--quiet" || key == "-q") opts.quiet = true;
             else if (key == "--help" || key == "-h") {
                 std::cout
-                    << "lfm25-download [REPO_ID] [options]\n"
+                    << "celeg-download [REPO_ID] [options]\n"
                     << "  REPO_ID defaults to LiquidAI/LFM2.5-230M\n"
                     << "  Common checkpoints:\n"
                     << "    LiquidAI/LFM2.5-230M            (230M base)\n"
                     << "    LiquidAI/LFM2.5-1.2B-Instruct   (1.2B Instruct)\n"
                     << "  --revision REV    (default: main)\n"
-                    << "  --cache-dir DIR   (default: " << lfm::default_hf_cache_dir().string() << ")\n"
+                    << "  --cache-dir DIR   (default: " << celeg::default_hf_cache_dir().string() << ")\n"
                     << "  --file FILE       (repeatable; default: all files)\n"
                     << "  --force           re-download even if cached\n"
                     << "  --quiet           suppress progress output\n";
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        lfm::DownloadResult result = lfm::download_model(opts);
+        celeg::DownloadResult result = celeg::download_model(opts);
         if (!opts.quiet) {
             std::cerr << "done: " << result.snapshot_path.string() << "\n";
         }

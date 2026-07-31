@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # Downloads a LiquidAI LFM2.5 checkpoint into a local directory.
 #
 # Usage:
@@ -36,7 +36,7 @@ case "$VARIANT" in
         ;;
 esac
 
-REVISION="${LFM_MODEL_REVISION:-main}"
+REVISION="${CELEG_MODEL_REVISION:-main}"
 BASE="https://huggingface.co/${REPO}/resolve/${REVISION}"
 
 mkdir -p "$DEST"

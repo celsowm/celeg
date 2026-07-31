@@ -1,8 +1,8 @@
-#include "lfm/backend/cpu/isa.hpp"
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/backend/cpu/quantization.hpp"
-#include "lfm/backend/cpu/thread_pool.hpp"
-#include "lfm/backend/cpu/topology.hpp"
+#include "celeg/backend/cpu/isa.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/quantization.hpp"
+#include "celeg/backend/cpu/thread_pool.hpp"
+#include "celeg/backend/cpu/topology.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -20,10 +20,10 @@ int main(int argc, char** argv) {
         const size_t threads = argc > 4 ? static_cast<size_t>(std::stoull(argv[4])) : 0;
         const int group = argc > 5 ? std::stoi(argv[5]) : 32;
         const size_t batch = argc > 6 ? static_cast<size_t>(std::stoull(argv[6])) : 1;
-        const lfm::CpuIsa requested = argc > 7
-            ? lfm::parse_cpu_isa(argv[7]) : lfm::CpuIsa::Auto;
-        const lfm::CpuAffinityPolicy affinity = argc > 8
-            ? lfm::parse_cpu_affinity(argv[8]) : lfm::CpuAffinityPolicy::None;
+        const celeg::CpuIsa requested = argc > 7
+            ? celeg::parse_cpu_isa(argv[7]) : celeg::CpuIsa::Auto;
+        const celeg::CpuAffinityPolicy affinity = argc > 8
+            ? celeg::parse_cpu_affinity(argv[8]) : celeg::CpuAffinityPolicy::None;
         if (rows == 0 || cols == 0 || batch == 0 || iterations <= 0 ||
             (group != 32 && group != 64)) {
             throw std::invalid_argument("invalid benchmark arguments");
@@ -37,24 +37,24 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < input.size(); ++i) {
             input[i] = std::cos(static_cast<float>(i) * 0.01f);
         }
-        const auto matrix = lfm::quantize_float_groupwise_q4(
+        const auto matrix = celeg::quantize_float_groupwise_q4(
             source.data(), rows, cols, static_cast<size_t>(group));
-        const auto caps = lfm::detect_cpu_capabilities();
-        const lfm::CpuIsa isa = requested == lfm::CpuIsa::Auto
+        const auto caps = celeg::detect_cpu_capabilities();
+        const celeg::CpuIsa isa = requested == celeg::CpuIsa::Auto
             ? caps.best_isa() : requested;
-        if (!lfm::cpu_isa_compiled(isa)) {
+        if (!celeg::cpu_isa_compiled(isa)) {
             throw std::invalid_argument("requested ISA was not compiled into this binary");
         }
         if (!caps.supports(isa)) {
             throw std::invalid_argument("requested ISA is not supported by this host");
         }
-        if (isa == lfm::CpuIsa::AmxInt8 || isa == lfm::CpuIsa::DotProd ||
-            isa == lfm::CpuIsa::I8mm || isa == lfm::CpuIsa::Sve2 ||
-            isa == lfm::CpuIsa::Sme2) {
+        if (isa == celeg::CpuIsa::AmxInt8 || isa == celeg::CpuIsa::DotProd ||
+            isa == celeg::CpuIsa::I8mm || isa == celeg::CpuIsa::Sve2 ||
+            isa == celeg::CpuIsa::Sme2) {
             throw std::invalid_argument("requested ISA has no executable v0.0.20 kernel");
         }
-        lfm::CpuThreadPool pool(threads, affinity);
-        lfm::CpuLinearEngine linear(isa, pool);
+        celeg::CpuThreadPool pool(threads, affinity);
+        celeg::CpuLinearEngine linear(isa, pool);
         auto execute = [&] {
             if (batch == 1) linear.gemv(matrix, input.data(), output.data());
             else linear.gemm(matrix, input.data(), output.data(), batch);
@@ -68,9 +68,9 @@ int main(int argc, char** argv) {
         const double rows_per_second = calls_per_second * batch;
         const double weight_gb = static_cast<double>(matrix.memory_bytes()) / 1e9;
         std::cout << std::fixed << std::setprecision(3)
-                  << "cpu.isa=" << lfm::cpu_isa_name(isa) << '\n'
+                  << "cpu.isa=" << celeg::cpu_isa_name(isa) << '\n'
                   << "cpu.threads=" << (pool.size() + 1) << '\n'
-                  << "cpu.affinity=" << lfm::cpu_affinity_name(affinity) << '\n'
+                  << "cpu.affinity=" << celeg::cpu_affinity_name(affinity) << '\n'
                   << "cpu.pinned_workers=" << pool.pinned_workers() << '\n'
                   << "matrix.rows=" << rows << '\n'
                   << "matrix.cols=" << cols << '\n'

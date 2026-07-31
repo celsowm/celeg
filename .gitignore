@@ -10,8 +10,8 @@ out.txt
 # Model weights / tokenizer artifacts are fetched at runtime by the C++ HF
 # cache downloader (src/download_main.cpp). Do not commit them. This pattern
 # also matches directories merely *named* "model" that hold source code, not
-# checkpoints (src/model, src/backend/cuda/model, include/lfm/model,
-# include/lfm/detail/model) -- each is re-included below.
+# checkpoints (src/model, src/backend/cuda/model, include/celeg/model,
+# include/celeg/detail/model) -- each is re-included below.
 model/
 
 # These are source code, not checkpoint directories.
@@ -19,10 +19,10 @@ model/
 !src/backend/cuda/model/**
 !src/model/
 !src/model/**
-!include/lfm/model/
-!include/lfm/model/**
-!include/lfm/detail/model/
-!include/lfm/detail/model/**
+!include/celeg/model/
+!include/celeg/model/**
+!include/celeg/detail/model/
+!include/celeg/detail/model/**
 
 # Third-party sources cloned/built locally for reference benchmarking
 # (e.g. llama.cpp). Never committed. Benchmark model weights are not stored

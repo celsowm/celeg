@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/backend/cuda/phase_profile.hpp"
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/backend/cuda/phase_profile.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
     reset();
@@ -22,7 +22,7 @@ void Model::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
     auto& prof = prefill_phase_profile();
     prof.count_step();
 
-    LFM_CUDA(cudaMemcpyAsync(prefill_tokens_.data(), tokens.data(),
+    CELEG_CUDA(cudaMemcpyAsync(prefill_tokens_.data(), tokens.data(),
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     prof.begin(stream_.get());
@@ -39,7 +39,7 @@ void Model::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
-            LFM_CUDA(cudaMemcpyAsync(
+            CELEG_CUDA(cudaMemcpyAsync(
                 prefill_residual_.data(), prefill_hidden_.data(),
                 prefill_hidden_.bytes(), cudaMemcpyDeviceToDevice,
                 stream_.get()));
@@ -138,7 +138,7 @@ void Model::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                     rows, shape_.kv_width, stream_.get());
                 if (options_.fast_attention) {
                     static const bool use_flash = []{
-                        const char* f = std::getenv("LFM_FLASH_ATTN");
+                        const char* f = std::getenv("CELEG_FLASH_ATTN");
                         return f != nullptr && f[0] != '\0' && f[0] != '0';
                     }();
                     if (use_flash) {
@@ -231,13 +231,13 @@ void Model::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
     prof.end(PrefillPhase::Logits, stream_.get());
 
     position_ = rows;
-    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
                              sizeof(position_), cudaMemcpyHostToDevice,
                              stream_.get()));
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     release_prefill_workspace();
     phase_ = SessionPhase::Ready;
 }
 
-} // namespace lfm
+} // namespace celeg
 

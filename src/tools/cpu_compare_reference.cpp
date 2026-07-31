@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/model.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -44,22 +44,22 @@ std::vector<size_t> top_indices(const std::vector<float>& values, size_t count) 
 int main(int argc, char** argv) {
     try {
         if (argc < 3) {
-            std::cerr << "usage: lfm25-cpu-compare-reference MODEL.safetensors REFERENCE_DIR [KV] [ISA] [THREADS]\n";
+            std::cerr << "usage: celeg-cpu-compare-reference MODEL.safetensors REFERENCE_DIR [KV] [ISA] [THREADS]\n";
             return 2;
         }
         const std::filesystem::path reference(argv[2]);
         const auto tokens = read_binary<int32_t>(reference / "tokens.i32");
         const auto expected = read_binary<float>(reference / "prefill_logits.f32");
         if (tokens.empty()) throw std::runtime_error("reference token sequence is empty");
-        lfm::CpuModelOptions options;
-        options.kv_cache_mode = lfm::parse_cpu_kv_cache_mode(argc > 3 ? argv[3] : "fp32");
-        options.isa = lfm::parse_cpu_isa(argc > 4 ? argv[4] : "scalar");
+        celeg::CpuModelOptions options;
+        options.kv_cache_mode = celeg::parse_cpu_kv_cache_mode(argc > 3 ? argv[3] : "fp32");
+        options.isa = celeg::parse_cpu_isa(argc > 4 ? argv[4] : "scalar");
         options.threads = argc > 5 ? static_cast<size_t>(std::stoul(argv[5])) : 1;
         options.use_pack_cache = true;
-        lfm::GenerationConfig generation;
+        celeg::GenerationConfig generation;
         generation.temperature = 0.0f;
         generation.top_k = 1;
-        lfm::CpuModel model(argv[1], static_cast<int>(tokens.size() + 8),
+        celeg::CpuModel model(argv[1], static_cast<int>(tokens.size() + 8),
                             options, generation);
         if (expected.size() != model.diagnostics().copy_logits().size()) {
             throw std::runtime_error("reference logits have the wrong vocabulary size");

@@ -1,21 +1,21 @@
 #pragma once
 
-#include "lfm/runtime/concurrency.hpp"
-#include "lfm/model/model.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/backend/cuda/packed.hpp"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/runtime/cache/prefix_cache.hpp"
-#include "lfm/detail/runtime/concurrency/request_registry.hpp"
-#include "lfm/detail/runtime/concurrency/batch_planner.hpp"
-#include "lfm/detail/runtime/concurrency/worker.hpp"
+#include "celeg/runtime/concurrency.hpp"
+#include "celeg/model/model.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/runtime/cache/prefix_cache.hpp"
+#include "celeg/detail/runtime/concurrency/request_registry.hpp"
+#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
+#include "celeg/detail/runtime/concurrency/worker.hpp"
 
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 struct ConcurrentEngine::Impl {
     using RequestId = ConcurrentEngine::RequestId;
@@ -72,4 +72,4 @@ private:
     bool stopping_ = false;
 };
 
-} // namespace lfm
+} // namespace celeg

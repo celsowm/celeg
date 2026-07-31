@@ -1,4 +1,4 @@
-#include "lfm/runtime/cache/pinned_expert_cache.hpp"
+#include "celeg/runtime/cache/pinned_expert_cache.hpp"
 
 #if __has_include(<cuda_runtime.h>)
 #include <cuda_runtime.h>
@@ -12,7 +12,7 @@
 #include <limits>
 #include <algorithm>
 
-namespace lfm {
+namespace celeg {
 
 ExpertHostLease::ExpertHostLease(PinnedExpertCache* cache, int slot_idx)
     : cache_(cache), slot_idx_(slot_idx) {
@@ -351,4 +351,4 @@ std::future<void> ExpertIoManager::submit(std::function<void()> task) {
     return future;
 }
 
-} // namespace lfm
+} // namespace celeg

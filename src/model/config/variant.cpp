@@ -1,10 +1,10 @@
-#include "lfm/model/config/variant.hpp"
+#include "celeg/model/config/variant.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -385,4 +385,4 @@ void register_builtin_variants() {
     (void)ModelVariantRegistry::instance();
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,5 +1,5 @@
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 void cpu_gqa_decode(const float* q, const float* key_cache,
                     const float* value_cache, float* output,
@@ -89,4 +89,4 @@ void cpu_gqa_decode_bf16(const float* q, const uint16_t* key_cache,
     }
 }
 
-} // namespace lfm
+} // namespace celeg

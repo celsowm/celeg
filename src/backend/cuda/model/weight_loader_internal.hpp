@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace lfm::cuda_loader_detail {
+namespace celeg::cuda_loader_detail {
 
 inline size_t checked_element_count(const std::vector<int64_t>& shape) {
     if (shape.empty()) {
@@ -21,4 +21,4 @@ inline size_t checked_element_count(const std::vector<int64_t>& shape) {
     return count;
 }
 
-} // namespace lfm::cuda_loader_detail
+} // namespace celeg::cuda_loader_detail

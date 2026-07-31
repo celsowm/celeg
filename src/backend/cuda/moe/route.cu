@@ -1,13 +1,13 @@
-#include "lfm/runtime/moe.hpp"
-#include "lfm/backend/cuda/utils.cuh"
+#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/utils.cuh"
 
 #include <cuda_runtime.h>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
-using lfm::moe_sigmoid;
+using celeg::moe_sigmoid;
 
 // One block per row (token). Consumes GEMM-produced router logits, computes
 // probabilities/scores in shared memory, performs a small-K top-K selection
@@ -116,7 +116,7 @@ void launch_moe_router(const MoeRouterDevice& device,
     const float beta = 0.0f;
     // C = W * hidden^T, with both inputs supplied in row-major storage. In
     // cuBLAS' column-major view this is W^T(op=T) times hidden(op=N).
-    LFM_CUBLAS(cublasSgemm(
+    CELEG_CUBLAS(cublasSgemm(
         cublas.get(), CUBLAS_OP_T, CUBLAS_OP_N,
         E, device.rows, device.hidden_dim,
         &alpha, device.router_weight, device.hidden_dim,
@@ -130,7 +130,7 @@ void launch_moe_router(const MoeRouterDevice& device,
         device.rows, E, cfg.experts_per_token,
         cfg.use_expert_bias, cfg.normalize_topk, cfg.routed_scaling_factor,
         scratch_logits);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
-} // namespace lfm
+} // namespace celeg

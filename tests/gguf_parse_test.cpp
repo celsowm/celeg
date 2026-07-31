@@ -1,4 +1,4 @@
-#include "lfm/checkpoint/formats/gguf.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
 #include "support/assertions.hpp"
 #include <cstdint>
 #include <cstring>
@@ -79,7 +79,7 @@ std::filesystem::path write_fixture() {
     const float payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     w.put_bytes(payload, sizeof(payload));
 
-    const auto path = std::filesystem::temp_directory_path() / "lfm_gguf_fixture.gguf";
+    const auto path = std::filesystem::temp_directory_path() / "celeg_gguf_fixture.gguf";
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(w.buf.data()),
               static_cast<std::streamsize>(w.buf.size()));
@@ -90,32 +90,32 @@ std::filesystem::path write_fixture() {
 void test_fixture() {
     const auto path = write_fixture();
     {
-        lfm::GgufFile g(path.string());
+        celeg::GgufFile g(path.string());
 
-        LFM_TEST_CHECK(g.version() == 3);
-        LFM_TEST_CHECK(g.str("general.architecture") == "lfm2");
-        LFM_TEST_CHECK(g.u32("lfm2.block_count") == 14);
-        LFM_TEST_CHECK(g.f32("lfm2.rope.freq_base") == 1000000.0f);
+        CELEG_TEST_CHECK(g.version() == 3);
+        CELEG_TEST_CHECK(g.str("general.architecture") == "lfm2");
+        CELEG_TEST_CHECK(g.u32("lfm2.block_count") == 14);
+        CELEG_TEST_CHECK(g.f32("lfm2.rope.freq_base") == 1000000.0f);
 
-        const lfm::GgufValue& kv = g.value("lfm2.attention.head_count_kv");
-        LFM_TEST_CHECK(kv.kind == lfm::GgufValueKind::Array);
-        LFM_TEST_CHECK(kv.array_integers.size() == 3);
-        LFM_TEST_CHECK(kv.array_integers[0] == 0 && kv.array_integers[2] == 8);
+        const celeg::GgufValue& kv = g.value("lfm2.attention.head_count_kv");
+        CELEG_TEST_CHECK(kv.kind == celeg::GgufValueKind::Array);
+        CELEG_TEST_CHECK(kv.array_integers.size() == 3);
+        CELEG_TEST_CHECK(kv.array_integers[0] == 0 && kv.array_integers[2] == 8);
 
-        LFM_TEST_CHECK(g.contains_tensor("token_embd.weight"));
-        const lfm::GgufTensorView t = g.tensor("token_embd.weight");
-        LFM_TEST_CHECK(t.type == lfm::GgmlType::F32);
+        CELEG_TEST_CHECK(g.contains_tensor("token_embd.weight"));
+        const celeg::GgufTensorView t = g.tensor("token_embd.weight");
+        CELEG_TEST_CHECK(t.type == celeg::GgmlType::F32);
         // HF shape is reversed GGUF dims: [rows=2, cols=4].
-        LFM_TEST_CHECK((t.shape == std::vector<int64_t>{2, 4}));
-        LFM_TEST_CHECK(t.element_count == 8);
-        LFM_TEST_CHECK(t.bytes == 8 * sizeof(float));
+        CELEG_TEST_CHECK((t.shape == std::vector<int64_t>{2, 4}));
+        CELEG_TEST_CHECK(t.element_count == 8);
+        CELEG_TEST_CHECK(t.bytes == 8 * sizeof(float));
         const float* data = reinterpret_cast<const float*>(t.data);
-        LFM_TEST_CHECK(data[0] == 1.0f && data[7] == 8.0f);
+        CELEG_TEST_CHECK(data[0] == 1.0f && data[7] == 8.0f);
 
         // Missing key / tensor should throw.
         bool threw = false;
         try { g.u32("does.not.exist"); } catch (const std::exception&) { threw = true; }
-        LFM_TEST_CHECK(threw);
+        CELEG_TEST_CHECK(threw);
     }
 
     std::filesystem::remove(path);
@@ -123,17 +123,17 @@ void test_fixture() {
 }
 
 void test_real_file_optional() {
-    const char* env = std::getenv("LFM_GGUF_TEST_FILE");
+    const char* env = std::getenv("CELEG_GGUF_TEST_FILE");
     if (env == nullptr) {
-        std::cout << "test_real_file SKIP (set LFM_GGUF_TEST_FILE)\n";
+        std::cout << "test_real_file SKIP (set CELEG_GGUF_TEST_FILE)\n";
         return;
     }
-    lfm::GgufFile g(env);
-    LFM_TEST_CHECK(g.str("general.architecture") == "lfm2");
-    LFM_TEST_CHECK(g.contains_tensor("token_embd.weight"));
-    LFM_TEST_CHECK(g.tensor_count() > 0);
+    celeg::GgufFile g(env);
+    CELEG_TEST_CHECK(g.str("general.architecture") == "lfm2");
+    CELEG_TEST_CHECK(g.contains_tensor("token_embd.weight"));
+    CELEG_TEST_CHECK(g.tensor_count() > 0);
     const auto t = g.tensor("blk.0.ffn_gate.weight");
-    LFM_TEST_CHECK(t.type == lfm::GgmlType::Q4_K);
+    CELEG_TEST_CHECK(t.type == celeg::GgmlType::Q4_K);
     std::cout << "test_real_file PASS (" << g.tensor_count() << " tensors)\n";
 }
 

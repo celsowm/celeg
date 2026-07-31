@@ -1,4 +1,4 @@
-#include "lfm/checkpoint/formats/gguf.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
 
 #include <bit>
 #include <cstring>
@@ -19,7 +19,7 @@
 #include <unistd.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 constexpr uint32_t kGgufMagic = 0x46554747u;  // "GGUF" little-endian
@@ -441,4 +441,4 @@ std::vector<std::string> GgufFile::tensor_names() const {
     return out;
 }
 
-} // namespace lfm
+} // namespace celeg

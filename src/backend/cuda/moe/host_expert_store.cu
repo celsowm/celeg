@@ -1,4 +1,4 @@
-#include "lfm/runtime/moe/expert_residency.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
 
 #include <cuda_runtime.h>
 
@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -72,10 +72,10 @@ const void* HostExpertStore::register_mapped(const void* host_ptr,
     const std::size_t aligned_bytes = align_up(offset + bytes);
 
     void* base_ptr = reinterpret_cast<void*>(base);
-    LFM_CUDA(cudaHostRegister(base_ptr, aligned_bytes,
+    CELEG_CUDA(cudaHostRegister(base_ptr, aligned_bytes,
                               cudaHostRegisterMapped | cudaHostRegisterPortable));
     void* dev_base = nullptr;
-    LFM_CUDA(cudaHostGetDevicePointer(&dev_base, base_ptr, 0));
+    CELEG_CUDA(cudaHostGetDevicePointer(&dev_base, base_ptr, 0));
 
     registrations_.push_back(Registration{base_ptr, /*owned=*/false});
     registered_bytes_ += aligned_bytes;
@@ -89,11 +89,11 @@ const void* HostExpertStore::store_pinned_copy(const void* src,
         throw std::invalid_argument("store_pinned_copy: empty range");
     }
     void* host = nullptr;
-    LFM_CUDA(cudaHostAlloc(&host, bytes,
+    CELEG_CUDA(cudaHostAlloc(&host, bytes,
                             cudaHostAllocMapped | cudaHostAllocPortable));
     std::memcpy(host, src, bytes);
     void* dev = nullptr;
-    LFM_CUDA(cudaHostGetDevicePointer(&dev, host, 0));
+    CELEG_CUDA(cudaHostGetDevicePointer(&dev, host, 0));
 
     registrations_.push_back(Registration{host, /*owned=*/true, /*mapped=*/false});
     pinned_bytes_ += bytes;
@@ -109,10 +109,10 @@ const void* HostExpertStore::alloc_mapped(std::size_t bytes) {
     // separate cudaHostRegister call is needed (registering CUDA-allocated
     // memory is invalid).
     void* host = nullptr;
-    LFM_CUDA(cudaHostAlloc(&host, bytes,
+    CELEG_CUDA(cudaHostAlloc(&host, bytes,
                             cudaHostAllocMapped | cudaHostAllocPortable));
     void* dev = nullptr;
-    LFM_CUDA(cudaHostGetDevicePointer(&dev, host, 0));
+    CELEG_CUDA(cudaHostGetDevicePointer(&dev, host, 0));
     registrations_.push_back(Registration{host, /*owned=*/true, /*mapped=*/false});
     pinned_bytes_ += bytes;
     return dev;
@@ -120,4 +120,4 @@ const void* HostExpertStore::alloc_mapped(std::size_t bytes) {
 
 // ---------------------------------------------------------------------------
 
-} // namespace lfm
+} // namespace celeg

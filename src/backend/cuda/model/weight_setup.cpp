@@ -1,15 +1,15 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/model/weights/policy.hpp"
-#include "lfm/model/weights/quantization.hpp"
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/runtime/weights_topology.hpp"
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/checkpoint/formats/gguf.hpp"
-#include "lfm/checkpoint/repositories/gguf.hpp"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/model/weights/policy.hpp"
+#include "celeg/model/weights/quantization.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/runtime/weights_topology.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/checkpoint/repositories/gguf.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -18,7 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-namespace lfm {
+namespace celeg {
 
 namespace {
 std::string layer_name(int index, const std::string& suffix) {
@@ -101,7 +101,7 @@ void Model::Impl::load_checkpoint_weights(
     if (options_.expert_offload.enabled() &&
         shape_.architecture == ArchitectureKind::MoeLfm2) {
         size_t free_bytes = 0, total_bytes = 0;
-        LFM_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
+        CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
         const int moe_layers = moe_layer_count(shape_);
         const size_t bpe = bytes_per_expert_bf16(shape_);
         // All experts are BF16; non-expert weights = everything else already or
@@ -285,7 +285,7 @@ void Model::Impl::load_checkpoint_weights(
                             controller->inflight_transfers.push_back({std::move(lease), std::move(ev)});
                         }
                     }
-                    LFM_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
+                    CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                     moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
                     moe_weights.down_ptrs = controller->cache->down_ptrs();
                     weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
@@ -315,7 +315,7 @@ void Model::Impl::load_checkpoint_weights(
                         seed[static_cast<size_t>(s)] = s;
                     }
                     controller->cache->seed(seed, controller->transfer_stream->get());
-                    LFM_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
+                    CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                     moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
                     moe_weights.down_ptrs = controller->cache->down_ptrs();
                     weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
@@ -407,4 +407,4 @@ void Model::Impl::load_checkpoint_weights(
 
 }
 
-} // namespace lfm
+} // namespace celeg

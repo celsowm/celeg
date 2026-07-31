@@ -1,9 +1,9 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/model/weights/quantization.hpp"
-#include "lfm/runtime/moe/expert_residency.hpp"
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
-#include "lfm/checkpoint/tensor_names.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/model/weights/quantization.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/tensor_names.hpp"
 #include "weight_loader_internal.hpp"
 
 #include <cstddef>
@@ -16,7 +16,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
                                  const IWeightRepository& repo,
@@ -56,7 +56,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
             throw std::runtime_error("invalid BF16 byte count for " + name);
         }
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
                             cudaMemcpyHostToDevice));
     } else if (tensor.dtype == TensorDType::F32) {
         if (tensor.bytes != count * sizeof(float)) {
@@ -67,7 +67,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         for (size_t i = 0; i < count; ++i) {
             converted[i] = __float2bfloat16(src[i]);
         }
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
     } else if (tensor.dtype == TensorDType::F16) {
@@ -79,7 +79,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         for (size_t i = 0; i < count; ++i) {
             converted[i] = __float2bfloat16(__half2float(src[i]));
         }
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), converted.data(),
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
     } else if (tensor.dtype == TensorDType::Quantized) {
@@ -94,7 +94,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
         if (dequantized.size() != count) {
             throw std::runtime_error("invalid GGUF router element count for " + name);
         }
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), dequantized.data(),
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dequantized.data(),
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
     } else {
@@ -138,7 +138,7 @@ const float* WeightLoader::load_f32_weight(
     DeviceWeight weight;
     weight.shape = tensor.shape;
     weight.scales_storage.reset(count);
-    LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), tensor.data, tensor.bytes,
+    CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), tensor.data, tensor.bytes,
                         cudaMemcpyHostToDevice));
     auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
     if (!inserted) throw std::runtime_error("duplicate f32 weight: " + name);
@@ -178,4 +178,4 @@ const LinearWeight* WeightLoader::load_router_weight(
     return &slot.linear;
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,35 +1,35 @@
 # Architecture Rules
 
-These rules govern refactoring of `lfm25-cuda-cpp` toward a multi-model runtime.
+These rules govern refactoring of `celeg-cuda-cpp` toward a multi-model runtime.
 They are the binding contract for every change landing after the Phase 0
-baseline (see `lfm25_multi_stage_refactoring_plan.md` section 0.5). A pull
+baseline (see `docs/ARCHITECTURE_RULES.md` section 0.5). A pull
 request that violates a rule must either fix the violation or document an
 explicit, time-bounded exception in its description.
 
 The rules are enforced by review today and by CI static checks in later phases
-(see `lfm25_multi_stage_refactoring_plan.md` section 17.5).
+(see `docs/ARCHITECTURE_RULES.md` section 17.5).
 
 ## R1 — No new LFM-specific type in generic runtime directories
 
-Generic runtime code lives under `include/lfm/runtime/`, `src/runtime/`, and
+Generic runtime code lives under `include/celeg/runtime/`, `src/runtime/`, and
 any future `models/`-neutral boundary. A type name prefixed `Lfm` (for example
-`LfmModel`, `LfmModelShape`, `LfmWeights`) must not be introduced there. New
+`CelegModel`, `CelegModelShape`, `CelegWeights`) must not be introduced there. New
 LFM-specific types belong under `src/models/lfm2/` or a private include tree.
 
 ## R2 — No CUDA type in backend-neutral model headers
 
-Headers under `include/lfm/model/`, `include/lfm/runtime/`,
-`include/lfm/checkpoint/`, `include/lfm/text/`, and `include/lfm/serve/` must
+Headers under `include/celeg/model/`, `include/celeg/runtime/`,
+`include/celeg/checkpoint/`, `include/celeg/text/`, and `include/celeg/serve/` must
 not name CUDA types (`cudaStream_t`, `cudaEvent_t`, `__nv_bfloat16`,
 `cublasHandle_t`, `CUstream`, ...). Backend-neutral interfaces use opaque
 handles, forward declarations, or backend-neutral value types. CUDA headers
-are restricted to `include/lfm/backend/cuda/`.
+are restricted to `include/celeg/backend/cuda/`.
 
 ## R3 — No new `.inl` implementation aggregation
 
 The `.inl` extension is reserved for unavoidable template implementation or
 generated code only. A new `.inl` file must not be introduced as a textual
-unit-assembly device (the pattern `namespace lfm { #include "x.inl" }` is
+unit-assembly device (the pattern `namespace celeg { #include "x.inl" }` is
 forbidden). Existing `.inl` aggregations are being removed; do not add more.
 
 ## R4 — No optional interface method that throws "not supported" by default
@@ -43,7 +43,7 @@ inapplicable.
 
 ## R5 — No architecture switch in backend operator code
 
-Backend operator code (`src/backend/**`, `include/lfm/backend/**`) must not
+Backend operator code (`src/backend/**`, `include/celeg/backend/**`) must not
 contain architecture dispatch (`if (architecture == Lfm) ...`,
 `switch (model_type) ...`). Architecture-specific scaling, naming, and
 topology belong in architecture-owned model programs (Phase 10) or in input

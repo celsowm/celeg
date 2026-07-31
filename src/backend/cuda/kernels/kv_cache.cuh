@@ -149,7 +149,7 @@ void launch_store_kv(const __nv_bfloat16* k, const __nv_bfloat16* v,
                      int position, int kv_width, cudaStream_t stream) {
     store_kv_kernel<<<(kv_width + 255) / 256, 256, 0, stream>>>(
         k, v, key_cache, value_cache, 1, kv_width, position, nullptr, 0);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_device(const __nv_bfloat16* k, const __nv_bfloat16* v,
@@ -159,7 +159,7 @@ void launch_store_kv_device(const __nv_bfloat16* k, const __nv_bfloat16* v,
                             cudaStream_t stream) {
     store_kv_kernel<<<(kv_width + 255) / 256, 256, 0, stream>>>(
         k, v, key_cache, value_cache, 1, kv_width, 0, position, 1);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_prefill(const __nv_bfloat16* k, const __nv_bfloat16* v,
@@ -169,7 +169,7 @@ void launch_store_kv_prefill(const __nv_bfloat16* k, const __nv_bfloat16* v,
     const size_t count = static_cast<size_t>(rows) * kv_width;
     store_kv_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         k, v, key_cache, value_cache, rows, kv_width, 0, nullptr, 2);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_int8(const __nv_bfloat16* k, const __nv_bfloat16* v,
@@ -181,7 +181,7 @@ void launch_store_kv_int8(const __nv_bfloat16* k, const __nv_bfloat16* v,
     store_kv_int8_kernel<<<kv_heads, threads, 0, stream>>>(
         k, v, key_cache, value_cache, key_scales, value_scales, 1,
         kv_heads, head_dim, position, nullptr, 0);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_int8_device(const __nv_bfloat16* k,
@@ -194,7 +194,7 @@ void launch_store_kv_int8_device(const __nv_bfloat16* k,
     store_kv_int8_kernel<<<kv_heads, threads, 0, stream>>>(
         k, v, key_cache, value_cache, key_scales, value_scales, 1,
         kv_heads, head_dim, 0, position, 1);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_int8_prefill(const __nv_bfloat16* k,
@@ -207,7 +207,7 @@ void launch_store_kv_int8_prefill(const __nv_bfloat16* k,
     store_kv_int8_kernel<<<rows * kv_heads, threads, 0, stream>>>(
         k, v, key_cache, value_cache, key_scales, value_scales, rows,
         kv_heads, head_dim, 0, nullptr, 2);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 __global__ void store_kv_paged_batch_kernel(
@@ -299,7 +299,7 @@ void launch_store_kv_batch_ptrs(
     const size_t count = static_cast<size_t>(rows) * kv_width;
     store_kv_batch_ptrs_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         k, v, key_cache, value_cache, positions, rows, kv_width);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_int8_batch_ptrs(
@@ -318,7 +318,7 @@ void launch_store_kv_int8_batch_ptrs(
     store_kv_int8_batch_ptrs_kernel<<<rows * kv_heads, threads, 0, stream>>>(
         k, v, key_cache, value_cache, key_scales, value_scales,
         positions, rows, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_store_kv_paged_batch(
@@ -333,7 +333,7 @@ void launch_store_kv_paged_batch(
         k, v, key_pool, value_pool, page_tables, page_table_stride,
         positions, rows, attention_slot, page_tokens, attention_layers,
         kv_heads, head_dim);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 void launch_store_kv_int8_paged_batch(
@@ -348,5 +348,5 @@ void launch_store_kv_int8_paged_batch(
         k, v, key_pool, value_pool, key_scale_pool, value_scale_pool,
         page_tables, page_table_stride, positions, rows, attention_slot,
         page_tokens, attention_layers, kv_heads, head_dim);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }

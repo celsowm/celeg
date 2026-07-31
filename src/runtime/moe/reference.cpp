@@ -1,10 +1,10 @@
-#include "lfm/runtime/moe.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 void compute_moe_router(const std::vector<float>& hidden,
                         const std::vector<float>& router_weight,
@@ -126,4 +126,4 @@ void compute_moe_ffn(const std::vector<float>& hidden,
     }
 }
 
-} // namespace lfm
+} // namespace celeg

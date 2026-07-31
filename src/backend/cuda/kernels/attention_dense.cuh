@@ -292,7 +292,7 @@ void launch_gqa_decode_strict(const __nv_bfloat16* q,
     gqa_decode_strict_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, out, 1, seq_len, nullptr, 0,
         q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_strict_device(const __nv_bfloat16* q,
@@ -306,7 +306,7 @@ void launch_gqa_decode_strict_device(const __nv_bfloat16* q,
     gqa_decode_strict_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, out, 1, 0, position, 1,
         q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_online(const __nv_bfloat16* q,
@@ -318,7 +318,7 @@ void launch_gqa_decode_online(const __nv_bfloat16* q,
     gqa_decode_online_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, 1, seq_len, nullptr, 0,
         q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_online_device(const __nv_bfloat16* q,
@@ -331,7 +331,7 @@ void launch_gqa_decode_online_device(const __nv_bfloat16* q,
     gqa_decode_online_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, 1, 0, position, 1,
         q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_prefill_strict(const __nv_bfloat16* q,
@@ -344,7 +344,7 @@ void launch_gqa_prefill_strict(const __nv_bfloat16* q,
     gqa_decode_strict_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, out, rows, 0, nullptr, 2,
         q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_prefill_online(const __nv_bfloat16* q,
@@ -356,7 +356,7 @@ void launch_gqa_prefill_online(const __nv_bfloat16* q,
     gqa_decode_online_kernel<<<rows * q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, rows, 0, nullptr, 2,
         q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_strict_int8(
@@ -368,7 +368,7 @@ void launch_gqa_decode_strict_int8(
     gqa_decode_strict_int8_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
         seq_len, nullptr, 0, q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_online_int8(
@@ -379,7 +379,7 @@ void launch_gqa_decode_online_int8(
     gqa_decode_online_int8_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
         seq_len, nullptr, 0, q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_strict_int8_device(
@@ -392,7 +392,7 @@ void launch_gqa_decode_strict_int8_device(
     gqa_decode_strict_int8_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
         0, position, 1, q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_online_int8_device(
@@ -404,7 +404,7 @@ void launch_gqa_decode_online_int8_device(
     gqa_decode_online_int8_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
         0, position, 1, q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_prefill_strict_int8(
@@ -416,7 +416,7 @@ void launch_gqa_prefill_strict_int8(
     gqa_decode_strict_int8_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, rows,
         0, nullptr, 2, q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_prefill_online_int8(
@@ -427,5 +427,5 @@ void launch_gqa_prefill_online_int8(
     gqa_decode_online_int8_kernel<<<rows * q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, rows,
         0, nullptr, 2, q_heads, kv_heads, head_dim);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }

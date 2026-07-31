@@ -1,9 +1,9 @@
-#include "lfm/backend/cpu/concurrent.hpp"
+#include "celeg/backend/cpu/concurrent.hpp"
 
-#include "lfm/backend/cpu/prefix_cache.hpp"
-#include "lfm/backend/cpu/numa.hpp"
-#include "lfm/detail/runtime/concurrency/worker.hpp"
-#include "lfm/detail/runtime/concurrency/batch_planner.hpp"
+#include "celeg/backend/cpu/prefix_cache.hpp"
+#include "celeg/backend/cpu/numa.hpp"
+#include "celeg/detail/runtime/concurrency/worker.hpp"
+#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 namespace {
 using Clock = std::chrono::steady_clock;
 
@@ -684,4 +684,4 @@ std::string CpuConcurrentEngine::last_error() const {
     return impl_->last_error_text;
 }
 
-} // namespace lfm
+} // namespace celeg

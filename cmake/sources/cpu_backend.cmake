@@ -1,4 +1,4 @@
-set(LFM_CPU_BACKEND_SOURCES
+set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/model.cpp
     src/backend/cpu/weights.cpp
     src/backend/cpu/model_state.cpp

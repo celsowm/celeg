@@ -1,12 +1,12 @@
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <cuda_fp16.h>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
-using lfm::gguf_blocks::q4k_scale_min;
+using celeg::gguf_blocks::q4k_scale_min;
 
 __device__ __forceinline__ float warp_reduce_sum(float v) {
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -275,7 +275,7 @@ void launch_gguf_linear_segment(const __nv_bfloat16* x, const uint8_t* blocks,
                 <<<grid, block, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
         }
     }
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gguf_embedding(int32_t token, const GgufLinearSegment& segment,
@@ -289,7 +289,7 @@ void launch_gguf_embedding(int32_t token, const GgufLinearSegment& segment,
         gguf_embedding_value_kernel<BlockQ6K, q6k_value>
             <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
     }
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gguf_embedding_device(const int32_t* token,
@@ -304,7 +304,7 @@ void launch_gguf_embedding_device(const int32_t* token,
         gguf_embedding_device_kernel<BlockQ6K, q6k_value>
             <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
     }
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gguf_embedding_batch(const int32_t* tokens, int rows,
@@ -321,7 +321,7 @@ void launch_gguf_embedding_batch(const int32_t* tokens, int rows,
             <<<grid, 256, 0, stream>>>(tokens, rows, segment.blocks, out,
                                          segment.cols, segment.row_bytes);
     }
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gguf_dequant(const uint8_t* blocks, GgmlType type,
@@ -340,4 +340,4 @@ void launch_gguf_dequant(const uint8_t* blocks, GgmlType type,
     }
 }
 
-} // namespace lfm
+} // namespace celeg

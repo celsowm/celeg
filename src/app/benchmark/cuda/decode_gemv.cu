@@ -18,10 +18,10 @@
 // answers "does that kernel matter".
 //
 // Usage:
-//   lfm25-decode-gemv-benchmark [iterations] [--shapes n,k,count ...]
+//   celeg-decode-gemv-benchmark [iterations] [--shapes n,k,count ...]
 // Defaults to the LFM2.5-230M shape set.
 
-#include "lfm/backend/cuda/utils.cuh"
+#include "celeg/backend/cuda/utils.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -36,7 +36,7 @@ namespace {
 
 // Pull in the shared kernel definitions (bf16_gemv_kernel, w8a16_gemv_kernel)
 // from the same header the production backend uses -- no hand-mirrored copies.
-#include "lfm/backend/cuda/kernels/gemv_kernels.cuh"
+#include "celeg/backend/cuda/kernels/gemv_kernels.cuh"
 
 struct Shape {
     int n;
@@ -79,20 +79,20 @@ int main(int argc, char** argv) {
     if (iterations <= 0) iterations = 200;
 
     cudaDeviceProp prop{};
-    LFM_CUDA(cudaGetDeviceProperties(&prop, 0));
+    CELEG_CUDA(cudaGetDeviceProperties(&prop, 0));
     // cudaDeviceProp::memoryClockRate was removed in CUDA 13; the attribute
     // query is the portable spelling. Clock is kHz, bus width is bits, x2 for
     // DDR.
     int mem_clock_khz = 0;
     int bus_width_bits = 0;
-    LFM_CUDA(cudaDeviceGetAttribute(&mem_clock_khz, cudaDevAttrMemoryClockRate, 0));
-    LFM_CUDA(cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, 0));
+    CELEG_CUDA(cudaDeviceGetAttribute(&mem_clock_khz, cudaDevAttrMemoryClockRate, 0));
+    CELEG_CUDA(cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, 0));
     const double peak_gbs =
         2.0 * mem_clock_khz * 1e3 * (bus_width_bits / 8.0) / 1e9;
     std::printf("%s: %d SMs, %.0f GB/s theoretical peak\n\n",
                 prop.name, prop.multiProcessorCount, peak_gbs);
 
-    lfm::CudaStream stream;
+    celeg::CudaStream stream;
     int max_n = 0, max_k = 0;
     double token_bytes = 0.0;
     for (const Shape& s : shapes) {
@@ -101,23 +101,23 @@ int main(int argc, char** argv) {
         token_bytes += static_cast<double>(s.n) * s.k * 2 * s.count;
     }
 
-    lfm::DeviceBuffer<__nv_bfloat16> x(static_cast<size_t>(max_k));
-    lfm::DeviceBuffer<__nv_bfloat16> y(static_cast<size_t>(max_n));
+    celeg::DeviceBuffer<__nv_bfloat16> x(static_cast<size_t>(max_k));
+    celeg::DeviceBuffer<__nv_bfloat16> y(static_cast<size_t>(max_n));
     x.zero_async(stream.get());
-    std::vector<lfm::DeviceBuffer<__nv_bfloat16>> weights(shapes.size());
+    std::vector<celeg::DeviceBuffer<__nv_bfloat16>> weights(shapes.size());
     for (size_t i = 0; i < shapes.size(); ++i) {
         weights[i].reset(static_cast<size_t>(shapes[i].n) * shapes[i].k);
         weights[i].zero_async(stream.get());
     }
-    std::vector<lfm::DeviceBuffer<int8_t>> i8_weights(shapes.size());
-    std::vector<lfm::DeviceBuffer<float>> i8_scales(shapes.size());
+    std::vector<celeg::DeviceBuffer<int8_t>> i8_weights(shapes.size());
+    std::vector<celeg::DeviceBuffer<float>> i8_scales(shapes.size());
     for (size_t i = 0; i < shapes.size(); ++i) {
         i8_weights[i].reset(static_cast<size_t>(shapes[i].n) * shapes[i].k);
         i8_weights[i].zero_async(stream.get());
         i8_scales[i].reset(static_cast<size_t>(shapes[i].n));
         i8_scales[i].zero_async(stream.get());
     }
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
     auto launch_bf16 = [&](size_t i) {
         constexpr int wpb = 8;
@@ -132,8 +132,8 @@ int main(int argc, char** argv) {
             x.data(), i8_weights[i].data(), i8_scales[i].data(), y.data(), 1, s.n, s.k, 0.0f);
     };
 
-    lfm::CudaEvent begin;
-    lfm::CudaEvent end;
+    celeg::CudaEvent begin;
+    celeg::CudaEvent end;
 
     // INT8 weight traffic per token
     double i8_token_bytes = 0.0;
@@ -145,12 +145,12 @@ int main(int argc, char** argv) {
                 "shape", "n", "k", "count", "ms/token", "GB/s", "of peak");
     for (size_t i = 0; i < shapes.size(); ++i) {
         for (int w = 0; w < 20; ++w) launch_bf16(i);
-        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         begin.record(stream.get());
         for (int it = 0; it < iterations; ++it) launch_bf16(i);
         end.record(stream.get());
         end.synchronize();
-        const double per_call = lfm::CudaEvent::elapsed_ms(begin, end) / iterations;
+        const double per_call = celeg::CudaEvent::elapsed_ms(begin, end) / iterations;
         const double bytes = static_cast<double>(shapes[i].n) * shapes[i].k * 2;
         const double gbs = bytes / (per_call * 1e-3) / 1e9;
         std::printf("%-10s %7d %7d %5d %11.4f %10.1f %7.0f%%\n",
@@ -164,12 +164,12 @@ int main(int argc, char** argv) {
                 "shape", "n", "k", "count", "ms/token", "GB/s", "of peak");
     for (size_t i = 0; i < shapes.size(); ++i) {
         for (int w = 0; w < 20; ++w) launch_w8a16(i);
-        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         begin.record(stream.get());
         for (int it = 0; it < iterations; ++it) launch_w8a16(i);
         end.record(stream.get());
         end.synchronize();
-        const double per_call = lfm::CudaEvent::elapsed_ms(begin, end) / iterations;
+        const double per_call = celeg::CudaEvent::elapsed_ms(begin, end) / iterations;
         const double bytes = static_cast<double>(shapes[i].n) * shapes[i].k * 1;
         const double gbs = bytes / (per_call * 1e-3) / 1e9;
         std::printf("%-10s %7d %7d %5d %11.4f %10.1f %7.0f%%\n",
@@ -190,23 +190,23 @@ int main(int argc, char** argv) {
     };
 
     for (int w = 0; w < 5; ++w) seq_bf16();
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     begin.record(stream.get());
     for (int it = 0; it < seq_iters; ++it) seq_bf16();
     end.record(stream.get());
     end.synchronize();
-    double per_token = lfm::CudaEvent::elapsed_ms(begin, end) / seq_iters;
+    double per_token = celeg::CudaEvent::elapsed_ms(begin, end) / seq_iters;
     double gbs = token_bytes / (per_token * 1e-3) / 1e9;
     std::printf("\n%-10s %7s %7s %5s %11.4f %10.1f %7.0f%%   <-- BF16 token\n",
                 "TOKEN", "", "", "", per_token, gbs, 100.0 * gbs / peak_gbs);
 
     for (int w = 0; w < 5; ++w) seq_w8a16();
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     begin.record(stream.get());
     for (int it = 0; it < seq_iters; ++it) seq_w8a16();
     end.record(stream.get());
     end.synchronize();
-    per_token = lfm::CudaEvent::elapsed_ms(begin, end) / seq_iters;
+    per_token = celeg::CudaEvent::elapsed_ms(begin, end) / seq_iters;
     gbs = i8_token_bytes / (per_token * 1e-3) / 1e9;
     std::printf("%-10s %7s %7s %5s %11.4f %10.1f %7.0f%%   <-- W8A16 token\n",
                 "TOKEN", "", "", "", per_token, gbs, 100.0 * gbs / peak_gbs);

@@ -87,7 +87,7 @@ void launch_conv_decode(const __nv_bfloat16* projected_bcx,
     conv_decode_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         projected_bcx, conv_weight, state, y, hidden, cache_length,
         position, nullptr, false);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_conv_decode_device(const __nv_bfloat16* projected_bcx,
@@ -99,7 +99,7 @@ void launch_conv_decode_device(const __nv_bfloat16* projected_bcx,
     conv_decode_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         projected_bcx, conv_weight, state, y, hidden, cache_length,
         0, position, true);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_conv_prefill(const __nv_bfloat16* projected_bcx,
@@ -110,10 +110,10 @@ void launch_conv_prefill(const __nv_bfloat16* projected_bcx,
     const size_t count = static_cast<size_t>(rows) * hidden;
     conv_prefill_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         projected_bcx, conv_weight, y, rows, hidden, cache_length);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
     conv_prefill_state_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         projected_bcx, state, rows, hidden, cache_length);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 

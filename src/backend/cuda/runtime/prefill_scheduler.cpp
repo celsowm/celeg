@@ -1,6 +1,6 @@
 #include "engine_internal.hpp"
 
-namespace lfm {
+namespace celeg {
 bool ConcurrentEngine::Impl::run_prefill_work() {
     struct Work { Lane* lane; RequestId id; size_t begin; size_t count; bool first; bool final; };
     std::vector<Work> work;
@@ -147,4 +147,4 @@ bool ConcurrentEngine::Impl::run_prefill_work() {
     return !work.empty();
 }
 
-} // namespace lfm
+} // namespace celeg

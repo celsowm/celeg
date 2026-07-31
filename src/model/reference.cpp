@@ -1,4 +1,4 @@
-#include "lfm/model/reference.hpp"
+#include "celeg/model/reference.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -6,7 +6,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace lfm::reference {
+namespace celeg::reference {
 
 uint16_t float_to_bf16(float value) {
     uint32_t bits = std::bit_cast<uint32_t>(value);
@@ -164,4 +164,4 @@ std::vector<float> conv_decode_bf16(
     return out;
 }
 
-} // namespace lfm::reference
+} // namespace celeg::reference

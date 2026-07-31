@@ -2,7 +2,7 @@
 // Phase 15 quantization-quality and CPU/CUDA parity tests will rely on. The
 // test exercises the comparison functions on synthetic vectors that mimic
 // small logits / weight rows; it does not require a GPU or a real checkpoint.
-// See lfm25_multi_stage_refactoring_plan.md section 0.3 and 15.3.
+// See docs/ARCHITECTURE_RULES.md section 0.3 and 15.3.
 
 #include "support/numerical_compare.hpp"
 
@@ -13,10 +13,10 @@
 
 namespace {
 
-using lfm::test::numerical::ComparisonResult;
-using lfm::test::numerical::compare;
-using lfm::test::numerical::top_k_agreement;
-using lfm::test::numerical::require_within;
+using celeg::test::numerical::ComparisonResult;
+using celeg::test::numerical::compare;
+using celeg::test::numerical::top_k_agreement;
+using celeg::test::numerical::require_within;
 
 constexpr double kEps = 1e-12;
 

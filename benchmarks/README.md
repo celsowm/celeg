@@ -1,4 +1,4 @@
-# CPU benchmarks: lfm25-cpu vs llama.cpp
+# CPU benchmarks: celeg-cpu vs llama.cpp
 
 Automated, reproducible comparison between this repo's native CPU engine and
 upstream [llama.cpp](https://github.com/ggml-org/llama.cpp), both running the
@@ -16,11 +16,11 @@ written under `benchmarks/models` or `model/`; run `huggingface-cli scan-cache`
 to see what's there.
 
 Both sides are timed with a purpose-built, in-process benchmark binary
-(`llama-bench` for llama.cpp, this repo's own `lfm25-bench` for lfm25-cpu)
+(`llama-bench` for llama.cpp, this repo's own `celeg-bench` for celeg-cpu)
 rather than shelling out to the interactive CLIs per run. Both use the same
 methodology: synthetic/random token ids (not a real prompt) for a chosen
 `n_prompt`/`n_gen`, model loaded once, KV/session reset between repetitions,
-one discarded warmup pass before the timed repetitions. `lfm25-bench` emits
+one discarded warmup pass before the timed repetitions. `celeg-bench` emits
 the exact same JSON row schema `llama-bench -o json` does (`n_prompt`,
 `n_gen`, `avg_ns`, `stddev_ns`, `avg_ts`, `stddev_ts`), so `run_bench.py` uses
 one loader for both.
@@ -35,7 +35,7 @@ GGUF revisions used by the comparison. Both KV caches use BF16.
 
 - Python 3.9+, with `huggingface_hub` installed (`pip install huggingface_hub`).
 - CMake and a C/C++ toolchain on `PATH` (the same ones you use to build this
-  repo) -- needed to build llama.cpp and `lfm25-bench`.
+  repo) -- needed to build llama.cpp and `celeg-bench`.
 - `git`, to clone llama.cpp.
 
 ## One-time setup + run
@@ -44,7 +44,7 @@ GGUF revisions used by the comparison. Both KV caches use BF16.
 python benchmarks/run_bench.py
 ```
 
-With no subcommand this clones/builds llama.cpp, builds `lfm25-bench`,
+With no subcommand this clones/builds llama.cpp, builds `celeg-bench`,
 downloads the pinned GGUF into the HF cache if it is not already there, runs both
 benchmarks, and writes `benchmarks/results/report.md`.
 
@@ -52,10 +52,10 @@ benchmarks, and writes `benchmarks/results/report.md`.
 
 ```bash
 python benchmarks/run_bench.py setup   # clone/build both engines and fetch the GGUF
-python benchmarks/run_bench.py run     # run llama-bench + lfm25-bench, write report.md
+python benchmarks/run_bench.py run     # run llama-bench + celeg-bench, write report.md
 ```
 
-Writes `benchmarks/results/llama_cpp_<QUANT>.json`, `benchmarks/results/lfm25_cpu.json`
+Writes `benchmarks/results/llama_cpp_<QUANT>.json`, `benchmarks/results/celeg_cpu.json`
 and `benchmarks/results/report.md` (a markdown table with prefill/decode
 tokens/sec for both engines and the speedup ratio).
 
@@ -79,7 +79,7 @@ e.g. Visual Studio on Windows).
 ## Choosing a GGUF quant
 
 The comparison intentionally accepts only `Q4_K_M`. That file contains native
-Q4_K and Q6_K tensors, both executed directly by lfm25-cpu and llama.cpp.
+Q4_K and Q6_K tensors, both executed directly by celeg-cpu and llama.cpp.
 Unsupported GGUF quantizations fail explicitly rather than being silently
 dequantized or requantized.
 
@@ -99,7 +99,7 @@ A manifest describes how to reproduce a deterministic reference run: the
 checkpoint, the runtime options, the prompt, and the sampling parameters. A
 result is the captured output of executing a manifest (a token sequence, a
 logits snapshot, or both). Storing them apart is Phase 0 task 0.2 of
-`lfm25_multi_stage_refactoring_plan.md`.
+`docs/ARCHITECTURE_RULES.md`.
 
 ## Manifest files
 
@@ -128,7 +128,7 @@ python benchmarks/run_manifest.py <path> --update-expected       # refresh the r
 ```
 
 `run_manifest.py` resolves the checkpoint from the local HF cache (downloading
-if missing, via `lfm25-download`), invokes `lfm25-run` against the build
+if missing, via `celeg-download`), invokes `celeg-run` against the build
 discovered by `scripts/dev.py`, and writes the captured output to
 `benchmarks/results/<name>.json`. When the manifest records an
 `expected_sequence` (greedy `top_k == 1`), the runner compares the captured
@@ -145,5 +145,5 @@ python scripts/measure_compile.py --skip-clean   # incremental rebuilds only
 
 Writes `benchmarks/compile_baseline.json` (gitignored) with clean build time,
 two incremental rebuild times (one after touching an attention kernel, one
-after touching a model orchestration file), and the final `lfm25-run` binary
+after touching a model orchestration file), and the final `celeg-run` binary
 size.

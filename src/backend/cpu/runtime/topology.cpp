@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/topology.hpp"
+#include "celeg/backend/cpu/topology.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 
 const char* cpu_affinity_name(CpuAffinityPolicy policy) {
     switch (policy) {
@@ -103,4 +103,4 @@ std::string CpuTopology::summary() const {
     return out.str();
 }
 
-} // namespace lfm
+} // namespace celeg

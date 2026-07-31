@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
 
 #include <cstddef>
 #include <cstdint>
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::reset(bool allocate_local_kv) {
     allocate_local_kv = allocate_local_kv && options_.allocate_local_kv_cache;
@@ -31,9 +31,9 @@ void Model::Impl::reset(bool allocate_local_kv) {
     phase_ = SessionPhase::Empty;
     const int32_t zero = 0;
     uint64_t seed = generation_.seed;
-    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &zero, sizeof(zero),
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &zero, sizeof(zero),
                              cudaMemcpyHostToDevice, stream_.get()));
-    LFM_CUDA(cudaMemcpyAsync(rng_state_.data(), &seed, sizeof(seed),
+    CELEG_CUDA(cudaMemcpyAsync(rng_state_.data(), &seed, sizeof(seed),
                              cudaMemcpyHostToDevice, stream_.get()));
     seen_tokens_.zero_async(stream_.get());
     // Zero convolution state (running buffer that must start empty).  KV
@@ -50,10 +50,10 @@ void Model::Impl::reset(bool allocate_local_kv) {
     // Prime the FFN-done, router-done and prefetch-done events so the offload
     // transfer stream can start promoting experts on the first layer of the
     // next forward pass.
-    LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
-    LFM_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
-    LFM_CUDA(cudaEventRecord(prefetch_done_event_.get(), stream_.get()));
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
+    CELEG_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
+    CELEG_CUDA(cudaEventRecord(prefetch_done_event_.get(), stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
 void Model::Impl::allocate_prefill_workspace(int rows) {
@@ -89,5 +89,5 @@ void Model::Impl::allocate_prefill_workspace(int rows) {
 void Model::Impl::release_prefill_workspace() {
 }
 
-} // namespace lfm
+} // namespace celeg
 

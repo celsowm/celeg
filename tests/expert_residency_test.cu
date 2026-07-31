@@ -1,8 +1,8 @@
-#include "lfm/runtime/moe/expert_residency.hpp"
-#include "lfm/runtime/moe.hpp"
-#include "lfm/backend/cuda/utils.cuh"
-#include "lfm/detail/model/types.hpp"
-#include "lfm/model/config/shape.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
+#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/utils.cuh"
+#include "celeg/detail/model/types.hpp"
+#include "celeg/model/config/shape.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -47,26 +47,26 @@ Problem build() {
 }
 
 // Runs launch_moe_ffn with a fully-contiguous device layout (baseline).
-std::vector<__nv_bfloat16> run_contiguous(const Problem& p, lfm::CudaStream& stream) {
-    lfm::DeviceBuffer<__nv_bfloat16> d_gate_up(p.gate_up.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_down(p.down.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
-    lfm::DeviceBuffer<float> d_accum(p.hidden_vec.size());
-    lfm::DeviceBuffer<int> d_sel(p.sel.size());
-    lfm::DeviceBuffer<float> d_wts(p.wts.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
+std::vector<__nv_bfloat16> run_contiguous(const Problem& p, celeg::CudaStream& stream) {
+    celeg::DeviceBuffer<__nv_bfloat16> d_gate_up(p.gate_up.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_down(p.down.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
+    celeg::DeviceBuffer<float> d_accum(p.hidden_vec.size());
+    celeg::DeviceBuffer<int> d_sel(p.sel.size());
+    celeg::DeviceBuffer<float> d_wts(p.wts.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
         static_cast<size_t>(p.rows) * p.K * 2 * p.inter);
-    lfm::DeviceBuffer<__nv_bfloat16> d_act_scratch(
+    celeg::DeviceBuffer<__nv_bfloat16> d_act_scratch(
         static_cast<size_t>(p.rows) * p.K * p.inter);
-    LFM_CUDA(cudaMemcpy(d_gate_up.data(), p.gate_up.data(), d_gate_up.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_down.data(), p.down.data(), d_down.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_gate_up.data(), p.gate_up.data(), d_gate_up.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_down.data(), p.down.data(), d_down.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
     d_accum.zero_async(stream.get());
 
-    lfm::MoeFfnDevice fdev;
+    celeg::MoeFfnDevice fdev;
     fdev.gate_up = d_gate_up.data();
     fdev.down = d_down.data();
     fdev.num_experts = p.experts;
@@ -74,15 +74,15 @@ std::vector<__nv_bfloat16> run_contiguous(const Problem& p, lfm::CudaStream& str
     fdev.hidden_dim = p.hidden;
     fdev.expert_gate_up_stride = static_cast<size_t>(2) * p.inter * p.hidden;
     fdev.expert_down_stride = static_cast<size_t>(p.hidden) * p.inter;
-    lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
+    celeg::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
                         d_accum.data(), p.rows, p.K, d_gu_scratch.data(),
                         d_act_scratch.data(), stream.get());
-    lfm::launch_finalize_moe_output(d_accum.data(), d_out.data(),
+    celeg::launch_finalize_moe_output(d_accum.data(), d_out.data(),
                                     static_cast<int>(p.hidden_vec.size()),
                                     stream.get());
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> out(p.hidden_vec.size());
-    LFM_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
+    CELEG_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
     return out;
 }
 
@@ -91,14 +91,14 @@ std::vector<__nv_bfloat16> run_contiguous(const Problem& p, lfm::CudaStream& str
 // GPU cache pointers and the host-mapped fallback pointers in one kernel.
 std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
                                        const std::vector<int>& resident,
-                                       lfm::CudaStream& stream) {
+                                       celeg::CudaStream& stream) {
     const size_t gate_up_per_expert = static_cast<size_t>(2) * p.inter * p.hidden;
     const size_t down_per_expert = static_cast<size_t>(p.hidden) * p.inter;
     const size_t gate_up_bytes = gate_up_per_expert * sizeof(__nv_bfloat16);
     const size_t down_bytes = down_per_expert * sizeof(__nv_bfloat16);
 
     // Host expert store: register each expert's bytes and get device pointers.
-    lfm::HostExpertStore store;
+    celeg::HostExpertStore store;
     std::vector<const __nv_bfloat16*> gu_host(p.experts);
     std::vector<const __nv_bfloat16*> dw_host(p.experts);
     for (int e = 0; e < p.experts; ++e) {
@@ -108,40 +108,40 @@ std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
             p.down.data() + static_cast<size_t>(e) * down_per_expert, down_bytes));
     }
 
-    lfm::ExpertLayerCache cache(p.experts, capacity, gate_up_bytes, down_bytes);
+    celeg::ExpertLayerCache cache(p.experts, capacity, gate_up_bytes, down_bytes);
     cache.set_host_sources(gu_host, dw_host);
     cache.seed(resident, stream.get());
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
-    lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
-    lfm::DeviceBuffer<float> d_accum(p.hidden_vec.size());
-    lfm::DeviceBuffer<int> d_sel(p.sel.size());
-    lfm::DeviceBuffer<float> d_wts(p.wts.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
+    celeg::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
+    celeg::DeviceBuffer<float> d_accum(p.hidden_vec.size());
+    celeg::DeviceBuffer<int> d_sel(p.sel.size());
+    celeg::DeviceBuffer<float> d_wts(p.wts.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
         static_cast<size_t>(p.rows) * p.K * 2 * p.inter);
-    lfm::DeviceBuffer<__nv_bfloat16> d_act_scratch(
+    celeg::DeviceBuffer<__nv_bfloat16> d_act_scratch(
         static_cast<size_t>(p.rows) * p.K * p.inter);
-    LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
     d_accum.zero_async(stream.get());
 
-    lfm::MoeFfnDevice fdev;
+    celeg::MoeFfnDevice fdev;
     fdev.num_experts = p.experts;
     fdev.inter = p.inter;
     fdev.hidden_dim = p.hidden;
     fdev.gate_up_ptrs = cache.gate_up_ptrs();
     fdev.down_ptrs = cache.down_ptrs();
-    lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
+    celeg::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
                         d_accum.data(), p.rows, p.K, d_gu_scratch.data(),
                         d_act_scratch.data(), stream.get());
-    lfm::launch_finalize_moe_output(d_accum.data(), d_out.data(),
+    celeg::launch_finalize_moe_output(d_accum.data(), d_out.data(),
                                     static_cast<int>(p.hidden_vec.size()),
                                     stream.get());
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> out(p.hidden_vec.size());
-    LFM_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
+    CELEG_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
     return out;
 }
 
@@ -181,13 +181,13 @@ void check_close(const std::vector<__nv_bfloat16>& a,
 // an ExpertLayerCache, resolve it through moe_ffn_device(), and run the kernel.
 std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
                                              const std::vector<int>& resident,
-                                             lfm::CudaStream& stream) {
+                                             celeg::CudaStream& stream) {
     const size_t gu_pe = static_cast<size_t>(2) * p.inter * p.hidden;
     const size_t dw_pe = static_cast<size_t>(p.hidden) * p.inter;
     const size_t gu_bytes = gu_pe * sizeof(__nv_bfloat16);
     const size_t dw_bytes = dw_pe * sizeof(__nv_bfloat16);
 
-    lfm::HostExpertStore store;
+    celeg::HostExpertStore store;
     std::vector<const __nv_bfloat16*> gu(p.experts), dw(p.experts);
     for (int e = 0; e < p.experts; ++e) {
         gu[e] = static_cast<const __nv_bfloat16*>(store.store_pinned_copy(
@@ -196,57 +196,57 @@ std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
             p.down.data() + static_cast<size_t>(e) * dw_pe, dw_bytes));
     }
 
-    lfm::ExpertLayerCache cache(p.experts, capacity, gu_bytes, dw_bytes);
+    celeg::ExpertLayerCache cache(p.experts, capacity, gu_bytes, dw_bytes);
     cache.set_host_sources(gu, dw);
     cache.seed(resident, stream.get());
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
-    lfm::MoeFfnWeights moe;
+    celeg::MoeFfnWeights moe;
     moe.gate_up_ptrs = cache.gate_up_ptrs();
     moe.down_ptrs = cache.down_ptrs();
 
-    lfm::ModelShape shape;
+    celeg::ModelShape shape;
     shape.num_experts = p.experts;
     shape.experts_per_token = p.K;
     shape.moe_intermediate = p.inter;
     shape.hidden = p.hidden;
 
-    lfm::MoeFfnDevice fdev = lfm::moe_ffn_device(moe, shape);
+    celeg::MoeFfnDevice fdev = celeg::moe_ffn_device(moe, shape);
     check(fdev.gate_up_ptrs == cache.gate_up_ptrs(),
           "moe_ffn_device indirect gate_up_ptrs");
     check(fdev.down_ptrs == cache.down_ptrs(),
           "moe_ffn_device indirect down_ptrs");
 
-    lfm::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
-    lfm::DeviceBuffer<float> d_accum(p.hidden_vec.size());
-    lfm::DeviceBuffer<int> d_sel(p.sel.size());
-    lfm::DeviceBuffer<float> d_wts(p.wts.size());
-    lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
+    celeg::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden_vec.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_out(p.hidden_vec.size());
+    celeg::DeviceBuffer<float> d_accum(p.hidden_vec.size());
+    celeg::DeviceBuffer<int> d_sel(p.sel.size());
+    celeg::DeviceBuffer<float> d_wts(p.wts.size());
+    celeg::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
         static_cast<size_t>(p.rows) * p.K * 2 * p.inter);
-    lfm::DeviceBuffer<__nv_bfloat16> d_act_scratch(
+    celeg::DeviceBuffer<__nv_bfloat16> d_act_scratch(
         static_cast<size_t>(p.rows) * p.K * p.inter);
-    LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_sel.data(), p.sel.data(), d_sel.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(d_wts.data(), p.wts.data(), d_wts.bytes(), cudaMemcpyHostToDevice));
     d_accum.zero_async(stream.get());
 
-    lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
+    celeg::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(), d_hidden.data(),
                         d_accum.data(), p.rows, p.K, d_gu_scratch.data(),
                         d_act_scratch.data(), stream.get());
-    lfm::launch_finalize_moe_output(d_accum.data(), d_out.data(),
+    celeg::launch_finalize_moe_output(d_accum.data(), d_out.data(),
                                     static_cast<int>(p.hidden_vec.size()),
                                     stream.get());
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> out(p.hidden_vec.size());
-    LFM_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
+    CELEG_CUDA(cudaMemcpy(out.data(), d_out.data(), d_out.bytes(), cudaMemcpyDeviceToHost));
     return out;
 }
 
 int main() {
     try {
         const Problem p = build();
-        lfm::CudaStream stream;
+        celeg::CudaStream stream;
 
         const std::vector<__nv_bfloat16> baseline = run_contiguous(p, stream);
 
@@ -273,7 +273,7 @@ int main() {
                 static_cast<size_t>(2) * p.inter * p.hidden * sizeof(__nv_bfloat16);
             const size_t dw_bytes =
                 static_cast<size_t>(p.hidden) * p.inter * sizeof(__nv_bfloat16);
-            lfm::HostExpertStore store;
+            celeg::HostExpertStore store;
             std::vector<const __nv_bfloat16*> gu(p.experts), dw(p.experts);
             const size_t gu_pe = static_cast<size_t>(2) * p.inter * p.hidden;
             const size_t dw_pe = static_cast<size_t>(p.hidden) * p.inter;
@@ -283,20 +283,20 @@ int main() {
                 dw[e] = static_cast<const __nv_bfloat16*>(store.store_pinned_copy(
                     p.down.data() + static_cast<size_t>(e) * dw_pe, dw_bytes));
             }
-            lfm::ExpertLayerCache cache(p.experts, 2, gu_bytes, dw_bytes);
+            celeg::ExpertLayerCache cache(p.experts, 2, gu_bytes, dw_bytes);
             cache.set_host_sources(gu, dw);
             cache.promote(4, 0, stream.get());
             cache.promote(1, 1, stream.get());
-            LFM_CUDA(cudaStreamSynchronize(stream.get()));
+            CELEG_CUDA(cudaStreamSynchronize(stream.get()));
             check(cache.resident(4) && cache.expert_slot(4) == 0, "promote expert 4 -> slot 0");
             check(cache.resident(1) && cache.expert_slot(1) == 1, "promote expert 1 -> slot 1");
             check(!cache.resident(0), "expert 0 host-resident");
             // Evict then re-promote a different expert into slot 0.
             cache.evict(0, stream.get());
-            LFM_CUDA(cudaStreamSynchronize(stream.get()));
+            CELEG_CUDA(cudaStreamSynchronize(stream.get()));
             check(!cache.resident(4), "expert 4 evicted");
             cache.promote(2, 0, stream.get());
-            LFM_CUDA(cudaStreamSynchronize(stream.get()));
+            CELEG_CUDA(cudaStreamSynchronize(stream.get()));
             check(cache.resident(2) && cache.slot_expert(0) == 2, "promote expert 2 -> slot 0");
         }
 
@@ -308,7 +308,7 @@ int main() {
                 static_cast<size_t>(p.hidden) * p.inter * sizeof(__nv_bfloat16);
             const size_t gu_pe = static_cast<size_t>(2) * p.inter * p.hidden;
             const size_t dw_pe = static_cast<size_t>(p.hidden) * p.inter;
-            lfm::HostExpertStore store;
+            celeg::HostExpertStore store;
             std::vector<const __nv_bfloat16*> gu(p.experts), dw(p.experts);
             for (int e = 0; e < p.experts; ++e) {
                 gu[e] = static_cast<const __nv_bfloat16*>(store.store_pinned_copy(
@@ -316,9 +316,9 @@ int main() {
                 dw[e] = static_cast<const __nv_bfloat16*>(store.store_pinned_copy(
                     p.down.data() + static_cast<size_t>(e) * dw_pe, dw_bytes));
             }
-            lfm::ExpertLayerCache cache(p.experts, 2, gu_bytes, dw_bytes);
+            celeg::ExpertLayerCache cache(p.experts, 2, gu_bytes, dw_bytes);
             cache.set_host_sources(gu, dw);
-            lfm::CudaStream stream;
+            celeg::CudaStream stream;
             check(cache.ensure_resident(3, stream.get()), "ensure_resident promotes cold expert 3");
             check(cache.ensure_resident(3, stream.get()) == false,
                   "ensure_resident no-op when already resident");
@@ -328,7 +328,7 @@ int main() {
             check(cache.ensure_resident(5, stream.get()), "ensure_resident promotes expert 5");
             check(!cache.resident(3), "LRU victim expert 3 evicted");
             check(cache.resident(1) && cache.resident(5), "experts 1 and 5 resident");
-            LFM_CUDA(cudaStreamSynchronize(stream.get()));
+            CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         }
 
         if (g_failed) {

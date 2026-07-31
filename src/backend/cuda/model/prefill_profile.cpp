@@ -1,6 +1,6 @@
-#include "lfm/backend/cuda/phase_profile.hpp"
+#include "celeg/backend/cuda/phase_profile.hpp"
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 PrefillPhaseProfile g_prefill_profile;
@@ -8,4 +8,4 @@ PrefillPhaseProfile g_prefill_profile;
 
 PrefillPhaseProfile& prefill_phase_profile() { return g_prefill_profile; }
 
-} // namespace lfm
+} // namespace celeg

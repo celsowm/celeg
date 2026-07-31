@@ -1,9 +1,9 @@
-#include "lfm/serve/generation_dispatcher.hpp"
+#include "celeg/serve/generation_dispatcher.hpp"
 
 #include <utility>
 #include <vector>
 
-namespace lfm::serve {
+namespace celeg::serve {
 
 GenerationDispatcher::GenerationDispatcher(IInferenceService& service,
                                            std::chrono::microseconds idle_interval)
@@ -75,4 +75,4 @@ void GenerationDispatcher::dispatch_once() {
     }
 }
 
-} // namespace lfm::serve
+} // namespace celeg::serve

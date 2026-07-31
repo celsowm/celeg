@@ -11,7 +11,7 @@ from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("lfm_dev", ROOT / "scripts" / "dev.py")
+SPEC = importlib.util.spec_from_file_location("celeg_dev", ROOT / "scripts" / "dev.py")
 assert SPEC and SPEC.loader
 dev = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = dev
@@ -34,7 +34,7 @@ class DevCliTest(unittest.TestCase):
         with self.assertRaises(Exception):
             dev.normalize_arch("latest")
 
-    def test_runtime_layout_supports_cuda_13_x64(self) -> None:
+    def test_celeg_layout_supports_cuda_13_x64(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             (root / "bin" / "x64").mkdir(parents=True)
@@ -123,14 +123,14 @@ class DevCliTest(unittest.TestCase):
             errors=[],
             warnings=[],
         )
-        args = mock.Mock(build_type="RelWithDebInfo", runtime_tests="on")
+        args = mock.Mock(build_type="RelWithDebInfo", celeg_tests="on")
         command = dev.configure_command(args, environment, pathlib.Path("out"))
         self.assertIn("-DCMAKE_C_COMPILER=cl.exe", command)
         self.assertIn("-DCMAKE_CXX_COMPILER=cl.exe", command)
         self.assertFalse(any(value.startswith("-DCMAKE_CUDA_HOST_COMPILER=") for value in command))
         self.assertIn("-DCMAKE_CUDA_ARCHITECTURES=86", command)
         self.assertIn("-DCMAKE_CUDA_FLAGS_INIT=--use-local-env", command)
-        self.assertIn("-DLFM_MSVC_SHOWINCLUDES_PREFIX=Note: including file: ", command)
+        self.assertIn("-DCELEG_MSVC_SHOWINCLUDES_PREFIX=Note: including file: ", command)
         self.assertNotIn("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler", command)
 
 

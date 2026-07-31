@@ -1,8 +1,8 @@
-#include "lfm/detail/checkpoint/bootstrap.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
 
 #include <stdexcept>
 
-namespace lfm::detail {
+namespace celeg::detail {
 
 bool path_is_gguf(const std::filesystem::path& model_path) {
     if (std::filesystem::is_directory(model_path)) return false;
@@ -42,4 +42,4 @@ ModelBootstrap load_model_bootstrap(const std::filesystem::path& model_path) {
     return bootstrap;
 }
 
-} // namespace lfm::detail
+} // namespace celeg::detail

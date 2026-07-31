@@ -1,9 +1,9 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/model/weights/quantization.hpp"
-#include "lfm/runtime/moe/expert_residency.hpp"
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
-#include "lfm/checkpoint/tensor_names.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/model/weights/quantization.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/tensor_names.hpp"
 #include "weight_loader_internal.hpp"
 
 #include <cstddef>
@@ -16,7 +16,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 const LinearWeight* WeightLoader::load_linear_weight(
     const IWeightRepository& repo,
@@ -65,7 +65,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
 
         if (weight_mode_ == WeightMode::NativeGguf) {
             DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
-            LFM_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
+            CELEG_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                                 tensor.bytes, cudaMemcpyHostToDevice));
             GgufLinearSegment segment;
             segment.blocks = raw_blocks.data();
@@ -90,19 +90,19 @@ const LinearWeight* WeightLoader::load_linear_weight(
         }
 
         DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
-        LFM_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
+        CELEG_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                             tensor.bytes, cudaMemcpyHostToDevice));
         weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
         launch_gguf_dequant(raw_blocks.data(), tensor.ggml_type,
                            weight.bf16_storage.data(), rows, cols,
                            nullptr);
-        LFM_CUDA(cudaStreamSynchronize(nullptr));
+        CELEG_CUDA(cudaStreamSynchronize(nullptr));
 
         if (weight_mode_ == WeightMode::Int8 ||
             weight_mode_ == WeightMode::Int4) {
             std::vector<__nv_bfloat16> host_bf16(
                 static_cast<size_t>(rows) * cols);
-            LFM_CUDA(cudaMemcpy(host_bf16.data(),
+            CELEG_CUDA(cudaMemcpy(host_bf16.data(),
                                 weight.bf16_storage.data(),
                                 host_bf16.size() * sizeof(__nv_bfloat16),
                                 cudaMemcpyDeviceToHost));
@@ -118,11 +118,11 @@ const LinearWeight* WeightLoader::load_linear_weight(
                     static_cast<size_t>(cols));
                 weight.int8_storage.reset(count);
                 weight.scales_storage.reset(pack.scales.size());
-                LFM_CUDA(cudaMemcpy(weight.int8_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(),
                                     pack.values.data(),
                                     pack.values.size() * sizeof(int8_t),
                                     cudaMemcpyHostToDevice));
-                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(),
                                     pack.scales.data(),
                                     pack.scales.size() * sizeof(float),
                                     cudaMemcpyHostToDevice));
@@ -136,11 +136,11 @@ const LinearWeight* WeightLoader::load_linear_weight(
                     static_cast<size_t>(cols));
                 weight.int4_storage.reset(pack.values.size());
                 weight.scales_storage.reset(pack.scales.size());
-                LFM_CUDA(cudaMemcpy(weight.int4_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.int4_storage.data(),
                                     pack.values.data(),
                                     pack.values.size() * sizeof(uint8_t),
                                     cudaMemcpyHostToDevice));
-                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(),
                                     pack.scales.data(),
                                     pack.scales.size() * sizeof(float),
                                     cudaMemcpyHostToDevice));
@@ -205,10 +205,10 @@ const LinearWeight* WeightLoader::load_linear_weight(
         std::vector<float>& scales = pack.scales;
         weight.int8_storage.reset(count);
         weight.scales_storage.reset(scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int8_storage.data(), quantized.data(),
+        CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(), quantized.data(),
                             quantized.size() * sizeof(int8_t),
                             cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
+        CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
                             scales.size() * sizeof(float),
                             cudaMemcpyHostToDevice));
         weight.linear.kind = LinearStorageKind::Int8;
@@ -219,10 +219,10 @@ const LinearWeight* WeightLoader::load_linear_weight(
             dense_data, static_cast<size_t>(rows), static_cast<size_t>(cols));
         weight.int4_storage.reset(pack.values.size());
         weight.scales_storage.reset(pack.scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int4_storage.data(), pack.values.data(),
+        CELEG_CUDA(cudaMemcpy(weight.int4_storage.data(), pack.values.data(),
                             pack.values.size() * sizeof(uint8_t),
                             cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), pack.scales.data(),
+        CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), pack.scales.data(),
                             pack.scales.size() * sizeof(float),
                             cudaMemcpyHostToDevice));
         weight.linear.kind = LinearStorageKind::Int4;
@@ -230,7 +230,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         weight.linear.scales = weight.scales_storage.data();
     } else {
         weight.bf16_storage.reset(count);
-        LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense_data,
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense_data,
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
         weight.linear.kind = LinearStorageKind::Bf16;
@@ -320,7 +320,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 const size_t row_bytes = static_cast<size_t>(common_width / trait.block_size) * trait.type_size;
                 const size_t bytes = static_cast<size_t>(v.shape[0]) * row_bytes;
                 DeviceBuffer<uint8_t> raw_blocks(bytes);
-                LFM_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
+                CELEG_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
                                     bytes, cudaMemcpyHostToDevice));
                 GgufLinearSegment segment;
                 segment.blocks = raw_blocks.data();
@@ -357,7 +357,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             const size_t row_bytes = static_cast<size_t>(common_width / trait.block_size) * trait.type_size;
             const size_t bytes = static_cast<size_t>(v.shape[0]) * row_bytes;
             DeviceBuffer<uint8_t> raw_blocks(bytes);
-            LFM_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
+            CELEG_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
                                 bytes, cudaMemcpyHostToDevice));
             launch_gguf_dequant(
                 raw_blocks.data(), v.ggml_type,
@@ -365,7 +365,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                     static_cast<size_t>(row_offset) * common_width,
                 static_cast<int>(v.shape[0]), static_cast<int>(common_width),
                 nullptr);
-            LFM_CUDA(cudaStreamSynchronize(nullptr));
+            CELEG_CUDA(cudaStreamSynchronize(nullptr));
             row_offset += static_cast<int>(v.shape[0]);
         }
 
@@ -373,7 +373,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             weight_mode_ == WeightMode::Int4) {
             const size_t count = static_cast<size_t>(total_rows) * common_width;
             std::vector<__nv_bfloat16> host_bf16(count);
-            LFM_CUDA(cudaMemcpy(host_bf16.data(),
+            CELEG_CUDA(cudaMemcpy(host_bf16.data(),
                                 weight.bf16_storage.data(),
                                 count * sizeof(__nv_bfloat16),
                                 cudaMemcpyDeviceToHost));
@@ -386,11 +386,11 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                     static_cast<size_t>(common_width));
                 weight.int8_storage.reset(count);
                 weight.scales_storage.reset(pack.scales.size());
-                LFM_CUDA(cudaMemcpy(weight.int8_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(),
                                     pack.values.data(),
                                     pack.values.size() * sizeof(int8_t),
                                     cudaMemcpyHostToDevice));
-                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(),
                                     pack.scales.data(),
                                     pack.scales.size() * sizeof(float),
                                     cudaMemcpyHostToDevice));
@@ -404,11 +404,11 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                     static_cast<size_t>(common_width));
                 weight.int4_storage.reset(pack.values.size());
                 weight.scales_storage.reset(pack.scales.size());
-                LFM_CUDA(cudaMemcpy(weight.int4_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.int4_storage.data(),
                                     pack.values.data(),
                                     pack.values.size() * sizeof(uint8_t),
                                     cudaMemcpyHostToDevice));
-                LFM_CUDA(cudaMemcpy(weight.scales_storage.data(),
+                CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(),
                                     pack.scales.data(),
                                     pack.scales.size() * sizeof(float),
                                     cudaMemcpyHostToDevice));
@@ -460,10 +460,10 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         }
         weight.int8_storage.reset(total_count);
         weight.scales_storage.reset(scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int8_storage.data(), quantized.data(),
+        CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(), quantized.data(),
                             quantized.size() * sizeof(int8_t),
                             cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
+        CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
                             scales.size() * sizeof(float),
                             cudaMemcpyHostToDevice));
         weight.linear.kind = LinearStorageKind::Int8;
@@ -484,10 +484,10 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         }
         weight.int4_storage.reset(quantized.size());
         weight.scales_storage.reset(scales.size());
-        LFM_CUDA(cudaMemcpy(weight.int4_storage.data(), quantized.data(),
+        CELEG_CUDA(cudaMemcpy(weight.int4_storage.data(), quantized.data(),
                             quantized.size() * sizeof(uint8_t),
                             cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
+        CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
                             scales.size() * sizeof(float),
                             cudaMemcpyHostToDevice));
         weight.linear.kind = LinearStorageKind::Int4;
@@ -499,7 +499,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         size_t offset = 0;
         for (const auto& view : views) {
             const size_t count = cuda_loader_detail::checked_element_count(view.shape);
-            LFM_CUDA(cudaMemcpy(dest + offset, view.data,
+            CELEG_CUDA(cudaMemcpy(dest + offset, view.data,
                                 count * sizeof(__nv_bfloat16),
                                 cudaMemcpyHostToDevice));
             offset += count;
@@ -516,4 +516,4 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     return &it->second.linear;
 }
 
-} // namespace lfm
+} // namespace celeg

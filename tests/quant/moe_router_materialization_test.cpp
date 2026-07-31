@@ -14,12 +14,12 @@
 //
 // The test runs on host only -- the WeightLoader materializes into a
 // DeviceWeight (CUDA-backed) so it requires a CUDA device; it links against
-// lfm_cuda_backend. See lfm25_multi_stage_refactoring_plan.md section 1.1.
+// celeg_cuda_backend. See docs/ARCHITECTURE_RULES.md section 1.1.
 
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/detail/model/types.hpp"
-#include "lfm/checkpoint/formats/safetensors.hpp"
-#include "lfm/checkpoint/formats/gguf.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/detail/model/types.hpp"
+#include "celeg/checkpoint/formats/safetensors.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
 
 #include "support/assertions.hpp"
 
@@ -36,15 +36,15 @@
 
 namespace {
 
-using lfm::DeviceWeight;
-using lfm::IWeightRepository;
-using lfm::LinearStorageKind;
-using lfm::LinearWeight;
-using lfm::SharedModelWeights;
-using lfm::TensorDType;
-using lfm::WeightLoader;
-using lfm::WeightMode;
-using lfm::HostTensorView;
+using celeg::DeviceWeight;
+using celeg::IWeightRepository;
+using celeg::LinearStorageKind;
+using celeg::LinearWeight;
+using celeg::SharedModelWeights;
+using celeg::TensorDType;
+using celeg::WeightLoader;
+using celeg::WeightMode;
+using celeg::HostTensorView;
 
 // In-memory repository that returns one BF16 tensor when asked for the
 // router name of `layer`. Used to mirror what weight_setup.cpp sees for the MoE router
@@ -98,16 +98,16 @@ RouterMaterialization materialize_router(WeightMode mode, int experts, int hidde
     FakeRouterRepo repo(experts, hidden, data);
 
     const LinearWeight* router = loader.load_router_weight(repo, 0, experts, hidden);
-    LFM_TEST_CHECK(router != nullptr);
-    LFM_TEST_CHECK(router->rows == experts);
-    LFM_TEST_CHECK(router->cols == hidden);
-    LFM_TEST_CHECK(!router->quantized());  // contract from plan 1.1
+    CELEG_TEST_CHECK(router != nullptr);
+    CELEG_TEST_CHECK(router->rows == experts);
+    CELEG_TEST_CHECK(router->cols == hidden);
+    CELEG_TEST_CHECK(!router->quantized());  // contract from plan 1.1
     RouterMaterialization result{
         router->kind,
         router->bf16 != nullptr,
     };
-    LFM_TEST_CHECK(result.kind == LinearStorageKind::Bf16);
-    LFM_TEST_CHECK(result.bf16_nonnull);
+    CELEG_TEST_CHECK(result.kind == LinearStorageKind::Bf16);
+    CELEG_TEST_CHECK(result.bf16_nonnull);
     return result;
 }
 
@@ -130,7 +130,7 @@ public:
         view.shape = {experts_, hidden_};
         view.data = blocks_.data();
         view.bytes = blocks_.size();
-        view.ggml_type = lfm::GgmlType::Q4_K;
+        view.ggml_type = celeg::GgmlType::Q4_K;
         return view;
     }
 
@@ -147,7 +147,7 @@ private:
 void verify_native_q4_router_is_materialized_as_bf16() {
     constexpr int experts = 1;
     constexpr int hidden = 256; // one complete Q4_K super-block per row
-    const lfm::GgmlTypeTrait trait = lfm::ggml_type_trait(lfm::GgmlType::Q4_K);
+    const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(celeg::GgmlType::Q4_K);
     std::vector<std::byte> blocks(static_cast<size_t>(experts) * trait.type_size);
 
     // A valid Q4_K block with d=1, dmin=0, scale=1 and q=1 everywhere.
@@ -167,10 +167,10 @@ void verify_native_q4_router_is_materialized_as_bf16() {
     FakeQuantizedRouterRepo repo(experts, hidden, std::move(blocks));
     const LinearWeight* router = loader.load_router_weight(
         repo, 0, experts, hidden);
-    LFM_TEST_CHECK(router != nullptr);
-    LFM_TEST_CHECK(router->kind == LinearStorageKind::Bf16);
-    LFM_TEST_CHECK(router->bf16 != nullptr);
-    LFM_TEST_CHECK(!router->quantized());
+    CELEG_TEST_CHECK(router != nullptr);
+    CELEG_TEST_CHECK(router->kind == LinearStorageKind::Bf16);
+    CELEG_TEST_CHECK(router->bf16 != nullptr);
+    CELEG_TEST_CHECK(!router->quantized());
 }
 
 } // namespace
@@ -194,8 +194,8 @@ int main() {
         std::cout << "mode=" << mode_name
                   << " kind=" << static_cast<int>(m.kind)
                   << " bf16_nonnull=" << (m.bf16_nonnull ? "yes" : "no") << "\n";
-        LFM_TEST_CHECK(m.kind == LinearStorageKind::Bf16);
-        LFM_TEST_CHECK(m.bf16_nonnull);
+        CELEG_TEST_CHECK(m.kind == LinearStorageKind::Bf16);
+        CELEG_TEST_CHECK(m.bf16_nonnull);
     }
 
     verify_native_q4_router_is_materialized_as_bf16();

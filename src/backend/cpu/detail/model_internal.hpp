@@ -1,14 +1,14 @@
 #pragma once
 
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/backend/cpu/model.hpp"
-#include "lfm/backend/cpu/paged_kv.hpp"
-#include "lfm/backend/cpu/prefix_cache.hpp"
-#include "lfm/backend/cpu/quantization.hpp"
-#include "lfm/backend/cpu/thread_pool.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/model/config/variant.hpp"
-#include "lfm/model/weights/roles.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/paged_kv.hpp"
+#include "celeg/backend/cpu/prefix_cache.hpp"
+#include "celeg/backend/cpu/quantization.hpp"
+#include "celeg/backend/cpu/thread_pool.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/model/config/variant.hpp"
+#include "celeg/model/weights/roles.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 // Capacity-managed activation storage shared by all CPU execution modes.
 // The executor chooses the row count; buffers are retained between calls.
@@ -207,4 +207,4 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
     CpuPrefillProfile prefill_profile;
 };
 
-} // namespace lfm
+} // namespace celeg

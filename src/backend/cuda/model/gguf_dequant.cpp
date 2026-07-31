@@ -1,13 +1,13 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 // as a fallback when a concatenation mixes quant formats (e.g. attention q/k/v
@@ -21,7 +21,7 @@ void q4k_decode(const Q4KHost* blk, int col, float& out) {
     const float dmin = __half2float(blk->dmin);
     const int sub = col >> 5, within = col & 31;
     uint8_t sc, m;
-    lfm::gguf_blocks::q4k_scale_min(sub, blk->scales, sc, m);
+    celeg::gguf_blocks::q4k_scale_min(sub, blk->scales, sc, m);
     const uint8_t* qs = blk->qs + (sub >> 1) * 32;
     const int q = (sub & 1) ? (qs[within] >> 4) : (qs[within] & 0xF);
     out = d * sc * static_cast<float>(q) - dmin * m;
@@ -75,4 +75,4 @@ void dequantize_gguf_to_bf16(const HostTensorView& tensor,
     dequantize_gguf_to_bf16_impl(tensor, out);
 }
 
-} // namespace lfm
+} // namespace celeg

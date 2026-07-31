@@ -4,7 +4,7 @@
 Nsight Compute needs elevated GPU-counter permissions (ERR_NVGPUCTRPERM) that
 are frequently unavailable on developer Windows machines, and decode is captured
 into one CUDA graph anyway, which flattens per-kernel attribution. This drives
-the in-tree profiler (include/lfm/backend/cuda/phase_profile.hpp) instead, which
+the in-tree profiler (include/celeg/backend/cuda/phase_profile.hpp) instead, which
 needs neither.
 
 It answers "where is the time actually going" before anyone writes a kernel.
@@ -68,13 +68,13 @@ def run(binary: Path, model: Path, extra: list[str], profile: bool,
         cmd.append("--no-cuda-graph")
     env = dict(os.environ)
     if profile:
-        env["LFM_PROFILE_DECODE"] = "1"
+        env["CELEG_PROFILE_DECODE"] = "1"
     else:
-        env.pop("LFM_PROFILE_DECODE", None)
+        env.pop("CELEG_PROFILE_DECODE", None)
     done = subprocess.run(cmd, text=True, capture_output=True, env=env)
     if done.returncode != 0:
         sys.stderr.write(done.stdout + done.stderr)
-        raise SystemExit(f"lfm25-run failed ({done.returncode})")
+        raise SystemExit(f"celeg-run failed ({done.returncode})")
     return done.stdout + done.stderr
 
 
@@ -99,7 +99,7 @@ def main() -> None:
                     help="skip the phase profile, only report throughput")
     args = ap.parse_args()
 
-    binary = find_binary(args.build, "lfm25-run")
+    binary = find_binary(args.build, "celeg-run")
     extra: list[str] = []
     if args.top_k is not None:
         extra += ["--top-k", str(args.top_k)]

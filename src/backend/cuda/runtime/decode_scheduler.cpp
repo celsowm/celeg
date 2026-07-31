@@ -1,6 +1,6 @@
 #include "engine_internal.hpp"
 
-namespace lfm {
+namespace celeg {
 bool ConcurrentEngine::Impl::run_decode_work() {
     struct Work { Lane* lane; RequestId id; bool paged_ready; };
     std::vector<Work> work;
@@ -222,4 +222,4 @@ bool ConcurrentEngine::Impl::run_decode_work() {
     return !work.empty();
 }
 
-} // namespace lfm
+} // namespace celeg

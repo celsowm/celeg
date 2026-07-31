@@ -296,10 +296,10 @@ void launch_gqa_decode_segmented_device(
     gqa_decode_segment_partial_kernel<<<q_heads * chunks, 32, 0, stream>>>(
         q, key_cache, value_cache, position, q_heads, kv_heads, head_dim,
         chunk_tokens, chunks, partial_max, partial_denom, partial_accum);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
     gqa_decode_segment_reduce_kernel<<<q_heads, threads, 0, stream>>>(
         out, q_heads, head_dim, chunks, partial_max, partial_denom, partial_accum);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_prefill_segmented(
@@ -312,11 +312,11 @@ void launch_gqa_prefill_segmented(
     gqa_prefill_segment_partial_kernel<<<rows * q_heads * chunks, threads, 0, stream>>>(
         q, key_cache, value_cache, rows, q_heads, kv_heads, head_dim,
         chunk_tokens, chunks, partial_max, partial_denom, partial_accum);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
     gqa_prefill_segment_reduce_kernel<<<rows * q_heads, threads, 0, stream>>>(
         out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,
         partial_accum);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_gqa_decode_segmented_int8_device(
@@ -331,9 +331,9 @@ void launch_gqa_decode_segmented_int8_device(
         q, key_cache, value_cache, key_scales, value_scales, position,
         q_heads, kv_heads, head_dim, chunk_tokens, chunks, partial_max,
         partial_denom, partial_accum);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
     gqa_decode_segment_reduce_kernel<<<q_heads, threads, 0, stream>>>(
         out, q_heads, head_dim, chunks, partial_max, partial_denom,
         partial_accum);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }

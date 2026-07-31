@@ -34,13 +34,13 @@ must pass for a CUDA build.
 ## Model checkpoints (HuggingFace cache)
 
 Checkpoints are normally resolved from the local HuggingFace cache, not from a
-local `./model/...` directory. `lfm25-run` accepts `--repo <HF_REPO_ID>`, which
-calls `lfm25::resolve_hf_model()` to locate the snapshot under the HF cache:
+local `./model/...` directory. `celeg-run` accepts `--repo <HF_REPO_ID>`, which
+calls `celeg::resolve_hf_model()` to locate the snapshot under the HF cache:
 
 - Windows: `C:\Users\<user>\.cache\huggingface\hub\models--<owner>--<repo>\snapshots\<commit>\`
 - Linux:   `~/.cache/huggingface/hub/models--<owner>--<repo>\snapshots\<commit>\`
 
-The downloader (`scripts/download_model.sh` / `lfm25-download`) populates that
+The downloader (`scripts/download_model.sh` / `celeg-download`) populates that
 cache; `--repo` then auto-resolves without copying files. Sharded checkpoints
 (`model.safetensors.index.json` + `model-0000N-of-0000M.safetensors`) are
 resolved through `SafeTensorRepository`.
@@ -58,11 +58,11 @@ captured into one graph, so per-kernel attribution is not free. Use these:
 python scripts/profile_decode.py --model <gguf>            # per-phase breakdown
 python scripts/profile_decode.py --model <gguf> --sweep    # config A/B, graph on
 python scripts/gguf_census.py <gguf>                       # tensor types + traffic
-./out/<build>/lfm25-decode-gemv-benchmark 200              # GEMV vs peak bandwidth
+./out/<build>/celeg-decode-gemv-benchmark 200              # GEMV vs peak bandwidth
 ```
 
 `profile_decode.py` drives the in-tree profiler in
-`include/lfm/backend/cuda/phase_profile.hpp` (env `LFM_PROFILE_DECODE=1`, needs
+`include/celeg/backend/cuda/phase_profile.hpp` (env `CELEG_PROFILE_DECODE=1`, needs
 `--no-cuda-graph`; it is a no-op branch otherwise, so it stays in the hot path).
 
 Why this section exists: a plausible weight-bandwidth argument once concluded
@@ -87,7 +87,7 @@ inference validation of that model must run on a larger GPU.
 
 ## Refactoring policy
 
-The staged multi-model refactor lives in `lfm25_multi_stage_refactoring_plan.md`.
+The staged multi-model refactor is governed by `docs/ARCHITECTURE_RULES.md`.
 The binding rules for every change landing after the Phase 0 baseline are in
 `docs/ARCHITECTURE_RULES.md` (no LFM types in generic runtime dirs, no CUDA types
 in backend-neutral model headers, no new `.inl` aggregation, no optional

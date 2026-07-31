@@ -1,5 +1,5 @@
-#include "lfm/runtime/concurrency.hpp"
-#include "lfm/text/tokenizer.hpp"
+#include "celeg/runtime/concurrency.hpp"
+#include "celeg/text/tokenizer.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -24,27 +24,27 @@ int main(int argc, char** argv) {
     try {
         const int requests = argc > 4 ? parse_positive(argv[4], "requests") : 8;
         const int max_new = argc > 5 ? parse_positive(argv[5], "max_new") : 64;
-        lfm::BpeTokenizer tokenizer(argv[2]);
+        celeg::BpeTokenizer tokenizer(argv[2]);
         const std::vector<int32_t> prompt = tokenizer.encode(argv[3], true);
 
-        lfm::ModelOptions model;
+        celeg::ModelOptions model;
         model.fast_attention = true;
         model.fused_projections = true;
         model.fused_residuals = true;
         model.cuda_graph = true;
 
-        lfm::ConcurrentEngineOptions engine_options;
+        celeg::ConcurrentEngineOptions engine_options;
         engine_options.max_active_requests = requests;
         engine_options.max_batched_tokens = std::max(256, requests * 2);
         engine_options.prefill_chunk_tokens = 256;
         engine_options.worker_thread = false;
 
         const int context = static_cast<int>(prompt.size()) + max_new + 8;
-        lfm::ConcurrentEngine engine(argv[1], context, model, engine_options);
-        std::vector<lfm::ConcurrentEngine::RequestId> ids;
+        celeg::ConcurrentEngine engine(argv[1], context, model, engine_options);
+        std::vector<celeg::ConcurrentEngine::RequestId> ids;
         ids.reserve(static_cast<size_t>(requests));
         for (int i = 0; i < requests; ++i) {
-            lfm::ConcurrentRequestOptions options;
+            celeg::ConcurrentRequestOptions options;
             options.max_new_tokens = max_new;
             options.eos_token = tokenizer.eos_id();
             options.generation.seed = static_cast<uint64_t>(i + 1);
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
             engine.step();
             for (int i = 0; i < requests; ++i) {
                 if (done[static_cast<size_t>(i)]) continue;
-                lfm::PollResult result = engine.poll(ids[static_cast<size_t>(i)], 0);
+                celeg::PollResult result = engine.poll(ids[static_cast<size_t>(i)], 0);
                 returned_tokens += result.tokens.size();
                 if (result.finished) {
                     done[static_cast<size_t>(i)] = true;
@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
         const auto end = std::chrono::steady_clock::now();
         const double elapsed_ms =
             std::chrono::duration<double, std::milli>(end - begin).count();
-        const lfm::ConcurrentMetrics metrics = engine.metrics();
+        const celeg::ConcurrentMetrics metrics = engine.metrics();
         std::cout << "requests=" << requests << '\n'
                   << "prompt_tokens_each=" << prompt.size() << '\n'
                   << "decoded_tokens=" << metrics.decoded_tokens << '\n'

@@ -1,10 +1,10 @@
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/backend/cuda/kernels/embedding.hpp"
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/model/execution/runtime_types.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/backend/cuda/kernels/embedding.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/model/execution/runtime_types.hpp"
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -129,4 +129,4 @@ std::unique_ptr<IWeightLayout> make_gguf_weight_layout(
     return std::make_unique<GgufWeightLayout>(segment);
 }
 
-} // namespace lfm
+} // namespace celeg

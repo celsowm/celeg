@@ -1,16 +1,16 @@
-#include "lfm/runtime/concurrency.hpp"
+#include "celeg/runtime/concurrency.hpp"
 
-#include "lfm/model/config/config.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/model/model.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/model/config/variant.hpp"
-#include "lfm/backend/cuda/packed.hpp"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/runtime/cache/prefix_cache.hpp"
-#include "lfm/detail/runtime/concurrency/request_registry.hpp"
-#include "lfm/detail/runtime/concurrency/batch_planner.hpp"
-#include "lfm/detail/runtime/concurrency/worker.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/model/model.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/model/config/variant.hpp"
+#include "celeg/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/runtime/cache/prefix_cache.hpp"
+#include "celeg/detail/runtime/concurrency/request_registry.hpp"
+#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
+#include "celeg/detail/runtime/concurrency/worker.hpp"
 #include "engine_internal.hpp"
 
 #include <algorithm>
@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 ConcurrentEngine::Impl::Impl(std::string model_path,
                                    int max_context,
@@ -87,4 +87,4 @@ ConcurrentEngine::Impl::Impl(std::string model_path,
     if (engine_options_.worker_thread) start();
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${BIN:-$ROOT/build/lfm25-run}"
-COMPARE="${COMPARE:-$ROOT/build/lfm25-compare-logits}"
+BIN="${BIN:-$ROOT/build/celeg-run}"
+COMPARE="${COMPARE:-$ROOT/build/celeg-compare-logits}"
 MODEL="${MODEL:-$ROOT/model/LFM2.5-230M}"
 PROMPT="${PROMPT:-Explique CUDA em uma frase.}"
 CONTEXT="${CONTEXT:-4096}"
-OUT="${OUT:-${TMPDIR:-/tmp}/lfm25-weight-parity}"
+OUT="${OUT:-${TMPDIR:-/tmp}/celeg-weight-parity}"
 
 if [[ ! -x "$BIN" ]]; then
     echo "binary not found or not executable: $BIN" >&2

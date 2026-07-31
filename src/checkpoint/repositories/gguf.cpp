@@ -1,6 +1,6 @@
-#include "lfm/model/config/config.hpp"
-#include "lfm/checkpoint/formats/gguf.hpp"
-#include "lfm/checkpoint/repositories/gguf.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/checkpoint/repositories/gguf.hpp"
 
 #include <cstdio>
 #include <optional>
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 // Derives a ModelConfig from an LFM2 GGUF checkpoint's metadata. GGUF stores the
 // architecture hyper-parameters under the `lfm2.*` and `general.*` key spaces,
@@ -308,4 +308,4 @@ std::vector<std::string> GgufRepository::names() const {
     return gguf_->tensor_names();
 }
 
-} // namespace lfm
+} // namespace celeg

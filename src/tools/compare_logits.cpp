@@ -46,7 +46,7 @@ std::vector<int32_t> top_indices(const std::vector<float>& values, int count) {
 int main(int argc, char** argv) {
     try {
         if (argc != 3) {
-            std::cerr << "usage: lfm25-compare-logits reference.f32 candidate.f32\n";
+            std::cerr << "usage: celeg-compare-logits reference.f32 candidate.f32\n";
             return 2;
         }
         const std::vector<float> reference = read_f32(argv[1]);

@@ -1,4 +1,4 @@
-set(LFM_CUDA_BACKEND_SOURCES
+set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/kernels/embedding.cu
     src/backend/cuda/kernels/transform.cu
     src/backend/cuda/kernels/attention.cu

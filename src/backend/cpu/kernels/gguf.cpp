@@ -1,5 +1,5 @@
-#include "lfm/backend/cpu/gguf.hpp"
-#include "lfm/checkpoint/gguf_blocks.hpp"
+#include "celeg/backend/cpu/gguf.hpp"
+#include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -12,10 +12,10 @@
 #include "gguf_avx2.hpp"
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
-using lfm::gguf_blocks::q4k_scale_min;
+using celeg::gguf_blocks::q4k_scale_min;
 
 #pragma pack(push, 1)
 struct BlockQ4K {
@@ -325,4 +325,4 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
     }
 }
 
-} // namespace lfm
+} // namespace celeg

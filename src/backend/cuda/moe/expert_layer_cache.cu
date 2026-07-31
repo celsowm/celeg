@@ -1,4 +1,4 @@
-#include "lfm/runtime/moe/expert_residency.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
 
 #include <cuda_runtime.h>
 
@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -72,7 +72,7 @@ ExpertLayerCache::ExpertLayerCache(int num_experts, int capacity,
 
     // Device-side residency check buffers.
     expert_slot_dev_.reset(static_cast<size_t>(num_experts));
-    LFM_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
+    CELEG_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
                         static_cast<size_t>(num_experts) * sizeof(int),
                         cudaMemcpyHostToDevice));
     cold_flags_dev_.reset(static_cast<size_t>(num_experts));
@@ -92,10 +92,10 @@ void ExpertLayerCache::set_host_sources(
     gate_up_ptrs_host_ = gate_up_host_dev_;
     down_ptrs_host_ = down_host_dev_;
     // Every expert starts host-resident: publish host pointers into the table.
-    LFM_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_host_dev_.data(),
+    CELEG_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_host_dev_.data(),
                         static_cast<size_t>(num_experts_) * sizeof(const __nv_bfloat16*),
                         cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(down_ptrs_dev_.data(), down_host_dev_.data(),
+    CELEG_CUDA(cudaMemcpy(down_ptrs_dev_.data(), down_host_dev_.data(),
                         static_cast<size_t>(num_experts_) * sizeof(const __nv_bfloat16*),
                         cudaMemcpyHostToDevice));
     sync_expert_slot_to_device();
@@ -103,11 +103,11 @@ void ExpertLayerCache::set_host_sources(
 
 void ExpertLayerCache::sync_expert_slot_to_device(cudaStream_t stream) {
     if (stream != nullptr) {
-        LFM_CUDA(cudaMemcpyAsync(expert_slot_dev_.data(), expert_slot_.data(),
+        CELEG_CUDA(cudaMemcpyAsync(expert_slot_dev_.data(), expert_slot_.data(),
                                  static_cast<size_t>(num_experts_) * sizeof(int),
                                  cudaMemcpyHostToDevice, stream));
     } else {
-        LFM_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
+        CELEG_CUDA(cudaMemcpy(expert_slot_dev_.data(), expert_slot_.data(),
                             static_cast<size_t>(num_experts_) * sizeof(int),
                             cudaMemcpyHostToDevice));
     }
@@ -123,11 +123,11 @@ int ExpertLayerCache::resolve_on_device(
 
     // Reset the cold count on device.
     const int zero = 0;
-    LFM_CUDA(cudaMemcpyAsync(cold_count_dev_.data(), &zero, sizeof(int),
+    CELEG_CUDA(cudaMemcpyAsync(cold_count_dev_.data(), &zero, sizeof(int),
                              cudaMemcpyHostToDevice, stream));
 
     // Clear cold flags
-    LFM_CUDA(cudaMemsetAsync(cold_flags_dev_.data(), 0,
+    CELEG_CUDA(cudaMemsetAsync(cold_flags_dev_.data(), 0,
                              static_cast<size_t>(num_experts_) * sizeof(int), stream));
 
     // Launch the residency check kernel.
@@ -142,19 +142,19 @@ int ExpertLayerCache::resolve_on_device(
     // and always read; for the fast path this avoids a second sync.
     int cold_count = 0;
     cold_host.resize(static_cast<size_t>(total));
-    LFM_CUDA(cudaMemcpyAsync(cold_host.data(), sel_dev,
+    CELEG_CUDA(cudaMemcpyAsync(cold_host.data(), sel_dev,
                              static_cast<size_t>(total) * sizeof(int),
                              cudaMemcpyDeviceToHost, stream));
-    LFM_CUDA(cudaMemcpyAsync(&cold_count, cold_count_dev_.data(), sizeof(int),
+    CELEG_CUDA(cudaMemcpyAsync(&cold_count, cold_count_dev_.data(), sizeof(int),
                              cudaMemcpyDeviceToHost, stream));
     if (route_scores_dev != nullptr) {
         const int E = num_experts_;
         cold_scores_host.resize(static_cast<size_t>(E));
-        LFM_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
+        CELEG_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
                                  static_cast<size_t>(E) * sizeof(float),
                                  cudaMemcpyDeviceToHost, stream));
     }
-    LFM_CUDA(cudaStreamSynchronize(stream));
+    CELEG_CUDA(cudaStreamSynchronize(stream));
 
     if (cold_count == 0) {
         // All selected experts are GPU-resident; cold_host has the selection.
@@ -164,10 +164,10 @@ int ExpertLayerCache::resolve_on_device(
     // Cold path: cold_host already has the full selection, but the caller
     // expects the compact cold list. Overwrite with cold_list_dev_ data.
     cold_host.resize(static_cast<size_t>(cold_count));
-    LFM_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
+    CELEG_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
                              static_cast<size_t>(cold_count) * sizeof(int),
                              cudaMemcpyDeviceToHost, stream));
-    LFM_CUDA(cudaStreamSynchronize(stream));
+    CELEG_CUDA(cudaStreamSynchronize(stream));
     return cold_count;
 }
 
@@ -186,9 +186,9 @@ void ExpertLayerCache::publish_pointer_immediate(int expert,
     gate_up_ptrs_host_[static_cast<size_t>(expert)] = gate_up;
     down_ptrs_host_[static_cast<size_t>(expert)] = down;
     const size_t offset = static_cast<size_t>(expert) * sizeof(const __nv_bfloat16*);
-    LFM_CUDA(cudaMemcpy(reinterpret_cast<char*>(gate_up_ptrs_dev_.data()) + offset,
+    CELEG_CUDA(cudaMemcpy(reinterpret_cast<char*>(gate_up_ptrs_dev_.data()) + offset,
                         &gate_up, sizeof(gate_up), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(reinterpret_cast<char*>(down_ptrs_dev_.data()) + offset,
+    CELEG_CUDA(cudaMemcpy(reinterpret_cast<char*>(down_ptrs_dev_.data()) + offset,
                         &down, sizeof(down), cudaMemcpyHostToDevice));
 }
 
@@ -199,14 +199,14 @@ void ExpertLayerCache::sync_residency_tables(cudaStream_t stream) {
     }
     const size_t bytes = static_cast<size_t>(num_experts_) * sizeof(const __nv_bfloat16*);
     if (stream != nullptr) {
-        LFM_CUDA(cudaMemcpyAsync(gate_up_ptrs_dev_.data(), gate_up_ptrs_host_.data(),
+        CELEG_CUDA(cudaMemcpyAsync(gate_up_ptrs_dev_.data(), gate_up_ptrs_host_.data(),
                                  bytes, cudaMemcpyHostToDevice, stream));
-        LFM_CUDA(cudaMemcpyAsync(down_ptrs_dev_.data(), down_ptrs_host_.data(),
+        CELEG_CUDA(cudaMemcpyAsync(down_ptrs_dev_.data(), down_ptrs_host_.data(),
                                  bytes, cudaMemcpyHostToDevice, stream));
     } else {
-        LFM_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_ptrs_host_.data(),
+        CELEG_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_ptrs_host_.data(),
                             bytes, cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(down_ptrs_dev_.data(), down_ptrs_host_.data(),
+        CELEG_CUDA(cudaMemcpy(down_ptrs_dev_.data(), down_ptrs_host_.data(),
                             bytes, cudaMemcpyHostToDevice));
     }
     sync_expert_slot_to_device(stream);
@@ -231,10 +231,10 @@ void ExpertLayerCache::promote(int expert, int slot, cudaStream_t stream,
                         down_host_dev_[static_cast<size_t>(s.expert)], stream);
     }
     // Copy weights host -> cache slot.
-    LFM_CUDA(cudaMemcpyAsync(s.gate_up.data(),
+    CELEG_CUDA(cudaMemcpyAsync(s.gate_up.data(),
                              gate_up_host_dev_[static_cast<size_t>(expert)],
                              gate_up_bytes_, cudaMemcpyDefault, stream));
-    LFM_CUDA(cudaMemcpyAsync(s.down.data(),
+    CELEG_CUDA(cudaMemcpyAsync(s.down.data(),
                              down_host_dev_[static_cast<size_t>(expert)],
                              down_bytes_, cudaMemcpyDefault, stream));
     s.expert = expert;
@@ -265,10 +265,10 @@ void ExpertLayerCache::promote(int expert, int slot, const __nv_bfloat16* gate_u
                         down_host_dev_[static_cast<size_t>(s.expert)], stream);
     }
     // Copy weights host -> cache slot.
-    LFM_CUDA(cudaMemcpyAsync(s.gate_up.data(),
+    CELEG_CUDA(cudaMemcpyAsync(s.gate_up.data(),
                              gate_up_src,
                              gate_up_bytes_, cudaMemcpyDefault, stream));
-    LFM_CUDA(cudaMemcpyAsync(s.down.data(),
+    CELEG_CUDA(cudaMemcpyAsync(s.down.data(),
                              down_src,
                              down_bytes_, cudaMemcpyDefault, stream));
     s.expert = expert;
@@ -455,4 +455,4 @@ const __nv_bfloat16* ExpertLayerCache::expert_down_dev(int expert) const {
     if (slot < 0) return nullptr;
     return slots_[static_cast<size_t>(slot)].down.data();
 }
-} // namespace lfm
+} // namespace celeg

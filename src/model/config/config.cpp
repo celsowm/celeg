@@ -1,11 +1,11 @@
-#include "lfm/model/config/config.hpp"
-#include "lfm/checkpoint/formats/json.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
 
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 int read_int(const Json& root, const char* name) {
@@ -263,4 +263,4 @@ std::string ModelConfig::summary() const {
     return out.str();
 }
 
-} // namespace lfm
+} // namespace celeg

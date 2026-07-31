@@ -1,7 +1,7 @@
-#include "lfm/backend/cpu/paged_kv.hpp"
-#include "lfm/backend/cpu/numa.hpp"
-#include "lfm/model/weights/quantization.hpp"
-#include "lfm/backend/cpu/isa.hpp"
+#include "celeg/backend/cpu/paged_kv.hpp"
+#include "celeg/backend/cpu/numa.hpp"
+#include "celeg/model/weights/quantization.hpp"
+#include "celeg/backend/cpu/isa.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,26 +17,26 @@
 // runtime capability check.  Without this the whole attention inner loop fell
 // back to scalar code on MSVC builds.
 #if defined(__x86_64__) || defined(__i386__)
-#define LFM_CPU_HAS_AVX2_KERNEL 1
-#define LFM_CPU_AVX2_TARGET __attribute__((target("avx2,fma")))
+#define CELEG_CPU_HAS_AVX2_KERNEL 1
+#define CELEG_CPU_AVX2_TARGET __attribute__((target("avx2,fma")))
 #pragma GCC push_options
 #pragma GCC target("avx2,fma")
 #include <immintrin.h>
 #pragma GCC pop_options
 #elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
-#define LFM_CPU_HAS_AVX2_KERNEL 1
-#define LFM_CPU_AVX2_TARGET
+#define CELEG_CPU_HAS_AVX2_KERNEL 1
+#define CELEG_CPU_AVX2_TARGET
 #include <immintrin.h>
 #else
-#define LFM_CPU_HAS_AVX2_KERNEL 0
-#define LFM_CPU_AVX2_TARGET
+#define CELEG_CPU_HAS_AVX2_KERNEL 0
+#define CELEG_CPU_AVX2_TARGET
 #endif
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
-#if LFM_CPU_HAS_AVX2_KERNEL
+#if CELEG_CPU_HAS_AVX2_KERNEL
 static const bool g_has_avx2_fma = []() {
     auto caps = detect_cpu_capabilities();
     return caps.avx2 && caps.fma;
@@ -80,8 +80,8 @@ struct PartialAttention {
     float denominator = 0.0f;
 };
 
-#if LFM_CPU_HAS_AVX2_KERNEL
-LFM_CPU_AVX2_TARGET
+#if CELEG_CPU_HAS_AVX2_KERNEL
+CELEG_CPU_AVX2_TARGET
 void update_online_avx2(const float* query, int kv_head, int head_dim, float scale,
                         const CpuKvPagePool& pool, CpuKvPageId page,
                         int token_begin, int token_end, float* accumulator,
@@ -180,7 +180,7 @@ void update_online(const float* query, int kv_head, int head_dim, float scale,
                    const CpuKvPagePool& pool, CpuKvPageId page,
                    int token_begin, int token_end, float* accumulator,
                    PartialAttention& state) {
-#if LFM_CPU_HAS_AVX2_KERNEL
+#if CELEG_CPU_HAS_AVX2_KERNEL
     if (g_has_avx2_fma) {
         update_online_avx2(query, kv_head, head_dim, scale, pool, page,
                            token_begin, token_end, accumulator, state);
@@ -564,4 +564,4 @@ void cpu_gqa_prefill_paged(
     });
 }
 
-} // namespace lfm
+} // namespace celeg

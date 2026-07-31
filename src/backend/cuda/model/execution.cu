@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/phase_profile.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/phase_profile.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/runtime/moe.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 void Model::Impl::set_generation_config(GenerationConfig generation) {
     generation.validate();
     if (phase_ == SessionPhase::DecodePending) {
@@ -75,7 +75,7 @@ void Model::Impl::enqueue_decode_forward() {
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
-            LFM_CUDA(cudaMemcpyAsync(
+            CELEG_CUDA(cudaMemcpyAsync(
                 residual_.data(), hidden_.data(), hidden_.bytes(),
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
@@ -305,7 +305,7 @@ void Model::Impl::decode_async_begin() {
     } else {
         enqueue_decode_step();
     }
-    LFM_CUDA(cudaMemcpyAsync(sampled_host_.data(), sampled_device_.data(),
+    CELEG_CUDA(cudaMemcpyAsync(sampled_host_.data(), sampled_device_.data(),
                              sizeof(int32_t), cudaMemcpyDeviceToHost,
                              stream_.get()));
     phase_ = SessionPhase::DecodePending;
@@ -315,7 +315,7 @@ int32_t Model::Impl::decode_async_finish() {
     if (phase_ != SessionPhase::DecodePending) {
         throw std::runtime_error("decode_async_finish without begin");
     }
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     phase_ = SessionPhase::Ready;
     ++position_;
     const auto ended = std::chrono::steady_clock::now();
@@ -361,7 +361,7 @@ DecodeBenchmark Model::Impl::benchmark_decode(int warmup_steps,
         ++simulated_position;
     };
     for (int i = 0; i < warmup_steps; ++i) launch_step();
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 
     CudaEvent begin;
     CudaEvent end;
@@ -437,7 +437,7 @@ ModelDiagnostics::ExpertOffloadStats Model::Impl::expert_offload_stats() const {
 
 void Model::Impl::release_local_kv_cache() {
     if (!local_kv_cache_available_) return;
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     for (Layer& layer : layers_) {
         AttentionLayer* attention = as_attention(layer);
         if (!attention) continue;
@@ -458,10 +458,10 @@ std::vector<float> Model::Impl::copy_logits() {
         throw std::runtime_error("logits are unavailable before prefill");
     }
     std::vector<__nv_bfloat16> bf16_logits(shape_.vocab_size);
-    LFM_CUDA(cudaMemcpyAsync(
+    CELEG_CUDA(cudaMemcpyAsync(
         bf16_logits.data(), logits_.data(), logits_.bytes(),
         cudaMemcpyDeviceToHost, stream_.get()));
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 
     std::vector<float> result(shape_.vocab_size);
     for (int i = 0; i < shape_.vocab_size; ++i) {
@@ -473,6 +473,6 @@ std::vector<float> Model::Impl::copy_logits() {
 
 
 
-} // namespace lfm
+} // namespace celeg
 
 

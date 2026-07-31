@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/model.hpp"
 
 #include "detail/model_internal.hpp"
 
@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 const char* cpu_kv_cache_mode_name(CpuKvCacheMode mode) {
     switch (mode) {
@@ -251,4 +251,4 @@ void CpuPersistence::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
     owner_->restore_session_prefix(std::move(snapshot), ready_for_decode);
 }
 
-} // namespace lfm
+} // namespace celeg

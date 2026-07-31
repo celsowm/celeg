@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/isa.hpp"
+#include "celeg/backend/cpu/isa.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -16,7 +16,7 @@
 #include <asm/hwcap.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -221,4 +221,4 @@ CpuCapabilities detect_cpu_capabilities() {
     return c;
 }
 
-} // namespace lfm
+} // namespace celeg

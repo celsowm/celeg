@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/numa.hpp"
+#include "celeg/backend/cpu/numa.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -12,7 +12,7 @@
 #include <unistd.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 
 const char* cpu_numa_mode_name(CpuNumaMode mode) {
     switch (mode) {
@@ -119,4 +119,4 @@ bool bind_memory_to_numa_node(void* address, size_t bytes, int node) noexcept {
 #endif
 }
 
-} // namespace lfm
+} // namespace celeg

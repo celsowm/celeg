@@ -11,7 +11,7 @@
       "hidden": true,
       "generator": "Ninja",
       "cacheVariables": {
-        "LFM_BUILD_TESTS": "ON"
+        "CELEG_BUILD_TESTS": "ON"
       }
     },
     {
@@ -21,7 +21,7 @@
       "binaryDir": "${sourceDir}/out/${hostSystemName}-cpu-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "LFM_ENABLE_CUDA": "OFF"
+        "CELEG_ENABLE_CUDA": "OFF"
       }
     },
     {
@@ -31,7 +31,7 @@
       "binaryDir": "${sourceDir}/out/${hostSystemName}-cpu-relwithdebinfo",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "LFM_ENABLE_CUDA": "OFF"
+        "CELEG_ENABLE_CUDA": "OFF"
       }
     },
     {
@@ -42,8 +42,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CUDA_ARCHITECTURES": "native",
-        "LFM_ENABLE_CUDA": "ON",
-        "LFM_RUN_CUDA_TESTS": "ON"
+        "CELEG_ENABLE_CUDA": "ON",
+        "CELEG_RUN_CUDA_TESTS": "ON"
       }
     },
     {
@@ -54,8 +54,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_CUDA_ARCHITECTURES": "native",
-        "LFM_ENABLE_CUDA": "ON",
-        "LFM_RUN_CUDA_TESTS": "ON"
+        "CELEG_ENABLE_CUDA": "ON",
+        "CELEG_RUN_CUDA_TESTS": "ON"
       }
     }
   ],

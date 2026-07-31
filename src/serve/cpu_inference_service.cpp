@@ -1,10 +1,10 @@
-#include "lfm/serve/cpu_inference_service.hpp"
+#include "celeg/serve/cpu_inference_service.hpp"
 
 #include <filesystem>
 #include <stdexcept>
 #include <utility>
 
-namespace lfm::serve {
+namespace celeg::serve {
 
 namespace {
 
@@ -106,4 +106,4 @@ bool CpuInferenceService::step() { return engine_.step(); }
 void CpuInferenceService::start() { engine_.start(); }
 void CpuInferenceService::stop() { engine_.stop(); }
 
-} // namespace lfm::serve
+} // namespace celeg::serve

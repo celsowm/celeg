@@ -1,8 +1,8 @@
-#include "lfm/text/chat_template.hpp"
+#include "celeg/text/chat_template.hpp"
 
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -43,4 +43,4 @@ std::unique_ptr<IChatTemplate> make_chat_template(ChatTemplateKind kind) {
     throw std::invalid_argument("unsupported chat template kind");
 }
 
-} // namespace lfm
+} // namespace celeg

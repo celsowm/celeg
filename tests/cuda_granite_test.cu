@@ -1,5 +1,5 @@
-#include "lfm/model/model.hpp"
-#include "lfm/runtime/concurrency.hpp"
+#include "celeg/model/model.hpp"
+#include "celeg/runtime/concurrency.hpp"
 #include "support/assertions.hpp"
 
 #include <cstdint>
@@ -100,27 +100,27 @@ void write_checkpoint(const std::filesystem::path& directory) {
 
 int main() {
     const std::filesystem::path directory =
-        std::filesystem::temp_directory_path() / "lfm25-granite-cuda-test";
+        std::filesystem::temp_directory_path() / "celeg-granite-cuda-test";
     write_checkpoint(directory);
-    lfm::ModelOptions options;
+    celeg::ModelOptions options;
     options.cuda_graph = false;
     options.fast_attention = false;
     options.fused_projections = false;
     options.fused_residuals = false;
     options.allocate_local_kv_cache = true;
-    lfm::GenerationConfig generation;
+    celeg::GenerationConfig generation;
     generation.seed = 7;
     generation.top_k = 1;
     {
-        lfm::Model model(directory.string(), 32, options, generation);
+        celeg::Model model(directory.string(), 32, options, generation);
         model.session().prefill({1, 3, 4});
-        LFM_TEST_CHECK(model.session().ready_for_decode());
-        LFM_TEST_CHECK(model.diagnostics().copy_logits().size() == 32);
+        CELEG_TEST_CHECK(model.session().ready_for_decode());
+        CELEG_TEST_CHECK(model.diagnostics().copy_logits().size() == 32);
         (void)model.session().decode();
-        LFM_TEST_CHECK(model.session().position() == 4);
+        CELEG_TEST_CHECK(model.session().position() == 4);
     }
     {
-        lfm::ConcurrentEngineOptions engine_options;
+        celeg::ConcurrentEngineOptions engine_options;
         engine_options.max_active_requests = 2;
         engine_options.max_batched_tokens = 16;
         engine_options.prefill_chunk_tokens = 8;
@@ -131,9 +131,9 @@ int main() {
         engine_options.ragged_packed_prefill = true;
         engine_options.ragged_prefill_min_batch = 2;
         engine_options.prefix_cache = false;
-        lfm::ConcurrentEngine engine(directory.string(), 32, options,
+        celeg::ConcurrentEngine engine(directory.string(), 32, options,
                                      engine_options);
-        lfm::ConcurrentRequestOptions request;
+        celeg::ConcurrentRequestOptions request;
         request.max_new_tokens = 2;
         request.eos_token = 31;
         request.generation.seed = 7;
@@ -141,20 +141,20 @@ int main() {
         const auto first = engine.submit({1, 3, 4}, request);
         const auto second = engine.submit({2, 5}, request);
         for (int step = 0; step < 32; ++step) {
-            if (lfm::is_terminal(engine.status(first)) &&
-                lfm::is_terminal(engine.status(second))) break;
+            if (celeg::is_terminal(engine.status(first)) &&
+                celeg::is_terminal(engine.status(second))) break;
             (void)engine.step();
         }
-        const lfm::PollResult first_result = engine.poll(first);
-        const lfm::PollResult second_result = engine.poll(second);
-        LFM_TEST_CHECK(first_result.status == lfm::RequestStatus::Finished);
-        LFM_TEST_CHECK(second_result.status == lfm::RequestStatus::Finished);
-        LFM_TEST_CHECK(first_result.tokens.size() == 2);
-        LFM_TEST_CHECK(second_result.tokens.size() == 2);
-        LFM_TEST_CHECK(engine.metrics().packed_decode_tokens > 0);
-        LFM_TEST_CHECK(engine.metrics().ragged_prefill_tokens > 0);
-        LFM_TEST_CHECK(engine.release(first));
-        LFM_TEST_CHECK(engine.release(second));
+        const celeg::PollResult first_result = engine.poll(first);
+        const celeg::PollResult second_result = engine.poll(second);
+        CELEG_TEST_CHECK(first_result.status == celeg::RequestStatus::Finished);
+        CELEG_TEST_CHECK(second_result.status == celeg::RequestStatus::Finished);
+        CELEG_TEST_CHECK(first_result.tokens.size() == 2);
+        CELEG_TEST_CHECK(second_result.tokens.size() == 2);
+        CELEG_TEST_CHECK(engine.metrics().packed_decode_tokens > 0);
+        CELEG_TEST_CHECK(engine.metrics().ragged_prefill_tokens > 0);
+        CELEG_TEST_CHECK(engine.release(first));
+        CELEG_TEST_CHECK(engine.release(second));
     }
     std::filesystem::remove_all(directory);
     return 0;

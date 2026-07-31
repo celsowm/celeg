@@ -1,9 +1,9 @@
-#include "lfm/checkpoint/repositories/safetensors.hpp"
-#include "lfm/model/config/config.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/detail/binary_codec.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/runtime/moe/offload.hpp"
+#include "celeg/checkpoint/repositories/safetensors.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/detail/binary_codec.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/runtime/moe/offload.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -32,20 +32,20 @@ struct SidecarExpertIndex {
 
 void write_header(std::ostream& output, const SidecarHeader& header) {
     output.write(header.magic, sizeof(header.magic));
-    lfm::binary::write_le(output, header.num_layers);
-    lfm::binary::write_le(output, header.num_experts);
-    lfm::binary::write_le(output, header.moe_intermediate);
-    lfm::binary::write_le(output, header.hidden);
+    celeg::binary::write_le(output, header.num_layers);
+    celeg::binary::write_le(output, header.num_experts);
+    celeg::binary::write_le(output, header.moe_intermediate);
+    celeg::binary::write_le(output, header.hidden);
     for (const std::uint64_t value : header.reserved) {
-        lfm::binary::write_le(output, value);
+        celeg::binary::write_le(output, value);
     }
 }
 
 void write_index(std::ostream& output, const SidecarExpertIndex& index) {
-    lfm::binary::write_le(output, index.gate_up_offset);
-    lfm::binary::write_le(output, index.gate_up_bytes);
-    lfm::binary::write_le(output, index.down_offset);
-    lfm::binary::write_le(output, index.down_bytes);
+    celeg::binary::write_le(output, index.gate_up_offset);
+    celeg::binary::write_le(output, index.gate_up_bytes);
+    celeg::binary::write_le(output, index.down_offset);
+    celeg::binary::write_le(output, index.down_bytes);
 }
 
 std::string layer_name(int layer, const std::string& suffix) {
@@ -56,7 +56,7 @@ std::string layer_name(int layer, const std::string& suffix) {
 
 int main(int argc, char** argv) {
     if (argc != 3) {
-        std::cerr << "usage: lfm25-pack-experts SAFETENSORS_PATH OUTPUT_SIDECAR_PATH\n";
+        std::cerr << "usage: celeg-pack-experts SAFETENSORS_PATH OUTPUT_SIDECAR_PATH\n";
         return 2;
     }
 
@@ -64,12 +64,12 @@ int main(int argc, char** argv) {
         std::filesystem::path model_path(argv[1]);
         std::filesystem::path sidecar_path(argv[2]);
 
-        const lfm::detail::ModelBootstrap bootstrap =
-            lfm::detail::load_model_bootstrap(model_path);
-        const lfm::ModelConfig& config = bootstrap.config;
-        const lfm::ModelShape& shape = bootstrap.shape;
+        const celeg::detail::ModelBootstrap bootstrap =
+            celeg::detail::load_model_bootstrap(model_path);
+        const celeg::ModelConfig& config = bootstrap.config;
+        const celeg::ModelShape& shape = bootstrap.shape;
 
-        int moe_layers = lfm::moe_layer_count(shape);
+        int moe_layers = celeg::moe_layer_count(shape);
         if (moe_layers == 0) {
             std::cout << "No MoE layers in this model variant, nothing to pack.\n";
             return 0;
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
                   << "  Intermediate: " << shape.moe_intermediate << "\n"
                   << "  Hidden: " << shape.hidden << "\n";
 
-        lfm::SafeTensorRepository repo(model_path);
+        celeg::SafeTensorRepository repo(model_path);
 
         SidecarHeader header;
         header.num_layers = static_cast<std::uint32_t>(moe_layers);
@@ -136,9 +136,9 @@ int main(int argc, char** argv) {
                 const std::string w2_name = layer_name(
                     actual_layer_idx, "feed_forward.experts." + std::to_string(e) + ".w2.weight");
 
-                lfm::HostTensorView w1 = repo.tensor(w1_name);
-                lfm::HostTensorView w3 = repo.tensor(w3_name);
-                lfm::HostTensorView w2 = repo.tensor(w2_name);
+                celeg::HostTensorView w1 = repo.tensor(w1_name);
+                celeg::HostTensorView w3 = repo.tensor(w3_name);
+                celeg::HostTensorView w2 = repo.tensor(w2_name);
 
                 std::memcpy(gate_up_stage.data(), w1.data, w_bytes);
                 std::memcpy(gate_up_stage.data() + w_bytes, w3.data, w_bytes);

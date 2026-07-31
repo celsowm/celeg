@@ -1,24 +1,24 @@
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/backend/cpu/isa.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/isa.hpp"
 
 #include <cmath>
 #include <stdexcept>
 #include <vector>
 
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
-#define LFM_CPU_X86 1
+#define CELEG_CPU_X86 1
 #else
-#define LFM_CPU_X86 0
+#define CELEG_CPU_X86 0
 #endif
 
-#if defined(_MSC_VER) && LFM_CPU_X86
+#if defined(_MSC_VER) && CELEG_CPU_X86
 #include "elementwise_avx2_msvc.hpp"
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
-#if LFM_CPU_X86
+#if CELEG_CPU_X86
 static const bool g_has_avx2_fma = []() {
     auto caps = detect_cpu_capabilities();
     return caps.avx2 && caps.fma;
@@ -71,7 +71,7 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
         cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
         return;
     }
-#elif defined(_MSC_VER) && LFM_CPU_X86
+#elif defined(_MSC_VER) && CELEG_CPU_X86
     if (g_has_avx2_fma) {
         detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
         return;
@@ -120,4 +120,4 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
     }
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lfm/serve/protocol/json.hpp"
+#include "celeg/serve/protocol/json.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 // Wires up the "buffer the full request body, parse it as Req, hand it to
 // fn(), write the result as JSON, or write a 400 on any thrown exception"
@@ -23,10 +23,10 @@ void handle_json_post(Res* res, Fn&& fn) {
         if (!last) return;
 
         try {
-            const Req request = lfm::serve::protocol::from_json<Req>(*body);
+            const Req request = celeg::serve::protocol::from_json<Req>(*body);
             const Resp response = fn(request);
             res->writeHeader("Content-Type", "application/json")
-                ->end(lfm::serve::protocol::to_json(response));
+                ->end(celeg::serve::protocol::to_json(response));
         } catch (const std::exception& error) {
             res->writeStatus("400 Bad Request")
                 ->writeHeader("Content-Type", "application/json")
@@ -35,4 +35,4 @@ void handle_json_post(Res* res, Fn&& fn) {
     });
 }
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

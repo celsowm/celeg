@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Compile-time baseline capture for Phase 0 of the multi-stage refactoring.
 
-Captures (per lfm25_multi_stage_refactoring_plan.md section 0.4):
+Captures (per docs/ARCHITECTURE_RULES.md section 0.4):
   - clean build time of the CUDA RelWithDebInfo build (configures + builds),
   - incremental rebuild after touching one attention kernel source,
   - incremental rebuild after touching one model orchestration source,
-  - final binary size of lfm25-run.
+  - final binary size of celeg-run.
 
 Writes benchmarks/compile_baseline.json. The harness reuses scripts/dev.py for
 the actual build process so the discovered toolchain (VS, CUDA, arch, runtime
@@ -72,10 +72,10 @@ def run_dev(args: list[str]) -> tuple[float, str]:
 def find_run_exe(build_dir: Path) -> Path:
     suffix = ".exe" if platform.system() == "Windows" else ""
     for layout in ("bin/Release", "bin", "Release", "."):
-        p = build_dir / layout / f"lfm25-run{suffix}"
+        p = build_dir / layout / f"celeg-run{suffix}"
         if p.is_file():
             return p
-    raise MeasureError(f"lfm25-run not found under {build_dir}")
+    raise MeasureError(f"celeg-run not found under {build_dir}")
 
 
 def touch(path: Path) -> None:
@@ -150,7 +150,7 @@ def main() -> int:
             "attention_kernel_touched": str(attention_src) if attention_src else None,
             "incremental_after_model_orchestration_seconds": round(model_incremental, 3),
             "model_orchestration_touched": str(model_src) if model_src else None,
-            "lfm25_run_binary_bytes": binary_size,
+            "celeg_run_binary_bytes": binary_size,
             "platform": platform.platform(),
         }
         BASELINE_PATH.parent.mkdir(parents=True, exist_ok=True)

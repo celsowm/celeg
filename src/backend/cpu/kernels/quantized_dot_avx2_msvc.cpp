@@ -2,14 +2,14 @@
 
 #include "quantized_dot_avx2_msvc.hpp"
 
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cstring>
 #include <immintrin.h>
 #include <stdexcept>
 
-namespace lfm::detail {
+namespace celeg::detail {
 namespace {
 
 inline int decode_q4(const uint8_t* packed, size_t col) {
@@ -74,7 +74,7 @@ float q4_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* scales_bf16,
     const __m128i val_8 = _mm_set1_epi8(8);
     float scalar_tail = 0.0f;
     for (size_t group = 0; group < groups_per_row; ++group) {
-        const float scale_val = lfm::bf16_bits_to_float(scales_bf16[group]);
+        const float scale_val = celeg::bf16_bits_to_float(scales_bf16[group]);
         const __m256 scale = _mm256_set1_ps(scale_val);
         const size_t group_end = std::min(cols, (group + 1) * group_size);
         __m256 group_total = _mm256_setzero_ps();
@@ -107,7 +107,7 @@ float q4_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* scales_bf16,
     float result = hsum256_ps(total) + scalar_tail;
     for (; col < cols; ++col) {
         const size_t group = col / group_size;
-        result += static_cast<float>(decode_q4(packed_row, col)) * lfm::bf16_bits_to_float(scales_bf16[group]) * activation[col];
+        result += static_cast<float>(decode_q4(packed_row, col)) * celeg::bf16_bits_to_float(scales_bf16[group]) * activation[col];
     }
     return result;
 }
@@ -124,7 +124,7 @@ float q4_q8_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* weight_scal
         const size_t begin = group * group_size;
         const size_t end = std::min(cols, begin + group_size);
         const size_t simd_end = begin + ((end - begin) / 32) * 32;
-        const float combined = lfm::bf16_bits_to_float(weight_scales_bf16[group]) *
+        const float combined = celeg::bf16_bits_to_float(weight_scales_bf16[group]) *
                                activation_scales[group];
         if (simd_end != begin) {
             __m256i group_dot = _mm256_setzero_si256();
@@ -171,7 +171,7 @@ void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
     for (size_t group = 0; group < groups_per_row; ++group) {
         // One unpack of the packed nibbles feeds all four activation rows.
         const __m256i weights = unpack_q4_biased(packed_row + group * 16);
-        const float weight_scale = lfm::bf16_bits_to_float(weight_scales_bf16[group]);
+        const float weight_scale = celeg::bf16_bits_to_float(weight_scales_bf16[group]);
         for (size_t lane = 0; lane < 4; ++lane) {
             const __m256i dot = dot32_epi32(weights,
                 activation_values + lane * value_stride + group * 32);
@@ -188,6 +188,6 @@ void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
     }
 }
 
-} // namespace lfm::detail
+} // namespace celeg::detail
 
 #endif

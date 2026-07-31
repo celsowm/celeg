@@ -2,7 +2,7 @@
 """Export official-model tokens and prefill logits for the C++ CPU comparator.
 
 This script is validation-only. Python/Transformers are never runtime
-requirements of liblfm25_cpu.
+requirements of libceleg_cpu.
 """
 from __future__ import annotations
 

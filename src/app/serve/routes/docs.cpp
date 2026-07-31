@@ -1,28 +1,28 @@
 #include "docs.hpp"
 
 #include "../static_assets.hpp"
-#include "lfm/serve/protocol/openapi.hpp"
+#include "celeg/serve/protocol/openapi.hpp"
 
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 
-#ifndef LFM_SERVE_STATIC_DIR
-#error "LFM_SERVE_STATIC_DIR must be defined by the build (see CMakeLists.txt)"
+#ifndef CELEG_SERVE_STATIC_DIR
+#error "CELEG_SERVE_STATIC_DIR must be defined by the build (see CMakeLists.txt)"
 #endif
-#ifndef LFM_SWAGGER_UI_DIR
-#error "LFM_SWAGGER_UI_DIR must be defined by the build (see CMakeLists.txt)"
+#ifndef CELEG_SWAGGER_UI_DIR
+#error "CELEG_SWAGGER_UI_DIR must be defined by the build (see CMakeLists.txt)"
 #endif
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 namespace {
 
-namespace protocol = lfm::serve::protocol;
+namespace protocol = celeg::serve::protocol;
 
 // Known Swagger UI dist assets served under /docs/<name>. Kept as an
 // explicit allowlist (rather than general static-file serving) so a request
-// path can never escape LFM_SWAGGER_UI_DIR.
+// path can never escape CELEG_SWAGGER_UI_DIR.
 const std::unordered_map<std::string, std::string>& swagger_ui_assets() {
     static const std::unordered_map<std::string, std::string> assets = {
         {"swagger-ui-bundle.js", "application/javascript"},
@@ -36,9 +36,9 @@ const std::unordered_map<std::string, std::string>& swagger_ui_assets() {
 
 void register_docs_routes(uWS::App& app, const std::string& model_name) {
     static const std::string index_html =
-        read_required_file(std::filesystem::path(LFM_SERVE_STATIC_DIR) / "index.html");
+        read_required_file(std::filesystem::path(CELEG_SERVE_STATIC_DIR) / "index.html");
     static const std::string docs_html =
-        read_required_file(std::filesystem::path(LFM_SERVE_STATIC_DIR) / "docs.html");
+        read_required_file(std::filesystem::path(CELEG_SERVE_STATIC_DIR) / "docs.html");
 
     app.get("/", [](auto* res, auto* /*req*/) {
         res->writeHeader("Content-Type", "text/html; charset=utf-8")->end(index_html);
@@ -61,7 +61,7 @@ void register_docs_routes(uWS::App& app, const std::string& model_name) {
             res->writeStatus("404 Not Found")->end("not found");
             return;
         }
-        const auto contents = read_file(std::filesystem::path(LFM_SWAGGER_UI_DIR) / file);
+        const auto contents = read_file(std::filesystem::path(CELEG_SWAGGER_UI_DIR) / file);
         if (!contents) {
             res->writeStatus("404 Not Found")->end("not found");
             return;
@@ -70,4 +70,4 @@ void register_docs_routes(uWS::App& app, const std::string& model_name) {
     });
 }
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible CUDA GGUF benchmark for lfm25 versus llama.cpp.
+"""Reproducible CUDA GGUF benchmark for celeg versus llama.cpp.
 
 Both engines receive the exact same Q4_K_M file.  The first of six one-shot
 runs is discarded; the remaining five are summarized in one JSON report.
@@ -114,7 +114,7 @@ def parse_llama(stdout: str, expected: Path) -> tuple[float, float]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("gguf", type=Path)
-    parser.add_argument("--lfm-build", type=Path, default=ROOT / "out" / "windows-cuda-release")
+    parser.add_argument("--celeg-build", type=Path, default=ROOT / "out" / "windows-cuda-release")
     parser.add_argument("--llama-build", type=Path, default=ROOT / ".externals" / "llama.cpp" / "build-cuda")
     parser.add_argument("--reps", type=int, default=5)
     parser.add_argument("--setup-llama", action="store_true")
@@ -125,20 +125,20 @@ def main() -> None:
         setup_llama(args.llama_build)
     model = args.gguf.resolve()
     digest = sha256(model)
-    lfm = find_binary(args.lfm_build, "lfm25-run")
+    celeg = find_binary(args.celeg_build, "celeg-run")
     llama = find_binary(args.llama_build, "llama-bench")
     env = dict(os.environ, OMP_NUM_THREADS="8", MKL_NUM_THREADS="8")
     cuda_bin = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin")
     env["PATH"] = os.pathsep.join([str(llama.parent), str(cuda_bin),
                                     str(cuda_bin / "x64"), env.get("PATH", "")])
 
-    lfm_prefill: list[float] = []
-    lfm_decode: list[float] = []
+    celeg_prefill: list[float] = []
+    celeg_decode: list[float] = []
     llama_prefill: list[float] = []
     llama_decode: list[float] = []
     for iteration in range(args.reps + 1):
-        lfm_result = subprocess.run([
-            str(lfm), "--model", str(model), "--prompt", "benchmark",
+        celeg_result = subprocess.run([
+            str(celeg), "--model", str(model), "--prompt", "benchmark",
             "--raw", "--benchmark-prefill-tokens", "512",
             "--benchmark-decode", "128", "--benchmark-warmup", "1",
             "--max-new-tokens", "128", "--context", "1024",
@@ -146,7 +146,7 @@ def main() -> None:
             "--gemm-backend", "cublaslt", "--kv-cache", "bf16",
             "--prefill-chunk", "256",
         ], text=True, capture_output=True, env=env, check=True)
-        lp, ld = parse_lfm(lfm_result.stderr)
+        lp, ld = parse_lfm(celeg_result.stderr)
         llama_result = subprocess.run([
             str(llama), "-m", str(model), "-p", "512", "-n", "128", "-r", "1",
             "-o", "json", "-t", "8", "-b", "256", "-ub", "256",
@@ -155,7 +155,7 @@ def main() -> None:
         cp, cd = parse_llama(llama_result.stdout, model)
         if iteration == 0:
             continue
-        lfm_prefill.append(lp); lfm_decode.append(ld)
+        celeg_prefill.append(lp); celeg_decode.append(ld)
         llama_prefill.append(cp); llama_decode.append(cd)
 
     report = {
@@ -164,7 +164,7 @@ def main() -> None:
         "quant": "Q4_K_M",
         "gguf_revision": GGUF_REVISION,
         "llama_cpp_revision": LLAMA_REVISION,
-        "lfm25_commit": git_head(ROOT),
+        "celeg_commit": git_head(ROOT),
         "gpu": gpu_info(),
         "model_path": str(model),
         "model_sha256": digest,
@@ -172,18 +172,18 @@ def main() -> None:
         "threads": 8, "prefill_tokens": 512, "decode_tokens": 128,
         "batch": 256, "ubatch": 256, "kv": "bf16", "gpu_layers": 99,
         "repetitions": args.reps,
-        "lfm25": {"prefill_tps": statistics.mean(lfm_prefill),
-                  "prefill_stddev": statistics.stdev(lfm_prefill) if len(lfm_prefill) > 1 else 0.0,
-                  "decode_tps": statistics.mean(lfm_decode),
-                  "decode_stddev": statistics.stdev(lfm_decode) if len(lfm_decode) > 1 else 0.0},
+        "celeg": {"prefill_tps": statistics.mean(celeg_prefill),
+                  "prefill_stddev": statistics.stdev(celeg_prefill) if len(celeg_prefill) > 1 else 0.0,
+                  "decode_tps": statistics.mean(celeg_decode),
+                  "decode_stddev": statistics.stdev(celeg_decode) if len(celeg_decode) > 1 else 0.0},
         "llama_cpp": {"prefill_tps": statistics.mean(llama_prefill),
                       "prefill_stddev": statistics.stdev(llama_prefill) if len(llama_prefill) > 1 else 0.0,
                       "decode_tps": statistics.mean(llama_decode),
                       "decode_stddev": statistics.stdev(llama_decode) if len(llama_decode) > 1 else 0.0},
     }
     report["ratio"] = {
-        "prefill": report["lfm25"]["prefill_tps"] / report["llama_cpp"]["prefill_tps"],
-        "decode": report["lfm25"]["decode_tps"] / report["llama_cpp"]["decode_tps"],
+        "prefill": report["celeg"]["prefill_tps"] / report["llama_cpp"]["prefill_tps"],
+        "decode": report["celeg"]["decode_tps"] / report["llama_cpp"]["decode_tps"],
     }
     RESULT.parent.mkdir(parents=True, exist_ok=True)
     RESULT.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

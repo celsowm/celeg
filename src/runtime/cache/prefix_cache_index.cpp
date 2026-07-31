@@ -1,9 +1,9 @@
-#include "lfm/runtime/cache/prefix_cache_index.hpp"
+#include "celeg/runtime/cache/prefix_cache_index.hpp"
 
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 PrefixCacheIndex::EntryId PrefixCacheIndex::insert(
     const std::vector<int32_t>& prompt) {
@@ -79,4 +79,4 @@ const std::vector<int32_t>& PrefixCacheIndex::prompt(EntryId id) const {
     return found->second.prompt;
 }
 
-} // namespace lfm
+} // namespace celeg

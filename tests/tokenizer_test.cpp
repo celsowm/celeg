@@ -1,11 +1,11 @@
-#include "lfm/text/tokenizer.hpp"
+#include "celeg/text/tokenizer.hpp"
 #include "support/assertions.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 
 int main() {
-    const auto path = std::filesystem::temp_directory_path() / "lfm_tokenizer_test.json";
+    const auto path = std::filesystem::temp_directory_path() / "celeg_tokenizer_test.json";
     std::ofstream out(path);
     out << R"({
       "model": {
@@ -19,12 +19,12 @@ int main() {
     })";
     out.close();
 
-    lfm::BpeTokenizer tokenizer(path.string());
+    celeg::BpeTokenizer tokenizer(path.string());
     const auto ids = tokenizer.encode("hi", false);
-    LFM_TEST_CHECK(ids.size() == 1 && ids[0] == 3);
-    LFM_TEST_CHECK(tokenizer.decode(ids, false) == "hi");
+    CELEG_TEST_CHECK(ids.size() == 1 && ids[0] == 3);
+    CELEG_TEST_CHECK(tokenizer.decode(ids, false) == "hi");
     const auto contraction = tokenizer.encode("'S", false);
-    LFM_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
+    CELEG_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
     std::filesystem::remove(path);
     std::cout << "tokenizer_test: ok\n";
 }

@@ -19,7 +19,7 @@ jobs:
         run: BUILD_DIR=out/linux-cpu-release ./scripts/cpu_vnni_check.sh
       - name: Verify no CUDA dependency
         run: |
-          if ldd out/linux-cpu-release/liblfm25_cpu.so | grep -Ei 'cuda|cublas'; then
+          if ldd out/linux-cpu-release/libceleg_cpu.so | grep -Ei 'cuda|cublas'; then
             echo 'CPU ABI unexpectedly links CUDA' >&2
             exit 1
           fi

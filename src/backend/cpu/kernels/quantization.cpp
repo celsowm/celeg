@@ -1,5 +1,5 @@
-#include "lfm/backend/cpu/quantization.hpp"
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/backend/cpu/quantization.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 constexpr std::array<char, 8> kMagic{{'L','F','M','P','A','C','K','1'}};
@@ -397,4 +397,4 @@ std::vector<float> CpuPackReader::read_bf16_vector(const std::string& name) cons
     return result;
 }
 
-} // namespace lfm
+} // namespace celeg

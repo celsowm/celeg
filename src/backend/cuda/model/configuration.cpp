@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/model/weights/policy.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/model/weights/policy.hpp"
 
 #include <stdexcept>
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::configure_model(
     const detail::ModelBootstrap& bootstrap) {
@@ -20,5 +20,5 @@ void Model::Impl::configure_model(
     check_moe_quantization_policy(options_.weight_mode, shape_.num_experts > 0);
 }
 
-} // namespace lfm
+} // namespace celeg
 

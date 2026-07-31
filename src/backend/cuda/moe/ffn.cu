@@ -1,10 +1,10 @@
-#include "lfm/runtime/moe.hpp"
-#include "lfm/backend/cuda/utils.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
+#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/utils.cuh"
+#include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <cuda_runtime.h>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -26,7 +26,7 @@ struct GgufQ6KBlock {
 __device__ __forceinline__ float gguf_q4k_value(const GgufQ4KBlock* block,
                                                  int col) {
     uint8_t scale = 0, minimum = 0;
-    lfm::gguf_blocks::q4k_scale_min(col >> 5, block->scales, scale, minimum);
+    celeg::gguf_blocks::q4k_scale_min(col >> 5, block->scales, scale, minimum);
     const uint8_t packed = block->qs[(col >> 6) * 32 + (col & 31)];
     const int q = (col & 32) != 0 ? packed >> 4 : packed & 15;
     return __half2float(block->d) * static_cast<float>(scale * q) -
@@ -159,7 +159,7 @@ void launch_moe_gguf_ffn(const MoeFfnDevice& device,
                 device.num_experts, device.inter, device.hidden_dim,
                 selected_experts, hidden, rows, K, scratch_activated);
     }
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 
     const dim3 down_grid(pairs, (device.hidden_dim + warps_per_block - 1) / warps_per_block);
     if (device.down_gguf_type == GgmlType::Q4_K) {
@@ -177,7 +177,7 @@ void launch_moe_gguf_ffn(const MoeFfnDevice& device,
                 device.hidden_dim, selected_experts, routing_weights,
                 scratch_activated, output_accum, rows, K);
     }
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 __device__ inline float bf16_to_f(const __nv_bfloat16 v) {
@@ -374,7 +374,7 @@ void launch_moe_ffn(const MoeFfnDevice& device,
         device.num_experts, device.inter, device.hidden_dim,
         device.expert_gate_up_stride, selected_experts, hidden,
         rows, K, scratch_activated);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 
     dim3 grid_dw(pairs, (device.hidden_dim + tile_size - 1) / tile_size);
     moe_down_tiled_kernel<<<grid_dw, tile_size, 0, stream>>>(
@@ -382,7 +382,7 @@ void launch_moe_ffn(const MoeFfnDevice& device,
         device.num_experts, device.inter, device.hidden_dim,
         device.expert_down_stride, selected_experts, routing_weights,
         output_accum, rows, K, scratch_activated);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 void launch_finalize_moe_output(const float* accum,
@@ -396,7 +396,7 @@ void launch_finalize_moe_output(const float* accum,
     const int block = 256;
     cast_float_to_bf16_kernel<<<static_cast<unsigned>((count + block - 1) / block), block, 0, stream>>>(
         accum, output, count);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 __global__ void cast_bf16_to_float_kernel(const __nv_bfloat16* input,
@@ -417,7 +417,7 @@ void launch_cast_bf16_to_float(const __nv_bfloat16* input,
     const int block = 256;
     cast_bf16_to_float_kernel<<<static_cast<unsigned>((count + block - 1) / block), block, 0, stream>>>(
         input, output, count);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
-} // namespace lfm
+} // namespace celeg

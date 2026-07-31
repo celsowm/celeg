@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 CpuModel::Impl::Impl(std::shared_ptr<Shared> shared_weights,
                      GenerationConfig generation_config,
@@ -288,4 +288,4 @@ CpuModelMemoryStats CpuModel::Impl::memory_stats() const {
     return stats;
 }
 
-} // namespace lfm
+} // namespace celeg

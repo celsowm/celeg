@@ -10,7 +10,7 @@ BUILD="${BUILD:-./build-cpu}"
 
 for requests in 1 2 4 8 16; do
   echo "=== requests=${requests} kv=${KV} isa=${ISA} ==="
-  "${BUILD}/lfm25-cpu-concurrent-benchmark" \
+  "${BUILD}/celeg-cpu-concurrent-benchmark" \
     "${MODEL}" "${PROMPT}" "${requests}" "${MAX_NEW}" \
     "${THREADS}" "${KV}" "${ISA}"
 done

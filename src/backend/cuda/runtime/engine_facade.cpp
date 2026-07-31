@@ -1,6 +1,6 @@
 #include "engine_internal.hpp"
 
-namespace lfm {
+namespace celeg {
 ConcurrentEngine::ConcurrentEngine(std::string model_path,
                                    int max_context,
                                    ModelOptions model_options,
@@ -38,4 +38,4 @@ GroupedConcurrentMetrics ConcurrentEngine::grouped_metrics() const {
 
 
 
-} // namespace lfm
+} // namespace celeg

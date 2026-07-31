@@ -1,6 +1,6 @@
-#include "lfm/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
 #include "support/assertions.hpp"
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,26 +29,26 @@ int main() {
     std::vector<float> key_rounded(key.size());
     std::vector<float> value_rounded(value.size());
     for (size_t i = 0; i < key.size(); ++i) {
-        key_bf16[i] = lfm::float_to_bf16_bits(key[i]);
-        key_rounded[i] = lfm::bf16_bits_to_float(key_bf16[i]);
+        key_bf16[i] = celeg::float_to_bf16_bits(key[i]);
+        key_rounded[i] = celeg::bf16_bits_to_float(key_bf16[i]);
     }
     for (size_t i = 0; i < value.size(); ++i) {
-        value_bf16[i] = lfm::float_to_bf16_bits(value[i]);
-        value_rounded[i] = lfm::bf16_bits_to_float(value_bf16[i]);
+        value_bf16[i] = celeg::float_to_bf16_bits(value[i]);
+        value_rounded[i] = celeg::bf16_bits_to_float(value_bf16[i]);
     }
 
     std::vector<float> reference(q_heads * head_dim);
     std::vector<float> actual(q_heads * head_dim);
-    lfm::cpu_gqa_decode(q.data(), key_rounded.data(), value_rounded.data(),
+    celeg::cpu_gqa_decode(q.data(), key_rounded.data(), value_rounded.data(),
                         reference.data(), sequence, q_heads, kv_heads, head_dim);
-    lfm::cpu_gqa_decode_bf16(q.data(), key_bf16.data(), value_bf16.data(),
+    celeg::cpu_gqa_decode_bf16(q.data(), key_bf16.data(), value_bf16.data(),
                              actual.data(), sequence, q_heads, kv_heads, head_dim);
 
     float maximum = 0.0f;
     for (size_t i = 0; i < actual.size(); ++i) {
         maximum = std::max(maximum, std::abs(actual[i] - reference[i]));
     }
-    LFM_TEST_CHECK(maximum < 1e-6f);
+    CELEG_TEST_CHECK(maximum < 1e-6f);
     std::cout << "cpu_kv_cache_test: ok max_error=" << maximum << '\n';
     return 0;
 }

@@ -1,11 +1,11 @@
 #pragma once
 
-#include "lfm/backend/cpu/quantization.hpp"
+#include "celeg/backend/cpu/quantization.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
-namespace lfm::detail {
+namespace celeg::detail {
 
 // FP32 router projection used by CPU MoE: contiguous dot product with AVX2/FMA.
 float f32_dot_avx2_msvc(const float* weight, const float* activation,
@@ -36,4 +36,4 @@ void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
                            size_t cols, size_t group_size, size_t groups_per_row,
                            float* output4);
 
-} // namespace lfm::detail
+} // namespace celeg::detail

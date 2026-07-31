@@ -1,11 +1,11 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/runtime/moe/expert_residency.hpp"
-#include "lfm/checkpoint/tensor_names.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
+#include "celeg/checkpoint/tensor_names.hpp"
 #include <cstring>
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     const IWeightRepository& repo, int layer,
     int num_experts, int moe_intermediate, int hidden,
@@ -150,4 +150,4 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
 }
 
 
-} // namespace lfm
+} // namespace celeg

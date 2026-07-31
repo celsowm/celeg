@@ -1,11 +1,11 @@
 #include "detail/model_internal.hpp"
 
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/checkpoint/repositories/gguf.hpp"
-#include "lfm/checkpoint/repositories/safetensors.hpp"
-#include "lfm/checkpoint/tensor_names.hpp"
-#include "lfm/model/config/variant.hpp"
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/checkpoint/repositories/gguf.hpp"
+#include "celeg/checkpoint/repositories/safetensors.hpp"
+#include "celeg/checkpoint/tensor_names.hpp"
+#include "celeg/model/config/variant.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -20,7 +20,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 namespace {
 std::string tensor_name(const ITensorNamingPolicy* policy, TensorRole role,
                         int layer = -1) {
@@ -121,12 +121,12 @@ std::string source_identity(const std::filesystem::path& path) {
 
 std::filesystem::path default_cache_directory() {
     if (const char* xdg = std::getenv("XDG_CACHE_HOME")) {
-        return std::filesystem::path(xdg) / "lfm25";
+        return std::filesystem::path(xdg) / "celeg";
     }
     if (const char* home = std::getenv("HOME")) {
-        return std::filesystem::path(home) / ".cache" / "lfm25";
+        return std::filesystem::path(home) / ".cache" / "celeg";
     }
-    return std::filesystem::temp_directory_path() / "lfm25-cache";
+    return std::filesystem::temp_directory_path() / "celeg-cache";
 }
 }
 
@@ -589,4 +589,4 @@ size_t CpuModel::Impl::Shared::weights_memory_bytes() const {
     return bytes;
 }
 
-} // namespace lfm
+} // namespace celeg

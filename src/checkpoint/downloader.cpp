@@ -1,5 +1,5 @@
-#include "lfm/checkpoint/downloader.hpp"
-#include "lfm/checkpoint/formats/json.hpp"
+#include "celeg/checkpoint/downloader.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -23,7 +23,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #endif
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -124,7 +124,7 @@ HttpResponse http_request(const std::string& method,
                           const std::string& path,
                           bool follow_redirects = true) {
     WinHttpHandle session(WinHttpOpen(
-        L"lfm25-native-cpp/0.0.20",
+        L"celeg-native-cpp/0.0.20",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session) throw std::runtime_error("WinHttpOpen failed");
@@ -200,7 +200,7 @@ void http_download_file(const std::string& path,
     std::string last_error;
     for (int attempt = 0; attempt < kAttempts; ++attempt) {
         WinHttpHandle session(WinHttpOpen(
-            L"lfm25-native-cpp/0.0.20",
+            L"celeg-native-cpp/0.0.20",
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
         if (!session) throw std::runtime_error("WinHttpOpen failed");
@@ -673,4 +673,4 @@ std::filesystem::path resolve_hf_gguf(
 
 #endif
 
-} // namespace lfm
+} // namespace celeg

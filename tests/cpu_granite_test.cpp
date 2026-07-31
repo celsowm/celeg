@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/model.hpp"
 #include "support/assertions.hpp"
 
 #include <cstdint>
@@ -99,21 +99,21 @@ void write_checkpoint(const std::filesystem::path& directory) {
 
 int main() {
     const std::filesystem::path directory =
-        std::filesystem::temp_directory_path() / "lfm25-granite-cpu-test";
+        std::filesystem::temp_directory_path() / "celeg-granite-cpu-test";
     write_checkpoint(directory);
-    lfm::CpuModelOptions options;
+    celeg::CpuModelOptions options;
     options.use_pack_cache = false;
     options.threads = 1;
-    lfm::GenerationConfig generation;
+    celeg::GenerationConfig generation;
     generation.seed = 7;
     generation.top_k = 1;
     {
-        lfm::CpuModel model(directory.string(), 32, options, generation);
+        celeg::CpuModel model(directory.string(), 32, options, generation);
         model.session().prefill({1, 3, 4});
-        LFM_TEST_CHECK(model.session().ready_for_decode());
-        LFM_TEST_CHECK(model.diagnostics().copy_logits().size() == 32);
+        CELEG_TEST_CHECK(model.session().ready_for_decode());
+        CELEG_TEST_CHECK(model.diagnostics().copy_logits().size() == 32);
         (void)model.session().decode();
-        LFM_TEST_CHECK(model.session().position() == 4);
+        CELEG_TEST_CHECK(model.session().position() == 4);
     }
     std::filesystem::remove_all(directory);
     return 0;

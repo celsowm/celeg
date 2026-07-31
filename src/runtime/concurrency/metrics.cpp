@@ -1,6 +1,6 @@
-#include "lfm/runtime/concurrency/metrics.hpp"
+#include "celeg/runtime/concurrency/metrics.hpp"
 
-namespace lfm {
+namespace celeg {
 
 GroupedConcurrentMetrics group_concurrent_metrics(
     const ConcurrentMetrics& flat) {
@@ -60,4 +60,4 @@ GroupedConcurrentMetrics group_concurrent_metrics(
     return grouped;
 }
 
-} // namespace lfm
+} // namespace celeg

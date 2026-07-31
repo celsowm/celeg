@@ -5,7 +5,7 @@
 #include <numeric>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 namespace {
 uint64_t xorshift64star(uint64_t& state) {
     state ^= state >> 12;
@@ -91,4 +91,4 @@ void CpuModel::Impl::set_generation(GenerationConfig config) {
     rng_state = generation.seed;
 }
 
-} // namespace lfm
+} // namespace celeg

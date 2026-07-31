@@ -199,7 +199,7 @@ void launch_gqa_prefill_flash(
     flash_attn_prefill_kernel<<<grid, block, smem_bytes, stream>>>(
         q, k, v, out, rows, q_heads, kv_heads, head_dim,
         q_width, kv_width, out_width);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +261,7 @@ void launch_causal_softmax(const float* scores, __nv_bfloat16* probs,
     const int threads = rows < 256 ? ((rows + 31) / 32) * 32 : 256;
     causal_softmax_kernel<<<rows * q_heads, max(threads, 32), 0, stream>>>(
         scores, probs, rows, q_heads);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 void launch_gqa_prefill_gemm(
@@ -282,7 +282,7 @@ void launch_gqa_prefill_gemm(
             static_cast<size_t>(kv_head) * group * head_dim;
         float* scores_base = scores_scratch +
             static_cast<size_t>(kv_head) * group * rows_sq;
-        LFM_CUBLAS(cublasGemmStridedBatchedEx(
+        CELEG_CUBLAS(cublasGemmStridedBatchedEx(
             cublas, CUBLAS_OP_T, CUBLAS_OP_N,
             rows, rows, head_dim,
             &scale,
@@ -301,7 +301,7 @@ void launch_gqa_prefill_gemm(
             static_cast<size_t>(kv_head) * group * rows_sq;
         __nv_bfloat16* out_base = out +
             static_cast<size_t>(kv_head) * group * head_dim;
-        LFM_CUBLAS(cublasGemmStridedBatchedEx(
+        CELEG_CUBLAS(cublasGemmStridedBatchedEx(
             cublas, CUBLAS_OP_N, CUBLAS_OP_N,
             head_dim, rows, rows,
             &one,

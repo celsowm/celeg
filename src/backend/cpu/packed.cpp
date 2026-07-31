@@ -1,6 +1,6 @@
 #include "detail/model_internal.hpp"
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/model.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace lfm {
+namespace celeg {
 
 struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
     using State = CpuModel::Impl;
@@ -322,4 +322,4 @@ CpuModel::decode_batch(std::span<CpuModel* const> models) {
     return {std::move(tokens), {sessions.size(), elapsed}};
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,4 +1,4 @@
-#include "lfm/serve/generation_dispatcher.hpp"
+#include "celeg/serve/generation_dispatcher.hpp"
 #include "support/assertions.hpp"
 
 #include <chrono>
@@ -12,15 +12,15 @@
 
 namespace {
 
-using lfm::serve::FinishReason;
-using lfm::serve::GenerateEvent;
-using lfm::serve::GenerateRequest;
-using lfm::serve::GenerationDispatcher;
-using lfm::serve::IInferenceService;
-using lfm::serve::ModelInfo;
-using lfm::serve::RequestId;
-using lfm::serve::RequestStatus;
-using lfm::serve::ServingMetrics;
+using celeg::serve::FinishReason;
+using celeg::serve::GenerateEvent;
+using celeg::serve::GenerateRequest;
+using celeg::serve::GenerationDispatcher;
+using celeg::serve::IInferenceService;
+using celeg::serve::ModelInfo;
+using celeg::serve::RequestId;
+using celeg::serve::RequestStatus;
+using celeg::serve::ServingMetrics;
 
 // Minimal in-memory stand-in for CpuInferenceService/CudaInferenceService:
 // each step() emits one token per active request until max_output_tokens is
@@ -115,7 +115,7 @@ int main() {
     GenerationDispatcher dispatcher(service, std::chrono::milliseconds(1));
 
     dispatcher.start();
-    LFM_TEST_CHECK(service.started());
+    CELEG_TEST_CHECK(service.started());
 
     // A request the dispatcher should drive to completion and auto-release.
     GenerateRequest request;
@@ -140,9 +140,9 @@ int main() {
         std::unique_lock<std::mutex> lock(result_mutex);
         const bool completed = result_cv.wait_for(
             lock, std::chrono::seconds(5), [&] { return finished; });
-        LFM_TEST_CHECK(completed);
-        LFM_TEST_CHECK(received.size() == 5);
-        for (std::int32_t i = 0; i < 5; ++i) LFM_TEST_CHECK(received[i] == i);
+        CELEG_TEST_CHECK(completed);
+        CELEG_TEST_CHECK(received.size() == 5);
+        for (std::int32_t i = 0; i < 5; ++i) CELEG_TEST_CHECK(received[i] == i);
     }
 
     // The callback is notified before the dispatcher performs its mandated
@@ -155,7 +155,7 @@ int main() {
     }
 
     // The dispatcher must have released the finished request on our behalf.
-    LFM_TEST_CHECK(service.status(id) == RequestStatus::Failed);
+    CELEG_TEST_CHECK(service.status(id) == RequestStatus::Failed);
 
     // unwatch() must stop delivery without releasing the request.
     GenerateRequest long_request;
@@ -167,13 +167,13 @@ int main() {
     dispatcher.unwatch(long_id);
     const int count_at_unwatch = callback_count;
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    LFM_TEST_CHECK(callback_count == count_at_unwatch);
-    LFM_TEST_CHECK(service.status(long_id) == RequestStatus::Decoding);
+    CELEG_TEST_CHECK(callback_count == count_at_unwatch);
+    CELEG_TEST_CHECK(service.status(long_id) == RequestStatus::Decoding);
     service.cancel(long_id);
     service.release(long_id);
 
     dispatcher.stop();
-    LFM_TEST_CHECK(!service.started());
+    CELEG_TEST_CHECK(!service.started());
 
     std::cout << "generation_dispatcher_test: ok\n";
     return 0;

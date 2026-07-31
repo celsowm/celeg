@@ -1,12 +1,12 @@
 #include "detail/model_internal.hpp"
 
-#include "lfm/runtime/moe.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -507,4 +507,4 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
     prefill_profile.total_ms += milliseconds_since(chunk_started);
 }
 
-} // namespace lfm
+} // namespace celeg

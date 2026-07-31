@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "lfm25-serve",
-    "description": "OpenAI-compatible chat completions API served by lfm25-serve.",
+    "title": "celeg-serve",
+    "description": "OpenAI-compatible chat completions API served by celeg-serve.",
     "version": "0.0.22"
   },
   "servers": [{"url": "/"}],

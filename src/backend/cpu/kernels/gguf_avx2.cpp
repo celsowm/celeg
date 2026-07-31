@@ -8,13 +8,13 @@
 #include <immintrin.h>
 #include <stdexcept>
 
-namespace lfm::detail {
+namespace celeg::detail {
 namespace {
 
 #if defined(__GNUC__) || defined(__clang__)
-#define LFM_GGUF_AVX2_TARGET __attribute__((target("avx2,fma")))
+#define CELEG_GGUF_AVX2_TARGET __attribute__((target("avx2,fma")))
 #else
-#define LFM_GGUF_AVX2_TARGET
+#define CELEG_GGUF_AVX2_TARGET
 #endif
 
 #pragma pack(push, 1)
@@ -61,7 +61,7 @@ float fp16_to_float(uint16_t bits) {
     return value;
 }
 
-LFM_GGUF_AVX2_TARGET int horizontal_sum(__m256i values) {
+CELEG_GGUF_AVX2_TARGET int horizontal_sum(__m256i values) {
     const __m128i low = _mm256_castsi256_si128(values);
     const __m128i high = _mm256_extracti128_si256(values, 1);
     __m128i sum = _mm_add_epi32(low, high);
@@ -70,7 +70,7 @@ LFM_GGUF_AVX2_TARGET int horizontal_sum(__m256i values) {
     return _mm_cvtsi128_si32(sum);
 }
 
-LFM_GGUF_AVX2_TARGET int horizontal_sum_128(__m128i values) {
+CELEG_GGUF_AVX2_TARGET int horizontal_sum_128(__m128i values) {
     values = _mm_hadd_epi32(values, values);
     values = _mm_hadd_epi32(values, values);
     return _mm_cvtsi128_si32(values);
@@ -80,7 +80,7 @@ LFM_GGUF_AVX2_TARGET int horizontal_sum_128(__m128i values) {
 // packed values in bytes is important: expanding every element to epi32
 // costs several times more instructions than the maddubs/madd pair used by
 // ggml's AVX2 kernels.
-LFM_GGUF_AVX2_TARGET int dot_u8_i8_32(const uint8_t* weights,
+CELEG_GGUF_AVX2_TARGET int dot_u8_i8_32(const uint8_t* weights,
                                       const int8_t* activation,
                                       bool high_nibble) {
     const __m256i packed = _mm256_loadu_si256(
@@ -95,7 +95,7 @@ LFM_GGUF_AVX2_TARGET int dot_u8_i8_32(const uint8_t* weights,
     return horizontal_sum(_mm256_madd_epi16(pair, _mm256_set1_epi16(1)));
 }
 
-LFM_GGUF_AVX2_TARGET int dot_u8_i8_16(const uint8_t* weights,
+CELEG_GGUF_AVX2_TARGET int dot_u8_i8_16(const uint8_t* weights,
                                       const int8_t* activation) {
     const __m128i w = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights));
     const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(activation));
@@ -103,7 +103,7 @@ LFM_GGUF_AVX2_TARGET int dot_u8_i8_16(const uint8_t* weights,
     return horizontal_sum_128(_mm_madd_epi16(pair, _mm_set1_epi16(1)));
 }
 
-LFM_GGUF_AVX2_TARGET int dot_i8_u4(const int8_t* activation,
+CELEG_GGUF_AVX2_TARGET int dot_i8_u4(const int8_t* activation,
                                   const uint8_t* packed,
                                   bool high_nibble) {
     __m256i sum = _mm256_setzero_si256();
@@ -152,7 +152,7 @@ void scale_min(const BlockQ4K& block, int sub, uint8_t& scale,
 
 } // namespace
 
-LFM_GGUF_AVX2_TARGET
+CELEG_GGUF_AVX2_TARGET
 void cpu_quantize_q8k_avx2(const float* input, size_t cols,
                            CpuQ8KBlock* output) {
     const __m256 sign_mask = _mm256_set1_ps(-0.0f);
@@ -190,7 +190,7 @@ void cpu_quantize_q8k_avx2(const float* input, size_t cols,
     }
 }
 
-LFM_GGUF_AVX2_TARGET
+CELEG_GGUF_AVX2_TARGET
 void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
                         const CpuQ8KBlock* activation, size_t cols,
                         float* output4) {
@@ -272,7 +272,7 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
     for (int lane = 0; lane < 4; ++lane) output4[lane] = totals[lane];
 }
 
-LFM_GGUF_AVX2_TARGET
+CELEG_GGUF_AVX2_TARGET
 float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
                         const CpuQ8KBlock* activation, size_t cols) {
     float total = 0.0f;
@@ -356,8 +356,8 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
     throw std::invalid_argument("unsupported CPU GGUF AVX2 type");
 }
 
-#undef LFM_GGUF_AVX2_TARGET
+#undef CELEG_GGUF_AVX2_TARGET
 
-} // namespace lfm::detail
+} // namespace celeg::detail
 
 #endif

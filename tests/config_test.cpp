@@ -1,7 +1,7 @@
-#include "lfm/model/config/config.hpp"
+#include "celeg/model/config/config.hpp"
 #include "support/assertions.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/model/config/variant.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/model/config/variant.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -104,113 +104,113 @@ void write_1_2b_thinking_config(const std::filesystem::path& path) {
 } // namespace
 
 int main() {
-    const auto path = std::filesystem::temp_directory_path() / "lfm25-config-test.json";
+    const auto path = std::filesystem::temp_directory_path() / "celeg-config-test.json";
 
     write_230m_config(path);
-    const lfm::ModelConfig config_230m = lfm::ModelConfig::load(path.string());
-    const lfm::ModelShape shape_230m = lfm::ModelShape::from_config(config_230m);
-    LFM_TEST_CHECK(shape_230m.head_dim == 64);
-    LFM_TEST_CHECK(shape_230m.num_hidden_layers == 14);
-    LFM_TEST_CHECK(static_cast<int>(shape_230m.layer_types.size()) == 14);
-    LFM_TEST_CHECK(shape_230m.attention_layer_count == 6);
-    LFM_TEST_CHECK(shape_230m.conv_layer_count == 8);
-    LFM_TEST_CHECK(shape_230m.q_width == 16 * 64);
-    LFM_TEST_CHECK(shape_230m.kv_width == 8 * 64);
-    LFM_TEST_CHECK(shape_230m.qkv_width == shape_230m.q_width + 2 * shape_230m.kv_width);
-    LFM_TEST_CHECK(shape_230m.attention_slot_for_layer[2] == 0);
-    LFM_TEST_CHECK(shape_230m.attention_slot_for_layer[4] == 1);
-    LFM_TEST_CHECK(shape_230m.attention_slot_for_layer[0] == -1);
-    LFM_TEST_CHECK(shape_230m.layer_for_attention_slot.size() == 6);
-    LFM_TEST_CHECK(shape_230m.layer_for_attention_slot[0] == 2);
-    LFM_TEST_CHECK(shape_230m.layer_for_attention_slot[5] == 12);
-    LFM_TEST_CHECK(config_230m.summary().find("attention_layers=6") != std::string::npos);
+    const celeg::ModelConfig config_230m = celeg::ModelConfig::load(path.string());
+    const celeg::ModelShape shape_230m = celeg::ModelShape::from_config(config_230m);
+    CELEG_TEST_CHECK(shape_230m.head_dim == 64);
+    CELEG_TEST_CHECK(shape_230m.num_hidden_layers == 14);
+    CELEG_TEST_CHECK(static_cast<int>(shape_230m.layer_types.size()) == 14);
+    CELEG_TEST_CHECK(shape_230m.attention_layer_count == 6);
+    CELEG_TEST_CHECK(shape_230m.conv_layer_count == 8);
+    CELEG_TEST_CHECK(shape_230m.q_width == 16 * 64);
+    CELEG_TEST_CHECK(shape_230m.kv_width == 8 * 64);
+    CELEG_TEST_CHECK(shape_230m.qkv_width == shape_230m.q_width + 2 * shape_230m.kv_width);
+    CELEG_TEST_CHECK(shape_230m.attention_slot_for_layer[2] == 0);
+    CELEG_TEST_CHECK(shape_230m.attention_slot_for_layer[4] == 1);
+    CELEG_TEST_CHECK(shape_230m.attention_slot_for_layer[0] == -1);
+    CELEG_TEST_CHECK(shape_230m.layer_for_attention_slot.size() == 6);
+    CELEG_TEST_CHECK(shape_230m.layer_for_attention_slot[0] == 2);
+    CELEG_TEST_CHECK(shape_230m.layer_for_attention_slot[5] == 12);
+    CELEG_TEST_CHECK(config_230m.summary().find("attention_layers=6") != std::string::npos);
 
-    lfm::register_builtin_variants();
-    const lfm::IModelVariant& variant_230m =
-        lfm::ModelVariantRegistry::instance().select(shape_230m);
-    LFM_TEST_CHECK(variant_230m.id() == "lfm2.5-230m");
-    LFM_TEST_CHECK(variant_230m.repo_id() == "LiquidAI/LFM2.5-230M");
+    celeg::register_builtin_variants();
+    const celeg::IModelVariant& variant_230m =
+        celeg::ModelVariantRegistry::instance().select(shape_230m);
+    CELEG_TEST_CHECK(variant_230m.id() == "lfm2.5-230m");
+    CELEG_TEST_CHECK(variant_230m.repo_id() == "LiquidAI/LFM2.5-230M");
 
     write_1_2b_config(path);
-    const lfm::ModelConfig config_1_2b = lfm::ModelConfig::load(path.string());
-    const lfm::ModelShape shape_1_2b = lfm::ModelShape::from_config(config_1_2b);
-    LFM_TEST_CHECK(shape_1_2b.head_dim == 64);
-    LFM_TEST_CHECK(shape_1_2b.num_hidden_layers == 16);
-    LFM_TEST_CHECK(shape_1_2b.attention_layer_count == 6);
-    LFM_TEST_CHECK(shape_1_2b.conv_layer_count == 10);
-    LFM_TEST_CHECK(shape_1_2b.q_width == 32 * 64);
-    LFM_TEST_CHECK(shape_1_2b.kv_width == 8 * 64);
-    LFM_TEST_CHECK(config_1_2b.summary().find("attention_layers=6") != std::string::npos);
+    const celeg::ModelConfig config_1_2b = celeg::ModelConfig::load(path.string());
+    const celeg::ModelShape shape_1_2b = celeg::ModelShape::from_config(config_1_2b);
+    CELEG_TEST_CHECK(shape_1_2b.head_dim == 64);
+    CELEG_TEST_CHECK(shape_1_2b.num_hidden_layers == 16);
+    CELEG_TEST_CHECK(shape_1_2b.attention_layer_count == 6);
+    CELEG_TEST_CHECK(shape_1_2b.conv_layer_count == 10);
+    CELEG_TEST_CHECK(shape_1_2b.q_width == 32 * 64);
+    CELEG_TEST_CHECK(shape_1_2b.kv_width == 8 * 64);
+    CELEG_TEST_CHECK(config_1_2b.summary().find("attention_layers=6") != std::string::npos);
 
-    const lfm::IModelVariant& variant_1_2b =
-        lfm::ModelVariantRegistry::instance().select(shape_1_2b);
-    LFM_TEST_CHECK(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
-    LFM_TEST_CHECK(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
+    const celeg::IModelVariant& variant_1_2b =
+        celeg::ModelVariantRegistry::instance().select(shape_1_2b);
+    CELEG_TEST_CHECK(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
+    CELEG_TEST_CHECK(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
 
     // The Thinking checkpoint shares the Instruct topology but must be
     // selected via its "_name" repo hint. Without the hint it must fall back
     // to the Instruct variant (shape-only loading stays unambiguous).
     write_1_2b_thinking_config(path);
-    const lfm::ModelConfig config_thinking = lfm::ModelConfig::load(path.string());
-    LFM_TEST_CHECK(!config_thinking.repo_hint.empty());
-    const lfm::ModelShape shape_thinking =
-        lfm::ModelShape::from_config(config_thinking);
-    const lfm::IModelVariant& variant_fallback =
-        lfm::ModelVariantRegistry::instance().select(shape_thinking);
-    LFM_TEST_CHECK(variant_fallback.id() == "lfm2.5-1.2b-instruct");
-    const lfm::IModelVariant& variant_thinking =
-        lfm::ModelVariantRegistry::instance().select(shape_thinking,
+    const celeg::ModelConfig config_thinking = celeg::ModelConfig::load(path.string());
+    CELEG_TEST_CHECK(!config_thinking.repo_hint.empty());
+    const celeg::ModelShape shape_thinking =
+        celeg::ModelShape::from_config(config_thinking);
+    const celeg::IModelVariant& variant_fallback =
+        celeg::ModelVariantRegistry::instance().select(shape_thinking);
+    CELEG_TEST_CHECK(variant_fallback.id() == "lfm2.5-1.2b-instruct");
+    const celeg::IModelVariant& variant_thinking =
+        celeg::ModelVariantRegistry::instance().select(shape_thinking,
                                                       config_thinking.repo_hint);
-    LFM_TEST_CHECK(variant_thinking.id() == "lfm2.5-1.2b-thinking");
-    LFM_TEST_CHECK(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
-    const lfm::ModelShape resolved_thinking = variant_thinking.resolve_shape(shape_thinking);
-    LFM_TEST_CHECK(resolved_thinking.intermediate == 8192);
+    CELEG_TEST_CHECK(variant_thinking.id() == "lfm2.5-1.2b-thinking");
+    CELEG_TEST_CHECK(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
+    const celeg::ModelShape resolved_thinking = variant_thinking.resolve_shape(shape_thinking);
+    CELEG_TEST_CHECK(resolved_thinking.intermediate == 8192);
 
     // ---- LFM2 MoE configuration (LiquidAI/LFM2.5-8B-A1B) ----
     write_8b_moe_config(path);
-    const lfm::ModelConfig config_moe = lfm::ModelConfig::load(path.string());
-    LFM_TEST_CHECK(config_moe.architecture == lfm::ArchitectureKind::MoeLfm2);
-    LFM_TEST_CHECK(config_moe.moe.has_value());
-    LFM_TEST_CHECK(config_moe.moe->num_experts == 32);
-    LFM_TEST_CHECK(config_moe.moe->experts_per_token == 4);
-    LFM_TEST_CHECK(config_moe.moe->num_dense_layers == 2);
-    LFM_TEST_CHECK(config_moe.moe->moe_intermediate_size == 1792);
-    LFM_TEST_CHECK(config_moe.moe->normalize_topk);
-    LFM_TEST_CHECK(config_moe.moe->use_expert_bias);
-    const lfm::ModelShape shape_moe = lfm::ModelShape::from_config(config_moe);
-    LFM_TEST_CHECK(shape_moe.architecture == lfm::ArchitectureKind::MoeLfm2);
-    LFM_TEST_CHECK(shape_moe.hidden == 2048);
-    LFM_TEST_CHECK(shape_moe.dense_intermediate == 7168);
-    LFM_TEST_CHECK(shape_moe.moe_intermediate == 1792);
-    LFM_TEST_CHECK(shape_moe.num_dense_layers == 2);
-    LFM_TEST_CHECK(shape_moe.num_experts == 32);
-    LFM_TEST_CHECK(shape_moe.experts_per_token == 4);
-    LFM_TEST_CHECK(shape_moe.attention_layer_count == 6);
-    LFM_TEST_CHECK(shape_moe.conv_layer_count == 18);
-    LFM_TEST_CHECK(shape_moe.num_hidden_layers == 24);
+    const celeg::ModelConfig config_moe = celeg::ModelConfig::load(path.string());
+    CELEG_TEST_CHECK(config_moe.architecture == celeg::ArchitectureKind::MoeLfm2);
+    CELEG_TEST_CHECK(config_moe.moe.has_value());
+    CELEG_TEST_CHECK(config_moe.moe->num_experts == 32);
+    CELEG_TEST_CHECK(config_moe.moe->experts_per_token == 4);
+    CELEG_TEST_CHECK(config_moe.moe->num_dense_layers == 2);
+    CELEG_TEST_CHECK(config_moe.moe->moe_intermediate_size == 1792);
+    CELEG_TEST_CHECK(config_moe.moe->normalize_topk);
+    CELEG_TEST_CHECK(config_moe.moe->use_expert_bias);
+    const celeg::ModelShape shape_moe = celeg::ModelShape::from_config(config_moe);
+    CELEG_TEST_CHECK(shape_moe.architecture == celeg::ArchitectureKind::MoeLfm2);
+    CELEG_TEST_CHECK(shape_moe.hidden == 2048);
+    CELEG_TEST_CHECK(shape_moe.dense_intermediate == 7168);
+    CELEG_TEST_CHECK(shape_moe.moe_intermediate == 1792);
+    CELEG_TEST_CHECK(shape_moe.num_dense_layers == 2);
+    CELEG_TEST_CHECK(shape_moe.num_experts == 32);
+    CELEG_TEST_CHECK(shape_moe.experts_per_token == 4);
+    CELEG_TEST_CHECK(shape_moe.attention_layer_count == 6);
+    CELEG_TEST_CHECK(shape_moe.conv_layer_count == 18);
+    CELEG_TEST_CHECK(shape_moe.num_hidden_layers == 24);
     // First two layers are dense; the rest are MoE.
-    LFM_TEST_CHECK(!shape_moe.layer_uses_moe(0));
-    LFM_TEST_CHECK(!shape_moe.layer_uses_moe(1));
-    LFM_TEST_CHECK(shape_moe.layer_uses_moe(2));
-    LFM_TEST_CHECK(shape_moe.layer_uses_moe(23));
+    CELEG_TEST_CHECK(!shape_moe.layer_uses_moe(0));
+    CELEG_TEST_CHECK(!shape_moe.layer_uses_moe(1));
+    CELEG_TEST_CHECK(shape_moe.layer_uses_moe(2));
+    CELEG_TEST_CHECK(shape_moe.layer_uses_moe(23));
     // Fingerprints must differ between dense and MoE shapes.
-    LFM_TEST_CHECK(shape_moe.fingerprint() != shape_1_2b.fingerprint());
-    LFM_TEST_CHECK(shape_moe.fingerprint().find("moe") != std::string::npos);
+    CELEG_TEST_CHECK(shape_moe.fingerprint() != shape_1_2b.fingerprint());
+    CELEG_TEST_CHECK(shape_moe.fingerprint().find("moe") != std::string::npos);
 
     // ---- Granite 4.1 dense configuration ----
     write_granite_config(path);
-    const lfm::ModelConfig granite = lfm::ModelConfig::load(path.string());
-    LFM_TEST_CHECK(granite.architecture == lfm::ArchitectureKind::Granite);
-    LFM_TEST_CHECK(granite.dtype == "bfloat16");
-    LFM_TEST_CHECK(granite.layer_types.size() == 2);
-    LFM_TEST_CHECK(granite.layer_types[0] == lfm::LayerType::FullAttention);
-    LFM_TEST_CHECK(granite.query_key_norm == false);
-    LFM_TEST_CHECK(granite.embedding_multiplier == 12.0f);
-    LFM_TEST_CHECK(granite.logits_divisor == 16.0f);
-    const lfm::ModelShape granite_shape = lfm::ModelShape::from_config(granite);
-    LFM_TEST_CHECK(granite_shape.attention_layer_count == 2);
-    LFM_TEST_CHECK(granite_shape.conv_layer_count == 0);
-    LFM_TEST_CHECK(granite_shape.attention_multiplier == 0.125f);
+    const celeg::ModelConfig granite = celeg::ModelConfig::load(path.string());
+    CELEG_TEST_CHECK(granite.architecture == celeg::ArchitectureKind::Granite);
+    CELEG_TEST_CHECK(granite.dtype == "bfloat16");
+    CELEG_TEST_CHECK(granite.layer_types.size() == 2);
+    CELEG_TEST_CHECK(granite.layer_types[0] == celeg::LayerType::FullAttention);
+    CELEG_TEST_CHECK(granite.query_key_norm == false);
+    CELEG_TEST_CHECK(granite.embedding_multiplier == 12.0f);
+    CELEG_TEST_CHECK(granite.logits_divisor == 16.0f);
+    const celeg::ModelShape granite_shape = celeg::ModelShape::from_config(granite);
+    CELEG_TEST_CHECK(granite_shape.attention_layer_count == 2);
+    CELEG_TEST_CHECK(granite_shape.conv_layer_count == 0);
+    CELEG_TEST_CHECK(granite_shape.attention_multiplier == 0.125f);
 
     // ---- MoE configuration validation ----
     auto expect_config_error = [&path](const std::string& json) {
@@ -218,19 +218,19 @@ int main() {
         out << json;
         bool threw = false;
         try {
-            lfm::ModelConfig::load(path.string());
+            celeg::ModelConfig::load(path.string());
         } catch (const std::runtime_error&) {
             threw = true;
         }
         return threw;
     };
     // experts_per_token exceeds num_experts
-    LFM_TEST_CHECK(expect_config_error(R"({"model_type":"lfm2_moe","dtype":"bfloat16","hidden_size":64,"intermediate_size":64,"moe_intermediate_size":32,"num_hidden_layers":2,"num_attention_heads":2,"num_key_value_heads":2,"vocab_size":100,"conv_L_cache":3,"max_position_embeddings":1024,"bos_token_id":1,"eos_token_id":2,"pad_token_id":0,"norm_eps":1e-5,"conv_bias":false,"tie_word_embeddings":true,"use_pos_enc":true,"rope_theta":1000000.0,"num_dense_layers":0,"num_experts":4,"num_experts_per_tok":8,"norm_topk_prob":true,"use_expert_bias":true,"layer_types":["conv","conv"]})"));
+    CELEG_TEST_CHECK(expect_config_error(R"({"model_type":"lfm2_moe","dtype":"bfloat16","hidden_size":64,"intermediate_size":64,"moe_intermediate_size":32,"num_hidden_layers":2,"num_attention_heads":2,"num_key_value_heads":2,"vocab_size":100,"conv_L_cache":3,"max_position_embeddings":1024,"bos_token_id":1,"eos_token_id":2,"pad_token_id":0,"norm_eps":1e-5,"conv_bias":false,"tie_word_embeddings":true,"use_pos_enc":true,"rope_theta":1000000.0,"num_dense_layers":0,"num_experts":4,"num_experts_per_tok":8,"norm_topk_prob":true,"use_expert_bias":true,"layer_types":["conv","conv"]})"));
     // unsupported architecture
-    LFM_TEST_CHECK(expect_config_error(R"({"model_type":"lfm3","dtype":"bfloat16","hidden_size":64,"intermediate_size":64,"num_hidden_layers":2,"num_attention_heads":2,"num_key_value_heads":2,"vocab_size":100,"conv_L_cache":3,"conv_dim":64,"max_position_embeddings":1024,"bos_token_id":1,"eos_token_id":2,"pad_token_id":0,"norm_eps":1e-5,"conv_bias":false,"tie_word_embeddings":true,"use_pos_enc":true,"rope_theta":1000000.0,"layer_types":["conv","conv"]})"));
+    CELEG_TEST_CHECK(expect_config_error(R"({"model_type":"lfm3","dtype":"bfloat16","hidden_size":64,"intermediate_size":64,"num_hidden_layers":2,"num_attention_heads":2,"num_key_value_heads":2,"vocab_size":100,"conv_L_cache":3,"conv_dim":64,"max_position_embeddings":1024,"bos_token_id":1,"eos_token_id":2,"pad_token_id":0,"norm_eps":1e-5,"conv_bias":false,"tie_word_embeddings":true,"use_pos_enc":true,"rope_theta":1000000.0,"layer_types":["conv","conv"]})"));
 
     // Unknown shapes must be rejected by the registry.
-    lfm::ModelShape bogus;
+    celeg::ModelShape bogus;
     bogus.hidden = 4096;
     bogus.intermediate = 4096;
     bogus.num_hidden_layers = 4;
@@ -247,16 +247,16 @@ int main() {
     bogus.norm_eps = 1e-5f;
     bogus.rope_theta = 1'000'000.0f;
     bogus.rope_type = "default";
-    bogus.layer_types = {lfm::LayerType::Convolution, lfm::LayerType::FullAttention,
-                         lfm::LayerType::Convolution, lfm::LayerType::FullAttention};
+    bogus.layer_types = {celeg::LayerType::Convolution, celeg::LayerType::FullAttention,
+                         celeg::LayerType::Convolution, celeg::LayerType::FullAttention};
     bogus.compute_derived();
     bool rejected = false;
     try {
-        lfm::ModelVariantRegistry::instance().select(bogus);
+        celeg::ModelVariantRegistry::instance().select(bogus);
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    LFM_TEST_CHECK(rejected);
+    CELEG_TEST_CHECK(rejected);
 
     std::filesystem::remove(path);
     std::cout << "config_test: ok\n";

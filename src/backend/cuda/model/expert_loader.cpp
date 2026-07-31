@@ -1,9 +1,9 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/model/weights/quantization.hpp"
-#include "lfm/runtime/moe/expert_residency.hpp"
-#include "lfm/backend/cuda/kernels/gguf.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
-#include "lfm/checkpoint/tensor_names.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/model/weights/quantization.hpp"
+#include "celeg/runtime/moe/expert_residency.hpp"
+#include "celeg/backend/cuda/kernels/gguf.cuh"
+#include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/tensor_names.hpp"
 #include "weight_loader_internal.hpp"
 
 #include <cstddef>
@@ -16,7 +16,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
     const IWeightRepository& repo,
@@ -47,7 +47,7 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
     DeviceWeight weight;
     weight.shape = {experts, rows_per_expert, cols};
     weight.bf16_storage.reset(count);
-    LFM_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
+    CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), tensor.data, tensor.bytes,
                         cudaMemcpyHostToDevice));
 
     ExpertLinearWeight ew;
@@ -63,4 +63,4 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
     return &stored;
 }
 
-} // namespace lfm
+} // namespace celeg

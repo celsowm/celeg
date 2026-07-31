@@ -1,10 +1,10 @@
-#include "lfm/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/packed.hpp"
 
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/runtime/moe.hpp"
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/backend/cuda/gemm_dispatcher.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/backend/cuda/gemm_dispatcher.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -16,7 +16,7 @@
 #include <utility>
 #include <optional>
 
-namespace lfm {
+namespace celeg {
 
 struct PackedDecodeExecutorImpl {
     explicit PackedDecodeExecutorImpl(size_t maximum_batch_value,
@@ -351,40 +351,40 @@ struct PackedDecodeExecutorImpl {
         }
 
         const size_t pointer_count = rows * sizeof(void*);
-        LFM_CUDA(cudaMemcpyAsync(d_logits.data(), h_logits.data(), pointer_count,
+        CELEG_CUDA(cudaMemcpyAsync(d_logits.data(), h_logits.data(), pointer_count,
                                  cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_seen.data(), h_seen.data(), pointer_count,
+        CELEG_CUDA(cudaMemcpyAsync(d_seen.data(), h_seen.data(), pointer_count,
                                  cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_rng.data(), h_rng.data(), pointer_count,
+        CELEG_CUDA(cudaMemcpyAsync(d_rng.data(), h_rng.data(), pointer_count,
                                  cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_sampled_dest.data(), h_sampled_dest.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_sampled_dest.data(), h_sampled_dest.data(),
                                  pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_position_dest.data(), h_position_dest.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_position_dest.data(), h_position_dest.data(),
                                  pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
 
         const size_t layer_pointer_count =
             static_cast<size_t>(shape_.num_hidden_layers) * maximum_batch * sizeof(void*);
-        LFM_CUDA(cudaMemcpyAsync(d_key_bf16.data(), h_key_bf16.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_key_bf16.data(), h_key_bf16.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_value_bf16.data(), h_value_bf16.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_value_bf16.data(), h_value_bf16.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_key_int8.data(), h_key_int8.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_key_int8.data(), h_key_int8.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_value_int8.data(), h_value_int8.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_value_int8.data(), h_value_int8.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_key_scales.data(), h_key_scales.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_key_scales.data(), h_key_scales.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_value_scales.data(), h_value_scales.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_value_scales.data(), h_value_scales.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_conv_states.data(), h_conv_states.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_conv_states.data(), h_conv_states.data(),
                                  layer_pointer_count, cudaMemcpyHostToDevice,
                                  stream.get()));
     }
@@ -421,22 +421,22 @@ struct PackedDecodeExecutorImpl {
         }
         const size_t scalar_i32 = rows * sizeof(int32_t);
         const size_t scalar_f32 = rows * sizeof(float);
-        LFM_CUDA(cudaMemcpyAsync(positions.data(), h_positions.data(),
+        CELEG_CUDA(cudaMemcpyAsync(positions.data(), h_positions.data(),
                                  scalar_i32, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(temperatures.data(), h_temperatures.data(),
+        CELEG_CUDA(cudaMemcpyAsync(temperatures.data(), h_temperatures.data(),
                                  scalar_f32, cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(repetition_penalties.data(),
+        CELEG_CUDA(cudaMemcpyAsync(repetition_penalties.data(),
                                  h_repetition_penalties.data(), scalar_f32,
                                  cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(top_k.data(), h_top_k.data(), scalar_i32,
+        CELEG_CUDA(cudaMemcpyAsync(top_k.data(), h_top_k.data(), scalar_i32,
                                  cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(top_p.data(), h_top_p.data(), scalar_f32,
+        CELEG_CUDA(cudaMemcpyAsync(top_p.data(), h_top_p.data(), scalar_f32,
                                  cudaMemcpyHostToDevice, stream.get()));
         if (paged_kv) {
             const size_t page_bytes = rows * static_cast<size_t>(page_stride) * sizeof(uint32_t);
-            LFM_CUDA(cudaMemcpyAsync(d_page_tables.data(), h_page_tables.data(),
+            CELEG_CUDA(cudaMemcpyAsync(d_page_tables.data(), h_page_tables.data(),
                                      page_bytes, cudaMemcpyHostToDevice,
                                      stream.get()));
         }
@@ -589,10 +589,10 @@ struct PackedDecodeExecutorImpl {
                           h_page_tables.data() + flat * static_cast<size_t>(page_stride));
             }
         }
-        LFM_CUDA(cudaMemcpyAsync(positions.data(), h_positions.data(),
+        CELEG_CUDA(cudaMemcpyAsync(positions.data(), h_positions.data(),
                                  tokens * sizeof(int32_t), cudaMemcpyHostToDevice,
                                  stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_page_tables.data(), h_page_tables.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_page_tables.data(), h_page_tables.data(),
                                  tokens * static_cast<size_t>(page_stride) * sizeof(uint32_t),
                                  cudaMemcpyHostToDevice, stream.get()));
         AttentionBatchPlan plan;
@@ -873,8 +873,8 @@ struct PackedDecodeExecutorImpl {
         launch_cast_bf16_to_float(normed.data(), moe_hidden_float.data(),
                                   rows * shape_.hidden, stream.get());
 
-        const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
-        lfm::MoeRouterDevice rdev;
+        const celeg::MoeRouterConfig cfg = moe_router_config(shape_);
+        celeg::MoeRouterDevice rdev;
         rdev.router_weight = moe.router_float;
         rdev.expert_bias = moe.expert_bias;
         rdev.hidden_data = moe_hidden_float.data();
@@ -896,7 +896,7 @@ struct PackedDecodeExecutorImpl {
         }
 
         moe_output_accum.zero_async(stream.get());
-        const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+        const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
         launch_moe_ffn(fdev, moe_sel.data(), moe_routing_w.data(),
                        normed.data(), moe_output_accum.data(), rows,
                        shape_.experts_per_token, moe_gu_scratch.data(),
@@ -918,7 +918,7 @@ struct PackedDecodeExecutorImpl {
             const auto& layer = reference.layers()[layer_index];
             const auto& common_layer = common(layer);
             if (!reference.options().fused_residuals) {
-                LFM_CUDA(cudaMemcpyAsync(
+                CELEG_CUDA(cudaMemcpyAsync(
                     residual.data(), hidden.data(),
                     static_cast<size_t>(rows) * shape_.hidden *
                         sizeof(__nv_bfloat16),
@@ -980,10 +980,10 @@ struct PackedDecodeExecutorImpl {
         launch_scatter_decode_state(
             sampled.data(), positions.data(), d_sampled_dest.data(),
             d_position_dest.data(), rows, stream.get());
-        LFM_CUDA(cudaMemcpyAsync(sampled_host.data(), sampled.data(),
+        CELEG_CUDA(cudaMemcpyAsync(sampled_host.data(), sampled.data(),
                                  static_cast<size_t>(rows) * sizeof(int32_t),
                                  cudaMemcpyDeviceToHost, stream.get()));
-        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
         const auto ended = std::chrono::steady_clock::now();
         const double elapsed_ms =
@@ -1053,15 +1053,15 @@ struct PackedDecodeExecutorImpl {
             h_span_counts.data()[request] = static_cast<int>(row_descriptors[request].token_count);
             h_final_rows.data()[request] = h_span_offsets.data()[request] + h_span_counts.data()[request] - 1;
         }
-        LFM_CUDA(cudaMemcpyAsync(d_span_offsets.data(), h_span_offsets.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_span_offsets.data(), h_span_offsets.data(),
                                  requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_span_counts.data(), h_span_counts.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_span_counts.data(), h_span_counts.data(),
                                  requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
-        LFM_CUDA(cudaMemcpyAsync(d_final_rows.data(), h_final_rows.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_final_rows.data(), h_final_rows.data(),
                                  requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
         const AttentionBatchPlan attention =
             prepare_flat_prefill_metadata(models, *page_tables, row_descriptors);
-        LFM_CUDA(cudaMemcpyAsync(sampled.data(), explicit_tokens.data(),
+        CELEG_CUDA(cudaMemcpyAsync(sampled.data(), explicit_tokens.data(),
                                  static_cast<size_t>(rows) * sizeof(int32_t),
                                  cudaMemcpyHostToDevice, stream.get()));
         // Reuse the request pointer table by expanding only the seen-token
@@ -1072,7 +1072,7 @@ struct PackedDecodeExecutorImpl {
                         h_span_counts.data()[request], h_seen.data()[request]);
         }
         DeviceBuffer<uint8_t*> d_flat_seen(static_cast<size_t>(rows));
-        LFM_CUDA(cudaMemcpyAsync(d_flat_seen.data(), flat_seen.data(),
+        CELEG_CUDA(cudaMemcpyAsync(d_flat_seen.data(), flat_seen.data(),
                                  static_cast<size_t>(rows) * sizeof(uint8_t*),
                                  cudaMemcpyHostToDevice, stream.get()));
         launch_mark_seen_batch_ptrs(sampled.data(), d_flat_seen.data(), rows,
@@ -1174,4 +1174,4 @@ PackedDecodeMetrics PackedDecodeExecutor::metrics() const {
     return impl_->metric;
 }
 
-} // namespace lfm
+} // namespace celeg

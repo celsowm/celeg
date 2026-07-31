@@ -1,5 +1,5 @@
-#include "lfm/runtime/concurrency.hpp"
-#include "lfm/text/tokenizer.hpp"
+#include "celeg/runtime/concurrency.hpp"
+#include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -16,13 +16,13 @@ int parse_positive(const char* text, const char* name) {
     return value;
 }
 
-void complete(lfm::ConcurrentEngine& engine,
-              lfm::ConcurrentEngine::RequestId id) {
+void complete(celeg::ConcurrentEngine& engine,
+              celeg::ConcurrentEngine::RequestId id) {
     for (;;) {
         engine.step();
-        const lfm::PollResult result = engine.poll(id, 0);
+        const celeg::PollResult result = engine.poll(id, 0);
         if (result.finished) {
-            if (result.status == lfm::RequestStatus::Failed) {
+            if (result.status == celeg::RequestStatus::Failed) {
                 throw std::runtime_error(result.error);
             }
             return;
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     try {
         const int repeats = argc > 4 ? parse_positive(argv[4], "repeats") : 4;
         const int max_new = argc > 5 ? parse_positive(argv[5], "max_new") : 1;
-        lfm::BpeTokenizer tokenizer(argv[2]);
+        celeg::BpeTokenizer tokenizer(argv[2]);
         std::vector<int32_t> prompt = tokenizer.encode(argv[3], true);
         std::vector<int32_t> extended_prompt = prompt;
         if (argc > 6 && argv[6][0] != '\0') {
@@ -52,13 +52,13 @@ int main(int argc, char** argv) {
         // copy-on-write, so no artificial page alignment is required.
         constexpr int page_tokens = 16;
 
-        lfm::ModelOptions model;
+        celeg::ModelOptions model;
         model.fast_attention = true;
         model.fused_projections = true;
         model.fused_residuals = true;
         model.cuda_graph = false;
 
-        lfm::ConcurrentEngineOptions options;
+        celeg::ConcurrentEngineOptions options;
         options.max_active_requests = 1;
         options.max_batched_tokens = 256;
         options.prefill_chunk_tokens = 256;
@@ -69,10 +69,10 @@ int main(int argc, char** argv) {
 
         const int context = static_cast<int>(
             std::max(prompt.size(), extended_prompt.size())) + max_new + 4;
-        lfm::ConcurrentEngine engine(argv[1], context, model, options);
+        celeg::ConcurrentEngine engine(argv[1], context, model, options);
 
         for (int i = 0; i < repeats; ++i) {
-            lfm::ConcurrentRequestOptions request;
+            celeg::ConcurrentRequestOptions request;
             request.max_new_tokens = max_new;
             request.eos_token = -1;
             request.generation.seed = static_cast<uint64_t>(i + 1);

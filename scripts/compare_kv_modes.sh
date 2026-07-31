@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${BIN:-$ROOT/build/lfm25-run}"
-COMPARE="${COMPARE:-$ROOT/build/lfm25-compare-logits}"
+BIN="${BIN:-$ROOT/build/celeg-run}"
+COMPARE="${COMPARE:-$ROOT/build/celeg-compare-logits}"
 MODEL="${MODEL:-$ROOT/model/LFM2.5-230M}"
 PROMPT="${PROMPT:-Explique CUDA em uma frase.}"
 CONTEXT="${CONTEXT:-4096}"
-OUT="${OUT:-${TMPDIR:-/tmp}/lfm25-kv-parity}"
+OUT="${OUT:-${TMPDIR:-/tmp}/celeg-kv-parity}"
 
 if [[ ! -x "$BIN" || ! -x "$COMPARE" ]]; then
-    echo "build lfm25-run and lfm25-compare-logits first" >&2
+    echo "build celeg-run and celeg-compare-logits first" >&2
     exit 2
 fi
 if [[ ! -f "$MODEL/model.safetensors" ]]; then

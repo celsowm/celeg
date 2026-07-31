@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
+#include "celeg/detail/model/impl.hpp"
 
 #include <cstddef>
-namespace lfm {
+namespace celeg {
 
-void Model::Impl::allocate_runtime_resources() {
+void Model::Impl::allocate_celeg_resources() {
     // Size all per-session device buffers from the runtime shape.
     seen_tokens_.reset(static_cast<size_t>(shape_.vocab_size));
     sampling_scores_.reset(static_cast<size_t>(shape_.vocab_size));
@@ -51,5 +51,5 @@ void Model::Impl::allocate_runtime_resources() {
     initialize_rope_tables();
 }
 
-} // namespace lfm
+} // namespace celeg
 

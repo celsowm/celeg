@@ -103,26 +103,26 @@ void launch_qk_common(__nv_bfloat16* q,
         qk_norm_rope_fast_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, q_norm, rope_cos, rope_sin, rows, q_heads, head_dim,
             position_value, position_pointer, mode, eps);
-        LFM_KERNEL_DEBUG_SYNC(stream);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
         qk_norm_rope_fast_kernel<<<rows * kv_heads, threads, 0, stream>>>(
             k, k_norm, rope_cos, rope_sin, rows, kv_heads, head_dim,
             position_value, position_pointer, mode, eps);
-        LFM_KERNEL_DEBUG_SYNC(stream);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
     } else {
         head_rmsnorm_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, q_norm, rows, q_heads, head_dim, eps);
-        LFM_KERNEL_DEBUG_SYNC(stream);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
         head_rmsnorm_kernel<<<rows * kv_heads, threads, 0, stream>>>(
             k, k_norm, rows, kv_heads, head_dim, eps);
-        LFM_KERNEL_DEBUG_SYNC(stream);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
         rope_strict_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, rope_cos, rope_sin, rows, q_heads, head_dim,
             position_value, position_pointer, mode);
-        LFM_KERNEL_DEBUG_SYNC(stream);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
         rope_strict_kernel<<<rows * kv_heads, threads, 0, stream>>>(
             k, rope_cos, rope_sin, rows, kv_heads, head_dim,
             position_value, position_pointer, mode);
-        LFM_KERNEL_DEBUG_SYNC(stream);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
     }
 }
 
@@ -214,7 +214,7 @@ void launch_rope_strict(__nv_bfloat16* q, __nv_bfloat16* k,
         q, rope_cos, rope_sin, 1, q_heads, head_dim, position, nullptr, 0);
     rope_strict_kernel<<<kv_heads, threads, 0, stream>>>(
         k, rope_cos, rope_sin, 1, kv_heads, head_dim, position, nullptr, 0);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_rope_strict_device(__nv_bfloat16* q, __nv_bfloat16* k,
@@ -227,7 +227,7 @@ void launch_rope_strict_device(__nv_bfloat16* q, __nv_bfloat16* k,
         q, rope_cos, rope_sin, 1, q_heads, head_dim, 0, position, 1);
     rope_strict_kernel<<<kv_heads, threads, 0, stream>>>(
         k, rope_cos, rope_sin, 1, kv_heads, head_dim, 0, position, 1);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_rope_prefill(__nv_bfloat16* q, __nv_bfloat16* k,
@@ -240,7 +240,7 @@ void launch_rope_prefill(__nv_bfloat16* q, __nv_bfloat16* k,
         q, rope_cos, rope_sin, rows, q_heads, head_dim, 0, nullptr, 2);
     rope_strict_kernel<<<rows * kv_heads, threads, 0, stream>>>(
         k, rope_cos, rope_sin, rows, kv_heads, head_dim, 0, nullptr, 2);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_rope_batch_positions(
@@ -253,5 +253,5 @@ void launch_rope_batch_positions(
         q, rope_cos, rope_sin, rows, q_heads, head_dim, 0, positions, 1);
     rope_strict_kernel<<<rows * kv_heads, threads, 0, stream>>>(
         k, rope_cos, rope_sin, rows, kv_heads, head_dim, 0, positions, 1);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }

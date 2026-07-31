@@ -1,12 +1,12 @@
-#include "lfm/model/architecture.hpp"
+#include "celeg/model/architecture.hpp"
 
 #include <cassert>
 #include <stdexcept>
 
-using namespace lfm;
+using namespace celeg;
 
 namespace {
-ModelConfig lfm_config() {
+ModelConfig celeg_config() {
     ModelConfig config;
     config.model_type = "lfm2";
     config.hidden_size = 8;
@@ -24,7 +24,7 @@ ModelConfig lfm_config() {
 }
 
 ModelConfig granite_config() {
-    ModelConfig config = lfm_config();
+    ModelConfig config = celeg_config();
     config.model_type = "granite";
     config.architecture = ArchitectureKind::Granite;
     config.embedding_multiplier = 2.0f;
@@ -40,9 +40,9 @@ ModelConfig granite_config() {
 int main() {
     register_builtin_architecture_providers();
     const auto& registry = ArchitectureRegistry::instance();
-    const auto& provider = registry.select(lfm_config());
+    const auto& provider = registry.select(celeg_config());
     assert(provider.id() == "lfm2");
-    const ModelDefinition definition = provider.inspect(lfm_config());
+    const ModelDefinition definition = provider.inspect(celeg_config());
     assert(definition.dimensions.hidden_size == 8);
     assert(definition.rope.kind == PositionalEncodingKind::Rope);
 
@@ -55,7 +55,7 @@ int main() {
         {TensorRole::AttentionOutput, 0, -1, {}}).front() ==
         "model.layers.0.self_attn.o_proj.weight");
 
-    ModelConfig unknown = lfm_config();
+    ModelConfig unknown = celeg_config();
     unknown.model_type = "unknown";
     unknown.architecture = static_cast<ArchitectureKind>(99);
     bool rejected = false;

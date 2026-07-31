@@ -1,10 +1,10 @@
-#include "lfm/backend/cuda/kernels/mmq.hpp"
+#include "celeg/backend/cuda/kernels/mmq.hpp"
 #include "kernel_common.cuh"
-#include "lfm/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/gguf_blocks.hpp"
 
 #include <cstring>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 // Mirrors gguf.cu's BlockQ4K layout (super-block layout is GGUF's on-disk
@@ -16,7 +16,7 @@ struct BlockQ4K {
     uint8_t qs[128];
 };
 
-using lfm::gguf_blocks::q4k_scale_min;
+using celeg::gguf_blocks::q4k_scale_min;
 
 constexpr int kSuperBlock = 256;
 constexpr int kSubBlocksPerSuperBlock = kSuperBlock / kMmqQ8_1BlockSize;
@@ -266,7 +266,7 @@ void launch_quantize_q8_1(const __nv_bfloat16* x, int8_t* q8, float* scales,
                     static_cast<unsigned>(rows));
     quantize_q8_1_kernel<<<grid, kMmqQ8_1BlockSize, 0, stream>>>(
         x, q8, scales, sums, k);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
@@ -279,7 +279,7 @@ void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
     const dim3 grid(grid_x, grid_y);
     q4k_mmq_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
         q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
@@ -292,7 +292,7 @@ void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
     const dim3 grid(grid_x, grid_y);
     q6k_mmq_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
         q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace lfm
+} // namespace celeg

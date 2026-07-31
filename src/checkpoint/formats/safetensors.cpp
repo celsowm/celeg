@@ -1,4 +1,4 @@
-#include "lfm/checkpoint/formats/safetensors.hpp"
+#include "celeg/checkpoint/formats/safetensors.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -20,7 +20,7 @@
 #include <unistd.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 TensorDType parse_dtype(const std::string& name) {
@@ -372,4 +372,4 @@ void SafeTensorFile::read(const TensorLocator& locator, std::span<std::byte> des
 #endif
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${TMPDIR:-/tmp}/lfm25-host-check"
+OUT="${TMPDIR:-/tmp}/celeg-host-check"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 CXX="${CXX:-g++}"

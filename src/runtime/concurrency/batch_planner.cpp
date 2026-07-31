@@ -1,9 +1,9 @@
-#include "lfm/detail/runtime/concurrency/batch_planner.hpp"
+#include "celeg/detail/runtime/concurrency/batch_planner.hpp"
 
 #include <algorithm>
 #include <numeric>
 
-namespace lfm::detail {
+namespace celeg::detail {
 
 std::optional<ConcurrentEngine::RequestId> BatchPlanner::next_admission(
     const RequestRegistry& registry) const {
@@ -62,4 +62,4 @@ std::vector<size_t> BatchPlanner::order_priority(
     return result;
 }
 
-} // namespace lfm::detail
+} // namespace celeg::detail

@@ -1,161 +1,74 @@
-# Stable C API — v6
+# Celeg C API
 
-`include/lfm/c_api.h` exposes a C ABI for C, Rust, Zig, Node native addons and
-other FFI consumers. v6 preserves all v1-v5 structures and entry points and adds
-ragged-prefill, radix and partial-COW metrics.
+The public C ABI is declared in `include/celeg/api.h`. It is intended for C,
+Rust, Zig, Node native addons, and other FFI consumers. This is a breaking
+rename: the exported `celeg_*` symbols replace the former project and runtime
+names.
 
-## v0.0.15 C++ facade boundaries
+## Initialization
 
-The C ABI remains at version 6 and all prior symbols/layouts are preserved.
-The C++ implementation now uses PIMPL facades for both `LfmModel` and
-`ConcurrentEngine`, so including their public headers no longer exposes CUDA
-resources or concrete scheduler containers.
-
-New C++ callers may obtain focused model views through:
-
-```cpp
-model.session();
-model.diagnostics();
-model.persistence();
-```
-
-Compatibility methods remain available on `LfmModel`; no C API change is
-required for this architectural release.
-
-## v0.0.14 compatibility and C++ metric views
-
-The C ABI remains at version 6; no existing C structure or symbol was removed.
-The C++ API adds `ConcurrentEngine::grouped_metrics()`, returning separate
-request, scheduler, prefill, decode, prefix-cache and KV-memory domains. The
-existing flat `metrics()` snapshot remains available and continues to back the
-C adapters.
-
-
-## Concurrent engine
+Every options structure must be initialized before use. The `struct_size`
+field supports size validation at the ABI boundary.
 
 ```c
-lfm25_engine_options_v2 engine_options;
-lfm25_request_options_v2 request_options;
-lfm25_engine_options_init(&engine_options);
-lfm25_request_options_init(&request_options);
+#include "celeg/api.h"
 
-engine_options.max_active_requests = 16;
-engine_options.max_batched_tokens = 256;
-engine_options.prefill_chunk_tokens = 128;
-engine_options.page_tokens = 16;
-engine_options.model.weight_mode = LFM25_WEIGHT_INT4;
-engine_options.model.kv_cache_mode = LFM25_KV_INT8;
+celeg_cpu_model_options model;
+celeg_cpu_model_options_init(&model);
 
-lfm25_engine* engine = lfm25_engine_create(
-    "model.safetensors", &engine_options);
+celeg_engine_options engine;
+celeg_engine_options_init(&engine, CELEG_BACKEND_CPU);
+
+celeg_request_options request;
+celeg_request_options_init(&request);
 ```
 
-Submission, polling, cancellation, worker control and manual stepping retain
-their v2 layouts.
+## Single-model API
 
-## Packed metrics
+`celeg_model_create` constructs a CPU model from a checkpoint path. Use
+`celeg_model_prefill`, `celeg_model_decode`, and
+`celeg_model_copy_logits` for direct inference. Metrics and errors are
+available through `celeg_model_get_metrics` and
+`celeg_model_last_error`.
 
 ```c
-lfm25_packed_metrics_v1 packed = {0};
-packed.struct_size = sizeof(packed);
-lfm25_engine_get_packed_metrics(engine, &packed);
+celeg_model* model = celeg_model_create("model.safetensors", &model_options);
+if (!model) {
+    /* celeg_model_last_error(NULL) contains the global error. */
+}
+celeg_model_destroy(model);
 ```
 
-## Backward-compatible paged metrics
+## Engine API
+
+`celeg_engine` provides request submission, polling, cancellation, status
+inspection, and explicit stepping. The backend is selected when calling
+`celeg_engine_options_init`.
 
 ```c
-lfm25_paged_kv_metrics_v1 paged = {0};
-paged.struct_size = sizeof(paged);
-lfm25_engine_get_paged_kv_metrics(engine, &paged);
+celeg_engine* engine = celeg_engine_create("model.safetensors", &engine_options);
+celeg_request_id request_id = 0;
+const int32_t prompt[] = {1, 2, 3};
+
+celeg_engine_submit(engine, prompt, 3, &request, &request_id);
+int progressed = 0;
+celeg_engine_step(engine, &progressed);
+celeg_engine_destroy(engine);
 ```
 
-This preserves the v4 counters.
+## Tokenizer API
 
-## Extended v5 paged/prefix metrics
+`celeg_tokenizer_create`, `celeg_tokenizer_encode`, and
+`celeg_tokenizer_decode` expose tokenizer operations with caller-provided
+buffers. The `required` output reports the required element count when a
+buffer is absent or too small.
 
-```c
-lfm25_paged_kv_metrics_v2 paged = {0};
-paged.struct_size = sizeof(paged);
-lfm25_engine_get_paged_kv_metrics_v2(engine, &paged);
+## ABI conventions
 
-printf("pages: %llu / %llu\n",
-       (unsigned long long) paged.physical_pages_used,
-       (unsigned long long) paged.physical_pages_total);
-printf("reused prompt tokens: %llu\n",
-       (unsigned long long) paged.prefix_reused_tokens);
-printf("COW pages: %llu\n",
-       (unsigned long long) paged.prefix_cow_pages);
-```
-
-Additional v2 fields:
-
-```text
-prefix_cache_partial_hits
-prefix_reused_tokens
-prefix_cow_pages
-direct_paged_prefill_tokens
-segmented_paged_decode_steps
-segmented_paged_decode_tokens
-```
-
-## ABI rules
-
-- `lfm25_api_version()` returns `LFM25_C_API_VERSION` (`5`).
-- Existing v1-v4 functions and layouts remain present.
-- Every options/statistics structure starts with `struct_size`.
-- Call the matching `*_init` function before changing option fields.
-- A single-request model handle is not reentrant.
-- A concurrent engine is thread-safe for submit, cancel, status and poll.
-
-## C API v6
-
-`LFM25_C_API_VERSION` is now `6`.
-
-### Packed prefill metrics
-
-```c
-lfm25_packed_metrics_v2 metrics = {0};
-metrics.struct_size = sizeof(metrics);
-lfm25_engine_get_packed_metrics_v2(engine, &metrics);
-```
-
-The v2 structure preserves all packed-decode fields and adds:
-
-- `ragged_prefill_steps`;
-- `ragged_prefill_tokens`;
-- `lane_prefill_tokens`;
-- `maximum_ragged_prefill_batch`;
-- `cumulative_ragged_prefill_ms`;
-- `ragged_prefill_tokens_per_second`.
-
-### Radix and partial-COW metrics
-
-```c
-lfm25_paged_kv_metrics_v3 metrics = {0};
-metrics.struct_size = sizeof(metrics);
-lfm25_engine_get_paged_kv_metrics_v3(engine, &metrics);
-```
-
-The v3 paged structure adds radix node/lookup counts and the amount of COW data
-copied versus avoided. The v1-v5 entry points and structures remain exported.
-
-
-## CPU C API v1
-
-`include/lfm/cpu_c_api.h` and `liblfm25_cpu.so` form an independent ABI that
-does not include or link CUDA. It provides CPU capability inspection, model
-construction, prefill/decode, logits, metrics, memory reporting, pack-cache
-introspection and tokenizer encode/decode.
-
-```c
-lfm25_cpu_model_options_v1 options;
-lfm25_cpu_generation_options_v1 generation;
-lfm25_cpu_model_options_init(&options);
-lfm25_cpu_generation_options_init(&generation);
-options.threads = 8;
-options.q4_group_size = 32;
-lfm25_cpu_model* model = lfm25_cpu_model_create(
-    "model.safetensors", &options, &generation);
-```
-
-See `CPU_API.md` and `examples/cpu_c_api_example.c`.
+- `celeg_status` reports success, invalid arguments, runtime errors, buffer
+  sizing failures, missing resources, and unavailable backends.
+- `celeg_backend_capabilities` reports the capabilities of a compiled backend.
+- Handles are opaque and must be destroyed with their matching destroy
+  function.
+- The API uses the upstream LFM2/LFM2.5 checkpoint formats; renaming Celeg
+  does not change model IDs, repository IDs, or checkpoint serialization.

@@ -1,6 +1,6 @@
-#include "lfm/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
 
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -10,7 +10,7 @@
 #include "quantized_dot_avx2_msvc.hpp"
 #endif
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 // A whole batch of Q8-quantized activation rows in three contiguous slabs.
@@ -445,4 +445,4 @@ void CpuLinearEngine::gemm_raw(const float* weight, const float* input,
     });
 }
 
-} // namespace lfm
+} // namespace celeg

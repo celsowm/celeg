@@ -81,7 +81,7 @@ void launch_conv_decode_batch_ptrs(
     conv_decode_batch_ptrs_kernel<<<grid, 256, 0, stream>>>(
         projected_bcx, conv_weight, states, y, positions,
         rows, hidden, cache_length);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_conv_ragged_prefill(
@@ -95,7 +95,7 @@ void launch_conv_ragged_prefill(
     conv_ragged_prefill_kernel<<<grid, 256, 0, stream>>>(
         projected_bcx, conv_weight, states, y, positions, span_offsets,
         span_counts, hidden, cache_length);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 

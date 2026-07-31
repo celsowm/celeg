@@ -1,9 +1,9 @@
-#include "lfm/model/config/shape.hpp"
+#include "celeg/model/config/shape.hpp"
 
 #include <sstream>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 ModelShape ModelShape::from_config(const ModelConfig& config) {
     ModelShape shape;
@@ -173,4 +173,4 @@ std::string ModelShape::summary() const {
     return out.str();
 }
 
-} // namespace lfm
+} // namespace celeg

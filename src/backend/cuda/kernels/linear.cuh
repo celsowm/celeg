@@ -68,7 +68,7 @@ void launch_w8a16_linear(const __nv_bfloat16* x, const int8_t* weight,
     const dim3 grid((n + warps_per_block - 1) / warps_per_block, grid_y);
     w8a16_gemv_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
         x, weight, scales, y, m, n, k, beta);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 
@@ -86,5 +86,5 @@ void launch_w4a16_linear(const __nv_bfloat16* x, const uint8_t* weight,
     const size_t smem_size = static_cast<size_t>(tile_k) * sizeof(__nv_bfloat16);
     w4a16_linear_kernel<<<grid, warps_per_block * 32, smem_size, stream>>>(
         x, weight, scales, y, m, n, k, beta, tile_k);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }

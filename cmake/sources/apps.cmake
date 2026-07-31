@@ -1,19 +1,19 @@
-set(LFM_CPU_APP_SOURCES
-    lfm25_cpu_run;src/app/cpu/main.cpp
-    lfm25_cpu_pack;src/tools/cpu_pack.cpp
-    lfm25_cpu_kernel_benchmark;src/app/benchmark/cpu/kernels.cpp
-    lfm25_cpu_concurrent_benchmark;src/app/benchmark/cpu/concurrent.cpp
-    lfm25_cpu_prefill_benchmark;src/app/benchmark/cpu/prefill.cpp
-    lfm25_cpu_prefix_cache_benchmark;src/app/benchmark/cpu/prefix_cache.cpp
-    lfm25_cpu_compare_reference;src/tools/cpu_compare_reference.cpp
+set(CELEG_CPU_APP_SOURCES
+    celeg_cpu_run;src/app/cpu/main.cpp
+    celeg_cpu_pack;src/tools/cpu_pack.cpp
+    celeg_cpu_kernel_benchmark;src/app/benchmark/cpu/kernels.cpp
+    celeg_cpu_concurrent_benchmark;src/app/benchmark/cpu/concurrent.cpp
+    celeg_cpu_prefill_benchmark;src/app/benchmark/cpu/prefill.cpp
+    celeg_cpu_prefix_cache_benchmark;src/app/benchmark/cpu/prefix_cache.cpp
+    celeg_cpu_compare_reference;src/tools/cpu_compare_reference.cpp
 )
-set(LFM_CUDA_APP_SOURCES
-    lfm25_run;src/app/cuda/main.cpp
-    lfm25_concurrent_benchmark;src/app/benchmark/cuda/concurrent.cpp
-    lfm25_prefix_cache_benchmark;src/app/benchmark/cuda/prefix_cache.cpp
+set(CELEG_CUDA_APP_SOURCES
+    celeg_run;src/app/cuda/main.cpp
+    celeg_concurrent_benchmark;src/app/benchmark/cuda/concurrent.cpp
+    celeg_prefix_cache_benchmark;src/app/benchmark/cuda/prefix_cache.cpp
 )
-set(LFM_SHARED_TOOL_SOURCES
-    lfm25_download;src/app/download/main.cpp
-    lfm25_compare_logits;src/tools/compare_logits.cpp
-    lfm25_pack_experts;src/tools/pack_experts.cpp
+set(CELEG_SHARED_TOOL_SOURCES
+    celeg_download;src/app/download/main.cpp
+    celeg_compare_logits;src/tools/compare_logits.cpp
+    celeg_pack_experts;src/tools/pack_experts.cpp
 )

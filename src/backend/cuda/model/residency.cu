@@ -1,11 +1,11 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/runtime/moe.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 void Model::Impl::run_mlp_decode(const LayerCommon& common_layer, int layer) {
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
@@ -107,7 +107,7 @@ __global__ void mask_expert_selection_kernel(const int* src_sel,
 }
 
 // MoE router config / FFN device descriptors are provided inline by
-// lfm/detail/model/types.hpp (moe_router_config / moe_ffn_device) so the
+// celeg/detail/model/types.hpp (moe_router_config / moe_ffn_device) so the
 // standalone paths and the packed executor share one definition.
 
 } // namespace
@@ -129,9 +129,9 @@ void SharedModelWeights::ensure_moe_experts_resident(
     ExpertLayerCache* cache = controller->cache.get();
     cudaStream_t transfer = controller->transfer_stream->get();
 
-    LFM_CUDA(cudaStreamWaitEvent(transfer, router_done_event.get(), 0));
-    LFM_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event.get(), 0));
-    LFM_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event.get(), 0));
+    CELEG_CUDA(cudaStreamWaitEvent(transfer, router_done_event.get(), 0));
+    CELEG_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event.get(), 0));
+    CELEG_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event.get(), 0));
 
     // Device-side residency check: reads sel_dev + expert_slot_dev_ on GPU,
     // outputs a compact list of cold experts. This avoids D2H-copying the
@@ -149,7 +149,7 @@ void SharedModelWeights::ensure_moe_experts_resident(
         } else if (status == cudaErrorNotReady) {
             ++it;
         } else {
-            LFM_CUDA(status);
+            CELEG_CUDA(status);
         }
     }
 
@@ -266,10 +266,10 @@ void SharedModelWeights::ensure_moe_experts_resident(
         if (rows >= 1) {
             const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(K);
             std::vector<int> sel_host(total);
-            LFM_CUDA(cudaMemcpyAsync(sel_host.data(), sel_dev,
+            CELEG_CUDA(cudaMemcpyAsync(sel_host.data(), sel_dev,
                                      total * sizeof(int),
                                      cudaMemcpyDeviceToHost, transfer));
-            LFM_CUDA(cudaStreamSynchronize(transfer));
+            CELEG_CUDA(cudaStreamSynchronize(transfer));
             for (size_t i = 0; i < total; ++i) {
                 const int e = sel_host[i];
                 if (cache->resident(e)) {
@@ -292,8 +292,8 @@ void SharedModelWeights::ensure_moe_experts_resident(
 
     // Compute stream must wait for the on-demand promotions to land before the
     // FFN reads the pointer table.
-    LFM_CUDA(cudaEventRecord(promote_done_event.get(), transfer));
-    LFM_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event.get(), 0));
+    CELEG_CUDA(cudaEventRecord(promote_done_event.get(), transfer));
+    CELEG_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event.get(), 0));
 
     // Speculatively prefetch experts so they are GPU-resident before the *next*
     // token's FFN. Reuses host buffers to avoid per-call allocation.
@@ -321,7 +321,7 @@ void SharedModelWeights::ensure_moe_experts_resident(
     } else if (expert_offload_plan.prefetch_experts > 0) {
         cache->prefetch(expert_offload_plan.prefetch_experts, transfer);
     }
-    LFM_CUDA(cudaEventRecord(prefetch_done_event.get(), transfer));
+    CELEG_CUDA(cudaEventRecord(prefetch_done_event.get(), transfer));
 }
 
 void Model::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
@@ -353,8 +353,8 @@ void Model::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
     // Router: BF16 normed hidden -> float -> top-K experts.
     launch_cast_bf16_to_float(normed_.data(), moe_hidden_float_.data(),
                                shape_.hidden, stream_.get());
-    const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
-    lfm::MoeRouterDevice rdev;
+    const celeg::MoeRouterConfig cfg = moe_router_config(shape_);
+    celeg::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
     rdev.expert_bias = moe.expert_bias;
     rdev.hidden_data = moe_hidden_float_.data();
@@ -363,7 +363,7 @@ void Model::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
     rdev.rows = 1;
     rdev.hidden_dim = shape_.hidden;
     launch_moe_router(rdev, cfg, moe_router_scratch_.data(), stream_.get());
-    LFM_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
+    CELEG_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
 
     // Promote any cold experts selected by the router before the FFN reads them.
     ensure_moe_experts_resident(layer, moe_sel_.data(), 1, stream_.get(),
@@ -372,13 +372,13 @@ void Model::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
     // Expert FFN: accumulate the routing-weighted expert outputs into the
     // FP32 output accumulator and then cast into the BF16 moe_output_.
     moe_output_accum_.zero_async(stream_.get());
-    const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+    const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
     launch_moe_ffn(fdev, moe_sel_.data(), moe_routing_w_.data(),
                     normed_.data(), moe_output_accum_.data(), 1, shape_.experts_per_token,
                     moe_gu_scratch_.data(), moe_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(moe_output_accum_.data(), moe_output_.data(),
                                 shape_.hidden, stream_.get());
-    LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
+    CELEG_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
     // Residual add into the hidden state.
     launch_residual_add(hidden_.data(), moe_output_.data(),
@@ -407,8 +407,8 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
                    stream_.get());
     launch_cast_bf16_to_float(prefill_normed_.data(), moe_pf_hidden_float_.data(),
                               rows * shape_.hidden, stream_.get());
-    const lfm::MoeRouterConfig cfg = moe_router_config(shape_);
-    lfm::MoeRouterDevice rdev;
+    const celeg::MoeRouterConfig cfg = moe_router_config(shape_);
+    celeg::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
     rdev.expert_bias = moe.expert_bias;
     rdev.hidden_data = moe_pf_hidden_float_.data();
@@ -417,7 +417,7 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
     rdev.rows = rows;
     rdev.hidden_dim = shape_.hidden;
     launch_moe_router(rdev, cfg, moe_pf_router_scratch_.data(), stream_.get());
-    LFM_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
+    CELEG_CUDA(cudaEventRecord(router_done_event_.get(), stream_.get()));
 
     const bool is_disk_backed = expert_offload_plan_.enabled && (options_.expert_offload.backing == ExpertBackingMode::DiskCached);
 
@@ -437,10 +437,10 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
         // 2. Read back the selection table to know all used experts in this prefill chunk
         const size_t total_selections = static_cast<size_t>(rows) * shape_.experts_per_token;
         std::vector<int> sel_host(total_selections);
-        LFM_CUDA(cudaMemcpyAsync(sel_host.data(), moe_pf_sel_.data(),
+        CELEG_CUDA(cudaMemcpyAsync(sel_host.data(), moe_pf_sel_.data(),
                                  total_selections * sizeof(int),
                                  cudaMemcpyDeviceToHost, stream_.get()));
-        LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 
         std::vector<int> used_experts;
         std::vector<bool> seen(static_cast<size_t>(shape_.num_experts), false);
@@ -486,7 +486,7 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
             }
 
             // Sync stream to ensure promotions are ordered
-            LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+            CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 
             // Construct a temporary device pointer table where ONLY the experts in the current batch are non-null
             std::vector<const __nv_bfloat16*> temp_gu(static_cast<size_t>(shape_.num_experts), nullptr);
@@ -499,15 +499,15 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
                 active_flags[static_cast<size_t>(e)] = 1;
             }
 
-            LFM_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->gate_up_ptrs()), temp_gu.data(),
+            CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->gate_up_ptrs()), temp_gu.data(),
                                      static_cast<size_t>(shape_.num_experts) * sizeof(const __nv_bfloat16*),
                                      cudaMemcpyHostToDevice, stream_.get()));
-            LFM_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->down_ptrs()), temp_dn.data(),
+            CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->down_ptrs()), temp_dn.data(),
                                      static_cast<size_t>(shape_.num_experts) * sizeof(const __nv_bfloat16*),
                                      cudaMemcpyHostToDevice, stream_.get()));
 
             // Populate active flags on device
-            LFM_CUDA(cudaMemcpyAsync(expert_active_dev_.data(), active_flags.data(),
+            CELEG_CUDA(cudaMemcpyAsync(expert_active_dev_.data(), active_flags.data(),
                                      static_cast<size_t>(shape_.num_experts) * sizeof(std::uint8_t),
                                      cudaMemcpyHostToDevice, stream_.get()));
 
@@ -519,7 +519,7 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
                 moe_pf_sel_.data(), moe_pf_sel_masked_.data(), expert_active_dev_.data(), total_elems);
 
             // Launch FFN for the chunk using the safely masked selection matrix
-            lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+            celeg::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
             fdev.gate_up_ptrs = cache->gate_up_ptrs();
             fdev.down_ptrs = cache->down_ptrs();
 
@@ -536,17 +536,17 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
             full_gu[static_cast<size_t>(e)] = cache->expert_gate_up_dev(e);
             full_dn[static_cast<size_t>(e)] = cache->expert_down_dev(e);
         }
-        LFM_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->gate_up_ptrs()), full_gu.data(),
+        CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->gate_up_ptrs()), full_gu.data(),
                                  static_cast<size_t>(shape_.num_experts) * sizeof(const __nv_bfloat16*),
                                  cudaMemcpyHostToDevice, stream_.get()));
-        LFM_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->down_ptrs()), full_dn.data(),
+        CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->down_ptrs()), full_dn.data(),
                                  static_cast<size_t>(shape_.num_experts) * sizeof(const __nv_bfloat16*),
                                  cudaMemcpyHostToDevice, stream_.get()));
 
         // Finalize outputs
         launch_finalize_moe_output(moe_pf_output_accum_.data(), moe_pf_output_.data(),
                                     rows * shape_.hidden, stream_.get());
-        LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
+        CELEG_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
         launch_residual_add(prefill_hidden_.data(), moe_pf_output_.data(),
                             rows * shape_.hidden, stream_.get());
@@ -555,18 +555,18 @@ void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
         ensure_moe_experts_resident(layer, moe_pf_sel_.data(), rows, stream_.get());
 
         moe_pf_output_accum_.zero_async(stream_.get());
-        const lfm::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
+        const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, shape_);
         launch_moe_ffn(fdev, moe_pf_sel_.data(), moe_pf_routing_w_.data(),
                         prefill_normed_.data(), moe_pf_output_accum_.data(), rows,
                         shape_.experts_per_token, moe_pf_gu_scratch_.data(),
                         moe_pf_act_scratch_.data(), stream_.get());
         launch_finalize_moe_output(moe_pf_output_accum_.data(), moe_pf_output_.data(),
                                     rows * shape_.hidden, stream_.get());
-        LFM_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
+        CELEG_CUDA(cudaEventRecord(ffn_done_event_.get(), stream_.get()));
 
         launch_residual_add(prefill_hidden_.data(), moe_pf_output_.data(),
                             rows * shape_.hidden, stream_.get());
     }
 }
 
-} // namespace lfm
+} // namespace celeg

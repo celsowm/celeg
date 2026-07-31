@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/thread_pool.hpp"
+#include "celeg/backend/cpu/thread_pool.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -8,7 +8,7 @@
 #include <sched.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 
 CpuThreadPool::CpuThreadPool(size_t threads, CpuAffinityPolicy affinity)
     : affinity_(affinity) {
@@ -120,4 +120,4 @@ void CpuThreadPool::worker_loop(size_t worker_index) {
     }
 }
 
-} // namespace lfm
+} // namespace celeg

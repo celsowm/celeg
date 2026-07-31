@@ -1,6 +1,6 @@
-#include "lfm/backend/cpu/gguf.hpp"
-#include "lfm/backend/cpu/kernels.hpp"
-#include "lfm/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/gguf.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/model.hpp"
 #include "support/assertions.hpp"
 
 #include <algorithm>
@@ -62,53 +62,53 @@ int main() {
     std::vector<BlockQ6K> q6_rows(2, unit_q6k());
     for (int8_t& value : q6_rows[1].scales) value = 2;
 
-    lfm::CpuGgufMatrix q4{
-        lfm::GgmlType::Q4_K, 2, 256, bytes(q4_rows),
+    celeg::CpuGgufMatrix q4{
+        celeg::GgmlType::Q4_K, 2, 256, bytes(q4_rows),
         q4_rows.size() * sizeof(BlockQ4K)};
-    lfm::CpuGgufMatrix q6{
-        lfm::GgmlType::Q6_K, 2, 256, bytes(q6_rows),
+    celeg::CpuGgufMatrix q6{
+        celeg::GgmlType::Q6_K, 2, 256, bytes(q6_rows),
         q6_rows.size() * sizeof(BlockQ6K)};
     q4.validate();
     q6.validate();
 
     std::vector<float> row(256);
-    lfm::cpu_gguf_dequantize_row(q4, 1, row.data());
-    for (float value : row) LFM_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
-    lfm::cpu_gguf_dequantize_row(q6, 0, row.data());
-    for (float value : row) LFM_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
-    lfm::cpu_gguf_dequantize_row(q6, 1, row.data());
-    for (float value : row) LFM_TEST_CHECK(std::abs(value - 2.0f) < 1e-6f);
+    celeg::cpu_gguf_dequantize_row(q4, 1, row.data());
+    for (float value : row) CELEG_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
+    celeg::cpu_gguf_dequantize_row(q6, 0, row.data());
+    for (float value : row) CELEG_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
+    celeg::cpu_gguf_dequantize_row(q6, 1, row.data());
+    for (float value : row) CELEG_TEST_CHECK(std::abs(value - 2.0f) < 1e-6f);
 
     std::vector<float> input(256);
     for (size_t i = 0; i < input.size(); ++i) {
         input[i] = std::sin(static_cast<float>(i) * 0.07f);
     }
     const auto activation =
-        lfm::cpu_quantize_q8k(input.data(), input.size(), lfm::CpuIsa::Scalar);
-    const lfm::CpuIsa isa = lfm::detect_cpu_capabilities().best_isa();
+        celeg::cpu_quantize_q8k(input.data(), input.size(), celeg::CpuIsa::Scalar);
+    const celeg::CpuIsa isa = celeg::detect_cpu_capabilities().best_isa();
     const auto optimized_activation =
-        lfm::cpu_quantize_q8k(input.data(), input.size(), isa);
-    LFM_TEST_CHECK(optimized_activation.size() == activation.size());
+        celeg::cpu_quantize_q8k(input.data(), input.size(), isa);
+    CELEG_TEST_CHECK(optimized_activation.size() == activation.size());
     for (size_t block = 0; block < activation.size(); ++block) {
-        LFM_TEST_CHECK(optimized_activation[block].d == activation[block].d);
-        LFM_TEST_CHECK(optimized_activation[block].qs == activation[block].qs);
-        LFM_TEST_CHECK(
+        CELEG_TEST_CHECK(optimized_activation[block].d == activation[block].d);
+        CELEG_TEST_CHECK(optimized_activation[block].qs == activation[block].qs);
+        CELEG_TEST_CHECK(
             optimized_activation[block].bsums == activation[block].bsums);
     }
     for (const auto* matrix : {&q4, &q6}) {
-        const float scalar = lfm::cpu_gguf_dot_scalar(
+        const float scalar = celeg::cpu_gguf_dot_scalar(
             matrix->data, matrix->type, activation.data(), matrix->cols);
         const auto selected =
-            lfm::select_cpu_gguf_dot_kernel(isa);
+            celeg::select_cpu_gguf_dot_kernel(isa);
         const float optimized = selected(
             matrix->data, matrix->type, activation.data(), matrix->cols);
-        LFM_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
-        if (const auto dot4 = lfm::select_cpu_gguf_dot4_kernel(isa)) {
-            std::array<lfm::CpuQ8KBlock, 4> batch{};
+        CELEG_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
+        if (const auto dot4 = celeg::select_cpu_gguf_dot4_kernel(isa)) {
+            std::array<celeg::CpuQ8KBlock, 4> batch{};
             for (size_t lane = 0; lane < batch.size(); ++lane) batch[lane] = activation[0];
             std::array<float, 4> values{};
             dot4(matrix->data, matrix->type, batch.data(), matrix->cols, values.data());
-            for (float value : values) LFM_TEST_CHECK(std::abs(value - scalar) < 1e-4f);
+            for (float value : values) CELEG_TEST_CHECK(std::abs(value - scalar) < 1e-4f);
         }
     }
 
@@ -134,46 +134,46 @@ int main() {
             static_cast<int>(i) * 7 - 48);
     }
     for (const auto matrix : {
-             lfm::CpuGgufMatrix{
-                 lfm::GgmlType::Q4_K, 1, 256,
+             celeg::CpuGgufMatrix{
+                 celeg::GgmlType::Q4_K, 1, 256,
                  reinterpret_cast<const std::byte*>(&known_q4),
                  sizeof(known_q4)},
-             lfm::CpuGgufMatrix{
-                 lfm::GgmlType::Q6_K, 1, 256,
+             celeg::CpuGgufMatrix{
+                 celeg::GgmlType::Q6_K, 1, 256,
                  reinterpret_cast<const std::byte*>(&known_q6),
                  sizeof(known_q6)}}) {
         std::vector<float> dequantized(256);
-        lfm::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
+        celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
         float reference = 0.0f;
         for (size_t i = 0; i < dequantized.size(); ++i) {
             reference += dequantized[i] * activation[0].d *
                          static_cast<float>(activation[0].qs[i]);
         }
-        const float scalar = lfm::cpu_gguf_dot_scalar(
+        const float scalar = celeg::cpu_gguf_dot_scalar(
             matrix.data, matrix.type, activation.data(), matrix.cols);
-        const float optimized = lfm::select_cpu_gguf_dot_kernel(isa)(
+        const float optimized = celeg::select_cpu_gguf_dot_kernel(isa)(
             matrix.data, matrix.type, activation.data(), matrix.cols);
         const float tolerance =
             1e-4f * std::max(1.0f, std::abs(reference));
-        LFM_TEST_CHECK(std::abs(scalar - reference) < tolerance);
-        LFM_TEST_CHECK(std::abs(optimized - reference) < tolerance);
+        CELEG_TEST_CHECK(std::abs(scalar - reference) < tolerance);
+        CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
     }
 
-    lfm::CpuLinearWeight composite;
+    celeg::CpuLinearWeight composite;
     composite.rows = 4;
     composite.cols = 256;
     composite.segments.emplace_back(q4);
     composite.segments.emplace_back(q6);
     composite.validate();
-    LFM_TEST_CHECK(composite.gguf_native());
+    CELEG_TEST_CHECK(composite.gguf_native());
 
-    lfm::CpuThreadPool pool(4);
-    lfm::CpuLinearEngine linear(isa, pool);
+    celeg::CpuThreadPool pool(4);
+    celeg::CpuLinearEngine linear(isa, pool);
     std::vector<float> gemv(4);
     linear.gemv(composite, input.data(), gemv.data());
-    LFM_TEST_CHECK(std::abs(gemv[1] - gemv[0]) < 1e-4f);
-    LFM_TEST_CHECK(std::abs(gemv[2] - gemv[0]) < 1e-4f);
-    LFM_TEST_CHECK(std::abs(gemv[3] - 2.0f * gemv[0]) < 1e-3f);
+    CELEG_TEST_CHECK(std::abs(gemv[1] - gemv[0]) < 1e-4f);
+    CELEG_TEST_CHECK(std::abs(gemv[2] - gemv[0]) < 1e-4f);
+    CELEG_TEST_CHECK(std::abs(gemv[3] - 2.0f * gemv[0]) < 1e-3f);
 
     std::vector<float> batch_input(2 * input.size());
     std::copy(input.begin(), input.end(), batch_input.begin());
@@ -183,15 +183,15 @@ int main() {
     std::vector<float> gemm(8, 2.0f);
     linear.gemm(composite, batch_input.data(), gemm.data(), 2, 0.25f);
     for (size_t r = 0; r < 2; ++r) {
-        LFM_TEST_CHECK(std::abs(gemm[r * 4 + 1] - gemm[r * 4]) < 1e-4f);
-        LFM_TEST_CHECK(std::abs(gemm[r * 4 + 2] - gemm[r * 4]) < 1e-4f);
-        LFM_TEST_CHECK(
+        CELEG_TEST_CHECK(std::abs(gemm[r * 4 + 1] - gemm[r * 4]) < 1e-4f);
+        CELEG_TEST_CHECK(std::abs(gemm[r * 4 + 2] - gemm[r * 4]) < 1e-4f);
+        CELEG_TEST_CHECK(
             std::abs(gemm[r * 4 + 3] -
                      (2.0f * gemm[r * 4] - 0.5f)) < 1e-3f);
     }
 
-    lfm::CpuLinearWeight q4_weight = lfm::CpuLinearWeight::from_gguf(q4);
-    lfm::CpuLinearWeight q6_weight = lfm::CpuLinearWeight::from_gguf(q6);
+    celeg::CpuLinearWeight q4_weight = celeg::CpuLinearWeight::from_gguf(q4);
+    celeg::CpuLinearWeight q6_weight = celeg::CpuLinearWeight::from_gguf(q6);
     std::vector<float> grouped_input(4 * input.size());
     for (size_t row_index = 0; row_index < 4; ++row_index) {
         for (size_t col = 0; col < input.size(); ++col) {
@@ -203,38 +203,38 @@ int main() {
     linear.gemm(q4_weight, grouped_input.data(), grouped_expected.data(), 2);
     linear.gemm(q6_weight, grouped_input.data() + 2 * input.size(),
                 grouped_expected.data() + 4, 2);
-    const std::array<lfm::CpuGroupedGemmJob, 2> grouped_jobs{{
+    const std::array<celeg::CpuGroupedGemmJob, 2> grouped_jobs{{
         {&q4_weight, 0, 2}, {&q6_weight, 2, 2},
     }};
     linear.gemm_grouped(grouped_jobs, grouped_input.data(), grouped_actual.data());
     for (size_t value = 0; value < grouped_actual.size(); ++value) {
-        LFM_TEST_CHECK(std::abs(grouped_actual[value] - grouped_expected[value]) < 1e-4f);
+        CELEG_TEST_CHECK(std::abs(grouped_actual[value] - grouped_expected[value]) < 1e-4f);
     }
 
-    const char* real_gguf = std::getenv("LFM_GGUF_TEST_FILE");
+    const char* real_gguf = std::getenv("CELEG_GGUF_TEST_FILE");
     if (real_gguf && *real_gguf) {
-        lfm::CpuModelOptions options;
+        celeg::CpuModelOptions options;
         options.threads = 4;
         options.use_pack_cache = true;
-        lfm::CpuModel model(real_gguf, 16, options);
-        LFM_TEST_CHECK(model.diagnostics().pack_path().empty());
-        LFM_TEST_CHECK(
+        celeg::CpuModel model(real_gguf, 16, options);
+        CELEG_TEST_CHECK(model.diagnostics().pack_path().empty());
+        CELEG_TEST_CHECK(
             model.diagnostics().backend_description().find("gguf-native") !=
             std::string::npos);
         model.session().prefill({1});
         const std::vector<float> first = model.diagnostics().copy_logits();
         model.session().prefill({1});
         const std::vector<float> second = model.diagnostics().copy_logits();
-        LFM_TEST_CHECK(first.size() == second.size());
+        CELEG_TEST_CHECK(first.size() == second.size());
         for (size_t i = 0; i < first.size(); ++i) {
-            LFM_TEST_CHECK(std::isfinite(first[i]));
-            LFM_TEST_CHECK(first[i] == second[i]);
+            CELEG_TEST_CHECK(std::isfinite(first[i]));
+            CELEG_TEST_CHECK(first[i] == second[i]);
         }
     } else {
-        std::cout << "real_gguf SKIP (set LFM_GGUF_TEST_FILE)\n";
+        std::cout << "real_gguf SKIP (set CELEG_GGUF_TEST_FILE)\n";
     }
 
-    std::cout << "cpu_gguf_kernels_test: isa=" << lfm::cpu_isa_name(isa)
+    std::cout << "cpu_gguf_kernels_test: isa=" << celeg::cpu_isa_name(isa)
               << " ok\n";
     return 0;
 }

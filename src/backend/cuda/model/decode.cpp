@@ -1,14 +1,14 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::forward_token_host(int32_t token, bool compute_logits) {
     if (position_ >= max_context_) {
@@ -23,7 +23,7 @@ void Model::Impl::forward_token_host(int32_t token, bool compute_logits) {
     for (Layer& layer : layers_) {
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
-            LFM_CUDA(cudaMemcpyAsync(
+            CELEG_CUDA(cudaMemcpyAsync(
                 residual_.data(), hidden_.data(), hidden_.bytes(),
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
@@ -172,7 +172,7 @@ void Model::Impl::forward_token_paged_host(
         Layer& layer = layers_[static_cast<size_t>(layer_index)];
         LayerCommon& common_layer = common(layer);
         if (!options_.fused_residuals) {
-            LFM_CUDA(cudaMemcpyAsync(residual_.data(), hidden_.data(), hidden_.bytes(),
+            CELEG_CUDA(cudaMemcpyAsync(residual_.data(), hidden_.data(), hidden_.bytes(),
                                      cudaMemcpyDeviceToDevice, stream_.get()));
         }
         launch_rmsnorm(hidden_.data(), common_layer.operator_norm, normed_.data(),
@@ -324,9 +324,9 @@ void Model::Impl::forward_token_paged_host(
                      1.0f / shape_.logits_divisor, stream_.get());
     }
     ++position_;
-    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
                              cudaMemcpyHostToDevice, stream_.get()));
 }
 
-} // namespace lfm
+} // namespace celeg
 

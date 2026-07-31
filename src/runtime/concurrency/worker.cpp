@@ -1,9 +1,9 @@
-#include "lfm/detail/runtime/concurrency/worker.hpp"
+#include "celeg/detail/runtime/concurrency/worker.hpp"
 
 #include <chrono>
 #include <stdexcept>
 
-namespace lfm::detail {
+namespace celeg::detail {
 
 EngineWorker::~EngineWorker() { stop(); }
 
@@ -66,4 +66,4 @@ void EngineWorker::loop() {
     }
 }
 
-} // namespace lfm::detail
+} // namespace celeg::detail

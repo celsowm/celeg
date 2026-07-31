@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Cross-platform CPU benchmark runner: lfm25-cpu vs llama.cpp.
+"""Cross-platform CPU benchmark runner: celeg-cpu vs llama.cpp.
 
-Replaces the old shell scripts (run_all.sh, run_llama_cpp.sh, run_lfm25.sh,
+Replaces the old shell scripts (run_all.sh, run_llama_cpp.sh, run_celeg.sh,
 setup_llama_cpp.sh) with one script that works the same way on Windows,
 Linux, and macOS.
 
@@ -38,7 +38,7 @@ BENCH_DIR = ROOT / "benchmarks"
 RESULTS_DIR = BENCH_DIR / "results"
 EXT_DIR = ROOT / ".externals" / "llama.cpp"
 LLAMA_BUILD_DIR = EXT_DIR / "build-cpu"
-LFM_BUILD_DIR = ROOT / "build-cpu"
+CELEG_BUILD_DIR = ROOT / "build-cpu"
 
 GGUF_REPO = "LiquidAI/LFM2.5-230M-GGUF"
 LLAMA_REVISION = "0e4a0362239713ea95a6864a17a8de4b0ad90d62"
@@ -132,15 +132,15 @@ def setup_llama_cpp(jobs: int) -> None:
     print(f"llama.cpp CPU build ready under {LLAMA_BUILD_DIR}")
 
 
-def build_lfm25_bench(jobs: int) -> None:
+def build_celeg_bench(jobs: int) -> None:
     run([
-        "cmake", "-S", str(ROOT), "-B", str(LFM_BUILD_DIR),
+        "cmake", "-S", str(ROOT), "-B", str(CELEG_BUILD_DIR),
         *default_generator(),
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DLFM_BUILD_TESTS=ON",
+        "-DCELEG_BUILD_TESTS=ON",
     ])
-    run(["cmake", "--build", str(LFM_BUILD_DIR), "--config", "Release",
-         "--target", "lfm25-bench", "-j", str(jobs)])
+    run(["cmake", "--build", str(CELEG_BUILD_DIR), "--config", "Release",
+         "--target", "celeg-bench", "-j", str(jobs)])
 
 
 # --------------------------------------------------------------------------
@@ -195,8 +195,8 @@ def run_llama_bench(args: argparse.Namespace, gguf: Path) -> Path:
     return out_path
 
 
-def run_lfm25_bench(args: argparse.Namespace, gguf: Path) -> Path:
-    bench = find_exe(LFM_BUILD_DIR, "lfm25-bench")
+def run_celeg_bench(args: argparse.Namespace, gguf: Path) -> Path:
+    bench = find_exe(CELEG_BUILD_DIR, "celeg-bench")
 
     cmd = [str(bench), "--model", str(gguf), "-p", str(args.prompt_tokens),
            "-n", str(args.gen_tokens), "-r", str(args.reps),
@@ -204,7 +204,7 @@ def run_lfm25_bench(args: argparse.Namespace, gguf: Path) -> Path:
            "-ub", str(args.ubatch_size), "-o", "json"]
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS_DIR / "lfm25_cpu.json"
+    out_path = RESULTS_DIR / "celeg_cpu.json"
     result = run(cmd, capture_output=True, text=True)
     out_path.write_text(
         annotate_rows(result.stdout, gguf, args), encoding="utf-8")
@@ -267,18 +267,18 @@ def git_commit(repo: Path) -> str:
     return commit + ("+dirty" if dirty else "")
 
 
-def write_report(llama_cpp_json: Path, lfm25_json: Path, out_path: Path,
+def write_report(llama_cpp_json: Path, celeg_json: Path, out_path: Path,
                  gguf: Path, args: argparse.Namespace) -> None:
     a = load_row(llama_cpp_json)
-    b = load_row(lfm25_json)
+    b = load_row(celeg_json)
 
     def speedup(x: float, y: float) -> str:
         return f"{x / y:.2f}x" if y else "n/a"
 
     lines = [
-        "# CPU benchmark: lfm25-cpu vs llama.cpp",
+        "# CPU benchmark: celeg-cpu vs llama.cpp",
         "",
-        "| metric | llama.cpp | lfm25-cpu | lfm25-cpu vs llama.cpp |",
+        "| metric | llama.cpp | celeg-cpu | celeg-cpu vs llama.cpp |",
         "|---|---|---|---|",
         f"| prefill tok/s (n={a['n_prompt']:.0f} vs {b['n_prompt']:.0f}) "
         f"| {a['avg_ts_prompt']:.2f} ± {a['stddev_ts_prompt']:.2f} "
@@ -294,10 +294,10 @@ def write_report(llama_cpp_json: Path, lfm25_json: Path, out_path: Path,
         f"- GGUF: `{gguf.resolve()}`",
         f"- SHA-256: `{file_sha256(gguf)}`",
         f"- Size: {gguf.stat().st_size} bytes",
-        f"- lfm25-cpu commit: `{git_commit(ROOT)}`",
+        f"- celeg-cpu commit: `{git_commit(ROOT)}`",
         f"- llama.cpp commit: `{git_commit(EXT_DIR)}`",
         f"- CPU: {platform.processor() or a['cpu_info']}",
-        f"- lfm25 ISA: {b['cpu_info']}",
+        f"- celeg ISA: {b['cpu_info']}",
         f"- Threads: {args.threads}",
         f"- Batch / ubatch: {args.batch_size} / {args.ubatch_size}",
         "- KV cache: BF16 on both engines",
@@ -312,7 +312,7 @@ def write_report(llama_cpp_json: Path, lfm25_json: Path, out_path: Path,
         "Both engines run the exact same memory-mapped Q4_K_M GGUF file. "
         "The runner verifies the canonical path, byte size and SHA-256 before "
         "writing either result. Both use the same synthetic-token methodology "
-        "(llama-bench and lfm25-bench both time n_prompt prefill tokens and "
+        "(llama-bench and celeg-bench both time n_prompt prefill tokens and "
         "n_gen decode tokens over identical repetitions with a discarded "
         "warmup run). Numbers are averages over the configured repetitions; "
         "see the raw JSON files next to this report for per-run detail.",
@@ -342,16 +342,16 @@ def add_common_bench_args(parser: argparse.ArgumentParser) -> None:
 def cmd_setup(args: argparse.Namespace) -> None:
     setup_llama_cpp(args.jobs)
     ensure_gguf(args.quant)
-    build_lfm25_bench(args.jobs)
+    build_celeg_bench(args.jobs)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
     gguf = ensure_gguf(args.quant).resolve()
     llama_json = run_llama_bench(args, gguf)
-    lfm25_json = run_lfm25_bench(args, gguf)
+    celeg_json = run_celeg_bench(args, gguf)
     expected_hash = file_sha256(gguf)
     for label, result_path in (
-        ("llama.cpp", llama_json), ("lfm25-cpu", lfm25_json)
+        ("llama.cpp", llama_json), ("celeg-cpu", celeg_json)
     ):
         rows = json.loads(result_path.read_text(encoding="utf-8"))
         if not rows or any(
@@ -360,7 +360,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise BenchError(
                 f"{label} result does not prove the expected GGUF hash")
     write_report(
-        llama_json, lfm25_json, RESULTS_DIR / "report.md", gguf, args)
+        llama_json, celeg_json, RESULTS_DIR / "report.md", gguf, args)
 
 
 def cmd_all(args: argparse.Namespace) -> None:
@@ -372,7 +372,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command")
 
-    p_setup = sub.add_parser("setup", help="clone/build llama.cpp, build lfm25-bench, fetch both models into the HF cache")
+    p_setup = sub.add_parser("setup", help="clone/build llama.cpp, build celeg-bench, fetch both models into the HF cache")
     add_common_bench_args(p_setup)
     p_setup.add_argument("--jobs", type=int, default=12)
     p_setup.set_defaults(func=cmd_setup)

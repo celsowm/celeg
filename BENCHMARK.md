@@ -3,7 +3,7 @@
 ## Built-in decode benchmark
 
 ```bash
-./build/lfm25-run \
+./build/celeg-run \
   --model ./model/LFM2.5-230M \
   --prompt "Explique Tensor Cores." \
   --context 8192 \
@@ -47,7 +47,7 @@ graph is captured before event timing begins.
 Example:
 
 ```bash
-./build/lfm25-run \
+./build/celeg-run \
   --model ./model/LFM2.5-230M \
   --prompt "Explique CUDA." \
   --context 16384 \
@@ -108,7 +108,7 @@ between BF16 and INT8 KV modes.
 ## v0.0.10 packed concurrent benchmark
 
 ```bash
-./build/lfm25-concurrent-benchmark \
+./build/celeg-concurrent-benchmark \
   ./model/LFM2.5-230M/model.safetensors \
   ./model/LFM2.5-230M/tokenizer.json \
   "Explique CUDA." 16 64
@@ -138,7 +138,7 @@ performance conclusions; this package does not contain measured v0.0.10 speedup.
 
 ## v0.0.11 physical-page and prefix-cache counters
 
-`lfm25-concurrent-benchmark` additionally prints:
+`celeg-concurrent-benchmark` additionally prints:
 
 ```text
 physical_pages_current
@@ -158,7 +158,7 @@ package.
 ### Dedicated prefix-cache benchmark
 
 ```bash
-./build/lfm25-prefix-cache-benchmark \
+./build/celeg-prefix-cache-benchmark \
   ./model/LFM2.5-230M/model.safetensors \
   ./model/LFM2.5-230M/tokenizer.json \
   "Explique CUDA." 4 1
@@ -191,7 +191,7 @@ This deliberately exercises arbitrary-length prefix insertion and partial-page
 copy-on-write:
 
 ```bash
-./build/lfm25-prefix-cache-benchmark \
+./build/celeg-prefix-cache-benchmark \
   ./model/LFM2.5-230M/model.safetensors \
   ./model/LFM2.5-230M/tokenizer.json \
   "Explique CUDA." 4 1 " Agora detalhe memória compartilhada."
@@ -218,7 +218,7 @@ ragged_prefill_tokens_per_second
 
 It also reports radix lookup activity and partial-page COW traffic. To exercise a
 large prefill batch, submit several requests before entering the manual `step()`
-loop, as `lfm25-concurrent-benchmark` already does.
+loop, as `celeg-concurrent-benchmark` already does.
 
 
 ## CPU benchmarks — v0.0.18
@@ -226,7 +226,7 @@ loop, as `lfm25-concurrent-benchmark` already does.
 Primitive Q4 GEMV/GEMM benchmark:
 
 ```bash
-./build-cpu/lfm25-cpu-kernel-benchmark \
+./build-cpu/celeg-cpu-kernel-benchmark \
   4096 1024 20 8 32 1 avx512-vnni compact
 ```
 
@@ -270,7 +270,7 @@ SwiGLU, sampling and additional memory traffic.
 Run one population:
 
 ```bash
-./build-cpu/lfm25-cpu-concurrent-benchmark \
+./build-cpu/celeg-cpu-concurrent-benchmark \
   ./model/LFM2.5-230M \
   "Explique como a CPU executa uma rede neural." \
   8 32 8 bf16 auto
@@ -304,7 +304,7 @@ change logits; performance and quality must both be measured on the target CPU.
 Run one configuration:
 
 ```bash
-./build-cpu/lfm25-cpu-prefill-benchmark \
+./build-cpu/celeg-cpu-prefill-benchmark \
   ./model/LFM2.5-230M/model.safetensors \
   1024 256 32 bf16 auto 8
 ```
@@ -329,7 +329,7 @@ with the official checkpoint before changing defaults.
 Run repeated identical prompts:
 
 ```bash
-./build-cpu/lfm25-cpu-prefix-cache-benchmark \
+./build-cpu/celeg-cpu-prefix-cache-benchmark \
   ./model/LFM2.5-230M/model.safetensors \
   4 1 "Explique CUDA." \
   " Agora detalhe memória compartilhada."
@@ -365,7 +365,7 @@ python3 scripts/export_cpu_reference.py \
 Compare the native CPU backend:
 
 ```bash
-./build-cpu/lfm25-cpu-compare-reference \
+./build-cpu/celeg-cpu-compare-reference \
   ./model/LFM2.5-230M/model.safetensors \
   ./validation/cpu-reference \
   bf16 auto 8

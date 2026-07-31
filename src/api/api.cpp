@@ -1,13 +1,13 @@
-#include "lfm/api.h"
+#include "celeg/api.h"
 
-#include "lfm/backend/cpu/concurrent.hpp"
-#include "lfm/backend/cpu/model.hpp"
-#include "lfm/backend/cpu/numa.hpp"
-#include "lfm/backend/cpu/topology.hpp"
-#include "lfm/serve/cpu_inference_service.hpp"
-#include "lfm/text/tokenizer.hpp"
-#ifdef RUNTIME_API_WITH_CUDA
-#include "lfm/serve/cuda_inference_service.hpp"
+#include "celeg/backend/cpu/concurrent.hpp"
+#include "celeg/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/numa.hpp"
+#include "celeg/backend/cpu/topology.hpp"
+#include "celeg/serve/cpu_inference_service.hpp"
+#include "celeg/text/tokenizer.hpp"
+#ifdef CELEG_API_WITH_CUDA
+#include "celeg/serve/cuda_inference_service.hpp"
 #endif
 
 #include <algorithm>
@@ -17,42 +17,42 @@
 #include <string>
 #include <vector>
 
-struct runtime_model {
-    runtime_backend backend = RUNTIME_BACKEND_CPU;
-    std::unique_ptr<lfm::CpuModel> cpu;
+struct celeg_model {
+    celeg_backend backend = CELEG_BACKEND_CPU;
+    std::unique_ptr<celeg::CpuModel> cpu;
     std::string error;
 };
-struct runtime_engine {
-    std::unique_ptr<lfm::serve::IInferenceService> service;
+struct celeg_engine {
+    std::unique_ptr<celeg::serve::IInferenceService> service;
     std::string error;
 };
-struct runtime_tokenizer { std::unique_ptr<lfm::BpeTokenizer> value; std::string error; };
+struct celeg_tokenizer { std::unique_ptr<celeg::BpeTokenizer> value; std::string error; };
 
 namespace {
 thread_local std::string global_error;
 
 template <typename Handle, typename Function>
-runtime_status protect(Handle* handle, Function&& function) noexcept {
-    if (!handle) return RUNTIME_STATUS_INVALID_ARGUMENT;
+celeg_status protect(Handle* handle, Function&& function) noexcept {
+    if (!handle) return CELEG_STATUS_INVALID_ARGUMENT;
     try {
         function();
         handle->error.clear();
-        return RUNTIME_STATUS_OK;
+        return CELEG_STATUS_OK;
     } catch (const std::length_error& error) {
         handle->error = error.what();
-        return RUNTIME_STATUS_BUFFER_TOO_SMALL;
+        return CELEG_STATUS_BUFFER_TOO_SMALL;
     } catch (const std::out_of_range& error) {
         handle->error = error.what();
-        return RUNTIME_STATUS_NOT_FOUND;
+        return CELEG_STATUS_NOT_FOUND;
     } catch (const std::invalid_argument& error) {
         handle->error = error.what();
-        return RUNTIME_STATUS_INVALID_ARGUMENT;
+        return CELEG_STATUS_INVALID_ARGUMENT;
     } catch (const std::exception& error) {
         handle->error = error.what();
-        return RUNTIME_STATUS_RUNTIME_ERROR;
+        return CELEG_STATUS_CELEG_ERROR;
     } catch (...) {
         handle->error = "unknown runtime error";
-        return RUNTIME_STATUS_RUNTIME_ERROR;
+        return CELEG_STATUS_CELEG_ERROR;
     }
 }
 
@@ -60,8 +60,8 @@ void require_size(uint32_t actual, size_t expected, const char* name) {
     if (actual < expected) throw std::invalid_argument(std::string(name) + " struct is too small");
 }
 
-lfm::GenerationConfig generation(const runtime_generation_options& source) {
-    lfm::GenerationConfig result;
+celeg::GenerationConfig generation(const celeg_generation_options& source) {
+    celeg::GenerationConfig result;
     result.temperature = source.temperature;
     result.top_k = source.top_k;
     result.top_p = source.top_p;
@@ -71,52 +71,52 @@ lfm::GenerationConfig generation(const runtime_generation_options& source) {
     return result;
 }
 
-lfm::CpuIsa cpu_isa(int value) {
+celeg::CpuIsa cpu_isa(int value) {
     switch (value) {
-        case 0: return lfm::CpuIsa::Auto; case 1: return lfm::CpuIsa::Scalar;
-        case 2: return lfm::CpuIsa::Avx2; case 3: return lfm::CpuIsa::AvxVnni;
-        case 4: return lfm::CpuIsa::Avx512Vnni; case 5: return lfm::CpuIsa::AmxInt8;
-        case 6: return lfm::CpuIsa::Neon; case 7: return lfm::CpuIsa::DotProd;
-        case 8: return lfm::CpuIsa::I8mm; case 9: return lfm::CpuIsa::Sve2;
-        case 10: return lfm::CpuIsa::Sme2;
+        case 0: return celeg::CpuIsa::Auto; case 1: return celeg::CpuIsa::Scalar;
+        case 2: return celeg::CpuIsa::Avx2; case 3: return celeg::CpuIsa::AvxVnni;
+        case 4: return celeg::CpuIsa::Avx512Vnni; case 5: return celeg::CpuIsa::AmxInt8;
+        case 6: return celeg::CpuIsa::Neon; case 7: return celeg::CpuIsa::DotProd;
+        case 8: return celeg::CpuIsa::I8mm; case 9: return celeg::CpuIsa::Sve2;
+        case 10: return celeg::CpuIsa::Sme2;
         default: throw std::invalid_argument("invalid CPU ISA");
     }
 }
 
-lfm::CpuAffinityPolicy cpu_affinity(int value) {
+celeg::CpuAffinityPolicy cpu_affinity(int value) {
     switch (value) {
-        case 0: return lfm::CpuAffinityPolicy::None;
-        case 1: return lfm::CpuAffinityPolicy::Compact;
-        case 2: return lfm::CpuAffinityPolicy::Scatter;
+        case 0: return celeg::CpuAffinityPolicy::None;
+        case 1: return celeg::CpuAffinityPolicy::Compact;
+        case 2: return celeg::CpuAffinityPolicy::Scatter;
         default: throw std::invalid_argument("invalid CPU affinity policy");
     }
 }
 
-lfm::CpuKvCacheMode cpu_kv_cache_mode(int value) {
+celeg::CpuKvCacheMode cpu_kv_cache_mode(int value) {
     switch (value) {
-        case 0: return lfm::CpuKvCacheMode::Fp32;
-        case 1: return lfm::CpuKvCacheMode::Bf16;
+        case 0: return celeg::CpuKvCacheMode::Fp32;
+        case 1: return celeg::CpuKvCacheMode::Bf16;
         default: throw std::invalid_argument("invalid CPU KV cache mode");
     }
 }
 
-lfm::CpuNumaMode cpu_numa_mode(int value) {
+celeg::CpuNumaMode cpu_numa_mode(int value) {
     switch (value) {
-        case 0: return lfm::CpuNumaMode::Disabled;
-        case 1: return lfm::CpuNumaMode::Local;
-        case 2: return lfm::CpuNumaMode::ReplicateWeights;
+        case 0: return celeg::CpuNumaMode::Disabled;
+        case 1: return celeg::CpuNumaMode::Local;
+        case 2: return celeg::CpuNumaMode::ReplicateWeights;
         default: throw std::invalid_argument("invalid CPU NUMA mode");
     }
 }
 
-lfm::CpuModelOptions cpu_options(const runtime_cpu_model_config& input) {
+celeg::CpuModelOptions cpu_options(const celeg_cpu_model_config& input) {
     if (input.q4_group_size != 32 && input.q4_group_size != 64) {
         throw std::invalid_argument("CPU Q4 group size must be 32 or 64");
     }
-    lfm::CpuModelOptions result;
+    celeg::CpuModelOptions result;
     result.isa = cpu_isa(input.isa);
     result.threads = input.threads > 0 ? static_cast<size_t>(input.threads) : 0;
-    result.weight_format = input.q4_group_size == 64 ? lfm::CpuWeightFormat::Q4Group64 : lfm::CpuWeightFormat::Q4Group32;
+    result.weight_format = input.q4_group_size == 64 ? celeg::CpuWeightFormat::Q4Group64 : celeg::CpuWeightFormat::Q4Group32;
     result.use_pack_cache = input.use_pack_cache != 0;
     if (input.pack_cache_directory) result.pack_cache_directory = input.pack_cache_directory;
     result.affinity = cpu_affinity(input.affinity);
@@ -130,20 +130,20 @@ lfm::CpuModelOptions cpu_options(const runtime_cpu_model_config& input) {
     return result;
 }
 
-lfm::CpuModelOptions cpu_options(const runtime_cpu_model_options& source) {
+celeg::CpuModelOptions cpu_options(const celeg_cpu_model_options& source) {
     return cpu_options(source.cpu);
 }
 
-lfm::CpuModelOptions cpu_options(const runtime_engine_model_options& source) {
-    if (source.backend != RUNTIME_BACKEND_CPU) {
+celeg::CpuModelOptions cpu_options(const celeg_engine_model_options& source) {
+    if (source.backend != CELEG_BACKEND_CPU) {
         throw std::invalid_argument("CPU options require CPU backend");
     }
     return cpu_options(source.backend_options.cpu);
 }
 
-lfm::CpuConcurrentEngineOptions cpu_engine_options(const runtime_engine_options& source) {
+celeg::CpuConcurrentEngineOptions cpu_engine_options(const celeg_engine_options& source) {
     const auto& input = source.backend_options.cpu;
-    lfm::CpuConcurrentEngineOptions result;
+    celeg::CpuConcurrentEngineOptions result;
     result.max_active_requests = input.max_active_requests;
     result.max_batched_tokens = input.max_batched_tokens;
     result.max_prefill_batch = input.max_prefill_batch;
@@ -157,58 +157,58 @@ lfm::CpuConcurrentEngineOptions cpu_engine_options(const runtime_engine_options&
     return result;
 }
 
-runtime_request_status status(lfm::serve::RequestStatus source) {
+celeg_request_status status(celeg::serve::RequestStatus source) {
     switch (source) {
-        case lfm::serve::RequestStatus::Queued: return RUNTIME_REQUEST_QUEUED;
-        case lfm::serve::RequestStatus::Prefill: return RUNTIME_REQUEST_PREFILLING;
-        case lfm::serve::RequestStatus::Decoding: return RUNTIME_REQUEST_DECODING;
-        case lfm::serve::RequestStatus::Finished: return RUNTIME_REQUEST_COMPLETED;
-        case lfm::serve::RequestStatus::Cancelled: return RUNTIME_REQUEST_CANCELLED;
-        case lfm::serve::RequestStatus::Failed: return RUNTIME_REQUEST_FAILED;
+        case celeg::serve::RequestStatus::Queued: return CELEG_REQUEST_QUEUED;
+        case celeg::serve::RequestStatus::Prefill: return CELEG_REQUEST_PREFILLING;
+        case celeg::serve::RequestStatus::Decoding: return CELEG_REQUEST_DECODING;
+        case celeg::serve::RequestStatus::Finished: return CELEG_REQUEST_COMPLETED;
+        case celeg::serve::RequestStatus::Cancelled: return CELEG_REQUEST_CANCELLED;
+        case celeg::serve::RequestStatus::Failed: return CELEG_REQUEST_FAILED;
     }
-    return RUNTIME_REQUEST_FAILED;
+    return CELEG_REQUEST_FAILED;
 }
 
-#ifdef RUNTIME_API_WITH_CUDA
-lfm::WeightMode cuda_weight_mode(int value) {
+#ifdef CELEG_API_WITH_CUDA
+celeg::WeightMode cuda_weight_mode(int value) {
     switch (value) {
-        case 0: return lfm::WeightMode::Bf16;
-        case 1: return lfm::WeightMode::Int8;
-        case 2: return lfm::WeightMode::Int4;
+        case 0: return celeg::WeightMode::Bf16;
+        case 1: return celeg::WeightMode::Int8;
+        case 2: return celeg::WeightMode::Int4;
         default: throw std::invalid_argument("invalid CUDA weight mode");
     }
 }
 
-lfm::KvCacheMode cuda_kv_cache_mode(int value) {
+celeg::KvCacheMode cuda_kv_cache_mode(int value) {
     switch (value) {
-        case 0: return lfm::KvCacheMode::Bf16;
-        case 1: return lfm::KvCacheMode::Int8;
+        case 0: return celeg::KvCacheMode::Bf16;
+        case 1: return celeg::KvCacheMode::Int8;
         default: throw std::invalid_argument("invalid CUDA KV cache mode");
     }
 }
 
-lfm::GemmBackend cuda_gemm_backend(int value) {
+celeg::GemmBackend cuda_gemm_backend(int value) {
     switch (value) {
-        case 0: return lfm::GemmBackend::Cublas;
-        case 1: return lfm::GemmBackend::CublasLt;
+        case 0: return celeg::GemmBackend::Cublas;
+        case 1: return celeg::GemmBackend::CublasLt;
         default: throw std::invalid_argument("invalid CUDA GEMM backend");
     }
 }
 
-lfm::AttentionMode cuda_attention_mode(int value) {
+celeg::AttentionMode cuda_attention_mode(int value) {
     switch (value) {
-        case 0: return lfm::AttentionMode::Single;
-        case 1: return lfm::AttentionMode::Segmented;
-        case 2: return lfm::AttentionMode::Auto;
+        case 0: return celeg::AttentionMode::Single;
+        case 1: return celeg::AttentionMode::Segmented;
+        case 2: return celeg::AttentionMode::Auto;
         default: throw std::invalid_argument("invalid CUDA attention mode");
     }
 }
 
-lfm::ModelOptions cuda_options(const runtime_engine_model_options& source) {
+celeg::ModelOptions cuda_options(const celeg_engine_model_options& source) {
     const auto& input = source.backend_options.cuda;
-    if (source.backend != RUNTIME_BACKEND_CUDA) throw std::invalid_argument("CUDA options require CUDA backend");
+    if (source.backend != CELEG_BACKEND_CUDA) throw std::invalid_argument("CUDA options require CUDA backend");
     if (input.flags != 0) throw std::invalid_argument("CUDA model option flags are reserved and must be zero");
-    lfm::ModelOptions result;
+    celeg::ModelOptions result;
     result.weight_mode = cuda_weight_mode(input.weight_mode);
     result.kv_cache_mode = cuda_kv_cache_mode(input.kv_cache_mode);
     result.gemm_backend = cuda_gemm_backend(input.gemm_backend);
@@ -222,17 +222,17 @@ lfm::ModelOptions cuda_options(const runtime_engine_model_options& source) {
     return result;
 }
 
-lfm::SchedulerPolicy cuda_scheduler_policy(int value) {
+celeg::SchedulerPolicy cuda_scheduler_policy(int value) {
     switch (value) {
-        case 0: return lfm::SchedulerPolicy::GuaranteedNoEvict;
-        case 1: return lfm::SchedulerPolicy::MaxUtilization;
+        case 0: return celeg::SchedulerPolicy::GuaranteedNoEvict;
+        case 1: return celeg::SchedulerPolicy::MaxUtilization;
         default: throw std::invalid_argument("invalid CUDA scheduler policy");
     }
 }
 
-lfm::ConcurrentEngineOptions cuda_engine_options(const runtime_engine_options& source) {
+celeg::ConcurrentEngineOptions cuda_engine_options(const celeg_engine_options& source) {
     const auto& input = source.backend_options.cuda;
-    lfm::ConcurrentEngineOptions result;
+    celeg::ConcurrentEngineOptions result;
     result.max_active_requests = input.max_active_requests;
     result.max_batched_tokens = input.max_batched_tokens;
     result.prefill_chunk_tokens = input.prefill_chunk_tokens;
@@ -245,7 +245,7 @@ lfm::ConcurrentEngineOptions cuda_engine_options(const runtime_engine_options& s
 } // namespace
 
 extern "C" {
-void runtime_cpu_model_options_init(runtime_cpu_model_options* options) {
+void celeg_cpu_model_options_init(celeg_cpu_model_options* options) {
     if (!options) return;
     *options = {};
     options->struct_size = sizeof(*options);
@@ -262,7 +262,7 @@ void runtime_cpu_model_options_init(runtime_cpu_model_options* options) {
     options->cpu.attention_parallel_threshold = 256;
     options->cpu.attention_page_tile = 4;
 }
-void runtime_engine_options_init(runtime_engine_options* options, runtime_backend backend) {
+void celeg_engine_options_init(celeg_engine_options* options, celeg_backend backend) {
     if (!options) return;
     *options = {};
     options->struct_size = sizeof(*options); options->backend = backend;
@@ -276,7 +276,7 @@ void runtime_engine_options_init(runtime_engine_options* options, runtime_backen
     options->model.generation.top_p = 1.0f;
     options->model.generation.repetition_penalty = 1.05f;
     options->model.generation.seed = 1;
-    if (backend == RUNTIME_BACKEND_CPU) {
+    if (backend == CELEG_BACKEND_CPU) {
         options->model.backend_options.cpu.q4_group_size = 32;
         options->model.backend_options.cpu.use_pack_cache = 1;
         options->model.backend_options.cpu.kv_cache_mode = 1;
@@ -285,7 +285,7 @@ void runtime_engine_options_init(runtime_engine_options* options, runtime_backen
         options->model.backend_options.cpu.prefill_chunk_threshold = 16;
         options->model.backend_options.cpu.attention_parallel_threshold = 256;
         options->model.backend_options.cpu.attention_page_tile = 4;
-    } else if (backend == RUNTIME_BACKEND_CUDA) {
+    } else if (backend == CELEG_BACKEND_CUDA) {
         options->model.backend_options.cuda.weight_mode = 0;
         options->model.backend_options.cuda.kv_cache_mode = 0;
         options->model.backend_options.cuda.gemm_backend = 0;
@@ -295,7 +295,7 @@ void runtime_engine_options_init(runtime_engine_options* options, runtime_backen
         options->model.backend_options.cuda.lt_workspace_mb = 64;
         options->model.backend_options.cuda.lt_heuristics = 8;
     }
-    if (backend == RUNTIME_BACKEND_CPU) {
+    if (backend == CELEG_BACKEND_CPU) {
         options->backend_options.cpu.max_active_requests = 16;
         options->backend_options.cpu.max_batched_tokens = 256;
         options->backend_options.cpu.max_prefill_batch = 16;
@@ -306,63 +306,63 @@ void runtime_engine_options_init(runtime_engine_options* options, runtime_backen
         options->backend_options.cpu.prefix_cache = 1;
         options->backend_options.cpu.prefix_cache_max_entries = 256;
         options->backend_options.cpu.prefix_cache_max_bytes = 512ULL * 1024ULL * 1024ULL;
-    } else if (backend == RUNTIME_BACKEND_CUDA) {
+    } else if (backend == CELEG_BACKEND_CUDA) {
         options->backend_options.cuda.max_active_requests = 8;
         options->backend_options.cuda.max_batched_tokens = 512;
         options->backend_options.cuda.prefill_chunk_tokens = 256;
         options->backend_options.cuda.page_tokens = 16;
     }
 }
-void runtime_request_options_init(runtime_request_options* options) {
+void celeg_request_options_init(celeg_request_options* options) {
     if (!options) return;
     *options = {}; options->struct_size = sizeof(*options); options->max_new_tokens = 128; options->eos_token_id = 7;
     options->generation.struct_size = sizeof(options->generation); options->generation.temperature = 0.1f;
     options->generation.top_k = 50; options->generation.top_p = 1.0f; options->generation.repetition_penalty = 1.05f; options->generation.seed = 1;
 }
-const char* runtime_backend_capabilities(runtime_backend backend) {
-    if (backend == RUNTIME_BACKEND_CPU) {
-        global_error = lfm::detect_cpu_capabilities().summary();
+const char* celeg_backend_capabilities(celeg_backend backend) {
+    if (backend == CELEG_BACKEND_CPU) {
+        global_error = celeg::detect_cpu_capabilities().summary();
         return global_error.c_str();
     }
-#ifdef RUNTIME_API_WITH_CUDA
-    global_error = "CUDA backend available for runtime_engine_*; runtime_model_* remains CPU-only";
+#ifdef CELEG_API_WITH_CUDA
+    global_error = "CUDA backend available for celeg_engine_*; celeg_model_* remains CPU-only";
     return global_error.c_str();
 #else
     return "CUDA backend unavailable in this build";
 #endif
 }
 
-runtime_model* runtime_model_create(const char* path, const runtime_cpu_model_options* options) {
+celeg_model* celeg_model_create(const char* path, const celeg_cpu_model_options* options) {
     if (!path || !*path || !options) { global_error = "model path and options are required"; return nullptr; }
     try {
         require_size(options->struct_size, sizeof(*options), "model options");
         require_size(options->generation.struct_size, sizeof(options->generation), "generation options");
-        auto result = std::make_unique<runtime_model>();
+        auto result = std::make_unique<celeg_model>();
         require_size(options->generation.struct_size, sizeof(options->generation), "generation options");
-        result->cpu = std::make_unique<lfm::CpuModel>(path, options->max_context, cpu_options(*options), generation(options->generation));
+        result->cpu = std::make_unique<celeg::CpuModel>(path, options->max_context, cpu_options(*options), generation(options->generation));
         return result.release();
     } catch (const std::exception& error) { global_error = error.what(); return nullptr; }
 }
-void runtime_model_destroy(runtime_model* model) { delete model; }
-runtime_status runtime_model_prefill(runtime_model* model, const int32_t* tokens, size_t count) {
-    if (!tokens || count == 0) return RUNTIME_STATUS_INVALID_ARGUMENT;
+void celeg_model_destroy(celeg_model* model) { delete model; }
+celeg_status celeg_model_prefill(celeg_model* model, const int32_t* tokens, size_t count) {
+    if (!tokens || count == 0) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(model, [&] { model->cpu->session().prefill(std::vector<int32_t>(tokens, tokens + count)); });
 }
-runtime_status runtime_model_decode(runtime_model* model, int32_t* token) {
-    if (!token) return RUNTIME_STATUS_INVALID_ARGUMENT;
+celeg_status celeg_model_decode(celeg_model* model, int32_t* token) {
+    if (!token) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(model, [&] { *token = model->cpu->session().decode(); });
 }
-runtime_status runtime_model_copy_logits(runtime_model* model, float* output, size_t capacity, size_t* required) {
-    if (!model || !required) return RUNTIME_STATUS_INVALID_ARGUMENT;
+celeg_status celeg_model_copy_logits(celeg_model* model, float* output, size_t capacity, size_t* required) {
+    if (!model || !required) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(model, [&] { const auto values = model->cpu->diagnostics().copy_logits(); *required = values.size(); if (!output || capacity < values.size()) throw std::length_error("logit output buffer is too small"); std::copy(values.begin(), values.end(), output); });
 }
-runtime_status runtime_model_get_metrics(runtime_model* model, runtime_metrics* metrics) {
-    if (!model || !metrics || metrics->struct_size < sizeof(*metrics)) return RUNTIME_STATUS_INVALID_ARGUMENT;
+celeg_status celeg_model_get_metrics(celeg_model* model, celeg_metrics* metrics) {
+    if (!model || !metrics || metrics->struct_size < sizeof(*metrics)) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(model, [&] { const auto value = model->cpu->diagnostics().runtime_metrics(); metrics->prefill_ms = value.last_prefill_ms; metrics->prefill_tokens = value.prefill_tokens; metrics->decode_ms = value.cumulative_decode_ms; metrics->decode_tokens = value.decoded_tokens; });
 }
-const char* runtime_model_last_error(const runtime_model* model) { return model ? model->error.c_str() : global_error.c_str(); }
+const char* celeg_model_last_error(const celeg_model* model) { return model ? model->error.c_str() : global_error.c_str(); }
 
-runtime_engine* runtime_engine_create(const char* path, const runtime_engine_options* options) {
+celeg_engine* celeg_engine_create(const char* path, const celeg_engine_options* options) {
     if (!path || !*path || !options) { global_error = "engine path and options are required"; return nullptr; }
     try {
         require_size(options->struct_size, sizeof(*options), "engine options");
@@ -371,14 +371,14 @@ runtime_engine* runtime_engine_create(const char* path, const runtime_engine_opt
             global_error = "engine backend must match model backend";
             return nullptr;
         }
-        auto result = std::make_unique<runtime_engine>();
-        if (options->backend == RUNTIME_BACKEND_CPU) {
-            result->service = std::make_unique<lfm::serve::CpuInferenceService>(
+        auto result = std::make_unique<celeg_engine>();
+        if (options->backend == CELEG_BACKEND_CPU) {
+            result->service = std::make_unique<celeg::serve::CpuInferenceService>(
                 path, options->model.max_context, cpu_options(options->model),
                 cpu_engine_options(*options));
-        } else if (options->backend == RUNTIME_BACKEND_CUDA) {
-#ifdef RUNTIME_API_WITH_CUDA
-            result->service = std::make_unique<lfm::serve::CudaInferenceService>(
+        } else if (options->backend == CELEG_BACKEND_CUDA) {
+#ifdef CELEG_API_WITH_CUDA
+            result->service = std::make_unique<celeg::serve::CudaInferenceService>(
                 path, options->model.max_context, cuda_options(options->model),
                 cuda_engine_options(*options));
 #else
@@ -392,12 +392,12 @@ runtime_engine* runtime_engine_create(const char* path, const runtime_engine_opt
         return result.release();
     } catch (const std::exception& error) { global_error = error.what(); return nullptr; }
 }
-void runtime_engine_destroy(runtime_engine* engine) { delete engine; }
-runtime_status runtime_engine_submit(runtime_engine* engine, const int32_t* tokens, size_t count, const runtime_request_options* options, runtime_request_id* request_id) {
-    if (!engine || !tokens || count == 0 || !options || !request_id) return RUNTIME_STATUS_INVALID_ARGUMENT;
+void celeg_engine_destroy(celeg_engine* engine) { delete engine; }
+celeg_status celeg_engine_submit(celeg_engine* engine, const int32_t* tokens, size_t count, const celeg_request_options* options, celeg_request_id* request_id) {
+    if (!engine || !tokens || count == 0 || !options || !request_id) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(engine, [&] {
         require_size(options->struct_size, sizeof(*options), "request options");
-        lfm::serve::GenerateRequest request;
+        celeg::serve::GenerateRequest request;
         request.prompt_tokens.assign(tokens, tokens + count);
         request.max_output_tokens = options->max_new_tokens;
         request.eos_token_id = options->eos_token_id;
@@ -406,27 +406,27 @@ runtime_status runtime_engine_submit(runtime_engine* engine, const int32_t* toke
         *request_id = engine->service->submit(std::move(request));
     });
 }
-runtime_status runtime_engine_poll(runtime_engine* engine, runtime_request_id id, int32_t* output, size_t capacity, size_t* count, int* finished) {
-    if (!engine || !output || capacity == 0 || !count || !finished) return RUNTIME_STATUS_INVALID_ARGUMENT;
+celeg_status celeg_engine_poll(celeg_engine* engine, celeg_request_id id, int32_t* output, size_t capacity, size_t* count, int* finished) {
+    if (!engine || !output || capacity == 0 || !count || !finished) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(engine, [&] {
-        const lfm::serve::GenerateEvent event = engine->service->poll(id, capacity);
+        const celeg::serve::GenerateEvent event = engine->service->poll(id, capacity);
         std::copy(event.tokens.begin(), event.tokens.end(), output);
         *count = event.tokens.size();
         *finished = event.finished ? 1 : 0;
     });
 }
-runtime_status runtime_engine_status(runtime_engine* engine, runtime_request_id id, runtime_request_status* value) { if (!value) return RUNTIME_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *value = status(engine->service->status(id)); }); }
-runtime_status runtime_engine_cancel(runtime_engine* engine, runtime_request_id id) {
+celeg_status celeg_engine_status(celeg_engine* engine, celeg_request_id id, celeg_request_status* value) { if (!value) return CELEG_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *value = status(engine->service->status(id)); }); }
+celeg_status celeg_engine_cancel(celeg_engine* engine, celeg_request_id id) {
     return protect(engine, [&] {
         if (!engine->service->cancel(id)) throw std::out_of_range("unknown request id");
     });
 }
-runtime_status runtime_engine_step(runtime_engine* engine, int* progressed) { if (!progressed) return RUNTIME_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *progressed = engine->service->step() ? 1 : 0; }); }
-const char* runtime_engine_last_error(const runtime_engine* engine) { return engine ? engine->error.c_str() : global_error.c_str(); }
+celeg_status celeg_engine_step(celeg_engine* engine, int* progressed) { if (!progressed) return CELEG_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *progressed = engine->service->step() ? 1 : 0; }); }
+const char* celeg_engine_last_error(const celeg_engine* engine) { return engine ? engine->error.c_str() : global_error.c_str(); }
 
-runtime_tokenizer* runtime_tokenizer_create(const char* path) { if (!path || !*path) return nullptr; try { auto result = std::make_unique<runtime_tokenizer>(); result->value = std::make_unique<lfm::BpeTokenizer>(path); return result.release(); } catch (const std::exception& error) { global_error = error.what(); return nullptr; } }
-void runtime_tokenizer_destroy(runtime_tokenizer* tokenizer) { delete tokenizer; }
-runtime_status runtime_tokenizer_encode(runtime_tokenizer* tokenizer, const char* text, int add_bos, int32_t* output, size_t capacity, size_t* required) { if (!tokenizer || !text || !required) return RUNTIME_STATUS_INVALID_ARGUMENT; return protect(tokenizer, [&] { const auto values = tokenizer->value->encode(text, add_bos != 0); *required = values.size(); if (!output || capacity < values.size()) throw std::length_error("token output buffer is too small"); std::copy(values.begin(), values.end(), output); }); }
-runtime_status runtime_tokenizer_decode(runtime_tokenizer* tokenizer, const int32_t* tokens, size_t count, int skip_special, char* output, size_t capacity, size_t* required) { if (!tokenizer || (!tokens && count) || !required) return RUNTIME_STATUS_INVALID_ARGUMENT; return protect(tokenizer, [&] { const std::vector<int32_t> values = count == 0 ? std::vector<int32_t>{} : std::vector<int32_t>(tokens, tokens + count); const auto text = tokenizer->value->decode(values, skip_special != 0); *required = text.size() + 1; if (!output || capacity < *required) throw std::length_error("text output buffer is too small"); std::memcpy(output, text.c_str(), *required); }); }
-const char* runtime_tokenizer_last_error(const runtime_tokenizer* tokenizer) { return tokenizer ? tokenizer->error.c_str() : global_error.c_str(); }
+celeg_tokenizer* celeg_tokenizer_create(const char* path) { if (!path || !*path) return nullptr; try { auto result = std::make_unique<celeg_tokenizer>(); result->value = std::make_unique<celeg::BpeTokenizer>(path); return result.release(); } catch (const std::exception& error) { global_error = error.what(); return nullptr; } }
+void celeg_tokenizer_destroy(celeg_tokenizer* tokenizer) { delete tokenizer; }
+celeg_status celeg_tokenizer_encode(celeg_tokenizer* tokenizer, const char* text, int add_bos, int32_t* output, size_t capacity, size_t* required) { if (!tokenizer || !text || !required) return CELEG_STATUS_INVALID_ARGUMENT; return protect(tokenizer, [&] { const auto values = tokenizer->value->encode(text, add_bos != 0); *required = values.size(); if (!output || capacity < values.size()) throw std::length_error("token output buffer is too small"); std::copy(values.begin(), values.end(), output); }); }
+celeg_status celeg_tokenizer_decode(celeg_tokenizer* tokenizer, const int32_t* tokens, size_t count, int skip_special, char* output, size_t capacity, size_t* required) { if (!tokenizer || (!tokens && count) || !required) return CELEG_STATUS_INVALID_ARGUMENT; return protect(tokenizer, [&] { const std::vector<int32_t> values = count == 0 ? std::vector<int32_t>{} : std::vector<int32_t>(tokens, tokens + count); const auto text = tokenizer->value->decode(values, skip_special != 0); *required = text.size() + 1; if (!output || capacity < *required) throw std::length_error("text output buffer is too small"); std::memcpy(output, text.c_str(), *required); }); }
+const char* celeg_tokenizer_last_error(const celeg_tokenizer* tokenizer) { return tokenizer ? tokenizer->error.c_str() : global_error.c_str(); }
 } // extern "C"

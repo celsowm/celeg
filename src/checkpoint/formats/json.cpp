@@ -1,4 +1,4 @@
-#include "lfm/checkpoint/formats/json.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
 
 #include <charconv>
 #include <cctype>
@@ -6,7 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 void append_utf8(std::string& out, uint32_t cp) {
@@ -232,4 +232,4 @@ const Json& Json::at(std::string_view key) const {
     return it->second;
 }
 
-} // namespace lfm
+} // namespace celeg

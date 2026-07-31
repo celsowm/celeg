@@ -1,9 +1,9 @@
-#include "lfm/model/weights/roles.hpp"
+#include "celeg/model/weights/roles.hpp"
 
 #include <sstream>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 std::string layer_name(int layer, std::string_view suffix) {
@@ -32,7 +32,7 @@ std::string role_suffix(TensorRole role) {
 
 }
 
-std::vector<std::string> LfmTensorNamingPolicy::candidates(
+std::vector<std::string> CelegTensorNamingPolicy::candidates(
     const TensorRequest& request) const {
     switch (request.role) {
     case TensorRole::TokenEmbedding:
@@ -113,4 +113,4 @@ ResolvedTensor TensorResolver::resolve(const TensorRequest& request) const {
     throw std::runtime_error(message.str());
 }
 
-} // namespace lfm
+} // namespace celeg

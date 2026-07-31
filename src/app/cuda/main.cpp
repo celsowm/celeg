@@ -1,12 +1,12 @@
-#include "lfm/model/config/config.hpp"
-#include "lfm/text/chat_template.hpp"
-#include "lfm/checkpoint/downloader.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/checkpoint/formats/gguf.hpp"
-#include "lfm/model/model.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/model/config/variant.hpp"
-#include "lfm/text/tokenizer.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/text/chat_template.hpp"
+#include "celeg/checkpoint/downloader.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
+#include "celeg/model/model.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/model/config/variant.hpp"
+#include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -146,7 +146,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--segmented-attention") args.attention_mode = "segmented";
         else if (key == "--help") {
             std::cout
-                << "lfm25-run [--model DIR | --repo REPO_ID] [--prompt TEXT] [--system TEXT]\n"
+                << "celeg-run [--model DIR | --repo REPO_ID] [--prompt TEXT] [--system TEXT]\n"
                 << "  [--max-new-tokens N] [--context N] [--raw]\n"
                 << "  [--fused-residuals] [--fast-attention] [--fused-projections]\n"
                 << "  [--print-config] [--tokens-only] [--legacy-prefill]\n"
@@ -296,7 +296,7 @@ std::string format_bytes(size_t bytes) {
     return out.str();
 }
 
-void print_memory_stats(const lfm::ModelMemoryStats& stats) {
+void print_memory_stats(const celeg::ModelMemoryStats& stats) {
     std::cerr << "memory.weights=" << format_bytes(stats.weights) << '\n'
               << "memory.kv_cache=" << format_bytes(stats.kv_cache) << '\n'
               << "memory.conv_state=" << format_bytes(stats.conv_state) << '\n'
@@ -333,19 +333,19 @@ int main(int argc, char** argv) {
         std::filesystem::path model;        // checkpoint dir (safetensors)
         std::filesystem::path gguf_path;    // concrete .gguf file (GGUF)
         if (repo_is_gguf) {
-            gguf_path = lfm::resolve_hf_gguf(repo_id,
+            gguf_path = celeg::resolve_hf_gguf(repo_id,
                 quant_tag.empty() ? "Q4_K_M" : quant_tag);
         } else if (!args.repo.empty()) {
-            model = lfm::resolve_hf_model(args.repo);
+            model = celeg::resolve_hf_model(args.repo);
         } else {
             model = std::filesystem::path(args.model_dir);
             if (direct_gguf) gguf_path = model;
         }
 
-        const lfm::detail::ModelBootstrap bootstrap =
-            lfm::detail::load_model_bootstrap(is_gguf ? gguf_path : model);
-        const lfm::ModelConfig& config = bootstrap.config;
-        const lfm::IModelVariant& variant = *bootstrap.variant;
+        const celeg::detail::ModelBootstrap bootstrap =
+            celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model);
+        const celeg::ModelConfig& config = bootstrap.config;
+        const celeg::IModelVariant& variant = *bootstrap.variant;
         if (args.context > config.max_position_embeddings) {
             throw std::runtime_error("--context exceeds max_position_embeddings");
         }
@@ -354,13 +354,13 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        lfm::BpeTokenizer tokenizer =
+        celeg::BpeTokenizer tokenizer =
             is_gguf
-                ? lfm::BpeTokenizer(lfm::BpeTokenizer::FromGguf{},
-                                    lfm::GgufFile(gguf_path.string()),
-                                    lfm::make_chat_template(variant.chat_template_kind()))
-                : lfm::BpeTokenizer((model / "tokenizer.json").string(),
-                                    lfm::make_chat_template(variant.chat_template_kind()));
+                ? celeg::BpeTokenizer(celeg::BpeTokenizer::FromGguf{},
+                                    celeg::GgufFile(gguf_path.string()),
+                                    celeg::make_chat_template(variant.chat_template_kind()))
+                : celeg::BpeTokenizer((model / "tokenizer.json").string(),
+                                    celeg::make_chat_template(variant.chat_template_kind()));
         if (tokenizer.bos_id() != config.bos_token_id ||
             tokenizer.eos_id() != config.eos_token_id) {
             throw std::runtime_error("tokenizer special IDs disagree with config");
@@ -368,11 +368,11 @@ int main(int argc, char** argv) {
 
         std::vector<int32_t> input;
         if (args.load_session.empty()) {
-            std::vector<lfm::ChatMessage> chat_messages;
+            std::vector<celeg::ChatMessage> chat_messages;
             if (!args.system.empty()) {
-                chat_messages.push_back({lfm::ChatRole::System, args.system});
+                chat_messages.push_back({celeg::ChatRole::System, args.system});
             }
-            chat_messages.push_back({lfm::ChatRole::User, args.prompt});
+            chat_messages.push_back({celeg::ChatRole::User, args.prompt});
             const std::string formatted = args.raw_prompt
                 ? args.prompt : tokenizer.format_chat(chat_messages);
             // Chat formatting contains <|startoftext|>; raw prompts receive BOS automatically.
@@ -401,7 +401,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--tokens-only cannot be used with --load-session");
         }
 
-        lfm::ModelOptions model_options;
+        celeg::ModelOptions model_options;
         model_options.fused_residuals = args.fused_residuals;
         model_options.fast_attention = args.fast_attention;
         model_options.fused_projections = args.fused_projections;
@@ -409,8 +409,8 @@ int main(int argc, char** argv) {
         model_options.cuda_graph = !args.no_cuda_graph;
         model_options.legacy_prefill = args.legacy_prefill;
         model_options.gemm_backend = args.gemm_backend == "cublaslt"
-            ? lfm::GemmBackend::CublasLt
-            : lfm::GemmBackend::Cublas;
+            ? celeg::GemmBackend::CublasLt
+            : celeg::GemmBackend::Cublas;
         model_options.lt_workspace_bytes =
             static_cast<size_t>(args.lt_workspace_mb) * 1024ULL * 1024ULL;
         model_options.lt_heuristics = args.lt_heuristics;
@@ -420,50 +420,50 @@ int main(int argc, char** argv) {
             // 2x less weight traffic than BF16 while prefill falls back to
             // BF16 cuBLAS tensor-core GEMM via the kept BF16 device buffer.
             model_options.weight_mode = is_gguf
-                ? lfm::WeightMode::Int8
-                : lfm::WeightMode::Bf16;
+                ? celeg::WeightMode::Int8
+                : celeg::WeightMode::Bf16;
         } else if (args.weight_mode == "int8") {
-            model_options.weight_mode = lfm::WeightMode::Int8;
+            model_options.weight_mode = celeg::WeightMode::Int8;
         } else if (args.weight_mode == "int4") {
-            model_options.weight_mode = lfm::WeightMode::Int4;
+            model_options.weight_mode = celeg::WeightMode::Int4;
         } else if (args.weight_mode == "native") {
-            model_options.weight_mode = lfm::WeightMode::NativeGguf;
+            model_options.weight_mode = celeg::WeightMode::NativeGguf;
         } else {
-            model_options.weight_mode = lfm::WeightMode::Bf16;
+            model_options.weight_mode = celeg::WeightMode::Bf16;
         }
         model_options.kv_cache_mode = args.kv_cache_mode == "int8"
-            ? lfm::KvCacheMode::Int8 : lfm::KvCacheMode::Bf16;
+            ? celeg::KvCacheMode::Int8 : celeg::KvCacheMode::Bf16;
         if (args.attention_mode == "segmented") {
-            model_options.attention_mode = lfm::AttentionMode::Segmented;
+            model_options.attention_mode = celeg::AttentionMode::Segmented;
         } else if (args.attention_mode == "auto") {
-            model_options.attention_mode = lfm::AttentionMode::Auto;
+            model_options.attention_mode = celeg::AttentionMode::Auto;
         } else {
-            model_options.attention_mode = lfm::AttentionMode::Single;
+            model_options.attention_mode = celeg::AttentionMode::Single;
         }
         model_options.attention_chunk_tokens = args.attention_chunk_tokens;
         model_options.attention_auto_threshold = args.attention_auto_threshold;
         {
-            lfm::ExpertOffloadOptions& off = model_options.expert_offload;
+            celeg::ExpertOffloadOptions& off = model_options.expert_offload;
             if (args.expert_offload == "auto") {
-                off.mode = lfm::ExpertOffloadMode::Auto;
+                off.mode = celeg::ExpertOffloadMode::Auto;
             } else if (args.expert_offload == "host") {
-                off.mode = lfm::ExpertOffloadMode::Host;
+                off.mode = celeg::ExpertOffloadMode::Host;
             } else {
-                off.mode = lfm::ExpertOffloadMode::None;
+                off.mode = celeg::ExpertOffloadMode::None;
             }
             if (args.expert_host_mode == "pinned-copy") {
-                off.host_mode = lfm::ExpertHostMode::PinnedCopy;
+                off.host_mode = celeg::ExpertHostMode::PinnedCopy;
             } else if (args.expert_host_mode == "staged") {
-                off.host_mode = lfm::ExpertHostMode::Staged;
+                off.host_mode = celeg::ExpertHostMode::Staged;
             } else {
-                off.host_mode = lfm::ExpertHostMode::Mapped;
+                off.host_mode = celeg::ExpertHostMode::Mapped;
             }
             if (args.expert_cache_policy == "static") {
-                off.policy = lfm::ExpertCachePolicy::Static;
+                off.policy = celeg::ExpertCachePolicy::Static;
             } else if (args.expert_cache_policy == "lru") {
-                off.policy = lfm::ExpertCachePolicy::Lru;
+                off.policy = celeg::ExpertCachePolicy::Lru;
             } else {
-                off.policy = lfm::ExpertCachePolicy::LayerLocalLfuLru;
+                off.policy = celeg::ExpertCachePolicy::LayerLocalLfuLru;
             }
             off.gpu_expert_cache_bytes =
                 static_cast<size_t>(args.expert_cache_mib) * 1024ULL * 1024ULL;
@@ -475,20 +475,20 @@ int main(int argc, char** argv) {
             off.prefill_chunk_tokens = args.prefill_chunk;
 
             if (args.expert_backing == "disk") {
-                off.backing = lfm::ExpertBackingMode::DiskCached;
+                off.backing = celeg::ExpertBackingMode::DiskCached;
             } else {
-                off.backing = lfm::ExpertBackingMode::HostResident;
+                off.backing = celeg::ExpertBackingMode::HostResident;
             }
             off.host_expert_cache_bytes =
                 static_cast<size_t>(args.expert_host_cache_mib) * 1024ULL * 1024ULL;
             if (args.expert_io_backend == "thread-pool") {
-                off.io_backend = lfm::ExpertIoBackend::ThreadPool;
+                off.io_backend = celeg::ExpertIoBackend::ThreadPool;
             } else if (args.expert_io_backend == "io-uring") {
-                off.io_backend = lfm::ExpertIoBackend::IoUring;
+                off.io_backend = celeg::ExpertIoBackend::IoUring;
             } else if (args.expert_io_backend == "overlapped") {
-                off.io_backend = lfm::ExpertIoBackend::WindowsOverlapped;
+                off.io_backend = celeg::ExpertIoBackend::WindowsOverlapped;
             } else {
-                off.io_backend = lfm::ExpertIoBackend::Auto;
+                off.io_backend = celeg::ExpertIoBackend::Auto;
             }
             off.io_workers = args.expert_io_workers;
             off.io_queue_depth = args.expert_io_queue_depth;
@@ -496,7 +496,7 @@ int main(int argc, char** argv) {
             off.usage_profile_path = args.expert_usage_profile;
             off.direct_io = args.expert_direct_io;
         }
-        lfm::GenerationConfig generation;
+        celeg::GenerationConfig generation;
         generation.temperature = args.temperature;
         generation.top_k = args.top_k;
         generation.top_p = args.top_p;
@@ -519,7 +519,7 @@ int main(int argc, char** argv) {
                                            ? model.string()
                                            : single.string();
                       }();
-        lfm::Model engine(
+        celeg::Model engine(
             model_path, args.context,
             model_options, generation);
         if (is_gguf) {
@@ -543,14 +543,14 @@ int main(int argc, char** argv) {
             engine.session().prefill(input);
         }
         if (args.benchmark_decode > 0) {
-            const lfm::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
+            const celeg::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
             const double prefill_ms = runtime.last_prefill_ms;
             const double prefill_tps = runtime.prefill_tokens_per_second();
             std::cerr << std::fixed << std::setprecision(3)
                       << "benchmark.prefill_tokens=" << runtime.prefill_tokens << '\n'
                       << "benchmark.prefill_ms=" << prefill_ms << '\n'
                       << "benchmark.prefill_tokens_per_second=" << prefill_tps << '\n';
-            const lfm::DecodeBenchmark benchmark = engine.diagnostics().benchmark_decode(
+            const celeg::DecodeBenchmark benchmark = engine.diagnostics().benchmark_decode(
                 args.benchmark_warmup, args.benchmark_decode);
             std::cerr << "benchmark.decode_warmup=" << benchmark.warmup_steps << '\n'
                       << "benchmark.decode_tokens=" << benchmark.measured_steps << '\n'
@@ -560,7 +560,7 @@ int main(int argc, char** argv) {
                       << "benchmark.decode_tokens_per_second="
                       << benchmark.tokens_per_second() << '\n';
 
-        const lfm::ModelDiagnostics::ExpertOffloadStats off =
+        const celeg::ModelDiagnostics::ExpertOffloadStats off =
                 engine.diagnostics().expert_offload_stats();
             if (off.hit_rate >= 0.0) {
                 std::cerr << "expert_offload.experts_per_layer="
@@ -591,7 +591,7 @@ int main(int argc, char** argv) {
         std::cout << '\n';
         if (!args.save_session.empty()) engine.persistence().save_session(args.save_session);
         if (args.runtime_metrics) {
-            const lfm::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
+            const celeg::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
             std::cerr << std::fixed << std::setprecision(3)
                       << "runtime.prefill_tokens=" << runtime.prefill_tokens << '\n'
                       << "runtime.prefill_ms=" << runtime.last_prefill_ms << '\n'

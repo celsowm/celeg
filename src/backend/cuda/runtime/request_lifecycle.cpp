@@ -1,6 +1,6 @@
 #include "engine_internal.hpp"
 
-namespace lfm {
+namespace celeg {
 ConcurrentEngine::Impl::~Impl() {
     stop();
     std::lock_guard<std::mutex> lock(mutex_);
@@ -218,4 +218,4 @@ void ConcurrentEngine::Impl::complete_prefill_locked(Request& request, Lane& lan
     request.status = RequestStatus::Decoding;
 }
 
-} // namespace lfm
+} // namespace celeg

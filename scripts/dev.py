@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Portable build, test, smoke, and environment diagnostics for lfm25."""
+"""Portable build, test, smoke, and environment diagnostics for celeg."""
 
 from __future__ import annotations
 
@@ -677,9 +677,9 @@ def configure_command(
         "-G",
         "Ninja",
         f"-DCMAKE_BUILD_TYPE={args.build_type}",
-        f"-DLFM_ENABLE_CUDA={'ON' if environment.backend == 'cuda' else 'OFF'}",
-        "-DLFM_BUILD_TESTS=ON",
-        f"-DLFM_RUN_CUDA_TESTS={'ON' if args.runtime_tests == 'on' else 'OFF'}",
+        f"-DCELEG_ENABLE_CUDA={'ON' if environment.backend == 'cuda' else 'OFF'}",
+        "-DCELEG_BUILD_TESTS=ON",
+        f"-DCELEG_RUN_CUDA_TESTS={'ON' if args.celeg_tests == 'on' else 'OFF'}",
     ]
     # Do not let CMake rediscover a newer preview toolset from the global
     # machine when the harness already selected a CUDA-compatible MSVC host.
@@ -706,10 +706,10 @@ def configure_command(
         if allow_unsupported:
             command.append("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler")
     if environment.msvc_include_prefix:
-        command.append(f"-DLFM_MSVC_SHOWINCLUDES_PREFIX={environment.msvc_include_prefix}")
-    serve = env_value(environment.values, "LFM_ENABLE_SERVE")
+        command.append(f"-DCELEG_MSVC_SHOWINCLUDES_PREFIX={environment.msvc_include_prefix}")
+    serve = env_value(environment.values, "CELEG_ENABLE_SERVE")
     if serve:
-        command.append(f"-DLFM_ENABLE_SERVE={serve}")
+        command.append(f"-DCELEG_ENABLE_SERVE={serve}")
     return command
 
 
@@ -827,15 +827,15 @@ def executable(directory: pathlib.Path, name: str, environment: Environment) -> 
 
 def run_smoke(args: argparse.Namespace, environment: Environment, directory: pathlib.Path) -> None:
     if environment.backend == "cuda":
-        runner = executable(directory, "lfm25-run", environment)
+        runner = executable(directory, "celeg-run", environment)
         smoke_tests = [
             [str(runner), "--help"],
             [str(executable(directory, "cpu_c_api_smoke_test", environment))],
         ]
-        if args.runtime_tests == "on":
+        if args.celeg_tests == "on":
             smoke_tests.append([str(executable(directory, "expert_residency_test", environment))])
     else:
-        runner = executable(directory, "lfm25-cpu-run", environment)
+        runner = executable(directory, "celeg-cpu-run", environment)
         smoke_tests = [
             [str(runner), "--help"],
             [str(executable(directory, "cpu_c_api_smoke_test", environment))],
@@ -888,7 +888,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--build-dir")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable doctor output")
     parser.add_argument(
-        "--runtime-tests",
+        "--celeg-tests",
+        dest="celeg_tests",
         choices=("on", "off"),
         default="on",
         help="Register and run tests that require a visible CUDA device",

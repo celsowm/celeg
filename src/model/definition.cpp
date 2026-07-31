@@ -1,9 +1,9 @@
-#include "lfm/model/definition.hpp"
+#include "celeg/model/definition.hpp"
 
 #include <cmath>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 void TransformerDimensions::validate() const {
     if (hidden_size <= 0 || intermediate_size <= 0 || num_layers <= 0 ||
@@ -49,4 +49,4 @@ void ModelDefinition::validate() const {
     }
 }
 
-} // namespace lfm
+} // namespace celeg

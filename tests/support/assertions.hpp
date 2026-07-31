@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace lfm::test {
+namespace celeg::test {
 
 inline void require(bool condition, const char* expression,
                     const char* file, int line) {
@@ -14,7 +14,7 @@ inline void require(bool condition, const char* expression,
     }
 }
 
-} // namespace lfm::test
+} // namespace celeg::test
 
-#define LFM_TEST_CHECK(condition) \
-    ::lfm::test::require(static_cast<bool>(condition), #condition, __FILE__, __LINE__)
+#define CELEG_TEST_CHECK(condition) \
+    ::celeg::test::require(static_cast<bool>(condition), #condition, __FILE__, __LINE__)

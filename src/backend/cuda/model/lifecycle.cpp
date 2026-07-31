@@ -1,7 +1,7 @@
-#include "lfm/detail/model/impl.hpp"
+#include "celeg/detail/model/impl.hpp"
 
 #include <cuda_runtime.h>
-namespace lfm {
+namespace celeg {
 
 Model::Impl::~Impl() {
     if (weights_ && !weights_->usage_profile_path.empty()) {
@@ -17,5 +17,5 @@ Model::Impl::~Impl() {
     }
 }
 
-} // namespace lfm
+} // namespace celeg
 

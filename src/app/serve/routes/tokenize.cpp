@@ -1,16 +1,16 @@
 #include "tokenize.hpp"
 
 #include "../json_route.hpp"
-#include "lfm/serve/protocol/chat.hpp"
-#include "lfm/serve/protocol/mapping.hpp"
+#include "celeg/serve/protocol/chat.hpp"
+#include "celeg/serve/protocol/mapping.hpp"
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 namespace {
-namespace protocol = lfm::serve::protocol;
+namespace protocol = celeg::serve::protocol;
 } // namespace
 
-void register_tokenize_route(uWS::App& app, const lfm::BpeTokenizer& tokenizer,
+void register_tokenize_route(uWS::App& app, const celeg::BpeTokenizer& tokenizer,
                              std::size_t max_model_len) {
     app.post("/tokenize", [&tokenizer, max_model_len](auto* res, auto* /*req*/) {
         handle_json_post<protocol::TokenizeRequest, protocol::TokenizeResponse>(
@@ -20,4 +20,4 @@ void register_tokenize_route(uWS::App& app, const lfm::BpeTokenizer& tokenizer,
     });
 }
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

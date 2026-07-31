@@ -3,11 +3,11 @@
 
 Reads a benchmark manifest from benchmarks/manifests/ and reproduces the
 reference run, capturing the deterministic token sequence (and, when supported
-by lfm25-run, the final logits) into benchmarks/results/<name>.json.
+by celeg-run, the final logits) into benchmarks/results/<name>.json.
 
 The manifest schema is documented in benchmarks/README.md. This runner only
-*drives* the existing lfm25-run binary; it does not modify the model code. It is
-the Phase 0 (task 0.2) companion to lfm25_multi_stage_refactoring_plan.md.
+*drives* the existing celeg-run binary; it does not modify the model code. It is
+the Phase 0 (task 0.2) companion to docs/ARCHITECTURE_RULES.md.
 
 Usage:
     python benchmarks/run_manifest.py benchmarks/manifests/dense_bf16.json
@@ -51,10 +51,10 @@ def default_build_dir() -> Path:
 def find_run_exe(build_dir: Path) -> Path:
     suffix = ".exe" if platform.system() == "Windows" else ""
     for layout in ("bin/Release", "bin", "Release", "."):
-        p = build_dir / layout / f"lfm25-run{suffix}"
+        p = build_dir / layout / f"celeg-run{suffix}"
         if p.is_file():
             return p
-    raise ManifestError(f"lfm25-run not found under {build_dir}")
+    raise ManifestError(f"celeg-run not found under {build_dir}")
 
 
 def build_run_cmd(manifest: dict[str, Any], exe: Path) -> list[str]:
@@ -83,14 +83,14 @@ def capture_stdout(cmd: list[str]) -> str:
                           text=True, encoding="utf-8", errors="replace", check=False)
     if proc.returncode != 0:
         raise ManifestError(
-            f"lfm25-run exited with code {proc.returncode}:\n{proc.stdout}")
+            f"celeg-run exited with code {proc.returncode}:\n{proc.stdout}")
     return proc.stdout
 
 
 def parse_tokens(stdout: str) -> list[int]:
-    """Best-effort extraction of generated token ids from lfm25-run output.
+    """Best-effort extraction of generated token ids from celeg-run output.
 
-    lfm25-run prints the decoded continuation after the prompt on stdout. We
+    celeg-run prints the decoded continuation after the prompt on stdout. We
     can't recover token ids from text alone; for a deterministic fixture the
     captured text is still valuable as a hashable fingerprint. This function
     returns an empty list when --runtime-tokens is not produced; the manifest

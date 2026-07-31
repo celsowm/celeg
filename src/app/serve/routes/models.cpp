@@ -1,6 +1,6 @@
 #include "models.hpp"
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 void register_models_route(uWS::App& app, const std::string& model_name) {
     app.get("/v1/models", [model_name](auto* res, auto* /*req*/) {
@@ -9,4 +9,4 @@ void register_models_route(uWS::App& app, const std::string& model_name) {
     });
 }
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

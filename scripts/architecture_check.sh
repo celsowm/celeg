@@ -14,13 +14,13 @@ require() {
     grep -q -- "$pattern" "$path" || fail "missing $pattern in ${path#$ROOT/}"
 }
 
-for obsolete in "$ROOT/include/lfm/api/cpu.h" "$ROOT/include/lfm/api/cuda.h" \
-                "$ROOT/include/lfm/backend/cpu/packed.hpp"; do
+for obsolete in "$ROOT/include/celeg/api/cpu.h" "$ROOT/include/celeg/api/cuda.h" \
+                "$ROOT/include/celeg/backend/cpu/packed.hpp"; do
     [[ ! -e "$obsolete" ]] || fail "obsolete public surface remains: ${obsolete#$ROOT/}"
 done
 
-require 'typedef enum lfm25_backend' "$ROOT/include/lfm/api.h"
-require 'add_library(lfm25 SHARED' "$ROOT/CMakeLists.txt"
+require 'typedef enum celeg_backend' "$ROOT/include/celeg/api.h"
+require 'add_library(celeg SHARED' "$ROOT/CMakeLists.txt"
 
 if rg -n 'friend class CpuPackedExecutor|owner_->impl_|new Impl|std::endl' \
         "$ROOT/include" "$ROOT/src" "$ROOT/tests"; then
@@ -38,7 +38,7 @@ if rg -n 'reinterpret_cast<[^>]*char\s*\*>\s*\([^)]*&' \
 fi
 
 # Only the CpuModel implementation boundary may name its opaque type.
-impl_uses=$(rg -l 'CpuModel::Impl' "$ROOT/src/backend/cpu" "$ROOT/include/lfm/backend/cpu" \
+impl_uses=$(rg -l 'CpuModel::Impl' "$ROOT/src/backend/cpu" "$ROOT/include/celeg/backend/cpu" \
     | sed "s#^$ROOT/##" \
     | grep -v -E '^(src/backend/cpu/model\.cpp|src/backend/cpu/packed\.cpp|src/backend/cpu/detail/model_internal\.hpp)$' || true)
 [[ -z "$impl_uses" ]] || fail "CpuModel::Impl escaped its implementation boundary: $impl_uses"

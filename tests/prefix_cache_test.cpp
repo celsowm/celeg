@@ -1,4 +1,4 @@
-#include "lfm/runtime/cache/prefix_cache.hpp"
+#include "celeg/runtime/cache/prefix_cache.hpp"
 #include "support/assertions.hpp"
 #include <iostream>
 #include <limits>
@@ -6,7 +6,7 @@
 
 namespace {
 
-class FakePages final : public lfm::IKvPageAllocator {
+class FakePages final : public celeg::IKvPageAllocator {
 public:
     FakePages(size_t count, int page_tokens)
         : page_tokens_(page_tokens), refs_(count, 0) {
@@ -78,50 +78,50 @@ private:
 } // namespace
 
 int main() {
-    using lfm::PrefixAcquireResult;
-    using lfm::PrefixAcquireStatus;
-    using lfm::PrefixCacheManager;
-    using lfm::PrefixCacheMetrics;
-    using lfm::PrefixState;
+    using celeg::PrefixAcquireResult;
+    using celeg::PrefixAcquireStatus;
+    using celeg::PrefixCacheManager;
+    using celeg::PrefixCacheMetrics;
+    using celeg::PrefixState;
 
     FakePages pages(16, 4);
     PrefixCacheManager cache(pages, true, 2);
 
     auto request_pages = cache.allocate_request_pages(8);
-    LFM_TEST_CHECK(request_pages && request_pages->size() == 2);
+    CELEG_TEST_CHECK(request_pages && request_pages->size() == 2);
 
     PrefixState state;
     state.position = 3;
     state.seen_tokens = {1, 0, 1};
     state.logits_bf16 = {4, 5};
     state.conv_state_bf16 = {6};
-    LFM_TEST_CHECK(cache.insert_or_update({10, 20, 30}, *request_pages, state));
-    LFM_TEST_CHECK(cache.size() == 1);
-    LFM_TEST_CHECK(pages.clones == 1);
-    LFM_TEST_CHECK(pages.last_clone_tokens == 3);
+    CELEG_TEST_CHECK(cache.insert_or_update({10, 20, 30}, *request_pages, state));
+    CELEG_TEST_CHECK(cache.size() == 1);
+    CELEG_TEST_CHECK(pages.clones == 1);
+    CELEG_TEST_CHECK(pages.last_clone_tokens == 3);
 
     PrefixAcquireResult hit = cache.acquire({10, 20, 30, 40, 50}, 8);
-    LFM_TEST_CHECK(hit.status == PrefixAcquireStatus::Hit);
-    LFM_TEST_CHECK(hit.matched_tokens == 3);
-    LFM_TEST_CHECK(hit.pages.size() == 2);
-    LFM_TEST_CHECK(hit.state && hit.state->position == 3);
-    LFM_TEST_CHECK(pages.clones == 2);
+    CELEG_TEST_CHECK(hit.status == PrefixAcquireStatus::Hit);
+    CELEG_TEST_CHECK(hit.matched_tokens == 3);
+    CELEG_TEST_CHECK(hit.pages.size() == 2);
+    CELEG_TEST_CHECK(hit.state && hit.state->position == 3);
+    CELEG_TEST_CHECK(pages.clones == 2);
 
     PrefixAcquireResult miss = cache.acquire({99, 100}, 4);
-    LFM_TEST_CHECK(miss.status == PrefixAcquireStatus::Miss);
+    CELEG_TEST_CHECK(miss.status == PrefixAcquireStatus::Miss);
 
     const PrefixCacheMetrics metrics = cache.metrics();
-    LFM_TEST_CHECK(metrics.hits == 1);
-    LFM_TEST_CHECK(metrics.partial_hits == 1);
-    LFM_TEST_CHECK(metrics.misses == 1);
-    LFM_TEST_CHECK(metrics.inserts == 1);
-    LFM_TEST_CHECK(metrics.cow_pages == 2);
-    LFM_TEST_CHECK(metrics.cow_bytes_saved > 0);
+    CELEG_TEST_CHECK(metrics.hits == 1);
+    CELEG_TEST_CHECK(metrics.partial_hits == 1);
+    CELEG_TEST_CHECK(metrics.misses == 1);
+    CELEG_TEST_CHECK(metrics.inserts == 1);
+    CELEG_TEST_CHECK(metrics.cow_pages == 2);
+    CELEG_TEST_CHECK(metrics.cow_bytes_saved > 0);
 
     pages.release(hit.pages);
     pages.release(*request_pages);
     cache.clear();
-    LFM_TEST_CHECK(pages.used_pages() == 0);
+    CELEG_TEST_CHECK(pages.used_pages() == 0);
 
     std::cout << "prefix_cache_test: ok\n";
     return 0;

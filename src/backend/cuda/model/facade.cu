@@ -1,6 +1,6 @@
-#include "lfm/detail/model/impl.hpp"
+#include "celeg/detail/model/impl.hpp"
 
-namespace lfm {
+namespace celeg {
 
 Model::Model(const std::string& model_path,
                    int max_context,
@@ -97,4 +97,4 @@ RuntimeMetrics ModelDiagnostics::runtime_metrics() const { return owner_->impl_-
 void ModelDiagnostics::clear_runtime_metrics() { owner_->impl_->clear_runtime_metrics(); }
 bool ModelDiagnostics::cuda_graph_ready() const { return owner_->impl_->cuda_graph_ready(); }
 
-} // namespace lfm
+} // namespace celeg

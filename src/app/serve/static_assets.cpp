@@ -4,7 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 std::optional<std::string> read_file(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -20,4 +20,4 @@ std::string read_required_file(const std::filesystem::path& path) {
     return *contents;
 }
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

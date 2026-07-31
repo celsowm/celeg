@@ -1,6 +1,6 @@
 #include "kernel_common.cuh"
 
-namespace lfm {
+namespace celeg {
 
 __global__ void argmax_bf16_kernel(const __nv_bfloat16* values,
                                    int count,
@@ -435,14 +435,14 @@ __global__ void packed_sample_topk_kernel(
 void launch_argmax_bf16(const __nv_bfloat16* logits, int count,
                         int32_t* result, cudaStream_t stream) {
     argmax_bf16_kernel<<<1, 256, 0, stream>>>(logits, count, result);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_mark_seen_batch(const int32_t* tokens, int count,
                             uint8_t* seen, int vocab, cudaStream_t stream) {
     mark_seen_batch_kernel<<<(count + 255) / 256, 256, 0, stream>>>(
         tokens, count, seen, vocab);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_mark_seen_batch_ptrs(const int32_t* tokens,
@@ -451,13 +451,13 @@ void launch_mark_seen_batch_ptrs(const int32_t* tokens,
                                  cudaStream_t stream) {
     mark_seen_batch_ptrs_kernel<<<(rows + 255) / 256, 256, 0, stream>>>(
         tokens, seen, rows, vocab);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_mark_seen(const int32_t* token, uint8_t* seen, int vocab,
                       cudaStream_t stream) {
     mark_seen_kernel<<<1, 1, 0, stream>>>(token, seen, vocab);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_prepare_sampling_scores(const __nv_bfloat16* logits,
@@ -468,7 +468,7 @@ void launch_prepare_sampling_scores(const __nv_bfloat16* logits,
                                     cudaStream_t stream) {
     prepare_sampling_scores_kernel<<<(vocab + 255) / 256, 256, 0, stream>>>(
         logits, seen, scores, vocab, temperature, repetition_penalty);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_select_topk(float* scores, float* selected_values,
@@ -476,7 +476,7 @@ void launch_select_topk(float* scores, float* selected_values,
                         cudaStream_t stream) {
     select_topk_kernel<<<1, 256, 0, stream>>>(
         scores, selected_values, selected_indices, rank, vocab);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_sample_topk(const float* selected_values,
@@ -485,7 +485,7 @@ void launch_sample_topk(const float* selected_values,
                         int32_t* result, cudaStream_t stream) {
     sample_topk_kernel<<<1, 1, 0, stream>>>(
         selected_values, selected_indices, top_k, top_p, rng_state, result);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_fused_sample_topk(const __nv_bfloat16* logits,
@@ -504,7 +504,7 @@ void launch_fused_sample_topk(const __nv_bfloat16* logits,
     fused_sample_topk_kernel<<<1, 256, 0, stream>>>(
         logits, seen, scores, selected_values, selected_indices, vocab,
         temperature, repetition_penalty, top_k, top_p, rng_state, result);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 
@@ -527,7 +527,7 @@ void launch_packed_sample_topk(
         logits, seen, rng_state, temperatures, repetition_penalties,
         top_k, top_p, scores, selected_values, selected_indices,
         rows, vocab, result);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace lfm
+} // namespace celeg

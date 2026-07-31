@@ -1,4 +1,4 @@
-#include "lfm/model/weights/quantization.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +6,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -204,4 +204,4 @@ std::vector<float> dequantize_int4_rows(const Int4RowwisePack& pack) {
     return output;
 }
 
-} // namespace lfm
+} // namespace celeg

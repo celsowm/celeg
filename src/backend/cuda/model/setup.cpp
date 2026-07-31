@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
 
 #include <filesystem>
 #include <stdexcept>
-namespace lfm {
+namespace celeg {
 
 Model::Impl::Impl(const std::string& model_path,
                    int max_context,
@@ -20,7 +20,7 @@ Model::Impl::Impl(const std::string& model_path,
     const detail::ModelBootstrap bootstrap =
         detail::load_model_bootstrap(std::filesystem::path(model_path));
     configure_model(bootstrap);
-    allocate_runtime_resources();
+    allocate_celeg_resources();
     load_checkpoint_weights(model_path, bootstrap);
     if (options_.cuda_graph ||
         options_.gemm_backend == GemmBackend::CublasLt) {
@@ -33,5 +33,5 @@ Model::Impl::Impl(const std::string& model_path,
     reset(options_.allocate_local_kv_cache);
 }
 
-} // namespace lfm
+} // namespace celeg
 

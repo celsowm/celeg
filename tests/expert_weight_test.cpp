@@ -1,9 +1,9 @@
-#include "lfm/model/weights/loader.hpp"
-#include "lfm/detail/binary_codec.hpp"
+#include "celeg/model/weights/loader.hpp"
+#include "celeg/detail/binary_codec.hpp"
 #include "support/assertions.hpp"
-#include "lfm/checkpoint/repositories/safetensors.hpp"
-#include "lfm/detail/model/types.hpp"
-#include "lfm/backend/cuda/utils.cuh"
+#include "celeg/checkpoint/repositories/safetensors.hpp"
+#include "celeg/detail/model/types.hpp"
+#include "celeg/backend/cuda/utils.cuh"
 #include <bit>
 #include <cstdint>
 #include <cstring>
@@ -24,7 +24,7 @@ void write_safetensors(const std::filesystem::path& path,
                        const void* data, size_t data_size) {
     std::ofstream out(path, std::ios::binary);
     const uint64_t header_size = header.size();
-    lfm::binary::write_le(out, header_size);
+    celeg::binary::write_le(out, header_size);
     out.write(header.data(), static_cast<std::streamsize>(header.size()));
     if (data_size) {
         out.write(static_cast<const char*>(data),
@@ -56,12 +56,12 @@ int main() {
     static_assert(sizeof(uint16_t) == 2, "bf16 is 2 bytes");
     static_assert(sizeof(float) == 4, "f32 is 4 bytes");
 
-    const auto dir = std::filesystem::temp_directory_path() / "lfm_expert_test";
+    const auto dir = std::filesystem::temp_directory_path() / "celeg_expert_test";
     std::filesystem::create_directories(dir);
     {
         std::ofstream out(dir / "model.safetensors", std::ios::binary);
         const uint64_t hs = header.size();
-        lfm::binary::write_le(out, hs);
+        celeg::binary::write_le(out, hs);
         out.write(header.data(), static_cast<std::streamsize>(header.size()));
         out.write(reinterpret_cast<const char*>(expert_values.data()),
                   static_cast<std::streamsize>(expert_values.size() * 2));
@@ -71,37 +71,37 @@ int main() {
     }
 
     {
-    lfm::SafeTensorRepository repo(dir / "model.safetensors");
-    LFM_TEST_CHECK(!repo.sharded());
-    LFM_TEST_CHECK(repo.contains("experts"));
-    LFM_TEST_CHECK(repo.contains("bias"));
+    celeg::SafeTensorRepository repo(dir / "model.safetensors");
+    CELEG_TEST_CHECK(!repo.sharded());
+    CELEG_TEST_CHECK(repo.contains("experts"));
+    CELEG_TEST_CHECK(repo.contains("bias"));
 
-    auto weights = lfm::WeightLoader::acquire((dir / "model.safetensors").string(),
-                                             lfm::WeightMode::Bf16, "test");
-    lfm::WeightLoader loader(weights, lfm::WeightMode::Bf16);
+    auto weights = celeg::WeightLoader::acquire((dir / "model.safetensors").string(),
+                                             celeg::WeightMode::Bf16, "test");
+    celeg::WeightLoader loader(weights, celeg::WeightMode::Bf16);
 
-    const lfm::ExpertLinearWeight* ew =
+    const celeg::ExpertLinearWeight* ew =
         loader.load_expert_linear_weight(repo, "experts", experts, rows_per_expert, cols);
-    LFM_TEST_CHECK(ew != nullptr);
-    LFM_TEST_CHECK(ew->experts == experts);
-    LFM_TEST_CHECK(ew->rows_per_expert == rows_per_expert);
-    LFM_TEST_CHECK(ew->cols == cols);
-    LFM_TEST_CHECK(ew->kind == lfm::LinearStorageKind::Bf16);
-    LFM_TEST_CHECK(ew->bf16 != nullptr);
+    CELEG_TEST_CHECK(ew != nullptr);
+    CELEG_TEST_CHECK(ew->experts == experts);
+    CELEG_TEST_CHECK(ew->rows_per_expert == rows_per_expert);
+    CELEG_TEST_CHECK(ew->cols == cols);
+    CELEG_TEST_CHECK(ew->kind == celeg::LinearStorageKind::Bf16);
+    CELEG_TEST_CHECK(ew->bf16 != nullptr);
 
     // expert_view(i) must point at offset i * rows_per_expert * cols.
     for (int e = 0; e < experts; ++e) {
-        const lfm::LinearWeight view = ew->expert_view(e);
-        LFM_TEST_CHECK(view.rows == rows_per_expert);
-        LFM_TEST_CHECK(view.cols == cols);
-        LFM_TEST_CHECK(view.bf16 == ew->bf16 + static_cast<size_t>(e) * rows_per_expert * cols);
+        const celeg::LinearWeight view = ew->expert_view(e);
+        CELEG_TEST_CHECK(view.rows == rows_per_expert);
+        CELEG_TEST_CHECK(view.cols == cols);
+        CELEG_TEST_CHECK(view.bf16 == ew->bf16 + static_cast<size_t>(e) * rows_per_expert * cols);
     }
 
     // Copy the packed device buffer back and verify exact ordering.
     std::vector<uint16_t> host_expert(total);
-    LFM_CUDA(cudaMemcpy(host_expert.data(), ew->bf16, total * sizeof(uint16_t),
+    CELEG_CUDA(cudaMemcpy(host_expert.data(), ew->bf16, total * sizeof(uint16_t),
                         cudaMemcpyDeviceToHost));
-    for (size_t i = 0; i < total; ++i) LFM_TEST_CHECK(host_expert[i] == expert_values[i]);
+    for (size_t i = 0; i < total; ++i) CELEG_TEST_CHECK(host_expert[i] == expert_values[i]);
 
     // Invalid expert index must throw.
     bool threw = false;
@@ -110,18 +110,18 @@ int main() {
     } catch (const std::out_of_range&) {
         threw = true;
     }
-    LFM_TEST_CHECK(threw);
+    CELEG_TEST_CHECK(threw);
 
     // F32 expert bias.
     const float* bias = loader.load_f32_weight(repo, "bias", {experts});
-    LFM_TEST_CHECK(bias != nullptr);
+    CELEG_TEST_CHECK(bias != nullptr);
     std::vector<float> host_bias(experts);
-    LFM_CUDA(cudaMemcpy(host_bias.data(), bias, experts * sizeof(float),
+    CELEG_CUDA(cudaMemcpy(host_bias.data(), bias, experts * sizeof(float),
                         cudaMemcpyDeviceToHost));
-    for (int i = 0; i < experts; ++i) LFM_TEST_CHECK(host_bias[i] == bias_values[i]);
+    for (int i = 0; i < experts; ++i) CELEG_TEST_CHECK(host_bias[i] == bias_values[i]);
 
     // Memory accounting must include the BF16 expert buffer and the F32 bias.
-    LFM_TEST_CHECK(weights->memory_bytes() >= total * sizeof(uint16_t) + experts * sizeof(float));
+    CELEG_TEST_CHECK(weights->memory_bytes() >= total * sizeof(uint16_t) + experts * sizeof(float));
     }
 
     std::filesystem::remove_all(dir);

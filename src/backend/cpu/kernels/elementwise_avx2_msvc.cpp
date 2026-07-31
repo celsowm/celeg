@@ -5,7 +5,7 @@
 #include <cmath>
 #include <immintrin.h>
 
-namespace lfm::detail {
+namespace celeg::detail {
 
 void cpu_rmsnorm_avx2_msvc(const float* input, const float* weight, float* output,
                            size_t width, float eps) {
@@ -108,6 +108,6 @@ void cpu_qk_norm_rope_avx2_msvc(float* data, const float* norm_weight,
     }
 }
 
-} // namespace lfm::detail
+} // namespace celeg::detail
 
 #endif

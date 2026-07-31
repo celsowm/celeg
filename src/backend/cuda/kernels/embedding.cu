@@ -1,6 +1,6 @@
 #include "kernel_common.cuh"
 
-namespace lfm {
+namespace celeg {
 namespace {
 
 __global__ void embedding_value_kernel(int32_t token,
@@ -138,14 +138,14 @@ void launch_embedding(int32_t token, const __nv_bfloat16* table,
                       __nv_bfloat16* out, int hidden, cudaStream_t stream) {
     embedding_value_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         token, table, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_device(const int32_t* token, const __nv_bfloat16* table,
                              __nv_bfloat16* out, int hidden, cudaStream_t stream) {
     embedding_pointer_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         token, table, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_batch(const int32_t* tokens, int rows,
@@ -154,7 +154,7 @@ void launch_embedding_batch(const int32_t* tokens, int rows,
     const size_t count = static_cast<size_t>(rows) * hidden;
     embedding_batch_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         tokens, rows, table, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_int8(int32_t token, const int8_t* table,
@@ -162,7 +162,7 @@ void launch_embedding_int8(int32_t token, const int8_t* table,
                            int hidden, cudaStream_t stream) {
     embedding_int8_value_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         token, table, scales, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_int8_device(const int32_t* token, const int8_t* table,
@@ -170,7 +170,7 @@ void launch_embedding_int8_device(const int32_t* token, const int8_t* table,
                                   int hidden, cudaStream_t stream) {
     embedding_int8_pointer_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         token, table, scales, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_int8_batch(const int32_t* tokens, int rows,
@@ -180,7 +180,7 @@ void launch_embedding_int8_batch(const int32_t* tokens, int rows,
     const size_t count = static_cast<size_t>(rows) * hidden;
     embedding_int8_batch_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         tokens, rows, table, scales, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_int4(int32_t token, const uint8_t* table,
@@ -188,7 +188,7 @@ void launch_embedding_int4(int32_t token, const uint8_t* table,
                            int hidden, cudaStream_t stream) {
     embedding_int4_value_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         token, table, scales, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_int4_device(const int32_t* token, const uint8_t* table,
@@ -196,7 +196,7 @@ void launch_embedding_int4_device(const int32_t* token, const uint8_t* table,
                                   int hidden, cudaStream_t stream) {
     embedding_int4_pointer_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
         token, table, scales, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_embedding_int4_batch(const int32_t* tokens, int rows,
@@ -206,7 +206,7 @@ void launch_embedding_int4_batch(const int32_t* tokens, int rows,
     const size_t count = static_cast<size_t>(rows) * hidden;
     embedding_int4_batch_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         tokens, rows, table, scales, out, hidden);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace lfm
+} // namespace celeg

@@ -1,9 +1,9 @@
-#include "lfm/model/execution/plan.hpp"
+#include "celeg/model/execution/plan.hpp"
 
 #include <sstream>
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
     if (max_context <= 0) {
@@ -30,10 +30,10 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
         throw std::invalid_argument(
             "attention_auto_threshold must be positive");
     }
-#if defined(LFM_DEBUG_SYNC) && LFM_DEBUG_SYNC
+#if defined(CELEG_DEBUG_SYNC) && CELEG_DEBUG_SYNC
     if (requested.cuda_graph) {
         throw std::invalid_argument(
-            "CUDA Graph capture is incompatible with LFM_DEBUG_SYNC; use --no-cuda-graph");
+            "CUDA Graph capture is incompatible with CELEG_DEBUG_SYNC; use --no-cuda-graph");
     }
 #endif
 
@@ -108,4 +108,4 @@ std::string ExecutionPlan::description() const {
     return out.str();
 }
 
-} // namespace lfm
+} // namespace celeg

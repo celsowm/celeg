@@ -54,7 +54,7 @@ void launch_scatter_bf16_rows(
     const size_t count = static_cast<size_t>(rows) * width;
     scatter_bf16_rows_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         source, destinations, rows, width);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_scatter_bf16_selected_rows(
@@ -64,7 +64,7 @@ void launch_scatter_bf16_selected_rows(
     const size_t count = static_cast<size_t>(rows) * width;
     scatter_bf16_selected_rows_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         source, source_rows, destinations, rows, width);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_scatter_decode_state(
@@ -77,7 +77,7 @@ void launch_scatter_decode_state(
     scatter_decode_state_kernel<<<(rows + 255) / 256, 256, 0, stream>>>(
         sampled, positions, sampled_destinations,
         position_destinations, rows);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 void launch_scatter_selected_decode_state(
@@ -87,7 +87,7 @@ void launch_scatter_selected_decode_state(
     scatter_selected_decode_state_kernel<<<(rows + 255) / 256, 256, 0, stream>>>(
         sampled, positions, source_rows, sampled_destinations,
         position_destinations, rows);
-    LFM_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
 

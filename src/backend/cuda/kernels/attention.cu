@@ -1,5 +1,5 @@
 #include "kernel_common.cuh"
-namespace lfm {
+namespace celeg {
 #include "kv_cache.cuh"
 #include "attention_common.cuh"
 #include "attention_dense.cuh"

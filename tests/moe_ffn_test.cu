@@ -1,6 +1,6 @@
-#include "lfm/runtime/moe.hpp"
+#include "celeg/runtime/moe.hpp"
 #include "support/assertions.hpp"
-#include "lfm/backend/cuda/utils.cuh"
+#include "celeg/backend/cuda/utils.cuh"
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -60,8 +60,8 @@ __nv_bfloat16 to_bf16(float v) { return __float2bfloat16(v); }
 // Exercise the native packed-expert path with one Q4_K and one Q6_K tensor.
 // Each packed row decodes to an all-ones vector, which makes the reference
 // independent of a second device implementation of the GGUF block decoder.
-void run_native_quantized_case(lfm::GgmlType gate_type,
-                               lfm::GgmlType down_type) {
+void run_native_quantized_case(celeg::GgmlType gate_type,
+                               celeg::GgmlType down_type) {
     constexpr int rows = 2;
     constexpr int hidden = 256;
     constexpr int inter = 256;
@@ -70,23 +70,23 @@ void run_native_quantized_case(lfm::GgmlType gate_type,
     constexpr size_t q4_row_bytes = 144;
     constexpr size_t q6_row_bytes = 210;
 
-    const size_t gate_row_bytes = gate_type == lfm::GgmlType::Q4_K
+    const size_t gate_row_bytes = gate_type == celeg::GgmlType::Q4_K
         ? q4_row_bytes : q6_row_bytes;
-    const size_t down_row_bytes = down_type == lfm::GgmlType::Q4_K
+    const size_t down_row_bytes = down_type == celeg::GgmlType::Q4_K
         ? q4_row_bytes : q6_row_bytes;
     const size_t gate_stride = static_cast<size_t>(2 * inter) * gate_row_bytes;
     const size_t down_stride = static_cast<size_t>(hidden) * down_row_bytes;
 
-    auto make_blocks = [](lfm::GgmlType type, size_t count) {
-        const size_t row_bytes = type == lfm::GgmlType::Q4_K
+    auto make_blocks = [](celeg::GgmlType type, size_t count) {
+        const size_t row_bytes = type == celeg::GgmlType::Q4_K
             ? q4_row_bytes : q6_row_bytes;
         std::vector<uint8_t> bytes(count * row_bytes, 0);
         for (size_t i = 0; i < count; ++i) {
             uint8_t* block = bytes.data() + i * row_bytes;
             // IEEE-754 half representation of 1.0.
-            block[type == lfm::GgmlType::Q4_K ? 0 : 208] = 0x00;
-            block[type == lfm::GgmlType::Q4_K ? 1 : 209] = 0x3c;
-            if (type == lfm::GgmlType::Q4_K) {
+            block[type == celeg::GgmlType::Q4_K ? 0 : 208] = 0x00;
+            block[type == celeg::GgmlType::Q4_K ? 1 : 209] = 0x3c;
+            if (type == celeg::GgmlType::Q4_K) {
                 for (int s = 4; s < 12; ++s) block[s] = 1;
                 // Packed nibble/scales chosen so this row decodes to ones.
                 for (int q = 16; q < 144; ++q) block[q] = 0x22;
@@ -103,11 +103,11 @@ void run_native_quantized_case(lfm::GgmlType gate_type,
         gate_type, static_cast<size_t>(experts) * 2 * inter);
     const std::vector<uint8_t> down_host = make_blocks(
         down_type, static_cast<size_t>(experts) * hidden);
-    lfm::DeviceBuffer<uint8_t> gate_device(gate_host.size());
-    lfm::DeviceBuffer<uint8_t> down_device(down_host.size());
-    LFM_CUDA(cudaMemcpy(gate_device.data(), gate_host.data(), gate_host.size(),
+    celeg::DeviceBuffer<uint8_t> gate_device(gate_host.size());
+    celeg::DeviceBuffer<uint8_t> down_device(down_host.size());
+    CELEG_CUDA(cudaMemcpy(gate_device.data(), gate_host.data(), gate_host.size(),
                         cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(down_device.data(), down_host.data(), down_host.size(),
+    CELEG_CUDA(cudaMemcpy(down_device.data(), down_host.data(), down_host.size(),
                         cudaMemcpyHostToDevice));
 
     std::vector<float> hidden_host(static_cast<size_t>(rows) * hidden);
@@ -116,24 +116,24 @@ void run_native_quantized_case(lfm::GgmlType gate_type,
     std::vector<__nv_bfloat16> hidden_bf16(hidden_host.size());
     for (size_t i = 0; i < hidden_host.size(); ++i)
         hidden_bf16[i] = to_bf16(hidden_host[i]);
-    lfm::DeviceBuffer<__nv_bfloat16> hidden_device(hidden_bf16.size());
-    LFM_CUDA(cudaMemcpy(hidden_device.data(), hidden_bf16.data(),
+    celeg::DeviceBuffer<__nv_bfloat16> hidden_device(hidden_bf16.size());
+    CELEG_CUDA(cudaMemcpy(hidden_device.data(), hidden_bf16.data(),
                         hidden_device.bytes(), cudaMemcpyHostToDevice));
 
     const int selected_host[] = {0, 1, 1, 0};
     const float routing_host[] = {0.25f, 0.75f, 0.6f, 0.4f};
-    lfm::DeviceBuffer<int> selected_device(rows * K);
-    lfm::DeviceBuffer<float> routing_device(rows * K);
-    LFM_CUDA(cudaMemcpy(selected_device.data(), selected_host,
+    celeg::DeviceBuffer<int> selected_device(rows * K);
+    celeg::DeviceBuffer<float> routing_device(rows * K);
+    CELEG_CUDA(cudaMemcpy(selected_device.data(), selected_host,
                         selected_device.bytes(), cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(routing_device.data(), routing_host,
+    CELEG_CUDA(cudaMemcpy(routing_device.data(), routing_host,
                         routing_device.bytes(), cudaMemcpyHostToDevice));
 
-    lfm::DeviceBuffer<float> accum(rows * hidden);
-    lfm::DeviceBuffer<__nv_bfloat16> activated(rows * K * inter);
-    lfm::CudaStream stream;
+    celeg::DeviceBuffer<float> accum(rows * hidden);
+    celeg::DeviceBuffer<__nv_bfloat16> activated(rows * K * inter);
+    celeg::CudaStream stream;
     accum.zero_async(stream.get());
-    lfm::MoeFfnDevice device;
+    celeg::MoeFfnDevice device;
     device.gate_up_gguf = gate_device.data();
     device.down_gguf = down_device.data();
     device.gate_up_gguf_type = gate_type;
@@ -146,17 +146,17 @@ void run_native_quantized_case(lfm::GgmlType gate_type,
     device.inter = inter;
     device.hidden_dim = hidden;
 
-    lfm::launch_moe_ffn(device, selected_device.data(), routing_device.data(),
+    celeg::launch_moe_ffn(device, selected_device.data(), routing_device.data(),
                         hidden_device.data(), accum.data(), rows, K, nullptr,
                         activated.data(), stream.get());
-    lfm::DeviceBuffer<__nv_bfloat16> output(rows * hidden);
-    lfm::launch_finalize_moe_output(accum.data(), output.data(), rows * hidden,
+    celeg::DeviceBuffer<__nv_bfloat16> output(rows * hidden);
+    celeg::launch_finalize_moe_output(accum.data(), output.data(), rows * hidden,
                                     stream.get());
-    LFM_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
     std::vector<float> actual(rows * hidden);
     std::vector<__nv_bfloat16> output_host(static_cast<size_t>(rows) * hidden);
-    LFM_CUDA(cudaMemcpy(output_host.data(), output.data(), output.bytes(),
+    CELEG_CUDA(cudaMemcpy(output_host.data(), output.data(), output.bytes(),
                         cudaMemcpyDeviceToHost));
     for (size_t i = 0; i < actual.size(); ++i)
         actual[i] = __bfloat162float(output_host[i]);
@@ -169,7 +169,7 @@ void run_native_quantized_case(lfm::GgmlType gate_type,
             static_cast<float>(inter) * activated_value;
         for (int h = 0; h < hidden; ++h) {
             const float denom = std::max(1.0f, std::fabs(expected));
-            LFM_TEST_CHECK(std::fabs(actual[static_cast<size_t>(row) * hidden + h] - expected) /
+            CELEG_TEST_CHECK(std::fabs(actual[static_cast<size_t>(row) * hidden + h] - expected) /
                            denom < 0.02f);
         }
     }
@@ -182,31 +182,31 @@ int main() {
         const bool with_bias = true;
         Problem p = build(3, 8, 16, 6, 4, with_bias);
 
-        run_native_quantized_case(lfm::GgmlType::Q4_K, lfm::GgmlType::Q6_K);
-        run_native_quantized_case(lfm::GgmlType::Q6_K, lfm::GgmlType::Q4_K);
+        run_native_quantized_case(celeg::GgmlType::Q4_K, celeg::GgmlType::Q6_K);
+        run_native_quantized_case(celeg::GgmlType::Q6_K, celeg::GgmlType::Q4_K);
 
-        lfm::MoeRouterConfig cfg;
+        celeg::MoeRouterConfig cfg;
         cfg.num_experts = p.experts;
         cfg.experts_per_token = p.K;
         cfg.normalize_topk = true;
         cfg.use_expert_bias = with_bias;
         cfg.routed_scaling_factor = 1.0f;
 
-        lfm::CudaStream stream;
+        celeg::CudaStream stream;
 
         // Router.
-        lfm::DeviceBuffer<float> d_hidden(p.rows * p.hidden);
-        lfm::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
-        lfm::DeviceBuffer<float> d_bias(p.experts);
-        lfm::DeviceBuffer<int> d_sel(static_cast<size_t>(p.rows) * p.K);
-        lfm::DeviceBuffer<float> d_wts(static_cast<size_t>(p.rows) * p.K);
-        lfm::DeviceBuffer<float> d_scratch(static_cast<size_t>(p.rows) * p.experts);
-        LFM_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(d_router.data(), p.router_w.data(), d_router.bytes(), cudaMemcpyHostToDevice));
+        celeg::DeviceBuffer<float> d_hidden(p.rows * p.hidden);
+        celeg::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
+        celeg::DeviceBuffer<float> d_bias(p.experts);
+        celeg::DeviceBuffer<int> d_sel(static_cast<size_t>(p.rows) * p.K);
+        celeg::DeviceBuffer<float> d_wts(static_cast<size_t>(p.rows) * p.K);
+        celeg::DeviceBuffer<float> d_scratch(static_cast<size_t>(p.rows) * p.experts);
+        CELEG_CUDA(cudaMemcpy(d_hidden.data(), p.hidden_vec.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(d_router.data(), p.router_w.data(), d_router.bytes(), cudaMemcpyHostToDevice));
         if (with_bias)
-            LFM_CUDA(cudaMemcpy(d_bias.data(), p.bias.data(), d_bias.bytes(), cudaMemcpyHostToDevice));
+            CELEG_CUDA(cudaMemcpy(d_bias.data(), p.bias.data(), d_bias.bytes(), cudaMemcpyHostToDevice));
 
-        lfm::MoeRouterDevice rdev;
+        celeg::MoeRouterDevice rdev;
         rdev.router_weight = d_router.data();
         rdev.expert_bias = with_bias ? d_bias.data() : nullptr;
         rdev.hidden_data = d_hidden.data();
@@ -214,32 +214,32 @@ int main() {
         rdev.routing_weights = d_wts.data();
         rdev.rows = p.rows;
         rdev.hidden_dim = p.hidden;
-        lfm::launch_moe_router(rdev, cfg, d_scratch.data(), stream.get());
-        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        celeg::launch_moe_router(rdev, cfg, d_scratch.data(), stream.get());
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
         std::vector<int> sel_gpu(static_cast<size_t>(p.rows) * p.K);
         std::vector<float> wts_gpu(static_cast<size_t>(p.rows) * p.K);
-        LFM_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(), d_sel.bytes(), cudaMemcpyDeviceToHost));
-        LFM_CUDA(cudaMemcpy(wts_gpu.data(), d_wts.data(), d_wts.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(), d_sel.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(wts_gpu.data(), d_wts.data(), d_wts.bytes(), cudaMemcpyDeviceToHost));
 
         // CPU reference for router (sanity + feed into CPU FFN reference).
         std::vector<int> sel_cpu;
         std::vector<float> wts_cpu;
-        lfm::compute_moe_router(p.hidden_vec, p.router_w,
+        celeg::compute_moe_router(p.hidden_vec, p.router_w,
                                 with_bias ? &p.bias : nullptr,
                                 p.rows, p.hidden, cfg, sel_cpu, wts_cpu);
-        for (size_t i = 0; i < sel_gpu.size(); ++i) LFM_TEST_CHECK(sel_gpu[i] == sel_cpu[i]);
+        for (size_t i = 0; i < sel_gpu.size(); ++i) CELEG_TEST_CHECK(sel_gpu[i] == sel_cpu[i]);
 
         // FFN device buffers.
-        lfm::DeviceBuffer<__nv_bfloat16> d_gate_up(
+        celeg::DeviceBuffer<__nv_bfloat16> d_gate_up(
             static_cast<size_t>(p.experts) * 2 * p.inter * p.hidden);
-        lfm::DeviceBuffer<__nv_bfloat16> d_down(
+        celeg::DeviceBuffer<__nv_bfloat16> d_down(
             static_cast<size_t>(p.experts) * p.hidden * p.inter);
-        lfm::DeviceBuffer<__nv_bfloat16> d_hidden_bf16(p.rows * p.hidden);
-        lfm::DeviceBuffer<__nv_bfloat16> d_output(p.rows * p.hidden);
-        lfm::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
+        celeg::DeviceBuffer<__nv_bfloat16> d_hidden_bf16(p.rows * p.hidden);
+        celeg::DeviceBuffer<__nv_bfloat16> d_output(p.rows * p.hidden);
+        celeg::DeviceBuffer<__nv_bfloat16> d_gu_scratch(
             static_cast<size_t>(p.rows) * p.K * 2 * p.inter);
-        lfm::DeviceBuffer<__nv_bfloat16> d_act_scratch(
+        celeg::DeviceBuffer<__nv_bfloat16> d_act_scratch(
             static_cast<size_t>(p.rows) * p.K * p.inter);
 
         std::vector<__nv_bfloat16> gu_bf16(p.gate_up.size());
@@ -248,14 +248,14 @@ int main() {
         for (size_t i = 0; i < p.gate_up.size(); ++i) gu_bf16[i] = to_bf16(p.gate_up[i]);
         for (size_t i = 0; i < p.down.size(); ++i) down_bf16[i] = to_bf16(p.down[i]);
         for (size_t i = 0; i < p.hidden_vec.size(); ++i) h_bf16[i] = to_bf16(p.hidden_vec[i]);
-        LFM_CUDA(cudaMemcpy(d_gate_up.data(), gu_bf16.data(), d_gate_up.bytes(), cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(d_down.data(), down_bf16.data(), d_down.bytes(), cudaMemcpyHostToDevice));
-        LFM_CUDA(cudaMemcpy(d_hidden_bf16.data(), h_bf16.data(), d_hidden_bf16.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(d_gate_up.data(), gu_bf16.data(), d_gate_up.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(d_down.data(), down_bf16.data(), d_down.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(d_hidden_bf16.data(), h_bf16.data(), d_hidden_bf16.bytes(), cudaMemcpyHostToDevice));
         d_output.zero_async(stream.get());
-        lfm::DeviceBuffer<float> d_accum(p.rows * p.hidden);
+        celeg::DeviceBuffer<float> d_accum(p.rows * p.hidden);
         d_accum.zero_async(stream.get());
 
-        lfm::MoeFfnDevice fdev;
+        celeg::MoeFfnDevice fdev;
         fdev.gate_up = d_gate_up.data();
         fdev.down = d_down.data();
         fdev.num_experts = p.experts;
@@ -263,20 +263,20 @@ int main() {
         fdev.hidden_dim = p.hidden;
         fdev.expert_gate_up_stride = static_cast<size_t>(2) * p.inter * p.hidden;
         fdev.expert_down_stride = static_cast<size_t>(p.hidden) * p.inter;
-        lfm::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(),
+        celeg::launch_moe_ffn(fdev, d_sel.data(), d_wts.data(),
                             d_hidden_bf16.data(), d_accum.data(),
                             p.rows, p.K, d_gu_scratch.data(),
                             d_act_scratch.data(), stream.get());
-        lfm::launch_finalize_moe_output(d_accum.data(), d_output.data(),
+        celeg::launch_finalize_moe_output(d_accum.data(), d_output.data(),
                                         p.rows * p.hidden, stream.get());
-        LFM_CUDA(cudaStreamSynchronize(stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
         std::vector<__nv_bfloat16> out_gpu(p.rows * p.hidden);
-        LFM_CUDA(cudaMemcpy(out_gpu.data(), d_output.data(), d_output.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(out_gpu.data(), d_output.data(), d_output.bytes(), cudaMemcpyDeviceToHost));
 
         // CPU reference FFN (float) using the GPU-selected experts/weights.
         std::vector<float> out_cpu;
-        lfm::compute_moe_ffn(p.hidden_vec, p.gate_up, p.down,
+        celeg::compute_moe_ffn(p.hidden_vec, p.gate_up, p.down,
                              sel_gpu, wts_gpu, p.rows, p.hidden,
                              p.inter, p.experts, out_cpu);
 
@@ -293,7 +293,7 @@ int main() {
         // The GPU kernel operates in BF16, so the legitimate reference is the
         // BF16-cast of the float computation, not the float computation itself.
         // Keep the float comparison only as a loose sanity bound.
-        LFM_TEST_CHECK(max_rel < 0.25f);
+        CELEG_TEST_CHECK(max_rel < 0.25f);
 
         // Also verify against a pure-BF16 CPU recompute (per-element tolerance
         // tightened to account only for BF16 rounding of the weights/inputs).
@@ -306,7 +306,7 @@ int main() {
         std::cout << "moe_ffn_test: max abs diff vs bf16-cast reference = " << max_abs_bf16 << "\n";
         // BF16 carries ~3 decimal digits; a per-element deviation larger than
         // 0.1 indicates a real kernel mismatch rather than rounding.
-        LFM_TEST_CHECK(max_abs_bf16 < 0.1f);
+        CELEG_TEST_CHECK(max_abs_bf16 < 0.1f);
 
         std::cout << "moe_ffn_test: ok\n";
         return 0;

@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-namespace lfm::app::serve {
+namespace celeg::app::serve {
 
 // Reads a whole file into a string, or nullopt if it can't be opened.
 std::optional<std::string> read_file(const std::filesystem::path& path);
@@ -14,4 +14,4 @@ std::optional<std::string> read_file(const std::filesystem::path& path);
 // missing, since that indicates a packaging bug rather than a client error.
 std::string read_required_file(const std::filesystem::path& path);
 
-} // namespace lfm::app::serve
+} // namespace celeg::app::serve

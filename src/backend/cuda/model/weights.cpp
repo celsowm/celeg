@@ -1,6 +1,6 @@
-#include "lfm/detail/model/types.hpp"
+#include "celeg/detail/model/types.hpp"
 
-namespace lfm {
+namespace celeg {
 
 size_t SharedModelWeights::memory_bytes() const {
     size_t total = 0;
@@ -18,4 +18,4 @@ size_t SharedModelWeights::memory_bytes() const {
     return total;
 }
 
-} // namespace lfm
+} // namespace celeg

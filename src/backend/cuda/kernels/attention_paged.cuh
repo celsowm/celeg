@@ -500,7 +500,7 @@ void launch_gqa_decode_paged_batch(
             positions, rows, attention_slot, page_tokens, attention_layers,
             q_heads, kv_heads, head_dim);
     }
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 void launch_gqa_decode_int8_paged_batch(
@@ -525,7 +525,7 @@ void launch_gqa_decode_int8_paged_batch(
             attention_slot, page_tokens, attention_layers, q_heads,
             kv_heads, head_dim);
     }
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 void launch_gqa_decode_paged_segmented_batch(
@@ -543,11 +543,11 @@ void launch_gqa_decode_paged_segmented_batch(
         rows, attention_slot, page_tokens, attention_layers, q_heads,
         kv_heads, head_dim, chunk_tokens, chunks, partial_max,
         partial_denom, partial_accum);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
     gqa_decode_segment_reduce_batch_kernel<<<rows * q_heads, threads, 0, stream>>>(
         out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,
         partial_accum);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }
 
 void launch_gqa_decode_int8_paged_segmented_batch(
@@ -566,9 +566,9 @@ void launch_gqa_decode_int8_paged_segmented_batch(
         page_tables, page_table_stride, positions, rows, attention_slot,
         page_tokens, attention_layers, q_heads, kv_heads, head_dim,
         chunk_tokens, chunks, partial_max, partial_denom, partial_accum);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
     gqa_decode_segment_reduce_batch_kernel<<<rows * q_heads, threads, 0, stream>>>(
         out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,
         partial_accum);
-    LFM_KERNEL_CHECK();
+    CELEG_KERNEL_CHECK();
 }

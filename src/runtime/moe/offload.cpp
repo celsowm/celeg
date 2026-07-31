@@ -1,5 +1,5 @@
-#include "lfm/runtime/moe/offload.hpp"
-#include "lfm/detail/binary_codec.hpp"
+#include "celeg/runtime/moe/offload.hpp"
+#include "celeg/detail/binary_codec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,7 +22,7 @@
 #include <unistd.h>
 #endif
 
-namespace lfm {
+namespace celeg {
 
 namespace {
 
@@ -447,4 +447,4 @@ void ModelUsageStats::save(const std::string& path) const {
     std::filesystem::rename(tmp_path, path, ec);
 }
 
-} // namespace lfm
+} // namespace celeg

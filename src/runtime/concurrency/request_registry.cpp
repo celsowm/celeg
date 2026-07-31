@@ -1,9 +1,9 @@
-#include "lfm/detail/runtime/concurrency/request_registry.hpp"
+#include "celeg/detail/runtime/concurrency/request_registry.hpp"
 
 #include <algorithm>
 #include <utility>
 
-namespace lfm::detail {
+namespace celeg::detail {
 
 RequestRegistry::RequestId RequestRegistry::create(
     std::vector<int32_t> prompt,
@@ -63,4 +63,4 @@ bool RequestRegistry::erase(RequestId id) {
     return true;
 }
 
-} // namespace lfm::detail
+} // namespace celeg::detail

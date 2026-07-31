@@ -1,17 +1,17 @@
-#include "lfm/model/config/config.hpp"
+#include "celeg/model/config/config.hpp"
 #include "support/assertions.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/model/config/variant.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/model/config/variant.hpp"
 #include <iostream>
 #include <string>
 
 namespace {
 
-lfm::ModelShape make_shape(int hidden, int intermediate, int layers,
+celeg::ModelShape make_shape(int hidden, int intermediate, int layers,
                             int q_heads, int kv_heads, int head_dim,
                             int vocab, int conv_cache, int conv_dim,
                             int attention_layers, int conv_layers) {
-    lfm::ModelShape shape;
+    celeg::ModelShape shape;
     shape.hidden = hidden;
     shape.intermediate = intermediate;
     shape.num_hidden_layers = layers;
@@ -28,7 +28,7 @@ lfm::ModelShape make_shape(int hidden, int intermediate, int layers,
     shape.norm_eps = 1e-5f;
     shape.rope_theta = 1'000'000.0f;
     shape.rope_type = "default";
-    shape.layer_types.assign(static_cast<size_t>(layers), lfm::LayerType::Convolution);
+    shape.layer_types.assign(static_cast<size_t>(layers), celeg::LayerType::Convolution);
     if (attention_layers <= 0) {
         throw std::invalid_argument("attention_layers must be positive");
     }
@@ -36,7 +36,7 @@ lfm::ModelShape make_shape(int hidden, int intermediate, int layers,
     for (int i = 0; i < attention_layers; ++i) {
         const int idx = (i + 1) * step - 1;
         if (idx >= 0 && idx < layers) {
-            shape.layer_types[static_cast<size_t>(idx)] = lfm::LayerType::FullAttention;
+            shape.layer_types[static_cast<size_t>(idx)] = celeg::LayerType::FullAttention;
         }
     }
     shape.compute_derived();
@@ -51,84 +51,84 @@ lfm::ModelShape make_shape(int hidden, int intermediate, int layers,
 } // namespace
 
 int main() {
-    lfm::register_builtin_variants();
-    auto& registry = lfm::ModelVariantRegistry::instance();
+    celeg::register_builtin_variants();
+    auto& registry = celeg::ModelVariantRegistry::instance();
 
     const auto ids = registry.ids();
-    LFM_TEST_CHECK(ids.size() == 6);
-    LFM_TEST_CHECK(registry.find("granite") != nullptr);
-    LFM_TEST_CHECK(registry.find("lfm2.5-8b-a1b") != nullptr);
-    LFM_TEST_CHECK(registry.find("lfm2-8b-a1b") != nullptr);
+    CELEG_TEST_CHECK(ids.size() == 6);
+    CELEG_TEST_CHECK(registry.find("granite") != nullptr);
+    CELEG_TEST_CHECK(registry.find("lfm2.5-8b-a1b") != nullptr);
+    CELEG_TEST_CHECK(registry.find("lfm2-8b-a1b") != nullptr);
 
-    const lfm::ModelShape shape_230m = make_shape(
+    const celeg::ModelShape shape_230m = make_shape(
         1024, 2560, 14, 16, 8, 64, 65536, 3, 1024, 6, 8);
-    const lfm::IModelVariant& variant_230m = registry.select(shape_230m);
-    LFM_TEST_CHECK(variant_230m.id() == "lfm2.5-230m");
-    LFM_TEST_CHECK(variant_230m.repo_id() == "LiquidAI/LFM2.5-230M");
-    LFM_TEST_CHECK(variant_230m.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-    LFM_TEST_CHECK(variant_230m.label().find("230M") != std::string::npos);
+    const celeg::IModelVariant& variant_230m = registry.select(shape_230m);
+    CELEG_TEST_CHECK(variant_230m.id() == "lfm2.5-230m");
+    CELEG_TEST_CHECK(variant_230m.repo_id() == "LiquidAI/LFM2.5-230M");
+    CELEG_TEST_CHECK(variant_230m.chat_template_kind() == celeg::ChatTemplateKind::Lfm2Instruct);
+    CELEG_TEST_CHECK(variant_230m.label().find("230M") != std::string::npos);
 
-    const lfm::ModelShape shape_1_2b = make_shape(
+    const celeg::ModelShape shape_1_2b = make_shape(
         2048, 12288, 16, 32, 8, 64, 65536, 3, 2048, 6, 10);
-    const lfm::IModelVariant& variant_1_2b = registry.select(shape_1_2b);
-    LFM_TEST_CHECK(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
-    LFM_TEST_CHECK(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
-    LFM_TEST_CHECK(variant_1_2b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-    LFM_TEST_CHECK(variant_1_2b.label().find("1.2B-Instruct") != std::string::npos);
+    const celeg::IModelVariant& variant_1_2b = registry.select(shape_1_2b);
+    CELEG_TEST_CHECK(variant_1_2b.id() == "lfm2.5-1.2b-instruct");
+    CELEG_TEST_CHECK(variant_1_2b.repo_id() == "LiquidAI/LFM2.5-1.2B-Instruct");
+    CELEG_TEST_CHECK(variant_1_2b.chat_template_kind() == celeg::ChatTemplateKind::Lfm2Instruct);
+    CELEG_TEST_CHECK(variant_1_2b.label().find("1.2B-Instruct") != std::string::npos);
 
     // config.json advertises intermediate_size=12288 but the published
     // checkpoint actually stores w1/w3 with 8192 rows. resolve_shape() must
     // canonicalize to the real value so the weight loader expects the right
     // tensor dimensions.
-    const lfm::ModelShape resolved_1_2b = variant_1_2b.resolve_shape(shape_1_2b);
-    LFM_TEST_CHECK(resolved_1_2b.intermediate == 8192);
+    const celeg::ModelShape resolved_1_2b = variant_1_2b.resolve_shape(shape_1_2b);
+    CELEG_TEST_CHECK(resolved_1_2b.intermediate == 8192);
 
     // A shape built directly from the real checkpoint (intermediate=8192)
     // must also match this variant so loading from a corrected config works.
-    const lfm::ModelShape shape_1_2b_real = make_shape(
+    const celeg::ModelShape shape_1_2b_real = make_shape(
         2048, 8192, 16, 32, 8, 64, 65536, 3, 2048, 6, 10);
-    LFM_TEST_CHECK(variant_1_2b.matches(shape_1_2b_real));
-    const lfm::ModelShape resolved_real = variant_1_2b.resolve_shape(shape_1_2b_real);
-    LFM_TEST_CHECK(resolved_real.intermediate == 8192);
+    CELEG_TEST_CHECK(variant_1_2b.matches(shape_1_2b_real));
+    const celeg::ModelShape resolved_real = variant_1_2b.resolve_shape(shape_1_2b_real);
+    CELEG_TEST_CHECK(resolved_real.intermediate == 8192);
 
     // LFM2.5-1.2B-Thinking shares the Instruct topology. It must NOT match on
     // shape alone (would create an ambiguous registry), but must match when the
     // repo hint identifies it as the Thinking checkpoint.
-    const lfm::ModelShape shape_thinking = make_shape(
+    const celeg::ModelShape shape_thinking = make_shape(
         2048, 12288, 16, 32, 8, 64, 65536, 3, 2048, 6, 10);
     bool thinking_matches_shape_only = true;
     try {
-        const lfm::IModelVariant& v = registry.select(shape_thinking);
+        const celeg::IModelVariant& v = registry.select(shape_thinking);
         (void)v;
         thinking_matches_shape_only = (v.id() == "lfm2.5-1.2b-thinking");
     } catch (const std::runtime_error&) {
         thinking_matches_shape_only = false;
     }
-    LFM_TEST_CHECK(!thinking_matches_shape_only);  // never dominant on shape alone
+    CELEG_TEST_CHECK(!thinking_matches_shape_only);  // never dominant on shape alone
 
-    const lfm::IModelVariant& variant_thinking =
+    const celeg::IModelVariant& variant_thinking =
         registry.select(shape_thinking, "LiquidAI/LFM2.5-1.2B-Thinking");
-    LFM_TEST_CHECK(variant_thinking.id() == "lfm2.5-1.2b-thinking");
-    LFM_TEST_CHECK(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
-    LFM_TEST_CHECK(variant_thinking.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-    LFM_TEST_CHECK(variant_thinking.label().find("1.2B-Thinking") != std::string::npos);
-    LFM_TEST_CHECK(variant_thinking.resolve_shape(shape_thinking).intermediate == 8192);
+    CELEG_TEST_CHECK(variant_thinking.id() == "lfm2.5-1.2b-thinking");
+    CELEG_TEST_CHECK(variant_thinking.repo_id() == "LiquidAI/LFM2.5-1.2B-Thinking");
+    CELEG_TEST_CHECK(variant_thinking.chat_template_kind() == celeg::ChatTemplateKind::Lfm2Instruct);
+    CELEG_TEST_CHECK(variant_thinking.label().find("1.2B-Thinking") != std::string::npos);
+    CELEG_TEST_CHECK(variant_thinking.resolve_shape(shape_thinking).intermediate == 8192);
 
     // A Thinking repo hint must NOT select the Instruct variant.
-    const lfm::IModelVariant& variant_instruct_again =
+    const celeg::IModelVariant& variant_instruct_again =
         registry.select(shape_1_2b, "LiquidAI/LFM2.5-1.2B-Thinking");
-    LFM_TEST_CHECK(variant_instruct_again.id() == "lfm2.5-1.2b-thinking");
+    CELEG_TEST_CHECK(variant_instruct_again.id() == "lfm2.5-1.2b-thinking");
 
     // A Thinking config resolved via its own hint must differ from Instruct.
-    LFM_TEST_CHECK(variant_thinking.id() != variant_1_2b.id());
+    CELEG_TEST_CHECK(variant_thinking.id() != variant_1_2b.id());
 
-    LFM_TEST_CHECK(registry.find("lfm2.5-230m") != nullptr);
-    LFM_TEST_CHECK(registry.find("lfm2.5-1.2b-instruct") != nullptr);
-    LFM_TEST_CHECK(registry.find("lfm2.5-1.2b-thinking") != nullptr);
-    LFM_TEST_CHECK(registry.find("nonexistent-variant") == nullptr);
+    CELEG_TEST_CHECK(registry.find("lfm2.5-230m") != nullptr);
+    CELEG_TEST_CHECK(registry.find("lfm2.5-1.2b-instruct") != nullptr);
+    CELEG_TEST_CHECK(registry.find("lfm2.5-1.2b-thinking") != nullptr);
+    CELEG_TEST_CHECK(registry.find("nonexistent-variant") == nullptr);
 
     // A valid but unrecognized shape must be rejected.
-    const lfm::ModelShape shape_unknown = make_shape(
+    const celeg::ModelShape shape_unknown = make_shape(
         4096, 4096, 8, 64, 8, 64, 100, 3, 4096, 4, 4);
     bool rejected = false;
     try {
@@ -136,12 +136,12 @@ int main() {
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    LFM_TEST_CHECK(rejected);
+    CELEG_TEST_CHECK(rejected);
 
     // ---- LFM2.5-8B-A1B (MoE) variant ----
     {
-        lfm::ModelShape shape_8b;
-        shape_8b.architecture = lfm::ArchitectureKind::MoeLfm2;
+        celeg::ModelShape shape_8b;
+        shape_8b.architecture = celeg::ArchitectureKind::MoeLfm2;
         shape_8b.hidden = 2048;
         shape_8b.intermediate = 7168;
         shape_8b.dense_intermediate = 7168;
@@ -169,53 +169,53 @@ int main() {
         // layer_types: 6 full_attention + 18 conv (matching the official
         // checkpoint ordering).
         const std::vector<int> attn_pos = {2, 6, 10, 14, 18, 21};
-        shape_8b.layer_types.assign(24, lfm::LayerType::Convolution);
+        shape_8b.layer_types.assign(24, celeg::LayerType::Convolution);
         for (int p : attn_pos) {
-            shape_8b.layer_types[static_cast<size_t>(p)] = lfm::LayerType::FullAttention;
+            shape_8b.layer_types[static_cast<size_t>(p)] = celeg::LayerType::FullAttention;
         }
         shape_8b.compute_derived();
         shape_8b.validate();
 
-        const lfm::IModelVariant& variant_8b = registry.select(shape_8b);
-        LFM_TEST_CHECK(variant_8b.id() == "lfm2.5-8b-a1b");
-        LFM_TEST_CHECK(variant_8b.repo_id() == "LiquidAI/LFM2.5-8B-A1B");
-        LFM_TEST_CHECK(variant_8b.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-        LFM_TEST_CHECK(variant_8b.label().find("8B-A1B") != std::string::npos);
-        LFM_TEST_CHECK(variant_8b.resolve_shape(shape_8b).intermediate == 7168);
+        const celeg::IModelVariant& variant_8b = registry.select(shape_8b);
+        CELEG_TEST_CHECK(variant_8b.id() == "lfm2.5-8b-a1b");
+        CELEG_TEST_CHECK(variant_8b.repo_id() == "LiquidAI/LFM2.5-8B-A1B");
+        CELEG_TEST_CHECK(variant_8b.chat_template_kind() == celeg::ChatTemplateKind::Lfm2Instruct);
+        CELEG_TEST_CHECK(variant_8b.label().find("8B-A1B") != std::string::npos);
+        CELEG_TEST_CHECK(variant_8b.resolve_shape(shape_8b).intermediate == 7168);
 
         // A dense 1.2B shape must NOT select the MoE variant.
         bool selected_moe = false;
         try {
-            const lfm::IModelVariant& v = registry.select(shape_1_2b);
+            const celeg::IModelVariant& v = registry.select(shape_1_2b);
             selected_moe = (v.id() == "lfm2.5-8b-a1b");
         } catch (const std::runtime_error&) {
             selected_moe = false;
         }
-        LFM_TEST_CHECK(!selected_moe);
+        CELEG_TEST_CHECK(!selected_moe);
 
         // The repo hint must select the 8B variant even though the base match
         // already succeeds on shape alone.
-        const lfm::IModelVariant& variant_8b_hint =
+        const celeg::IModelVariant& variant_8b_hint =
             registry.select(shape_8b, "LiquidAI/LFM2.5-8B-A1B");
-        LFM_TEST_CHECK(variant_8b_hint.id() == "lfm2.5-8b-a1b");
+        CELEG_TEST_CHECK(variant_8b_hint.id() == "lfm2.5-8b-a1b");
 
         // LFM2-8B-A1B shares the MoE topology but uses vocab_size 65536 and a
         // different rope_theta, so it must NOT be selected by the LFM2.5 shape.
-        lfm::ModelShape shape_lfm2 = shape_8b;
+        celeg::ModelShape shape_lfm2 = shape_8b;
         shape_lfm2.vocab_size = 65536;
         shape_lfm2.rope_theta = 1'000'000.0f;
         shape_lfm2.num_dense_layers = 2;
         shape_lfm2.use_expert_bias = true;
         shape_lfm2.compute_derived();
         shape_lfm2.validate();
-        LFM_TEST_CHECK(!registry.select(shape_lfm2).matches(shape_8b));
-        const lfm::IModelVariant& variant_lfm2 =
+        CELEG_TEST_CHECK(!registry.select(shape_lfm2).matches(shape_8b));
+        const celeg::IModelVariant& variant_lfm2 =
             registry.select(shape_lfm2, "LiquidAI/LFM2-8B-A1B");
-        LFM_TEST_CHECK(variant_lfm2.id() == "lfm2-8b-a1b");
-        LFM_TEST_CHECK(variant_lfm2.repo_id() == "LiquidAI/LFM2-8B-A1B");
-        LFM_TEST_CHECK(variant_lfm2.chat_template_kind() == lfm::ChatTemplateKind::Lfm2Instruct);
-        LFM_TEST_CHECK(variant_lfm2.label().find("LFM2-8B-A1B") != std::string::npos);
-        LFM_TEST_CHECK(variant_lfm2.resolve_shape(shape_lfm2).intermediate == 7168);
+        CELEG_TEST_CHECK(variant_lfm2.id() == "lfm2-8b-a1b");
+        CELEG_TEST_CHECK(variant_lfm2.repo_id() == "LiquidAI/LFM2-8B-A1B");
+        CELEG_TEST_CHECK(variant_lfm2.chat_template_kind() == celeg::ChatTemplateKind::Lfm2Instruct);
+        CELEG_TEST_CHECK(variant_lfm2.label().find("LFM2-8B-A1B") != std::string::npos);
+        CELEG_TEST_CHECK(variant_lfm2.resolve_shape(shape_lfm2).intermediate == 7168);
     }
 
     std::cout << "model_variant_test: ok variants=";

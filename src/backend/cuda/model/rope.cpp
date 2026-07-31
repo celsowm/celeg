@@ -1,8 +1,8 @@
-#include "lfm/detail/model/impl.hpp"
+#include "celeg/detail/model/impl.hpp"
 
 #include <cmath>
 #include <vector>
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::initialize_rope_tables() {
     const size_t table_elements =
@@ -26,13 +26,13 @@ void Model::Impl::initialize_rope_tables() {
 
     rope_cos_.reset(table_elements);
     rope_sin_.reset(table_elements);
-    LFM_CUDA(cudaMemcpy(rope_cos_.data(), cos_table.data(),
+    CELEG_CUDA(cudaMemcpy(rope_cos_.data(), cos_table.data(),
                         cos_table.size() * sizeof(__nv_bfloat16),
                         cudaMemcpyHostToDevice));
-    LFM_CUDA(cudaMemcpy(rope_sin_.data(), sin_table.data(),
+    CELEG_CUDA(cudaMemcpy(rope_sin_.data(), sin_table.data(),
                         sin_table.size() * sizeof(__nv_bfloat16),
                         cudaMemcpyHostToDevice));
 }
 
-} // namespace lfm
+} // namespace celeg
 

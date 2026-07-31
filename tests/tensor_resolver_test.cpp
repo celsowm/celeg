@@ -1,10 +1,10 @@
-#include "lfm/model/weights/roles.hpp"
+#include "celeg/model/weights/roles.hpp"
 
 #include <cassert>
 #include <cstddef>
 #include <unordered_map>
 
-using namespace lfm;
+using namespace celeg;
 
 namespace {
 class MemoryRepository final : public IWeightRepository {
@@ -28,7 +28,7 @@ int main() {
     MemoryRepository repository;
     repository.tensors.emplace("model.layers.0.self_attn.q_proj.weight",
         HostTensorView{TensorDType::BF16, {2, 4}, nullptr, 16});
-    LfmTensorNamingPolicy policy;
+    CelegTensorNamingPolicy policy;
     TensorResolver resolver(repository, policy);
     const ResolvedTensor tensor = resolver.resolve({
         TensorRole::AttentionQuery, 0, -1, {2, 4}});

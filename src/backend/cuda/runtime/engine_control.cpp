@@ -1,6 +1,6 @@
 #include "engine_internal.hpp"
 
-namespace lfm {
+namespace celeg {
 bool ConcurrentEngine::Impl::step() {
     std::lock_guard<std::mutex> step_lock(step_mutex_);
     const auto started = std::chrono::steady_clock::now();
@@ -71,4 +71,4 @@ GroupedConcurrentMetrics ConcurrentEngine::Impl::grouped_metrics() const {
 
 
 
-} // namespace lfm
+} // namespace celeg

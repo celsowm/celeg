@@ -4,8 +4,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${BUILD_DIR:-$ROOT/build-cpu-sanitize}"
 rm -rf "$BUILD"
 cmake -S "$ROOT" -B "$BUILD" \
-  -DLFM_ENABLE_CUDA=OFF \
-  -DLFM_BUILD_TESTS=ON \
+  -DCELEG_ENABLE_CUDA=OFF \
+  -DCELEG_BUILD_TESTS=ON \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \

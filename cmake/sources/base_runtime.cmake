@@ -1,5 +1,5 @@
 # Backend-independent checkpoint, model, text, and runtime support.
-set(LFM_BASE_RUNTIME_SOURCES
+set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp
     src/checkpoint/formats/gguf.cpp

@@ -1,13 +1,13 @@
-#include "lfm/model/config/config.hpp"
-#include "lfm/backend/cpu/isa.hpp"
-#include "lfm/backend/cpu/model.hpp"
-#include "lfm/backend/cpu/topology.hpp"
-#include "lfm/text/chat_template.hpp"
-#include "lfm/detail/checkpoint/bootstrap.hpp"
-#include "lfm/checkpoint/downloader.hpp"
-#include "lfm/model/config/shape.hpp"
-#include "lfm/model/config/variant.hpp"
-#include "lfm/text/tokenizer.hpp"
+#include "celeg/model/config/config.hpp"
+#include "celeg/backend/cpu/isa.hpp"
+#include "celeg/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/topology.hpp"
+#include "celeg/text/chat_template.hpp"
+#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/checkpoint/downloader.hpp"
+#include "celeg/model/config/shape.hpp"
+#include "celeg/model/config/variant.hpp"
+#include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -92,7 +92,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--help") {
             std::cout
-                << "lfm25-cpu-run [--model DIR | --repo REPO_ID] --prompt TEXT [options]\n"
+                << "celeg-cpu-run [--model DIR | --repo REPO_ID] --prompt TEXT [options]\n"
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
                 << "    (AMX/I8MM/SME2 remain diagnostic-only in v0.0.20)\n"
                 << "  --cpu-q4-group 32|64 --threads N\n"
@@ -135,10 +135,10 @@ std::string bytes(size_t count) {
 int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
-        const lfm::CpuCapabilities caps = lfm::detect_cpu_capabilities();
+        const celeg::CpuCapabilities caps = celeg::detect_cpu_capabilities();
         if (args.print_cpu) {
             std::cout << caps.summary() << '\n'
-                      << lfm::detect_cpu_topology().summary() << '\n';
+                      << celeg::detect_cpu_topology().summary() << '\n';
             if (args.model_dir.empty() && args.repo.empty()) return 0;
         }
         std::string repo_id = args.repo;
@@ -155,16 +155,16 @@ int main(int argc, char** argv) {
         std::filesystem::path model;
         if (!args.repo.empty()) {
             model = repo_is_gguf
-                ? lfm::resolve_hf_gguf(
+                ? celeg::resolve_hf_gguf(
                       repo_id, quant_tag.empty() ? "Q4_K_M" : quant_tag)
-                : lfm::resolve_hf_model(args.repo);
+                : celeg::resolve_hf_model(args.repo);
         } else {
             model = std::filesystem::path(args.model_dir);
         }
-        const lfm::detail::ModelBootstrap bootstrap =
-            lfm::detail::load_model_bootstrap(model);
-        const lfm::ModelConfig& config = bootstrap.config;
-        const lfm::IModelVariant& variant = *bootstrap.variant;
+        const celeg::detail::ModelBootstrap bootstrap =
+            celeg::detail::load_model_bootstrap(model);
+        const celeg::ModelConfig& config = bootstrap.config;
+        const celeg::IModelVariant& variant = *bootstrap.variant;
         if (bootstrap.is_gguf && args.group_size_explicit) {
             throw std::runtime_error(
                 "--cpu-q4-group is only valid for Safetensors checkpoints");
@@ -174,46 +174,46 @@ int main(int argc, char** argv) {
         }
         const std::filesystem::path model_dir =
             std::filesystem::is_directory(model) ? model : model.parent_path();
-        lfm::BpeTokenizer tokenizer = bootstrap.is_gguf
-            ? lfm::BpeTokenizer(
-                  lfm::BpeTokenizer::FromGguf{}, *bootstrap.gguf_file,
-                  lfm::make_chat_template(variant.chat_template_kind()))
-            : lfm::BpeTokenizer(
+        celeg::BpeTokenizer tokenizer = bootstrap.is_gguf
+            ? celeg::BpeTokenizer(
+                  celeg::BpeTokenizer::FromGguf{}, *bootstrap.gguf_file,
+                  celeg::make_chat_template(variant.chat_template_kind()))
+            : celeg::BpeTokenizer(
                   (model_dir / "tokenizer.json").string(),
-                  lfm::make_chat_template(variant.chat_template_kind()));
-        std::vector<lfm::ChatMessage> chat_messages;
+                  celeg::make_chat_template(variant.chat_template_kind()));
+        std::vector<celeg::ChatMessage> chat_messages;
         if (!args.system.empty()) {
-            chat_messages.push_back({lfm::ChatRole::System, args.system});
+            chat_messages.push_back({celeg::ChatRole::System, args.system});
         }
-        chat_messages.push_back({lfm::ChatRole::User, args.prompt});
+        chat_messages.push_back({celeg::ChatRole::User, args.prompt});
         const std::string text = args.raw_prompt
             ? args.prompt : tokenizer.format_chat(chat_messages);
         const std::vector<int32_t> input = tokenizer.encode(text, args.raw_prompt);
         if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {
             throw std::runtime_error("prompt plus output exceeds context");
         }
-        lfm::CpuModelOptions options;
-        options.isa = lfm::parse_cpu_isa(args.isa);
+        celeg::CpuModelOptions options;
+        options.isa = celeg::parse_cpu_isa(args.isa);
         options.weight_format = args.group_size == 64
-            ? lfm::CpuWeightFormat::Q4Group64 : lfm::CpuWeightFormat::Q4Group32;
+            ? celeg::CpuWeightFormat::Q4Group64 : celeg::CpuWeightFormat::Q4Group32;
         options.threads = static_cast<size_t>(args.threads);
-        options.affinity = lfm::parse_cpu_affinity(args.affinity);
-        options.kv_cache_mode = lfm::parse_cpu_kv_cache_mode(args.kv_cache);
+        options.affinity = celeg::parse_cpu_affinity(args.affinity);
+        options.kv_cache_mode = celeg::parse_cpu_kv_cache_mode(args.kv_cache);
         options.kv_page_tokens = static_cast<size_t>(args.kv_page_tokens);
         options.prefill_chunk_tokens = static_cast<size_t>(args.prefill_chunk_tokens);
         options.prefill_chunk_threshold = static_cast<size_t>(args.prefill_chunk_threshold);
         options.attention_parallel_threshold = static_cast<size_t>(args.attention_parallel_threshold);
         options.attention_page_tile = static_cast<size_t>(args.attention_page_tile);
-        options.numa_mode = lfm::parse_cpu_numa_mode(args.numa);
+        options.numa_mode = celeg::parse_cpu_numa_mode(args.numa);
         options.use_pack_cache = !args.no_pack_cache;
         if (!args.pack_cache.empty()) options.pack_cache_directory = args.pack_cache;
-        lfm::GenerationConfig generation;
+        celeg::GenerationConfig generation;
         generation.temperature = args.temperature;
         generation.top_k = args.top_k;
         generation.top_p = args.top_p;
         generation.repetition_penalty = args.repetition_penalty;
         generation.seed = args.seed;
-        lfm::CpuModel engine(model.string(), args.context, options, generation);
+        celeg::CpuModel engine(model.string(), args.context, options, generation);
         std::cerr << "backend=" << engine.diagnostics().backend_description() << '\n';
         if (!engine.diagnostics().pack_path().empty()) std::cerr << "cpu.pack_path=" << engine.diagnostics().pack_path() << '\n';
         if (args.memory_report) {
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
             pending.clear();
         }
         std::cout << '\n';
-        const lfm::RuntimeMetrics metrics = engine.diagnostics().runtime_metrics();
+        const celeg::RuntimeMetrics metrics = engine.diagnostics().runtime_metrics();
         std::cerr << std::fixed << std::setprecision(3)
                   << "runtime.prefill_tokens=" << metrics.prefill_tokens << '\n'
                   << "runtime.prefill_ms=" << metrics.last_prefill_ms << '\n'

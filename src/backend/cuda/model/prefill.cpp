@@ -1,9 +1,9 @@
-#include "lfm/detail/model/impl.hpp"
-#include "lfm/backend/cuda/kernels/kernels.cuh"
-#include "lfm/backend/cuda/paged_kv.hpp"
-#include "lfm/backend/cuda/phase_profile.hpp"
-#include "lfm/model/weights/layout.hpp"
-#include "lfm/runtime/moe.hpp"
+#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/backend/cuda/phase_profile.hpp"
+#include "celeg/model/weights/layout.hpp"
+#include "celeg/runtime/moe.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -13,12 +13,12 @@
 #include <utility>
 #include <vector>
 
-namespace lfm {
+namespace celeg {
 
 void Model::Impl::prefill_legacy(const std::vector<int32_t>& tokens) {
     reset();
     DeviceBuffer<int32_t> input(tokens.size());
-    LFM_CUDA(cudaMemcpyAsync(input.data(), tokens.data(),
+    CELEG_CUDA(cudaMemcpyAsync(input.data(), tokens.data(),
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(input.data(), static_cast<int>(tokens.size()),
@@ -27,10 +27,10 @@ void Model::Impl::prefill_legacy(const std::vector<int32_t>& tokens) {
     for (size_t i = 0; i < tokens.size(); ++i) {
         forward_token_host(tokens[i], i + 1 == tokens.size());
     }
-    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
                              sizeof(position_), cudaMemcpyHostToDevice,
                              stream_.get()));
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     phase_ = SessionPhase::Ready;
 }
 
@@ -76,7 +76,7 @@ void Model::Impl::prefill_chunk(const std::vector<int32_t>& tokens,
     phase_ = SessionPhase::Prefilling;
 
     DeviceBuffer<int32_t> input(tokens.size());
-    LFM_CUDA(cudaMemcpyAsync(input.data(), tokens.data(),
+    CELEG_CUDA(cudaMemcpyAsync(input.data(), tokens.data(),
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(input.data(), static_cast<int>(tokens.size()),
@@ -86,10 +86,10 @@ void Model::Impl::prefill_chunk(const std::vector<int32_t>& tokens,
     for (size_t i = 0; i < tokens.size(); ++i) {
         forward_token_host(tokens[i], finalize && i + 1 == tokens.size());
     }
-    LFM_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &position_,
                              sizeof(position_), cudaMemcpyHostToDevice,
                              stream_.get()));
-    LFM_CUDA(cudaStreamSynchronize(stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     const auto ended = std::chrono::steady_clock::now();
     metrics_.last_prefill_ms +=
         std::chrono::duration<double, std::milli>(ended - started).count();
@@ -100,4 +100,4 @@ void Model::Impl::prefill_chunk(const std::vector<int32_t>& tokens,
     }
 }
 
-} // namespace lfm
+} // namespace celeg

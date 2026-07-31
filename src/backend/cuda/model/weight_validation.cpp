@@ -1,8 +1,8 @@
-#include "lfm/detail/model/impl.hpp"
+#include "celeg/detail/model/impl.hpp"
 
 #include <stdexcept>
 
-namespace lfm {
+namespace celeg {
 
 void LinearWeight::validate_storage() const {
     if (rows <= 0 || cols <= 0) {
@@ -40,4 +40,4 @@ void LinearWeight::validate_storage() const {
     }
 }
 
-} // namespace lfm
+} // namespace celeg

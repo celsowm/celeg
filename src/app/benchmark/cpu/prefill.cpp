@@ -1,4 +1,4 @@
-#include "lfm/backend/cpu/model.hpp"
+#include "celeg/backend/cpu/model.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -11,7 +11,7 @@
 int main(int argc, char** argv) {
     try {
         if (argc < 2 || argc > 8) {
-            std::cerr << "usage: lfm25-cpu-prefill-benchmark MODEL_SAFETENSORS "
+            std::cerr << "usage: celeg-cpu-prefill-benchmark MODEL_SAFETENSORS "
                          "[TOKENS=1024] [CHUNK=256] [PAGE=32] "
                          "[KV=bf16] [ISA=auto] [THREADS=0]\n";
             return 2;
@@ -26,17 +26,17 @@ int main(int argc, char** argv) {
         if (token_count == 0 || chunk == 0 || page == 0) {
             throw std::invalid_argument("tokens, chunk and page must be positive");
         }
-        lfm::CpuModelOptions options;
-        options.isa = lfm::parse_cpu_isa(isa);
-        options.kv_cache_mode = lfm::parse_cpu_kv_cache_mode(kv);
+        celeg::CpuModelOptions options;
+        options.isa = celeg::parse_cpu_isa(isa);
+        options.kv_cache_mode = celeg::parse_cpu_kv_cache_mode(kv);
         options.kv_page_tokens = page;
         options.prefill_chunk_tokens = chunk;
         options.prefill_chunk_threshold = 1;
         options.threads = threads;
-        lfm::GenerationConfig generation;
+        celeg::GenerationConfig generation;
         generation.temperature = 0.0f;
         generation.top_k = 1;
-        lfm::CpuModel runtime(model, static_cast<int>(token_count + 16),
+        celeg::CpuModel runtime(model, static_cast<int>(token_count + 16),
                               options, generation);
         std::vector<int32_t> tokens(token_count, 1);
         runtime.session().prefill(tokens);

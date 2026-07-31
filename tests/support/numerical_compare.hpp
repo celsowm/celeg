@@ -2,7 +2,7 @@
 
 // Numerical comparison utilities used by Phase 0 baseline tests and, later, by
 // the Phase 15 testing matrix. Pure host code, header-only, no CUDA dependency.
-// See lfm25_multi_stage_refactoring_plan.md section 0.3 (tolerance classes) and
+// See docs/ARCHITECTURE_RULES.md section 0.3 (tolerance classes) and
 // section 15.3 (quantization quality).
 
 #include <algorithm>
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace lfm::test::numerical {
+namespace celeg::test::numerical {
 
 struct ComparisonResult {
     double cosine_similarity = 0.0;
@@ -112,7 +112,7 @@ inline ComparisonResult compare(const std::vector<float>& a,
 }
 
 // Tolerance checks with the classes described in section 0.3 of
-// lfm25_multi_stage_refactoring_plan.md.
+// docs/ARCHITECTURE_RULES.md.
 inline void require_within(const ComparisonResult& r,
                            double min_cosine,
                            double max_rmse,
@@ -142,4 +142,4 @@ inline void require_within(const ComparisonResult& r,
     }
 }
 
-} // namespace lfm::test::numerical
+} // namespace celeg::test::numerical

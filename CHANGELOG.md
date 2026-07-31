@@ -11,8 +11,8 @@
 - Added LRU eviction with entry and byte limits plus prefix hit/reuse/COW metrics.
 - Added NUMA topology discovery, per-request node assignment, aligned page storage and best-effort Linux `mbind` placement.
 - Added CPU C API v5 model options, engine v3 options and engine metrics v3 while preserving older entry points.
-- Added `lfm25-cpu-prefix-cache-benchmark`.
-- Added `export_cpu_reference.py`, `lfm25-cpu-compare-reference` and a shell wrapper for official-logit parity checks.
+- Added `celeg-cpu-prefix-cache-benchmark`.
+- Added `export_cpu_reference.py`, `celeg-cpu-compare-reference` and a shell wrapper for official-logit parity checks.
 - Added parallel-attention, prefix-cache/COW and NUMA unit tests; CPU CTest now contains 31 tests.
 - Preserved layer-major long-prompt prefill, packed decode, ragged prefill and all previous CUDA sources.
 
@@ -47,8 +47,8 @@
 
 ## v0.0.15
 
-- Converted `LfmModel` into a PIMPL facade and removed CUDA/cuBLAS/checkpoint implementation dependencies from its public header.
-- Added focused `LfmInferenceSession`, `LfmDiagnostics` and `LfmPersistence` C++ views while retaining compatibility forwarding methods.
+- Converted `CelegModel` into a PIMPL facade and removed CUDA/cuBLAS/checkpoint implementation dependencies from its public header.
+- Added focused `CelegInferenceSession`, `CelegDiagnostics` and `CelegPersistence` C++ views while retaining compatibility forwarding methods.
 - Replaced the common boolean-discriminated `Layer` record with `std::variant<AttentionLayer, ConvolutionLayer>` and layer-specific state.
 - Converted `ConcurrentEngine` into a PIMPL facade whose public header no longer exposes mutexes, queues, CUDA page arenas or packed executors.
 - Extracted host-testable `RequestRegistry`, `BatchPlanner` and `EngineWorker` components.
@@ -68,9 +68,9 @@
 - Added `SharedModelWeights` as the explicit shared immutable checkpoint store, including serialized first-load initialization across concurrent sessions.
 - Extracted radix lookup, LRU eviction, page ownership, partial COW and cache counters into `PrefixCacheManager`.
 - Added host-only `IKvPageAllocator`; `PhysicalPagedKvCache` now implements the interface used by cache policy.
-- Removed `PhysicalPagedKvCache::import_from_model`, the `LfmModel` friendship and the model/paged-KV header cycle.
+- Removed `PhysicalPagedKvCache::import_from_model`, the `CelegModel` friendship and the model/paged-KV header cycle.
 - Added grouped concurrent metric domains while retaining the flat compatibility snapshot and C ABI v6.
-- Split CMake into `lfm25_host` and CUDA-dependent `lfm25_core` targets.
+- Split CMake into `celeg_host` and CUDA-dependent `celeg_core` targets.
 - Removed the obsolete linear `common_prefix_length` policy helper.
 - Added execution-plan, prefix-cache/fake-allocator and grouped-metrics tests.
 - Added `SOLID.md` and an automated architecture boundary check.
@@ -85,7 +85,7 @@
 - Replaced linear longest-prefix cache scans with a token-ID radix tree.
 - Added transactional radix insertion/removal synchronized with LRU cache ownership.
 - Added partial-page COW that copies only initialized token intervals for BF16 and INT8 KV, including scale planes.
-- Added C API v6 structures `lfm25_packed_metrics_v2` and `lfm25_paged_kv_metrics_v3`.
+- Added C API v6 structures `celeg_packed_metrics_v2` and `celeg_paged_kv_metrics_v3`.
 - Added host radix tests, CUDA source tests for per-row seen histories and partial-page cloning, host-only shared-library linkage and C ABI symbol validation.
 
 ## v0.0.12
@@ -134,8 +134,8 @@
 ### Metrics and API
 
 - Bumped the advertised C ABI version to 3 while preserving v1/v2 functions.
-- Added `lfm25_packed_metrics_v1` and
-  `lfm25_engine_get_packed_metrics`.
+- Added `celeg_packed_metrics_v1` and
+  `celeg_engine_get_packed_metrics`.
 - Extended the concurrent benchmark with packed/lane counts, maximum batch and
   packed-path throughput.
 
