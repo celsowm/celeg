@@ -1,7 +1,6 @@
 #include "App.h"
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/model/config/config.hpp"
 #include "celeg/serve/cpu_inference_service.hpp"
 #ifdef CELEG_SERVE_CUDA
 #include "celeg/serve/cuda_inference_service.hpp"
@@ -69,18 +68,18 @@ int main(int argc, char** argv) {
         const std::filesystem::path model(args.model_dir);
 
         const celeg::detail::ModelBootstrap bootstrap = celeg::detail::load_model_bootstrap(model);
-        const celeg::ModelConfig& config = bootstrap.config;
-        const celeg::IModelVariant& variant = *bootstrap.variant;
-        if (args.context > config.max_position_embeddings) {
+        const auto& model_definition = bootstrap.model.definition;
+        const auto& topology = bootstrap.model.topology;
+        if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
         const celeg::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
-            celeg::make_chat_template(variant.chat_template_kind()));
+            celeg::make_chat_template(bootstrap.model.chat_profile_id));
 
         const std::string model_name =
-            args.served_model_name.empty() ? std::string(variant.id()) : args.served_model_name;
-        const std::int32_t eos_token_id = config.eos_token_id;
+            args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
+        const std::int32_t eos_token_id = model_definition.tokens.eos;
 
         std::unique_ptr<celeg::serve::IInferenceService> service;
         if (args.backend == "cpu") {

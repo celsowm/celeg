@@ -1,10 +1,8 @@
 #include "celeg/runtime/concurrency.hpp"
 
-#include "celeg/model/config/config.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/model/model.hpp"
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/packed.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/runtime/cache/prefix_cache.hpp"
@@ -61,9 +59,9 @@ ConcurrentEngine::Impl::Impl(std::string model_path,
         ? engine_options_.logical_kv_pages
         : pages_per_lane * active;
     // Load the model topology so the physical paged KV arena and the packed
-    // executor can size per-attention-layer storage from the variant shape.
+    // executor can size per-attention-layer storage from the resolved topology.
     shape_ = detail::load_model_bootstrap(
-        std::filesystem::path(model_path_)).shape;
+        std::filesystem::path(model_path_)).model.topology;
     paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
         total_pages, engine_options_.page_tokens, max_context_,
         model_options_.kv_cache_mode, shape_);

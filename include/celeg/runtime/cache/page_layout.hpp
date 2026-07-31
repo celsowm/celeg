@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -10,7 +10,7 @@ namespace celeg {
 
 // Pure value type describing the per-page memory layout of a
 // PhysicalPagedKvCache. Extracting the offset/stride math into a standalone
-// struct lets future variants supply a different layout (e.g. per-layer page
+// struct lets future execution profiles supply a different layout (e.g. per-layer page
 // tokens, or a different quantization group) at construction time without
 // subclassing the cache itself (Open/Closed Principle). It also makes the
 // layout testable in isolation from the CUDA resources (Single
@@ -23,7 +23,7 @@ struct PageLayout {
 
     PageLayout() = default;
     PageLayout(int page_tokens_value,
-               const ModelShape& shape)
+               const RuntimeTopology& shape)
         : page_tokens(page_tokens_value),
           attention_layers(shape.attention_layer_count),
           kv_width(shape.kv_width),

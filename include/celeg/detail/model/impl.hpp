@@ -4,8 +4,7 @@
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/model/execution/plan.hpp"
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/session_store.hpp"
 #include "celeg/model/weights/layout.hpp"
 #include "celeg/model/weights/loader.hpp"
@@ -108,7 +107,7 @@ struct Model::Impl : ModelResources, SessionState {
     void set_active_segmented_attention(bool value) { active_segmented_attention_ = value; }
     const ModelOptions& options() const { return options_; }
     const GenerationConfig& generation() const { return generation_; }
-    const ModelShape& shape() const { return shape_; }
+    const RuntimeTopology& shape() const { return model_.topology; }
     const std::shared_ptr<SharedModelWeights>& weights() const { return weights_; }
     DeviceBuffer<__nv_bfloat16>& logits() { return logits_; }
     DeviceBuffer<uint8_t>& seen_tokens() { return seen_tokens_; }

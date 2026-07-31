@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include <stdexcept>
+
 namespace celeg {
 
 namespace {
@@ -41,6 +43,13 @@ std::unique_ptr<IChatTemplate> make_chat_template(ChatTemplateKind kind) {
             return std::make_unique<Lfm2InstructChatTemplate>();
     }
     throw std::invalid_argument("unsupported chat template kind");
+}
+
+std::unique_ptr<IChatTemplate> make_chat_template(std::string_view profile_id) {
+    if (profile_id == "lfm2-instruct" || profile_id == "lfm2") {
+        return make_chat_template(ChatTemplateKind::Lfm2Instruct);
+    }
+    throw std::invalid_argument("unknown chat profile: " + std::string(profile_id));
 }
 
 } // namespace celeg

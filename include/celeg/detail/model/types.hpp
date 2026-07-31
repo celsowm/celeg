@@ -13,7 +13,7 @@
 #include "celeg/runtime/moe/offload.hpp"
 #include "celeg/runtime/moe/expert_residency.hpp"
 #include "celeg/runtime/moe.hpp"
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/runtime/cache/pinned_expert_cache.hpp"
 
@@ -352,7 +352,7 @@ inline bool is_moe_ffn(const FeedForwardWeights& ff) {
 // packed executor (packed.cu) so both stay in lock-step with the checkpoint
 // topology. Defined inline here (where MoeFfnWeights is complete) to avoid
 // duplicating the descriptor construction across translation units.
-inline celeg::MoeRouterConfig moe_router_config(const ModelShape& shape) {
+inline celeg::MoeRouterConfig moe_router_config(const RuntimeTopology& shape) {
     celeg::MoeRouterConfig cfg;
     cfg.num_experts = shape.num_experts;
     cfg.experts_per_token = shape.experts_per_token;
@@ -362,7 +362,7 @@ inline celeg::MoeRouterConfig moe_router_config(const ModelShape& shape) {
     return cfg;
 }
 
-inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const ModelShape& shape) {
+inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const RuntimeTopology& shape) {
     celeg::MoeFfnDevice fdev;
     fdev.num_experts = shape.num_experts;
     fdev.inter = shape.moe_intermediate;

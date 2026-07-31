@@ -1,13 +1,13 @@
 #pragma once
 
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/model/execution/plan.hpp"
 #include "celeg/model/weights/layout.hpp"
 #include "celeg/model/weights/loader.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -22,9 +22,10 @@ struct ModelResources {
 
     ExecutionPlan plan_;
     ModelOptions options_;
-    ModelShape shape_;
-    const IModelVariant* variant_ = nullptr;
+    ResolvedModel model_;
+    RuntimeTopology shape_;
     const ITensorNamingPolicy* tensor_naming_ = nullptr;
+    std::string model_identity_;
     std::shared_ptr<SharedModelWeights> weights_;
     std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;

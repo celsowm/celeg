@@ -1,60 +1,53 @@
 #pragma once
 
-#include "celeg/model/config/config.hpp"
-#include "celeg/model/definition.hpp"
-#include "celeg/model/weights/roles.hpp"
+#include "celeg/checkpoint/metadata.hpp"
+#include "celeg/model/resolved.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <string_view>
 #include <vector>
 
 namespace celeg {
 
-// Architecture providers own checkpoint interpretation. This contract is
-// intentionally limited to metadata and common definitions; CUDA operators,
-// allocation, and execution programs remain backend responsibilities.
-class IArchitectureProvider {
-public:
-    virtual ~IArchitectureProvider() = default;
-    virtual std::string_view id() const = 0;
-    virtual bool supports(const ModelConfig& config) const = 0;
-    virtual ModelDefinition inspect(const ModelConfig& config) const = 0;
-    virtual const ITensorNamingPolicy& tensor_naming() const = 0;
+class IWeightRepository;
+
+struct CheckpointView {
+    CheckpointMetadata metadata;
+    std::shared_ptr<IWeightRepository> repository;
+    std::shared_ptr<class GgufFile> gguf;
+    std::filesystem::path path;
 };
 
-class ArchitectureRegistry {
-public:
-    static ArchitectureRegistry& instance();
+struct ProbeResult {
+    bool supported = false;
+    int specificity = 0;
+    std::string reason;
+};
 
-    void register_provider(std::unique_ptr<IArchitectureProvider> provider);
-    const IArchitectureProvider& select(const ModelConfig& config) const;
-    const IArchitectureProvider* find(std::string_view id) const;
+// An architecture owns checkpoint interpretation and produces a fully
+// resolved, backend-neutral model. Backends never inspect architecture IDs.
+class IArchitecture {
+public:
+    virtual ~IArchitecture() = default;
+    virtual std::string_view id() const = 0;
+    virtual ProbeResult probe(const CheckpointMetadata& metadata) const = 0;
+    virtual ResolvedModel resolve(const CheckpointView& checkpoint) const = 0;
+};
+
+class ArchitectureCatalog {
+public:
+    void add(std::unique_ptr<IArchitecture> architecture);
+    void freeze();
+    const IArchitecture& select(const CheckpointMetadata& metadata) const;
+    const IArchitecture* find(std::string_view id) const;
     std::vector<std::string_view> ids() const;
 
 private:
-    ArchitectureRegistry() = default;
-    std::vector<std::unique_ptr<IArchitectureProvider>> providers_;
+    bool frozen_ = false;
+    std::vector<std::unique_ptr<IArchitecture>> architectures_;
 };
 
-// The LFM provider is the first concrete implementation of the generic
-// metadata seam. Its architecture-specific layer schedule and MoE topology
-// remain in the LFM config/variant layer.
-class CelegArchitectureProvider final : public IArchitectureProvider {
-public:
-    std::string_view id() const override;
-    bool supports(const ModelConfig& config) const override;
-    ModelDefinition inspect(const ModelConfig& config) const override;
-    const ITensorNamingPolicy& tensor_naming() const override;
-};
-
-class GraniteArchitectureProvider final : public IArchitectureProvider {
-public:
-    std::string_view id() const override;
-    bool supports(const ModelConfig& config) const override;
-    ModelDefinition inspect(const ModelConfig& config) const override;
-    const ITensorNamingPolicy& tensor_naming() const override;
-};
-
-void register_builtin_architecture_providers();
+std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog();
 
 } // namespace celeg

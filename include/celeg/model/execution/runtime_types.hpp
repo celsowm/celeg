@@ -10,7 +10,7 @@
 namespace celeg {
 
 // Upper bound on the top-k sampler buffer. This is a kernel/workspace limit,
-// not a model-shape property, so it lives here instead of ModelShape.
+// not a model-topology property, so it lives here instead of the resolved model.
 inline constexpr int kMaxTopK = 128;
 
 enum class GemmBackend {

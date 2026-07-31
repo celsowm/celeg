@@ -50,6 +50,27 @@ def main() -> int:
             if legacy.search(path.read_text(encoding="utf-8")):
                 errors.append(f"legacy public/interface symbol remains: {path}")
 
+    removed = re.compile(
+        r"\b(?:ArchitectureKind|ModelConfig|ModelShape|IModelVariant|"
+        r"ModelVariantRegistry|ArchitectureRegistry|IArchitectureProvider)\b"
+    )
+    for relative in ("include/celeg", "src", "tests", "examples", "cmake"):
+        for path in files(root / relative, "**/*"):
+            if path == Path(__file__).resolve():
+                continue
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".inl", ".cmake"}:
+                continue
+            if removed.search(path.read_text(encoding="utf-8")):
+                errors.append(f"removed architecture interface remains: {path}")
+
+    backend_dispatch = re.compile(r"\b(?:architecture_id|architecture_kind|model_type)\b")
+    for relative in ("include/celeg/backend", "src/backend"):
+        for path in files(root / relative, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".inl"}:
+                continue
+            if backend_dispatch.search(path.read_text(encoding="utf-8")):
+                errors.append(f"architecture dispatch leaked into backend: {path}")
+
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

@@ -15,10 +15,10 @@ namespace celeg {
 
 class BpeTokenizer {
 public:
-    // Loads the tokenizer with the LFM2 Instruct chat template by default.
+    // Loads the tokenizer with the default instruct chat profile.
     explicit BpeTokenizer(const std::string& tokenizer_json_path);
     // Loads the tokenizer with an explicit chat template chosen by the model
-    // variant. Use this overload when the variant is known at construction.
+    // profile. Use this overload when the chat profile is known at construction.
     BpeTokenizer(const std::string& tokenizer_json_path,
                  std::unique_ptr<IChatTemplate> chat_template);
 

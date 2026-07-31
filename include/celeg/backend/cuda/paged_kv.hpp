@@ -4,7 +4,7 @@
 #include "celeg/model/execution/runtime_types.hpp"
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/cache/kv_page_allocator.hpp"
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/runtime/cache/page_layout.hpp"
 
 #include <cstddef>
@@ -16,7 +16,7 @@ namespace celeg {
 
 // Physical, reference-counted KV page arena shared by all requests in one
 // ConcurrentEngine. A page contains the same token range for every attention
-// layer of the variant, which makes a request page table valid across the
+// layer of the resolved model, which makes a request page table valid across the
 // entire model.
 class PhysicalPagedKvCache final : public IKvPageAllocator {
 public:
@@ -24,7 +24,7 @@ public:
                          int page_tokens,
                          int max_context,
                          KvCacheMode mode,
-                         const ModelShape& shape);
+                         const RuntimeTopology& shape);
     ~PhysicalPagedKvCache() = default;
 
     PhysicalPagedKvCache(const PhysicalPagedKvCache&) = delete;

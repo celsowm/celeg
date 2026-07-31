@@ -1,8 +1,6 @@
 #include "celeg/checkpoint/repositories/safetensors.hpp"
-#include "celeg/model/config/config.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/detail/binary_codec.hpp"
-#include "celeg/model/config/shape.hpp"
 #include "celeg/runtime/moe/offload.hpp"
 
 #include <iostream>
@@ -66,16 +64,16 @@ int main(int argc, char** argv) {
 
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_path);
-        const celeg::ModelConfig& config = bootstrap.config;
-        const celeg::ModelShape& shape = bootstrap.shape;
+        const auto& model = bootstrap.model;
+        const auto& shape = model.topology;
 
         int moe_layers = celeg::moe_layer_count(shape);
         if (moe_layers == 0) {
-            std::cout << "No MoE layers in this model variant, nothing to pack.\n";
+            std::cout << "No MoE layers in this model, nothing to pack.\n";
             return 0;
         }
 
-        std::cout << "Packing MoE experts for " << config.repo_hint << "...\n"
+        std::cout << "Packing MoE experts for " << model.identity << "...\n"
                   << "  MoE layers: " << moe_layers << "\n"
                   << "  Experts/layer: " << shape.num_experts << "\n"
                   << "  Intermediate: " << shape.moe_intermediate << "\n"

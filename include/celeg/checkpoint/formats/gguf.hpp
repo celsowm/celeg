@@ -105,6 +105,7 @@ public:
     // Metadata access.
     bool has(std::string_view key) const;
     const GgufValue& value(std::string_view key) const;
+    const std::unordered_map<std::string, GgufValue>& metadata() const { return kv_; }
 
     uint32_t u32(std::string_view key) const;
     uint64_t u64(std::string_view key) const;

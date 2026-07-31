@@ -22,7 +22,7 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
                                            int page_tokens,
                                            int max_context,
                                            KvCacheMode mode,
-                                           const ModelShape& shape)
+                                           const RuntimeTopology& shape)
     : page_tokens_(page_tokens),
       mode_(mode),
       attention_layer_count_(shape.attention_layer_count),

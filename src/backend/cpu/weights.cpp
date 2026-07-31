@@ -4,7 +4,6 @@
 #include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
-#include "celeg/model/config/variant.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
@@ -155,10 +154,10 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     group_size = options.weight_format == CpuWeightFormat::Q4Group64 ? 64 : 32;
     const detail::ModelBootstrap bootstrap =
         detail::load_model_bootstrap(std::filesystem::path(model_path));
-    is_gguf = bootstrap.is_gguf;
-    shape = bootstrap.shape;
-    variant = bootstrap.variant;
-    tensor_naming = &bootstrap.architecture_provider->tensor_naming();
+    is_gguf = bootstrap.is_gguf();
+    shape = bootstrap.model.topology;
+    model_identity = bootstrap.model.identity;
+    tensor_naming = bootstrap.model.tensor_naming.get();
     if (is_gguf) {
         repository = std::make_shared<GgufRepository>(bootstrap.gguf_file);
     } else {
@@ -208,9 +207,9 @@ void CpuModel::Impl::Shared::prepare_pack_path() {
     if (error) throw std::runtime_error("cannot create CPU pack cache: " + error.message());
     const std::string source = source_identity(model_path);
     const size_t id = std::hash<std::string>{}(source);
-    const std::string variant_id = variant ? std::string(variant->id()) : "unknown";
+    const std::string model_id = model_identity.empty() ? "unknown" : model_identity;
     std::ostringstream filename;
-    filename << variant_id << '-' << std::hex << id << "-q4g" << group_size
+    filename << model_id << '-' << std::hex << id << "-q4g" << group_size
              << '-' << cpu_isa_name(options.isa) << ".lfmpack";
     pack_file = directory / filename.str();
     source_id = source;

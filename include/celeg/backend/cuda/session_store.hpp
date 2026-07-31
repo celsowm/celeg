@@ -1,8 +1,7 @@
 #pragma once
 
 #include "celeg/model/execution/runtime_types.hpp"
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 
 #include <array>
@@ -14,7 +13,7 @@ namespace celeg {
 
 // Persistence boundary for a Model session. Isolates the on-disk
 // session-file format (header layout, byte order, payload ordering, magic
-// number, version, variant fingerprint) and the prefix-state snapshot
+// number, version, resolved-model fingerprint) and the prefix-state snapshot
 // representation from the inference path (Single Responsibility Principle).
 // New file-format versions or new prefix-state representations are added
 // here without touching the forward pass (Open/Closed Principle).
@@ -24,13 +23,13 @@ namespace celeg {
 // the live device buffers and topology snapshot per call.
 class SessionStore {
 public:
-    // Header layout for the v2 session file. Bumping the version requires
+    // Header layout for the v3 session file. Bumping the version requires
     // changing the magic and the version field; old files are rejected
     // cleanly without a migration path because the on-disk layout now
-    // depends on the variant fingerprint.
+    // depends on the resolved-model fingerprint.
     struct Header {
-        std::array<char, 8> magic{{'L', 'F', 'M', 'S', 'E', 'S', 'S', '2'}};
-        uint32_t version = 2;
+        std::array<char, 8> magic{{'C', 'E', 'L', 'E', 'G', 'S', 'S', '3'}};
+        uint32_t version = 3;
         uint32_t kv_cache_mode = 0;
         int32_t position = 0;
         int32_t max_context = 0;
@@ -40,22 +39,22 @@ public:
         int32_t vocab = 0;
         int32_t attention_layers = 0;
         uint64_t rng_state = 0;
-        char variant_id[32] = {};
+        char model_identity[96] = {};
     };
 
     static constexpr std::array<char, 8> kMagic{
-        {'L', 'F', 'M', 'S', 'E', 'S', 'S', '2'}};
-    static constexpr uint32_t kVersion = 2;
+        {'C', 'E', 'L', 'E', 'G', 'S', 'S', '3'}};
+    static constexpr uint32_t kVersion = 3;
 
     // Snapshot of the live session state that SessionStore reads from or
     // writes to. The host fills this struct and passes it in; the store
     // never retains a reference beyond the call.
     struct SessionState {
-        const ModelShape& shape;
+        const RuntimeTopology& shape;
         int max_context = 0;
         int position = 0;
         KvCacheMode kv_cache_mode = KvCacheMode::Bf16;
-        const IModelVariant* variant = nullptr;
+        std::string model_identity;
         cudaStream_t stream = nullptr;
         DeviceBuffer<uint8_t>* seen_tokens = nullptr;
         DeviceBuffer<__nv_bfloat16>* logits = nullptr;
@@ -79,12 +78,12 @@ public:
         std::vector<LayerBuffers> layer_buffers;
     };
 
-    // Writes a v2 session file at `path`. Throws on any I/O or CUDA error.
+    // Writes a v3 session file at `path`. Throws on any I/O or CUDA error.
     static void save(const std::string& path, SessionState& state);
 
-    // Reads a v2 session file from `path` and restores the buffers. Throws
-    // if the file is not a v2 session, the dimensions mismatch, or the
-    // variant fingerprint differs. On success, `state.position` is updated
+    // Reads a v3 session file from `path` and restores the buffers. Throws
+    // if the file is not a v3 session, the dimensions mismatch, or the
+        // resolved-model fingerprint differs. On success, `state.position` is updated
     // to match the header.
     static void load(const std::string& path, SessionState& state);
 

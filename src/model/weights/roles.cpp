@@ -22,7 +22,7 @@ std::string role_suffix(TensorRole role) {
     case TensorRole::FfnGate: return "feed_forward.w1.weight";
     case TensorRole::FfnUp: return "feed_forward.w3.weight";
     case TensorRole::FfnDown: return "feed_forward.w2.weight";
-    case TensorRole::ShortConvInput: return "conv.input_proj.weight";
+    case TensorRole::ShortConvInput: return "conv.in_proj.weight";
     case TensorRole::ShortConvKernel: return "conv.conv.weight";
     case TensorRole::ShortConvOutput: return "conv.output_proj.weight";
     case TensorRole::MoeRouter: return "feed_forward.gate.weight";

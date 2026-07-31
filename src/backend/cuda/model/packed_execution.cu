@@ -22,7 +22,7 @@ struct PackedDecodeExecutorImpl {
     explicit PackedDecodeExecutorImpl(size_t maximum_batch_value,
                                       size_t maximum_prefill_tokens_value,
                                       PhysicalPagedKvCache* paged_kv_value,
-                                      const ModelShape& shape)
+                                      const RuntimeTopology& shape)
         : maximum_batch(maximum_batch_value),
           maximum_prefill_token_capacity(maximum_prefill_tokens_value),
           paged_kv(paged_kv_value),
@@ -120,7 +120,7 @@ struct PackedDecodeExecutorImpl {
     size_t maximum_batch;
     size_t maximum_prefill_token_capacity;
     PhysicalPagedKvCache* paged_kv = nullptr;
-    ModelShape shape_;
+    RuntimeTopology shape_;
     CudaStream stream;
     CublasHandle cublas;
     PackedDecodeMetrics metric;
@@ -1132,7 +1132,7 @@ struct PackedDecodeExecutorImpl {
 PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,
                                            size_t maximum_prefill_tokens,
                                            PhysicalPagedKvCache* paged_kv,
-                                           const ModelShape& shape)
+                                           const RuntimeTopology& shape)
     : impl_(std::make_unique<PackedDecodeExecutorImpl>(
           maximum_sessions, maximum_prefill_tokens, paged_kv, shape)) {}
 

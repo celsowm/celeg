@@ -12,7 +12,7 @@ namespace celeg {
 SessionStore::SessionState Model::Impl::make_session_state() {
     SessionStore::SessionState state{
         .shape = shape_, .max_context = max_context_, .position = position_,
-        .kv_cache_mode = options_.kv_cache_mode, .variant = variant_,
+        .kv_cache_mode = options_.kv_cache_mode, .model_identity = model_identity_,
         .stream = stream_.get(), .seen_tokens = &seen_tokens_,
         .logits = &logits_, .rng_state = &rng_state_};
     state.layer_buffers.reserve(layers_.size());
@@ -154,12 +154,12 @@ void SessionStore::save(const std::string& path, SessionState& state) {
         CELEG_CUDA(cudaMemcpy(&header.rng_state, state.rng_state->data(),
                             sizeof(header.rng_state), cudaMemcpyDeviceToHost));
     }
-    if (state.variant != nullptr) {
-        const std::string_view id = state.variant->id();
+    if (!state.model_identity.empty()) {
+        const std::string_view id = state.model_identity;
         const size_t copy_size =
-            std::min(id.size(), sizeof(header.variant_id) - 1);
-        std::memcpy(header.variant_id, id.data(), copy_size);
-        header.variant_id[copy_size] = '\0';
+            std::min(id.size(), sizeof(header.model_identity) - 1);
+        std::memcpy(header.model_identity, id.data(), copy_size);
+        header.model_identity[copy_size] = '\0';
     }
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -212,7 +212,7 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     read_scalar(in, header);
     if (header.magic != kMagic || header.version != kVersion) {
         throw std::runtime_error(
-            "unsupported session format; this build requires session v2 files");
+            "unsupported session format; this build requires session v3 files");
     }
     const uint32_t expected_kv =
         state.kv_cache_mode == KvCacheMode::Int8 ? 1U : 0U;
@@ -227,14 +227,14 @@ void SessionStore::load(const std::string& path, SessionState& state) {
         header.attention_layers != state.shape.attention_layer_count) {
         throw std::runtime_error("session dimensions are incompatible with this model");
     }
-    if (state.variant != nullptr) {
-        const std::string_view id = state.variant->id();
+    if (!state.model_identity.empty()) {
+        const std::string_view id = state.model_identity;
         const std::string_view stored(
-            header.variant_id,
-            strnlen(header.variant_id, sizeof(header.variant_id)));
+            header.model_identity,
+            strnlen(header.model_identity, sizeof(header.model_identity)));
         if (!stored.empty() && id != stored) {
             throw std::runtime_error(
-                "session was written for a different model variant: " +
+                "session was written for a different resolved model: " +
                 std::string(stored));
         }
     }

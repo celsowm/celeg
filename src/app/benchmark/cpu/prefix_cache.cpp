@@ -1,4 +1,3 @@
-#include "celeg/model/config/config.hpp"
 #include "celeg/backend/cpu/concurrent.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/text/tokenizer.hpp"
@@ -24,7 +23,7 @@ int main(int argc, char** argv) {
         if (repeats < 2) throw std::invalid_argument("repeats must be at least two");
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_dir);
-        const auto& config = bootstrap.config;
+        const auto& topology = bootstrap.model.topology;
         celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
         const auto base = tokenizer.encode(
             tokenizer.format_chat(
@@ -42,12 +41,12 @@ int main(int argc, char** argv) {
         engine_options.prefix_cache = true;
         celeg::CpuConcurrentEngine engine(
             (model_dir / "model.safetensors").string(),
-            std::min(config.max_position_embeddings,
+            std::min(topology.max_position_embeddings,
                      static_cast<int>(longer.size()) + 16),
             model_options, engine_options);
         celeg::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = 1;
-        request_options.eos_token = config.eos_token_id;
+        request_options.eos_token = bootstrap.model.definition.tokens.eos;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
         for (int run = 0; run < repeats; ++run) {

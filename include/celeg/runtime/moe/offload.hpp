@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 
 #include <cstddef>
@@ -213,14 +213,14 @@ struct ExpertOffloadOptions {
 //   gate_up : 2 * moe_intermediate * hidden
 //   down    :     hidden * moe_intermediate
 // times sizeof(__nv_bfloat16) == 2.
-std::size_t bytes_per_expert_bf16(const ModelShape& shape);
+std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape);
 
 // Number of MoE layers in the topology (layers at or beyond num_dense_layers).
-int moe_layer_count(const ModelShape& shape);
+int moe_layer_count(const RuntimeTopology& shape);
 
 // BF16 KV-cache bytes required for `context_tokens` tokens across all
 // attention layers.
-std::size_t kv_cache_bytes(const ModelShape& shape, int context_tokens);
+std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens);
 
 // The resolved offload layout. All byte fields are exact multiples of the
 // per-expert / per-layer sizes so the caller can allocate directly.
@@ -254,7 +254,7 @@ struct ExpertOffloadPlan {
 // `workspace_bytes` are supplied by the caller (from cudaMemGetInfo and the
 // weight arena) so the planner itself is pure and testable.
 struct ExpertOffloadPlanInputs {
-    ModelShape shape;
+    RuntimeTopology shape;
     ExpertOffloadOptions options;
     std::size_t gpu_free_bytes = 0;
     std::size_t non_expert_weight_bytes = 0;

@@ -2,7 +2,7 @@
 #include "celeg/runtime/moe.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/detail/model/types.hpp"
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -205,7 +205,7 @@ std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
     moe.gate_up_ptrs = cache.gate_up_ptrs();
     moe.down_ptrs = cache.down_ptrs();
 
-    celeg::ModelShape shape;
+    celeg::RuntimeTopology shape;
     shape.num_experts = p.experts;
     shape.experts_per_token = p.K;
     shape.moe_intermediate = p.inter;

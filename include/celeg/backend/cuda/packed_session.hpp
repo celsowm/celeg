@@ -2,7 +2,7 @@
 
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/model/execution/runtime_types.hpp"
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/model/weights/layout.hpp"
 #include "celeg/detail/model/types.hpp"
 
@@ -34,7 +34,7 @@ struct PackedSessionContext {
     bool* active_segmented_attention_state = nullptr;
     const ModelOptions* options_state = nullptr;
     const GenerationConfig* generation_state = nullptr;
-    const ModelShape* shape_state = nullptr;
+    const RuntimeTopology* shape_state = nullptr;
     std::shared_ptr<SharedModelWeights> weights_state;
 
     DeviceBuffer<__nv_bfloat16>* logits_state = nullptr;
@@ -71,7 +71,7 @@ struct PackedSessionContext {
     }
     const ModelOptions& options() const { return *options_state; }
     const GenerationConfig& generation() const { return *generation_state; }
-    const ModelShape& shape() const { return *shape_state; }
+    const RuntimeTopology& shape() const { return *shape_state; }
     const std::shared_ptr<SharedModelWeights>& weights() const {
         return weights_state;
     }

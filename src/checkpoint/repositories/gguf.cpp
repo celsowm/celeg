@@ -1,4 +1,3 @@
-#include "celeg/model/config/config.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/repositories/gguf.hpp"
 
@@ -9,139 +8,6 @@
 #include <vector>
 
 namespace celeg {
-
-// Derives a ModelConfig from an LFM2 GGUF checkpoint's metadata. GGUF stores the
-// architecture hyper-parameters under the `lfm2.*` and `general.*` key spaces,
-// and encodes the per-layer conv/attention pattern in the
-// `lfm2.attention.head_count_kv` array (0 -> convolution, non-zero -> attention).
-ModelConfig ModelConfig::from_gguf(const GgufFile& gguf) {
-    const std::string arch = gguf.str("general.architecture");
-    if (arch != "lfm2" && arch != "lfm2moe") {
-        throw std::runtime_error("unsupported GGUF architecture: " + arch);
-    }
-
-    ModelConfig config;
-    config.is_gguf = true;
-    config.dtype = "gguf";
-
-    const bool is_moe = (arch == "lfm2moe");
-    const std::string prefix = is_moe ? "lfm2moe" : "lfm2";
-
-    if (is_moe) {
-        config.architecture = ArchitectureKind::MoeLfm2;
-        config.model_type = "lfm2_moe";
-    } else {
-        config.architecture = ArchitectureKind::DenseLfm2;
-        config.model_type = "lfm2";
-    }
-
-    config.hidden_size = static_cast<int>(gguf.u32(prefix + ".embedding_length"));
-    config.intermediate_size = static_cast<int>(gguf.u32(prefix + ".feed_forward_length"));
-    config.num_hidden_layers = static_cast<int>(gguf.u32(prefix + ".block_count"));
-    config.num_attention_heads = static_cast<int>(gguf.u32(prefix + ".attention.head_count"));
-    config.vocab_size = static_cast<int>(
-        gguf.has(prefix + ".vocab_size") ? gguf.u32(prefix + ".vocab_size")
-                                         : gguf.u32("llama.vocab_size"));
-    config.conv_cache = static_cast<int>(gguf.u32(prefix + ".shortconv.l_cache"));
-    config.conv_dim = config.hidden_size;
-    config.max_position_embeddings =
-        static_cast<int>(gguf.u32(prefix + ".context_length"));
-    config.norm_eps = gguf.f32(prefix + ".attention.layer_norm_rms_epsilon");
-    config.rope_theta = gguf.f32(prefix + ".rope.freq_base");
-    config.rope_type = "default";
-    config.conv_bias = false;
-    config.use_pos_enc = true;
-    config.tie_word_embeddings = true;  // LFM2 ties the LM head to the embedding.
-    config.repo_hint = gguf.str_or("general.name", "");
-
-    // Per-layer head_count_kv: 0 => convolution layer, else full attention.
-    const GgufValue& kv_heads = gguf.value(prefix + ".attention.head_count_kv");
-    if (kv_heads.kind != GgufValueKind::Array) {
-        throw std::runtime_error(prefix + ".attention.head_count_kv is not an array");
-    }
-    const std::vector<int64_t>& per_layer = kv_heads.array_integers;
-    if (static_cast<int>(per_layer.size()) != config.num_hidden_layers) {
-        throw std::runtime_error(
-            prefix + ".attention.head_count_kv length does not match block_count");
-    }
-    int kv_heads_value = 0;
-    config.layer_types.reserve(per_layer.size());
-    for (int64_t v : per_layer) {
-        if (v == 0) {
-            config.layer_types.push_back(LayerType::Convolution);
-        } else {
-            config.layer_types.push_back(LayerType::FullAttention);
-            if (kv_heads_value == 0) kv_heads_value = static_cast<int>(v);
-            else if (kv_heads_value != static_cast<int>(v)) {
-                throw std::runtime_error(
-                    "heterogeneous KV head counts are not supported");
-            }
-        }
-    }
-    if (kv_heads_value == 0) {
-        throw std::runtime_error("GGUF checkpoint has no attention layers");
-    }
-    config.num_key_value_heads = kv_heads_value;
-
-    // head_dim: prefer explicit key, else derive from hidden / heads.
-    if (gguf.has(prefix + ".attention.key_length")) {
-        config.head_dim = static_cast<int>(gguf.u32(prefix + ".attention.key_length"));
-    } else {
-        if (config.num_attention_heads == 0 ||
-            config.hidden_size % config.num_attention_heads != 0) {
-            throw std::runtime_error(
-                "hidden_size not divisible by num_attention_heads");
-        }
-        config.head_dim = config.hidden_size / config.num_attention_heads;
-    }
-
-    // GGUF omits explicit special-token config for the model; take the tokenizer
-    // ids so validate()'s bounds checks pass. These mirror LFM2.5 defaults.
-    config.bos_token_id = gguf.has("tokenizer.ggml.bos_token_id")
-        ? static_cast<int>(gguf.i64("tokenizer.ggml.bos_token_id")) : 1;
-    config.eos_token_id = gguf.has("tokenizer.ggml.eos_token_id")
-        ? static_cast<int>(gguf.i64("tokenizer.ggml.eos_token_id")) : 7;
-    config.pad_token_id = gguf.has("tokenizer.ggml.padding_token_id")
-        ? static_cast<int>(gguf.i64("tokenizer.ggml.padding_token_id")) : 0;
-
-    // MoE configuration (only present in lfm2moe GGUF checkpoints).
-    if (is_moe) {
-        MoeConfig moe_cfg;
-        if (gguf.has(prefix + ".expert_count")) {
-            moe_cfg.num_experts = static_cast<int>(gguf.u32(prefix + ".expert_count"));
-        }
-        if (gguf.has(prefix + ".expert_used_count")) {
-            moe_cfg.experts_per_token = static_cast<int>(gguf.u32(prefix + ".expert_used_count"));
-        }
-        if (gguf.has(prefix + ".expert_feed_forward_length")) {
-            moe_cfg.moe_intermediate_size = static_cast<int>(gguf.u32(prefix + ".expert_feed_forward_length"));
-        }
-        if (gguf.has(prefix + ".num_dense_layers")) {
-            moe_cfg.num_dense_layers = static_cast<int>(gguf.u32(prefix + ".num_dense_layers"));
-        } else {
-            // GGUF exports omit this configuration key. Infer the dense prefix
-            // from its un-routed FFN tensors instead of treating every block as
-            // an MoE block. LFM2.5-8B-A1B has two such prefix blocks.
-            while (gguf.contains_tensor("blk." +
-                    std::to_string(moe_cfg.num_dense_layers) +
-                    ".ffn_gate.weight")) {
-                ++moe_cfg.num_dense_layers;
-            }
-        }
-        const std::string first_moe = "blk." +
-            std::to_string(moe_cfg.num_dense_layers) + ".ffn_expert_bias.weight";
-        moe_cfg.use_expert_bias = gguf.contains_tensor(first_moe);
-        moe_cfg.normalize_topk = true;
-        moe_cfg.routed_scaling_factor = 1.0f;
-        moe_cfg.intermediate_size = config.intermediate_size;
-        config.moe = moe_cfg;
-        config.validate();
-        return config;
-    }
-
-    config.validate();
-    return config;
-}
 
 // ---------------------------------------------------------------------------
 // GgufRepository.
@@ -220,6 +86,7 @@ GgufRepository::GgufRepository(std::shared_ptr<GgufFile> gguf)
 std::string GgufRepository::translate(std::string_view hf_name) const {
     if (hf_name == "model.embed_tokens.weight") return "token_embd.weight";
     if (hf_name == "model.embedding_norm.weight") return "token_embd_norm.weight";
+    if (hf_name == "model.norm.weight") return "output_norm.weight";
     if (hf_name == "model.lm_head.weight") return "output.weight";
 
     int layer = 0;
@@ -227,7 +94,9 @@ std::string GgufRepository::translate(std::string_view hf_name) const {
     if (!split_layer(hf_name, layer, s)) return {};
 
     if (s == "operator_norm.weight") return blk(layer, "attn_norm.weight");
+    if (s == "input_layernorm.weight") return blk(layer, "attn_norm.weight");
     if (s == "ffn_norm.weight") return blk(layer, "ffn_norm.weight");
+    if (s == "post_attention_layernorm.weight") return blk(layer, "ffn_norm.weight");
 
     // Dense feed-forward.
     if (s == "feed_forward.w1.weight") return blk(layer, "ffn_gate.weight");
@@ -239,8 +108,15 @@ std::string GgufRepository::translate(std::string_view hf_name) const {
     if (s == "self_attn.k_proj.weight") return blk(layer, "attn_k.weight");
     if (s == "self_attn.v_proj.weight") return blk(layer, "attn_v.weight");
     if (s == "self_attn.out_proj.weight") return blk(layer, "attn_output.weight");
+    if (s == "self_attn.o_proj.weight") return blk(layer, "attn_output.weight");
     if (s == "self_attn.q_layernorm.weight") return blk(layer, "attn_q_norm.weight");
     if (s == "self_attn.k_layernorm.weight") return blk(layer, "attn_k_norm.weight");
+
+    // Granite names its MLP projections gate/up/down; GGUF stores the same
+    // semantic roles using the common ffn_* block names.
+    if (s == "mlp.gate_proj.weight") return blk(layer, "ffn_gate.weight");
+    if (s == "mlp.up_proj.weight") return blk(layer, "ffn_up.weight");
+    if (s == "mlp.down_proj.weight") return blk(layer, "ffn_down.weight");
 
     // Short convolution.
     if (s == "conv.in_proj.weight") return blk(layer, "shortconv.in_proj.weight");

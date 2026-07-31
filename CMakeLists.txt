@@ -15,28 +15,6 @@ option(CELEG_FAST_MATH "Enable CUDA --use_fast_math" OFF)
 option(CELEG_DEBUG_SYNC "Synchronize after every CUDA kernel" OFF)
 option(CELEG_RUN_CUDA_TESTS "Register CUDA runtime tests with CTest" ON)
 option(CELEG_ENABLE_SERVE "Build celeg-serve and its OpenAI-compatible protocol layer (fetches Glaze)" ON)
-set(CELEG_VARIANTS "230m;1.2b-instruct;1.2b-thinking;8b-a1b" CACHE STRING
-    "Semicolon-separated list of model variants to compile in. Available: 230m, 1.2b-instruct, 1.2b-thinking, 8b-a1b")
-
-list(REMOVE_DUPLICATES CELEG_VARIANTS)
-foreach(variant IN LISTS CELEG_VARIANTS)
-    if(variant STREQUAL "230m")
-        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-230M")
-    elseif(variant STREQUAL "1.2b-instruct")
-        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-1.2B-Instruct")
-    elseif(variant STREQUAL "1.2b-thinking")
-        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-1.2B-Thinking")
-    elseif(variant STREQUAL "8b-a1b")
-        message(STATUS "LFM variant enabled: LiquidAI/LFM2.5-8B-A1B (MoE)")
-    else()
-        message(FATAL_ERROR "Unknown LFM variant: ${variant}. Valid: 230m, 1.2b-instruct, 1.2b-thinking, 8b-a1b")
-    endif()
-endforeach()
-# Expose the variant list as a space-separated string for any tooling that
-# wants to read it at compile time. Semicolons are avoided so MSVC does not
-# split the value on the command line.
-string(REPLACE ";" " " CELEG_VARIANTS_STR "${CELEG_VARIANTS}")
-add_compile_definitions(CELEG_VARIANTS="${CELEG_VARIANTS_STR}")
 
 find_package(Threads REQUIRED)
 
@@ -396,15 +374,16 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/checkpoint/formats/gguf.hpp
     include/celeg/checkpoint/formats/json.hpp
     include/celeg/checkpoint/formats/safetensors.hpp
+    include/celeg/checkpoint/metadata.hpp
     include/celeg/checkpoint/gguf_blocks.hpp
     include/celeg/checkpoint/repositories/gguf.hpp
     include/celeg/checkpoint/repositories/safetensors.hpp
     include/celeg/checkpoint/tensor_names.hpp
-    include/celeg/model/config/config.hpp
-    include/celeg/model/config/shape.hpp
-    include/celeg/model/config/variant.hpp
     include/celeg/model/definition.hpp
     include/celeg/model/architecture.hpp
+    include/celeg/model/graph.hpp
+    include/celeg/model/profiles.hpp
+    include/celeg/model/resolved.hpp
     include/celeg/model/execution/plan.hpp
     include/celeg/model/execution/runtime_types.hpp
     include/celeg/model/session.hpp
@@ -434,6 +413,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/serve/protocol/openapi.hpp
     include/celeg/serve/types.hpp
     include/celeg/text/chat_template.hpp
+    include/celeg/text/chat_profile.hpp
     include/celeg/text/tokenizer.hpp)
 foreach(_celeg_public_header IN LISTS CELEG_PUBLIC_HEADERS)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_celeg_public_header}")
@@ -456,19 +436,13 @@ if(CELEG_BUILD_TESTS)
     add_executable(json_test tests/json_test.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(json_test PRIVATE include)
     add_test(NAME json_test COMMAND json_test)
-    add_executable(config_test tests/config_test.cpp src/model/config/config.cpp src/model/config/shape.cpp src/model/config/variant.cpp src/checkpoint/formats/json.cpp)
-    target_include_directories(config_test PRIVATE include)
-    add_test(NAME config_test COMMAND config_test)
-    add_executable(model_variant_test tests/model_variant_test.cpp src/model/config/shape.cpp src/model/config/variant.cpp)
-    target_include_directories(model_variant_test PRIVATE include)
-    add_test(NAME model_variant_test COMMAND model_variant_test)
-    add_executable(model_definition_test tests/model_definition_test.cpp
-        src/model/definition.cpp src/model/architecture.cpp
-        src/model/weights/roles.cpp
-        src/model/config/config.cpp src/model/config/shape.cpp
-        src/model/config/variant.cpp src/checkpoint/formats/json.cpp)
-    target_include_directories(model_definition_test PRIVATE include)
-    add_test(NAME model_definition_test COMMAND model_definition_test)
+    add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/metadata.cpp
+        src/model/definition.cpp src/model/resolved.cpp src/model/architecture.cpp
+        src/models/lfm2/architecture.cpp src/models/granite/architecture.cpp
+        src/model/weights/roles.cpp)
+    target_include_directories(architecture_resolution_test PRIVATE include)
+    add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
     add_executable(chat_template_test tests/chat_template_test.cpp src/text/chat_template.cpp)
     target_include_directories(chat_template_test PRIVATE include)
     add_test(NAME chat_template_test COMMAND chat_template_test)

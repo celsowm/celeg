@@ -36,9 +36,8 @@ std::string tensor_name(const ITensorNamingPolicy& policy, TensorRole role,
 void Model::Impl::load_checkpoint_weights(
     const std::string& model_path,
     const detail::ModelBootstrap& bootstrap) {
-    const bool is_gguf = bootstrap.is_gguf;
+    const bool is_gguf = bootstrap.is_gguf();
     const std::shared_ptr<GgufFile> gguf_file = bootstrap.gguf_file;
-    const ModelConfig& config = bootstrap.config;
     // Immutable device weights are shared across all request lanes that use
     // the same checkpoint, device and quantization mode. The WeightLoader
     // owns the process-wide cache and the SafeTensor I/O + quantization;
@@ -88,7 +87,7 @@ void Model::Impl::load_checkpoint_weights(
     // the embedding table, so we fall back to it instead of erroring.
     const std::string lm_head_name =
         tensor_name(*tensor_naming_, TensorRole::LanguageModelHead);
-    if (!config.tie_word_embeddings && repo.contains(lm_head_name)) {
+    if (!model_.capabilities.tied_embeddings && repo.contains(lm_head_name)) {
         lm_head_ = weight_loader_->load_linear_weight(
             repo, lm_head_name, {shape_.vocab_size, shape_.hidden});
     }
@@ -99,7 +98,7 @@ void Model::Impl::load_checkpoint_weights(
     // weight footprint analytically from the topology so the planner can decide
     // how many experts fit in the GPU cache per layer.
     if (options_.expert_offload.enabled() &&
-        shape_.architecture == ArchitectureKind::MoeLfm2) {
+        shape_.num_experts > 0) {
         size_t free_bytes = 0, total_bytes = 0;
         CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
         const int moe_layers = moe_layer_count(shape_);

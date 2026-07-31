@@ -3,15 +3,16 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp
     src/checkpoint/formats/gguf.cpp
+    src/checkpoint/metadata.cpp
     src/checkpoint/repositories/safetensors.cpp
     src/checkpoint/repositories/gguf.cpp
     src/checkpoint/downloader.cpp
     src/checkpoint/bootstrap.cpp
-    src/model/config/config.cpp
-    src/model/config/shape.cpp
-    src/model/config/variant.cpp
     src/model/definition.cpp
     src/model/architecture.cpp
+    src/model/resolved.cpp
+    src/models/lfm2/architecture.cpp
+    src/models/granite/architecture.cpp
     src/model/execution/runtime_types.cpp
     src/model/execution/plan.cpp
     src/model/weights/quantization.cpp

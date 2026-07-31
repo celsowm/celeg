@@ -64,7 +64,7 @@ const char* policy_name(ExpertCachePolicy policy) {
 
 } // namespace
 
-std::size_t bytes_per_expert_bf16(const ModelShape& shape) {
+std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape) {
     const std::size_t gate_up = static_cast<std::size_t>(2) *
         static_cast<std::size_t>(shape.moe_intermediate) *
         static_cast<std::size_t>(shape.hidden);
@@ -73,12 +73,12 @@ std::size_t bytes_per_expert_bf16(const ModelShape& shape) {
     return (gate_up + down) * kBf16Bytes;
 }
 
-int moe_layer_count(const ModelShape& shape) {
-    if (shape.architecture != ArchitectureKind::MoeLfm2) return 0;
+int moe_layer_count(const RuntimeTopology& shape) {
+    if (shape.num_experts <= 0) return 0;
     return std::max(0, shape.num_hidden_layers - shape.num_dense_layers);
 }
 
-std::size_t kv_cache_bytes(const ModelShape& shape, int context_tokens) {
+std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens) {
     if (context_tokens <= 0) return 0;
     const std::size_t per_token =
         static_cast<std::size_t>(2) *
@@ -91,7 +91,7 @@ std::size_t kv_cache_bytes(const ModelShape& shape, int context_tokens) {
 }
 
 ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
-    const ModelShape& shape = inputs.shape;
+    const RuntimeTopology& shape = inputs.shape;
     const ExpertOffloadOptions& options = inputs.options;
 
     ExpertOffloadPlan plan;

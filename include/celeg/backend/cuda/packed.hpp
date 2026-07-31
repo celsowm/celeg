@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/config/shape.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/packed_session.hpp"
 
 #include <cstddef>
@@ -57,7 +57,7 @@ public:
     PackedDecodeExecutor(size_t maximum_sessions,
                          size_t maximum_prefill_tokens,
                          PhysicalPagedKvCache* paged_kv,
-                         const ModelShape& shape);
+                         const RuntimeTopology& shape);
     ~PackedDecodeExecutor();
 
     PackedDecodeExecutor(const PackedDecodeExecutor&) = delete;

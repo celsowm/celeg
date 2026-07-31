@@ -13,24 +13,22 @@ installed public header manifest. The CUDA model implementation owns device
 allocation and forwards compact operation contexts to the packed executor;
 public `Model` does not expose that executor or its context type.
 
-## Architecture providers
+## Architecture catalog
 
-`IArchitectureProvider` converts validated checkpoint metadata into a common
-`ModelDefinition`. Providers own architecture detection and tensor naming;
-operators and schedulers consume common dimensions and operation arguments.
-`ArchitectureRegistry` is the single selection point. LFM2 and Granite are
-registered providers. Granite supplies validated configuration, standard
-Safetensors tensor naming, explicit numerical modifiers, and dense CPU/CUDA
-execution through the same backend-neutral operator contracts; it does not add
-an architecture switch to backend kernels.
+The composition root reads a `CheckpointMetadata`/`CheckpointView`, selects one
+entry from the frozen `ArchitectureCatalog`, and asks its `IArchitecture` to
+produce a complete `ResolvedModel`. Resolution owns detection, profile patches,
+topology validation, `ModelGraph` construction, semantic `WeightPlan` creation,
+tensor bindings, chat profile, and the model fingerprint. CPU and CUDA receive
+only that resolved data and compile the graph into executable layer programs.
 
 ## Weight pipeline
 
 `IWeightRepository` exposes source tensors. Optional location and random-access
-operations are separate capabilities. `TensorResolver` maps semantic
-`TensorRole` values to source names and validates shapes before the CUDA
-`WeightLoader` materializes storage. Source encoding and runtime encoding are
-therefore decisions at different boundaries.
+operations are separate capabilities. Architecture modules map semantic
+`TensorRole` values to source names and produce a shape-checked `WeightPlan`.
+CPU/CUDA then split planning, materialization, expert residency, caching, and
+offload without rediscovering the checkpoint architecture.
 
 ## Session lifecycle
 

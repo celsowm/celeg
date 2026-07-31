@@ -52,7 +52,7 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
         }
         const size_t batch = sessions.size();
         SharedWeights& shared = *sessions.front()->shared;
-        const ModelShape& shape = shared.shape;
+        const RuntimeTopology& shape = shared.shape;
         ensure(batch, shape);
 
         for (size_t row = 0; row < batch; ++row) {

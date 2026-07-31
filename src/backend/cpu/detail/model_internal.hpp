@@ -6,8 +6,7 @@
 #include "celeg/backend/cpu/prefix_cache.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
+#include "celeg/model/resolved.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <filesystem>
@@ -23,7 +22,7 @@ namespace celeg {
 // Capacity-managed activation storage shared by all CPU execution modes.
 // The executor chooses the row count; buffers are retained between calls.
 struct CpuExecutionWorkspace {
-    void ensure(size_t rows, const ModelShape& shape) {
+    void ensure(size_t rows, const RuntimeTopology& shape) {
         hidden.resize(rows * shape.hidden);
         residual.resize(rows * shape.hidden);
         normed.resize(rows * shape.hidden);
@@ -135,8 +134,8 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
         std::filesystem::path pack_file;
         std::string source_id;
         bool loaded_pack = false;
-        ModelShape shape;
-        const IModelVariant* variant = nullptr;
+        RuntimeTopology shape;
+        std::string model_identity;
         const ITensorNamingPolicy* tensor_naming = nullptr;
         bool tie_word_embeddings = true;
         CpuLinearWeight embedding;

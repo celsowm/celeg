@@ -7,15 +7,14 @@ namespace {
 // Reference LFM2.5-8B-A1B MoE topology (config.json):
 //   hidden 2048, moe_intermediate 1792, 22 MoE layers, 32 experts,
 //   4 experts/token, 6 attention layers, 8 KV heads, head_dim 64.
-celeg::ModelShape make_8b_a1b_shape() {
-    celeg::ModelShape shape;
+celeg::RuntimeTopology make_8b_a1b_shape() {
+    celeg::RuntimeTopology shape;
     shape.hidden = 2048;
     shape.num_hidden_layers = 24;
     shape.num_dense_layers = 2;
     shape.num_attention_heads = 32;
     shape.num_key_value_heads = 8;
     shape.head_dim = 64;
-    shape.architecture = celeg::ArchitectureKind::MoeLfm2;
     shape.moe_intermediate = 1792;
     shape.num_experts = 32;
     shape.experts_per_token = 4;
@@ -26,7 +25,7 @@ celeg::ModelShape make_8b_a1b_shape() {
 }
 
 void test_byte_helpers() {
-    const celeg::ModelShape shape = make_8b_a1b_shape();
+    const celeg::RuntimeTopology shape = make_8b_a1b_shape();
     // 21 MiB per expert per the proposal.
     const std::size_t per_expert = celeg::bytes_per_expert_bf16(shape);
     CELEG_TEST_CHECK(per_expert == 3ull * 1792ull * 2048ull * 2ull);

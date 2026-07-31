@@ -36,12 +36,12 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
         for (float& value : hidden) value *= shared->shape.embedding_multiplier;
     }
     for (size_t index = 0; index < shared->layers.size(); ++index) {
-        const WeightLayer& layer_variant = shared->layers[index];
+        const WeightLayer& layer_program = shared->layers[index];
         const CommonWeights& common = common_weights(index);
         std::copy(hidden.begin(), hidden.end(), residual.begin());
         cpu_rmsnorm(hidden.data(), common.operator_norm.data(), normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
-        if (const auto* attention = attention_operator(layer_variant)) {
+        if (const auto* attention = attention_operator(layer_program)) {
             shared->linear.gemv(attention->qkv, normed.data(), qkv.data());
             float* q = qkv.data();
             float* k = q + shared->shape.q_width;
@@ -67,7 +67,7 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
             run_attention(state, q, op_output.data(), position_value + 1);
             shared->linear.gemv(attention->out, op_output.data(), hidden.data());
         } else {
-            const auto* convolution = convolution_operator(layer_variant);
+        const auto* convolution = convolution_operator(layer_program);
             if (!convolution) throw std::logic_error("CPU layer has no operator");
             ConvolutionState& state = convolution_state(index);
             shared->linear.gemv(convolution->in, normed.data(), conv_projected.data());
@@ -84,7 +84,7 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
         cpu_rmsnorm(hidden.data(), common.ffn_norm.data(), normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
 
-        if (const auto* moe = std::get_if<MoeWeights>(&layer_variant)) {
+        if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
             // MoE FFN: router -> top-K expert selection -> per-expert FFN GEMVs.
             const int E = moe->num_experts;
             const int K = moe->experts_per_token;

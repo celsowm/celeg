@@ -3,8 +3,7 @@
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/model/reference.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
+#include "celeg/model/resolved.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -22,29 +21,11 @@ __nv_bfloat16 to_bf16(float value) {
     return __float2bfloat16(value);
 }
 
-// Returns the canonical shapes for every registered model variant. The
-// paged-KV tests run against each entry so a regression that affects only
-// one variant (e.g. a different num_hidden_layers or kv_width) is caught.
-// Adding a new variant to ModelVariantRegistry automatically extends the
-// test matrix without editing this file (Open/Closed Principle).
-std::vector<celeg::ModelShape> registered_variant_shapes() {
-    celeg::register_builtin_variants();
-    std::vector<celeg::ModelShape> shapes;
-    for (const celeg::IModelVariant* variant :
-         []() -> std::vector<const celeg::IModelVariant*> {
-         std::vector<const celeg::IModelVariant*> out;
-         for (const auto id : celeg::ModelVariantRegistry::instance().ids()) {
-             const auto* v = celeg::ModelVariantRegistry::instance().find(id);
-             if (v != nullptr) out.push_back(v);
-         }
-         return out;
-     }()) {
-        // Rebuild a ModelShape from the variant's matching topology by
-        // running resolve_shape on the canonical shape the variant
-        // advertises. We approximate "canonical" by constructing from the
-        // known published configs; this keeps the test self-contained.
-        celeg::ModelShape shape;
-        if (variant->id() == "lfm2.5-230m") {
+std::vector<celeg::RuntimeTopology> registered_model_shapes() {
+    std::vector<celeg::RuntimeTopology> shapes;
+    for (int model = 0; model < 2; ++model) {
+        celeg::RuntimeTopology shape;
+        if (model == 0) {
             shape.hidden = 1024;
             shape.intermediate = 2560;
             shape.num_hidden_layers = 14;
@@ -70,9 +51,8 @@ std::vector<celeg::ModelShape> registered_variant_shapes() {
                 celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
                 celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
             };
-        } else if (variant->id() == "lfm2.5-1.2b-instruct" ||
-                   variant->id() == "lfm2.5-1.2b-thinking") {
-            // The Thinking and Instruct variants share the same topology.
+        } else {
+            // The Thinking and Instruct profiles share the same topology.
             shape.hidden = 2048;
             shape.intermediate = 12288;
             shape.num_hidden_layers = 16;
@@ -102,13 +82,26 @@ std::vector<celeg::ModelShape> registered_variant_shapes() {
         } else {
             continue;
         }
-        shape.compute_derived();
-        shape.validate();
-        shape = variant->resolve_shape(shape);
+        shape.mixer_kinds = shape.layer_types;
+        shape.q_width = shape.num_attention_heads * shape.head_dim;
+        shape.kv_width = shape.num_key_value_heads * shape.head_dim;
+        shape.qkv_width = shape.q_width + 2 * shape.kv_width;
+        shape.rope_pairs = shape.head_dim / 2;
+        shape.attention_layer_count = 0;
+        shape.conv_layer_count = 0;
+        for (int i = 0; i < shape.num_hidden_layers; ++i) {
+            if (shape.layer_types[static_cast<size_t>(i)] == celeg::LayerType::FullAttention) {
+                shape.attention_slot_for_layer.push_back(shape.attention_layer_count++);
+                shape.layer_for_attention_slot.push_back(i);
+            } else {
+                shape.attention_slot_for_layer.push_back(-1);
+                ++shape.conv_layer_count;
+            }
+        }
         shapes.push_back(shape);
     }
     if (shapes.empty()) {
-        std::cerr << "registered_variant_shapes: no variants registered\n";
+        std::cerr << "registered_model_shapes: no model shapes registered\n";
         std::abort();
     }
     return shapes;
@@ -1136,10 +1129,10 @@ int main() {
     }
 
     // Copy-on-write cloning duplicates all physical page storage while keeping
-    // independent reference counts. Run against every registered variant so a
+    // independent reference counts. Run against every registered model shape so a
     // regression that affects only one (e.g. different attention_layers) is
     // caught without editing this test.
-    for (const celeg::ModelShape& shape : registered_variant_shapes()) {
+    for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
         celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Bf16, shape);
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
@@ -1167,7 +1160,7 @@ int main() {
     }
 
     // Partial-page COW copies initialized token slots without transferring the unused suffix.
-    for (const celeg::ModelShape& shape : registered_variant_shapes()) {
+    for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
         constexpr int page_tokens = 4;
         celeg::PhysicalPagedKvCache cache(3, page_tokens, 8,
                                         celeg::KvCacheMode::Bf16, shape);
@@ -1198,7 +1191,7 @@ int main() {
     }
 
     // INT8 copy-on-write clones both quantized vectors and scale planes.
-    for (const celeg::ModelShape& shape : registered_variant_shapes()) {
+    for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
         celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Int8, shape);
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);

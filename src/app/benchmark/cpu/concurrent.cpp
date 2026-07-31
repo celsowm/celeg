@@ -1,4 +1,3 @@
-#include "celeg/model/config/config.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cpu/concurrent.hpp"
 #include "celeg/text/chat_template.hpp"
@@ -34,10 +33,9 @@ int main(int argc, char** argv) {
 
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_dir);
-        const celeg::ModelConfig& config = bootstrap.config;
-        const celeg::IModelVariant& variant = *bootstrap.variant;
+        const auto& topology = bootstrap.model.topology;
         celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string(),
-            celeg::make_chat_template(variant.chat_template_kind()));
+            celeg::make_chat_template(bootstrap.model.chat_profile_id));
         const std::vector<int32_t> tokens = tokenizer.encode(
             tokenizer.format_chat(
                 std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}}),
@@ -57,13 +55,13 @@ int main(int argc, char** argv) {
 
         celeg::CpuConcurrentEngine engine(
             (model_dir / "model.safetensors").string(),
-            std::min(config.max_position_embeddings,
+            std::min(topology.max_position_embeddings,
                      static_cast<int>(tokens.size()) + max_new + 8),
             model_options, engine_options);
 
         celeg::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = static_cast<size_t>(max_new);
-        request_options.eos_token = config.eos_token_id;
+        request_options.eos_token = bootstrap.model.definition.tokens.eos;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
 

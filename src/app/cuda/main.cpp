@@ -1,11 +1,8 @@
-#include "celeg/model/config/config.hpp"
 #include "celeg/text/chat_template.hpp"
 #include "celeg/checkpoint/downloader.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/model/model.hpp"
-#include "celeg/model/config/shape.hpp"
-#include "celeg/model/config/variant.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
@@ -344,13 +341,13 @@ int main(int argc, char** argv) {
 
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model);
-        const celeg::ModelConfig& config = bootstrap.config;
-        const celeg::IModelVariant& variant = *bootstrap.variant;
-        if (args.context > config.max_position_embeddings) {
+        const auto& model_definition = bootstrap.model.definition;
+        const auto& topology = bootstrap.model.topology;
+        if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds max_position_embeddings");
         }
         if (args.print_config) {
-            std::cout << config.summary() << '\n';
+            std::cout << topology.summary() << '\n';
             return 0;
         }
 
@@ -358,11 +355,11 @@ int main(int argc, char** argv) {
             is_gguf
                 ? celeg::BpeTokenizer(celeg::BpeTokenizer::FromGguf{},
                                     celeg::GgufFile(gguf_path.string()),
-                                    celeg::make_chat_template(variant.chat_template_kind()))
+                                    celeg::make_chat_template(bootstrap.model.chat_profile_id))
                 : celeg::BpeTokenizer((model / "tokenizer.json").string(),
-                                    celeg::make_chat_template(variant.chat_template_kind()));
-        if (tokenizer.bos_id() != config.bos_token_id ||
-            tokenizer.eos_id() != config.eos_token_id) {
+                                    celeg::make_chat_template(bootstrap.model.chat_profile_id));
+        if (tokenizer.bos_id() != model_definition.tokens.bos ||
+            tokenizer.eos_id() != model_definition.tokens.eos) {
             throw std::runtime_error("tokenizer special IDs disagree with config");
         }
 

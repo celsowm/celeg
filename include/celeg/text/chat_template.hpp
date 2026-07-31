@@ -1,10 +1,11 @@
 #pragma once
 
-#include "celeg/model/config/variant.hpp"
+#include "celeg/text/chat_profile.hpp"
 
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace celeg {
 
@@ -22,7 +23,7 @@ struct ChatMessage {
 };
 
 // Interface Segregation Principle: tokenizer chat formatting depends only on
-// this narrow interface, not on the variant metadata.
+// this narrow interface, not on model metadata.
 class IChatTemplate {
 public:
     virtual ~IChatTemplate() = default;
@@ -34,11 +35,11 @@ public:
     virtual ChatTemplateKind kind() const = 0;
 };
 
-// LFM2 Instruct chat template:
+// Instruct chat template:
 //   <|startoftext|>(<|im_start|>{role}\n{content}<|im_end|>\n)*
 //   [<|im_start|>assistant\n]
 // System and Developer messages both render under the "system" role tag;
-// LFM2 has no separate developer-turn syntax.
+// This profile has no separate developer-turn syntax.
 class Lfm2InstructChatTemplate final : public IChatTemplate {
 public:
     std::string format(std::span<const ChatMessage> messages,
@@ -48,5 +49,6 @@ public:
 
 // Factory: returns the chat template implementation for a given kind.
 std::unique_ptr<IChatTemplate> make_chat_template(ChatTemplateKind kind);
+std::unique_ptr<IChatTemplate> make_chat_template(std::string_view profile_id);
 
 } // namespace celeg
