@@ -1,80 +1,82 @@
-# celeg-native-cpp
+# Celeg
 
-Experimental C++20 inference runtime for LiquidAI LFM2.5 checkpoints, with
-independent NVIDIA CUDA and native CPU backends. The runtime reads the
-original `safetensors`, `config.json` and `tokenizer.json` files. Python or
-another model-serving runtime is not required.
+Celeg is a native C++20 inference runtime for LFM2, LFM2.5, and Granite
+language models. It provides independent CPU and NVIDIA CUDA backends, direct
+checkpoint loading, quantized execution, an OpenAI-compatible server, and a
+public C API.
 
-## Supported variants
+Celeg does not bundle model weights. Supply a Hugging Face repository, a local
+Safetensors checkpoint directory, or a local GGUF file.
 
-| Variant id              | HuggingFace repo                       | Hidden | Layers | Q heads | KV heads | Head dim | Vocab  |
-|-------------------------|----------------------------------------|-------:|-------:|--------:|---------:|---------:|-------:|
-| `lfm2.5-230m`           | `LiquidAI/LFM2.5-230M`                 |   1024 |     14 |      16 |        8 |       64 |  65536 |
-| `lfm2.5-1.2b-instruct`  | `LiquidAI/LFM2.5-1.2B-Instruct`        |   2048 |     16 |      32 |        8 |       64 |  65536 |
-| `lfm2.5-1.2b-thinking`  | `LiquidAI/LFM2.5-1.2B-Thinking`        |   2048 |     16 |      32 |        8 |       64 |  65536 |
+## Support matrix
 
-Variants are selected at runtime from the checkpoint's `config.json` through
-`celeg::ModelVariantRegistry`. Adding a new variant does not require editing the
-kernels: register a new `IModelVariant` subclass and the runtime will pick it
-up automatically (Open/Closed Principle).
+| Architecture | Safetensors | GGUF | CPU | CUDA |
+| --- | :---: | :---: | :---: | :---: |
+| LFM2/LFM2.5 dense | Yes | Yes | Yes | Yes |
+| LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes |
+| Granite dense | Yes | No | Yes | Yes |
 
-## v0.0.21: multi-variant support
+GGUF loading currently recognizes the LFM2 and LFM2-MoE metadata namespaces
+(`lfm2.*` and `lfm2moe.*`). Granite GGUF files are not supported by the
+current GGUF loader.
 
-The runtime is no longer specialized for the 230M checkpoint. The major
-refactor is the introduction of `celeg::ModelShape`, a runtime topology
-descriptor that replaces the former `CelegConfig` constexpr struct. Every buffer
-size and kernel call now reads dimensions from `ModelShape` rather than from
-compile-time constants, so the same binary can execute either the 230M or the
-1.2B-Instruct checkpoint.
+## Supported LFM checkpoints
 
-Additional changes:
+| Variant | Hugging Face repository |
+| --- | --- |
+| LFM2.5 230M | `LiquidAI/LFM2.5-230M` |
+| LFM2.5 1.2B Instruct | `LiquidAI/LFM2.5-1.2B-Instruct` |
+| LFM2.5 1.2B Thinking | `LiquidAI/LFM2.5-1.2B-Thinking` |
+| LFM2.5 8B-A1B | `LiquidAI/LFM2.5-8B-A1B` |
+| LFM2 8B-A1B | `LiquidAI/LFM2-8B-A1B` |
 
-- `IModelVariant` / `ModelVariantRegistry` for variant discovery and selection;
-- `IChatTemplate` interface with the LFM2 Instruct template selected per
-  variant by the tokenizer;
-- `PhysicalPagedKvCache` no longer hard-codes 6 attention layers; it accepts
-  the variant's attention-layer count and slot table at construction;
-- session file header bumped to v2 (`LFMSESS2`) with a variant id field; old
-  v1 session files are rejected cleanly;
-- CPU C API v6 — the legacy v1-v4 entry points were removed (no retrocompat
-  surface is maintained in this release);
-- CUDA C API gains `celeg_model_vocab_size`;
-- CMake `CELEG_VARIANTS` option lists which variants the build advertises
-  (default: `230m;1.2b-instruct;1.2b-thinking`).
+Granite checkpoints are selected from their `config.json`. The runtime
+expects the architecture metadata to identify Granite with
+`model_type: "granite"`.
 
-The CUDA backend continues to provide quantized weights, paged KV, prefix
-reuse, ragged packed prefill, packed decode, continuous scheduling, CUDA
-Graphs and cuBLAS/cuBLASLt. When `nvcc` is unavailable, CMake builds only the
-CPU targets.
+## Requirements
 
-## Portable build and verification
+For CPU builds:
 
-The standard developer entrypoint works from Windows, Linux and agent
-harnesses. It discovers Visual Studio, CUDA, the GPU architecture, runtime
-libraries and cached checkpoints without machine-specific paths:
+- CMake 3.24 or newer.
+- A C++20 compiler.
+- Python 3 for the developer helper.
+
+For CUDA builds, add a compatible NVIDIA CUDA Toolkit and GPU. CUDA is
+optional; the CPU backend can be built without it.
+
+The repository is developed and tested on Windows and Linux. On Windows,
+executables have an `.exe` suffix.
+
+## Build and verify
+
+The portable developer entrypoint discovers the available compiler, CUDA
+toolkit, GPU architecture, and runtime dependencies:
 
 ```text
 python scripts/dev.py doctor
-python scripts/dev.py verify
-```
-
-`auto` uses CUDA when a compatible toolkit and GPU architecture are available,
-otherwise it builds the CPU backend. Select a backend explicitly when required:
-
-```text
 python scripts/dev.py verify --backend cpu
 python scripts/dev.py verify --backend cuda
-python scripts/dev.py doctor --backend cuda --json
 ```
 
-Builds default to `RelWithDebInfo` under
-`out/<platform>-<backend>-relwithdebinfo`. Common overrides include
-`--build-type Release`, `--arch 86`, `--jobs 8` and `--build-dir PATH`.
-`build`, `test`, `smoke` and `verify` always perform a fresh CMake configure so
-an old cache cannot retain a different compiler or CUDA toolkit.
+Use `--backend auto` to select CUDA when available and CPU otherwise. Other
+useful options are `--build-type Release`, `--arch 86`, `--jobs 8`, and
+`--build-dir PATH`.
 
-For IDEs and direct CMake use, equivalent CPU/CUDA Release and RelWithDebInfo
-presets are available:
+The helper supports these commands:
+
+```text
+python scripts/dev.py doctor
+python scripts/dev.py build --backend cpu
+python scripts/dev.py test --backend cpu
+python scripts/dev.py smoke --backend cuda
+python scripts/dev.py verify --backend cpu
+```
+
+`verify` performs a fresh configure, build, and test run. Build directories are
+written under `out/` by default.
+
+For direct CMake builds, use the checked-in presets:
 
 ```text
 cmake --preset cpu-relwithdebinfo
@@ -82,82 +84,188 @@ cmake --build --preset cpu-relwithdebinfo
 ctest --preset cpu-relwithdebinfo
 ```
 
-Standalone execution (230M):
+CUDA presets are named `cuda-release` and `cuda-relwithdebinfo`.
 
-```bash
-./out/linux-cpu-relwithdebinfo/celeg-cpu-run \
-  --model ./model/LFM2.5-230M \
-  --prompt "Explique CUDA em uma frase." \
-  --cpu-isa auto \
-  --cpu-kv-cache bf16 \
-  --cpu-kv-page-tokens 32 \
-  --cpu-prefill-chunk 256 \
-  --cpu-affinity compact \
-  --threads 8 \
+## Obtain a model
+
+### Hugging Face cache
+
+The `--repo` option resolves a repository from the local Hugging Face cache.
+This is the preferred workflow when a checkpoint has already been downloaded:
+
+```text
+celeg-cpu-run --repo LiquidAI/LFM2.5-230M \
+  --prompt "Explain CUDA in one sentence." \
   --max-new-tokens 32
 ```
 
-Standalone execution (1.2B-Instruct):
+The CUDA runner uses the same repository IDs:
 
-```bash
-./out/linux-cpu-relwithdebinfo/celeg-cpu-run \
-  --model ./model/LFM2.5-1.2B-Instruct \
-  --prompt "Explique CUDA em uma frase." \
-  --cpu-isa auto \
-  --cpu-kv-cache bf16 \
-  --threads 8 \
+```text
+celeg-run --repo LiquidAI/LFM2.5-230M \
+  --prompt "Explain CUDA in one sentence." \
   --max-new-tokens 32
 ```
 
-Downloading a checkpoint:
+Use `celeg-download` to populate the Hugging Face cache from a repository:
 
-```bash
-# 230M (default)
+```text
+celeg-download LiquidAI/LFM2.5-230M
+```
+
+The project script provides convenient LFM2.5 presets and downloads into a
+local directory:
+
+```text
 ./scripts/download_model.sh 230m
-# 1.2B-Instruct
 ./scripts/download_model.sh 1.2b-instruct
-# 1.2B-Thinking
 ./scripts/download_model.sh 1.2b-thinking
+./scripts/download_model.sh 8b-a1b
 ```
 
-Concurrent benchmark:
+### Local Safetensors
 
-```bash
-./out/linux-cpu-relwithdebinfo/celeg-cpu-concurrent-benchmark \
-  ./model/LFM2.5-1.2B-Instruct \
-  "Explique como a CPU executa uma rede neural." \
-  8 32 8 bf16 auto
+For a local Safetensors checkpoint, pass the directory containing
+`config.json`, tokenizer files, and either `model.safetensors` or a
+`model.safetensors.index.json` plus its shards:
+
+```text
+celeg-cpu-run --model path/to/checkpoint-directory \
+  --prompt "Write a short welcome message." \
+  --max-new-tokens 32
 ```
 
-Long-prompt chunk/page sweep:
+This also works for Granite checkpoints whose `config.json` declares
+`model_type: "granite"`.
 
-```bash
-MODEL=./model/LFM2.5-1.2B-Instruct/model.safetensors \
-TOKENS=1024 KV=bf16 \
-./scripts/cpu_long_prefill_benchmark.sh
+### Local GGUF
+
+GGUF checkpoints are concrete files, not checkpoint directories. Pass the
+`.gguf` file directly to the runner:
+
+```text
+celeg-cpu-run --model path/to/model.gguf \
+  --prompt "Write a short welcome message." \
+  --max-new-tokens 32
 ```
 
-On Windows, replace `linux` in those paths with `windows` and append `.exe`.
+CUDA GGUF inference can select native GGUF weight handling explicitly:
 
-## CUDA backend
-
-The CUDA path continues to provide quantized weights, paged KV, prefix reuse,
-ragged packed prefill, packed decode, continuous scheduling, CUDA Graphs and
-cuBLAS/cuBLASLt. Windows builds stage the selected toolkit's required runtime
-DLLs beside the executables. A cached 230M checkpoint is exercised by
-`scripts/dev.py smoke`; if it is absent, inference is clearly skipped and no
-download occurs.
-
-## Validation helpers
-
-```bash
-python scripts/dev.py verify
-./scripts/cpu_sanitizer_test.sh
-./scripts/cpu_vnni_check.sh
-./scripts/host_check.sh
-./scripts/architecture_check.sh
+```text
+celeg-run --model path/to/model.gguf \
+  --weight-mode native \
+  --prompt "Write a short welcome message." \
+  --max-new-tokens 32
 ```
 
-The original checkpoints are not bundled. The packaging environment could not
-run the complete official models, so the package does not claim end-to-end
-logit parity, text quality or model tokens/s. See `VALIDATION.md`.
+Celeg reads GGUF model metadata and tokenizer data directly. The file must
+describe an LFM2 or LFM2-MoE checkpoint using the supported GGUF metadata
+namespaces; Granite GGUF is not supported at this time.
+
+## Runner options
+
+Both runners support model selection, prompts, context length, maximum output
+tokens, sampling controls, and memory reporting. The CUDA runner additionally
+supports CUDA Graphs, cuBLAS/cuBLASLt selection, quantized weight modes,
+attention modes, paged KV cache controls, session persistence, and LFM2-MoE
+expert offload.
+
+Inspect the complete options for the binary produced by your build:
+
+```text
+celeg-cpu-run --help
+celeg-run --help
+```
+
+Typical CPU controls include `--cpu-isa`, `--threads`, `--cpu-kv-cache`,
+`--cpu-prefill-chunk`, and `--cpu-affinity`. Typical CUDA controls include
+`--weight-mode`, `--kv-cache`, `--attention-mode`, `--no-cuda-graph`, and
+`--expert-offload`.
+
+## OpenAI-compatible server
+
+`celeg-serve` exposes an OpenAI-compatible HTTP API. It uses a local model path
+and can select the CPU or CUDA backend:
+
+```text
+celeg-serve \
+  --model path/to/checkpoint-directory \
+  --backend cpu \
+  --port 8080 \
+  --served-model-name celeg
+```
+
+Start the CUDA version by changing `--backend cpu` to `--backend cuda`. The
+server provides health, model, tokenizer, and chat-completion routes. See the
+generated API documentation served by the process for the exact HTTP schema.
+
+## C API
+
+The public C ABI is declared in [`include/celeg/api.h`](include/celeg/api.h).
+It uses the `celeg_*` function and type namespace and is suitable for C, Rust,
+Zig, Node native addons, and other FFI consumers.
+
+The API supports:
+
+- CPU model creation and direct prefill/decode.
+- Request-oriented engine submission, polling, stepping, and cancellation.
+- Tokenizer encoding and decoding with caller-provided buffers.
+- Backend capability and diagnostic queries.
+
+See [`API.md`](API.md) for initialization rules, handle ownership, status
+codes, and short C examples.
+
+## Features
+
+- LFM2/LFM2.5 dense and MoE model variants.
+- Granite dense architecture support through the same backend-neutral model
+  contracts.
+- Safetensors, sharded Safetensors, and LFM2/LFM2-MoE GGUF loading.
+- CPU scalar, AVX2, and VNNI execution paths where available.
+- CUDA quantized weights, paged KV cache, prefix reuse, packed prefill and
+  decode, CUDA Graphs, and cuBLAS/cuBLASLt.
+- LFM2-MoE expert residency, host offload, and cache policies.
+- Concurrent scheduling, session persistence, diagnostics, and benchmarks.
+
+## Benchmarks and architecture
+
+- [`BENCHMARK.md`](BENCHMARK.md) contains benchmark commands and reproducible
+  comparison procedures.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes model providers,
+  checkpoint contracts, runtime scheduling, and backend boundaries.
+- [`docs/ARCHITECTURE_RULES.md`](docs/ARCHITECTURE_RULES.md) records the
+  architectural constraints used for changes.
+- [`scripts/gguf_census.py`](scripts/gguf_census.py) inventories GGUF tensor
+  types and estimated traffic.
+- [`scripts/profile_decode.py`](scripts/profile_decode.py) profiles decode
+  phases and can compare CUDA configurations.
+
+## Troubleshooting
+
+### CUDA is unavailable
+
+Run `python scripts/dev.py doctor --backend cuda --json` to inspect the CUDA
+toolkit, compiler, GPU architecture, and runtime libraries. If CUDA is not
+available, build and run the CPU backend explicitly.
+
+### A repository cannot be resolved
+
+`--repo` requires the requested snapshot to exist in the local Hugging Face
+cache. Run `celeg-download REPO_ID` or `scripts/download_model.sh VARIANT`,
+then retry. Use `--model` when the checkpoint is stored at a known local path.
+
+### A Safetensors checkpoint fails to load
+
+Confirm that the directory contains `config.json`, tokenizer files, and either
+an unsharded `model.safetensors` or every shard referenced by
+`model.safetensors.index.json`.
+
+### A GGUF checkpoint fails to load
+
+Confirm that the path points to a `.gguf` file and that its metadata describes
+an LFM2 or LFM2-MoE model. Granite GGUF files are not supported by the current
+loader.
+
+## License
+
+See [`LICENSE`](LICENSE).
