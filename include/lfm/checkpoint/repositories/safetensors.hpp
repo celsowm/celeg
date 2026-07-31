@@ -17,7 +17,10 @@ namespace lfm {
 //
 // Shards are memory-mapped lazily and kept alive for the lifetime of the
 // repository so HostTensorView values returned by tensor() remain valid.
-class SafeTensorRepository : public IWeightRepository {
+class SafeTensorRepository final
+    : public IWeightRepository,
+      public ILocatableTensorRepository,
+      public IRandomAccessTensorReader {
 public:
     // `model_dir` may be:
     //   * a directory containing `model.safetensors.index.json` (sharded),
@@ -30,7 +33,8 @@ public:
     std::vector<std::string> names() const override;
 
     TensorLocator locate(std::string_view name) const override;
-    void read(const TensorLocator& locator, std::span<std::byte> destination) const override;
+    void read(const TensorLocator& locator,
+              std::span<std::byte> destination) const override;
 
     // True when the checkpoint is split across multiple shard files.
     bool sharded() const { return sharded_; }

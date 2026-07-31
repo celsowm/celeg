@@ -232,7 +232,7 @@ int main() {
     if (const char* real_path = std::getenv("LFM_GGUF_TEST_FILE");
         real_path != nullptr && *real_path != '\0') {
         const auto bootstrap = lfm::detail::load_model_bootstrap(std::filesystem::path(real_path));
-        lfm::LfmModel model(real_path, 1024);
+        lfm::Model model(real_path, 1024);
         model.session().prefill({bootstrap.config.bos_token_id});
         const std::vector<float> first = model.diagnostics().copy_logits();
         for (float value : first) if (!std::isfinite(value)) return 6;

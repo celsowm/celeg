@@ -12,7 +12,7 @@
 
 namespace lfm {
 
-// Persistence boundary for an LfmModel session. Isolates the on-disk
+// Persistence boundary for a Model session. Isolates the on-disk
 // session-file format (header layout, byte order, payload ordering, magic
 // number, version, variant fingerprint) and the prefix-state snapshot
 // representation from the inference path (Single Responsibility Principle).
@@ -20,7 +20,7 @@ namespace lfm {
 // here without touching the forward pass (Open/Closed Principle).
 //
 // The store exposes only static helpers: it never retains ownership and
-// never holds a reference to the host. The host (LfmModel::Impl) passes
+// never holds a reference to the host. The host (Model::Impl) passes
 // the live device buffers and topology snapshot per call.
 class SessionStore {
 public:

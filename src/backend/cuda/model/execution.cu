@@ -14,7 +14,7 @@
 #include <vector>
 
 namespace lfm {
-void LfmModel::Impl::set_generation_config(GenerationConfig generation) {
+void Model::Impl::set_generation_config(GenerationConfig generation) {
     generation.validate();
     if (phase_ == SessionPhase::DecodePending) {
         throw std::runtime_error(
@@ -30,7 +30,7 @@ PhaseProfile& decode_phase_profile() {
     return instance;
 }
 
-void LfmModel::Impl::enqueue_sampling() {
+void Model::Impl::enqueue_sampling() {
     const int effective_top_k = generation_.greedy() ? 1 : generation_.top_k;
     const float effective_temperature =
         generation_.temperature > 0.0f ? generation_.temperature : 1.0f;
@@ -62,11 +62,13 @@ void LfmModel::Impl::enqueue_sampling() {
     }
 }
 
-void LfmModel::Impl::enqueue_decode_forward() {
+void Model::Impl::enqueue_decode_forward() {
     decode_phase_profile().begin(stream_.get());
     weight_layout_->embed_token_device(
         sampled_device_.data(), hidden_.data(), shape_.hidden,
         stream_.get());
+    launch_scale(hidden_.data(), shape_.hidden, shape_.embedding_multiplier,
+                 stream_.get());
     decode_phase_profile().end(DecodePhase::Embed, stream_.get());
 
     int layer_idx = 0;
@@ -107,7 +109,15 @@ void LfmModel::Impl::enqueue_decode_forward() {
             }
             decode_phase_profile().end(DecodePhase::Projection, stream_.get());
             decode_phase_profile().begin(stream_.get());
-            if (options_.fast_attention) {
+            if (!shape_.query_key_norm) {
+                launch_rope_strict_device(
+                    q, k, rope_cos_.data(), rope_sin_.data(),
+                    shape_.num_attention_heads, shape_.num_key_value_heads,
+                    shape_.head_dim, position_device_.data(), stream_.get());
+                const float ratio = shape_.attention_multiplier /
+                    (1.0f / std::sqrt(static_cast<float>(shape_.head_dim)));
+                launch_scale(q, shape_.q_width, ratio, stream_.get());
+            } else if (options_.fast_attention) {
                 launch_qk_norm_rope_fast_device(
                     q, k, attention->q_norm, attention->k_norm,
                     rope_cos_.data(), rope_sin_.data(),
@@ -192,6 +202,8 @@ void LfmModel::Impl::enqueue_decode_forward() {
             linear(op_output_.data(), *attention->out, hidden_.data(),
                    1, shape_.hidden, shape_.hidden,
                    options_.fused_residuals ? 1.0f : 0.0f);
+            launch_scale(hidden_.data(), shape_.hidden, shape_.residual_multiplier,
+                         stream_.get());
             decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
@@ -225,10 +237,12 @@ void LfmModel::Impl::enqueue_decode_forward() {
                     stream_.get());
     linear(normed_.data(), *logits_weight(), logits_.data(),
             1, shape_.vocab_size, shape_.hidden);
+    launch_scale(logits_.data(), shape_.vocab_size,
+                 1.0f / shape_.logits_divisor, stream_.get());
     decode_phase_profile().end(DecodePhase::Logits, stream_.get());
 }
 
-void LfmModel::Impl::enqueue_decode_step() {
+void Model::Impl::enqueue_decode_step() {
     decode_phase_profile().begin(stream_.get());
     enqueue_sampling();
     decode_phase_profile().end(DecodePhase::Sampling, stream_.get());
@@ -239,15 +253,15 @@ void LfmModel::Impl::enqueue_decode_step() {
     decode_phase_profile().end(DecodePhase::Other, stream_.get());
 }
 
-bool LfmModel::Impl::use_segmented_attention(int host_position) const {
+bool Model::Impl::use_segmented_attention(int host_position) const {
     return plan_.segmented_attention(host_position);
 }
 
-CudaGraphExec& LfmModel::Impl::graph_for_attention(bool segmented) {
+CudaGraphExec& Model::Impl::graph_for_attention(bool segmented) {
     return segmented ? segmented_decode_graph_ : decode_graph_;
 }
 
-void LfmModel::Impl::capture_decode_graph(bool segmented) {
+void Model::Impl::capture_decode_graph(bool segmented) {
     if (!options_.cuda_graph) return;
     CudaGraphExec& graph = graph_for_attention(segmented);
     if (graph.ready()) return;
@@ -262,12 +276,12 @@ void LfmModel::Impl::capture_decode_graph(bool segmented) {
     }
 }
 
-int32_t LfmModel::Impl::decode() {
+int32_t Model::Impl::decode() {
     decode_async_begin();
     return decode_async_finish();
 }
 
-void LfmModel::Impl::decode_async_begin() {
+void Model::Impl::decode_async_begin() {
     if (!local_kv_cache_available_) {
         throw std::runtime_error(
             "lane decode is unavailable after transferring KV to the shared paged cache");
@@ -297,7 +311,7 @@ void LfmModel::Impl::decode_async_begin() {
     phase_ = SessionPhase::DecodePending;
 }
 
-int32_t LfmModel::Impl::decode_async_finish() {
+int32_t Model::Impl::decode_async_finish() {
     if (phase_ != SessionPhase::DecodePending) {
         throw std::runtime_error("decode_async_finish without begin");
     }
@@ -312,7 +326,7 @@ int32_t LfmModel::Impl::decode_async_finish() {
     return sampled_host_.data()[0];
 }
 
-DecodeBenchmark LfmModel::Impl::benchmark_decode(int warmup_steps,
+DecodeBenchmark Model::Impl::benchmark_decode(int warmup_steps,
                                                 int measured_steps) {
     if (phase_ != SessionPhase::Ready) {
         throw std::runtime_error("benchmark_decode requires a successful prefill");
@@ -364,7 +378,7 @@ DecodeBenchmark LfmModel::Impl::benchmark_decode(int warmup_steps,
     return result;
 }
 
-ModelMemoryStats LfmModel::Impl::memory_stats() const {
+ModelMemoryStats Model::Impl::memory_stats() const {
     ModelMemoryStats stats;
     stats.weights = weights_ ? weights_->memory_bytes() : 0;
     for (const Layer& layer : layers_) {
@@ -399,8 +413,8 @@ ModelMemoryStats LfmModel::Impl::memory_stats() const {
     return stats;
 }
 
-LfmDiagnostics::ExpertOffloadStats LfmModel::Impl::expert_offload_stats() const {
-    LfmDiagnostics::ExpertOffloadStats stats;
+ModelDiagnostics::ExpertOffloadStats Model::Impl::expert_offload_stats() const {
+    ModelDiagnostics::ExpertOffloadStats stats;
     if (!expert_offload_plan_.enabled) {
         stats.hit_rate = -1.0;
         return stats;
@@ -421,7 +435,7 @@ LfmDiagnostics::ExpertOffloadStats LfmModel::Impl::expert_offload_stats() const 
     return stats;
 }
 
-void LfmModel::Impl::release_local_kv_cache() {
+void Model::Impl::release_local_kv_cache() {
     if (!local_kv_cache_available_) return;
     LFM_CUDA(cudaStreamSynchronize(stream_.get()));
     for (Layer& layer : layers_) {
@@ -439,7 +453,7 @@ void LfmModel::Impl::release_local_kv_cache() {
     segmented_decode_graph_.reset();
 }
 
-std::vector<float> LfmModel::Impl::copy_logits() {
+std::vector<float> Model::Impl::copy_logits() {
     if (phase_ != SessionPhase::Ready) {
         throw std::runtime_error("logits are unavailable before prefill");
     }

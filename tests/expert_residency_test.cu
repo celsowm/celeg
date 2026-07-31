@@ -176,7 +176,7 @@ void check_close(const std::vector<__nv_bfloat16>& a,
 
 } // namespace
 
-// Drives the exact model-level path used by LfmModel::Impl when offload is
+// Drives the exact model-level path used by Model::Impl when offload is
 // enabled: build an offloaded MoeFfnWeights with indirect pointer tables from
 // an ExpertLayerCache, resolve it through moe_ffn_device(), and run the kernel.
 std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,

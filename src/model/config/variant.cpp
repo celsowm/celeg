@@ -297,6 +297,18 @@ std::string Lfm25_8B_A1B_LFM2_Variant::label() const {
     return "LiquidAI LFM2-8B-A1B (MoE)";
 }
 
+std::string_view Granite_Variant::id() const { return "granite"; }
+std::string_view Granite_Variant::repo_id() const {
+    return "ibm-granite/granite-4.1-8b";
+}
+bool Granite_Variant::matches(const ModelShape& shape) const {
+    return shape.architecture == ArchitectureKind::Granite;
+}
+ChatTemplateKind Granite_Variant::chat_template_kind() const {
+    return ChatTemplateKind::Lfm2Instruct;
+}
+std::string Granite_Variant::label() const { return "IBM Granite 4.1"; }
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -313,6 +325,7 @@ ModelVariantRegistry& ModelVariantRegistry::instance() {
         registry.register_variant(std::make_unique<Lfm25_1_2B_Thinking_Variant>());
         registry.register_variant(std::make_unique<Lfm25_8B_A1B_Variant>());
         registry.register_variant(std::make_unique<Lfm25_8B_A1B_LFM2_Variant>());
+        registry.register_variant(std::make_unique<Granite_Variant>());
     }
     return registry;
 }

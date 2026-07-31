@@ -98,6 +98,8 @@ void cpu_swiglu(const float* gate_up, float* output, size_t count);
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
                       float rope_theta, float eps);
+void cpu_rope(float* data, int heads, int head_dim, int position,
+              float rope_theta);
 void cpu_gqa_decode(const float* q, const float* key_cache,
                     const float* value_cache, float* output,
                     int sequence_length, int q_heads, int kv_heads,

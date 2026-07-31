@@ -125,6 +125,7 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
                                  std::to_string(layer));
     }
     std::vector<ExpertLocation> catalog(static_cast<size_t>(num_experts));
+    const auto& locator = require_locatable_tensor_repository(repo);
     for (int e = 0; e < num_experts; ++e) {
         const std::string w1_name = layer_name(
             layer, "feed_forward.experts." + std::to_string(e) + ".w1.weight");
@@ -133,9 +134,9 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
         const std::string w2_name = layer_name(
             layer, "feed_forward.experts." + std::to_string(e) + ".w2.weight");
 
-        TensorLocator w1_loc = repo.locate(w1_name);
-        TensorLocator w3_loc = repo.locate(w3_name);
-        TensorLocator w2_loc = repo.locate(w2_name);
+        TensorLocator w1_loc = locator.locate(w1_name);
+        TensorLocator w3_loc = locator.locate(w3_name);
+        TensorLocator w2_loc = locator.locate(w2_name);
 
         if (w1_loc.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
             w3_loc.shape != std::vector<int64_t>{moe_intermediate, hidden} ||
@@ -150,4 +151,3 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
 
 
 } // namespace lfm
-

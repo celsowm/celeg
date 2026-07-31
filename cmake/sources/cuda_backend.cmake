@@ -6,16 +6,31 @@ set(LFM_CUDA_BACKEND_SOURCES
     src/backend/cuda/kernels/packed.cu
     src/backend/cuda/kernels/gguf.cu
     src/backend/cuda/kernels/mmq.cu
-    src/backend/cuda/model/setup.cu
+    src/backend/cuda/model/setup.cpp
+    src/backend/cuda/model/configuration.cpp
+    src/backend/cuda/model/resources.cpp
+    src/backend/cuda/model/weight_setup.cpp
+    src/backend/cuda/model/weight_validation.cpp
+    src/backend/cuda/model/rope.cpp
+    src/backend/cuda/model/warmup.cpp
+    src/backend/cuda/model/session_resources.cpp
+    src/backend/cuda/model/lifecycle.cpp
     src/backend/cuda/model/residency.cu
     src/backend/cuda/model/execution.cu
-    src/backend/cuda/model/prefill.cu
-    src/backend/cuda/model/weights.cu
+    src/backend/cuda/model/decode.cpp
+    src/backend/cuda/model/prefill.cpp
+    src/backend/cuda/model/prefill_batched.cpp
+    src/backend/cuda/model/paged_prefill.cpp
+    src/backend/cuda/model/prefill_profile.cpp
+    src/backend/cuda/model/weights.cpp
     src/backend/cuda/model/packed_execution.cu
     src/backend/cuda/model/persistence.cu
     src/backend/cuda/model/facade.cu
     src/backend/cuda/model/weight_layout.cu
-    src/backend/cuda/model/loader.cu
+    src/backend/cuda/model/gguf_dequant.cpp
+    src/backend/cuda/model/weight_upload.cpp
+    src/backend/cuda/model/linear_loader.cpp
+    src/backend/cuda/model/expert_loader.cpp
     src/backend/cuda/model/loader_experts.cu
     src/backend/cuda/model/experts.cu
     src/backend/cuda/model/loader_cache.cu
@@ -25,5 +40,10 @@ set(LFM_CUDA_BACKEND_SOURCES
     src/backend/cuda/moe/ffn.cu
     src/backend/cuda/moe/route.cu
     src/backend/cuda/runtime/engine.cpp
+    src/backend/cuda/runtime/request_lifecycle.cpp
+    src/backend/cuda/runtime/prefill_scheduler.cpp
+    src/backend/cuda/runtime/decode_scheduler.cpp
+    src/backend/cuda/runtime/engine_control.cpp
+    src/backend/cuda/runtime/engine_facade.cpp
     src/backend/cuda/runtime/gemm_dispatcher.cu
 )

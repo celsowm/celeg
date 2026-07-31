@@ -519,7 +519,7 @@ int main(int argc, char** argv) {
                                            ? model.string()
                                            : single.string();
                       }();
-        lfm::LfmModel engine(
+        lfm::Model engine(
             model_path, args.context,
             model_options, generation);
         if (is_gguf) {
@@ -560,7 +560,7 @@ int main(int argc, char** argv) {
                       << "benchmark.decode_tokens_per_second="
                       << benchmark.tokens_per_second() << '\n';
 
-            const lfm::LfmDiagnostics::ExpertOffloadStats off =
+        const lfm::ModelDiagnostics::ExpertOffloadStats off =
                 engine.diagnostics().expert_offload_stats();
             if (off.hit_rate >= 0.0) {
                 std::cerr << "expert_offload.experts_per_layer="

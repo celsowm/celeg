@@ -18,6 +18,7 @@ std::filesystem::path config_path_for(const std::filesystem::path& model_path) {
 
 ModelBootstrap load_model_bootstrap(const std::filesystem::path& model_path) {
     register_builtin_variants();
+    register_builtin_architecture_providers();
 
     ModelBootstrap bootstrap;
     bootstrap.is_gguf = path_is_gguf(model_path);
@@ -33,6 +34,8 @@ ModelBootstrap load_model_bootstrap(const std::filesystem::path& model_path) {
         bootstrap.config = ModelConfig::load(config_path.string());
     }
     bootstrap.shape = ModelShape::from_config(bootstrap.config);
+    bootstrap.architecture_provider = &ArchitectureRegistry::instance().select(
+        bootstrap.config);
     bootstrap.variant = &ModelVariantRegistry::instance().select(
         bootstrap.shape, bootstrap.config.repo_hint);
     bootstrap.shape = bootstrap.variant->resolve_shape(bootstrap.shape);

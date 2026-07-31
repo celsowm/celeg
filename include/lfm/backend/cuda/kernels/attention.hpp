@@ -70,7 +70,8 @@ void launch_gqa_prefill_segmented(
     float* partial_max, float* partial_denom, float* partial_accum,
     cudaStream_t stream);
 
-// Batched-GEMM causal prefill attention (see attention_compute.inl for the
+// Batched-GEMM causal prefill attention (see the private attention .cuh
+// implementation for the
 // rationale). `scores_scratch` needs q_heads*rows*rows floats,
 // `probs_scratch` the same element count in BF16. `q_width`/`kv_width` are
 // the interleaved-head row strides of `q`/`k`/`v`; `out_width` is the row

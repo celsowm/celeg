@@ -12,82 +12,96 @@
 
 namespace lfm {
 
-// Narrow interface that PackedDecodeExecutor depends on for multi-session
-// packed decode. Extracted from the concrete LfmModel::Impl to remove the
-// `friend struct PackedDecodeExecutorImpl` breach (Interface Segregation
-// Principle): the packed executor now depends only on the accessors it
-// actually calls, and new code can implement IPackedSession for testing
-// without constructing a full LfmModel. LfmModel::Impl publicly implements
-// this interface.
+// Operation-specific, non-owning context for one lane in a packed decode or
+// ragged-prefill batch.  It contains only the resources that the packed
+// executor is allowed to touch; model loading, graph capture, and unrelated
+// session operations are deliberately absent.  The context is copied into a
+// batch before execution, while its pointed-to state remains owned by Model.
 //
-// The interface exposes the session-scoped state the packed executor reads
-// or writes during a single decode step: position, phase, generation
-// config, the sampling device buffers, and the layer vector. Immutable
-// checkpoint state (weights, embedding) is shared across sessions and
-// accessed through the concrete LfmModel.
-class IPackedSession {
-public:
-    virtual ~IPackedSession() = default;
+// Callback fields are construction-time bindings to the concrete model
+// program. They avoid a virtual getter interface and keep architecture and
+// dispatch decisions out of the packed executor's layer loop.
+struct PackedSessionContext {
+    using SegmentedAttentionFn = bool (*)(const void*, int);
+    using ExpertResidencyFn = void (*)(void*, int, const int*, int,
+                                       cudaStream_t, const float*);
 
-    // Session state.
-    virtual SessionPhase phase() const = 0;
-    virtual void set_phase(SessionPhase phase) = 0;
-    virtual int position() const = 0;
-    virtual void set_position(int position) = 0;
-    virtual int max_context() const = 0;
-    virtual bool local_kv_cache_available() const = 0;
-    virtual bool active_segmented_attention() const = 0;
-    virtual void set_active_segmented_attention(bool value) = 0;
+    void* owner = nullptr;
+    SessionPhase* phase_state = nullptr;
+    int* position_state = nullptr;
+    int max_context_value = 0;
+    const bool* local_kv_cache_available_state = nullptr;
+    bool* active_segmented_attention_state = nullptr;
+    const ModelOptions* options_state = nullptr;
+    const GenerationConfig* generation_state = nullptr;
+    const ModelShape* shape_state = nullptr;
+    std::shared_ptr<SharedModelWeights> weights_state;
 
-    // Configuration.
-    virtual const ModelOptions& options() const = 0;
-    virtual const GenerationConfig& generation() const = 0;
-    virtual const ModelShape& shape() const = 0;
-    // Shared checkpoint owner. Two sessions with the same owner pointer
-    // share device weights and can be packed together.
-    virtual const std::shared_ptr<SharedModelWeights>& weights() const = 0;
+    DeviceBuffer<__nv_bfloat16>* logits_state = nullptr;
+    DeviceBuffer<uint8_t>* seen_tokens_state = nullptr;
+    DeviceBuffer<uint64_t>* rng_state_buffer = nullptr;
+    DeviceBuffer<int32_t>* sampled_device_state = nullptr;
+    DeviceBuffer<int32_t>* position_device_state = nullptr;
+    PinnedBuffer<int32_t>* sampled_host_state = nullptr;
+    std::vector<Layer>* layers_state = nullptr;
+    RuntimeMetrics* metrics_state = nullptr;
+    IWeightLayout* weight_layout_state = nullptr;
+    const LinearWeight* embedding_weight = nullptr;
+    const LinearWeight* logits_weight_value = nullptr;
+    const __nv_bfloat16* final_norm_value = nullptr;
+    const __nv_bfloat16* rope_cos_value = nullptr;
+    const __nv_bfloat16* rope_sin_value = nullptr;
 
-    // Sampling device buffers (writable).
-    virtual DeviceBuffer<__nv_bfloat16>& logits() = 0;
-    virtual DeviceBuffer<uint8_t>& seen_tokens() = 0;
-    virtual DeviceBuffer<uint64_t>& rng_state() = 0;
-    virtual DeviceBuffer<int32_t>& sampled_device() = 0;
-    virtual DeviceBuffer<int32_t>& position_device() = 0;
-    virtual PinnedBuffer<int32_t>& sampled_host() = 0;
+    SegmentedAttentionFn segmented_attention = nullptr;
+    ExpertResidencyFn ensure_expert_residency = nullptr;
 
-    // Per-layer K/V and conv state.
-    virtual std::vector<Layer>& layers() = 0;
-    virtual const std::vector<Layer>& layers() const = 0;
-
-    // Helpers.
-    virtual bool use_segmented_attention(int host_position) const = 0;
-    virtual RuntimeMetrics& metrics() = 0;
-    virtual int32_t sampled_host_value() const = 0;
-    virtual void set_sampled_host_value(int32_t value) = 0;
-
-    // Expert offload: ensure selected experts are GPU-resident before the
-    // MoE FFN reads them.  Called by the packed executor after the router.
-    // `sel_dev` points to this session's selected-expert indices (K ints),
-    // `rows` is 1 for decode, and `route_scores_dev` may be null.
-    virtual void ensure_moe_experts_resident_packed(
+    SessionPhase phase() const { return *phase_state; }
+    void set_phase(SessionPhase value) const { *phase_state = value; }
+    int position() const { return *position_state; }
+    void set_position(int value) const { *position_state = value; }
+    int max_context() const { return max_context_value; }
+    bool local_kv_cache_available() const {
+        return *local_kv_cache_available_state;
+    }
+    bool active_segmented_attention() const {
+        return *active_segmented_attention_state;
+    }
+    void set_active_segmented_attention(bool value) const {
+        *active_segmented_attention_state = value;
+    }
+    const ModelOptions& options() const { return *options_state; }
+    const GenerationConfig& generation() const { return *generation_state; }
+    const ModelShape& shape() const { return *shape_state; }
+    const std::shared_ptr<SharedModelWeights>& weights() const {
+        return weights_state;
+    }
+    DeviceBuffer<__nv_bfloat16>& logits() const { return *logits_state; }
+    DeviceBuffer<uint8_t>& seen_tokens() const { return *seen_tokens_state; }
+    DeviceBuffer<uint64_t>& rng_state() const { return *rng_state_buffer; }
+    DeviceBuffer<int32_t>& sampled_device() const { return *sampled_device_state; }
+    DeviceBuffer<int32_t>& position_device() const { return *position_device_state; }
+    PinnedBuffer<int32_t>& sampled_host() const { return *sampled_host_state; }
+    std::vector<Layer>& layers() const { return *layers_state; }
+    RuntimeMetrics& metrics() const { return *metrics_state; }
+    int32_t sampled_host_value() const { return sampled_host().data()[0]; }
+    void set_sampled_host_value(int32_t value) const {
+        sampled_host().data()[0] = value;
+    }
+    bool use_segmented_attention(int host_position) const {
+        return segmented_attention(owner, host_position);
+    }
+    void ensure_moe_experts_resident_packed(
         int layer, const int* sel_dev, int rows, cudaStream_t stream,
-        const float* route_scores_dev) = 0;
-
-    // Shared checkpoint state. The packed executor uses the reference
-    // session's weight layout for embedding lookup, the final norm, and the
-    // RoPE tables (these are identical across all sessions sharing the
-    // checkpoint).
-    virtual IWeightLayout& weight_layout() = 0;
-    virtual const LinearWeight* embedding() const = 0;
-    virtual const LinearWeight* logits_weight() const = 0;
-    virtual const __nv_bfloat16* final_norm() const = 0;
-    virtual const __nv_bfloat16* rope_cos() const = 0;
-    virtual const __nv_bfloat16* rope_sin() const = 0;
-    virtual void linear(const __nv_bfloat16* x,
-                        const LinearWeight& weight,
-                        __nv_bfloat16* y,
-                        int m, int n, int k,
-                        float beta = 0.0f) = 0;
+        const float* route_scores_dev) const {
+        ensure_expert_residency(owner, layer, sel_dev, rows, stream,
+                                route_scores_dev);
+    }
+    IWeightLayout& weight_layout() const { return *weight_layout_state; }
+    const LinearWeight* embedding() const { return embedding_weight; }
+    const LinearWeight* logits_weight() const { return logits_weight_value; }
+    const __nv_bfloat16* final_norm() const { return final_norm_value; }
+    const __nv_bfloat16* rope_cos() const { return rope_cos_value; }
+    const __nv_bfloat16* rope_sin() const { return rope_sin_value; }
 };
 
 } // namespace lfm

@@ -32,6 +32,9 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
         throw std::runtime_error("CPU context limit reached");
     }
     shared->linear.embedding(shared->embedding, token, hidden.data());
+    if (shared->shape.embedding_multiplier != 1.0f) {
+        for (float& value : hidden) value *= shared->shape.embedding_multiplier;
+    }
     for (size_t index = 0; index < shared->layers.size(); ++index) {
         const WeightLayer& layer_variant = shared->layers[index];
         const CommonWeights& common = common_weights(index);
@@ -43,12 +46,22 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
             float* q = qkv.data();
             float* k = q + shared->shape.q_width;
             float* v = k + shared->shape.kv_width;
-            cpu_qk_norm_rope(q, attention->q_norm.data(), shared->shape.num_attention_heads,
-                shared->shape.head_dim, position_value, shared->shape.rope_theta,
-                shared->shape.norm_eps);
-            cpu_qk_norm_rope(k, attention->k_norm.data(), shared->shape.num_key_value_heads,
-                shared->shape.head_dim, position_value, shared->shape.rope_theta,
-                shared->shape.norm_eps);
+            if (shared->shape.query_key_norm) {
+                cpu_qk_norm_rope(q, attention->q_norm.data(), shared->shape.num_attention_heads,
+                    shared->shape.head_dim, position_value, shared->shape.rope_theta,
+                    shared->shape.norm_eps);
+                cpu_qk_norm_rope(k, attention->k_norm.data(), shared->shape.num_key_value_heads,
+                    shared->shape.head_dim, position_value, shared->shape.rope_theta,
+                    shared->shape.norm_eps);
+            } else {
+                cpu_rope(q, shared->shape.num_attention_heads, shared->shape.head_dim,
+                         position_value, shared->shape.rope_theta);
+                cpu_rope(k, shared->shape.num_key_value_heads, shared->shape.head_dim,
+                         position_value, shared->shape.rope_theta);
+                const float ratio = shared->shape.attention_multiplier /
+                    (1.0f / std::sqrt(static_cast<float>(shared->shape.head_dim)));
+                for (int i = 0; i < shared->shape.q_width; ++i) q[i] *= ratio;
+            }
             AttentionState& state = attention_state(index);
             store_kv(state, position_value, k, v);
             run_attention(state, q, op_output.data(), position_value + 1);
@@ -62,6 +75,9 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
                 state.state.data(), op_output.data(), shared->shape.hidden,
                 shared->shape.conv_cache, position_value);
             shared->linear.gemv(convolution->out, op_output.data(), hidden.data());
+        }
+        if (shared->shape.residual_multiplier != 1.0f) {
+            for (float& value : hidden) value *= shared->shape.residual_multiplier;
         }
         cpu_residual_add(hidden.data(), residual.data(), shared->shape.hidden);
 
@@ -144,6 +160,9 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
                     mlp_output[static_cast<size_t>(j)] += rw * op_output[static_cast<size_t>(j)];
                 }
             }
+            if (shared->shape.residual_multiplier != 1.0f) {
+                for (float& value : mlp_output) value *= shared->shape.residual_multiplier;
+            }
             cpu_residual_add(hidden.data(), mlp_output.data(), shared->shape.hidden);
             if (profile_moe) prefill_profile.moe_expert_ms += milliseconds_since(started);
         } else {
@@ -151,6 +170,9 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
             shared->linear.gemv(common.w13, normed.data(), gate_up.data());
             cpu_swiglu(gate_up.data(), activated.data(), shared->shape.intermediate);
             shared->linear.gemv(common.w2, activated.data(), mlp_output.data());
+            if (shared->shape.residual_multiplier != 1.0f) {
+                for (float& value : mlp_output) value *= shared->shape.residual_multiplier;
+            }
             cpu_residual_add(hidden.data(), mlp_output.data(), shared->shape.hidden);
         }
     }
@@ -159,6 +181,9 @@ void CpuModel::Impl::forward_token(int32_t token, bool compute_logits) {
                     shared->shape.hidden, shared->shape.norm_eps);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->embedding :
                             shared->lm_head, normed.data(), logits.data());
+        if (shared->shape.logits_divisor != 1.0f) {
+            for (float& value : logits) value /= shared->shape.logits_divisor;
+        }
     }
     ++position_value;
 }
@@ -205,6 +230,12 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
     parallel_rows(shared->pool, rows, [&](size_t row) {
         shared->linear.embedding(shared->embedding, tokens[row],
             chunk_hidden.data() + row * shared->shape.hidden);
+        if (shared->shape.embedding_multiplier != 1.0f) {
+            float* values = chunk_hidden.data() + row * shared->shape.hidden;
+            for (int i = 0; i < shared->shape.hidden; ++i) {
+                values[i] *= shared->shape.embedding_multiplier;
+            }
+        }
     });
 
     const int base_position = position_value;
@@ -233,14 +264,24 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                 float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
                 float* k = q + shared->shape.q_width;
                 const int absolute_position = base_position + static_cast<int>(row);
-                cpu_qk_norm_rope(q, attention->q_norm.data(),
-                    shared->shape.num_attention_heads, shared->shape.head_dim,
-                    absolute_position, shared->shape.rope_theta,
-                    shared->shape.norm_eps);
-                cpu_qk_norm_rope(k, attention->k_norm.data(),
-                    shared->shape.num_key_value_heads, shared->shape.head_dim,
-                    absolute_position, shared->shape.rope_theta,
-                    shared->shape.norm_eps);
+                if (shared->shape.query_key_norm) {
+                    cpu_qk_norm_rope(q, attention->q_norm.data(),
+                        shared->shape.num_attention_heads, shared->shape.head_dim,
+                        absolute_position, shared->shape.rope_theta,
+                        shared->shape.norm_eps);
+                    cpu_qk_norm_rope(k, attention->k_norm.data(),
+                        shared->shape.num_key_value_heads, shared->shape.head_dim,
+                        absolute_position, shared->shape.rope_theta,
+                        shared->shape.norm_eps);
+                } else {
+                    cpu_rope(q, shared->shape.num_attention_heads, shared->shape.head_dim,
+                             absolute_position, shared->shape.rope_theta);
+                    cpu_rope(k, shared->shape.num_key_value_heads, shared->shape.head_dim,
+                             absolute_position, shared->shape.rope_theta);
+                    const float ratio = shared->shape.attention_multiplier /
+                        (1.0f / std::sqrt(static_cast<float>(shared->shape.head_dim)));
+                    for (int i = 0; i < shared->shape.q_width; ++i) q[i] *= ratio;
+                }
             });
             for (size_t row = 0; row < rows; ++row) {
                 float* q = chunk_qkv.data() + row * shared->shape.qkv_width;
@@ -283,6 +324,11 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
 
         parallel_rows(shared->pool, rows, [&](size_t row) {
             float* row_hidden = chunk_hidden.data() + row * shared->shape.hidden;
+            if (shared->shape.residual_multiplier != 1.0f) {
+                for (int i = 0; i < shared->shape.hidden; ++i) {
+                    row_hidden[i] *= shared->shape.residual_multiplier;
+                }
+            }
             cpu_residual_add(row_hidden,
                 chunk_residual.data() + row * shared->shape.hidden,
                 shared->shape.hidden);
@@ -435,6 +481,12 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
             prefill_profile.linear_ms += milliseconds_since(started);
         }
         parallel_rows(shared->pool, rows, [&](size_t row) {
+            if (shared->shape.residual_multiplier != 1.0f) {
+                float* output = chunk_mlp.data() + row * shared->shape.hidden;
+                for (int i = 0; i < shared->shape.hidden; ++i) {
+                    output[i] *= shared->shape.residual_multiplier;
+                }
+            }
             cpu_residual_add(chunk_hidden.data() + row * shared->shape.hidden,
                              chunk_mlp.data() + row * shared->shape.hidden,
                              shared->shape.hidden);
@@ -447,6 +499,9 @@ void CpuModel::Impl::forward_chunk(std::span<const int32_t> tokens,
                     shared->shape.hidden, shared->shape.norm_eps);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->embedding :
                             shared->lm_head, normed.data(), logits.data());
+        if (shared->shape.logits_divisor != 1.0f) {
+            for (float& value : logits) value /= shared->shape.logits_divisor;
+        }
     }
     position_value += static_cast<int>(rows);
     prefill_profile.total_ms += milliseconds_since(chunk_started);

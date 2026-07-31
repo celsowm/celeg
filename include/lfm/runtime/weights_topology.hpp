@@ -29,6 +29,10 @@ inline TensorSpec language_model_head(const ModelShape& shape, bool tied) {
 }
 
 inline TensorSpec final_norm(const ModelShape& shape) {
+    if (shape.architecture == ArchitectureKind::Granite) {
+        return {TensorRole::FinalNorm, "model.norm.weight", {},
+                {shape.hidden}, false};
+    }
     return {TensorRole::FinalNorm, "model.embedding_norm.weight",
             {"model.norm.weight", "model.final_norm.weight"}, {shape.hidden}, false};
 }

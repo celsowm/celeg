@@ -11,6 +11,8 @@ void launch_rmsnorm(const __nv_bfloat16* x, const __nv_bfloat16* weight,
                    cudaStream_t stream);
 void launch_residual_add(__nv_bfloat16* x, const __nv_bfloat16* residual,
                         int count, cudaStream_t stream);
+void launch_scale(__nv_bfloat16* x, int count, float scale,
+                  cudaStream_t stream);
 void launch_swiglu_fused(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
                         int count, cudaStream_t stream);
 

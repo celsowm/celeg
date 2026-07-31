@@ -8,6 +8,7 @@
 #include "lfm/backend/cpu/thread_pool.hpp"
 #include "lfm/model/config/shape.hpp"
 #include "lfm/model/config/variant.hpp"
+#include "lfm/model/weights/roles.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -136,6 +137,7 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
         bool loaded_pack = false;
         ModelShape shape;
         const IModelVariant* variant = nullptr;
+        const ITensorNamingPolicy* tensor_naming = nullptr;
         bool tie_word_embeddings = true;
         CpuLinearWeight embedding;
         CpuLinearWeight lm_head;

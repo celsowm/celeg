@@ -14,6 +14,8 @@
 #include "lfm/runtime/moe/offload.hpp"
 #include "lfm/runtime/moe/expert_residency.hpp"
 #include "lfm/detail/model/types.hpp"
+#include "lfm/detail/model/resources.hpp"
+#include "lfm/model/session.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -28,7 +30,11 @@
 
 namespace lfm {
 
-struct LfmModel::Impl : public IPackedSession {
+namespace detail {
+struct ModelBootstrap;
+}
+
+struct Model::Impl : ModelResources, SessionState {
     // Chunk size for launch_gqa_prefill_segmented (batched, chunked causal
     // prefill attention). Smaller than the long-context decode default
     // (attention_chunk_tokens, 256) because prefill parallelism comes from
@@ -61,6 +67,11 @@ struct LfmModel::Impl : public IPackedSession {
     void warmup_decode_gemms();
     void warmup_prefill_attention_gemm();
 
+    void configure_model(const detail::ModelBootstrap& bootstrap);
+    void allocate_runtime_resources();
+    void load_checkpoint_weights(const std::string& model_path,
+                                 const detail::ModelBootstrap& bootstrap);
+
     void reset(bool allocate_local_kv = true);
     void prefill(const std::vector<int32_t>& tokens);
     void prefill_chunk(const std::vector<int32_t>& tokens,
@@ -76,7 +87,7 @@ struct LfmModel::Impl : public IPackedSession {
     std::vector<float> copy_logits();
     DecodeBenchmark benchmark_decode(int warmup_steps, int measured_steps);
     ModelMemoryStats memory_stats() const;
-    LfmDiagnostics::ExpertOffloadStats expert_offload_stats() const;
+    ModelDiagnostics::ExpertOffloadStats expert_offload_stats() const;
     RuntimeMetrics runtime_metrics() const { return metrics_; }
     void clear_runtime_metrics() { metrics_ = {}; }
     void save_session(const std::string& path);
@@ -111,11 +122,11 @@ struct LfmModel::Impl : public IPackedSession {
     int32_t sampled_host_value() const { return sampled_host_.data()[0]; }
     void set_sampled_host_value(int32_t value) { sampled_host_.data()[0] = value; }
     IWeightLayout& weight_layout() { return *weight_layout_; }
-    const LinearWeight* embedding() const override { return embedding_; }
+    const LinearWeight* embedding() const { return embedding_; }
     // Weight used for the final logits projection. When the checkpoint ships a
     // separate (untied) lm_head, that is returned; otherwise the tied
     // embed_tokens table is shared.
-    const LinearWeight* logits_weight() const override {
+    const LinearWeight* logits_weight() const {
         return lm_head_ ? lm_head_ : embedding_;
     }
     bool tied_lm_head() const { return lm_head_ == nullptr; }
@@ -144,7 +155,7 @@ struct LfmModel::Impl : public IPackedSession {
                                      const float* route_scores_dev = nullptr);
     void ensure_moe_experts_resident_packed(
         int layer, const int* sel_dev, int rows, cudaStream_t stream,
-        const float* route_scores_dev) override;
+        const float* route_scores_dev);
     void forward_token_host(int32_t token, bool compute_logits);
     void forward_token_paged_host(int32_t token, bool compute_logits,
                                   PhysicalPagedKvCache& paged_kv,
@@ -158,34 +169,20 @@ struct LfmModel::Impl : public IPackedSession {
     bool use_segmented_attention(int host_position) const;
     CudaGraphExec& graph_for_attention(bool segmented);
 
-    ModelShape shape_;
-    const IModelVariant* variant_ = nullptr;
-    ExecutionPlan plan_;
-    ModelOptions options_;
-    GenerationConfig generation_;
+    PackedSessionContext packed_session_context();
+    static bool packed_segmented_attention_callback(const void* owner,
+                                                    int host_position);
+    static void packed_expert_residency_callback(
+        void* owner, int layer, const int* sel_dev, int rows,
+        cudaStream_t stream, const float* route_scores_dev);
+
     CudaStream stream_;
     std::unique_ptr<GemmDispatcher> gemm_;
     CudaGraphExec decode_graph_;
     CudaGraphExec segmented_decode_graph_;
     int max_context_;
-    int position_ = 0;
-    SessionPhase phase_ = SessionPhase::Empty;
-    bool active_segmented_attention_ = false;
     bool local_kv_cache_available_ = true;
     std::chrono::steady_clock::time_point decode_async_begin_time_{};
-    RuntimeMetrics metrics_;
-
-    std::shared_ptr<SharedModelWeights> weights_;
-    std::unique_ptr<WeightLoader> weight_loader_;
-    std::vector<Layer> layers_;
-    const LinearWeight* embedding_ = nullptr;
-    // Separate LM head weight when the checkpoint uses an untied head
-    // (tie_word_embeddings == false and a model.lm_head.weight tensor exists).
-    // Null when the head is tied to the embedding table.
-    const LinearWeight* lm_head_ = nullptr;
-    const __nv_bfloat16* final_norm_ = nullptr;
-    std::unique_ptr<IWeightLayout> weight_layout_;
-
     DeviceBuffer<int32_t> position_device_{1};
     DeviceBuffer<int32_t> sampled_device_{1};
     PinnedBuffer<int32_t> sampled_host_{1};
@@ -231,7 +228,7 @@ struct LfmModel::Impl : public IPackedSession {
 
     // Chunked prefill attention scratch (launch_gqa_prefill_segmented): one
     // (max, denom) pair and one head_dim-wide accumulator per
-    // (row, head, chunk). See prefill.cu's use of kPrefillAttnChunkTokens.
+    // (row, head, chunk). See prefill_batched.cpp's use of kPrefillAttnChunkTokens.
     DeviceBuffer<float> prefill_attn_partial_max_;
     DeviceBuffer<float> prefill_attn_partial_denom_;
     DeviceBuffer<float> prefill_attn_partial_accum_;

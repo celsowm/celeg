@@ -12,7 +12,13 @@
 namespace lfm {
 
 class PhysicalPagedKvCache;
+class Model;
 struct PackedDecodeExecutorImpl;
+
+// Backend-internal factory. Keeping this operation-specific context factory
+// out of the public Model surface prevents CUDA packed-execution types from
+// becoming part of the generic model API.
+PackedSessionContext packed_session_context(Model& model);
 
 struct PackedDecodeMetrics {
     uint64_t steps = 0;
@@ -57,15 +63,17 @@ public:
     PackedDecodeExecutor(const PackedDecodeExecutor&) = delete;
     PackedDecodeExecutor& operator=(const PackedDecodeExecutor&) = delete;
 
-    bool eligible(const IPackedSession& session, std::string* reason = nullptr) const;
-    std::vector<int32_t> decode(const std::vector<IPackedSession*>& sessions);
+    bool eligible(const PackedSessionContext& session,
+                  std::string* reason = nullptr) const;
     std::vector<int32_t> decode(
-        const std::vector<IPackedSession*>& sessions,
+        const std::vector<PackedSessionContext>& sessions);
+    std::vector<int32_t> decode(
+        const std::vector<PackedSessionContext>& sessions,
         const std::vector<std::vector<uint32_t>>& page_tables);
     // Advances a flattened ragged prompt batch. Each row consumes
     // `rows[i].token_count` tokens from `tokens` beginning at
     // `rows[i].token_offset`.
-    void prefill(const std::vector<IPackedSession*>& sessions,
+    void prefill(const std::vector<PackedSessionContext>& sessions,
                  const std::vector<std::vector<uint32_t>>& page_tables,
                  const std::vector<int32_t>& tokens,
                  const std::vector<PackedPrefillRow>& rows);

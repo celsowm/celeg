@@ -42,10 +42,13 @@ ModelConfig ModelConfig::load(const std::string& path) {
         config.architecture = ArchitectureKind::DenseLfm2;
     } else if (config.model_type == "lfm2_moe") {
         config.architecture = ArchitectureKind::MoeLfm2;
+    } else if (config.model_type == "granite") {
+        config.architecture = ArchitectureKind::Granite;
     } else {
         throw std::runtime_error("unsupported model architecture: " + config.model_type);
     }
-    config.dtype = root["dtype"].as_string();
+    config.dtype = root.contains("dtype") ? root["dtype"].as_string()
+                                           : root["torch_dtype"].as_string();
     config.hidden_size = read_int(root, "hidden_size");
     config.intermediate_size = read_int(root, "intermediate_size");
     config.num_hidden_layers = read_int(root, "num_hidden_layers");
@@ -54,7 +57,8 @@ ModelConfig ModelConfig::load(const std::string& path) {
     config.num_attention_heads = read_int_or(root, "num_attention_heads", "num_heads");
     config.num_key_value_heads = read_int(root, "num_key_value_heads");
     config.vocab_size = read_int(root, "vocab_size");
-    config.conv_cache = read_int(root, "conv_L_cache");
+    config.conv_cache = config.architecture == ArchitectureKind::Granite
+        ? 1 : read_int(root, "conv_L_cache");
     // MoE configurations omit conv_dim and use_pos_enc; the official
     // architecture always uses conv_dim == hidden_size and positional
     // encoding. Default those only when absent (validated against the
@@ -66,8 +70,10 @@ ModelConfig ModelConfig::load(const std::string& path) {
     config.bos_token_id = read_int(root, "bos_token_id");
     config.eos_token_id = read_int(root, "eos_token_id");
     config.pad_token_id = read_int(root, "pad_token_id");
-    config.norm_eps = static_cast<float>(root["norm_eps"].as_number());
-    config.conv_bias = read_bool(root, "conv_bias");
+    config.norm_eps = static_cast<float>(root.contains("norm_eps")
+        ? root["norm_eps"].as_number() : root["rms_norm_eps"].as_number());
+    config.conv_bias = config.architecture == ArchitectureKind::Granite
+        ? false : read_bool(root, "conv_bias");
     // 1.2B-Instruct uses "tie_embedding"; 230M uses "tie_word_embeddings".
     config.tie_word_embeddings = read_bool_or(root, "tie_word_embeddings", "tie_embedding");
     config.use_pos_enc = root.contains("use_pos_enc")
@@ -82,13 +88,28 @@ ModelConfig ModelConfig::load(const std::string& path) {
         } else {
             config.rope_type = "default";
         }
-    } else {
+    } else if (root.contains("rope_theta")) {
         config.rope_theta = static_cast<float>(root["rope_theta"].as_number());
         if (root.contains("rope_type")) {
             config.rope_type = root["rope_type"].as_string();
         } else {
             config.rope_type = "default";
         }
+    } else {
+        config.rope_theta = 10000.0f;
+        config.rope_type = "default";
+    }
+
+    if (config.architecture == ArchitectureKind::Granite) {
+        config.embedding_multiplier = root.contains("embedding_multiplier")
+            ? static_cast<float>(root["embedding_multiplier"].as_number()) : 1.0f;
+        config.attention_multiplier = root.contains("attention_multiplier")
+            ? static_cast<float>(root["attention_multiplier"].as_number()) : 0.0f;
+        config.residual_multiplier = root.contains("residual_multiplier")
+            ? static_cast<float>(root["residual_multiplier"].as_number()) : 1.0f;
+        config.logits_divisor = root.contains("logits_scaling")
+            ? static_cast<float>(root["logits_scaling"].as_number()) : 1.0f;
+        config.query_key_norm = false;
     }
 
     if (root.contains("_name")) {
@@ -119,7 +140,10 @@ ModelConfig ModelConfig::load(const std::string& path) {
         config.moe = moe;
     }
 
-    for (const Json& item : root["layer_types"].as_array()) {
+    if (config.architecture == ArchitectureKind::Granite) {
+        config.layer_types.assign(static_cast<size_t>(config.num_hidden_layers),
+                                  LayerType::FullAttention);
+    } else for (const Json& item : root["layer_types"].as_array()) {
         const std::string& value = item.as_string();
         if (value == "conv") {
             config.layer_types.push_back(LayerType::Convolution);
@@ -161,6 +185,15 @@ void ModelConfig::validate() const {
         if (!(m.routed_scaling_factor > 0.0f) || !std::isfinite(m.routed_scaling_factor)) {
             throw std::runtime_error("invalid MoE routed_scaling_factor");
         }
+    } else if (architecture == ArchitectureKind::Granite) {
+        if (model_type != "granite") throw std::runtime_error("config model_type is not granite");
+        if (conv_cache != 1 || conv_dim != hidden_size || conv_bias) {
+            throw std::runtime_error("invalid Granite convolution defaults");
+        }
+        if (!(embedding_multiplier > 0.0f) || !(attention_multiplier > 0.0f) ||
+            !(residual_multiplier > 0.0f) || !(logits_divisor > 0.0f)) {
+            throw std::runtime_error("invalid Granite numerical modifiers");
+        }
     } else {
         throw std::runtime_error("unsupported model architecture");
     }
@@ -180,7 +213,8 @@ void ModelConfig::validate() const {
     if (head_dim <= 0 || head_dim * num_attention_heads != hidden_size || (head_dim % 2) != 0) {
         throw std::runtime_error("invalid attention head_dim");
     }
-    if (conv_dim != hidden_size || conv_cache <= 0) {
+    if (architecture != ArchitectureKind::Granite &&
+        (conv_dim != hidden_size || conv_cache <= 0)) {
         throw std::runtime_error("unsupported convolution dimensions");
     }
     if (max_position_embeddings <= 0) throw std::runtime_error("invalid max_position_embeddings");
@@ -201,8 +235,10 @@ std::string ModelConfig::summary() const {
         if (type == LayerType::FullAttention) ++attention_layers;
     }
     std::ostringstream out;
+    const char* architecture_name = architecture == ArchitectureKind::MoeLfm2 ? "lfm2_moe" :
+        architecture == ArchitectureKind::Granite ? "granite" : "lfm2";
     out << "model_type=" << model_type
-        << " architecture=" << (architecture == ArchitectureKind::MoeLfm2 ? "lfm2_moe" : "lfm2")
+        << " architecture=" << architecture_name
         << " dtype=" << dtype
         << " hidden=" << hidden_size;
     if (architecture == ArchitectureKind::MoeLfm2 && moe) {

@@ -91,4 +91,33 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
     }
 }
 
+void cpu_rope(float* data, int heads, int head_dim, int position,
+              float rope_theta) {
+    if (!data || heads <= 0 || head_dim <= 0 || (head_dim % 2) != 0 ||
+        position < 0 || !(rope_theta > 0.0f)) {
+        throw std::invalid_argument("invalid RoPE arguments");
+    }
+    const int half = head_dim / 2;
+    std::vector<float> cos_vals(static_cast<size_t>(half));
+    std::vector<float> sin_vals(static_cast<size_t>(half));
+    for (int pair = 0; pair < half; ++pair) {
+        const float frequency = std::pow(rope_theta,
+            -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
+        const float angle = static_cast<float>(position) * frequency;
+        cos_vals[static_cast<size_t>(pair)] = std::cos(angle);
+        sin_vals[static_cast<size_t>(pair)] = std::sin(angle);
+    }
+    for (int head = 0; head < heads; ++head) {
+        float* row = data + static_cast<size_t>(head) * head_dim;
+        for (int pair = 0; pair < half; ++pair) {
+            const float x0 = row[pair];
+            const float x1 = row[half + pair];
+            row[pair] = x0 * cos_vals[static_cast<size_t>(pair)] -
+                        x1 * sin_vals[static_cast<size_t>(pair)];
+            row[half + pair] = x1 * cos_vals[static_cast<size_t>(pair)] +
+                               x0 * sin_vals[static_cast<size_t>(pair)];
+        }
+    }
+}
+
 } // namespace lfm

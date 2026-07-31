@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -64,6 +65,10 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
             }
             shared.linear.embedding(shared.embedding, tokens[row],
                                     hidden.data() + row * shape.hidden);
+            if (shape.embedding_multiplier != 1.0f) {
+                float* values = hidden.data() + row * shape.hidden;
+                for (int i = 0; i < shape.hidden; ++i) values[i] *= shape.embedding_multiplier;
+            }
         }
 
         for (size_t layer_index = 0; layer_index < shared.layers.size(); ++layer_index) {
@@ -91,14 +96,24 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
                     float* q = qkv.data() + row * shape.qkv_width;
                     float* k = q + shape.q_width;
                     float* v = k + shape.kv_width;
-                    cpu_qk_norm_rope(q, attention->q_norm.data(),
-                        shape.num_attention_heads, shape.head_dim,
-                        session.position_value, shape.rope_theta,
-                        shape.norm_eps);
-                    cpu_qk_norm_rope(k, attention->k_norm.data(),
-                        shape.num_key_value_heads, shape.head_dim,
-                        session.position_value, shape.rope_theta,
-                        shape.norm_eps);
+                    if (shape.query_key_norm) {
+                        cpu_qk_norm_rope(q, attention->q_norm.data(),
+                            shape.num_attention_heads, shape.head_dim,
+                            session.position_value, shape.rope_theta,
+                            shape.norm_eps);
+                        cpu_qk_norm_rope(k, attention->k_norm.data(),
+                            shape.num_key_value_heads, shape.head_dim,
+                            session.position_value, shape.rope_theta,
+                            shape.norm_eps);
+                    } else {
+                        cpu_rope(q, shape.num_attention_heads, shape.head_dim,
+                                 session.position_value, shape.rope_theta);
+                        cpu_rope(k, shape.num_key_value_heads, shape.head_dim,
+                                 session.position_value, shape.rope_theta);
+                        const float ratio = shape.attention_multiplier /
+                            (1.0f / std::sqrt(static_cast<float>(shape.head_dim)));
+                        for (int i = 0; i < shape.q_width; ++i) q[i] *= ratio;
+                    }
                     auto& cache = session.attention_state(layer_index);
                     session.store_kv(cache, session.position_value, k, v);
                     session.run_attention(
@@ -126,6 +141,10 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
             }
 
             for (size_t row = 0; row < batch; ++row) {
+                if (shape.residual_multiplier != 1.0f) {
+                    float* value = hidden.data() + row * shape.hidden;
+                    for (int i = 0; i < shape.hidden; ++i) value[i] *= shape.residual_multiplier;
+                }
                 cpu_residual_add(hidden.data() + row * shape.hidden,
                                  residual.data() + row * shape.hidden,
                                  shape.hidden);
@@ -142,6 +161,10 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
             }
             shared.linear.gemm(common.w2, activated.data(), mlp_output.data(), batch);
             for (size_t row = 0; row < batch; ++row) {
+                if (shape.residual_multiplier != 1.0f) {
+                    float* value = mlp_output.data() + row * shape.hidden;
+                    for (int i = 0; i < shape.hidden; ++i) value[i] *= shape.residual_multiplier;
+                }
                 cpu_residual_add(hidden.data() + row * shape.hidden,
                                  mlp_output.data() + row * shape.hidden,
                                  shape.hidden);
@@ -164,6 +187,9 @@ struct CpuModel::Impl::BatchScratch : CpuExecutionWorkspace {
             }
             shared.linear.gemm(shared.embedding, final_normed.data(),
                                final_logits.data(), terminal_rows.size());
+            if (shape.logits_divisor != 1.0f) {
+                for (float& value : final_logits) value /= shape.logits_divisor;
+            }
             for (size_t index = 0; index < terminal_rows.size(); ++index) {
                 State& session = *sessions[terminal_rows[index]];
                 std::copy(

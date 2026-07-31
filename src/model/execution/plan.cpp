@@ -61,7 +61,11 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
             plan.linear_kernel_ = LinearKernelKind::W4A16;
             break;
         case WeightMode::NativeGguf:
-            plan.linear_kernel_ = LinearKernelKind::Bf16CublasLt;
+            // Phase 1.4: a native-GGUF weight mode mixes BF16 (norms/conv) and
+            // GGUF MMQ (linear blocks). Do not report this path as plain
+            // BF16 cuBLASLt; the per-tensor dispatcher switches to MMQ for
+            // the GGUF-quantized tensors at run time.
+            plan.linear_kernel_ = LinearKernelKind::MixedBf16AndGgufMmq;
             break;
     }
     plan.sampling_kernel_ = requested.fused_sampling
@@ -90,6 +94,8 @@ std::string ExecutionPlan::description() const {
         case LinearKernelKind::W4A16: out << "w4a16"; break;
         case LinearKernelKind::Q4kMmq: out << "q4k-mmq"; break;
         case LinearKernelKind::Q6kMmq: out << "q6k-mmq"; break;
+        case LinearKernelKind::MixedBf16AndGgufMmq:
+            out << "mixed-bf16-and-gguf-mmq"; break;
     }
     out << ", sampling="
         << (sampling_kernel_ == SamplingKernelKind::Fused ? "fused" : "legacy")

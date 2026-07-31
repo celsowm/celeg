@@ -12,12 +12,12 @@ namespace lfm {
 
 struct PackedDecodeExecutorImpl;
 class PhysicalPagedKvCache;
-class LfmModel;
-class IPackedSession;
+class Model;
+struct PackedSessionContext;
 
 // Narrow interface for token-processing operations. New C++ callers should
-// depend on this view instead of the compatibility surface on LfmModel.
-class LfmInferenceSession {
+// depend on this view instead of the complete Model surface.
+class InferenceSession {
 public:
     void reset(bool allocate_local_kv = true);
     void prefill(const std::vector<int32_t>& tokens);
@@ -40,13 +40,13 @@ public:
     int position() const;
 
 private:
-    friend class LfmModel;
-    explicit LfmInferenceSession(LfmModel& owner) : owner_(&owner) {}
-    LfmModel* owner_;
+    friend class Model;
+    explicit InferenceSession(Model& owner) : owner_(&owner) {}
+    Model* owner_;
 };
 
 // Read-only operational and benchmarking surface.
-class LfmDiagnostics {
+class ModelDiagnostics {
 public:
     std::vector<float> copy_logits() const;
     DecodeBenchmark benchmark_decode(int warmup_steps, int measured_steps);
@@ -69,13 +69,13 @@ public:
     ExpertOffloadStats expert_offload_stats() const;
 
 private:
-    friend class LfmModel;
-    explicit LfmDiagnostics(LfmModel& owner) : owner_(&owner) {}
-    LfmModel* owner_;
+    friend class Model;
+    explicit ModelDiagnostics(Model& owner) : owner_(&owner) {}
+    Model* owner_;
 };
 
 // Persistence and deterministic prefix-state boundary.
-class LfmPersistence {
+class SessionPersistence {
 public:
     void save_session(const std::string& path) const;
     void load_session(const std::string& path);
@@ -83,50 +83,44 @@ public:
     void restore_prefix_state(const PrefixState& state);
 
 private:
-    friend class LfmModel;
-    explicit LfmPersistence(LfmModel& owner) : owner_(&owner) {}
-    LfmModel* owner_;
+    friend class Model;
+    explicit SessionPersistence(Model& owner) : owner_(&owner) {}
+    Model* owner_;
 };
 
-// Thin compatibility facade. The implementation, CUDA resources and model
+// Thin runtime facade. The implementation, CUDA resources and model
 // topology live in Impl; focused clients can use session(), diagnostics() and
-// persistence() to avoid depending on the complete legacy surface.
-class LfmModel {
-    friend class LfmInferenceSession;
-    friend class LfmDiagnostics;
-    friend class LfmPersistence;
+// persistence() to avoid depending on the complete model implementation.
+class Model {
+    friend class InferenceSession;
+    friend class ModelDiagnostics;
+    friend class SessionPersistence;
+    friend PackedSessionContext packed_session_context(Model& model);
 public:
-    LfmModel(const std::string& model_path,
+    Model(const std::string& model_path,
              int max_context = 4096,
              ModelOptions options = {},
              GenerationConfig generation = {});
-    ~LfmModel();
+    ~Model();
 
-    LfmModel(const LfmModel&) = delete;
-    LfmModel& operator=(const LfmModel&) = delete;
-    LfmModel(LfmModel&&) = delete;
-    LfmModel& operator=(LfmModel&&) = delete;
+    Model(const Model&) = delete;
+    Model& operator=(const Model&) = delete;
+    Model(Model&&) = delete;
+    Model& operator=(Model&&) = delete;
 
-    LfmInferenceSession& session() { return session_view_; }
-    const LfmInferenceSession& session() const { return session_view_; }
-    LfmDiagnostics& diagnostics() { return diagnostics_view_; }
-    const LfmDiagnostics& diagnostics() const { return diagnostics_view_; }
-    LfmPersistence& persistence() { return persistence_view_; }
-    const LfmPersistence& persistence() const { return persistence_view_; }
-
-    // Returns the narrow IPackedSession view. PackedDecodeExecutor depends
-    // only on this interface rather than on LfmModel's full surface
-    // (Interface Segregation Principle); the friend declaration for
-    // PackedDecodeExecutorImpl is no longer required.
-    IPackedSession& packed_session();
-    const IPackedSession& packed_session() const;
+    InferenceSession& session() { return session_view_; }
+    const InferenceSession& session() const { return session_view_; }
+    ModelDiagnostics& diagnostics() { return diagnostics_view_; }
+    const ModelDiagnostics& diagnostics() const { return diagnostics_view_; }
+    SessionPersistence& persistence() { return persistence_view_; }
+    const SessionPersistence& persistence() const { return persistence_view_; }
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-    LfmInferenceSession session_view_;
-    LfmDiagnostics diagnostics_view_;
-    LfmPersistence persistence_view_;
+    InferenceSession session_view_;
+    ModelDiagnostics diagnostics_view_;
+    SessionPersistence persistence_view_;
 };
 
 } // namespace lfm

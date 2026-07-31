@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace lfm {
-void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer, int layer) {
+void Model::Impl::run_mlp_decode(const LayerCommon& common_layer, int layer) {
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
         run_mlp_moe_decode(common_layer, layer);
@@ -36,12 +36,14 @@ void LfmModel::Impl::run_mlp_decode(const LayerCommon& common_layer, int layer) 
     } else {
         linear(activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, mlp_output_.data(),
                1, shape_.hidden, shape_.intermediate);
+        launch_scale(mlp_output_.data(), shape_.hidden, shape_.residual_multiplier,
+                     stream_.get());
         launch_residual_add(hidden_.data(), mlp_output_.data(),
                             shape_.hidden, stream_.get());
     }
 }
 
-void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows,
+void Model::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows,
                                      int layer) {
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
@@ -81,6 +83,8 @@ void LfmModel::Impl::run_mlp_prefill(const LayerCommon& common_layer, int rows,
     } else {
         linear(prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, prefill_mlp_output_.data(),
                 rows, shape_.hidden, shape_.intermediate);
+        launch_scale(prefill_mlp_output_.data(), rows * shape_.hidden,
+                     shape_.residual_multiplier, stream_.get());
         launch_residual_add(prefill_hidden_.data(), prefill_mlp_output_.data(),
                             rows * shape_.hidden, stream_.get());
     }
@@ -192,9 +196,11 @@ void SharedModelWeights::ensure_moe_experts_resident(
                         if (expert_sidecar) {
                             expert_sidecar->read_expert(layer, e, gu_dest, dn_dest);
                         } else {
-                            repo->read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                            repo->read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                            repo->read(loc.w2, dn_dest);
+                            const auto& reader =
+                                require_random_access_tensor_reader(*repo);
+                            reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
+                            reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
+                            reader.read(loc.w2, dn_dest);
                         }
                     });
                     lease_dest = std::move(lease);
@@ -233,9 +239,11 @@ void SharedModelWeights::ensure_moe_experts_resident(
                     if (expert_sidecar) {
                         expert_sidecar->read_expert(layer, e, gu_dest, dn_dest);
                     } else {
-                        repo->read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                        repo->read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                        repo->read(loc.w2, dn_dest);
+                        const auto& reader =
+                            require_random_access_tensor_reader(*repo);
+                        reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
+                        reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
+                        reader.read(loc.w2, dn_dest);
                     }
                 });
 
@@ -316,7 +324,7 @@ void SharedModelWeights::ensure_moe_experts_resident(
     LFM_CUDA(cudaEventRecord(prefetch_done_event.get(), transfer));
 }
 
-void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
+void Model::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
                                                    int rows,
                                                    cudaStream_t compute_stream,
                                                    const float* route_scores_dev) {
@@ -331,13 +339,13 @@ void LfmModel::Impl::ensure_moe_experts_resident(int layer, const int* sel_dev,
         prefetch_scores_);
 }
 
-void LfmModel::Impl::ensure_moe_experts_resident_packed(
+void Model::Impl::ensure_moe_experts_resident_packed(
     int layer, const int* sel_dev, int rows, cudaStream_t stream,
     const float* route_scores_dev) {
     ensure_moe_experts_resident(layer, sel_dev, rows, stream, route_scores_dev);
 }
 
-void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
+void Model::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     launch_rmsnorm(hidden_.data(), common_layer.ffn_norm, normed_.data(),
@@ -377,7 +385,7 @@ void LfmModel::Impl::run_mlp_moe_decode(const LayerCommon& common_layer,
                          shape_.hidden, stream_.get());
 }
 
-void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
+void Model::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     // Size the prefill scratch to the requested row count.
@@ -456,9 +464,11 @@ void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int ro
                         if (weights_->expert_sidecar) {
                             weights_->expert_sidecar->read_expert(layer, e, gu_dest, dn_dest);
                         } else {
-                            weights_->repo->read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                            weights_->repo->read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                            weights_->repo->read(loc.w2, dn_dest);
+                            const auto& reader =
+                                require_random_access_tensor_reader(*weights_->repo);
+                            reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
+                            reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
+                            reader.read(loc.w2, dn_dest);
                         }
                     });
                     if (cache->ensure_resident(e,
@@ -560,4 +570,3 @@ void LfmModel::Impl::run_mlp_moe_prefill(const LayerCommon& common_layer, int ro
 }
 
 } // namespace lfm
-

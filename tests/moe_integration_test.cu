@@ -1,4 +1,4 @@
-// Integration test for the MoE decode forward sequence wired into LfmModel
+// Integration test for the MoE decode forward sequence wired into Model
 // (run_mlp_moe_decode). It exercises the exact kernel pipeline the model uses:
 //   1. RMSNorm the hidden state (BF16)
 //   2. cast the normed BF16 activations to float (router input path)

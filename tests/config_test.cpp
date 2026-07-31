@@ -44,6 +44,22 @@ void write_1_2b_config(const std::filesystem::path& path) {
     })";
 }
 
+void write_granite_config(const std::filesystem::path& path) {
+    std::ofstream out(path);
+    out << R"({
+      "model_type":"granite", "torch_dtype":"bfloat16",
+      "hidden_size":64, "intermediate_size":128,
+      "num_hidden_layers":2, "num_attention_heads":4,
+      "num_key_value_heads":2, "vocab_size":256,
+      "max_position_embeddings":4096,
+      "bos_token_id":1, "eos_token_id":2, "pad_token_id":0,
+      "rms_norm_eps":1e-5, "rope_theta":10000000.0,
+      "embedding_multiplier":12.0, "attention_multiplier":0.125,
+      "residual_multiplier":0.22, "logits_scaling":16.0,
+      "tie_word_embeddings":true
+    })";
+}
+
 void write_8b_moe_config(const std::filesystem::path& path) {
     // Mirrors the official LiquidAI/LFM2.5-8B-A1B config.json. conv_dim and
     // use_pos_enc are intentionally omitted to exercise the architecture-aware
@@ -180,6 +196,21 @@ int main() {
     // Fingerprints must differ between dense and MoE shapes.
     LFM_TEST_CHECK(shape_moe.fingerprint() != shape_1_2b.fingerprint());
     LFM_TEST_CHECK(shape_moe.fingerprint().find("moe") != std::string::npos);
+
+    // ---- Granite 4.1 dense configuration ----
+    write_granite_config(path);
+    const lfm::ModelConfig granite = lfm::ModelConfig::load(path.string());
+    LFM_TEST_CHECK(granite.architecture == lfm::ArchitectureKind::Granite);
+    LFM_TEST_CHECK(granite.dtype == "bfloat16");
+    LFM_TEST_CHECK(granite.layer_types.size() == 2);
+    LFM_TEST_CHECK(granite.layer_types[0] == lfm::LayerType::FullAttention);
+    LFM_TEST_CHECK(granite.query_key_norm == false);
+    LFM_TEST_CHECK(granite.embedding_multiplier == 12.0f);
+    LFM_TEST_CHECK(granite.logits_divisor == 16.0f);
+    const lfm::ModelShape granite_shape = lfm::ModelShape::from_config(granite);
+    LFM_TEST_CHECK(granite_shape.attention_layer_count == 2);
+    LFM_TEST_CHECK(granite_shape.conv_layer_count == 0);
+    LFM_TEST_CHECK(granite_shape.attention_multiplier == 0.125f);
 
     // ---- MoE configuration validation ----
     auto expect_config_error = [&path](const std::string& json) {

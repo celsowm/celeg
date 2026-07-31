@@ -1,9 +1,9 @@
 #pragma once
 
 // Hoisted model implementation types. These were previously nested inside
-// LfmModel::Impl and are now at namespace lfm:: scope so that WeightLoader,
-// GemmDispatcher, and IPackedSession can depend on them without being
-// friends of LfmModel::Impl (Interface Segregation + Dependency Inversion).
+// Model::Impl and are now at namespace lfm:: scope so that WeightLoader,
+// GemmDispatcher and PackedSessionContext can depend on them without being
+// friends of Model::Impl (Interface Segregation + Dependency Inversion).
 //
 // All types in this header are implementation details; they are not part of
 // the public API and live under lfm:: so the detail/ headers can reference
@@ -241,7 +241,7 @@ struct ResidencyController {
     std::vector<InflightTransfer> inflight_transfers;
 };
 
-// Process-wide shared weight arena. Multiple LfmModel sessions on the same
+// Process-wide shared weight arena. Multiple Model sessions on the same
 // device + checkpoint + weight_mode share one instance to avoid duplicate
 // GPU allocations.
 struct SharedModelWeights {

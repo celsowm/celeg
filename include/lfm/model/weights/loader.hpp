@@ -24,11 +24,11 @@ void dequantize_gguf_to_bf16(const HostTensorView& tensor,
 // Loads SafeTensor weights (and preserves native GGUF Q4_K/Q6_K blocks) into
 // device memory, with a
 // process-wide shared-weight cache keyed by (device, checkpoint path,
-// weight mode). Multiple LfmModel sessions on the same device + checkpoint
+// weight mode). Multiple Model sessions on the same device + checkpoint
 // + weight_mode share one SharedModelWeights instance to avoid duplicate
 // GPU allocations.
 //
-// Extracted from LfmModel::Impl for Single Responsibility: this class does
+// Extracted from Model::Impl for Single Responsibility: this class does
 // only I/O + quantization + caching; the Impl retains the forward pass,
 // session state, and graph capture. New weight formats are added by
 // extending the quantization branches here without touching the inference
@@ -104,10 +104,21 @@ public:
         const std::string& name,
         std::vector<int64_t> expected);
 
-    // Loads the router/gate weight [num_experts, hidden] as a LinearWeight.
+    // Loads the router/gate weight [num_experts, hidden] as a LinearWeight
+    // that is always materialized as BF16, regardless of the global
+    // --weight-mode. The CUDA MoE router kernel consumes a float copy of
+    // this weight (cast once at load time, see weight_upload.cpp), so quantized
+    // storage here would invalidate that contract and, before Phase 1.1,
+    // left the session construction crashing on a null BF16 pointer.
+    //
+    // MoE expert kernels do not yet have INT4/INT8 implementations; the
+    // Phase 1 policy check (`check_moe_quantization_policy` in policy.hpp)
+    // rejects those combinations at model construction time so the loader
+    // never sees them for a MoE layer.
+    //
     // Official tensor name:
     //   model.layers.{layer}.feed_forward.gate.weight
-    const LinearWeight* load_router(
+    const LinearWeight* load_router_weight(
         const IWeightRepository& repo, int layer,
         int num_experts, int hidden);
 

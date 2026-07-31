@@ -137,7 +137,7 @@ enum class ExpertOffloadMode : uint8_t {
     Host,
 };
 
-// Byte-size helpers (mirror the packed expert layout in weight_loader.cu).
+// Byte-size helpers (mirror the packed expert layout in expert_loader.cpp).
 inline constexpr std::size_t operator"" _MiB(unsigned long long v) {
     return static_cast<std::size_t>(v) * 1024ull * 1024ull;
 }

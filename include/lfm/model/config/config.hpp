@@ -18,6 +18,7 @@ enum class LayerType {
 enum class ArchitectureKind {
     DenseLfm2,
     MoeLfm2,
+    Granite,
 };
 
 // Explicit MoE topology for the LFM2 MoE architecture. Populated only when
@@ -51,6 +52,14 @@ struct ModelConfig {
     int pad_token_id = -1;
     float norm_eps = 0.0f;
     float rope_theta = 0.0f;
+    // Common model numerics resolved from the architecture provider. LFM2
+    // keeps the historical defaults; Granite supplies its explicit scaling
+    // constants from config.json.
+    float embedding_multiplier = 1.0f;
+    float attention_multiplier = 0.0f;
+    float residual_multiplier = 1.0f;
+    float logits_divisor = 1.0f;
+    bool query_key_norm = true;
     bool conv_bias = false;
     bool tie_word_embeddings = false;
     bool use_pos_enc = false;

@@ -55,7 +55,8 @@ int main() {
     auto& registry = lfm::ModelVariantRegistry::instance();
 
     const auto ids = registry.ids();
-    LFM_TEST_CHECK(ids.size() == 5);
+    LFM_TEST_CHECK(ids.size() == 6);
+    LFM_TEST_CHECK(registry.find("granite") != nullptr);
     LFM_TEST_CHECK(registry.find("lfm2.5-8b-a1b") != nullptr);
     LFM_TEST_CHECK(registry.find("lfm2-8b-a1b") != nullptr);
 

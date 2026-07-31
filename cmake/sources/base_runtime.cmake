@@ -10,9 +10,12 @@ set(LFM_BASE_RUNTIME_SOURCES
     src/model/config/config.cpp
     src/model/config/shape.cpp
     src/model/config/variant.cpp
+    src/model/definition.cpp
+    src/model/architecture.cpp
     src/model/execution/runtime_types.cpp
     src/model/execution/plan.cpp
     src/model/weights/quantization.cpp
+    src/model/weights/roles.cpp
     src/model/reference.cpp
     src/text/tokenizer.cpp
     src/text/chat_template.cpp

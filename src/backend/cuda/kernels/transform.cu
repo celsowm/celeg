@@ -6,5 +6,8 @@
 #include "lfm/backend/cuda/kernels/gemv_kernels.cuh"
 
 namespace lfm {
-#include "transform.inl"
+#include "linear.cuh"
+#include "norm.cuh"
+#include "shortconv_transform.cuh"
+#include "rope.cuh"
 }

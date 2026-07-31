@@ -22,6 +22,14 @@
 
 namespace lfm {
 namespace {
+std::string tensor_name(const ITensorNamingPolicy* policy, TensorRole role,
+                        int layer = -1) {
+    if (policy == nullptr) throw std::logic_error("missing tensor naming policy");
+    const auto names = policy->candidates({role, layer, -1, {}});
+    if (names.empty()) throw std::logic_error("tensor naming policy returned no candidates");
+    return names.front();
+}
+
 size_t checked_elements(const std::vector<int64_t>& shape) {
     size_t result = 1;
     for (int64_t dim : shape) {
@@ -150,6 +158,7 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     is_gguf = bootstrap.is_gguf;
     shape = bootstrap.shape;
     variant = bootstrap.variant;
+    tensor_naming = &bootstrap.architecture_provider->tensor_naming();
     if (is_gguf) {
         repository = std::make_shared<GgufRepository>(bootstrap.gguf_file);
     } else {
@@ -212,18 +221,20 @@ CpuModel::Impl::CommonWeights CpuModel::Impl::Shared::load_common(
     int layer) {
     CommonWeights common;
     common.operator_norm = load_vector(source, reader, writer,
-        layer_name(layer, "operator_norm.weight"), {shape.hidden});
+        tensor_name(tensor_naming, TensorRole::AttentionInputNorm, layer),
+        {shape.hidden});
     common.ffn_norm = load_vector(source, reader, writer,
-        layer_name(layer, "ffn_norm.weight"), {shape.hidden});
+        tensor_name(tensor_naming, TensorRole::FfnInputNorm, layer),
+        {shape.hidden});
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
-            {layer_name(layer, "feed_forward.w1.weight"),
+            {tensor_name(tensor_naming, TensorRole::FfnGate, layer),
              {shape.intermediate, shape.hidden}},
-            {layer_name(layer, "feed_forward.w3.weight"),
+            {tensor_name(tensor_naming, TensorRole::FfnUp, layer),
              {shape.intermediate, shape.hidden}},
         });
     common.w2 = load_matrix(source, reader, writer,
-        layer_name(layer, "feed_forward.w2.weight"),
+        tensor_name(tensor_naming, TensorRole::FfnDown, layer),
         {shape.hidden, shape.intermediate});
     return common;
 }
@@ -262,9 +273,11 @@ void CpuModel::Impl::Shared::load_weights() {
 
     IWeightRepository* source = reader ? nullptr : repository.get();
     embedding = load_matrix(source, reader.get(), writer.get(),
-        "model.embed_tokens.weight", {shape.vocab_size, shape.hidden});
+        tensor_name(tensor_naming, TensorRole::TokenEmbedding),
+        {shape.vocab_size, shape.hidden});
     final_norm = load_vector(source, reader.get(), writer.get(),
-        "model.embedding_norm.weight", {shape.hidden});
+        tensor_name(tensor_naming, TensorRole::FinalNorm),
+        {shape.hidden});
 
     // Attention and short-convolution are identical between dense and MoE
     // layers. Keeping their loader in one place prevents the two checkpoint
@@ -275,22 +288,27 @@ void CpuModel::Impl::Shared::load_weights() {
             AttentionWeights layer;
             layer.qkv = load_concat(source, reader.get(), writer.get(),
                 layer_name(index, "self_attn.qkv.weight"), {
-                    {layer_name(index, "self_attn.q_proj.weight"),
+                    {tensor_name(tensor_naming, TensorRole::AttentionQuery, index),
                      {shape.q_width, shape.hidden}},
-                    {layer_name(index, "self_attn.k_proj.weight"),
+                    {tensor_name(tensor_naming, TensorRole::AttentionKey, index),
                      {shape.kv_width, shape.hidden}},
-                    {layer_name(index, "self_attn.v_proj.weight"),
+                    {tensor_name(tensor_naming, TensorRole::AttentionValue, index),
                      {shape.kv_width, shape.hidden}},
                 });
             layer.out = load_matrix(source, reader.get(), writer.get(),
-                layer_name(index, "self_attn.out_proj.weight"),
+                tensor_name(tensor_naming, TensorRole::AttentionOutput, index),
                 {shape.hidden, shape.hidden});
-            layer.q_norm = load_vector(source, reader.get(), writer.get(),
-                layer_name(index, "self_attn.q_layernorm.weight"),
-                {shape.head_dim});
-            layer.k_norm = load_vector(source, reader.get(), writer.get(),
-                layer_name(index, "self_attn.k_layernorm.weight"),
-                {shape.head_dim});
+            if (!shape.query_key_norm) {
+                layer.q_norm.assign(static_cast<size_t>(shape.head_dim), 1.0f);
+                layer.k_norm.assign(static_cast<size_t>(shape.head_dim), 1.0f);
+            } else {
+                layer.q_norm = load_vector(source, reader.get(), writer.get(),
+                    layer_name(index, "self_attn.q_layernorm.weight"),
+                    {shape.head_dim});
+                layer.k_norm = load_vector(source, reader.get(), writer.get(),
+                    layer_name(index, "self_attn.k_layernorm.weight"),
+                    {shape.head_dim});
+            }
             return layer;
         }
 
@@ -315,7 +333,7 @@ void CpuModel::Impl::Shared::load_weights() {
         return layer;
     };
 
-    if (shape.architecture == ArchitectureKind::MoeLfm2) {
+    if (shape.num_experts > 0) {
         // MoE checkpoints begin with ordinary dense FFN blocks. Keep them as
         // dense layers, then load only the remaining routed blocks as MoE.
         layers.reserve(static_cast<size_t>(shape.num_hidden_layers));

@@ -32,6 +32,11 @@ struct ModelShape {
     int pad_token_id = -1;
     float norm_eps = 0.0f;
     float rope_theta = 0.0f;
+    float embedding_multiplier = 1.0f;
+    float attention_multiplier = 0.0f;
+    float residual_multiplier = 1.0f;
+    float logits_divisor = 1.0f;
+    bool query_key_norm = true;
     std::string rope_type;
     std::vector<LayerType> layer_types;
 

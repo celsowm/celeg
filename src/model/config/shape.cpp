@@ -22,6 +22,11 @@ ModelShape ModelShape::from_config(const ModelConfig& config) {
     shape.pad_token_id = config.pad_token_id;
     shape.norm_eps = config.norm_eps;
     shape.rope_theta = config.rope_theta;
+    shape.embedding_multiplier = config.embedding_multiplier;
+    shape.attention_multiplier = config.attention_multiplier;
+    shape.residual_multiplier = config.residual_multiplier;
+    shape.logits_divisor = config.logits_divisor;
+    shape.query_key_norm = config.query_key_norm;
     shape.rope_type = config.rope_type;
     shape.layer_types = config.layer_types;
     shape.architecture = config.architecture;
@@ -97,7 +102,8 @@ void ModelShape::validate() const {
     if (head_dim <= 0 || head_dim * num_attention_heads != hidden || (head_dim % 2) != 0) {
         throw std::runtime_error("invalid attention head_dim");
     }
-    if (conv_dim != hidden || conv_cache <= 0) {
+    if (architecture != ArchitectureKind::Granite &&
+        (conv_dim != hidden || conv_cache <= 0)) {
         throw std::runtime_error("unsupported convolution dimensions");
     }
     if (max_position_embeddings <= 0) {

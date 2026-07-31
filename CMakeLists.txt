@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(lfm25_cuda_cpp VERSION 0.0.21 LANGUAGES C CXX)
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -61,7 +63,7 @@ endforeach()
 
 file(GLOB_RECURSE _lfm_public_headers CONFIGURE_DEPENDS
     RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-    "include/lfm/*.h" "include/lfm/*.hpp" "include/lfm/*.cuh" "include/lfm/*.inl")
+    "include/lfm/*.h" "include/lfm/*.hpp" "include/lfm/*.cuh")
 foreach(_lfm_header IN LISTS _lfm_public_headers)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_lfm_header}")
         message(FATAL_ERROR "Public header disappeared: ${_lfm_header}")
@@ -116,7 +118,7 @@ target_link_libraries(lfm_cpu_backend PUBLIC lfm_runtime Threads::Threads)
 add_library(lfm25 SHARED ${LFM_API_SOURCES})
 target_link_libraries(lfm25 PRIVATE lfm_cpu_backend)
 target_include_directories(lfm25 PUBLIC include)
-target_compile_definitions(lfm25 PRIVATE LFM25_API_BUILD=1)
+target_compile_definitions(lfm25 PRIVATE RUNTIME_API_BUILD=1)
 set_target_properties(lfm25 PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION 0
@@ -324,7 +326,7 @@ if(LFM_CUDA_AVAILABLE)
     endif()
 
     target_link_libraries(lfm25 PRIVATE lfm_cuda_backend)
-    target_compile_definitions(lfm25 PRIVATE LFM25_API_WITH_CUDA=1)
+    target_compile_definitions(lfm25 PRIVATE RUNTIME_API_WITH_CUDA=1)
     if(TARGET lfm25_cuda_runtime)
         add_dependencies(lfm25 lfm25_cuda_runtime)
     endif()
@@ -371,7 +373,82 @@ install(TARGETS ${LFM_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# Keep the installed surface explicit.  The repository contains implementation
+# headers under lfm/detail, CUDA device helpers under lfm/backend/cuda, and
+# model-loading internals under lfm/model/weights; none of those are consumer
+# contracts.  Installing the directory wholesale made internal layout part of
+# the package ABI and also forced CPU-only consumers to discover CUDA headers.
+set(LFM_PUBLIC_HEADERS
+    include/lfm/api.h
+    include/lfm/backend/cpu/concurrent.hpp
+    include/lfm/backend/cpu/gguf.hpp
+    include/lfm/backend/cpu/isa.hpp
+    include/lfm/backend/cpu/kernels.hpp
+    include/lfm/backend/cpu/model.hpp
+    include/lfm/backend/cpu/numa.hpp
+    include/lfm/backend/cpu/paged_kv.hpp
+    include/lfm/backend/cpu/prefix_cache.hpp
+    include/lfm/backend/cpu/quantization.hpp
+    include/lfm/backend/cpu/runtime_types.hpp
+    include/lfm/backend/cpu/thread_pool.hpp
+    include/lfm/backend/cpu/topology.hpp
+    include/lfm/checkpoint/downloader.hpp
+    include/lfm/checkpoint/formats/gguf.hpp
+    include/lfm/checkpoint/formats/json.hpp
+    include/lfm/checkpoint/formats/safetensors.hpp
+    include/lfm/checkpoint/gguf_blocks.hpp
+    include/lfm/checkpoint/repositories/gguf.hpp
+    include/lfm/checkpoint/repositories/safetensors.hpp
+    include/lfm/checkpoint/tensor_names.hpp
+    include/lfm/model/config/config.hpp
+    include/lfm/model/config/shape.hpp
+    include/lfm/model/config/variant.hpp
+    include/lfm/model/definition.hpp
+    include/lfm/model/architecture.hpp
+    include/lfm/model/execution/plan.hpp
+    include/lfm/model/execution/runtime_types.hpp
+    include/lfm/model/session.hpp
+    include/lfm/model/weights/roles.hpp
+    include/lfm/model/model.hpp
+    include/lfm/model/reference.hpp
+    include/lfm/runtime/cache/kv_page_allocator.hpp
+    include/lfm/runtime/cache/page_layout.hpp
+    include/lfm/runtime/cache/page_lease.hpp
+    include/lfm/runtime/cache/pinned_expert_cache.hpp
+    include/lfm/runtime/cache/prefix_cache_index.hpp
+    include/lfm/runtime/cache/prefix_cache.hpp
+    include/lfm/runtime/cache/prefix_radix.hpp
+    include/lfm/runtime/concurrency.hpp
+    include/lfm/runtime/concurrency/metrics.hpp
+    include/lfm/runtime/concurrency/policy_types.hpp
+    include/lfm/runtime/concurrency/policy.hpp
+    include/lfm/runtime/moe/offload.hpp
+    include/lfm/runtime/weights_topology.hpp
+    include/lfm/serve/cpu_inference_service.hpp
+    include/lfm/serve/cuda_inference_service.hpp
+    include/lfm/serve/generation_dispatcher.hpp
+    include/lfm/serve/inference_service.hpp
+    include/lfm/serve/protocol/chat.hpp
+    include/lfm/serve/protocol/json.hpp
+    include/lfm/serve/protocol/mapping.hpp
+    include/lfm/serve/protocol/openapi.hpp
+    include/lfm/serve/types.hpp
+    include/lfm/text/chat_template.hpp
+    include/lfm/text/tokenizer.hpp)
+foreach(_lfm_public_header IN LISTS LFM_PUBLIC_HEADERS)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_lfm_public_header}")
+        message(FATAL_ERROR "Public header manifest entry is missing: ${_lfm_public_header}")
+    endif()
+endforeach()
+foreach(_lfm_public_header IN LISTS LFM_PUBLIC_HEADERS)
+    file(RELATIVE_PATH _lfm_header_relative
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${_lfm_public_header}")
+    get_filename_component(_lfm_header_directory
+        "${_lfm_header_relative}" DIRECTORY)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${_lfm_public_header}"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_lfm_header_directory}")
+endforeach()
 
 if(LFM_BUILD_TESTS)
     enable_testing()
@@ -385,12 +462,23 @@ if(LFM_BUILD_TESTS)
     add_executable(model_variant_test tests/model_variant_test.cpp src/model/config/shape.cpp src/model/config/variant.cpp)
     target_include_directories(model_variant_test PRIVATE include)
     add_test(NAME model_variant_test COMMAND model_variant_test)
+    add_executable(model_definition_test tests/model_definition_test.cpp
+        src/model/definition.cpp src/model/architecture.cpp
+        src/model/weights/roles.cpp
+        src/model/config/config.cpp src/model/config/shape.cpp
+        src/model/config/variant.cpp src/checkpoint/formats/json.cpp)
+    target_include_directories(model_definition_test PRIVATE include)
+    add_test(NAME model_definition_test COMMAND model_definition_test)
     add_executable(chat_template_test tests/chat_template_test.cpp src/text/chat_template.cpp)
     target_include_directories(chat_template_test PRIVATE include)
     add_test(NAME chat_template_test COMMAND chat_template_test)
     add_executable(reference_test tests/reference_test.cpp src/model/reference.cpp)
     target_include_directories(reference_test PRIVATE include)
     add_test(NAME reference_test COMMAND reference_test)
+    add_executable(tensor_resolver_test tests/tensor_resolver_test.cpp
+        src/model/weights/roles.cpp)
+    target_include_directories(tensor_resolver_test PRIVATE include)
+    add_test(NAME tensor_resolver_test COMMAND tensor_resolver_test)
     add_executable(policy_test tests/policy_test.cpp)
     target_include_directories(policy_test PRIVATE include)
     add_test(NAME policy_test COMMAND policy_test)
@@ -426,9 +514,18 @@ if(LFM_BUILD_TESTS)
     add_executable(api_header_test tests/api_header_test.c)
     target_include_directories(api_header_test PRIVATE include)
     add_test(NAME api_header_test COMMAND api_header_test)
+    add_test(NAME architecture_boundary_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_architecture_boundaries.py
+                --root ${CMAKE_CURRENT_SOURCE_DIR})
     add_executable(numerical_compare_test tests/numerical_compare_test.cpp)
     target_include_directories(numerical_compare_test PRIVATE tests)
     add_test(NAME numerical_compare_test COMMAND numerical_compare_test)
+    add_executable(unsupported_moe_policy_test tests/quant/unsupported_moe_policy_test.cpp)
+    target_include_directories(unsupported_moe_policy_test PRIVATE include tests)
+    add_test(NAME unsupported_moe_policy_test COMMAND unsupported_moe_policy_test)
+    add_executable(checkpoint_capabilities_test tests/checkpoint_capabilities_test.cpp)
+    target_include_directories(checkpoint_capabilities_test PRIVATE include tests)
+    add_test(NAME checkpoint_capabilities_test COMMAND checkpoint_capabilities_test)
     add_executable(concurrent_metrics_test tests/concurrent_metrics_test.cpp)
     target_link_libraries(concurrent_metrics_test PRIVATE lfm_runtime)
     add_test(NAME concurrent_metrics_test COMMAND concurrent_metrics_test)
@@ -507,6 +604,9 @@ if(LFM_BUILD_TESTS)
     add_executable(cpu_model_options_test tests/cpu_model_options_test.cpp)
     target_link_libraries(cpu_model_options_test PRIVATE lfm_cpu_backend)
     add_test(NAME cpu_model_options_test COMMAND cpu_model_options_test)
+    add_executable(cpu_granite_test tests/cpu_granite_test.cpp)
+    target_link_libraries(cpu_granite_test PRIVATE lfm_cpu_backend)
+    add_test(NAME cpu_granite_test COMMAND cpu_granite_test)
     add_executable(cpu_c_api_smoke_test tests/api_smoke_test.c)
     target_link_libraries(cpu_c_api_smoke_test PRIVATE lfm25)
     target_include_directories(cpu_c_api_smoke_test PRIVATE include)
@@ -534,6 +634,13 @@ if(LFM_BUILD_TESTS)
             add_test(NAME moe_route_test COMMAND moe_route_test)
         endif()
 
+        add_executable(moe_router_materialization_test tests/quant/moe_router_materialization_test.cpp)
+        target_link_libraries(moe_router_materialization_test PRIVATE lfm_cuda_backend)
+        target_include_directories(moe_router_materialization_test PRIVATE include tests)
+        if(LFM_RUN_CUDA_TESTS)
+            add_test(NAME moe_router_materialization_test COMMAND moe_router_materialization_test)
+        endif()
+
         add_executable(moe_ffn_test tests/moe_ffn_test.cu)
         target_link_libraries(moe_ffn_test PRIVATE lfm_cuda_backend)
         target_include_directories(moe_ffn_test PRIVATE include)
@@ -553,6 +660,13 @@ if(LFM_BUILD_TESTS)
         target_include_directories(expert_residency_test PRIVATE include)
         if(LFM_RUN_CUDA_TESTS)
             add_test(NAME expert_residency_test COMMAND expert_residency_test)
+        endif()
+
+        add_executable(cuda_granite_test tests/cuda_granite_test.cu)
+        target_link_libraries(cuda_granite_test PRIVATE lfm_cuda_backend)
+        target_include_directories(cuda_granite_test PRIVATE include)
+        if(LFM_RUN_CUDA_TESTS)
+            add_test(NAME cuda_granite_test COMMAND cuda_granite_test)
         endif()
     endif()
 endif()

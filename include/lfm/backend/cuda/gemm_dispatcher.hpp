@@ -19,7 +19,7 @@ namespace lfm {
 
 // Dispatches linear (GEMM) operations across cuBLAS, cuBLASLt, and
 // specialized INT4/INT8 kernels based on the active ExecutionPlan and the
-// weight storage kind. Extracted from LfmModel::Impl for Single
+// weight storage kind. Extracted from Model::Impl for Single
 // Responsibility: this class owns the cuBLAS handles, the cuBLASLt plan
 // cache, and the autotuning workspace; the Impl retains the forward pass,
 // session state, and graph capture. New GEMM backends (e.g. CUTLASS) are

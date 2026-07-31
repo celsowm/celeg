@@ -138,6 +138,19 @@ public:
     std::string label() const override;
 };
 
+// Shape-independent Granite dense variant. Granite's architecture provider
+// owns its numerical and tensor semantics; this entry supplies generic
+// serving metadata for the common runtime.
+class Granite_Variant final : public IModelVariant {
+public:
+    using IModelVariant::matches;
+    std::string_view id() const override;
+    std::string_view repo_id() const override;
+    bool matches(const ModelShape& shape) const override;
+    ChatTemplateKind chat_template_kind() const override;
+    std::string label() const override;
+};
+
 // Registers all built-in variants exactly once. Safe to call multiple times.
 void register_builtin_variants();
 

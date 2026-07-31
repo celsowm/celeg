@@ -210,7 +210,7 @@ struct PackedDecodeExecutorImpl {
     std::unique_ptr<GemmDispatcher> gemm_;
     ModelOptions cached_options_;
     std::optional<ExecutionPlan> active_plan_;
-    std::vector<IPackedSession*> cached_sessions_;
+    std::vector<PackedSessionContext> cached_sessions_;
     size_t cached_rows_ = 0;
 
     void ensure_gemm_dispatcher(const ModelOptions& options) {
@@ -238,8 +238,8 @@ struct PackedDecodeExecutorImpl {
         }
     }
 
-    static bool options_compatible(const IPackedSession& left,
-                                   const IPackedSession& right,
+    static bool options_compatible(const PackedSessionContext& left,
+                                   const PackedSessionContext& right,
                                    std::string* reason) {
         const ModelOptions& a = left.options();
         const ModelOptions& b = right.options();
@@ -259,7 +259,7 @@ struct PackedDecodeExecutorImpl {
         return true;
     }
 
-    bool eligible(const IPackedSession& model, std::string* reason) const {
+    bool eligible(const PackedSessionContext& model, std::string* reason) const {
         if (model.phase() != SessionPhase::Ready) {
             if (reason) *reason = "session has not completed prefill";
             return false;
@@ -301,22 +301,24 @@ struct PackedDecodeExecutorImpl {
         gemm_->linear(x, weight, y, m, n, k_width, beta, *active_plan_);
     }
 
-    bool session_layout_changed(const std::vector<IPackedSession*>& models) const {
+    bool session_layout_changed(
+        const std::vector<PackedSessionContext>& models) const {
         if (cached_rows_ != models.size() || cached_sessions_.size() != models.size()) {
             return true;
         }
         for (size_t row = 0; row < models.size(); ++row) {
-            if (cached_sessions_[row] != models[row]) return true;
+            if (cached_sessions_[row].owner != models[row].owner) return true;
         }
         return false;
     }
 
-    void copy_persistent_metadata(const std::vector<IPackedSession*>& models) {
+    void copy_persistent_metadata(
+        const std::vector<PackedSessionContext>& models) {
         const size_t rows = models.size();
         cached_sessions_ = models;
         cached_rows_ = rows;
         for (size_t row = 0; row < rows; ++row) {
-            IPackedSession& model = *models[row];
+            const PackedSessionContext& model = models[row];
             h_logits.data()[row] = model.logits().data();
             h_seen.data()[row] = model.seen_tokens().data();
             h_rng.data()[row] = model.rng_state().data();
@@ -387,7 +389,7 @@ struct PackedDecodeExecutorImpl {
                                  stream.get()));
     }
 
-    void copy_step_metadata(const std::vector<IPackedSession*>& models,
+    void copy_step_metadata(const std::vector<PackedSessionContext>& models,
                             const std::vector<std::vector<uint32_t>>* page_tables) {
         const size_t rows = models.size();
         const int page_stride = paged_kv ? paged_kv->max_pages_per_request() : 0;
@@ -399,7 +401,7 @@ struct PackedDecodeExecutorImpl {
                         std::numeric_limits<uint32_t>::max());
         }
         for (size_t row = 0; row < rows; ++row) {
-            IPackedSession& model = *models[row];
+            const PackedSessionContext& model = models[row];
             h_positions.data()[row] = model.position();
             h_temperatures.data()[row] = model.generation().temperature;
             h_repetition_penalties.data()[row] = model.generation().repetition_penalty;
@@ -441,33 +443,38 @@ struct PackedDecodeExecutorImpl {
     }
 
 
-    IPackedSession& validate_decode_batch(const std::vector<IPackedSession*>& models) const {
+    const PackedSessionContext& validate_decode_batch(
+        const std::vector<PackedSessionContext>& models) const {
         if (models.empty()) throw std::invalid_argument("packed batch is empty");
         if (models.size() > maximum_batch) {
             throw std::invalid_argument("packed batch exceeds executor capacity");
         }
-        if (!models.front()) throw std::invalid_argument("null packed session");
-        IPackedSession& reference = *models.front();
+        if (models.front().owner == nullptr) {
+            throw std::invalid_argument("null packed session");
+        }
+        const PackedSessionContext& reference = models.front();
         std::string reason;
         if (!eligible(reference, &reason)) throw std::invalid_argument(reason);
-        std::unordered_set<IPackedSession*> seen;
+        std::unordered_set<void*> seen;
         seen.reserve(models.size());
-        seen.insert(models[0]);
+        seen.insert(models[0].owner);
         for (size_t row = 1; row < models.size(); ++row) {
-            if (!models[row]) throw std::invalid_argument("null packed session");
-            if (!seen.insert(models[row]).second) {
+            if (models[row].owner == nullptr) {
+                throw std::invalid_argument("null packed session");
+            }
+            if (!seen.insert(models[row].owner).second) {
                 throw std::invalid_argument("duplicate session in packed batch");
             }
-            if (!eligible(*models[row], &reason) ||
-                !options_compatible(reference, *models[row], &reason)) {
+            if (!eligible(models[row], &reason) ||
+                !options_compatible(reference, models[row], &reason)) {
                 throw std::invalid_argument(reason);
             }
         }
         return reference;
     }
 
-    IPackedSession& validate_prefill_batch(
-        const std::vector<IPackedSession*>& models,
+    const PackedSessionContext& validate_prefill_batch(
+        const std::vector<PackedSessionContext>& models,
         const std::vector<int32_t>& explicit_tokens,
         const std::vector<PackedPrefillRow>& rows) const {
         if (models.empty()) throw std::invalid_argument("packed batch is empty");
@@ -487,10 +494,12 @@ struct PackedDecodeExecutorImpl {
         if (consumed != explicit_tokens.size()) {
             throw std::invalid_argument("ragged prefill token buffer length mismatch");
         }
-        if (!models.front()) throw std::invalid_argument("null packed session");
-        IPackedSession& reference = *models.front();
+        if (models.front().owner == nullptr) {
+            throw std::invalid_argument("null packed session");
+        }
+        const PackedSessionContext& reference = models.front();
         std::string reason;
-        const auto eligible_prefill = [&](const IPackedSession& model) {
+        const auto eligible_prefill = [&](const PackedSessionContext& model) {
             if (model.phase() == SessionPhase::DecodePending) {
                 reason = "session already has a pending decode";
                 return false;
@@ -506,16 +515,18 @@ struct PackedDecodeExecutorImpl {
             return true;
         };
         if (!eligible_prefill(reference)) throw std::invalid_argument(reason);
-        std::unordered_set<IPackedSession*> seen;
+        std::unordered_set<void*> seen;
         seen.reserve(models.size());
-        seen.insert(models[0]);
+        seen.insert(models[0].owner);
         for (size_t row = 1; row < models.size(); ++row) {
-            if (!models[row]) throw std::invalid_argument("null packed session");
-            if (!seen.insert(models[row]).second) {
+            if (models[row].owner == nullptr) {
+                throw std::invalid_argument("null packed session");
+            }
+            if (!seen.insert(models[row].owner).second) {
                 throw std::invalid_argument("duplicate session in packed batch");
             }
-            if (!eligible_prefill(*models[row]) ||
-                !options_compatible(reference, *models[row], &reason)) {
+            if (!eligible_prefill(models[row]) ||
+                !options_compatible(reference, models[row], &reason)) {
                 throw std::invalid_argument(reason);
             }
         }
@@ -528,7 +539,7 @@ struct PackedDecodeExecutorImpl {
     };
 
     AttentionBatchPlan prepare_batch_metadata(
-        const std::vector<IPackedSession*>& models,
+        const std::vector<PackedSessionContext>& models,
         const std::vector<std::vector<uint32_t>>* page_tables) {
         if (session_layout_changed(models)) {
             copy_persistent_metadata(models);
@@ -540,12 +551,12 @@ struct PackedDecodeExecutorImpl {
             maximum_position = std::max(maximum_position,
                                         h_positions.data()[row]);
             plan.segmented = plan.segmented ||
-                models[row]->use_segmented_attention(
+                models[row].use_segmented_attention(
                     h_positions.data()[row]);
         }
         if (plan.segmented) {
             const int chunk_tokens =
-                models.front()->options().attention_chunk_tokens;
+                models.front().options().attention_chunk_tokens;
             plan.chunks = (maximum_position + 1 + chunk_tokens - 1) /
                           chunk_tokens;
             ensure_segmented_workspace(static_cast<int>(models.size()),
@@ -555,7 +566,7 @@ struct PackedDecodeExecutorImpl {
     }
 
     AttentionBatchPlan prepare_flat_prefill_metadata(
-        const std::vector<IPackedSession*>& models,
+        const std::vector<PackedSessionContext>& models,
         const std::vector<std::vector<uint32_t>>& page_tables,
         const std::vector<PackedPrefillRow>& descriptors) {
         const size_t tokens = [&] {
@@ -569,7 +580,7 @@ struct PackedDecodeExecutorImpl {
         size_t flat = 0;
         int maximum_position = 0;
         for (size_t request = 0; request < models.size(); ++request) {
-            const int start = models[request]->position();
+            const int start = models[request].position();
             const auto& pages = page_tables[request];
             for (size_t token = 0; token < descriptors[request].token_count; ++token, ++flat) {
                 h_positions.data()[flat] = start + static_cast<int>(token);
@@ -586,18 +597,18 @@ struct PackedDecodeExecutorImpl {
                                  cudaMemcpyHostToDevice, stream.get()));
         AttentionBatchPlan plan;
         for (size_t request = 0; request < models.size(); ++request) {
-            plan.segmented = plan.segmented || models[request]->use_segmented_attention(
-                models[request]->position() + static_cast<int>(descriptors[request].token_count) - 1);
+            plan.segmented = plan.segmented || models[request].use_segmented_attention(
+                models[request].position() + static_cast<int>(descriptors[request].token_count) - 1);
         }
         if (plan.segmented) {
-            const int chunk_tokens = models.front()->options().attention_chunk_tokens;
+            const int chunk_tokens = models.front().options().attention_chunk_tokens;
             plan.chunks = (maximum_position + 1 + chunk_tokens - 1) / chunk_tokens;
             ensure_segmented_workspace(static_cast<int>(tokens), plan.chunks);
         }
         return plan;
     }
 
-    void launch_embedding_rows(const IPackedSession& reference, int rows) {
+    void launch_embedding_rows(const PackedSessionContext& reference, int rows) {
         if (reference.embedding()->int4_quantized()) {
             launch_embedding_int4_batch(
                 sampled.data(), rows, reference.embedding()->int4,
@@ -613,10 +624,12 @@ struct PackedDecodeExecutorImpl {
                 sampled.data(), rows, reference.embedding()->bf16,
                 hidden.data(), shape_.hidden, stream.get());
         }
+        launch_scale(hidden.data(), rows * shape_.hidden,
+                     shape_.embedding_multiplier, stream.get());
     }
 
     void project_attention_qkv(
-        IPackedSession& reference,
+        const PackedSessionContext& reference,
         const AttentionLayer& attention,
         int rows) {
         if (reference.options().fused_projections) {
@@ -640,15 +653,25 @@ struct PackedDecodeExecutorImpl {
             linear(normed.data(), v_weight, v.data(), rows,
                    shape_.kv_width, shape_.hidden);
         }
-        launch_qk_norm_rope_batch_positions(
-            q.data(), k.data(), attention.q_norm, attention.k_norm,
-            reference.rope_cos(), reference.rope_sin(),
-            positions.data(), rows, shape_.num_attention_heads, shape_.num_key_value_heads,
-            shape_.head_dim, shape_.norm_eps,
-            reference.options().fast_attention, stream.get());
+        if (!shape_.query_key_norm) {
+            launch_rope_batch_positions(
+                q.data(), k.data(), reference.rope_cos(), reference.rope_sin(),
+                positions.data(), rows, shape_.num_attention_heads,
+                shape_.num_key_value_heads, shape_.head_dim, stream.get());
+            const float ratio = shape_.attention_multiplier /
+                (1.0f / std::sqrt(static_cast<float>(shape_.head_dim)));
+            launch_scale(q.data(), rows * shape_.q_width, ratio, stream.get());
+        } else {
+            launch_qk_norm_rope_batch_positions(
+                q.data(), k.data(), attention.q_norm, attention.k_norm,
+                reference.rope_cos(), reference.rope_sin(),
+                positions.data(), rows, shape_.num_attention_heads, shape_.num_key_value_heads,
+                shape_.head_dim, shape_.norm_eps,
+                reference.options().fast_attention, stream.get());
+        }
     }
 
-    void run_paged_attention_cache(IPackedSession& reference, int rows,
+    void run_paged_attention_cache(const PackedSessionContext& reference, int rows,
                                    int layer_index,
                                    bool segmented_attention,
                                    int segmented_chunks) {
@@ -717,7 +740,7 @@ struct PackedDecodeExecutorImpl {
         }
     }
 
-    void run_local_attention_cache(IPackedSession& reference, int rows,
+    void run_local_attention_cache(const PackedSessionContext& reference, int rows,
                                    int layer_index) {
         const size_t offset = static_cast<size_t>(layer_index) * maximum_batch;
         if (reference.options().kv_cache_mode == KvCacheMode::Int8) {
@@ -747,7 +770,7 @@ struct PackedDecodeExecutorImpl {
             stream.get());
     }
 
-    void run_attention_layer(IPackedSession& reference,
+    void run_attention_layer(const PackedSessionContext& reference,
                              const AttentionLayer& attention,
                              int rows, int layer_index,
                              bool segmented_attention,
@@ -762,10 +785,12 @@ struct PackedDecodeExecutorImpl {
         linear(op_output.data(), *attention.out, hidden.data(), rows,
                shape_.hidden, shape_.hidden,
                reference.options().fused_residuals ? 1.0f : 0.0f);
+        launch_scale(hidden.data(), rows * shape_.hidden,
+                     shape_.residual_multiplier, stream.get());
     }
 
     void run_convolution_layer(
-        IPackedSession& reference,
+        const PackedSessionContext& reference,
         const ConvolutionLayer& convolution,
         int rows, int layer_index, int ragged_requests = 0) {
         linear(normed.data(), *convolution.conv_in, conv_projected.data(),
@@ -788,10 +813,10 @@ struct PackedDecodeExecutorImpl {
                reference.options().fused_residuals ? 1.0f : 0.0f);
     }
 
-    void run_mlp_layer(IPackedSession& reference,
+    void run_mlp_layer(const PackedSessionContext& reference,
                        const LayerCommon& common_layer,
                        int rows,
-                       const std::vector<IPackedSession*>* batch_models = nullptr,
+                       const std::vector<PackedSessionContext>* batch_models = nullptr,
                        int layer_index = -1) {
         if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
             (void)moe;
@@ -828,6 +853,8 @@ struct PackedDecodeExecutorImpl {
         } else {
             linear(activated.data(), *as_dense_ffn(common_layer.feed_forward)->w2, mlp_output.data(), rows,
                     shape_.hidden, shape_.intermediate);
+            launch_scale(mlp_output.data(), rows * shape_.hidden,
+                         shape_.residual_multiplier, stream.get());
             launch_residual_add(hidden.data(), mlp_output.data(),
                                 rows * shape_.hidden, stream.get());
         }
@@ -836,9 +863,9 @@ struct PackedDecodeExecutorImpl {
     // MoE feed-forward for packed decode/ragged prefill. Mirrors the standalone
     // run_mlp_moe_decode path: RMSNorm -> cast -> router -> expert residency
     // resolution -> selected-expert FFN -> residual add. Router runs in float.
-    void run_mlp_moe_layer(IPackedSession& reference,
+    void run_mlp_moe_layer(const PackedSessionContext& reference,
                             const LayerCommon& common_layer, int rows,
-                            const std::vector<IPackedSession*>* batch_models = nullptr,
+                            const std::vector<PackedSessionContext>* batch_models = nullptr,
                             int layer_index = -1) {
         const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
         launch_rmsnorm(hidden.data(), common_layer.ffn_norm, normed.data(),
@@ -860,7 +887,7 @@ struct PackedDecodeExecutorImpl {
         // Ensure selected experts are GPU-resident before the FFN reads them.
         // Resolve residency once for the entire batch of tokens on the shared layer cache.
         if (batch_models && !batch_models->empty() && layer_index >= 0) {
-            IPackedSession& session = *batch_models->front();
+            const PackedSessionContext& session = batch_models->front();
             session.ensure_moe_experts_resident_packed(
                 layer_index,
                 moe_sel.data(),
@@ -881,10 +908,10 @@ struct PackedDecodeExecutorImpl {
                             rows * shape_.hidden, stream.get());
     }
 
-    void run_transformer_layers(IPackedSession& reference, int rows,
+    void run_transformer_layers(const PackedSessionContext& reference, int rows,
                                 bool segmented_attention,
                                 int segmented_chunks,
-                                const std::vector<IPackedSession*>* batch_models = nullptr,
+                                const std::vector<PackedSessionContext>* batch_models = nullptr,
                                 int ragged_requests = 0) {
         for (int layer_index = 0; layer_index < shape_.num_hidden_layers;
              ++layer_index) {
@@ -917,10 +944,11 @@ struct PackedDecodeExecutorImpl {
         }
     }
 
-    std::vector<int32_t> decode(const std::vector<IPackedSession*>& models,
+    std::vector<int32_t> decode(
+        const std::vector<PackedSessionContext>& models,
                                 const std::vector<std::vector<uint32_t>>* page_tables) {
         if (models.empty()) return {};
-        IPackedSession& reference = validate_decode_batch(models);
+        const PackedSessionContext& reference = validate_decode_batch(models);
         const int rows = static_cast<int>(models.size());
         active_plan_ = ExecutionPlan::compile(reference.options(), reference.max_context());
         ensure_gemm_dispatcher(reference.options());
@@ -944,6 +972,8 @@ struct PackedDecodeExecutorImpl {
                        stream.get());
         linear(normed.data(), *reference.logits_weight(), logits.data(), rows,
                shape_.vocab_size, shape_.hidden);
+        launch_scale(logits.data(), rows * shape_.vocab_size,
+                     1.0f / shape_.logits_divisor, stream.get());
         launch_scatter_bf16_rows(
             logits.data(), d_logits.data(), rows, shape_.vocab_size,
             stream.get());
@@ -960,7 +990,7 @@ struct PackedDecodeExecutorImpl {
             std::chrono::duration<double, std::milli>(ended - started).count();
         std::vector<int32_t> result(static_cast<size_t>(rows));
         for (int row = 0; row < rows; ++row) {
-            IPackedSession& model = *models[static_cast<size_t>(row)];
+            const PackedSessionContext& model = models[static_cast<size_t>(row)];
             result[static_cast<size_t>(row)] = sampled_host.data()[row];
             model.set_sampled_host_value(sampled_host.data()[row]);
             model.set_position(model.position() + 1);
@@ -980,12 +1010,12 @@ struct PackedDecodeExecutorImpl {
         return result;
     }
 
-    void prefill(const std::vector<IPackedSession*>& models,
+    void prefill(const std::vector<PackedSessionContext>& models,
                  const std::vector<std::vector<uint32_t>>* page_tables,
                  const std::vector<int32_t>& explicit_tokens,
                  const std::vector<PackedPrefillRow>& row_descriptors) {
         if (models.empty()) return;
-        IPackedSession& reference =
+        const PackedSessionContext& reference =
             validate_prefill_batch(models, explicit_tokens, row_descriptors);
         if (!page_tables || page_tables->size() != models.size()) {
             throw std::invalid_argument("ragged packed prefill needs one page table per request");
@@ -1001,9 +1031,9 @@ struct PackedDecodeExecutorImpl {
             if (descriptor.token_count == 0) {
                 throw std::invalid_argument("ragged prefill rows must be non-empty");
             }
-            const size_t end = static_cast<size_t>(models[request]->position()) +
+            const size_t end = static_cast<size_t>(models[request].position()) +
                 descriptor.token_count;
-            if (end > static_cast<size_t>(models[request]->max_context())) {
+            if (end > static_cast<size_t>(models[request].max_context())) {
                 throw std::invalid_argument("ragged prefill exceeds context limit");
             }
             const size_t pages_needed =
@@ -1057,6 +1087,8 @@ struct PackedDecodeExecutorImpl {
                            rows, shape_.hidden, shape_.norm_eps, stream.get());
             linear(normed.data(), *reference.logits_weight(), logits.data(), rows,
                    shape_.vocab_size, shape_.hidden);
+            launch_scale(logits.data(), rows * shape_.vocab_size,
+                         1.0f / shape_.logits_divisor, stream.get());
             launch_scatter_bf16_selected_rows(logits.data(), d_final_rows.data(),
                                                d_logits.data(), requests,
                                                shape_.vocab_size, stream.get());
@@ -1065,7 +1097,7 @@ struct PackedDecodeExecutorImpl {
             sampled.data(), positions.data(), d_final_rows.data(),
             d_sampled_dest.data(), d_position_dest.data(), requests, stream.get());
         for (int request = 0; request < requests; ++request) {
-            IPackedSession& model = *models[static_cast<size_t>(request)];
+            const PackedSessionContext& model = models[static_cast<size_t>(request)];
             const PackedPrefillRow& descriptor = row_descriptors[static_cast<size_t>(request)];
             model.set_sampled_host_value(explicit_tokens[static_cast<size_t>(h_final_rows.data()[request])]);
             model.set_position(model.position() + static_cast<int>(descriptor.token_count));
@@ -1087,7 +1119,7 @@ struct PackedDecodeExecutorImpl {
             ? 0.0
             : elapsed_ms / static_cast<double>(explicit_tokens.size());
         for (int row = 0; row < requests; ++row) {
-            IPackedSession& model = *models[static_cast<size_t>(row)];
+            const PackedSessionContext& model = models[static_cast<size_t>(row)];
             model.metrics().last_prefill_ms +=
                 per_token_ms * static_cast<double>(row_descriptors[static_cast<size_t>(row)].token_count);
         }
@@ -1106,24 +1138,24 @@ PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,
 
 PackedDecodeExecutor::~PackedDecodeExecutor() = default;
 
-bool PackedDecodeExecutor::eligible(const IPackedSession& model,
+bool PackedDecodeExecutor::eligible(const PackedSessionContext& model,
                                     std::string* reason) const {
     return impl_->eligible(model, reason);
 }
 
 std::vector<int32_t> PackedDecodeExecutor::decode(
-    const std::vector<IPackedSession*>& models) {
+    const std::vector<PackedSessionContext>& models) {
     return impl_->decode(models, nullptr);
 }
 
 std::vector<int32_t> PackedDecodeExecutor::decode(
-    const std::vector<IPackedSession*>& models,
+    const std::vector<PackedSessionContext>& models,
     const std::vector<std::vector<uint32_t>>& page_tables) {
     return impl_->decode(models, &page_tables);
 }
 
 void PackedDecodeExecutor::prefill(
-    const std::vector<IPackedSession*>& models,
+    const std::vector<PackedSessionContext>& models,
     const std::vector<std::vector<uint32_t>>& page_tables,
     const std::vector<int32_t>& tokens,
     const std::vector<PackedPrefillRow>& rows) {
@@ -1143,7 +1175,3 @@ PackedDecodeMetrics PackedDecodeExecutor::metrics() const {
 }
 
 } // namespace lfm
-
-
-
-

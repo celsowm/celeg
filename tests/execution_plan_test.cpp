@@ -2,6 +2,7 @@
 #include "support/assertions.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 int main() {
     using lfm::AttentionMode;
@@ -37,6 +38,24 @@ int main() {
         rejected = true;
     }
     LFM_TEST_CHECK(rejected);
+
+    // Phase 1.4: --weight-mode native must not report plain BF16 cuBLASLt. The
+    // actual execution mixes BF16 (norms / conv) and GGUF MMQ (linear blocks);
+    // the plan label must be honest about that, or the diagnostics contradict
+    // the real storage / kernels. See lfm25_multi_stage_refactoring_plan.md
+    // section 1.4.
+    ModelOptions native;
+    native.weight_mode = WeightMode::NativeGguf;
+    auto native_plan = ExecutionPlan::compile(native, 4096);
+    LFM_TEST_CHECK(native_plan.linear_kernel() ==
+                   LinearKernelKind::MixedBf16AndGgufMmq);
+    {
+        const std::string desc = native_plan.description();
+        LFM_TEST_CHECK(desc.find("linear=mixed-bf16-and-gguf-mmq") !=
+                       std::string::npos);
+        // The diagnostic must not falsely contain the BF16 cuBLASLt label.
+        LFM_TEST_CHECK(desc.find("bf16-cublaslt") == std::string::npos);
+    }
 
     std::cout << "execution_plan_test: ok\n";
     return 0;
