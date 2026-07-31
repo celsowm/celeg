@@ -138,10 +138,11 @@ public:
         t.validate();
 
         ResolvedModel result;
+        result.is_gguf = gguf;
         result.topology = t;
         result.architecture_id = "granite";
         result.checkpoint_profile_id = "granite";
-        result.chat_profile_id = "lfm2-instruct";
+        result.chat_profile_id = "granite-instruct";
         result.profile = {"granite", "", {}, result.chat_profile_id};
         result.identity = "granite-" + t.fingerprint();
         result.tensor_naming = naming_policy();

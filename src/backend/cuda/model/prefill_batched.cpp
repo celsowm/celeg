@@ -141,7 +141,13 @@ void Model::Impl::prefill_batched(const std::vector<int32_t>& tokens) {
                         const char* f = std::getenv("CELEG_FLASH_ATTN");
                         return f != nullptr && f[0] != '\0' && f[0] != '0';
                     }();
-                    if (use_flash) {
+                    // The batched GEMM path is only valid for the narrow-head
+                    // layouts it was tuned for.  With head_dim=128 its
+                    // strided GQA batches can corrupt the KV state; use the
+                    // tiled path automatically for wider heads so the next
+                    // decode step sees a valid cache.  This is a kernel
+                    // capability boundary, not an architecture dispatch.
+                    if (use_flash || shape_.head_dim > 64) {
                         launch_gqa_prefill_flash(
                             prefill_q_.data(),
                             attention->key_cache.data(), attention->value_cache.data(),

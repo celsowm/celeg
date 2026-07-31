@@ -47,6 +47,18 @@ public:
     ChatTemplateKind kind() const override { return ChatTemplateKind::Lfm2Instruct; }
 };
 
+// Granite instruct chat template:
+//   (<|start_of_role|>{role}<|end_of_role|>{content}<|end_of_text|>\n)*
+//   [<|start_of_role|>assistant<|end_of_role|>]
+// When no system message is supplied, Granite's standard assistant system
+// message is inserted before the conversation.
+class GraniteInstructChatTemplate final : public IChatTemplate {
+public:
+    std::string format(std::span<const ChatMessage> messages,
+                       bool add_generation_prompt) const override;
+    ChatTemplateKind kind() const override { return ChatTemplateKind::GraniteInstruct; }
+};
+
 // Factory: returns the chat template implementation for a given kind.
 std::unique_ptr<IChatTemplate> make_chat_template(ChatTemplateKind kind);
 std::unique_ptr<IChatTemplate> make_chat_template(std::string_view profile_id);

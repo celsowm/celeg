@@ -99,6 +99,7 @@ int main() {
     const celeg::ResolvedModel granite_gguf_model =
         granite_architecture.resolve(granite_gguf_checkpoint);
     assert(granite_gguf_model.definition.source_format == "gguf");
+    assert(granite_gguf_model.chat_profile_id == "granite-instruct");
     assert(granite_gguf_model.topology.vocab_size == 32);
     assert(granite_gguf_model.graph.layers.size() == 1);
 

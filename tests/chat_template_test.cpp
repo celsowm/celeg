@@ -52,5 +52,31 @@ int main() {
     }
     CELEG_TEST_CHECK(threw);
 
+    auto granite = celeg::make_chat_template(celeg::ChatTemplateKind::GraniteInstruct);
+    CELEG_TEST_CHECK(granite);
+    CELEG_TEST_CHECK(granite->kind() == celeg::ChatTemplateKind::GraniteInstruct);
+    auto granite_by_id = celeg::make_chat_template("granite-instruct");
+    CELEG_TEST_CHECK(granite_by_id->kind() == celeg::ChatTemplateKind::GraniteInstruct);
+
+    const std::string granite_user_only = granite->format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
+    CELEG_TEST_CHECK(granite_user_only ==
+        "<|start_of_role|>system<|end_of_role|>Knowledge Cutoff Date: April 2024. "
+        "You are Granite, developed by IBM. You are a helpful AI assistant."
+        "<|end_of_text|>\n"
+        "<|start_of_role|>user<|end_of_role|>Hello<|end_of_text|>\n"
+        "<|start_of_role|>assistant<|end_of_role|>");
+
+    const std::string granite_with_system = granite->format(
+        std::vector<celeg::ChatMessage>{
+            {celeg::ChatRole::System, "You are helpful."},
+            {celeg::ChatRole::User, "Hi"},
+        },
+        true);
+    CELEG_TEST_CHECK(granite_with_system ==
+        "<|start_of_role|>system<|end_of_role|>You are helpful.<|end_of_text|>\n"
+        "<|start_of_role|>user<|end_of_role|>Hi<|end_of_text|>\n"
+        "<|start_of_role|>assistant<|end_of_role|>");
+
     std::cout << "chat_template_test: ok\n";
 }
