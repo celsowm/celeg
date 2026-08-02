@@ -27,15 +27,20 @@ struct CpuWorkspace {
         hidden.resize(rows * shape.hidden);
         residual.resize(rows * shape.hidden);
         normed.resize(rows * shape.hidden);
-        op_output.resize(rows * shape.hidden);
-        qkv.resize(rows * shape.qkv_width);
+        // Attention output is still laid out as [query_heads, head_dim] until
+        // the layer's output projection. Full-attention Gemma layers can be
+        // wider than the residual hidden state.
+        op_output.resize(rows * static_cast<size_t>(shape.maximum_attention_query_heads()) *
+                         static_cast<size_t>(shape.maximum_attention_head_dim()));
+        qkv.resize(rows * static_cast<size_t>(shape.maximum_attention_projection_width()));
         conv_projected.resize(rows * 3ULL * shape.hidden);
-        gate_up.resize(rows * 2ULL * shape.intermediate);
-        activated.resize(rows * shape.intermediate);
+        gate_up.resize(rows * 2ULL * shape.max_feed_forward_intermediate);
+        activated.resize(rows * shape.max_feed_forward_intermediate);
         mlp_output.resize(rows * shape.hidden);
     }
 
     std::vector<float> hidden, residual, normed, op_output, qkv;
+    std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
     std::vector<float> conv_projected, gate_up, activated, mlp_output;
     std::vector<float> logits;
     std::vector<float> chunk_hidden, chunk_residual, chunk_normed, chunk_op;
@@ -60,13 +65,22 @@ struct CpuCompiledModel {
     struct BatchScratch;
     struct CommonWeights {
         std::vector<float> operator_norm;
+        std::vector<float> post_attention_norm;
+        std::vector<float> pre_feed_forward_norm;
+        std::vector<float> post_feed_forward_norm;
+        std::vector<float> per_layer_input_norm;
         std::vector<float> ffn_norm;
         CpuLinearWeight w13;
         CpuLinearWeight w2;
+        CpuLinearWeight per_layer_input_gate;
+        CpuLinearWeight per_layer_projection;
+        float layer_scalar = 1.0f;
     };
     struct AttentionWeights {
         CommonWeights common;
-        CpuLinearWeight qkv;
+        CpuLinearWeight q;
+        CpuLinearWeight k;
+        CpuLinearWeight v;
         CpuLinearWeight out;
         std::vector<float> q_norm;
         std::vector<float> k_norm;
@@ -98,6 +112,9 @@ struct CpuCompiledModel {
     struct CpuWeightStore {
         CpuLinearWeight embedding;
         CpuLinearWeight lm_head;
+        CpuLinearWeight per_layer_embedding;
+        CpuLinearWeight per_layer_context_projection;
+        std::vector<float> per_layer_projection_norm;
         std::vector<float> final_norm;
         std::vector<WeightLayer> layers;
     };
@@ -147,9 +164,11 @@ struct CpuCompiledModel {
         std::string model_identity;
         const ITensorNamingPolicy* tensor_naming = nullptr;
         bool tie_word_embeddings = true;
+        float final_logit_softcap = 0.0f;
         CpuWeightStore weight_store;
         std::vector<std::shared_ptr<CpuKvPagePool>> kv_pools;
         std::vector<int> layer_to_kv_pool;
+        std::vector<int> layer_to_kv_owner;
     };
 
     struct AttentionState {
@@ -203,8 +222,8 @@ struct CpuCompiledModel {
 
     void store_kv(AttentionState& state, int position,
                   const float* key, const float* value);
-    void run_attention(const AttentionState& state, const float* q,
-                       float* output, int sequence_length) const;
+    void run_attention(const AttentionState& state, const AttentionSpec& attention,
+                       const float* q, float* output, int sequence_length) const;
     void release_attention_pages(AttentionState& state) noexcept;
 
     CpuPrefixSnapshot export_prefix_snapshot() const;

@@ -42,7 +42,7 @@ __global__ void flash_attn_prefill_kernel(
     const __nv_bfloat16* __restrict__ v,
     __nv_bfloat16* __restrict__ out,
     int rows, int q_heads, int kv_heads, int head_dim,
-    int q_width, int kv_width, int out_width) {
+    int q_width, int kv_width, int out_width, int sliding_window) {
 
     constexpr int Br = 64;
     constexpr int Bc = 64;
@@ -112,7 +112,10 @@ __global__ void flash_attn_prefill_kernel(
             int row = warp * kRowsPerWarp + wr;
             if (row >= actual_br) break;
             for (int col = lane; col < actual_bc; col += 32) {
-                if (k_start + col > q_start + row) {
+                const int token = k_start + col;
+                const int query_position = q_start + row;
+                if (token > query_position ||
+                    (sliding_window > 0 && token < query_position + 1 - sliding_window)) {
                     s_s[row * Bc + col] = -FLT_MAX;
                     continue;
                 }
@@ -132,7 +135,10 @@ __global__ void flash_attn_prefill_kernel(
 
             float tile_max = -FLT_MAX;
             for (int col = lane; col < actual_bc; col += 32) {
-                if (k_start + col <= q_start + row)
+                const int token = k_start + col;
+                const int query_position = q_start + row;
+                if (token <= query_position &&
+                    (sliding_window <= 0 || token >= query_position + 1 - sliding_window))
                     tile_max = fmaxf(tile_max, s_s[row * Bc + col]);
             }
             tile_max = warp_xor_max(tile_max);
@@ -143,7 +149,10 @@ __global__ void flash_attn_prefill_kernel(
             float tile_sum = 0.0f;
             for (int col = lane; col < actual_bc; col += 32) {
                 float p = 0.0f;
-                if (k_start + col <= q_start + row) {
+                const int token = k_start + col;
+                const int query_position = q_start + row;
+                if (token <= query_position &&
+                    (sliding_window <= 0 || token >= query_position + 1 - sliding_window)) {
                     p = expf(s_s[row * Bc + col] - tile_max);
                     tile_sum += p;
                 }
@@ -156,7 +165,11 @@ __global__ void flash_attn_prefill_kernel(
                 int d_idx = d / 32;
                 float acc = row_acc[wr][d_idx] * alpha;
                 for (int col = 0; col < actual_bc; ++col) {
-                    if (k_start + col > q_start + row) break;
+                    const int token = k_start + col;
+                    const int query_position = q_start + row;
+                    if (token > query_position) break;
+                    if (sliding_window > 0 && token < query_position + 1 - sliding_window)
+                        continue;
                     acc += s_s[row * Bc + col] * bf16_float(s_v[col * head_dim + d]);
                 }
                 row_acc[wr][d_idx] = acc;
@@ -184,7 +197,7 @@ void launch_gqa_prefill_flash(
     const __nv_bfloat16* q, const __nv_bfloat16* k,
     const __nv_bfloat16* v, __nv_bfloat16* out, int rows,
     int q_heads, int kv_heads, int head_dim,
-    int q_width, int kv_width, int out_width,
+    int q_width, int kv_width, int out_width, int sliding_window,
     cudaStream_t stream) {
     constexpr int Br = 64;
     const int num_q_tiles = (rows + Br - 1) / Br;
@@ -198,7 +211,7 @@ void launch_gqa_prefill_flash(
                          static_cast<int>(smem_bytes));
     flash_attn_prefill_kernel<<<grid, block, smem_bytes, stream>>>(
         q, k, v, out, rows, q_heads, kv_heads, head_dim,
-        q_width, kv_width, out_width);
+        q_width, kv_width, out_width, sliding_window);
     CELEG_KERNEL_CHECK();
 }
 
@@ -224,13 +237,14 @@ void launch_gqa_prefill_flash(
 // following dense PV GEMM naturally ignores masked positions.
 __global__ void causal_softmax_kernel(const float* __restrict__ scores,
                                       __nv_bfloat16* __restrict__ probs,
-                                      int rows, int q_heads) {
+                                      int rows, int q_heads, int sliding_window) {
     const int flat = blockIdx.x;
     const int head = flat / rows;
     const int row = flat % rows;
     if (head >= q_heads) return;
     const size_t base = (static_cast<size_t>(head) * rows + row) * static_cast<size_t>(rows);
     const int valid = row + 1;
+    const int first = sliding_window > 0 ? max(0, valid - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int threads = blockDim.x;
 
@@ -238,29 +252,30 @@ __global__ void causal_softmax_kernel(const float* __restrict__ scores,
     __shared__ float block_value;
 
     float local_max = -FLT_MAX;
-    for (int c = lane; c < valid; c += threads) {
+    for (int c = first + lane; c < valid; c += threads) {
         local_max = fmaxf(local_max, scores[base + c]);
     }
     const float row_max = block_max(local_max, warp_scratch, &block_value);
 
     float local_sum = 0.0f;
-    for (int c = lane; c < valid; c += threads) {
+    for (int c = first + lane; c < valid; c += threads) {
         local_sum += expf(scores[base + c] - row_max);
     }
     const float row_sum = block_sum(local_sum, warp_scratch, &block_value);
     const float inv_sum = 1.0f / row_sum;
 
     for (int c = lane; c < rows; c += threads) {
-        const float p = c < valid ? expf(scores[base + c] - row_max) * inv_sum : 0.0f;
+        const float p = c >= first && c < valid ? expf(scores[base + c] - row_max) * inv_sum : 0.0f;
         probs[base + c] = __float2bfloat16(p);
     }
 }
 
 void launch_causal_softmax(const float* scores, __nv_bfloat16* probs,
-                           int rows, int q_heads, cudaStream_t stream) {
+                           int rows, int q_heads, int sliding_window,
+                           cudaStream_t stream) {
     const int threads = rows < 256 ? ((rows + 31) / 32) * 32 : 256;
     causal_softmax_kernel<<<rows * q_heads, max(threads, 32), 0, stream>>>(
-        scores, probs, rows, q_heads);
+        scores, probs, rows, q_heads, sliding_window);
     CELEG_KERNEL_CHECK();
 }
 
@@ -269,6 +284,7 @@ void launch_gqa_prefill_gemm(
     const __nv_bfloat16* v, __nv_bfloat16* out, float* scores_scratch,
     __nv_bfloat16* probs_scratch, int rows, int q_heads, int kv_heads,
     int head_dim, int q_width, int kv_width, int out_width,
+    int sliding_window,
     cudaStream_t stream) {
     const int group = q_heads / kv_heads;
     const float scale = rsqrtf(static_cast<float>(head_dim));
@@ -293,7 +309,8 @@ void launch_gqa_prefill_gemm(
             group, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
-    launch_causal_softmax(scores_scratch, probs_scratch, rows, q_heads, stream);
+    launch_causal_softmax(scores_scratch, probs_scratch, rows, q_heads,
+                          sliding_window, stream);
 
     for (int kv_head = 0; kv_head < kv_heads; ++kv_head) {
         const __nv_bfloat16* v_base = v + static_cast<size_t>(kv_head) * head_dim;

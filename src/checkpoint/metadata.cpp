@@ -122,6 +122,14 @@ bool CheckpointMetadata::boolean_or(std::string_view key, bool fallback) const {
     return contains(key) ? boolean(key) : fallback;
 }
 
+std::vector<int64_t> CheckpointMetadata::integers(std::string_view key) const {
+    return as<std::vector<int64_t>>(value(key), key);
+}
+
+std::vector<double> CheckpointMetadata::numbers(std::string_view key) const {
+    return as<std::vector<double>>(value(key), key);
+}
+
 std::vector<std::string> CheckpointMetadata::strings(std::string_view key) const {
     return as<std::vector<std::string>>(value(key), key);
 }

@@ -20,13 +20,14 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
                                          int mode,
                                          int q_heads,
                                          int kv_heads,
-                                         int head_dim) {
+                                         int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int query_row = mode == 2 ? block / q_heads : 0;
     const int query_head = mode == 2 ? block % q_heads : block;
     if (query_row >= rows || query_head >= q_heads) return;
     const int seq_len = mode == 2 ? query_row + 1 :
         (mode == 1 ? *position_pointer + 1 : seq_len_value);
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -41,7 +42,7 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
 
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = key_cache +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -54,7 +55,7 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
 
     if (lane == 0) denominator = 0.0f;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = key_cache +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -66,7 +67,7 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
     }
 
     float accumulator = 0.0f;
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = key_cache +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -102,13 +103,14 @@ __global__ void gqa_decode_online_kernel(const __nv_bfloat16* q,
                                          int mode,
                                          int q_heads,
                                          int kv_heads,
-                                         int head_dim) {
+                                         int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int query_row = mode == 2 ? block / q_heads : 0;
     const int query_head = mode == 2 ? block % q_heads : block;
     if (query_row >= rows || query_head >= q_heads) return;
     const int seq_len = mode == 2 ? query_row + 1 :
         (mode == 1 ? *position_pointer + 1 : seq_len_value);
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -121,7 +123,7 @@ __global__ void gqa_decode_online_kernel(const __nv_bfloat16* q,
     for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
     const float scale = rsqrtf(static_cast<float>(head_dim));
 
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = key_cache +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         float partial = 0.0f;
@@ -157,13 +159,14 @@ __global__ void gqa_decode_strict_int8_kernel(
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int rows,
     int seq_len_value, const int32_t* position_pointer, int mode,
-    int q_heads, int kv_heads, int head_dim) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int query_row = mode == 2 ? block / q_heads : 0;
     const int query_head = mode == 2 ? block % q_heads : block;
     if (query_row >= rows || query_head >= q_heads) return;
     const int seq_len = mode == 2 ? query_row + 1 :
         (mode == 1 ? *position_pointer + 1 : seq_len_value);
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -176,7 +179,7 @@ __global__ void gqa_decode_strict_int8_kernel(
     __shared__ float probability;
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = key_cache + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, key_scales[scale_index],
@@ -189,7 +192,7 @@ __global__ void gqa_decode_strict_int8_kernel(
     }
     if (lane == 0) denominator = 0.0f;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = key_cache + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, key_scales[scale_index],
@@ -201,7 +204,7 @@ __global__ void gqa_decode_strict_int8_kernel(
         __syncthreads();
     }
     float accumulator = 0.0f;
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = key_cache + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, key_scales[scale_index],
@@ -231,13 +234,14 @@ __global__ void gqa_decode_online_int8_kernel(
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int rows,
     int seq_len_value, const int32_t* position_pointer, int mode,
-    int q_heads, int kv_heads, int head_dim) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int query_row = mode == 2 ? block / q_heads : 0;
     const int query_head = mode == 2 ? block % q_heads : block;
     if (query_row >= rows || query_head >= q_heads) return;
     const int seq_len = mode == 2 ? query_row + 1 :
         (mode == 1 ? *position_pointer + 1 : seq_len_value);
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -249,7 +253,7 @@ __global__ void gqa_decode_online_int8_kernel(
     for (int i = 0; i < kMaxHeadDimPerLane; ++i) accumulator[i] = 0.0f;
     const float scale = rsqrtf(static_cast<float>(head_dim));
 
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = key_cache + scale_index * head_dim;
         const float key_scale = key_scales[scale_index];
@@ -287,11 +291,12 @@ void launch_gqa_decode_strict(const __nv_bfloat16* q,
                               const __nv_bfloat16* value_cache,
                               __nv_bfloat16* out, int seq_len,
                               int q_heads, int kv_heads, int head_dim,
+                              int sliding_window,
                               cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_strict_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, out, 1, seq_len, nullptr, 0,
-        q_heads, kv_heads, head_dim);
+        q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -301,11 +306,12 @@ void launch_gqa_decode_strict_device(const __nv_bfloat16* q,
                                      __nv_bfloat16* out,
                                      const int32_t* position,
                                      int q_heads, int kv_heads, int head_dim,
+                                     int sliding_window,
                                      cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_strict_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, out, 1, 0, position, 1,
-        q_heads, kv_heads, head_dim);
+        q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -314,10 +320,11 @@ void launch_gqa_decode_online(const __nv_bfloat16* q,
                               const __nv_bfloat16* value_cache,
                               __nv_bfloat16* out, int seq_len,
                               int q_heads, int kv_heads, int head_dim,
+                              int sliding_window,
                               cudaStream_t stream) {
     gqa_decode_online_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, 1, seq_len, nullptr, 0,
-        q_heads, kv_heads, head_dim);
+        q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -327,10 +334,11 @@ void launch_gqa_decode_online_device(const __nv_bfloat16* q,
                                      __nv_bfloat16* out,
                                      const int32_t* position,
                                      int q_heads, int kv_heads, int head_dim,
+                                     int sliding_window,
                                      cudaStream_t stream) {
     gqa_decode_online_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, 1, 0, position, 1,
-        q_heads, kv_heads, head_dim);
+        q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -339,11 +347,12 @@ void launch_gqa_prefill_strict(const __nv_bfloat16* q,
                                const __nv_bfloat16* value_cache,
                                __nv_bfloat16* out, int rows,
                                int q_heads, int kv_heads, int head_dim,
+                               int sliding_window,
                                cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_strict_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, out, rows, 0, nullptr, 2,
-        q_heads, kv_heads, head_dim);
+        q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -352,10 +361,11 @@ void launch_gqa_prefill_online(const __nv_bfloat16* q,
                                const __nv_bfloat16* value_cache,
                                __nv_bfloat16* out, int rows,
                                int q_heads, int kv_heads, int head_dim,
+                               int sliding_window,
                                cudaStream_t stream) {
     gqa_decode_online_kernel<<<rows * q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, out, rows, 0, nullptr, 2,
-        q_heads, kv_heads, head_dim);
+        q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -363,11 +373,12 @@ void launch_gqa_decode_strict_int8(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int seq_len,
-    int q_heads, int kv_heads, int head_dim, cudaStream_t stream) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_strict_int8_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
-        seq_len, nullptr, 0, q_heads, kv_heads, head_dim);
+        seq_len, nullptr, 0, q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -375,10 +386,11 @@ void launch_gqa_decode_online_int8(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int seq_len,
-    int q_heads, int kv_heads, int head_dim, cudaStream_t stream) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    cudaStream_t stream) {
     gqa_decode_online_int8_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
-        seq_len, nullptr, 0, q_heads, kv_heads, head_dim);
+        seq_len, nullptr, 0, q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -387,11 +399,12 @@ void launch_gqa_decode_strict_int8_device(
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out,
     const int32_t* position, int q_heads, int kv_heads, int head_dim,
+    int sliding_window,
     cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_strict_int8_kernel<<<q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
-        0, position, 1, q_heads, kv_heads, head_dim);
+        0, position, 1, q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -400,10 +413,11 @@ void launch_gqa_decode_online_int8_device(
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out,
     const int32_t* position, int q_heads, int kv_heads, int head_dim,
+    int sliding_window,
     cudaStream_t stream) {
     gqa_decode_online_int8_kernel<<<q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, 1,
-        0, position, 1, q_heads, kv_heads, head_dim);
+        0, position, 1, q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -411,11 +425,12 @@ void launch_gqa_prefill_strict_int8(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int rows,
-    int q_heads, int kv_heads, int head_dim, cudaStream_t stream) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_strict_int8_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, rows,
-        0, nullptr, 2, q_heads, kv_heads, head_dim);
+        0, nullptr, 2, q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
@@ -423,9 +438,10 @@ void launch_gqa_prefill_online_int8(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
     const float* value_scales, __nv_bfloat16* out, int rows,
-    int q_heads, int kv_heads, int head_dim, cudaStream_t stream) {
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    cudaStream_t stream) {
     gqa_decode_online_int8_kernel<<<rows * q_heads, 32, 0, stream>>>(
         q, key_cache, value_cache, key_scales, value_scales, out, rows,
-        0, nullptr, 2, q_heads, kv_heads, head_dim);
+        0, nullptr, 2, q_heads, kv_heads, head_dim, sliding_window);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

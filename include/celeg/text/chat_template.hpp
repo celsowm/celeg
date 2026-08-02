@@ -59,6 +59,13 @@ public:
     ChatTemplateKind kind() const override { return ChatTemplateKind::GraniteInstruct; }
 };
 
+class Gemma4InstructChatTemplate final : public IChatTemplate {
+public:
+    std::string format(std::span<const ChatMessage> messages,
+                       bool add_generation_prompt) const override;
+    ChatTemplateKind kind() const override { return ChatTemplateKind::Gemma4Instruct; }
+};
+
 // Factory: returns the chat template implementation for a given kind.
 std::unique_ptr<IChatTemplate> make_chat_template(ChatTemplateKind kind);
 std::unique_ptr<IChatTemplate> make_chat_template(std::string_view profile_id);

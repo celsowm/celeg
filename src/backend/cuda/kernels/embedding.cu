@@ -36,6 +36,34 @@ __global__ void embedding_batch_kernel(const int32_t* tokens,
     out[index] = table[static_cast<size_t>(tokens[row]) * hidden + column];
 }
 
+__global__ void embedding_slice_kernel(const int32_t* token, const __nv_bfloat16* table,
+                                       int table_width, int offset,
+                                       __nv_bfloat16* out, int width, bool device_token) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= width) return;
+    const int row = device_token ? *token : *token;
+    out[i] = table[static_cast<size_t>(row) * table_width + offset + i];
+}
+
+__global__ void embedding_slice_value_kernel(int32_t token, const __nv_bfloat16* table,
+                                             int table_width, int offset,
+                                             __nv_bfloat16* out, int width) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= width) return;
+    out[i] = table[static_cast<size_t>(token) * table_width + offset + i];
+}
+
+__global__ void embedding_slice_batch_kernel(const int32_t* tokens, int rows,
+                                             const __nv_bfloat16* table, int table_width,
+                                             int offset, __nv_bfloat16* out, int width) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * width;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / width);
+    const int column = static_cast<int>(index % width);
+    out[index] = table[static_cast<size_t>(tokens[row]) * table_width + offset + column];
+}
+
 __global__ void embedding_int8_value_kernel(int32_t token,
                                              const int8_t* table,
                                              const float* scales,
@@ -154,6 +182,32 @@ void launch_embedding_batch(const int32_t* tokens, int rows,
     const size_t count = static_cast<size_t>(rows) * hidden;
     embedding_batch_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         tokens, rows, table, out, hidden);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_embedding_slice(int32_t token, const __nv_bfloat16* table,
+                            int table_width, int offset, __nv_bfloat16* out,
+                            int width, cudaStream_t stream) {
+    embedding_slice_value_kernel<<<(width + 255) / 256, 256, 0, stream>>>(
+        token, table, table_width, offset, out, width);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_embedding_slice_device(const int32_t* token, const __nv_bfloat16* table,
+                                   int table_width, int offset, __nv_bfloat16* out,
+                                   int width, cudaStream_t stream) {
+    embedding_slice_kernel<<<(width + 255) / 256, 256, 0, stream>>>(
+        token, table, table_width, offset, out, width, true);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_embedding_slice_batch(const int32_t* tokens, int rows,
+                                  const __nv_bfloat16* table, int table_width,
+                                  int offset, __nv_bfloat16* out, int width,
+                                  cudaStream_t stream) {
+    const size_t count = static_cast<size_t>(rows) * width;
+    embedding_slice_batch_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
+        tokens, rows, table, table_width, offset, out, width);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

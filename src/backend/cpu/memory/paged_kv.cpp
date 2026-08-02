@@ -430,7 +430,8 @@ void cpu_gqa_decode_paged(const float* q,
                           int sequence_length,
                           int q_heads,
                           int kv_heads,
-                          int head_dim) {
+                          int head_dim,
+                          int sliding_window) {
     if (!q || !output) throw std::invalid_argument("paged GQA pointers are required");
     if (sequence_length <= 0 || q_heads <= 0 || kv_heads <= 0 || head_dim <= 0 ||
         q_heads % kv_heads != 0) {
@@ -445,19 +446,23 @@ void cpu_gqa_decode_paged(const float* q,
     }
     const int queries_per_kv = q_heads / kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    if (sliding_window < 0) throw std::invalid_argument("negative sliding attention window");
+    const int first_token = sliding_window > 0
+        ? std::max(0, sequence_length - sliding_window) : 0;
     for (int qh = 0; qh < q_heads; ++qh) {
         const int kvh = qh / queries_per_kv;
         const float* query = q + static_cast<size_t>(qh) * head_dim;
         float* destination = output + static_cast<size_t>(qh) * head_dim;
         std::fill(destination, destination + head_dim, 0.0f);
         PartialAttention state;
-        int processed = 0;
-        for (size_t page_index = 0; page_index < required_pages; ++page_index) {
+        const size_t first_page = static_cast<size_t>(first_token) / pool.page_tokens();
+        for (size_t page_index = first_page; page_index < required_pages; ++page_index) {
+            const int page_start = static_cast<int>(page_index * pool.page_tokens());
+            const int offset = std::max(first_token - page_start, 0);
             const int tokens_in_page = std::min<int>(
-                static_cast<int>(pool.page_tokens()), sequence_length - processed);
+                static_cast<int>(pool.page_tokens()) - offset, sequence_length - page_start - offset);
             update_online(query, kvh, head_dim, scale, pool, pages[page_index],
-                          0, tokens_in_page, destination, state);
-            processed += tokens_in_page;
+                          static_cast<size_t>(offset), tokens_in_page, destination, state);
         }
         const float reciprocal = 1.0f / state.denominator;
         for (int d = 0; d < head_dim; ++d) destination[d] *= reciprocal;
@@ -475,10 +480,10 @@ void cpu_gqa_decode_paged_parallel(
         (static_cast<size_t>(sequence_length) + pool.page_tokens() - 1) /
         pool.page_tokens();
     const size_t tiles = (required_pages + options.page_tile - 1) / options.page_tile;
-    if (static_cast<size_t>(sequence_length) < options.parallel_threshold ||
+    if (options.sliding_window > 0 || static_cast<size_t>(sequence_length) < options.parallel_threshold ||
         thread_pool.size() == 0 || tiles == 0) {
         cpu_gqa_decode_paged(q, pool, pages, output, sequence_length,
-                             q_heads, kv_heads, head_dim);
+                             q_heads, kv_heads, head_dim, options.sliding_window);
         if (stats) *stats = {static_cast<size_t>(q_heads), tiles, false};
         return;
     }
@@ -543,7 +548,7 @@ void cpu_gqa_prefill_paged(
     const CpuKvPagePool& pool,
     std::span<const CpuKvPageId> pages, float* output,
     int base_sequence_length, int q_heads, int kv_heads, int head_dim,
-    CpuThreadPool& thread_pool) {
+    CpuThreadPool& thread_pool, int sliding_window) {
     if (!queries || !output || query_rows == 0 || base_sequence_length < 0 ||
         q_heads <= 0 || kv_heads <= 0 || q_heads % kv_heads != 0 || head_dim <= 0) {
         throw std::invalid_argument("invalid CPU paged prefill GQA arguments");
@@ -559,7 +564,7 @@ void cpu_gqa_prefill_paged(
             const int sequence_length = base_sequence_length + static_cast<int>(row) + 1;
             cpu_gqa_decode_paged(queries + row * query_stride, pool, pages,
                                  output + row * query_width, sequence_length,
-                                 q_heads, kv_heads, head_dim);
+                                 q_heads, kv_heads, head_dim, sliding_window);
         }
     });
 }

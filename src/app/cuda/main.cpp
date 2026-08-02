@@ -291,7 +291,6 @@ void print_memory_stats(const celeg::ModelMemoryStats& stats) {
     std::cerr << "memory.weights=" << format_bytes(stats.weights) << '\n'
               << "memory.kv_cache=" << format_bytes(stats.kv_cache) << '\n'
               << "memory.conv_state=" << format_bytes(stats.conv_state) << '\n'
-              << "memory.rope_tables=" << format_bytes(stats.rope_tables) << '\n'
               << "memory.activations=" << format_bytes(stats.activations) << '\n'
               << "memory.sampling=" << format_bytes(stats.sampling) << '\n'
               << "memory.matmul_workspace=" << format_bytes(stats.matmul_workspace) << '\n'

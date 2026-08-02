@@ -13,6 +13,16 @@ void launch_embedding_device(const int32_t* token, const __nv_bfloat16* table,
 void launch_embedding_batch(const int32_t* tokens, int rows,
                            const __nv_bfloat16* table, __nv_bfloat16* out,
                            int hidden, cudaStream_t stream);
+void launch_embedding_slice(int32_t token, const __nv_bfloat16* table,
+                            int table_width, int offset, __nv_bfloat16* out,
+                            int width, cudaStream_t stream);
+void launch_embedding_slice_device(const int32_t* token, const __nv_bfloat16* table,
+                                   int table_width, int offset, __nv_bfloat16* out,
+                                   int width, cudaStream_t stream);
+void launch_embedding_slice_batch(const int32_t* tokens, int rows,
+                                  const __nv_bfloat16* table, int table_width,
+                                  int offset, __nv_bfloat16* out, int width,
+                                  cudaStream_t stream);
 
 void launch_embedding_int8(int32_t token, const int8_t* table,
                           const float* scales, __nv_bfloat16* out,

@@ -63,6 +63,19 @@ void CudaCompiledModel::load_checkpoint_weights(
     resources_.final_norm_ = resources_.weight_loader_->load_weight(
         repo, tensor_name(*resources_.tensor_naming_, TensorRole::FinalNorm),
         {resources_.shape_.hidden});
+    if (resources_.shape_.has_per_layer_input) {
+        const int ple = resources_.shape_.per_layer_input_size;
+        resources_.per_layer_embedding_ = resources_.weight_loader_->load_linear_weight(
+            repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerEmbedding),
+            {resources_.shape_.vocab_size,
+             resources_.shape_.num_hidden_layers * ple});
+        resources_.per_layer_context_projection_ = resources_.weight_loader_->load_linear_weight(
+            repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerContextProjection),
+            {resources_.shape_.num_hidden_layers * ple, resources_.shape_.hidden});
+        resources_.per_layer_projection_norm_ = resources_.weight_loader_->load_weight(
+            repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerProjectionNorm),
+            {ple});
+    }
     {
         if (resources_.embedding_->gguf_quantized()) {
             if (resources_.embedding_->gguf_segments.size() != 1) {
@@ -112,8 +125,8 @@ void CudaCompiledModel::load_checkpoint_weights(
         const size_t embed_bytes =
             static_cast<size_t>(resources_.shape_.vocab_size) * resources_.shape_.hidden *
             sizeof(__nv_bfloat16);
-        const size_t per_attn = static_cast<size_t>(resources_.shape_.qkv_width) * resources_.shape_.hidden +
-            static_cast<size_t>(resources_.shape_.hidden) * resources_.shape_.q_width;
+        const size_t per_attn = static_cast<size_t>(resources_.shape_.maximum_attention_projection_width()) *
+            resources_.shape_.hidden;
         const size_t attn_bytes = per_attn *
             static_cast<size_t>(resources_.shape_.attention_layer_count) * sizeof(__nv_bfloat16);
         const size_t dense_ffn_bytes =
@@ -192,6 +205,7 @@ void CudaCompiledModel::load_checkpoint_weights(
     }
 
     resources_.layers_.reserve(static_cast<size_t>(resources_.shape_.num_hidden_layers));
+    std::vector<int> shared_owner(2, -1);
     for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
         common_layer.operator_norm = resources_.weight_loader_->load_weight(
@@ -200,6 +214,27 @@ void CudaCompiledModel::load_checkpoint_weights(
         common_layer.ffn_norm = resources_.weight_loader_->load_weight(
             repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnInputNorm, i),
             {resources_.shape_.hidden});
+        if (resources_.shape_.has_split_attention_norms) {
+            common_layer.post_attention_norm = resources_.weight_loader_->load_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionPostNorm, i),
+                {resources_.shape_.hidden});
+            common_layer.post_feed_forward_norm = resources_.weight_loader_->load_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnOutputNorm, i),
+                {resources_.shape_.hidden});
+        }
+        if (resources_.shape_.has_per_layer_input) {
+            common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerInputGate, i),
+                {resources_.shape_.per_layer_input_size, resources_.shape_.hidden});
+            common_layer.per_layer_projection = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerProjection, i),
+                {resources_.shape_.hidden, resources_.shape_.per_layer_input_size});
+            common_layer.per_layer_input_norm = resources_.weight_loader_->load_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerInputNorm, i),
+                {resources_.shape_.hidden});
+            common_layer.layer_scalar = resources_.weight_loader_->load_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::LayerScalar, i), {1});
+        }
         if (resources_.shape_.layer_uses_moe(i)) {
             // Mixture-of-experts feed-forward for this layer.
             const int E = resources_.shape_.num_experts;
@@ -329,17 +364,20 @@ void CudaCompiledModel::load_checkpoint_weights(
 
             common_layer.feed_forward = moe_weights;
         } else {
+            const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
+                ? resources_.shape_.intermediate
+                : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(i));
             const LinearWeight* w13 = resources_.weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "feed_forward.w13.weight"),
                 {
                     {tensor_name(*resources_.tensor_naming_, TensorRole::FfnGate, i),
-                     {resources_.shape_.intermediate, resources_.shape_.hidden}},
+                     {intermediate, resources_.shape_.hidden}},
                     {tensor_name(*resources_.tensor_naming_, TensorRole::FfnUp, i),
-                     {resources_.shape_.intermediate, resources_.shape_.hidden}},
+                     {intermediate, resources_.shape_.hidden}},
                 });
             const LinearWeight* w2 = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnDown, i),
-                {resources_.shape_.hidden, resources_.shape_.intermediate});
+                {resources_.shape_.hidden, intermediate});
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
@@ -348,36 +386,50 @@ void CudaCompiledModel::load_checkpoint_weights(
         if (layer_type == LayerType::FullAttention) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
-            attention_layer.qkv = resources_.weight_loader_->load_concat_linear_weight(
-                repo, layer_name(i, "self_attn.qkv.weight"),
-                {
-                    {tensor_name(*resources_.tensor_naming_, TensorRole::AttentionQuery, i),
-                     {resources_.shape_.q_width, resources_.shape_.hidden}},
-                    {tensor_name(*resources_.tensor_naming_, TensorRole::AttentionKey, i),
-                     {resources_.shape_.kv_width, resources_.shape_.hidden}},
-                    {tensor_name(*resources_.tensor_naming_, TensorRole::AttentionValue, i),
-                     {resources_.shape_.kv_width, resources_.shape_.hidden}},
-                });
+            attention_layer.layout = resources_.shape_.attention_layout(i);
+            const AttentionSpec& layout = attention_layer.layout;
+            attention_layer.query = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionQuery, i),
+                {layout.query_width(), resources_.shape_.hidden});
+            if (!layout.kv_sharing.shared() || layout.kv_sharing.publishes) {
+                attention_layer.key = resources_.weight_loader_->load_linear_weight(
+                    repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionKey, i),
+                    {layout.key_value_width(), resources_.shape_.hidden});
+                attention_layer.value = resources_.weight_loader_->load_linear_weight(
+                    repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionValue, i),
+                    {layout.key_value_width(), resources_.shape_.hidden});
+            } else {
+                if (layout.kv_sharing.group < 0 ||
+                    layout.kv_sharing.group >= static_cast<int>(shared_owner.size()) ||
+                    shared_owner[static_cast<size_t>(layout.kv_sharing.group)] < 0) {
+                    throw std::runtime_error("CUDA shared KV consumer has no owner");
+                }
+                attention_layer.kv_owner_layer =
+                    shared_owner[static_cast<size_t>(layout.kv_sharing.group)];
+            }
             attention_layer.out = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionOutput, i),
-                {resources_.shape_.hidden, resources_.shape_.hidden});
-            if (resources_.shape_.query_key_norm) {
+                {resources_.shape_.hidden, layout.query_width()});
+            if (layout.query_key_norm) {
                 attention_layer.q_norm = resources_.weight_loader_->load_weight(
-                    repo, layer_name(i, "self_attn.q_layernorm.weight"),
-                    {resources_.shape_.head_dim});
-                attention_layer.k_norm = resources_.weight_loader_->load_weight(
-                    repo, layer_name(i, "self_attn.k_layernorm.weight"),
-                    {resources_.shape_.head_dim});
+                    repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionQueryNorm, i),
+                    {layout.head_dim});
+                if (attention_layer.key) {
+                    attention_layer.k_norm = resources_.weight_loader_->load_weight(
+                        repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionKeyNorm, i),
+                        {layout.head_dim});
+                }
             }
 
-            if (resources_.options_.allocate_local_kv_cache) {
-                const size_t cache_elements =
-                    static_cast<size_t>(max_context_) * resources_.shape_.kv_width;
+            if (resources_.options_.allocate_local_kv_cache && attention_layer.key) {
+                const size_t cache_elements = static_cast<size_t>(max_context_) *
+                    static_cast<size_t>(layout.key_value_width());
                 if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
                     attention_layer.key_cache_int8.reset(cache_elements);
                     attention_layer.value_cache_int8.reset(cache_elements);
                     const size_t scale_elements =
-                        static_cast<size_t>(max_context_) * resources_.shape_.num_key_value_heads;
+                        static_cast<size_t>(max_context_) *
+                        static_cast<size_t>(layout.key_value_heads);
                     attention_layer.key_cache_scales.reset(scale_elements);
                     attention_layer.value_cache_scales.reset(scale_elements);
                 } else {
@@ -385,6 +437,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.value_cache.reset(cache_elements);
                 }
             }
+            if (layout.kv_sharing.publishes) {
+                shared_owner[static_cast<size_t>(layout.kv_sharing.group)] = i;
+                attention_layer.kv_owner_layer = i;
+            }
+            if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
             resources_.layers_.emplace_back(std::move(attention_layer));
         } else {
             ConvolutionLayer convolution_layer;

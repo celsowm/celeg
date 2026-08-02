@@ -26,36 +26,21 @@ void CudaCompiledModel::warmup_decode_gemms() {
     }
     const LayerCommon& first_common = common(resources_.layers_.front());
 
-    if (resources_.options_.fused_projections) {
-        linear(workspace_.normed_.data(), *attention_layer->qkv, workspace_.qkv_output_.data(),
-               1, resources_.shape_.qkv_width, resources_.shape_.hidden);
-        linear(workspace_.normed_.data(), *as_dense_ffn(first_common.feed_forward)->w13, workspace_.gate_up_.data(),
-               1, 2 * resources_.shape_.intermediate, resources_.shape_.hidden);
-    } else {
-        const LinearWeight q_weight =
-            slice_rows(*attention_layer->qkv, 0, resources_.shape_.q_width);
-        const LinearWeight k_weight = slice_rows(
-            *attention_layer->qkv, resources_.shape_.q_width, resources_.shape_.kv_width);
-        const LinearWeight v_weight = slice_rows(
-            *attention_layer->qkv, resources_.shape_.q_width + resources_.shape_.kv_width,
-            resources_.shape_.kv_width);
-        linear(workspace_.normed_.data(), q_weight, workspace_.qkv_output_.data(),
-               1, resources_.shape_.q_width, resources_.shape_.hidden);
-        linear(workspace_.normed_.data(), k_weight, workspace_.qkv_output_.data() + resources_.shape_.q_width,
-               1, resources_.shape_.kv_width, resources_.shape_.hidden);
-        linear(workspace_.normed_.data(), v_weight,
-               workspace_.qkv_output_.data() + resources_.shape_.q_width + resources_.shape_.kv_width,
-               1, resources_.shape_.kv_width, resources_.shape_.hidden);
-
-        const LinearWeight w1 =
-            slice_rows(*as_dense_ffn(first_common.feed_forward)->w13, 0, resources_.shape_.intermediate);
-        const LinearWeight w3 = slice_rows(
-            *as_dense_ffn(first_common.feed_forward)->w13, resources_.shape_.intermediate,
-            resources_.shape_.intermediate);
-        linear(workspace_.normed_.data(), w1, workspace_.gate_up_.data(),
-               1, resources_.shape_.intermediate, resources_.shape_.hidden);
-        linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + resources_.shape_.intermediate,
-               1, resources_.shape_.intermediate, resources_.shape_.hidden);
+    const AttentionSpec& layout = attention_layer->layout;
+    linear(workspace_.normed_.data(), *attention_layer->query, workspace_.qkv_output_.data(),
+           1, layout.query_width(), resources_.shape_.hidden);
+    if (attention_layer->key && attention_layer->value) {
+        linear(workspace_.normed_.data(), *attention_layer->key,
+               workspace_.qkv_output_.data() + layout.query_width(),
+               1, layout.key_value_width(), resources_.shape_.hidden);
+        linear(workspace_.normed_.data(), *attention_layer->value,
+               workspace_.qkv_output_.data() + layout.query_width() + layout.key_value_width(),
+               1, layout.key_value_width(), resources_.shape_.hidden);
+    }
+    if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward)) {
+        const int intermediate = dense->w2->cols;
+        linear(workspace_.normed_.data(), *dense->w13, workspace_.gate_up_.data(),
+               1, 2 * intermediate, resources_.shape_.hidden);
     }
 
     linear(workspace_.op_output_.data(), *attention_layer->out, workspace_.hidden_.data(),
@@ -65,9 +50,11 @@ void CudaCompiledModel::warmup_decode_gemms() {
         linear(workspace_.normed_.data(), *convolution_layer->conv_in, workspace_.conv_projected_.data(),
                1, 3 * resources_.shape_.hidden, resources_.shape_.hidden);
     }
-    linear(workspace_.activated_.data(), *as_dense_ffn(first_common.feed_forward)->w2, workspace_.hidden_.data(),
-           1, resources_.shape_.hidden, resources_.shape_.intermediate,
-           resources_.options_.fused_residuals ? 1.0f : 0.0f);
+    if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward)) {
+        linear(workspace_.activated_.data(), *dense->w2, workspace_.hidden_.data(),
+               1, resources_.shape_.hidden, dense->w2->cols,
+               resources_.options_.fused_residuals ? 1.0f : 0.0f);
+    }
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
            1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
@@ -75,22 +62,29 @@ void CudaCompiledModel::warmup_decode_gemms() {
 
 void CudaCompiledModel::warmup_prefill_attention_gemm() {
     constexpr int kRows = 2;
-    DeviceBuffer<__nv_bfloat16> q(static_cast<size_t>(kRows) * resources_.shape_.q_width);
-    DeviceBuffer<__nv_bfloat16> k(static_cast<size_t>(kRows) * resources_.shape_.kv_width);
-    DeviceBuffer<__nv_bfloat16> v(static_cast<size_t>(kRows) * resources_.shape_.kv_width);
-    DeviceBuffer<__nv_bfloat16> out(static_cast<size_t>(kRows) * resources_.shape_.q_width);
+    const AttentionLayer* attention = nullptr;
+    for (const Layer& layer : resources_.layers_) {
+        if ((attention = as_attention(layer)) != nullptr) break;
+    }
+    if (!attention) throw std::runtime_error("compiled attention layer map is incomplete");
+    const AttentionSpec& layout = attention->layout;
+    DeviceBuffer<__nv_bfloat16> q(static_cast<size_t>(kRows) * layout.query_width());
+    DeviceBuffer<__nv_bfloat16> k(static_cast<size_t>(kRows) * layout.key_value_width());
+    DeviceBuffer<__nv_bfloat16> v(static_cast<size_t>(kRows) * layout.key_value_width());
+    DeviceBuffer<__nv_bfloat16> out(static_cast<size_t>(kRows) * layout.query_width());
     DeviceBuffer<float> scores(
-        static_cast<size_t>(resources_.shape_.num_attention_heads) * kRows * kRows);
+        static_cast<size_t>(layout.query_heads) * kRows * kRows);
     DeviceBuffer<__nv_bfloat16> probs(
-        static_cast<size_t>(resources_.shape_.num_attention_heads) * kRows * kRows);
+        static_cast<size_t>(layout.query_heads) * kRows * kRows);
     q.zero_async(stream_.get());
     k.zero_async(stream_.get());
     v.zero_async(stream_.get());
     launch_gqa_prefill_gemm(
         gemm_->cublas().get(), q.data(), k.data(), v.data(), out.data(),
-        scores.data(), probs.data(), kRows, resources_.shape_.num_attention_heads,
-        resources_.shape_.num_key_value_heads, resources_.shape_.head_dim, resources_.shape_.q_width,
-        resources_.shape_.kv_width, resources_.shape_.q_width, stream_.get());
+        scores.data(), probs.data(), kRows, layout.query_heads,
+        layout.key_value_heads, layout.head_dim, layout.query_width(),
+        layout.key_value_width(), layout.query_width(), layout.sliding_window,
+        stream_.get());
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 

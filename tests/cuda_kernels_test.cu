@@ -29,9 +29,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.hidden = 1024;
             shape.intermediate = 2560;
             shape.num_hidden_layers = 14;
-            shape.num_attention_heads = 16;
-            shape.num_key_value_heads = 8;
-            shape.head_dim = 64;
             shape.vocab_size = 65536;
             shape.conv_cache = 3;
             shape.conv_dim = 1024;
@@ -40,7 +37,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.eos_token_id = 7;
             shape.pad_token_id = 0;
             shape.norm_eps = 1e-5f;
-            shape.rope_theta = 1'000'000.0f;
             shape.rope_type = "default";
             shape.layer_types = {
                 celeg::LayerType::Convolution, celeg::LayerType::Convolution,
@@ -56,9 +52,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.hidden = 2048;
             shape.intermediate = 12288;
             shape.num_hidden_layers = 16;
-            shape.num_attention_heads = 32;
-            shape.num_key_value_heads = 8;
-            shape.head_dim = 64;
             shape.vocab_size = 65536;
             shape.conv_cache = 3;
             shape.conv_dim = 2048;
@@ -67,7 +60,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.eos_token_id = 7;
             shape.pad_token_id = 0;
             shape.norm_eps = 1e-5f;
-            shape.rope_theta = 1'000'000.0f;
             shape.rope_type = "default";
             shape.layer_types = {
                 celeg::LayerType::Convolution, celeg::LayerType::Convolution,
@@ -81,10 +73,12 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             };
         }
         shape.mixer_kinds = shape.layer_types;
-        shape.q_width = shape.num_attention_heads * shape.head_dim;
-        shape.kv_width = shape.num_key_value_heads * shape.head_dim;
-        shape.qkv_width = shape.q_width + 2 * shape.kv_width;
-        shape.rope_pairs = shape.head_dim / 2;
+        const int query_heads = model == 0 ? 16 : 32;
+        shape.attention_layouts.assign(
+            static_cast<size_t>(shape.num_hidden_layers),
+            celeg::AttentionSpec{query_heads, 8, 64, false,
+                                 celeg::AttentionMaskKind::Causal, 0,
+                                 1.0e6, 1.0, {}});
         shape.attention_layer_count = 0;
         shape.conv_layer_count = 0;
         for (int i = 0; i < shape.num_hidden_layers; ++i) {
@@ -248,17 +242,13 @@ int main() {
         std::vector<__nv_bfloat16> k = {
             to_bf16(4.0f), to_bf16(3.0f), to_bf16(2.0f), to_bf16(1.0f)};
         std::vector<__nv_bfloat16> norm(4, to_bf16(1.0f));
-        std::vector<__nv_bfloat16> rope_cos = {to_bf16(1.0f), to_bf16(0.0f)};
-        std::vector<__nv_bfloat16> rope_sin = {to_bf16(0.0f), to_bf16(1.0f)};
-        celeg::DeviceBuffer<__nv_bfloat16> dq(4), dk(4), dn(4), dc(2), ds(2);
+        celeg::DeviceBuffer<__nv_bfloat16> dq(4), dk(4), dn(4);
         CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dn.data(), norm.data(), dn.bytes(), cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(dc.data(), rope_cos.data(), dc.bytes(), cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(ds.data(), rope_sin.data(), ds.bytes(), cudaMemcpyHostToDevice));
-        celeg::launch_qk_norm_rope_strict(
-            dq.data(), dk.data(), dn.data(), dn.data(), dc.data(), ds.data(),
-            1, 1, 4, 0, 1e-5f, stream.get());
+        celeg::launch_dynamic_qk_norm_rope(
+            dq.data(), dk.data(), dn.data(), dn.data(), 1, 1, 4, 0,
+            10000.0f, 1.0f, 1e-5f, true, stream.get());
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         CELEG_CUDA(cudaMemcpy(q.data(), dq.data(), dq.bytes(), cudaMemcpyDeviceToHost));
         CELEG_CUDA(cudaMemcpy(k.data(), dk.data(), dk.bytes(), cudaMemcpyDeviceToHost));
@@ -266,8 +256,6 @@ int main() {
             {1, 2, 3, 4}, {1, 1, 1, 1}, 1e-5f);
         std::vector<float> expected_k = celeg::reference::rmsnorm_bf16(
             {4, 3, 2, 1}, {1, 1, 1, 1}, 1e-5f);
-        celeg::reference::rope_bf16_inplace(expected_q, {1, 0}, {0, 1});
-        celeg::reference::rope_bf16_inplace(expected_k, {1, 0}, {0, 1});
         for (int i = 0; i < 4; ++i) {
             expect_near(to_float(q[i]), expected_q[i], 0.01f);
             expect_near(to_float(k[i]), expected_k[i], 0.01f);
@@ -290,7 +278,7 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
         celeg::launch_gqa_decode_strict(
-            dq.data(), dk.data(), dv.data(), dout.data(), 2, 2, 1, 2, stream.get());
+            dq.data(), dk.data(), dv.data(), dout.data(), 2, 2, 1, 2, 0, stream.get());
         std::vector<__nv_bfloat16> output(4);
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
@@ -450,7 +438,7 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
         celeg::launch_gqa_prefill_strict(dq.data(), dk.data(), dv.data(), dout.data(),
-                                       rows, q_heads, kv_heads, head_dim, stream.get());
+                                       rows, q_heads, kv_heads, head_dim, 0, stream.get());
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         std::vector<__nv_bfloat16> output(q.size());
         CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
@@ -497,10 +485,10 @@ int main() {
         celeg::launch_gqa_prefill_strict_int8(
             dq.data(), key_cache.data(), value_cache.data(),
             key_scales.data(), value_scales.data(), dout_int8.data(), rows,
-            q_heads, kv_heads, head_dim, stream.get());
+            q_heads, kv_heads, head_dim, 0, stream.get());
         celeg::launch_gqa_prefill_strict(
             dq.data(), dk.data(), dv.data(), dout_bf16.data(), rows,
-            q_heads, kv_heads, head_dim, stream.get());
+                                       q_heads, kv_heads, head_dim, 0, stream.get());
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         std::vector<__nv_bfloat16> int8_output(q.size()), bf16_output(q.size());
         CELEG_CUDA(cudaMemcpy(int8_output.data(), dout_int8.data(),
@@ -813,10 +801,10 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position), cudaMemcpyHostToDevice));
         celeg::launch_gqa_decode_online_device(
             dq.data(), dk.data(), dv.data(), reference.data(), dposition.data(),
-            q_heads, kv_heads, head_dim, stream.get());
+            q_heads, kv_heads, head_dim, 0, stream.get());
         celeg::launch_gqa_decode_segmented_device(
             dq.data(), dk.data(), dv.data(), segmented.data(), dposition.data(),
-            q_heads, kv_heads, head_dim, chunk_tokens, chunks,
+            q_heads, kv_heads, head_dim, chunk_tokens, chunks, 0,
             partial_max.data(), partial_denom.data(), partial_accum.data(),
             stream.get());
         std::vector<__nv_bfloat16> a(q.size()), b(q.size());
@@ -968,7 +956,8 @@ int main() {
         celeg::launch_gqa_decode_paged_batch(
             dq.data(), dk.data(), dv.data(), dtable.data(), 1,
             dout.data(), dpositions.data(), 1, 0, page_tokens,
-            attention_layers, q_heads, kv_heads, head_dim, false,
+            page_tokens * kv_heads * head_dim, 0,
+            q_heads, kv_heads, head_dim, 0, false,
             stream.get());
         std::vector<__nv_bfloat16> output(head_dim);
         CELEG_CUDA(cudaMemcpyAsync(output.data(), dout.data(), dout.bytes(),
@@ -1019,12 +1008,14 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dpositions.data(), positions.data(), dpositions.bytes(), cudaMemcpyHostToDevice));
         celeg::launch_gqa_decode_paged_batch(
             dq.data(), dk.data(), dv.data(), dtable.data(), 2, normal.data(),
-            dpositions.data(), 1, 0, page_tokens, attention_layers,
-            q_heads, kv_heads, head_dim, true, stream.get());
+            dpositions.data(), 1, 0, page_tokens,
+            page_tokens * kv_heads * head_dim, 0,
+            q_heads, kv_heads, head_dim, 0, true, stream.get());
         celeg::launch_gqa_decode_paged_segmented_batch(
             dq.data(), dk.data(), dv.data(), dtable.data(), 2,
             segmented.data(), dpositions.data(), 1, 0, page_tokens,
-            attention_layers, q_heads, kv_heads, head_dim, 1, 3,
+            page_tokens * kv_heads * head_dim, 0,
+            q_heads, kv_heads, head_dim, 1, 3, 0,
             pmax.data(), pdenom.data(), paccum.data(), stream.get());
         std::vector<__nv_bfloat16> a(head_dim), b(head_dim);
         CELEG_CUDA(cudaMemcpyAsync(a.data(), normal.data(), normal.bytes(),
@@ -1080,12 +1071,16 @@ int main() {
         celeg::launch_gqa_decode_int8_paged_batch(
             dq.data(), dk.data(), dv.data(), dks.data(), dvs.data(),
             dtable.data(), 2, normal.data(), dpositions.data(), 1, 0,
-            page_tokens, attention_layers, q_heads, kv_heads, head_dim, true,
+            page_tokens, page_tokens * kv_heads * head_dim, 0,
+            page_tokens * kv_heads, 0,
+            q_heads, kv_heads, head_dim, 0, true,
             stream.get());
         celeg::launch_gqa_decode_int8_paged_segmented_batch(
             dq.data(), dk.data(), dv.data(), dks.data(), dvs.data(),
             dtable.data(), 2, segmented.data(), dpositions.data(), 1, 0,
-            page_tokens, attention_layers, q_heads, kv_heads, head_dim, 1, 3,
+            page_tokens, page_tokens * kv_heads * head_dim, 0,
+            page_tokens * kv_heads, 0,
+            q_heads, kv_heads, head_dim, 1, 3, 0,
             pmax.data(), pdenom.data(), paccum.data(), stream.get());
         std::vector<__nv_bfloat16> a(head_dim), b(head_dim);
         CELEG_CUDA(cudaMemcpyAsync(a.data(), normal.data(), normal.bytes(),
@@ -1135,8 +1130,7 @@ int main() {
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
-        const size_t page_elements = static_cast<size_t>(
-            cache.attention_layers()) * shape.kv_width;
+        const size_t page_elements = cache.page_vector_elements();
         std::vector<__nv_bfloat16> contents(page_elements, to_bf16(0.0f));
         contents[0] = to_bf16(3.5f);
         CELEG_CUDA(cudaMemcpy(cache.key_bf16() +
@@ -1165,8 +1159,7 @@ int main() {
         auto source = cache.allocate_tokens(page_tokens);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
-        const size_t page_elements = static_cast<size_t>(
-            cache.attention_layers()) * page_tokens * shape.kv_width;
+        const size_t page_elements = cache.page_vector_elements();
         std::vector<__nv_bfloat16> contents(page_elements, to_bf16(9.0f));
         CELEG_CUDA(cudaMemcpy(cache.key_bf16() +
                             static_cast<size_t>(source_page) * page_elements,
@@ -1180,8 +1173,7 @@ int main() {
                             copied.size() * sizeof(__nv_bfloat16),
                             cudaMemcpyDeviceToHost));
         for (int layer = 0; layer < cache.attention_layers(); ++layer) {
-            const size_t layer_base = static_cast<size_t>(layer) * page_tokens *
-                                      shape.kv_width;
+            const size_t layer_base = cache.layer_vector_offset(layer);
             expect_near(to_float(copied[layer_base]), 9.0f, 0.01f);
         }
         cache.release(*source);
@@ -1194,10 +1186,8 @@ int main() {
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
-        const size_t page_elements = static_cast<size_t>(
-            cache.attention_layers()) * shape.kv_width;
-        const size_t scale_elements = static_cast<size_t>(
-            cache.attention_layers()) * shape.num_key_value_heads;
+        const size_t page_elements = cache.page_vector_elements();
+        const size_t scale_elements = cache.page_scale_elements();
         const int8_t quantized = -37;
         const float scale = 0.03125f;
         CELEG_CUDA(cudaMemcpy(cache.key_int8() +
@@ -1253,8 +1243,9 @@ int main() {
         celeg::launch_store_kv_int8_paged_batch(
             dk.data(), dv.data(), key_pool.data(), value_pool.data(),
             key_scales.data(), value_scales.data(), dtable.data(), 1,
-            dpositions.data(), 1, 0, page_tokens, attention_layers,
-            kv_heads, head_dim, stream.get());
+            dpositions.data(), 1, 0, page_tokens,
+            page_tokens * kv_heads * head_dim, 0,
+            page_tokens * kv_heads, 0, kv_heads, head_dim, stream.get());
         std::vector<int8_t> host_keys(vector_count), host_values(vector_count);
         std::vector<float> host_key_scales(scale_count), host_value_scales(scale_count);
         CELEG_CUDA(cudaMemcpyAsync(host_keys.data(), key_pool.data(), key_pool.bytes(),

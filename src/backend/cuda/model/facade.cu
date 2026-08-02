@@ -50,8 +50,6 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
     context.embedding_weight = resources_.embedding_;
     context.logits_weight_value = resources_.lm_head_ ? resources_.lm_head_ : resources_.embedding_;
     context.final_norm_value = resources_.final_norm_;
-    context.rope_cos_value = workspace_.rope_cos_.data();
-    context.rope_sin_value = workspace_.rope_sin_.data();
     context.segmented_attention = &CudaCompiledModel::packed_segmented_attention_callback;
     context.ensure_expert_residency = &CudaCompiledModel::packed_expert_residency_callback;
     return context;

@@ -95,11 +95,14 @@ void cpu_rmsnorm_inplace(float* data, const float* weight,
                          size_t width, float eps);
 void cpu_residual_add(float* data, const float* residual, size_t count);
 void cpu_swiglu(const float* gate_up, float* output, size_t count);
+void cpu_gated_gelu_tanh(const float* gate_up, float* output, size_t count);
+void cpu_gelu_tanh(float* data, size_t count);
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
-                      float rope_theta, float eps);
+                      float rope_theta, float eps,
+                      float rotary_fraction = 1.0f);
 void cpu_rope(float* data, int heads, int head_dim, int position,
-              float rope_theta);
+              float rope_theta, float rotary_fraction = 1.0f);
 void cpu_gqa_decode(const float* q, const float* key_cache,
                     const float* value_cache, float* output,
                     int sequence_length, int q_heads, int kv_heads,

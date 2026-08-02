@@ -42,10 +42,11 @@ public:
         result.identity = "granite-" + t.fingerprint();
         result.tensor_naming = naming_policy();
         result.capabilities = {true, true, false, true};
+        const AttentionSpec& attention = t.attention_layouts.front();
         result.definition.dimensions = {t.hidden, t.intermediate, t.num_hidden_layers,
-            t.num_attention_heads, t.num_key_value_heads, t.head_dim, t.vocab_size,
+            attention.query_heads, attention.key_value_heads, attention.head_dim, t.vocab_size,
             t.max_position_embeddings};
-        result.definition.rope = {PositionalEncodingKind::Rope, t.rope_theta, {}};
+        result.definition.rope = {PositionalEncodingKind::Rope, attention.rope_theta, {}};
         result.definition.numerics = {t.norm_eps, t.embedding_multiplier,
             t.attention_multiplier, 1.0f, t.residual_multiplier, t.logits_divisor};
         result.definition.tokens = {t.bos_token_id, t.eos_token_id, t.pad_token_id};

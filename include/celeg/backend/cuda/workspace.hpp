@@ -26,8 +26,9 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> activated_;
     DeviceBuffer<__nv_bfloat16> mlp_output_;
     DeviceBuffer<__nv_bfloat16> logits_;
-    DeviceBuffer<__nv_bfloat16> rope_cos_;
-    DeviceBuffer<__nv_bfloat16> rope_sin_;
+    DeviceBuffer<__nv_bfloat16> per_layer_token_;
+    DeviceBuffer<__nv_bfloat16> per_layer_context_;
+    DeviceBuffer<__nv_bfloat16> per_layer_gate_;
     DeviceBuffer<float> attention_partial_max_;
     DeviceBuffer<float> attention_partial_denom_;
     DeviceBuffer<float> attention_partial_accum_;
@@ -49,6 +50,9 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> prefill_gate_up_;
     DeviceBuffer<__nv_bfloat16> prefill_activated_;
     DeviceBuffer<__nv_bfloat16> prefill_mlp_output_;
+    DeviceBuffer<__nv_bfloat16> prefill_per_layer_token_;
+    DeviceBuffer<__nv_bfloat16> prefill_per_layer_context_;
+    DeviceBuffer<__nv_bfloat16> prefill_per_layer_gate_;
     DeviceBuffer<float> prefill_attn_partial_max_;
     DeviceBuffer<float> prefill_attn_partial_denom_;
     DeviceBuffer<float> prefill_attn_partial_accum_;

@@ -157,6 +157,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
         detail::load_model_bootstrap(std::filesystem::path(model_path));
     native_checkpoint = bootstrap.checkpoint.gguf != nullptr;
     shape = bootstrap.model.topology;
+    final_logit_softcap = bootstrap.model.graph.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
     model_identity = bootstrap.model.identity;
     tensor_naming = bootstrap.model.tensor_naming.get();
@@ -164,12 +165,40 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     prepare_pack_path();
     load_weights();
     layer_to_kv_pool.assign(weight_store.layers.size(), -1);
+    layer_to_kv_owner.assign(weight_store.layers.size(), -1);
+    std::vector<int> shared_owner(2, -1);
+    for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
+        if (!CpuCompiledModel::attention_operator(weight_store.layers[layer])) continue;
+        const AttentionSpec& attention = shape.attention_layout(static_cast<int>(layer));
+        if (attention.kv_sharing.publishes) {
+            shared_owner[static_cast<size_t>(attention.kv_sharing.group)] =
+                static_cast<int>(layer);
+        }
+    }
+    std::vector<int> shared_pool(2, -1);
     for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
         if (CpuCompiledModel::attention_operator(weight_store.layers[layer])) {
+            const AttentionSpec& attention = shape.attention_layout(static_cast<int>(layer));
+            if (attention.kv_sharing.shared() && !attention.kv_sharing.publishes) {
+                const int group = attention.kv_sharing.group;
+                if (group < 0 || group >= static_cast<int>(shared_pool.size()) ||
+                    shared_pool[static_cast<size_t>(group)] < 0) {
+                    throw std::runtime_error("Gemma shared KV consumer has no owner pool");
+                }
+                layer_to_kv_pool[layer] = shared_pool[static_cast<size_t>(group)];
+                layer_to_kv_owner[layer] = shared_owner[static_cast<size_t>(group)];
+                continue;
+            }
             layer_to_kv_pool[layer] = static_cast<int>(kv_pools.size());
             kv_pools.push_back(std::make_shared<CpuKvPagePool>(
                 options.kv_cache_mode, options.kv_page_tokens,
-                static_cast<size_t>(shape.kv_width)));
+                static_cast<size_t>(attention.key_value_width())));
+            if (attention.kv_sharing.shared()) {
+                shared_pool[static_cast<size_t>(attention.kv_sharing.group)] =
+                    layer_to_kv_pool[layer];
+                layer_to_kv_owner[layer] = static_cast<int>(layer);
+            }
+            if (!attention.kv_sharing.shared()) layer_to_kv_owner[layer] = static_cast<int>(layer);
         }
     }
 }
@@ -219,19 +248,45 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     common.operator_norm = load_vector(source, reader, writer,
         tensor_name(tensor_naming, TensorRole::AttentionInputNorm, layer),
         {shape.hidden});
+    if (shape.has_split_attention_norms) {
+        common.post_attention_norm = load_vector(source, reader, writer,
+            tensor_name(tensor_naming, TensorRole::AttentionPostNorm, layer),
+            {shape.hidden});
+    }
     common.ffn_norm = load_vector(source, reader, writer,
         tensor_name(tensor_naming, TensorRole::FfnInputNorm, layer),
         {shape.hidden});
+    if (shape.has_split_attention_norms) {
+        common.post_feed_forward_norm = load_vector(source, reader, writer,
+            tensor_name(tensor_naming, TensorRole::FfnOutputNorm, layer),
+            {shape.hidden});
+    }
+    const int intermediate = shape.feed_forward_intermediates.empty()
+        ? shape.intermediate : shape.feed_forward_intermediates.at(static_cast<size_t>(layer));
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {tensor_name(tensor_naming, TensorRole::FfnGate, layer),
-             {shape.intermediate, shape.hidden}},
+             {intermediate, shape.hidden}},
             {tensor_name(tensor_naming, TensorRole::FfnUp, layer),
-             {shape.intermediate, shape.hidden}},
+             {intermediate, shape.hidden}},
         });
     common.w2 = load_matrix(source, reader, writer,
         tensor_name(tensor_naming, TensorRole::FfnDown, layer),
-        {shape.hidden, shape.intermediate});
+        {shape.hidden, intermediate});
+    if (shape.has_per_layer_input) {
+        common.per_layer_input_gate = load_matrix(source, reader, writer,
+            tensor_name(tensor_naming, TensorRole::PerLayerInputGate, layer),
+            {shape.per_layer_input_size, shape.hidden});
+        common.per_layer_projection = load_matrix(source, reader, writer,
+            tensor_name(tensor_naming, TensorRole::PerLayerProjection, layer),
+            {shape.hidden, shape.per_layer_input_size});
+        common.per_layer_input_norm = load_vector(source, reader, writer,
+            tensor_name(tensor_naming, TensorRole::PerLayerInputNorm, layer),
+            {shape.hidden});
+        const std::vector<float> scalar = load_vector(source, reader, writer,
+            tensor_name(tensor_naming, TensorRole::LayerScalar, layer), {1});
+        common.layer_scalar = scalar.front();
+    }
     return common;
 }
 
@@ -274,6 +329,17 @@ void CpuCompiledModel::Shared::load_weights() {
     weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
         tensor_name(tensor_naming, TensorRole::FinalNorm),
         {shape.hidden});
+    if (shape.has_per_layer_input) {
+        weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
+            tensor_name(tensor_naming, TensorRole::PerLayerEmbedding),
+                            {shape.vocab_size, shape.num_hidden_layers * shape.per_layer_input_size});
+        weight_store.per_layer_context_projection = load_matrix(source, reader.get(), writer.get(),
+            tensor_name(tensor_naming, TensorRole::PerLayerContextProjection),
+            {shape.num_hidden_layers * shape.per_layer_input_size, shape.hidden});
+        weight_store.per_layer_projection_norm = load_vector(source, reader.get(), writer.get(),
+            tensor_name(tensor_naming, TensorRole::PerLayerProjectionNorm),
+            {shape.per_layer_input_size});
+    }
 
     // Attention and short-convolution are identical between dense and MoE
     // layers. Keeping their loader in one place prevents the two checkpoint
@@ -282,28 +348,33 @@ void CpuCompiledModel::Shared::load_weights() {
         -> std::variant<AttentionWeights, ConvolutionWeights> {
         if (layer_type == LayerType::FullAttention) {
             AttentionWeights layer;
-            layer.qkv = load_concat(source, reader.get(), writer.get(),
-                layer_name(index, "self_attn.qkv.weight"), {
-                    {tensor_name(tensor_naming, TensorRole::AttentionQuery, index),
-                     {shape.q_width, shape.hidden}},
-                    {tensor_name(tensor_naming, TensorRole::AttentionKey, index),
-                     {shape.kv_width, shape.hidden}},
-                    {tensor_name(tensor_naming, TensorRole::AttentionValue, index),
-                     {shape.kv_width, shape.hidden}},
-                });
+            const AttentionSpec& attention = shape.attention_layout(index);
+            layer.q = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(tensor_naming, TensorRole::AttentionQuery, index),
+                {attention.query_width(), shape.hidden});
+            if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
+                layer.k = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(tensor_naming, TensorRole::AttentionKey, index),
+                    {attention.key_value_width(), shape.hidden});
+                layer.v = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(tensor_naming, TensorRole::AttentionValue, index),
+                    {attention.key_value_width(), shape.hidden});
+            }
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(tensor_naming, TensorRole::AttentionOutput, index),
-                {shape.hidden, shape.hidden});
-            if (!shape.query_key_norm) {
-                layer.q_norm.assign(static_cast<size_t>(shape.head_dim), 1.0f);
-                layer.k_norm.assign(static_cast<size_t>(shape.head_dim), 1.0f);
+                {shape.hidden, attention.query_width()});
+            if (!attention.query_key_norm) {
+                layer.q_norm.assign(static_cast<size_t>(attention.head_dim), 1.0f);
+                layer.k_norm.assign(static_cast<size_t>(attention.head_dim), 1.0f);
             } else {
                 layer.q_norm = load_vector(source, reader.get(), writer.get(),
-                    layer_name(index, "self_attn.q_layernorm.weight"),
-                    {shape.head_dim});
-                layer.k_norm = load_vector(source, reader.get(), writer.get(),
-                    layer_name(index, "self_attn.k_layernorm.weight"),
-                    {shape.head_dim});
+                    tensor_name(tensor_naming, TensorRole::AttentionQueryNorm, index),
+                    {attention.head_dim});
+                if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
+                    layer.k_norm = load_vector(source, reader.get(), writer.get(),
+                        tensor_name(tensor_naming, TensorRole::AttentionKeyNorm, index),
+                        {attention.head_dim});
+                }
             }
             return layer;
         }
@@ -553,7 +624,8 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                      value.common.w2.memory_bytes();
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, AttentionWeights>) {
-                bytes += value.qkv.memory_bytes() + value.out.memory_bytes() +
+                bytes += value.q.memory_bytes() + value.k.memory_bytes() +
+                         value.v.memory_bytes() + value.out.memory_bytes() +
                          value.q_norm.size() * sizeof(float) +
                          value.k_norm.size() * sizeof(float);
             } else if constexpr (std::is_same_v<T, ConvolutionWeights>) {
@@ -564,7 +636,9 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                 std::visit([&](const auto& operator_weights) {
                     using Operator = std::decay_t<decltype(operator_weights)>;
                     if constexpr (std::is_same_v<Operator, AttentionWeights>) {
-                        bytes += operator_weights.qkv.memory_bytes() +
+                        bytes += operator_weights.q.memory_bytes() +
+                                 operator_weights.k.memory_bytes() +
+                                 operator_weights.v.memory_bytes() +
                                  operator_weights.out.memory_bytes() +
                                  (operator_weights.q_norm.size() +
                                   operator_weights.k_norm.size()) * sizeof(float);

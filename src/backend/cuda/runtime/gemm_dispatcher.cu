@@ -196,7 +196,9 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
                             float beta,
                             const CudaExecutionPlan& plan) {
     if (weight.rows != n || weight.cols != k) {
-        throw std::runtime_error("linear weight shape does not match the requested GEMM");
+        throw std::runtime_error("linear weight shape does not match the requested GEMM: weight=" +
+            std::to_string(weight.rows) + "x" + std::to_string(weight.cols) +
+            " requested=" + std::to_string(n) + "x" + std::to_string(k));
     }
     weight.validate_storage();
     if (weight.gguf_quantized()) {

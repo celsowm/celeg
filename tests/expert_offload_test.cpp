@@ -1,5 +1,6 @@
 #include "celeg/backend/cuda/moe/offload.hpp"
 #include "support/assertions.hpp"
+#include <algorithm>
 #include <iostream>
 
 namespace {
@@ -12,12 +13,17 @@ celeg::RuntimeTopology make_8b_a1b_shape() {
     shape.hidden = 2048;
     shape.num_hidden_layers = 24;
     shape.num_dense_layers = 2;
-    shape.num_attention_heads = 32;
-    shape.num_key_value_heads = 8;
-    shape.head_dim = 64;
     shape.moe_intermediate = 1792;
     shape.num_experts = 32;
     shape.experts_per_token = 4;
+    shape.mixer_kinds.assign(static_cast<size_t>(shape.num_hidden_layers),
+                             celeg::MixerKind::Convolution);
+    std::fill_n(shape.mixer_kinds.begin(), 6, celeg::MixerKind::Attention);
+    shape.layer_types = shape.mixer_kinds;
+    shape.attention_layouts.assign(
+        static_cast<size_t>(shape.num_hidden_layers),
+        celeg::AttentionSpec{32, 8, 64, false, celeg::AttentionMaskKind::Causal,
+                             0, 1.0e6, 1.0, {}});
     // Derived field used by the KV planner; the 8B-A1B model has 6 attention
     // layers.
     shape.attention_layer_count = 6;

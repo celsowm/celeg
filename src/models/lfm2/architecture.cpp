@@ -66,11 +66,11 @@ void build_weight_plan(ResolvedModel& model) {
         add_request(model, {TensorRole::AttentionInputNorm, layer, -1, {t.hidden}});
         if (t.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
             add_request(model, {TensorRole::AttentionQuery, layer, -1,
-                                {t.q_width, t.hidden}});
+                                {t.attention_layout(layer).query_width(), t.hidden}});
             add_request(model, {TensorRole::AttentionKey, layer, -1,
-                                {t.kv_width, t.hidden}});
+                                {t.attention_layout(layer).key_value_width(), t.hidden}});
             add_request(model, {TensorRole::AttentionValue, layer, -1,
-                                {t.kv_width, t.hidden}});
+                                {t.attention_layout(layer).key_value_width(), t.hidden}});
             add_request(model, {TensorRole::AttentionOutput, layer, -1,
                                 {t.hidden, t.hidden}});
         } else {
@@ -109,10 +109,12 @@ ModelDefinition make_definition(const RuntimeTopology& topology,
     ModelDefinition definition;
     definition.dimensions = {
         topology.hidden, topology.intermediate, topology.num_hidden_layers,
-        topology.num_attention_heads, topology.num_key_value_heads, topology.head_dim,
+        topology.attention_layouts.front().query_heads,
+        topology.attention_layouts.front().key_value_heads,
+        topology.attention_layouts.front().head_dim,
         topology.vocab_size, topology.max_position_embeddings};
     definition.rope.kind = PositionalEncodingKind::Rope;
-    definition.rope.theta = topology.rope_theta;
+    definition.rope.theta = topology.attention_layouts.front().rope_theta;
     definition.numerics.norm_epsilon = topology.norm_eps;
     definition.numerics.embedding_multiplier = topology.embedding_multiplier;
     definition.numerics.attention_multiplier = topology.attention_multiplier;
@@ -147,14 +149,12 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     t.intermediate = decoded.intermediate;
     t.dense_intermediate = t.intermediate;
     t.num_hidden_layers = decoded.num_hidden_layers;
-    t.num_attention_heads = decoded.num_attention_heads;
-    t.num_key_value_heads = decoded.num_key_value_heads;
+    const int query_heads = decoded.num_attention_heads;
     t.vocab_size = decoded.vocab_size;
     t.conv_cache = decoded.conv_cache;
     t.conv_dim = decoded.conv_dim;
     t.max_position_embeddings = decoded.max_position_embeddings;
     t.norm_eps = decoded.norm_eps;
-    t.rope_theta = decoded.rope_theta;
     t.bos_token_id = decoded.bos_token_id;
     t.eos_token_id = decoded.eos_token_id;
     t.pad_token_id = decoded.pad_token_id;
@@ -162,13 +162,12 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     t.attention_multiplier = 0.0f;
     t.residual_multiplier = 1.0f;
     t.logits_divisor = 1.0f;
-    t.query_key_norm = true;
 
-    const auto decoded_layers = decode_lfm2_layer_types(m, prefix, t.num_key_value_heads);
+    const auto decoded_layers = decode_lfm2_layer_types(m, prefix, decoded.num_key_value_heads);
     t.mixer_kinds = decoded_layers.mixer_kinds;
-    t.num_key_value_heads = decoded_layers.num_key_value_heads;
-    t.head_dim = decoded.head_dim;
-    if (t.num_key_value_heads == 0) throw std::runtime_error("checkpoint has no attention layers");
+    const int key_value_heads = decoded_layers.num_key_value_heads;
+    const int head_dim = decoded.head_dim;
+    if (key_value_heads == 0) throw std::runtime_error("checkpoint has no attention layers");
 
     if (moe) {
         t.moe_intermediate = decoded.moe_intermediate;
@@ -217,10 +216,14 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
         }
     }
     t.layer_types = t.mixer_kinds;
-    t.q_width = t.num_attention_heads * t.head_dim;
-    t.kv_width = t.num_key_value_heads * t.head_dim;
-    t.qkv_width = t.q_width + 2 * t.kv_width;
-    t.rope_pairs = t.head_dim / 2;
+    t.max_feed_forward_intermediate = t.intermediate;
+    t.feed_forward_intermediates.assign(static_cast<size_t>(t.num_hidden_layers), t.intermediate);
+    t.feed_forward_activations.assign(static_cast<size_t>(t.num_hidden_layers),
+                                       ActivationKind::SwiGLU);
+    t.attention_layouts.assign(static_cast<size_t>(t.num_hidden_layers),
+        AttentionSpec{query_heads, key_value_heads, head_dim,
+                      false, AttentionMaskKind::Causal, 0,
+                      decoded.rope_theta, 1.0, {}});
     t.validate();
 
     ResolvedModel result;
@@ -243,8 +246,7 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
         layer.feed_forward_norm.epsilon = t.norm_eps;
         layer.residual.multiplier = t.residual_multiplier;
         if (t.mixer_kinds[static_cast<size_t>(i)] == MixerKind::Attention) {
-            layer.mixer = AttentionSpec{t.num_attention_heads, t.num_key_value_heads,
-                                        t.head_dim, t.query_key_norm};
+            layer.mixer = t.attention_layout(i);
         } else {
             layer.mixer = ShortConvolutionSpec{t.conv_cache, t.conv_dim, false};
         }

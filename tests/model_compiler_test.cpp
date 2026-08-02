@@ -12,10 +12,14 @@ int main() {
     model.definition.source_format = "safetensors";
     model.capabilities.supports_cpu = true;
     model.capabilities.supports_cuda = true;
-    model.graph.layers.push_back({
-        {}, celeg::AttentionSpec{}, {}, celeg::DenseFeedForwardSpec{}, {}});
-    model.graph.layers.push_back({
-        {}, celeg::ShortConvolutionSpec{}, {}, celeg::MixtureOfExpertsSpec{}, {}});
+    celeg::LayerSpec attention_layer;
+    attention_layer.mixer = celeg::AttentionSpec{};
+    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{};
+    model.graph.layers.push_back(attention_layer);
+    celeg::LayerSpec convolution_layer;
+    convolution_layer.mixer = celeg::ShortConvolutionSpec{};
+    convolution_layer.feed_forward = celeg::MixtureOfExpertsSpec{};
+    model.graph.layers.push_back(convolution_layer);
     model.weight_plan.requests.push_back({celeg::TensorRole::AttentionInputNorm, 0, -1, {}});
     model.weight_plan.requests.push_back({celeg::TensorRole::AttentionOutput, 0, -1, {}});
     model.weight_plan.requests.push_back({celeg::TensorRole::ShortConvInput, 1, -1, {}});

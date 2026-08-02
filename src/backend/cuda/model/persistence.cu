@@ -20,6 +20,8 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
         SessionStore::SessionState::LayerBuffers buffers{};
         if (AttentionLayer* attention = as_attention(layer)) {
             buffers.is_attention = true;
+            buffers.owns_kv_cache = attention->key_cache.data() != nullptr ||
+                attention->key_cache_int8.data() != nullptr;
             buffers.key_cache_bf16 = attention->key_cache.data();
             buffers.value_cache_bf16 = attention->value_cache.data();
             buffers.key_cache_int8 = attention->key_cache_int8.data();
@@ -146,8 +148,6 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     header.position = state.position;
     header.max_context = state.max_context;
     header.layers = state.shape.num_hidden_layers;
-    header.kv_width = state.shape.kv_width;
-    header.kv_heads = state.shape.num_key_value_heads;
     header.vocab = state.shape.vocab_size;
     header.attention_layers = state.shape.attention_layer_count;
     if (state.rng_state != nullptr) {
@@ -174,12 +174,15 @@ void SessionStore::save(const std::string& path, SessionState& state) {
         write_device(out, state.logits->data(), state.logits->bytes(),
                      state.stream);
     }
-    const size_t cache_elements =
-        static_cast<size_t>(state.position) * state.shape.kv_width;
-    const size_t scale_elements =
-        static_cast<size_t>(state.position) * state.shape.num_key_value_heads;
-    for (const auto& layer : state.layer_buffers) {
-        if (layer.is_attention) {
+    for (size_t layer_index = 0; layer_index < state.layer_buffers.size(); ++layer_index) {
+        const auto& layer = state.layer_buffers[layer_index];
+        if (layer.is_attention && layer.owns_kv_cache) {
+            const AttentionSpec& layout = state.shape.attention_layout(
+                static_cast<int>(layer_index));
+            const size_t cache_elements = static_cast<size_t>(state.position) *
+                static_cast<size_t>(layout.key_value_width());
+            const size_t scale_elements = static_cast<size_t>(state.position) *
+                static_cast<size_t>(layout.key_value_heads);
             if (state.kv_cache_mode == KvCacheMode::Int8) {
                 write_device(out, layer.key_cache_int8,
                              cache_elements * sizeof(int8_t), state.stream);
@@ -212,7 +215,7 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     read_scalar(in, header);
     if (header.magic != kMagic || header.version != kVersion) {
         throw std::runtime_error(
-            "unsupported session format; this build requires session v3 files");
+            "unsupported session format; this build requires session v4 files");
     }
     const uint32_t expected_kv =
         state.kv_cache_mode == KvCacheMode::Int8 ? 1U : 0U;
@@ -221,8 +224,6 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     }
     if (header.position <= 0 || header.position > state.max_context ||
         header.layers != state.shape.num_hidden_layers ||
-        header.kv_width != state.shape.kv_width ||
-        header.kv_heads != state.shape.num_key_value_heads ||
         header.vocab != state.shape.vocab_size ||
         header.attention_layers != state.shape.attention_layer_count) {
         throw std::runtime_error("session dimensions are incompatible with this model");
@@ -245,12 +246,15 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     if (state.logits != nullptr) {
         read_device(in, state.logits->data(), state.logits->bytes());
     }
-    const size_t cache_elements =
-        static_cast<size_t>(header.position) * state.shape.kv_width;
-    const size_t scale_elements =
-        static_cast<size_t>(header.position) * state.shape.num_key_value_heads;
-    for (const auto& layer : state.layer_buffers) {
-        if (layer.is_attention) {
+    for (size_t layer_index = 0; layer_index < state.layer_buffers.size(); ++layer_index) {
+        const auto& layer = state.layer_buffers[layer_index];
+        if (layer.is_attention && layer.owns_kv_cache) {
+            const AttentionSpec& layout = state.shape.attention_layout(
+                static_cast<int>(layer_index));
+            const size_t cache_elements = static_cast<size_t>(header.position) *
+                static_cast<size_t>(layout.key_value_width());
+            const size_t scale_elements = static_cast<size_t>(header.position) *
+                static_cast<size_t>(layout.key_value_heads);
             if (state.kv_cache_mode == KvCacheMode::Int8) {
                 read_device(in, layer.key_cache_int8,
                             cache_elements * sizeof(int8_t));

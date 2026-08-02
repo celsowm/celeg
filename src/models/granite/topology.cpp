@@ -19,10 +19,10 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.intermediate = integer("intermediate_size", "feed_forward_length");
     t.dense_intermediate = t.intermediate;
     t.num_hidden_layers = integer("num_hidden_layers", "block_count");
-    t.num_attention_heads = integer("num_attention_heads", "attention.head_count");
-    t.num_key_value_heads = integer("num_key_value_heads", "attention.head_count_kv");
-    t.head_dim = integer_or("head_dim", "attention.key_length",
-                            t.hidden / t.num_attention_heads);
+    const int query_heads = integer("num_attention_heads", "attention.head_count");
+    const int key_value_heads = integer("num_key_value_heads", "attention.head_count_kv");
+    const int head_dim = integer_or("head_dim", "attention.key_length",
+                                    t.hidden / query_heads);
     t.vocab_size = integer_or("vocab_size", "vocab_size", 0);
     if (gguf && t.vocab_size == 0 && source.contains("tokenizer.ggml.tokens")) {
         t.vocab_size = static_cast<int>(source.strings("tokenizer.ggml.tokens").size());
@@ -44,7 +44,7 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.norm_eps = static_cast<float>(number_or(
         "rms_norm_eps", "attention.layer_norm_rms_epsilon",
         source.number_or("norm_eps", 1.0e-5)));
-    t.rope_theta = static_cast<float>(number_or("rope_theta", "rope.freq_base", 1.0e6));
+    const float rope_theta = static_cast<float>(number_or("rope_theta", "rope.freq_base", 1.0e6));
     t.embedding_multiplier = static_cast<float>(number_or(
         "embedding_multiplier", "embedding_multiplier", 1.0));
     t.attention_multiplier = static_cast<float>(number_or(
@@ -53,7 +53,6 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
         "residual_multiplier", "residual_multiplier", 1.0));
     t.logits_divisor = static_cast<float>(number_or(
         "logits_scaling", "logits_scaling", 1.0));
-    t.query_key_norm = false;
     t.mixer_kinds.assign(static_cast<size_t>(t.num_hidden_layers), MixerKind::Attention);
     t.attention_layer_count = t.num_hidden_layers;
     t.layer_for_attention_slot.resize(static_cast<size_t>(t.num_hidden_layers));
@@ -63,10 +62,13 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
         t.attention_slot_for_layer[static_cast<size_t>(i)] = i;
     }
     t.layer_types = t.mixer_kinds;
-    t.q_width = t.num_attention_heads * t.head_dim;
-    t.kv_width = t.num_key_value_heads * t.head_dim;
-    t.qkv_width = t.q_width + 2 * t.kv_width;
-    t.rope_pairs = t.head_dim / 2;
+    t.max_feed_forward_intermediate = t.intermediate;
+    t.feed_forward_intermediates.assign(static_cast<size_t>(t.num_hidden_layers), t.intermediate);
+    t.feed_forward_activations.assign(static_cast<size_t>(t.num_hidden_layers),
+                                       ActivationKind::SwiGLU);
+    t.attention_layouts.assign(static_cast<size_t>(t.num_hidden_layers),
+        AttentionSpec{query_heads, key_value_heads, head_dim,
+                      false, AttentionMaskKind::Causal, 0, rope_theta, 1.0, {}});
     t.validate();
     return t;
 }

@@ -6,41 +6,140 @@
 #include <vector>
 
 namespace celeg {
+void CudaCompiledModel::initialize_per_layer_input_device(const int32_t* token) {
+    if (!resources_.shape_.has_per_layer_input) return;
+    if (!resources_.per_layer_embedding_ || !resources_.per_layer_embedding_->bf16 ||
+        !resources_.per_layer_context_projection_ || !resources_.per_layer_projection_norm_) {
+        throw std::logic_error("Gemma per-layer input weights are not BF16-resident");
+    }
+    const int layers = resources_.shape_.num_hidden_layers;
+    const int ple = resources_.shape_.per_layer_input_size;
+    const int width = layers * ple;
+    launch_embedding_slice_device(token, resources_.per_layer_embedding_->bf16,
+                                  width, 0, workspace_.per_layer_token_.data(), width,
+                                  stream_.get());
+    launch_scale(workspace_.per_layer_token_.data(), width,
+                 std::sqrt(static_cast<float>(ple)), stream_.get());
+    linear(workspace_.hidden_.data(), *resources_.per_layer_context_projection_,
+           workspace_.per_layer_context_.data(), 1, width, resources_.shape_.hidden);
+    launch_scale(workspace_.per_layer_context_.data(), width,
+                 1.0f / std::sqrt(static_cast<float>(resources_.shape_.hidden)), stream_.get());
+    launch_rmsnorm(workspace_.per_layer_context_.data(), resources_.per_layer_projection_norm_,
+                   workspace_.per_layer_context_.data(), layers, ple,
+                   resources_.shape_.norm_eps, stream_.get());
+    launch_residual_add(workspace_.per_layer_context_.data(), workspace_.per_layer_token_.data(),
+                        width, stream_.get());
+    launch_scale(workspace_.per_layer_context_.data(), width,
+                 0.7071067811865475f, stream_.get());
+}
+
+void CudaCompiledModel::initialize_per_layer_input_host(int32_t token) {
+    if (!resources_.shape_.has_per_layer_input) return;
+    if (!resources_.per_layer_embedding_ || !resources_.per_layer_embedding_->bf16 ||
+        !resources_.per_layer_context_projection_ || !resources_.per_layer_projection_norm_) {
+        throw std::logic_error("Gemma per-layer input weights are not BF16-resident");
+    }
+    const int layers = resources_.shape_.num_hidden_layers;
+    const int ple = resources_.shape_.per_layer_input_size;
+    const int width = layers * ple;
+    launch_embedding_slice(token, resources_.per_layer_embedding_->bf16, width, 0,
+                           workspace_.per_layer_token_.data(), width, stream_.get());
+    launch_scale(workspace_.per_layer_token_.data(), width,
+                 std::sqrt(static_cast<float>(ple)), stream_.get());
+    linear(workspace_.hidden_.data(), *resources_.per_layer_context_projection_,
+           workspace_.per_layer_context_.data(), 1, width, resources_.shape_.hidden);
+    launch_scale(workspace_.per_layer_context_.data(), width,
+                 1.0f / std::sqrt(static_cast<float>(resources_.shape_.hidden)), stream_.get());
+    launch_rmsnorm(workspace_.per_layer_context_.data(), resources_.per_layer_projection_norm_,
+                   workspace_.per_layer_context_.data(), layers, ple,
+                   resources_.shape_.norm_eps, stream_.get());
+    launch_residual_add(workspace_.per_layer_context_.data(), workspace_.per_layer_token_.data(),
+                        width, stream_.get());
+    launch_scale(workspace_.per_layer_context_.data(), width,
+                 0.7071067811865475f, stream_.get());
+}
+
+void CudaCompiledModel::initialize_per_layer_input_batch(const int32_t* tokens, int rows) {
+    if (!resources_.shape_.has_per_layer_input) return;
+    if (!resources_.per_layer_embedding_ || !resources_.per_layer_embedding_->bf16 ||
+        !resources_.per_layer_context_projection_ || !resources_.per_layer_projection_norm_) {
+        throw std::logic_error("Gemma per-layer input weights are not BF16-resident");
+    }
+    const int layers = resources_.shape_.num_hidden_layers;
+    const int ple = resources_.shape_.per_layer_input_size;
+    const int width = layers * ple;
+    launch_embedding_slice_batch(tokens, rows, resources_.per_layer_embedding_->bf16,
+                                 width, 0, workspace_.prefill_per_layer_token_.data(),
+                                 width, stream_.get());
+    launch_scale(workspace_.prefill_per_layer_token_.data(), rows * width,
+                 std::sqrt(static_cast<float>(ple)), stream_.get());
+    linear(workspace_.prefill_hidden_.data(), *resources_.per_layer_context_projection_,
+           workspace_.prefill_per_layer_context_.data(), rows, width,
+           resources_.shape_.hidden);
+    launch_scale(workspace_.prefill_per_layer_context_.data(), rows * width,
+                 1.0f / std::sqrt(static_cast<float>(resources_.shape_.hidden)), stream_.get());
+    launch_rmsnorm(workspace_.prefill_per_layer_context_.data(), resources_.per_layer_projection_norm_,
+                   workspace_.prefill_per_layer_context_.data(), rows * layers, ple,
+                   resources_.shape_.norm_eps, stream_.get());
+    launch_residual_add(workspace_.prefill_per_layer_context_.data(),
+                        workspace_.prefill_per_layer_token_.data(), rows * width,
+                        stream_.get());
+    launch_scale(workspace_.prefill_per_layer_context_.data(), rows * width,
+                 0.7071067811865475f, stream_.get());
+}
+
 void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int layer) {
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
         run_mlp_moe_decode(common_layer, layer);
-        return;
-    }
-    launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                   1, resources_.shape_.hidden, resources_.shape_.norm_eps,
-                   stream_.get());
-    if (resources_.options_.fused_projections) {
-        linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.gate_up_.data(),
-               1, 2 * resources_.shape_.intermediate, resources_.shape_.hidden);
     } else {
-        const LinearWeight w1 =
-            slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, resources_.shape_.intermediate);
-        const LinearWeight w3 = slice_rows(
-            *as_dense_ffn(common_layer.feed_forward)->w13, resources_.shape_.intermediate, resources_.shape_.intermediate);
-        linear(workspace_.normed_.data(), w1, workspace_.gate_up_.data(),
-               1, resources_.shape_.intermediate, resources_.shape_.hidden);
-        linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + resources_.shape_.intermediate,
-               1, resources_.shape_.intermediate, resources_.shape_.hidden);
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
+                       1, resources_.shape_.hidden, resources_.shape_.norm_eps,
+                       stream_.get());
+        const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
+            ? resources_.shape_.intermediate
+            : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer));
+        if (resources_.options_.fused_projections) {
+            linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.gate_up_.data(),
+                   1, 2 * intermediate, resources_.shape_.hidden);
+        } else {
+            const LinearWeight w1 =
+                slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, intermediate);
+            const LinearWeight w3 = slice_rows(
+                *as_dense_ffn(common_layer.feed_forward)->w13, intermediate, intermediate);
+            linear(workspace_.normed_.data(), w1, workspace_.gate_up_.data(),
+                   1, intermediate, resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + intermediate,
+                   1, intermediate, resources_.shape_.hidden);
+        }
+        const bool gelu_tanh = !resources_.shape_.feed_forward_activations.empty() &&
+            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh;
+        if (gelu_tanh) {
+            launch_gated_gelu_tanh(workspace_.gate_up_.data(), workspace_.activated_.data(),
+                                   intermediate, stream_.get());
+        } else {
+            launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
+                                intermediate, stream_.get());
+        }
+        const bool split_output = common_layer.post_feed_forward_norm != nullptr;
+        if (resources_.options_.fused_residuals && !split_output) {
+            linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.hidden_.data(),
+                   1, resources_.shape_.hidden, intermediate, 1.0f);
+        } else {
+            linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.mlp_output_.data(),
+                   1, resources_.shape_.hidden, intermediate);
+            if (split_output) {
+                launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
+                               workspace_.mlp_output_.data(), 1, resources_.shape_.hidden,
+                               resources_.shape_.norm_eps, stream_.get());
+            }
+            launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.residual_multiplier,
+                         stream_.get());
+            launch_residual_add(workspace_.hidden_.data(), workspace_.mlp_output_.data(),
+                                resources_.shape_.hidden, stream_.get());
+        }
     }
-    launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
-                        resources_.shape_.intermediate, stream_.get());
-    if (resources_.options_.fused_residuals) {
-        linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.hidden_.data(),
-               1, resources_.shape_.hidden, resources_.shape_.intermediate, 1.0f);
-    } else {
-        linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.mlp_output_.data(),
-               1, resources_.shape_.hidden, resources_.shape_.intermediate);
-        launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.residual_multiplier,
-                     stream_.get());
-        launch_residual_add(workspace_.hidden_.data(), workspace_.mlp_output_.data(),
-                            resources_.shape_.hidden, stream_.get());
-    }
+    run_per_layer_input_decode(common_layer, layer);
 }
 
 void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int rows,
@@ -48,46 +147,120 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
         run_mlp_moe_prefill(common_layer, rows, layer);
-        return;
-    }
-    const size_t matrix_elements =
-        static_cast<size_t>(rows) * resources_.shape_.intermediate;
-    launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
-                   workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
-                   resources_.shape_.norm_eps, stream_.get());
-    if (resources_.options_.fused_projections) {
+    } else {
+        const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
+            ? resources_.shape_.intermediate
+            : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer));
+        const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
+        launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
+                       workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
+                       resources_.shape_.norm_eps, stream_.get());
+        if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
-               rows, 2 * resources_.shape_.intermediate, resources_.shape_.hidden);
+               rows, 2 * intermediate, resources_.shape_.hidden);
         // The fused GEMM writes one contiguous [gate|up] pair per row
         // (row stride 2*intermediate), unlike the split-call path below
         // which writes all gates then all ups as two separate planes.
-        launch_swiglu_interleaved(workspace_.prefill_gate_up_.data(),
-                                  workspace_.prefill_activated_.data(), rows,
-                                  resources_.shape_.intermediate, stream_.get());
-    } else {
+        if (!resources_.shape_.feed_forward_activations.empty() &&
+            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh) {
+            launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(),
+                                   workspace_.prefill_activated_.data(),
+                                   static_cast<int>(matrix_elements), stream_.get());
+        } else {
+            launch_swiglu_interleaved(workspace_.prefill_gate_up_.data(),
+                                      workspace_.prefill_activated_.data(), rows,
+                                      intermediate, stream_.get());
+        }
+        } else {
         const LinearWeight w1 =
-            slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, resources_.shape_.intermediate);
+            slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, intermediate);
         const LinearWeight w3 = slice_rows(
-            *as_dense_ffn(common_layer.feed_forward)->w13, resources_.shape_.intermediate, resources_.shape_.intermediate);
+            *as_dense_ffn(common_layer.feed_forward)->w13, intermediate, intermediate);
         linear(workspace_.prefill_normed_.data(), w1, workspace_.prefill_gate_up_.data(),
-               rows, resources_.shape_.intermediate, resources_.shape_.hidden);
+               rows, intermediate, resources_.shape_.hidden);
         linear(workspace_.prefill_normed_.data(), w3,
                workspace_.prefill_gate_up_.data() + matrix_elements,
-               rows, resources_.shape_.intermediate, resources_.shape_.hidden);
-        launch_swiglu_fused(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
-                            static_cast<int>(matrix_elements), stream_.get());
-    }
-    if (resources_.options_.fused_residuals) {
+               rows, intermediate, resources_.shape_.hidden);
+        if (!resources_.shape_.feed_forward_activations.empty() &&
+            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh) {
+            launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
+                                   static_cast<int>(matrix_elements), stream_.get());
+        } else {
+            launch_swiglu_fused(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
+                                static_cast<int>(matrix_elements), stream_.get());
+        }
+        }
+        const bool split_output = common_layer.post_feed_forward_norm != nullptr;
+        if (resources_.options_.fused_residuals && !split_output) {
         linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_hidden_.data(),
-               rows, resources_.shape_.hidden, resources_.shape_.intermediate, 1.0f);
-    } else {
+               rows, resources_.shape_.hidden, intermediate, 1.0f);
+        } else {
         linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_mlp_output_.data(),
-                rows, resources_.shape_.hidden, resources_.shape_.intermediate);
+                rows, resources_.shape_.hidden, intermediate);
+        if (split_output) {
+            launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
+                           workspace_.prefill_mlp_output_.data(), rows, resources_.shape_.hidden,
+                           resources_.shape_.norm_eps, stream_.get());
+        }
         launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.shape_.hidden,
                      resources_.shape_.residual_multiplier, stream_.get());
         launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_mlp_output_.data(),
                             rows * resources_.shape_.hidden, stream_.get());
+        }
     }
+    run_per_layer_input_prefill(common_layer, rows, layer);
+}
+
+void CudaCompiledModel::run_per_layer_input_decode(const LayerCommon& common_layer,
+                                                   int layer) {
+    if (!resources_.shape_.has_per_layer_input) return;
+    const int ple = resources_.shape_.per_layer_input_size;
+    launch_gelu_tanh(workspace_.per_layer_gate_.data(), workspace_.per_layer_gate_.data(),
+                     ple, stream_.get());
+    const __nv_bfloat16* context = workspace_.per_layer_context_.data() +
+        static_cast<size_t>(layer) * ple;
+    launch_multiply(workspace_.per_layer_gate_.data(), context, ple, stream_.get());
+    CELEG_CUDA(cudaMemcpyAsync(workspace_.residual_.data(), workspace_.hidden_.data(),
+                               workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice,
+                               stream_.get()));
+    linear(workspace_.per_layer_gate_.data(), *common_layer.per_layer_projection,
+           workspace_.hidden_.data(), 1, resources_.shape_.hidden, ple);
+    launch_rmsnorm(workspace_.hidden_.data(), common_layer.per_layer_input_norm,
+                   workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                   resources_.shape_.norm_eps, stream_.get());
+    launch_scale_by_scalar(workspace_.hidden_.data(), common_layer.layer_scalar,
+                           resources_.shape_.hidden, stream_.get());
+    launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
+                        resources_.shape_.hidden, stream_.get());
+}
+
+void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_layer,
+                                                    int rows, int layer) {
+    if (!resources_.shape_.has_per_layer_input) return;
+    const int layers = resources_.shape_.num_hidden_layers;
+    const int ple = resources_.shape_.per_layer_input_size;
+    linear(workspace_.prefill_hidden_.data(), *common_layer.per_layer_input_gate,
+           workspace_.prefill_per_layer_gate_.data(), rows, ple,
+           resources_.shape_.hidden);
+    launch_gelu_tanh(workspace_.prefill_per_layer_gate_.data(),
+                     workspace_.prefill_per_layer_gate_.data(), rows * ple,
+                     stream_.get());
+    launch_multiply_strided(workspace_.prefill_per_layer_gate_.data(),
+                            workspace_.prefill_per_layer_context_.data(), rows, ple,
+                            layers * ple, layer * ple, stream_.get());
+    CELEG_CUDA(cudaMemcpyAsync(workspace_.prefill_residual_.data(),
+                               workspace_.prefill_hidden_.data(),
+                               workspace_.prefill_hidden_.bytes(),
+                               cudaMemcpyDeviceToDevice, stream_.get()));
+    linear(workspace_.prefill_per_layer_gate_.data(), *common_layer.per_layer_projection,
+           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden, ple);
+    launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.per_layer_input_norm,
+                   workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                   resources_.shape_.norm_eps, stream_.get());
+    launch_scale_by_scalar(workspace_.prefill_hidden_.data(), common_layer.layer_scalar,
+                           rows * resources_.shape_.hidden, stream_.get());
+    launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_residual_.data(),
+                        rows * resources_.shape_.hidden, stream_.get());
 }
 
 namespace {

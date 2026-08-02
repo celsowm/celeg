@@ -118,4 +118,23 @@ void cpu_swiglu(const float* gate_up, float* output, size_t count) {
     }
 }
 
+void cpu_gated_gelu_tanh(const float* gate_up, float* output, size_t count) {
+    constexpr float k = 0.7978845608028654f;
+    constexpr float c = 0.044715f;
+    for (size_t i = 0; i < count; ++i) {
+        const float x = gate_up[i];
+        const float gelu = 0.5f * x * (1.0f + std::tanh(k * (x + c * x * x * x)));
+        output[i] = gelu * gate_up[count + i];
+    }
+}
+
+void cpu_gelu_tanh(float* data, size_t count) {
+    constexpr float k = 0.7978845608028654f;
+    constexpr float c = 0.044715f;
+    for (size_t i = 0; i < count; ++i) {
+        const float x = data[i];
+        data[i] = 0.5f * x * (1.0f + std::tanh(k * (x + c * x * x * x)));
+    }
+}
+
 } // namespace celeg

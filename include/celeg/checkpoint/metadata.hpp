@@ -46,6 +46,8 @@ struct CheckpointMetadata {
     double number_or(std::string_view key, double fallback) const;
     bool boolean(std::string_view key) const;
     bool boolean_or(std::string_view key, bool fallback) const;
+    std::vector<int64_t> integers(std::string_view key) const;
+    std::vector<double> numbers(std::string_view key) const;
     std::vector<std::string> strings(std::string_view key) const;
 
     // Architecture-facing schema access. Format-specific key spelling stays

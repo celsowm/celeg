@@ -13,8 +13,21 @@ void launch_residual_add(__nv_bfloat16* x, const __nv_bfloat16* residual,
                         int count, cudaStream_t stream);
 void launch_scale(__nv_bfloat16* x, int count, float scale,
                   cudaStream_t stream);
+void launch_tanh_softcap(__nv_bfloat16* x, int count, float cap,
+                         cudaStream_t stream);
 void launch_swiglu_fused(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
                         int count, cudaStream_t stream);
+void launch_gelu_tanh(const __nv_bfloat16* input, __nv_bfloat16* out,
+                      int count, cudaStream_t stream);
+void launch_gated_gelu_tanh(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
+                            int count, cudaStream_t stream);
+void launch_multiply(__nv_bfloat16* x, const __nv_bfloat16* y, int count,
+                     cudaStream_t stream);
+void launch_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* y,
+                             int rows, int width, int y_stride, int y_offset,
+                             cudaStream_t stream);
+void launch_scale_by_scalar(__nv_bfloat16* x, const __nv_bfloat16* scalar,
+                            int count, cudaStream_t stream);
 
 void launch_conv_decode(const __nv_bfloat16* projected_bcx,
                        const __nv_bfloat16* conv_weight,

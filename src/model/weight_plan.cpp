@@ -29,14 +29,17 @@ void build_dense_weight_plan(ResolvedModel& model) {
     for (int layer = 0; layer < t.num_hidden_layers; ++layer) {
         add_request(model, {TensorRole::AttentionInputNorm, layer, -1,
                             {t.hidden}});
+        const AttentionSpec& attention = t.attention_layout(layer);
+        const int q_width = attention.query_heads * attention.head_dim;
+        const int kv_width = attention.key_value_heads * attention.head_dim;
         add_request(model, {TensorRole::AttentionQuery, layer, -1,
-                            {t.q_width, t.hidden}});
+                            {q_width, t.hidden}});
         add_request(model, {TensorRole::AttentionKey, layer, -1,
-                            {t.kv_width, t.hidden}});
+                            {kv_width, t.hidden}});
         add_request(model, {TensorRole::AttentionValue, layer, -1,
-                            {t.kv_width, t.hidden}});
+                            {kv_width, t.hidden}});
         add_request(model, {TensorRole::AttentionOutput, layer, -1,
-                            {t.hidden, t.hidden}});
+                            {t.hidden, q_width}});
         add_request(model, {TensorRole::FfnInputNorm, layer, -1,
                             {t.hidden}});
         add_request(model, {TensorRole::FfnGate, layer, -1,

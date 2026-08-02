@@ -26,7 +26,9 @@ inline void check_cublas(cublasStatus_t status, const char* call) {
 
 #define CELEG_CUDA(call) ::celeg::check_cuda((call), #call)
 #define CELEG_CUBLAS(call) ::celeg::check_cublas((call), #call)
-#define CELEG_KERNEL_CHECK() ::celeg::check_cuda(cudaPeekAtLastError(), "CUDA kernel launch")
+#define CELEG_CUDA_STRINGIFY_IMPL(value) #value
+#define CELEG_CUDA_STRINGIFY(value) CELEG_CUDA_STRINGIFY_IMPL(value)
+#define CELEG_KERNEL_CHECK() ::celeg::check_cuda(cudaPeekAtLastError(), "CUDA kernel launch at " __FILE__ ":" CELEG_CUDA_STRINGIFY(__LINE__))
 
 #if defined(CELEG_DEBUG_SYNC) && CELEG_DEBUG_SYNC
 #define CELEG_KERNEL_DEBUG_SYNC(stream)                    \

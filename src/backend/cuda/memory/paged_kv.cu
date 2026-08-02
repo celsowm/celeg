@@ -26,9 +26,6 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
     : page_tokens_(page_tokens),
       mode_(mode),
       attention_layer_count_(shape.attention_layer_count),
-      kv_width_(shape.kv_width),
-      kv_heads_(shape.num_key_value_heads),
-      head_dim_(shape.head_dim),
       attention_slot_for_layer_(shape.attention_slot_for_layer),
       layout_(page_tokens, shape),
       allocator_(page_count, page_tokens) {
@@ -52,14 +49,6 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
         key_bf16_.reset(vectors);
         value_bf16_.reset(vectors);
     }
-}
-
-size_t PhysicalPagedKvCache::page_vector_elements() const {
-    return layout_.page_vector_elements();
-}
-
-size_t PhysicalPagedKvCache::page_scale_elements() const {
-    return layout_.page_scale_elements();
 }
 
 std::optional<std::vector<uint32_t>>
@@ -107,7 +96,7 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
             const size_t target_scale = layout_.page_scale_offset(target);
             for (int layer = 0; layer < attention_layer_count_; ++layer) {
                 const size_t layer_vector = layout_.layer_vector_offset(layer);
-                const size_t count = layout_.layer_vector_count(used_tokens);
+                const size_t count = layout_.layer_vector_count(layer, used_tokens);
                 CELEG_CUDA(cudaMemcpy(key_int8_.data() + target_vector + layer_vector,
                                     key_int8_.data() + source_vector + layer_vector,
                                     count * sizeof(int8_t), cudaMemcpyDeviceToDevice));
@@ -115,7 +104,7 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
                                     value_int8_.data() + source_vector + layer_vector,
                                     count * sizeof(int8_t), cudaMemcpyDeviceToDevice));
                 const size_t layer_scale = layout_.layer_scale_offset(layer);
-                const size_t scale_count = layout_.layer_scale_count(used_tokens);
+                const size_t scale_count = layout_.layer_scale_count(layer, used_tokens);
                 CELEG_CUDA(cudaMemcpy(key_scales_.data() + target_scale + layer_scale,
                                     key_scales_.data() + source_scale + layer_scale,
                                     scale_count * sizeof(float), cudaMemcpyDeviceToDevice));
@@ -126,7 +115,7 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
         } else {
             for (int layer = 0; layer < attention_layer_count_; ++layer) {
                 const size_t layer_vector = layout_.layer_vector_offset(layer);
-                const size_t count = layout_.layer_vector_count(used_tokens);
+                const size_t count = layout_.layer_vector_count(layer, used_tokens);
                 CELEG_CUDA(cudaMemcpy(key_bf16_.data() + target_vector + layer_vector,
                                     key_bf16_.data() + source_vector + layer_vector,
                                     count * sizeof(__nv_bfloat16), cudaMemcpyDeviceToDevice));

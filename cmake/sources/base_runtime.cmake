@@ -20,6 +20,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/lfm2/metadata_decoder.cpp
     src/models/granite/architecture.cpp
     src/models/granite/topology.cpp
+    src/models/gemma4/architecture.cpp
     src/model/execution/runtime_types.cpp
     src/backend/cuda/execution_plan.cpp
     src/backend/cpu/compiler.cpp

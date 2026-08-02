@@ -80,14 +80,16 @@ int moe_layer_count(const RuntimeTopology& shape) {
 
 std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens) {
     if (context_tokens <= 0) return 0;
-    const std::size_t per_token =
-        static_cast<std::size_t>(2) *
-        static_cast<std::size_t>(shape.num_key_value_heads) *
-        static_cast<std::size_t>(shape.head_dim) *
-        kBf16Bytes;
-    return per_token *
-        static_cast<std::size_t>(shape.attention_layer_count) *
-        static_cast<std::size_t>(context_tokens);
+    std::size_t bytes = 0;
+    for (size_t layer = 0; layer < shape.attention_layouts.size(); ++layer) {
+        if (shape.mixer_kinds[static_cast<size_t>(layer)] != MixerKind::Attention) continue;
+        const AttentionSpec& layout = shape.attention_layouts[layer];
+        if (layout.kv_sharing.shared() && !layout.kv_sharing.publishes) continue;
+        bytes += static_cast<std::size_t>(2) *
+            static_cast<std::size_t>(layout.key_value_width()) * kBf16Bytes *
+            static_cast<std::size_t>(context_tokens);
+    }
+    return bytes;
 }
 
 ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {

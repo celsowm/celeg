@@ -1,15 +1,17 @@
 __device__ __forceinline__ size_t paged_vector_offset(
     uint32_t page, int attention_slot, int in_page, int head, int dim,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim) {
-    return (((((static_cast<size_t>(page) * attention_layers + attention_slot) *
-               page_tokens + in_page) * kv_heads + head) * head_dim) + dim);
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    int kv_heads, int head_dim) {
+    return static_cast<size_t>(page) * page_vector_elements + layer_vector_offset +
+        ((static_cast<size_t>(in_page) * kv_heads + head) * head_dim) + dim;
 }
 
 __device__ __forceinline__ size_t paged_scale_offset(
     uint32_t page, int attention_slot, int in_page, int head,
-    int page_tokens, int attention_layers, int kv_heads) {
-    return ((((static_cast<size_t>(page) * attention_layers + attention_slot) *
-              page_tokens + in_page) * kv_heads) + head);
+    int page_tokens, size_t page_scale_elements, size_t layer_scale_offset,
+    int kv_heads) {
+    return static_cast<size_t>(page) * page_scale_elements + layer_scale_offset +
+        static_cast<size_t>(in_page) * kv_heads + head;
 }
 
 __global__ void store_kv_kernel(const __nv_bfloat16* k,
@@ -215,7 +217,8 @@ __global__ void store_kv_paged_batch_kernel(
     __nv_bfloat16* key_pool, __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim) {
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    int kv_heads, int head_dim) {
     const size_t kv_width = static_cast<size_t>(kv_heads) * head_dim;
     const size_t total = static_cast<size_t>(rows) * kv_width;
     const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -230,7 +233,7 @@ __global__ void store_kv_paged_batch_kernel(
     const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + logical_page];
     const size_t target = paged_vector_offset(page, attention_slot, in_page,
                                                head, dim, page_tokens,
-                                               attention_layers, kv_heads,
+                                               page_vector_elements, layer_vector_offset, kv_heads,
                                                head_dim);
     key_pool[target] = k[index];
     value_pool[target] = v[index];
@@ -242,7 +245,9 @@ __global__ void store_kv_int8_paged_batch_kernel(
     float* key_scale_pool, float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim) {
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    size_t page_scale_elements, size_t layer_scale_offset,
+    int kv_heads, int head_dim) {
     const int flat = blockIdx.x;
     const int row = flat / kv_heads;
     const int head = flat % kv_heads;
@@ -271,7 +276,7 @@ __global__ void store_kv_int8_paged_batch_kernel(
         value_scale = value_max > 0.0f ? value_max / 127.0f : 1.0f;
         const size_t scale_index = paged_scale_offset(
             page, attention_slot, in_page, head, page_tokens,
-            attention_layers, kv_heads);
+            page_scale_elements, layer_scale_offset, kv_heads);
         key_scale_pool[scale_index] = key_scale;
         value_scale_pool[scale_index] = value_scale;
     }
@@ -279,7 +284,7 @@ __global__ void store_kv_int8_paged_batch_kernel(
     for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
         const size_t target = paged_vector_offset(
             page, attention_slot, in_page, head, d, page_tokens,
-            attention_layers, kv_heads, head_dim);
+            page_vector_elements, layer_vector_offset, kv_heads, head_dim);
         key_pool[target] = quantize_symmetric_int8(
             bf16_float(k[source_base + d]), key_scale);
         value_pool[target] = quantize_symmetric_int8(
@@ -326,12 +331,14 @@ void launch_store_kv_paged_batch(
     __nv_bfloat16* key_pool, __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    int kv_heads, int head_dim,
     cudaStream_t stream) {
     const size_t total = static_cast<size_t>(rows) * kv_heads * head_dim;
     store_kv_paged_batch_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
         k, v, key_pool, value_pool, page_tables, page_table_stride,
-        positions, rows, attention_slot, page_tokens, attention_layers,
+        positions, rows, attention_slot, page_tokens, page_vector_elements,
+        layer_vector_offset,
         kv_heads, head_dim);
     CELEG_KERNEL_CHECK();
 }
@@ -342,11 +349,14 @@ void launch_store_kv_int8_paged_batch(
     float* key_scale_pool, float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    size_t page_scale_elements, size_t layer_scale_offset,
+    int kv_heads, int head_dim,
     cudaStream_t stream) {
     store_kv_int8_paged_batch_kernel<<<rows * kv_heads, 64, 0, stream>>>(
         k, v, key_pool, value_pool, key_scale_pool, value_scale_pool,
         page_tables, page_table_stride, positions, rows, attention_slot,
-        page_tokens, attention_layers, kv_heads, head_dim);
+        page_tokens, page_vector_elements, layer_vector_offset,
+        page_scale_elements, layer_scale_offset, kv_heads, head_dim);
     CELEG_KERNEL_CHECK();
 }

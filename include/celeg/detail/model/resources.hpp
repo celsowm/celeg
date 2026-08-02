@@ -32,6 +32,9 @@ struct CudaModelResources {
     std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;
     const LinearWeight* embedding_ = nullptr;
+    const LinearWeight* per_layer_embedding_ = nullptr;
+    const LinearWeight* per_layer_context_projection_ = nullptr;
+    const __nv_bfloat16* per_layer_projection_norm_ = nullptr;
     const LinearWeight* lm_head_ = nullptr;
     const __nv_bfloat16* final_norm_ = nullptr;
     std::unique_ptr<IWeightLayout> weight_layout_;

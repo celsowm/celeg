@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -228,6 +229,9 @@ void BpeTokenizer::load_gguf(const GgufFile& gguf) {
     if (gguf.has("tokenizer.ggml.eos_token_id")) {
         eos_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.eos_token_id"));
     }
+    if (gguf.has("tokenizer.ggml.padding_token_id")) {
+        pad_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.padding_token_id"));
+    }
 
     init_byte_encoder();
 }
@@ -273,14 +277,20 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
             SpecialToken token{item["content"].as_string(), static_cast<int32_t>(item["id"].as_i64())};
             specials_.push_back(token);
             special_ids_[token.id] = true;
-            if (token.text == "<|startoftext|>") bos_id_ = token.id;
-            if (token.text == "<|im_end|>") eos_id_ = token.id;
+            if (token.text == "<|startoftext|>" || token.text == "<bos>") bos_id_ = token.id;
+            if (token.text == "<|im_end|>" || token.text == "<eos>") eos_id_ = token.id;
+            if (token.text == "<pad>") pad_id_ = token.id;
         }
         std::sort(specials_.begin(), specials_.end(), [](const auto& a, const auto& b) {
             return a.text.size() > b.text.size();
         });
     }
 
+    byte_fallback_ = model.contains("byte_fallback") && model["byte_fallback"].as_bool();
+    // The Gemma tokenizer combines a SentencePiece-style `▁` vocabulary with
+    // byte fallback. GPT-2/BPE tokenizers such as LFM2 may still carry a
+    // JSON `normalizer: null`; that must remain on the byte-encoder path.
+    gemma_normalization_ = byte_fallback_ && vocab_.contains("▁");
     init_byte_encoder();
 }
 
@@ -371,6 +381,26 @@ std::vector<std::string> BpeTokenizer::bpe(std::string_view encoded_piece) const
         symbols.emplace_back(encoded_piece.substr(i, len));
         i += len;
     }
+    return bpe_symbols(std::move(symbols));
+}
+
+void reject_gemma4_unsupported_input(const IChatTemplate& chat_template,
+                                     std::string_view text) {
+    if (chat_template.kind() != ChatTemplateKind::Gemma4Instruct) return;
+    static constexpr std::string_view forbidden[] = {
+        "<|image>", "<|audio>", "<|video>", "<|tool>",
+        "<tool|>", "<|tool_call>", "<tool_call|>",
+        "<|tool_response>", "<tool_response|>",
+    };
+    for (const std::string_view marker : forbidden) {
+        if (text.find(marker) != std::string_view::npos) {
+            throw std::invalid_argument(
+                "Gemma 4 text-only mode rejects multimodal and tool inputs");
+        }
+    }
+}
+
+std::vector<std::string> BpeTokenizer::bpe_symbols(std::vector<std::string> symbols) const {
     if (symbols.size() < 2) return symbols;
 
     while (true) {
@@ -404,6 +434,53 @@ std::vector<std::string> BpeTokenizer::bpe(std::string_view encoded_piece) const
 
 std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const {
     std::vector<int32_t> ids;
+    if (gemma_normalization_) {
+        std::string normalized;
+        for (size_t offset = 0; offset < text.size();) {
+            const auto [cp, len] = next_cp(text, offset);
+            // Gemma's tokenizer.json uses a Replace normalizer for the ASCII
+            // space only. Newlines, tabs, and other whitespace remain bytes
+            // and therefore take the configured byte-fallback path.
+            if (cp == ' ') append_utf8(normalized, 0x2581);
+            else normalized.append(text.substr(offset, len));
+            offset += len;
+        }
+        size_t offset = 0;
+        while (offset < normalized.size()) {
+            const bool starts_marker = normalized.compare(offset, std::string("▁").size(), "▁") == 0;
+            size_t end = offset;
+            if (starts_marker) end += std::string("▁").size();
+            while (end < normalized.size()) {
+                const auto [cp, len] = next_cp(normalized, end);
+                if (cp == 0x2581) break;
+                end += len;
+            }
+            std::vector<std::string> symbols;
+            for (size_t cursor = offset; cursor < end;) {
+                const auto [cp, len] = next_cp(normalized, cursor);
+                std::string symbol(normalized.substr(cursor, len));
+                if (!vocab_.contains(symbol) && byte_fallback_) {
+                    for (unsigned char byte : std::string(normalized.substr(cursor, len))) {
+                        char fallback[7] = {};
+                        std::snprintf(fallback, sizeof(fallback), "<0x%02X>", byte);
+                        symbols.emplace_back(fallback);
+                    }
+                } else {
+                    symbols.push_back(std::move(symbol));
+                }
+                cursor += len;
+            }
+            for (const std::string& token : bpe_symbols(std::move(symbols))) {
+                const auto it = vocab_.find(token);
+                if (it == vocab_.end()) {
+                    throw std::runtime_error("Gemma BPE produced token absent from vocabulary: " + token);
+                }
+                ids.push_back(it->second);
+            }
+            offset = end;
+        }
+        return ids;
+    }
     for (const std::string& piece : pretokenize(text)) {
         const std::string encoded = byte_encode(piece);
         for (const std::string& token : bpe(encoded)) {
@@ -416,6 +493,7 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
 }
 
 std::vector<int32_t> BpeTokenizer::encode(std::string_view text, bool add_bos) const {
+    reject_gemma4_unsupported_input(*chat_template_, text);
     std::vector<int32_t> out;
     if (add_bos) out.push_back(bos_id_);
     size_t cursor = 0;
@@ -445,6 +523,26 @@ std::vector<int32_t> BpeTokenizer::encode(std::string_view text, bool add_bos) c
 }
 
 std::string BpeTokenizer::decode(const std::vector<int32_t>& ids, bool skip_special) const {
+    if (gemma_normalization_) {
+        std::string decoded;
+        for (int32_t id : ids) {
+            if (id < 0 || static_cast<size_t>(id) >= id_to_token_.size()) continue;
+            if (skip_special && special_ids_.contains(id)) continue;
+            const std::string& token = id_to_token_[static_cast<size_t>(id)];
+            if (token.size() == 6 && token.rfind("<0x", 0) == 0 && token.back() == '>') {
+                const unsigned value = std::stoul(token.substr(3, 2), nullptr, 16);
+                decoded.push_back(static_cast<char>(value));
+            } else {
+                decoded += token;
+            }
+        }
+        std::string marker = "▁";
+        for (size_t offset = 0; (offset = decoded.find(marker, offset)) != std::string::npos;) {
+            decoded.replace(offset, marker.size(), " ");
+            ++offset;
+        }
+        return decoded;
+    }
     std::string encoded;
     for (int32_t id : ids) {
         if (id < 0 || static_cast<size_t>(id) >= id_to_token_.size()) continue;

@@ -50,31 +50,39 @@ void cpu_qk_norm_rope_avx2(float* data, const float* norm_weight,
 
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
-                      float rope_theta, float eps) {
+                      float rope_theta, float eps, float rotary_fraction) {
     if (!data || !norm_weight || heads <= 0 || head_dim <= 0 ||
         (head_dim % 2) != 0 || position < 0) {
         throw std::invalid_argument("invalid QK norm/RoPE arguments");
     }
-    const int half = head_dim / 2;
+    if (!(rotary_fraction > 0.0f) || rotary_fraction > 1.0f) {
+        throw std::invalid_argument("invalid rotary fraction");
+    }
+    const int half = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     thread_local std::vector<float> cos_vals;
     thread_local std::vector<float> sin_vals;
     cos_vals.resize(static_cast<size_t>(half));
     sin_vals.resize(static_cast<size_t>(half));
     for (int d = 0; d < half; ++d) {
-        const float frequency = std::pow(rope_theta, -2.0f * static_cast<float>(d) / head_dim);
+        const float frequency = std::pow(rope_theta, -2.0f * static_cast<float>(d) /
+                                        static_cast<float>(head_dim));
         const float angle = static_cast<float>(position) * frequency;
         cos_vals[d] = std::cos(angle);
         sin_vals[d] = std::sin(angle);
     }
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (g_has_avx2_fma) {
-        cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
-        return;
+        if (rotary_fraction == 1.0f) {
+            cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
+            return;
+        }
     }
 #elif defined(_MSC_VER) && CELEG_CPU_X86
     if (g_has_avx2_fma) {
-        detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
-        return;
+        if (rotary_fraction == 1.0f) {
+            detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
+            return;
+        }
     }
 #endif
     for (int head = 0; head < heads; ++head) {
@@ -92,12 +100,15 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
 }
 
 void cpu_rope(float* data, int heads, int head_dim, int position,
-              float rope_theta) {
+              float rope_theta, float rotary_fraction) {
     if (!data || heads <= 0 || head_dim <= 0 || (head_dim % 2) != 0 ||
         position < 0 || !(rope_theta > 0.0f)) {
         throw std::invalid_argument("invalid RoPE arguments");
     }
-    const int half = head_dim / 2;
+    if (!(rotary_fraction > 0.0f) || rotary_fraction > 1.0f) {
+        throw std::invalid_argument("invalid rotary fraction");
+    }
+    const int half = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     std::vector<float> cos_vals(static_cast<size_t>(half));
     std::vector<float> sin_vals(static_cast<size_t>(half));
     for (int pair = 0; pair < half; ++pair) {

@@ -15,16 +15,28 @@ enum class TensorRole : uint8_t {
     FinalNorm,
     AttentionInputNorm,
     AttentionQuery,
+    AttentionQueryNorm,
     AttentionKey,
+    AttentionKeyNorm,
     AttentionValue,
     AttentionOutput,
+    AttentionValueNorm,
+    AttentionPostNorm,
     FfnInputNorm,
+    FfnOutputNorm,
     FfnGate,
     FfnUp,
     FfnDown,
     ShortConvInput,
     ShortConvKernel,
     ShortConvOutput,
+    PerLayerEmbedding,
+    PerLayerContextProjection,
+    PerLayerProjection,
+    PerLayerProjectionNorm,
+    PerLayerInputGate,
+    PerLayerInputNorm,
+    LayerScalar,
     MoeRouter,
     MoeExpertGate,
     MoeExpertUp,
@@ -57,6 +69,11 @@ public:
 };
 
 class GraniteTensorNamingPolicy final : public ITensorNamingPolicy {
+public:
+    std::vector<std::string> candidates(const TensorRequest& request) const override;
+};
+
+class Gemma4TensorNamingPolicy final : public ITensorNamingPolicy {
 public:
     std::vector<std::string> candidates(const TensorRequest& request) const override;
 };

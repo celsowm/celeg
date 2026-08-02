@@ -15,9 +15,6 @@ void TransformerDimensions::validate() const {
         throw std::invalid_argument(
             "attention heads must be divisible by key-value heads");
     }
-    if (hidden_size != num_attention_heads * head_dim) {
-        throw std::invalid_argument("hidden size must equal attention heads * head dimension");
-    }
 }
 
 void RopeSpec::validate() const {

@@ -3,8 +3,9 @@
 #include "celeg/model/resolved.hpp"
 
 #include <cstddef>
-#include <stdexcept>
 #include <limits>
+#include <stdexcept>
+#include <vector>
 
 namespace celeg {
 
@@ -16,69 +17,102 @@ namespace celeg {
 // layout testable in isolation from the CUDA resources (Single
 // Responsibility Principle: the struct does math, the cache owns memory).
 struct PageLayout {
+    struct Layer {
+        int kv_width = 0;
+        int kv_heads = 0;
+        size_t vector_offset = 0;
+        size_t scale_offset = 0;
+    };
+
     int page_tokens = 0;
     int attention_layers = 0;
-    int kv_width = 0;
-    int kv_heads = 0;
+    std::vector<Layer> layers;
 
     PageLayout() = default;
     PageLayout(int page_tokens_value,
                const RuntimeTopology& shape)
         : page_tokens(page_tokens_value),
-          attention_layers(shape.attention_layer_count),
-          kv_width(shape.kv_width),
-          kv_heads(shape.num_key_value_heads) {
+          attention_layers(shape.attention_layer_count) {
         if (page_tokens <= 0) {
             throw std::invalid_argument("PageLayout page_tokens must be positive");
         }
         if (attention_layers <= 0) {
             throw std::invalid_argument("PageLayout requires at least one attention layer");
         }
+        layers.reserve(static_cast<size_t>(attention_layers));
+        size_t vector_offset = 0;
+        size_t scale_offset = 0;
+        for (int slot = 0; slot < attention_layers; ++slot) {
+            const int model_layer = slot < static_cast<int>(shape.layer_for_attention_slot.size())
+                ? shape.layer_for_attention_slot[static_cast<size_t>(slot)] : slot;
+            const AttentionSpec* attention = nullptr;
+            if (model_layer >= 0 && model_layer < static_cast<int>(shape.attention_layouts.size())) {
+                attention = &shape.attention_layout(model_layer);
+            }
+            if (!attention) {
+                throw std::invalid_argument("PageLayout requires an attention layout for every slot");
+            }
+            const int layer_kv_width = attention->key_value_width();
+            const int layer_kv_heads = attention->key_value_heads;
+            if (layer_kv_width <= 0 || layer_kv_heads <= 0) {
+                throw std::invalid_argument("PageLayout layer has invalid KV dimensions");
+            }
+            layers.push_back({layer_kv_width, layer_kv_heads, vector_offset, scale_offset});
+            vector_offset += static_cast<size_t>(page_tokens) *
+                static_cast<size_t>(layer_kv_width);
+            scale_offset += static_cast<size_t>(page_tokens) *
+                static_cast<size_t>(layer_kv_heads);
+        }
     }
 
     // Number of bf16/int8 vector elements per page.
     size_t page_vector_elements() const {
-        return checked_mul(
-            checked_mul(static_cast<size_t>(attention_layers),
-                        static_cast<size_t>(page_tokens),
-                        "PageLayout layer/token overflow"),
-            static_cast<size_t>(kv_width),
-            "PageLayout vector overflow");
+        size_t total = 0;
+        for (const Layer& layer : layers) {
+            const size_t layer_elements = checked_mul(
+                static_cast<size_t>(page_tokens), static_cast<size_t>(layer.kv_width),
+                "PageLayout layer/token overflow");
+            if (layer_elements > std::numeric_limits<size_t>::max() - total) {
+                throw std::overflow_error("PageLayout vector overflow");
+            }
+            total += layer_elements;
+        }
+        return total;
     }
 
     // Number of per-token scale elements per page (one per kv_head).
     size_t page_scale_elements() const {
-        return checked_mul(
-            checked_mul(static_cast<size_t>(attention_layers),
-                        static_cast<size_t>(page_tokens),
-                        "PageLayout scale layer/token overflow"),
-            static_cast<size_t>(kv_heads),
-            "PageLayout scale overflow");
+        size_t total = 0;
+        for (const Layer& layer : layers) {
+            const size_t layer_elements = checked_mul(
+                static_cast<size_t>(page_tokens), static_cast<size_t>(layer.kv_heads),
+                "PageLayout scale layer/token overflow");
+            if (layer_elements > std::numeric_limits<size_t>::max() - total) {
+                throw std::overflow_error("PageLayout scale overflow");
+            }
+            total += layer_elements;
+        }
+        return total;
     }
 
     // Byte offset of a layer's first token within a single page's vector
     // buffer. Used for per-layer COW copies and per-layer writes.
     size_t layer_vector_offset(int layer) const {
-        return static_cast<size_t>(layer) *
-               static_cast<size_t>(page_tokens) *
-               static_cast<size_t>(kv_width);
+        return layers.at(static_cast<size_t>(layer)).vector_offset;
     }
 
     size_t layer_scale_offset(int layer) const {
-        return static_cast<size_t>(layer) *
-               static_cast<size_t>(page_tokens) *
-               static_cast<size_t>(kv_heads);
+        return layers.at(static_cast<size_t>(layer)).scale_offset;
     }
 
-    // Number of vector elements for `used_tokens` worth of K/V in one layer.
-    size_t layer_vector_count(int used_tokens) const {
+    size_t layer_vector_count(int layer, int used_tokens) const {
         return static_cast<size_t>(used_tokens) *
-               static_cast<size_t>(kv_width);
+               static_cast<size_t>(layers.at(static_cast<size_t>(layer)).kv_width);
     }
 
-    size_t layer_scale_count(int used_tokens) const {
+    size_t layer_scale_count(int layer, int used_tokens) const {
         return static_cast<size_t>(used_tokens) *
-               static_cast<size_t>(kv_heads);
+               static_cast<size_t>(layers.at(static_cast<size_t>(layer)).kv_heads);
     }
 
     // Flat vector-element offset of page `page` (i.e. the first element of

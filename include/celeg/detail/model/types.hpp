@@ -279,13 +279,22 @@ struct SharedModelWeights {
 
 struct LayerCommon {
     const __nv_bfloat16* operator_norm = nullptr;
+    const __nv_bfloat16* post_attention_norm = nullptr;
     const __nv_bfloat16* ffn_norm = nullptr;
+    const __nv_bfloat16* post_feed_forward_norm = nullptr;
     FeedForwardWeights feed_forward;
+    const LinearWeight* per_layer_input_gate = nullptr;
+    const LinearWeight* per_layer_projection = nullptr;
+    const __nv_bfloat16* per_layer_input_norm = nullptr;
+    const __nv_bfloat16* layer_scalar = nullptr;
 };
 
 struct AttentionLayer {
     LayerCommon common;
-    const LinearWeight* qkv = nullptr;
+    AttentionSpec layout;
+    const LinearWeight* query = nullptr;
+    const LinearWeight* key = nullptr;
+    const LinearWeight* value = nullptr;
     const LinearWeight* out = nullptr;
     const __nv_bfloat16* q_norm = nullptr;
     const __nv_bfloat16* k_norm = nullptr;
@@ -295,6 +304,7 @@ struct AttentionLayer {
     DeviceBuffer<int8_t> value_cache_int8;
     DeviceBuffer<float> key_cache_scales;
     DeviceBuffer<float> value_cache_scales;
+    int kv_owner_layer = -1;
 };
 
 struct ConvolutionLayer {

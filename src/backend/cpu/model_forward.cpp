@@ -37,6 +37,33 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
     if (shared->shape.embedding_multiplier != 1.0f) {
         for (float& value : workspace_.hidden) value *= shared->shape.embedding_multiplier;
     }
+    if (shared->shape.has_per_layer_input) {
+        const size_t packed = static_cast<size_t>(shared->shape.num_hidden_layers) *
+            static_cast<size_t>(shared->shape.per_layer_input_size);
+        workspace_.per_layer_input.resize(packed);
+        workspace_.per_layer_context.resize(packed);
+        workspace_.per_layer_gate.resize(static_cast<size_t>(shared->shape.per_layer_input_size));
+        shared->linear.embedding(shared->weight_store.per_layer_embedding, token,
+                                 workspace_.per_layer_input.data());
+        const float token_scale = std::sqrt(static_cast<float>(shared->shape.per_layer_input_size));
+        for (float& value : workspace_.per_layer_input) value *= token_scale;
+        shared->linear.gemv(shared->weight_store.per_layer_context_projection,
+                            workspace_.hidden.data(), workspace_.per_layer_context.data());
+        const float context_scale = 1.0f / std::sqrt(static_cast<float>(shared->shape.hidden));
+        for (float& value : workspace_.per_layer_context) value *= context_scale;
+        for (int layer = 0; layer < shared->shape.num_hidden_layers; ++layer) {
+            float* context = workspace_.per_layer_context.data() +
+                static_cast<size_t>(layer) * shared->shape.per_layer_input_size;
+            cpu_rmsnorm_inplace(context,
+                shared->weight_store.per_layer_projection_norm.data(),
+                shared->shape.per_layer_input_size, shared->shape.norm_eps);
+            float* token_values = workspace_.per_layer_input.data() +
+                static_cast<size_t>(layer) * shared->shape.per_layer_input_size;
+            for (int d = 0; d < shared->shape.per_layer_input_size; ++d) {
+                context[d] = (context[d] + token_values[d]) * 0.7071067811865475f;
+            }
+        }
+    }
     for (size_t index = 0; index < shared->weight_store.layers.size(); ++index) {
         const WeightLayer& layer_program = shared->weight_store.layers[index];
         const CommonWeights& common = common_weights(index);
@@ -44,29 +71,46 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
                     shared->shape.hidden, shared->shape.norm_eps);
         if (const auto* attention = attention_operator(layer_program)) {
-            shared->linear.gemv(attention->qkv, workspace_.normed.data(), workspace_.qkv.data());
+            const AttentionSpec& layout = shared->shape.attention_layout(static_cast<int>(index));
+            const int q_width = layout.query_width();
+            const int kv_width = layout.key_value_width();
+            shared->linear.gemv(attention->q, workspace_.normed.data(), workspace_.qkv.data());
             float* q = workspace_.qkv.data();
-            float* k = q + shared->shape.q_width;
-            float* v = k + shared->shape.kv_width;
-            if (shared->shape.query_key_norm) {
-                cpu_qk_norm_rope(q, attention->q_norm.data(), shared->shape.num_attention_heads,
-                    shared->shape.head_dim, session_.position_value, shared->shape.rope_theta,
-                    shared->shape.norm_eps);
-                cpu_qk_norm_rope(k, attention->k_norm.data(), shared->shape.num_key_value_heads,
-                    shared->shape.head_dim, session_.position_value, shared->shape.rope_theta,
-                    shared->shape.norm_eps);
-            } else {
-                cpu_rope(q, shared->shape.num_attention_heads, shared->shape.head_dim,
-                         session_.position_value, shared->shape.rope_theta);
-                cpu_rope(k, shared->shape.num_key_value_heads, shared->shape.head_dim,
-                         session_.position_value, shared->shape.rope_theta);
-                const float ratio = shared->shape.attention_multiplier /
-                    (1.0f / std::sqrt(static_cast<float>(shared->shape.head_dim)));
-                for (int i = 0; i < shared->shape.q_width; ++i) q[i] *= ratio;
+            float* k = q + q_width;
+            float* v = k + kv_width;
+            if (!attention->k.segments.empty()) {
+                shared->linear.gemv(attention->k, workspace_.normed.data(), k);
+                shared->linear.gemv(attention->v, workspace_.normed.data(), v);
             }
-            AttentionState& state = attention_state(index);
-            store_kv(state, session_.position_value, k, v);
-            run_attention(state, q, workspace_.op_output.data(), session_.position_value + 1);
+            if (layout.query_key_norm) {
+                cpu_qk_norm_rope(q, attention->q_norm.data(), layout.query_heads,
+                    layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
+                    shared->shape.norm_eps, static_cast<float>(layout.rotary_fraction));
+                if (!attention->k.segments.empty()) {
+                    cpu_qk_norm_rope(k, attention->k_norm.data(), layout.key_value_heads,
+                        layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
+                        shared->shape.norm_eps, static_cast<float>(layout.rotary_fraction));
+                }
+            } else {
+                cpu_rope(q, layout.query_heads, layout.head_dim,
+                         session_.position_value, static_cast<float>(layout.rope_theta),
+                         static_cast<float>(layout.rotary_fraction));
+                if (!attention->k.segments.empty()) {
+                    cpu_rope(k, layout.key_value_heads, layout.head_dim,
+                             session_.position_value, static_cast<float>(layout.rope_theta),
+                             static_cast<float>(layout.rotary_fraction));
+                }
+                const float ratio = shared->shape.attention_multiplier /
+                    (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
+                for (int i = 0; i < q_width; ++i) q[i] *= ratio;
+            }
+            const int owner = shared->layer_to_kv_owner.at(index);
+            AttentionState& state = attention_state(static_cast<size_t>(owner));
+            if (!attention->k.segments.empty()) {
+                store_kv(state, session_.position_value, k, v);
+            }
+            run_attention(state, layout, q, workspace_.op_output.data(),
+                          session_.position_value + 1);
             shared->linear.gemv(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
         } else {
         const auto* convolution = convolution_operator(layer_program);
@@ -80,6 +124,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
         }
         if (shared->shape.residual_multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= shared->shape.residual_multiplier;
+        }
+        if (shared->shape.has_split_attention_norms) {
+            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
+                                shared->shape.hidden, shared->shape.norm_eps);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
 
@@ -165,17 +213,53 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
             if (shared->shape.residual_multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= shared->shape.residual_multiplier;
             }
+            if (shared->shape.has_split_attention_norms) {
+                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
+                                    shared->shape.hidden, shared->shape.norm_eps);
+            }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
             if (profile_moe) session_.prefill_profile.moe_expert_ms += milliseconds_since(started);
         } else {
             // Dense FFN path.
+            const int intermediate = shared->shape.feed_forward_intermediates.empty()
+                ? shared->shape.intermediate
+                : shared->shape.feed_forward_intermediates.at(index);
             shared->linear.gemv(common.w13, workspace_.normed.data(), workspace_.gate_up.data());
-            cpu_swiglu(workspace_.gate_up.data(), workspace_.activated.data(), shared->shape.intermediate);
+            if (!shared->shape.feed_forward_activations.empty() &&
+                shared->shape.feed_forward_activations.at(index) == ActivationKind::GeluTanh) {
+                cpu_gated_gelu_tanh(workspace_.gate_up.data(), workspace_.activated.data(), intermediate);
+            } else {
+                cpu_swiglu(workspace_.gate_up.data(), workspace_.activated.data(), intermediate);
+            }
             shared->linear.gemv(common.w2, workspace_.activated.data(), workspace_.mlp_output.data());
             if (shared->shape.residual_multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= shared->shape.residual_multiplier;
             }
+            if (shared->shape.has_split_attention_norms) {
+                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
+                                    shared->shape.hidden, shared->shape.norm_eps);
+            }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
+        }
+        if (shared->shape.has_per_layer_input) {
+            std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
+            shared->linear.gemv(common.per_layer_input_gate, workspace_.hidden.data(),
+                                workspace_.per_layer_gate.data());
+            cpu_gelu_tanh(workspace_.per_layer_gate.data(),
+                          static_cast<size_t>(shared->shape.per_layer_input_size));
+            const float* layer_input = workspace_.per_layer_context.data() +
+                index * static_cast<size_t>(shared->shape.per_layer_input_size);
+            for (int d = 0; d < shared->shape.per_layer_input_size; ++d) {
+                workspace_.per_layer_gate[static_cast<size_t>(d)] *= layer_input[d];
+            }
+            shared->linear.gemv(common.per_layer_projection, workspace_.per_layer_gate.data(),
+                                workspace_.hidden.data());
+            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
+                                shared->shape.hidden, shared->shape.norm_eps);
+            if (common.layer_scalar != 1.0f) {
+                for (float& value : workspace_.hidden) value *= common.layer_scalar;
+            }
+            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
         }
     }
     if (compute_logits) {
@@ -185,6 +269,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
                             shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
         if (shared->shape.logits_divisor != 1.0f) {
             for (float& value : workspace_.logits) value /= shared->shape.logits_divisor;
+        }
+        if (shared->final_logit_softcap > 0.0f) {
+            for (float& value : workspace_.logits) {
+                value = std::tanh(value / shared->final_logit_softcap) *
+                    shared->final_logit_softcap;
+            }
         }
     }
     ++session_.position_value;
@@ -197,316 +287,10 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         tokens.size() > static_cast<size_t>(shared->max_context - session_.position_value)) {
         throw std::runtime_error("CPU chunked prefill exceeds context limit");
     }
-    // A 32-expert MoE prompt shorter than this produces only a handful of
-    // routes per expert. The decode GEMV path is faster for that sparse case;
-    // grouped GEMM is reserved for chunks large enough to amortize its setup.
-    constexpr size_t kGroupedMoeMinimumRows = 32;
-    if (tokens.size() < kGroupedMoeMinimumRows &&
-        std::any_of(shared->weight_store.layers.begin(), shared->weight_store.layers.end(),
-                    [](const WeightLayer& layer) {
-                        return std::holds_alternative<MoeWeights>(layer);
-                    })) {
-        for (size_t row = 0; row < tokens.size(); ++row) {
-            forward_token(tokens[row], compute_logits && row + 1 == tokens.size());
-        }
-        return;
+    for (size_t row = 0; row < tokens.size(); ++row) {
+        forward_token(tokens[row], compute_logits && row + 1 == tokens.size());
     }
-    const size_t rows = tokens.size();
-    const auto chunk_started = Clock::now();
-    workspace_.chunk_hidden.resize(rows * shared->shape.hidden);
-    workspace_.chunk_residual.resize(rows * shared->shape.hidden);
-    workspace_.chunk_normed.resize(rows * shared->shape.hidden);
-    workspace_.chunk_op.resize(rows * shared->shape.hidden);
-    workspace_.chunk_qkv.resize(rows * shared->shape.qkv_width);
-    workspace_.chunk_conv.resize(rows * 3ULL * shared->shape.hidden);
-    workspace_.chunk_gate_up.resize(rows * 2ULL * shared->shape.intermediate);
-    workspace_.chunk_activated.resize(rows * shared->shape.intermediate);
-    workspace_.chunk_mlp.resize(rows * shared->shape.hidden);
-
-    for (size_t row = 0; row < rows; ++row) {
-        const int32_t token = tokens[row];
-        if (token < 0 || token >= shared->shape.vocab_size) {
-            throw std::invalid_argument("CPU chunked prefill token out of range");
-        }
-    }
-    parallel_rows(shared->pool, rows, [&](size_t row) {
-        shared->linear.embedding(shared->weight_store.embedding, tokens[row],
-            workspace_.chunk_hidden.data() + row * shared->shape.hidden);
-        if (shared->shape.embedding_multiplier != 1.0f) {
-            float* values = workspace_.chunk_hidden.data() + row * shared->shape.hidden;
-            for (int i = 0; i < shared->shape.hidden; ++i) {
-                values[i] *= shared->shape.embedding_multiplier;
-            }
-        }
-    });
-
-    const int base_position = session_.position_value;
-    for (size_t layer_index = 0; layer_index < shared->weight_store.layers.size(); ++layer_index) {
-        const WeightLayer& layer = shared->weight_store.layers[layer_index];
-        const CommonWeights& common = common_weights(layer_index);
-        std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(), workspace_.chunk_residual.begin());
-        parallel_rows(shared->pool, rows, [&](size_t row) {
-            cpu_rmsnorm(workspace_.chunk_hidden.data() + row * shared->shape.hidden,
-                        common.operator_norm.data(),
-                        workspace_.chunk_normed.data() + row * shared->shape.hidden,
-                        shared->shape.hidden, shared->shape.norm_eps);
-        });
-
-        if (const auto* attention = attention_operator(layer)) {
-            auto started = Clock::now();
-            shared->linear.gemm(attention->qkv, workspace_.chunk_normed.data(),
-                                workspace_.chunk_qkv.data(), rows);
-            session_.prefill_profile.linear_ms += milliseconds_since(started);
-            AttentionState& cache = attention_state(layer_index);
-            // Normalize/rotate and commit the complete chunk first. Each query
-            // still observes only [0, base + row], preserving causality.
-            // QK-norm + RoPE is per-row independent; the KV commit that follows
-            // appends to the shared page table and stays on this thread.
-            parallel_rows(shared->pool, rows, [&](size_t row) {
-                float* q = workspace_.chunk_qkv.data() + row * shared->shape.qkv_width;
-                float* k = q + shared->shape.q_width;
-                const int absolute_position = base_position + static_cast<int>(row);
-                if (shared->shape.query_key_norm) {
-                    cpu_qk_norm_rope(q, attention->q_norm.data(),
-                        shared->shape.num_attention_heads, shared->shape.head_dim,
-                        absolute_position, shared->shape.rope_theta,
-                        shared->shape.norm_eps);
-                    cpu_qk_norm_rope(k, attention->k_norm.data(),
-                        shared->shape.num_key_value_heads, shared->shape.head_dim,
-                        absolute_position, shared->shape.rope_theta,
-                        shared->shape.norm_eps);
-                } else {
-                    cpu_rope(q, shared->shape.num_attention_heads, shared->shape.head_dim,
-                             absolute_position, shared->shape.rope_theta);
-                    cpu_rope(k, shared->shape.num_key_value_heads, shared->shape.head_dim,
-                             absolute_position, shared->shape.rope_theta);
-                    const float ratio = shared->shape.attention_multiplier /
-                        (1.0f / std::sqrt(static_cast<float>(shared->shape.head_dim)));
-                    for (int i = 0; i < shared->shape.q_width; ++i) q[i] *= ratio;
-                }
-            });
-            for (size_t row = 0; row < rows; ++row) {
-                float* q = workspace_.chunk_qkv.data() + row * shared->shape.qkv_width;
-                float* k = q + shared->shape.q_width;
-                float* v = k + shared->shape.kv_width;
-                store_kv(cache, base_position + static_cast<int>(row), k, v);
-            }
-            const CpuKvPagePool& pool = *shared->kv_pools.at(cache.pool_index);
-            started = Clock::now();
-            cpu_gqa_prefill_paged(workspace_.chunk_qkv.data(), rows, shared->shape.qkv_width,
-                                  pool, cache.pages,
-                                  workspace_.chunk_op.data(), base_position,
-                                  shared->shape.num_attention_heads,
-                                  shared->shape.num_key_value_heads,
-                                  shared->shape.head_dim, shared->pool);
-            session_.prefill_profile.attention_ms += milliseconds_since(started);
-            started = Clock::now();
-            shared->linear.gemm(attention->out, workspace_.chunk_op.data(),
-                                workspace_.chunk_hidden.data(), rows);
-            session_.prefill_profile.linear_ms += milliseconds_since(started);
-        } else {
-            const auto* convolution = convolution_operator(layer);
-            if (!convolution) throw std::logic_error("CPU layer has no operator");
-            auto started = Clock::now();
-            shared->linear.gemm(convolution->in, workspace_.chunk_normed.data(),
-                                workspace_.chunk_conv.data(), rows);
-            session_.prefill_profile.linear_ms += milliseconds_since(started);
-            ConvolutionState& conv_state = convolution_state(layer_index);
-            started = Clock::now();
-            cpu_conv_prefill(workspace_.chunk_conv.data(), convolution->weight_tap_major.data(),
-                             conv_state.state.data(), workspace_.chunk_op.data(), rows,
-                             shared->shape.hidden, shared->shape.conv_cache,
-                             base_position, shared->pool);
-            session_.prefill_profile.shortconv_ms += milliseconds_since(started);
-            started = Clock::now();
-            shared->linear.gemm(convolution->out, workspace_.chunk_op.data(),
-                                workspace_.chunk_hidden.data(), rows);
-            session_.prefill_profile.linear_ms += milliseconds_since(started);
-        }
-
-        parallel_rows(shared->pool, rows, [&](size_t row) {
-            float* row_hidden = workspace_.chunk_hidden.data() + row * shared->shape.hidden;
-            if (shared->shape.residual_multiplier != 1.0f) {
-                for (int i = 0; i < shared->shape.hidden; ++i) {
-                    row_hidden[i] *= shared->shape.residual_multiplier;
-                }
-            }
-            cpu_residual_add(row_hidden,
-                workspace_.chunk_residual.data() + row * shared->shape.hidden,
-                shared->shape.hidden);
-            cpu_rmsnorm(row_hidden, common.ffn_norm.data(),
-                workspace_.chunk_normed.data() + row * shared->shape.hidden,
-                shared->shape.hidden, shared->shape.norm_eps);
-        });
-        if (const auto* moe = std::get_if<MoeWeights>(&layer)) {
-            const int E = moe->num_experts;
-            const int K = moe->experts_per_token;
-            const int moe_inter = shared->shape.moe_intermediate > 0
-                ? shared->shape.moe_intermediate : shared->shape.intermediate;
-            if (E <= 0 || K <= 0 || K > E) {
-                throw std::logic_error("CPU MoE layer has invalid routing dimensions");
-            }
-
-            auto started = Clock::now();
-            workspace_.moe_router_logits.resize(rows * static_cast<size_t>(E));
-            shared->linear.gemm_raw(moe->router.data(), workspace_.chunk_normed.data(),
-                                    workspace_.moe_router_logits.data(), rows, E,
-                                    shared->shape.hidden);
-            workspace_.moe_router_probs.resize(static_cast<size_t>(E));
-            workspace_.moe_router_scored.resize(static_cast<size_t>(E));
-            workspace_.moe_route_rows.resize(rows * static_cast<size_t>(K));
-            workspace_.moe_route_experts.resize(rows * static_cast<size_t>(K));
-            workspace_.moe_route_weights.resize(rows * static_cast<size_t>(K));
-            for (size_t row = 0; row < rows; ++row) {
-                const float* logits = workspace_.moe_router_logits.data() + row * static_cast<size_t>(E);
-                for (int expert = 0; expert < E; ++expert) {
-                    const float probability = moe_sigmoid(logits[expert]);
-                    workspace_.moe_router_probs[static_cast<size_t>(expert)] = probability;
-                    const float bias = moe->use_expert_bias &&
-                        expert < static_cast<int>(moe->router_bias.size())
-                        ? moe->router_bias[static_cast<size_t>(expert)] : 0.0f;
-                    workspace_.moe_router_scored[static_cast<size_t>(expert)] = {probability + bias, expert};
-                }
-                std::partial_sort(workspace_.moe_router_scored.begin(),
-                    workspace_.moe_router_scored.begin() + K, workspace_.moe_router_scored.end(),
-                    [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
-                        return a.first != b.first ? a.first > b.first : a.second < b.second;
-                    });
-                float weight_sum = 0.0f;
-                const size_t route_base = row * static_cast<size_t>(K);
-                for (int slot = 0; slot < K; ++slot) {
-                    const int expert = workspace_.moe_router_scored[static_cast<size_t>(slot)].second;
-                    workspace_.moe_route_rows[route_base + static_cast<size_t>(slot)] = static_cast<int>(row);
-                    workspace_.moe_route_experts[route_base + static_cast<size_t>(slot)] = expert;
-                    workspace_.moe_route_weights[route_base + static_cast<size_t>(slot)] =
-                        workspace_.moe_router_probs[static_cast<size_t>(expert)];
-                    weight_sum += workspace_.moe_route_weights[route_base + static_cast<size_t>(slot)];
-                }
-                const float scale = moe->routed_scaling_factor *
-                    (moe->normalize_topk ? 1.0f / (weight_sum + 1e-6f) : 1.0f);
-                for (int slot = 0; slot < K; ++slot) {
-                    workspace_.moe_route_weights[route_base + static_cast<size_t>(slot)] *= scale;
-                }
-            }
-            session_.prefill_profile.moe_router_ms += milliseconds_since(started);
-
-            started = Clock::now();
-            const size_t route_count = rows * static_cast<size_t>(K);
-            workspace_.moe_group_offsets.assign(static_cast<size_t>(E) + 1, 0);
-            for (int expert : workspace_.moe_route_experts) ++workspace_.moe_group_offsets[static_cast<size_t>(expert) + 1];
-            for (int expert = 0; expert < E; ++expert) {
-                workspace_.moe_group_offsets[static_cast<size_t>(expert) + 1] +=
-                    workspace_.moe_group_offsets[static_cast<size_t>(expert)];
-            }
-            workspace_.moe_group_cursor = workspace_.moe_group_offsets;
-            workspace_.moe_route_order.resize(route_count);
-            for (size_t route = 0; route < route_count; ++route) {
-                const int expert = workspace_.moe_route_experts[route];
-                workspace_.moe_route_order[workspace_.moe_group_cursor[static_cast<size_t>(expert)]++] = route;
-            }
-
-            // Pack every routed row once in expert-group order. The two FFN
-            // stages then share one cross-expert work queue instead of paying
-            // a thread-pool barrier for each sparse expert group.
-            workspace_.moe_gathered_normed.resize(route_count * static_cast<size_t>(shared->shape.hidden));
-            workspace_.moe_gathered_gate_up.resize(route_count * 2ULL * static_cast<size_t>(moe_inter));
-            workspace_.moe_gathered_activated.resize(route_count * static_cast<size_t>(moe_inter));
-            workspace_.moe_gathered_output.resize(route_count * static_cast<size_t>(shared->shape.hidden));
-            workspace_.moe_gemm_jobs.clear();
-            workspace_.moe_gemm_jobs.reserve(static_cast<size_t>(E));
-            std::fill(workspace_.chunk_mlp.begin(), workspace_.chunk_mlp.end(), 0.0f);
-            for (int expert = 0; expert < E; ++expert) {
-                const size_t begin = workspace_.moe_group_offsets[static_cast<size_t>(expert)];
-                const size_t end = workspace_.moe_group_offsets[static_cast<size_t>(expert) + 1];
-                const size_t group_rows = end - begin;
-                if (group_rows == 0) continue;
-                for (size_t group_row = 0; group_row < group_rows; ++group_row) {
-                    const size_t route = workspace_.moe_route_order[begin + group_row];
-                    const int row = workspace_.moe_route_rows[route];
-                    std::copy_n(workspace_.chunk_normed.data() + static_cast<size_t>(row) * shared->shape.hidden,
-                                shared->shape.hidden,
-                                workspace_.moe_gathered_normed.data() + (begin + group_row) * shared->shape.hidden);
-                }
-                workspace_.moe_gemm_jobs.push_back({&moe->expert_w13[static_cast<size_t>(expert)],
-                                         begin, group_rows});
-            }
-            auto linear_started = Clock::now();
-            shared->linear.gemm_grouped(workspace_.moe_gemm_jobs, workspace_.moe_gathered_normed.data(),
-                                        workspace_.moe_gathered_gate_up.data());
-            parallel_rows(shared->pool, route_count, [&](size_t group_row) {
-                cpu_swiglu(workspace_.moe_gathered_gate_up.data() + group_row * 2ULL * moe_inter,
-                           workspace_.moe_gathered_activated.data() + group_row * moe_inter, moe_inter);
-            });
-            size_t job_index = 0;
-            for (int expert = 0; expert < E; ++expert) {
-                const size_t begin = workspace_.moe_group_offsets[static_cast<size_t>(expert)];
-                const size_t end = workspace_.moe_group_offsets[static_cast<size_t>(expert) + 1];
-                if (begin != end) {
-                    workspace_.moe_gemm_jobs[job_index++].weight =
-                        &moe->expert_w2[static_cast<size_t>(expert)];
-                }
-            }
-            shared->linear.gemm_grouped(workspace_.moe_gemm_jobs, workspace_.moe_gathered_activated.data(),
-                                        workspace_.moe_gathered_output.data());
-            session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
-            for (int expert = 0; expert < E; ++expert) {
-                const size_t begin = workspace_.moe_group_offsets[static_cast<size_t>(expert)];
-                const size_t end = workspace_.moe_group_offsets[static_cast<size_t>(expert) + 1];
-                const size_t group_rows = end - begin;
-                if (group_rows == 0) continue;
-                for (size_t group_row = 0; group_row < group_rows; ++group_row) {
-                    const size_t route = workspace_.moe_route_order[begin + group_row];
-                    float* output = workspace_.chunk_mlp.data() +
-                        static_cast<size_t>(workspace_.moe_route_rows[route]) * shared->shape.hidden;
-                    const float* expert_output = workspace_.moe_gathered_output.data() +
-                        (begin + group_row) * shared->shape.hidden;
-                    const float weight = workspace_.moe_route_weights[route];
-                    for (int column = 0; column < shared->shape.hidden; ++column) {
-                        output[column] += weight * expert_output[column];
-                    }
-                }
-            }
-            session_.prefill_profile.moe_expert_ms += milliseconds_since(started);
-        } else {
-            auto started = Clock::now();
-            shared->linear.gemm(common.w13, workspace_.chunk_normed.data(),
-                                workspace_.chunk_gate_up.data(), rows);
-            session_.prefill_profile.linear_ms += milliseconds_since(started);
-            parallel_rows(shared->pool, rows, [&](size_t row) {
-                cpu_swiglu(workspace_.chunk_gate_up.data() + row * 2ULL * shared->shape.intermediate,
-                           workspace_.chunk_activated.data() + row * shared->shape.intermediate,
-                           shared->shape.intermediate);
-            });
-            started = Clock::now();
-            shared->linear.gemm(common.w2, workspace_.chunk_activated.data(),
-                                workspace_.chunk_mlp.data(), rows);
-            session_.prefill_profile.linear_ms += milliseconds_since(started);
-        }
-        parallel_rows(shared->pool, rows, [&](size_t row) {
-            if (shared->shape.residual_multiplier != 1.0f) {
-                float* output = workspace_.chunk_mlp.data() + row * shared->shape.hidden;
-                for (int i = 0; i < shared->shape.hidden; ++i) {
-                    output[i] *= shared->shape.residual_multiplier;
-                }
-            }
-            cpu_residual_add(workspace_.chunk_hidden.data() + row * shared->shape.hidden,
-                             workspace_.chunk_mlp.data() + row * shared->shape.hidden,
-                             shared->shape.hidden);
-        });
-    }
-
-    if (compute_logits) {
-        const float* last = workspace_.chunk_hidden.data() + (rows - 1) * shared->shape.hidden;
-        cpu_rmsnorm(last, shared->weight_store.final_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, shared->shape.norm_eps);
-        shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
-                            shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
-        if (shared->shape.logits_divisor != 1.0f) {
-            for (float& value : workspace_.logits) value /= shared->shape.logits_divisor;
-        }
-    }
-    session_.position_value += static_cast<int>(rows);
-    session_.prefill_profile.total_ms += milliseconds_since(chunk_started);
+    return;
 }
 
 } // namespace celeg

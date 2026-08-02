@@ -8,8 +8,7 @@ namespace celeg {
 std::string RuntimeTopology::fingerprint() const {
     std::ostringstream out;
     out << "h" << hidden << "-l" << num_hidden_layers
-        << "-qh" << num_attention_heads << "-kvh" << num_key_value_heads
-        << "-hd" << head_dim << "-voc" << vocab_size
+        << "-voc" << vocab_size
         << "-int" << intermediate << "-cc" << conv_cache
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
@@ -23,21 +22,14 @@ std::string RuntimeTopology::summary() const {
         << " layers=" << num_hidden_layers
         << " attention_layers=" << attention_layer_count
         << " conv_layers=" << conv_layer_count
-        << " q_heads=" << num_attention_heads
-        << " kv_heads=" << num_key_value_heads
-        << " head_dim=" << head_dim << " vocab=" << vocab_size;
+        << " vocab=" << vocab_size;
     return out.str();
 }
 
 void RuntimeTopology::validate() const {
     if (hidden <= 0 || intermediate <= 0 || vocab_size <= 0 ||
-        num_hidden_layers <= 0 || num_attention_heads <= 0 ||
-        num_key_value_heads <= 0 || head_dim <= 0) {
+        num_hidden_layers <= 0) {
         throw std::runtime_error("invalid resolved model topology");
-    }
-    if (num_attention_heads % num_key_value_heads != 0 ||
-        hidden != num_attention_heads * head_dim || (head_dim % 2) != 0) {
-        throw std::runtime_error("invalid resolved attention topology");
     }
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers ||
         static_cast<int>(layer_types.size()) != num_hidden_layers) {
@@ -53,10 +45,21 @@ void RuntimeTopology::validate() const {
                             experts_per_token > num_experts)) {
         throw std::runtime_error("invalid resolved MoE topology");
     }
-    if (q_width != num_attention_heads * head_dim ||
-        kv_width != num_key_value_heads * head_dim ||
-        qkv_width != q_width + 2 * kv_width || rope_pairs != head_dim / 2) {
-        throw std::runtime_error("invalid derived resolved dimensions");
+    if (static_cast<int>(attention_layouts.size()) != num_hidden_layers) {
+        throw std::runtime_error("per-layer attention layout count mismatch");
+    }
+    for (const AttentionSpec& layout : attention_layouts) {
+            if (layout.query_heads <= 0 || layout.key_value_heads <= 0 ||
+                layout.query_heads % layout.key_value_heads != 0 ||
+                layout.head_dim <= 0 || (layout.head_dim % 2) != 0 ||
+                layout.rope_theta <= 0.0 || layout.rotary_fraction <= 0.0 ||
+                layout.rotary_fraction > 1.0) {
+                throw std::runtime_error("invalid per-layer attention layout");
+            }
+            if (layout.mask == AttentionMaskKind::SlidingCausal &&
+                layout.sliding_window <= 0) {
+                throw std::runtime_error("sliding attention requires a window");
+            }
     }
 }
 

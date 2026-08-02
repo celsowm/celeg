@@ -13,14 +13,13 @@ struct ModelMemoryStats {
     size_t weights = 0;
     size_t kv_cache = 0;
     size_t conv_state = 0;
-    size_t rope_tables = 0;
     size_t activations = 0;
     size_t sampling = 0;
     size_t matmul_workspace = 0;
     size_t attention_workspace = 0;
 
     size_t total() const {
-        return weights + kv_cache + conv_state + rope_tables + activations +
+        return weights + kv_cache + conv_state + activations +
                sampling + matmul_workspace + attention_workspace;
     }
 };

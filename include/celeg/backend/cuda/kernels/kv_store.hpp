@@ -57,7 +57,8 @@ void launch_store_kv_paged_batch(
     __nv_bfloat16* key_pool, __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    int kv_heads, int head_dim,
     cudaStream_t stream);
 void launch_store_kv_int8_paged_batch(
     const __nv_bfloat16* k, const __nv_bfloat16* v,
@@ -65,7 +66,9 @@ void launch_store_kv_int8_paged_batch(
     float* key_scale_pool, float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    size_t page_scale_elements, size_t layer_scale_offset,
+    int kv_heads, int head_dim,
     cudaStream_t stream);
 
 } // namespace celeg

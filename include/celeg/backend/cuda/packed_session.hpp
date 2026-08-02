@@ -49,8 +49,6 @@ struct PackedSessionContext {
     const LinearWeight* embedding_weight = nullptr;
     const LinearWeight* logits_weight_value = nullptr;
     const __nv_bfloat16* final_norm_value = nullptr;
-    const __nv_bfloat16* rope_cos_value = nullptr;
-    const __nv_bfloat16* rope_sin_value = nullptr;
 
     SegmentedAttentionFn segmented_attention = nullptr;
     ExpertResidencyFn ensure_expert_residency = nullptr;
@@ -100,8 +98,6 @@ struct PackedSessionContext {
     const LinearWeight* embedding() const { return embedding_weight; }
     const LinearWeight* logits_weight() const { return logits_weight_value; }
     const __nv_bfloat16* final_norm() const { return final_norm_value; }
-    const __nv_bfloat16* rope_cos() const { return rope_cos_value; }
-    const __nv_bfloat16* rope_sin() const { return rope_sin_value; }
 };
 
 } // namespace celeg

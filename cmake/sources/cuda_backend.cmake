@@ -11,7 +11,6 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/resources.cpp
     src/backend/cuda/model/weight_setup.cpp
     src/backend/cuda/model/weight_validation.cpp
-    src/backend/cuda/model/rope.cpp
     src/backend/cuda/model/warmup.cpp
     src/backend/cuda/model/session_resources.cpp
     src/backend/cuda/model/lifecycle.cpp

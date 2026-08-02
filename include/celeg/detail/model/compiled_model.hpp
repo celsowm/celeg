@@ -68,7 +68,6 @@ struct CudaCompiledModel {
         gemm_->linear(x, weight, y, m, n, k, beta, resources_.plan_);
     }
 
-    void initialize_rope_tables();
     void warmup_decode_gemms();
     void warmup_prefill_attention_gemm();
 
@@ -136,8 +135,6 @@ struct CudaCompiledModel {
     }
     bool tied_lm_head() const { return resources_.lm_head_ == nullptr; }
     const __nv_bfloat16* final_norm() const { return resources_.final_norm_; }
-    const __nv_bfloat16* rope_cos() const { return workspace_.rope_cos_.data(); }
-    const __nv_bfloat16* rope_sin() const { return workspace_.rope_sin_.data(); }
     bool cuda_graph_ready() const {
         return decode_graphs_.ready();
     }
@@ -147,6 +144,11 @@ struct CudaCompiledModel {
     void release_prefill_workspace();
     void run_mlp_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_prefill(const LayerCommon& common_layer, int rows, int layer);
+    void run_per_layer_input_decode(const LayerCommon& common_layer, int layer);
+    void run_per_layer_input_prefill(const LayerCommon& common_layer, int rows, int layer);
+    void initialize_per_layer_input_device(const int32_t* token);
+    void initialize_per_layer_input_host(int32_t token);
+    void initialize_per_layer_input_batch(const int32_t* tokens, int rows);
     void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
 

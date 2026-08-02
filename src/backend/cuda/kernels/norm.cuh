@@ -74,8 +74,99 @@ void launch_scale(__nv_bfloat16* x, int count, float scale, cudaStream_t stream)
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__global__ void tanh_softcap_kernel(__nv_bfloat16* x, int count, float cap) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index >= count) return;
+    x[index] = __float2bfloat16(tanhf(bf16_float(x[index]) / cap) * cap);
+}
+
+void launch_tanh_softcap(__nv_bfloat16* x, int count, float cap, cudaStream_t stream) {
+    tanh_softcap_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, count, cap);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
 void launch_swiglu_fused(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
                          int count, cudaStream_t stream) {
     swiglu_fused_kernel<<<(count + 255) / 256, 256, 0, stream>>>(gate_up, out, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void gelu_tanh_kernel(const __nv_bfloat16* input,
+                                 __nv_bfloat16* out, int count) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index >= count) return;
+    const float x = bf16_float(input[index]);
+    constexpr float kSqrt2OverPi = 0.7978845608028654f;
+    out[index] = __float2bfloat16(0.5f * x *
+        (1.0f + tanhf(kSqrt2OverPi * (x + 0.044715f * x * x * x))));
+}
+
+void launch_gelu_tanh(const __nv_bfloat16* input, __nv_bfloat16* out,
+                      int count, cudaStream_t stream) {
+    gelu_tanh_kernel<<<(count + 255) / 256, 256, 0, stream>>>(input, out, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void gated_gelu_tanh_kernel(const __nv_bfloat16* gate_up,
+                                       __nv_bfloat16* out, int count) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index >= count) return;
+    const float x = bf16_float(gate_up[index]);
+    constexpr float kSqrt2OverPi = 0.7978845608028654f;
+    const float gelu = 0.5f * x *
+        (1.0f + tanhf(kSqrt2OverPi * (x + 0.044715f * x * x * x)));
+    out[index] = __float2bfloat16(gelu * bf16_float(gate_up[count + index]));
+}
+
+void launch_gated_gelu_tanh(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
+                            int count, cudaStream_t stream) {
+    gated_gelu_tanh_kernel<<<(count + 255) / 256, 256, 0, stream>>>(gate_up, out, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void multiply_kernel(__nv_bfloat16* x, const __nv_bfloat16* y, int count) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index < count) x[index] = __float2bfloat16(bf16_float(x[index]) * bf16_float(y[index]));
+}
+
+void launch_multiply(__nv_bfloat16* x, const __nv_bfloat16* y, int count,
+                     cudaStream_t stream) {
+    multiply_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, y, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void multiply_strided_kernel(__nv_bfloat16* x, const __nv_bfloat16* y,
+                                        int rows, int width, int y_stride,
+                                        int y_offset) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * width;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / width);
+    const int column = static_cast<int>(index % width);
+    x[index] = __float2bfloat16(
+        bf16_float(x[index]) * bf16_float(y[static_cast<size_t>(row) * y_stride +
+                                            y_offset + column]));
+}
+
+void launch_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* y,
+                             int rows, int width, int y_stride, int y_offset,
+                             cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * width;
+    multiply_strided_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
+        x, y, rows, width, y_stride, y_offset);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void scale_by_scalar_kernel(__nv_bfloat16* x,
+                                       const __nv_bfloat16* scalar, int count) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index < count) {
+        x[index] = __float2bfloat16(bf16_float(x[index]) * bf16_float(*scalar));
+    }
+}
+
+void launch_scale_by_scalar(__nv_bfloat16* x, const __nv_bfloat16* scalar,
+                            int count, cudaStream_t stream) {
+    scale_by_scalar_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, scalar, count);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

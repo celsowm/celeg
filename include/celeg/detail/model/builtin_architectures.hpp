@@ -8,5 +8,6 @@ namespace celeg::detail {
 
 std::unique_ptr<IArchitecture> make_lfm2_architecture();
 std::unique_ptr<IArchitecture> make_granite_architecture();
+std::unique_ptr<IArchitecture> make_gemma4_architecture();
 
 } // namespace celeg::detail

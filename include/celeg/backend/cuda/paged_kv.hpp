@@ -69,9 +69,20 @@ public:
     const float* value_scales() const { return value_scales_.data(); }
 
     int attention_layers() const { return attention_layer_count_; }
-    int kv_width() const { return kv_width_; }
-    int kv_heads() const { return kv_heads_; }
-    int head_dim() const { return head_dim_; }
+    size_t page_vector_elements() const { return layout_.page_vector_elements(); }
+    size_t page_scale_elements() const { return layout_.page_scale_elements(); }
+    size_t layer_vector_offset(int attention_slot) const {
+        return layout_.layer_vector_offset(attention_slot);
+    }
+    size_t layer_scale_offset(int attention_slot) const {
+        return layout_.layer_scale_offset(attention_slot);
+    }
+    int layer_kv_width(int attention_slot) const {
+        return layout_.layers.at(static_cast<size_t>(attention_slot)).kv_width;
+    }
+    int layer_kv_heads(int attention_slot) const {
+        return layout_.layers.at(static_cast<size_t>(attention_slot)).kv_heads;
+    }
     // Returns the attention slot for a given model layer index, or -1 if the
     // layer is a convolution layer.
     int attention_slot(int model_layer) const {
@@ -83,15 +94,9 @@ public:
     }
 
 private:
-    size_t page_vector_elements() const;
-    size_t page_scale_elements() const;
-
     int page_tokens_ = 0;
     int max_pages_per_request_ = 0;
     int attention_layer_count_ = 0;
-    int kv_width_ = 0;
-    int kv_heads_ = 0;
-    int head_dim_ = 0;
     KvCacheMode mode_ = KvCacheMode::Bf16;
     std::vector<int> attention_slot_for_layer_;
     PageLayout layout_;

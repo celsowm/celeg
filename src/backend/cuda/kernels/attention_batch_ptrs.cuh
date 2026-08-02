@@ -16,12 +16,13 @@ __global__ void gqa_decode_online_batch_ptrs_kernel(
     int rows,
     int q_heads,
     int kv_heads,
-    int head_dim) {
+    int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int row = block / q_heads;
     const int query_head = block % q_heads;
     if (row >= rows) return;
     const int seq_len = positions[row] + 1;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -38,7 +39,7 @@ __global__ void gqa_decode_online_batch_ptrs_kernel(
     __shared__ float beta;
     __shared__ float next_max;
     __shared__ float shared_denominator;
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = row_keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -74,12 +75,13 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
     int rows,
     int q_heads,
     int kv_heads,
-    int head_dim) {
+    int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int row = block / q_heads;
     const int query_head = block % q_heads;
     if (row >= rows) return;
     const int seq_len = positions[row] + 1;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -94,7 +96,7 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
     __shared__ float probability;
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = row_keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -106,7 +108,7 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
     }
     if (lane == 0) denominator = 0.0f;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = row_keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -117,7 +119,7 @@ __global__ void gqa_decode_strict_batch_ptrs_kernel(
         __syncthreads();
     }
     float accumulator = 0.0f;
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const __nv_bfloat16* key = row_keys +
             (static_cast<size_t>(token) * kv_heads + kv_head) * head_dim;
         const float dot = attention_dot(query, key, head_dim, warp_sums, &dot_total);
@@ -150,12 +152,13 @@ __global__ void gqa_decode_online_int8_batch_ptrs_kernel(
     int rows,
     int q_heads,
     int kv_heads,
-    int head_dim) {
+    int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int row = block / q_heads;
     const int query_head = block % q_heads;
     if (row >= rows) return;
     const int seq_len = positions[row] + 1;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -174,7 +177,7 @@ __global__ void gqa_decode_online_int8_batch_ptrs_kernel(
     __shared__ float beta;
     __shared__ float next_max;
     __shared__ float shared_denominator;
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = row_keys + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
@@ -213,12 +216,13 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
     int rows,
     int q_heads,
     int kv_heads,
-    int head_dim) {
+    int head_dim, int sliding_window) {
     const int block = blockIdx.x;
     const int row = block / q_heads;
     const int query_head = block % q_heads;
     if (row >= rows) return;
     const int seq_len = positions[row] + 1;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q +
@@ -235,7 +239,7 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
     __shared__ float probability;
     if (lane == 0) maximum = -FLT_MAX;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = row_keys + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
@@ -248,7 +252,7 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
     }
     if (lane == 0) denominator = 0.0f;
     __syncthreads();
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = row_keys + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
@@ -260,7 +264,7 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
         __syncthreads();
     }
     float accumulator = 0.0f;
-    for (int token = 0; token < seq_len; ++token) {
+    for (int token = first_token; token < seq_len; ++token) {
         const size_t scale_index = static_cast<size_t>(token) * kv_heads + kv_head;
         const int8_t* key = row_keys + scale_index * head_dim;
         const float dot = attention_dot_int8(query, key, row_key_scales[scale_index],
@@ -292,18 +296,18 @@ void launch_gqa_decode_batch_ptrs(
     int rows,
     int q_heads,
     int kv_heads,
-    int head_dim,
+    int head_dim, int sliding_window,
     bool fast,
     cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     if (fast) {
         gqa_decode_online_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, key_cache, value_cache, out, positions,
-            rows, q_heads, kv_heads, head_dim);
+            rows, q_heads, kv_heads, head_dim, sliding_window);
     } else {
         gqa_decode_strict_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, key_cache, value_cache, out, positions,
-            rows, q_heads, kv_heads, head_dim);
+            rows, q_heads, kv_heads, head_dim, sliding_window);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -319,18 +323,18 @@ void launch_gqa_decode_int8_batch_ptrs(
     int rows,
     int q_heads,
     int kv_heads,
-    int head_dim,
+    int head_dim, int sliding_window,
     bool fast,
     cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     if (fast) {
         gqa_decode_online_int8_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, key_cache, value_cache, key_scales, value_scales,
-            out, positions, rows, q_heads, kv_heads, head_dim);
+            out, positions, rows, q_heads, kv_heads, head_dim, sliding_window);
     } else {
         gqa_decode_strict_int8_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
             q, key_cache, value_cache, key_scales, value_scales,
-            out, positions, rows, q_heads, kv_heads, head_dim);
+            out, positions, rows, q_heads, kv_heads, head_dim, sliding_window);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

@@ -139,6 +139,7 @@ void CpuCompiledModel::store_kv(AttentionState& state, int position,
 }
 
 void CpuCompiledModel::run_attention(const AttentionState& state,
+                                   const AttentionSpec& attention,
                                    const float* q, float* output,
                                    int sequence_length) const {
     if (sequence_length <= 0 || static_cast<size_t>(sequence_length) > state.token_count) {
@@ -148,11 +149,13 @@ void CpuCompiledModel::run_attention(const AttentionState& state,
     CpuPagedAttentionStats attention_stats;
     cpu_gqa_decode_paged_parallel(
         q, pool, state.pages, output, sequence_length,
-        shared->shape.num_attention_heads, shared->shape.num_key_value_heads, shared->shape.head_dim,
+        attention.query_heads, attention.key_value_heads, attention.head_dim,
         shared->pool,
         CpuPagedAttentionOptions{
             shared->options.attention_parallel_threshold,
-            shared->options.attention_page_tile},
+            shared->options.attention_page_tile,
+            attention.mask == AttentionMaskKind::SlidingCausal
+                ? attention.sliding_window : 0},
         &attention_stats);
     if (attention_stats.parallel) {
         ++const_cast<CpuCompiledModel*>(this)->session_.attention_parallel_calls;

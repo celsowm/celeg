@@ -40,10 +40,11 @@ struct PackedDecodeExecutorImpl {
           residual(maximum_prefill_token_capacity * shape_.hidden),
           normed(maximum_prefill_token_capacity * shape_.hidden),
           op_output(maximum_prefill_token_capacity * shape_.hidden),
-          qkv_output(maximum_prefill_token_capacity * shape_.qkv_width),
-          q(maximum_prefill_token_capacity * shape_.q_width),
-          k(maximum_prefill_token_capacity * shape_.kv_width),
-          v(maximum_prefill_token_capacity * shape_.kv_width),
+          qkv_output(maximum_prefill_token_capacity *
+                     shape_.maximum_attention_projection_width()),
+          q(maximum_prefill_token_capacity * shape_.maximum_attention_projection_width()),
+          k(maximum_prefill_token_capacity * shape_.maximum_attention_projection_width()),
+          v(maximum_prefill_token_capacity * shape_.maximum_attention_projection_width()),
           conv_projected(maximum_prefill_token_capacity * 3 * shape_.hidden),
           gate_up(maximum_prefill_token_capacity * 2 * shape_.intermediate),
           activated(maximum_prefill_token_capacity * shape_.intermediate),
@@ -225,8 +226,8 @@ struct PackedDecodeExecutorImpl {
 
     void ensure_segmented_workspace(int rows, int chunks) {
         const size_t scalar_count = static_cast<size_t>(rows) *
-            shape_.num_attention_heads * static_cast<size_t>(chunks);
-        const size_t accum_count = scalar_count * shape_.head_dim;
+            shape_.maximum_attention_query_heads() * static_cast<size_t>(chunks);
+        const size_t accum_count = scalar_count * shape_.maximum_attention_head_dim();
         if (scalar_count > segmented_scalar_capacity) {
             segmented_partial_max.reset(scalar_count);
             segmented_partial_denom.reset(scalar_count);
@@ -632,70 +633,57 @@ struct PackedDecodeExecutorImpl {
         const PackedSessionContext& reference,
         const AttentionLayer& attention,
         int rows) {
-        if (reference.options().fused_projections) {
-            linear(normed.data(), *attention.qkv, qkv_output.data(), rows,
-                   shape_.qkv_width, shape_.hidden);
-            launch_split_qkv_rows(
-                qkv_output.data(), q.data(), k.data(), v.data(), rows,
-                shape_.q_width, shape_.kv_width, stream.get());
-        } else {
-            const auto q_weight = slice_rows(
-                *attention.qkv, 0, shape_.q_width);
-            const auto k_weight = slice_rows(
-                *attention.qkv, shape_.q_width, shape_.kv_width);
-            const auto v_weight = slice_rows(
-                *attention.qkv, shape_.q_width + shape_.kv_width,
-                shape_.kv_width);
-            linear(normed.data(), q_weight, q.data(), rows,
-                   shape_.q_width, shape_.hidden);
-            linear(normed.data(), k_weight, k.data(), rows,
-                   shape_.kv_width, shape_.hidden);
-            linear(normed.data(), v_weight, v.data(), rows,
-                   shape_.kv_width, shape_.hidden);
+        const AttentionSpec& layout = attention.layout;
+        linear(normed.data(), *attention.query, q.data(), rows,
+               layout.query_width(), shape_.hidden);
+        if (attention.key && attention.value) {
+            linear(normed.data(), *attention.key, k.data(), rows,
+                   layout.key_value_width(), shape_.hidden);
+            linear(normed.data(), *attention.value, v.data(), rows,
+                   layout.key_value_width(), shape_.hidden);
         }
-        if (!shape_.query_key_norm) {
-            launch_rope_batch_positions(
-                q.data(), k.data(), reference.rope_cos(), reference.rope_sin(),
-                positions.data(), rows, shape_.num_attention_heads,
-                shape_.num_key_value_heads, shape_.head_dim, stream.get());
-            const float ratio = shape_.attention_multiplier /
-                (1.0f / std::sqrt(static_cast<float>(shape_.head_dim)));
-            launch_scale(q.data(), rows * shape_.q_width, ratio, stream.get());
-        } else {
-            launch_qk_norm_rope_batch_positions(
-                q.data(), k.data(), attention.q_norm, attention.k_norm,
-                reference.rope_cos(), reference.rope_sin(),
-                positions.data(), rows, shape_.num_attention_heads, shape_.num_key_value_heads,
-                shape_.head_dim, shape_.norm_eps,
-                reference.options().fast_attention, stream.get());
-        }
+        launch_dynamic_qk_norm_rope_device(
+            q.data(), attention.key ? k.data() : nullptr, attention.q_norm, attention.k_norm,
+            layout.query_heads, layout.key_value_heads, layout.head_dim, positions.data(),
+            static_cast<float>(layout.rope_theta), static_cast<float>(layout.rotary_fraction),
+            shape_.norm_eps, layout.query_key_norm, stream.get());
     }
 
     void run_paged_attention_cache(const PackedSessionContext& reference, int rows,
                                    int layer_index,
                                    bool segmented_attention,
                                    int segmented_chunks) {
-        const int slot = paged_kv ? paged_kv->attention_slot(layer_index) : -1;
+        const AttentionLayer& current = *as_attention(reference.layers().at(
+            static_cast<size_t>(layer_index)));
+        const int cache_layer = current.kv_owner_layer >= 0
+            ? current.kv_owner_layer : layer_index;
+        const AttentionLayer& owner = *as_attention(reference.layers().at(
+            static_cast<size_t>(cache_layer)));
+        const AttentionSpec& layout = current.layout;
+        const AttentionSpec& owner_layout = owner.layout;
+        const int slot = paged_kv ? paged_kv->attention_slot(cache_layer) : -1;
         const int stride = paged_kv->max_pages_per_request();
         if (reference.options().kv_cache_mode == KvCacheMode::Int8) {
-            launch_store_kv_int8_paged_batch(
+            if (current.key && current.value) launch_store_kv_int8_paged_batch(
                 k.data(), v.data(), paged_kv->key_int8(),
                 paged_kv->value_int8(), paged_kv->key_scales(),
                 paged_kv->value_scales(), d_page_tables.data(), stride,
                 positions.data(), rows, slot, paged_kv->page_tokens(),
-                paged_kv->attention_layers(), shape_.num_key_value_heads,
-                shape_.head_dim, stream.get());
+                paged_kv->page_vector_elements(), paged_kv->layer_vector_offset(slot),
+                paged_kv->page_scale_elements(), paged_kv->layer_scale_offset(slot),
+                owner_layout.key_value_heads, owner_layout.head_dim, stream.get());
             if (segmented_attention) {
                 launch_gqa_decode_int8_paged_segmented_batch(
                     q.data(), paged_kv->key_int8(), paged_kv->value_int8(),
                     paged_kv->key_scales(), paged_kv->value_scales(),
                     d_page_tables.data(), stride, op_output.data(),
                     positions.data(), rows, slot, paged_kv->page_tokens(),
-                    paged_kv->attention_layers(),
-                    shape_.num_attention_heads, shape_.num_key_value_heads,
-                    shape_.head_dim,
+                    paged_kv->page_vector_elements(), paged_kv->layer_vector_offset(slot),
+                    paged_kv->page_scale_elements(), paged_kv->layer_scale_offset(slot),
+                    layout.query_heads, owner_layout.key_value_heads,
+                    owner_layout.head_dim,
                     reference.options().attention_chunk_tokens,
-                    segmented_chunks, segmented_partial_max.data(),
+                    segmented_chunks, layout.sliding_window, segmented_partial_max.data(),
                     segmented_partial_denom.data(),
                     segmented_partial_accum.data(), stream.get());
             } else {
@@ -704,28 +692,30 @@ struct PackedDecodeExecutorImpl {
                     paged_kv->key_scales(), paged_kv->value_scales(),
                     d_page_tables.data(), stride, op_output.data(),
                     positions.data(), rows, slot, paged_kv->page_tokens(),
-                    paged_kv->attention_layers(),
-                    shape_.num_attention_heads, shape_.num_key_value_heads,
-                    shape_.head_dim,
-                    reference.options().fast_attention, stream.get());
+                    paged_kv->page_vector_elements(), paged_kv->layer_vector_offset(slot),
+                    paged_kv->page_scale_elements(), paged_kv->layer_scale_offset(slot),
+                    layout.query_heads, owner_layout.key_value_heads,
+                    owner_layout.head_dim,
+                    layout.sliding_window, reference.options().fast_attention, stream.get());
             }
             return;
         }
-        launch_store_kv_paged_batch(
+        if (current.key && current.value) launch_store_kv_paged_batch(
             k.data(), v.data(), paged_kv->key_bf16(), paged_kv->value_bf16(),
             d_page_tables.data(), stride, positions.data(), rows, slot,
-            paged_kv->page_tokens(), paged_kv->attention_layers(),
-            shape_.num_key_value_heads, shape_.head_dim, stream.get());
+            paged_kv->page_tokens(), paged_kv->page_vector_elements(),
+            paged_kv->layer_vector_offset(slot), owner_layout.key_value_heads,
+            owner_layout.head_dim, stream.get());
         if (segmented_attention) {
             launch_gqa_decode_paged_segmented_batch(
                 q.data(), paged_kv->key_bf16(), paged_kv->value_bf16(),
                 d_page_tables.data(), stride, op_output.data(),
                 positions.data(), rows, slot, paged_kv->page_tokens(),
-                paged_kv->attention_layers(),
-                shape_.num_attention_heads, shape_.num_key_value_heads,
-                shape_.head_dim,
+                paged_kv->page_vector_elements(), paged_kv->layer_vector_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim,
                 reference.options().attention_chunk_tokens,
-                segmented_chunks, segmented_partial_max.data(),
+                segmented_chunks, layout.sliding_window, segmented_partial_max.data(),
                 segmented_partial_denom.data(), segmented_partial_accum.data(),
                 stream.get());
         } else {
@@ -733,40 +723,49 @@ struct PackedDecodeExecutorImpl {
                 q.data(), paged_kv->key_bf16(), paged_kv->value_bf16(),
                 d_page_tables.data(), stride, op_output.data(),
                 positions.data(), rows, slot, paged_kv->page_tokens(),
-                paged_kv->attention_layers(),
-                shape_.num_attention_heads, shape_.num_key_value_heads,
-                shape_.head_dim,
-                reference.options().fast_attention, stream.get());
+                paged_kv->page_vector_elements(), paged_kv->layer_vector_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim,
+                layout.sliding_window, reference.options().fast_attention, stream.get());
         }
     }
 
     void run_local_attention_cache(const PackedSessionContext& reference, int rows,
                                    int layer_index) {
-        const size_t offset = static_cast<size_t>(layer_index) * maximum_batch;
+        const AttentionLayer& current = *as_attention(reference.layers().at(
+            static_cast<size_t>(layer_index)));
+        const int cache_layer = current.kv_owner_layer >= 0
+            ? current.kv_owner_layer : layer_index;
+        const AttentionLayer& owner = *as_attention(reference.layers().at(
+            static_cast<size_t>(cache_layer)));
+        const AttentionSpec& layout = current.layout;
+        const AttentionSpec& owner_layout = owner.layout;
+        const size_t offset = static_cast<size_t>(cache_layer) * maximum_batch;
         if (reference.options().kv_cache_mode == KvCacheMode::Int8) {
-            launch_store_kv_int8_batch_ptrs(
+            if (current.key && current.value) launch_store_kv_int8_batch_ptrs(
                 k.data(), v.data(), d_key_int8.data() + offset,
                 d_value_int8.data() + offset, d_key_scales.data() + offset,
                 d_value_scales.data() + offset, positions.data(), rows,
-                shape_.num_key_value_heads, shape_.head_dim, stream.get());
+                owner_layout.key_value_heads, owner_layout.head_dim, stream.get());
             launch_gqa_decode_int8_batch_ptrs(
                 q.data(), d_key_int8.data() + offset,
                 d_value_int8.data() + offset, d_key_scales.data() + offset,
                 d_value_scales.data() + offset, op_output.data(),
-                positions.data(), rows, shape_.num_attention_heads,
-                shape_.num_key_value_heads, shape_.head_dim,
-                reference.options().fast_attention, stream.get());
+                positions.data(), rows, layout.query_heads,
+                owner_layout.key_value_heads, owner_layout.head_dim,
+                layout.sliding_window, reference.options().fast_attention, stream.get());
             return;
         }
-        launch_store_kv_batch_ptrs(
+        if (current.key && current.value) launch_store_kv_batch_ptrs(
             k.data(), v.data(), d_key_bf16.data() + offset,
             d_value_bf16.data() + offset, positions.data(), rows,
-            shape_.kv_width, stream.get());
+            owner_layout.key_value_width(), stream.get());
         launch_gqa_decode_batch_ptrs(
             q.data(), d_key_bf16.data() + offset,
             d_value_bf16.data() + offset, op_output.data(), positions.data(),
-            rows, shape_.num_attention_heads, shape_.num_key_value_heads,
-            shape_.head_dim, reference.options().fast_attention,
+            rows, layout.query_heads, owner_layout.key_value_heads,
+            owner_layout.head_dim, layout.sliding_window,
+            reference.options().fast_attention,
             stream.get());
     }
 
@@ -974,6 +973,10 @@ struct PackedDecodeExecutorImpl {
                shape_.vocab_size, shape_.hidden);
         launch_scale(logits.data(), rows * shape_.vocab_size,
                      1.0f / shape_.logits_divisor, stream.get());
+        if (shape_.final_logit_softcap > 0.0f) {
+            launch_tanh_softcap(logits.data(), rows * shape_.vocab_size,
+                                shape_.final_logit_softcap, stream.get());
+        }
         launch_scatter_bf16_rows(
             logits.data(), d_logits.data(), rows, shape_.vocab_size,
             stream.get());
@@ -1089,6 +1092,10 @@ struct PackedDecodeExecutorImpl {
                    shape_.vocab_size, shape_.hidden);
             launch_scale(logits.data(), rows * shape_.vocab_size,
                          1.0f / shape_.logits_divisor, stream.get());
+            if (shape_.final_logit_softcap > 0.0f) {
+                launch_tanh_softcap(logits.data(), rows * shape_.vocab_size,
+                                    shape_.final_logit_softcap, stream.get());
+            }
             launch_scatter_bf16_selected_rows(logits.data(), d_final_rows.data(),
                                                d_logits.data(), requests,
                                                shape_.vocab_size, stream.get());

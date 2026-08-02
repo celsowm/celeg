@@ -73,6 +73,7 @@ private:
 struct CpuPagedAttentionOptions {
     size_t parallel_threshold = 256;
     size_t page_tile = 4;
+    int sliding_window = 0;
 };
 
 struct CpuPagedAttentionStats {
@@ -89,7 +90,8 @@ void cpu_gqa_decode_paged(
     int sequence_length,
     int q_heads,
     int kv_heads,
-    int head_dim);
+    int head_dim,
+    int sliding_window = 0);
 
 void cpu_gqa_decode_paged_parallel(
     const float* q,
@@ -119,6 +121,7 @@ void cpu_gqa_prefill_paged(
     int q_heads,
     int kv_heads,
     int head_dim,
-    CpuThreadPool& thread_pool);
+    CpuThreadPool& thread_pool,
+    int sliding_window = 0);
 
 } // namespace celeg

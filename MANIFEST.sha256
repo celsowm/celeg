@@ -223,7 +223,6 @@ c04d23a0ae2928ee55e023f0a95ca0a66cdb9ad6a6aa1e18b5f070e044ecfee3  ./src/backend/
 ebe991c655ac7b58819214d63677a053cd748af35a51c4b514f10853bb2df828  ./src/backend/cuda/model/prefill.cpp
 407e5f2a11d97ee8ef50d58c3a110eddf8c933bf507bfe983a3cc3950d6c056c  ./src/backend/cuda/model/residency.cu
 7dfc8b286c97e17af0ee8a52b04b3da734a9716bbe443dfef8f00bbde16828bb  ./src/backend/cuda/model/resources.cpp
-aa21970d8e6161639f8c49c0cc9ae386bd9965acb59c5fe3e4af73277fc58ba3  ./src/backend/cuda/model/rope.cpp
 57c02c1d8c95872e3143a71ad8a04055c003b3b6c4fc3b51928014ff6a6bc60b  ./src/backend/cuda/model/session_resources.cpp
 d4f668b59bf0bcf48661a1a4bb2f7ffd392198e8b23036772aa11cf040b1bab6  ./src/backend/cuda/model/setup.cpp
 509f4d4ab9a33a49024b841634c0963708a6aeba52446a846b86b39d2e1577e5  ./src/backend/cuda/model/warmup.cpp

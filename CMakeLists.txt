@@ -53,7 +53,7 @@ if(MSVC)
     # CUDA 13.1's host-config guard predates the currently installed MSVC
     # 19.50 toolset.  Keep the override limited to CUDA translation units and
     # only newer toolsets; supported MSVC versions retain CUDA's normal check.
-    if(CELEG_ENABLE_CUDA AND MSVC_VERSION GREATER 1949)
+    if(CELEG_ENABLE_CUDA AND MSVC_VERSION GREATER 1942)
         add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-allow-unsupported-compiler>)
     endif()
     set(CELEG_MSVC_SHOWINCLUDES_PREFIX "" CACHE STRING
@@ -240,7 +240,7 @@ if(CELEG_ENABLE_CUDA)
     # identification.  The same flag must be present before check_language;
     # applying it only to target compile options is too late for CMake's
     # compiler probe.
-    if(MSVC AND MSVC_VERSION GREATER 1949)
+    if(MSVC AND MSVC_VERSION GREATER 1942)
         set(CMAKE_CUDA_FLAGS_INIT
             "${CMAKE_CUDA_FLAGS_INIT} -allow-unsupported-compiler"
             CACHE STRING "Initial CUDA flags" FORCE)
@@ -460,6 +460,7 @@ if(CELEG_BUILD_TESTS)
         src/models/lfm2/architecture.cpp src/models/lfm2/layer_decoder.cpp
         src/models/lfm2/metadata_decoder.cpp
         src/models/granite/architecture.cpp src/models/granite/topology.cpp
+        src/models/gemma4/architecture.cpp
         src/model/weights/roles.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)

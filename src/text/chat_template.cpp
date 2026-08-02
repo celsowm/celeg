@@ -76,12 +76,55 @@ std::string GraniteInstructChatTemplate::format(std::span<const ChatMessage> mes
     return out;
 }
 
+std::string Gemma4InstructChatTemplate::format(std::span<const ChatMessage> messages,
+                                               bool add_generation_prompt) const {
+    const auto reject_multimodal_or_tool_text = [](std::string_view content) {
+        static constexpr std::string_view forbidden[] = {
+            "<|image>", "<|audio>", "<|video>", "<|tool>",
+            "<tool|>", "<|tool_call>", "<tool_call|>",
+            "<|tool_response>", "<tool_response|>",
+        };
+        for (const std::string_view marker : forbidden) {
+            if (content.find(marker) != std::string_view::npos) {
+                throw std::invalid_argument(
+                    "Gemma4InstructChatTemplate accepts text-only content; "
+                    "multimodal and tool markers are unsupported");
+            }
+        }
+    };
+    std::string out = "<bos>";
+    for (const ChatMessage& message : messages) {
+        const char* role = nullptr;
+        switch (message.role) {
+            case ChatRole::System: role = "system"; break;
+            case ChatRole::User: role = "user"; break;
+            case ChatRole::Assistant: role = "model"; break;
+            case ChatRole::Developer:
+                throw std::invalid_argument(
+                    "Gemma4InstructChatTemplate supports only system, user, and assistant messages");
+            case ChatRole::Tool:
+                throw std::invalid_argument(
+                    "Gemma4InstructChatTemplate does not support tool messages");
+        }
+        reject_multimodal_or_tool_text(message.content);
+        out += "<|turn>";
+        out += role;
+        out += "\n";
+        out += message.content;
+        out += "<turn|>\n";
+    }
+    if (add_generation_prompt) out += "<|turn>model\n";
+    return out;
+}
+
 std::unique_ptr<IChatTemplate> make_chat_template(ChatTemplateKind kind) {
     switch (kind) {
         case ChatTemplateKind::Lfm2Instruct:
             return std::make_unique<Lfm2InstructChatTemplate>();
         case ChatTemplateKind::GraniteInstruct:
             return std::make_unique<GraniteInstructChatTemplate>();
+        case ChatTemplateKind::Gemma4Instruct:
+            return std::make_unique<Gemma4InstructChatTemplate>();
     }
     throw std::invalid_argument("unsupported chat template kind");
 }
@@ -92,6 +135,9 @@ std::unique_ptr<IChatTemplate> make_chat_template(std::string_view profile_id) {
     }
     if (profile_id == "granite-instruct" || profile_id == "granite") {
         return make_chat_template(ChatTemplateKind::GraniteInstruct);
+    }
+    if (profile_id == "gemma4-instruct" || profile_id == "gemma4") {
+        return make_chat_template(ChatTemplateKind::Gemma4Instruct);
     }
     throw std::invalid_argument("unknown chat profile: " + std::string(profile_id));
 }

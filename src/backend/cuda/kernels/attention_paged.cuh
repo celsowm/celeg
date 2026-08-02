@@ -17,8 +17,9 @@ __global__ void gqa_decode_paged_batch_kernel(
     const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, int attention_layers,
-    int q_heads, int kv_heads, int head_dim) {
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset,
+    int q_heads, int kv_heads, int head_dim, int sliding_window) {
     const int flat = blockIdx.x;
     const int row = flat / q_heads;
     const int query_head = flat % q_heads;
@@ -26,6 +27,7 @@ __global__ void gqa_decode_paged_batch_kernel(
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const int seq_len = positions[row] + 1;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const __nv_bfloat16* query = q +
         (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
     const float scale = rsqrtf(static_cast<float>(head_dim));
@@ -37,7 +39,7 @@ __global__ void gqa_decode_paged_batch_kernel(
     if constexpr (Strict) {
         if (lane == 0) maximum = -FLT_MAX;
         __syncthreads();
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens;
             const int ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
@@ -45,7 +47,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             for (int d = lane; d < head_dim; d += blockDim.x) {
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, d, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 local += bf16_float(query[d]) * bf16_float(key_pool[offset]);
             }
             const float dot = block_sum(local, warp_sums, &dot_total);
@@ -57,7 +59,7 @@ __global__ void gqa_decode_paged_batch_kernel(
         }
         if (lane == 0) denominator = 0.0f;
         __syncthreads();
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens;
             const int ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
@@ -65,7 +67,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             for (int d = lane; d < head_dim; d += blockDim.x) {
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, d, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 local += bf16_float(query[d]) * bf16_float(key_pool[offset]);
             }
             const float dot = block_sum(local, warp_sums, &dot_total);
@@ -76,7 +78,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             __syncthreads();
         }
         float accumulator = 0.0f;
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens;
             const int ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
@@ -84,7 +86,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             for (int d = lane; d < head_dim; d += blockDim.x) {
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, d, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 local += bf16_float(query[d]) * bf16_float(key_pool[offset]);
             }
             const float dot = block_sum(local, warp_sums, &dot_total);
@@ -96,7 +98,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             if (lane < head_dim) {
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, lane, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 accumulator += probability * bf16_float(value_pool[offset]);
             }
             __syncthreads();
@@ -113,7 +115,7 @@ __global__ void gqa_decode_paged_batch_kernel(
         __shared__ float beta;
         __shared__ float next_max;
         __shared__ float next_denom;
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens;
             const int ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
@@ -121,7 +123,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             for (int d = lane; d < head_dim; d += blockDim.x) {
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, d, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 local += bf16_float(query[d]) * bf16_float(key_pool[offset]);
             }
             const float dot = block_sum(local, warp_sums, &dot_total);
@@ -136,7 +138,7 @@ __global__ void gqa_decode_paged_batch_kernel(
             if (lane < head_dim) {
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, lane, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 accumulator = accumulator * alpha + bf16_float(value_pool[offset]) * beta;
             }
             denom = next_denom;
@@ -155,18 +157,20 @@ __device__ float paged_int8_attention_dot(
     const int8_t* key_pool,
     const float* key_scale_pool,
     uint32_t page, int attention_slot, int in_page, int kv_head,
-    int page_tokens, int attention_layers, int kv_heads, int head_dim,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    size_t page_scale_elements, size_t layer_scale_offset,
+    int kv_heads, int head_dim,
     float* warp_sums, float* dot_total) {
     const int lane = threadIdx.x;
     const size_t scale_offset = paged_scale_offset(
         page, attention_slot, in_page, kv_head, page_tokens,
-        attention_layers, kv_heads);
+        page_scale_elements, layer_scale_offset, kv_heads);
     const float key_scale = key_scale_pool[scale_offset];
     float local = 0.0f;
     for (int d = lane; d < head_dim; d += blockDim.x) {
         const size_t offset = paged_vector_offset(
             page, attention_slot, in_page, kv_head, d, page_tokens,
-            attention_layers, kv_heads, head_dim);
+            page_vector_elements, layer_vector_offset, kv_heads, head_dim);
         local += bf16_float(query[d]) * static_cast<float>(key_pool[offset]) * key_scale;
     }
     return block_sum(local, warp_sums, dot_total);
@@ -179,8 +183,10 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
     const float* key_scale_pool, const float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, int attention_layers,
-    int q_heads, int kv_heads, int head_dim) {
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, size_t page_scale_elements,
+    size_t layer_scale_offset,
+    int q_heads, int kv_heads, int head_dim, int sliding_window) {
     const int flat = blockIdx.x;
     const int row = flat / q_heads;
     const int query_head = flat % q_heads;
@@ -188,6 +194,7 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
     const int lane = threadIdx.x;
     const int kv_head = query_head / (q_heads / kv_heads);
     const int seq_len = positions[row] + 1;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
     const __nv_bfloat16* query = q +
         (static_cast<size_t>(row) * q_heads + query_head) * head_dim;
     const float scale = rsqrtf(static_cast<float>(head_dim));
@@ -199,12 +206,13 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
     if constexpr (Strict) {
         if (lane == 0) maximum = -FLT_MAX;
         __syncthreads();
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens, ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
             const float dot = paged_int8_attention_dot(
                 query, key_pool, key_scale_pool, page, attention_slot, ip,
-                kv_head, page_tokens, attention_layers, kv_heads, head_dim,
+                kv_head, page_tokens, page_vector_elements, layer_vector_offset,
+                page_scale_elements, layer_scale_offset, kv_heads, head_dim,
                 warp_sums, &dot_total);
             if (lane == 0) maximum = fmaxf(maximum,
                 rounded_bf16_float(rounded_bf16_float(dot) * scale));
@@ -212,24 +220,26 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
         }
         if (lane == 0) denominator = 0.0f;
         __syncthreads();
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens, ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
             const float dot = paged_int8_attention_dot(
                 query, key_pool, key_scale_pool, page, attention_slot, ip,
-                kv_head, page_tokens, attention_layers, kv_heads, head_dim,
+                kv_head, page_tokens, page_vector_elements, layer_vector_offset,
+                page_scale_elements, layer_scale_offset, kv_heads, head_dim,
                 warp_sums, &dot_total);
             if (lane == 0) denominator += expf(
                 rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum);
             __syncthreads();
         }
         float accumulator = 0.0f;
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens, ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
             const float dot = paged_int8_attention_dot(
                 query, key_pool, key_scale_pool, page, attention_slot, ip,
-                kv_head, page_tokens, attention_layers, kv_heads, head_dim,
+                kv_head, page_tokens, page_vector_elements, layer_vector_offset,
+                page_scale_elements, layer_scale_offset, kv_heads, head_dim,
                 warp_sums, &dot_total);
             if (lane == 0) probability = rounded_bf16_float(expf(
                 rounded_bf16_float(rounded_bf16_float(dot) * scale) - maximum) / denominator);
@@ -237,10 +247,10 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
             if (lane < head_dim) {
                 const size_t scale_offset = paged_scale_offset(
                     page, attention_slot, ip, kv_head, page_tokens,
-                    attention_layers, kv_heads);
+                    page_scale_elements, layer_scale_offset, kv_heads);
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, lane, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 accumulator += probability * static_cast<float>(value_pool[offset]) *
                                value_scale_pool[scale_offset];
             }
@@ -251,12 +261,13 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
     } else {
         float running_max = -FLT_MAX, denom = 0.0f, accumulator = 0.0f;
         __shared__ float alpha, beta, next_max, next_denom;
-        for (int token = 0; token < seq_len; ++token) {
+        for (int token = first_token; token < seq_len; ++token) {
             const int lp = token / page_tokens, ip = token % page_tokens;
             const uint32_t page = page_tables[static_cast<size_t>(row) * page_table_stride + lp];
             const float dot = paged_int8_attention_dot(
                 query, key_pool, key_scale_pool, page, attention_slot, ip,
-                kv_head, page_tokens, attention_layers, kv_heads, head_dim,
+                kv_head, page_tokens, page_vector_elements, layer_vector_offset,
+                page_scale_elements, layer_scale_offset, kv_heads, head_dim,
                 warp_sums, &dot_total);
             if (lane == 0) {
                 const float score = dot * scale;
@@ -269,10 +280,10 @@ __global__ void gqa_decode_int8_paged_batch_kernel(
             if (lane < head_dim) {
                 const size_t scale_offset = paged_scale_offset(
                     page, attention_slot, ip, kv_head, page_tokens,
-                    attention_layers, kv_heads);
+                    page_scale_elements, layer_scale_offset, kv_heads);
                 const size_t offset = paged_vector_offset(
                     page, attention_slot, ip, kv_head, lane, page_tokens,
-                    attention_layers, kv_heads, head_dim);
+                    page_vector_elements, layer_vector_offset, kv_heads, head_dim);
                 accumulator = accumulator * alpha + static_cast<float>(value_pool[offset]) *
                               value_scale_pool[scale_offset] * beta;
             }
@@ -290,8 +301,9 @@ __global__ void gqa_decode_paged_segment_partial_kernel(
     const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int q_heads, int kv_heads,
-    int head_dim, int chunk_tokens, int chunks,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    int q_heads, int kv_heads,
+        int head_dim, int chunk_tokens, int chunks, int sliding_window,
     float* partial_max, float* partial_denom, float* partial_accum) {
     const int flat = blockIdx.x;
     const int chunk = flat % chunks;
@@ -300,7 +312,8 @@ __global__ void gqa_decode_paged_segment_partial_kernel(
     const int query_head = query_index % q_heads;
     if (row >= rows) return;
     const int seq_len = positions[row] + 1;
-    const int begin = chunk * chunk_tokens;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
+    const int begin = max(chunk * chunk_tokens, first_token);
     const int end = min(begin + chunk_tokens, seq_len);
     const int lane = threadIdx.x;
     const size_t partial_index =
@@ -336,7 +349,7 @@ __global__ void gqa_decode_paged_segment_partial_kernel(
         for (int d = lane; d < head_dim; d += blockDim.x) {
             const size_t offset = paged_vector_offset(
                 page, attention_slot, ip, kv_head, d, page_tokens,
-                attention_layers, kv_heads, head_dim);
+                page_vector_elements, layer_vector_offset, kv_heads, head_dim);
             local += bf16_float(query[d]) * bf16_float(key_pool[offset]);
         }
         const float dot = block_sum(local, warp_sums, &dot_total);
@@ -351,7 +364,7 @@ __global__ void gqa_decode_paged_segment_partial_kernel(
         if (lane < head_dim) {
             const size_t offset = paged_vector_offset(
                 page, attention_slot, ip, kv_head, lane, page_tokens,
-                attention_layers, kv_heads, head_dim);
+                page_vector_elements, layer_vector_offset, kv_heads, head_dim);
             accumulator = accumulator * alpha +
                 bf16_float(value_pool[offset]) * beta_value;
         }
@@ -372,8 +385,10 @@ __global__ void gqa_decode_int8_paged_segment_partial_kernel(
     const float* key_scale_pool, const float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     const int32_t* positions, int rows, int attention_slot,
-    int page_tokens, int attention_layers, int q_heads, int kv_heads,
-    int head_dim, int chunk_tokens, int chunks,
+    int page_tokens, size_t page_vector_elements, size_t layer_vector_offset,
+    size_t page_scale_elements, size_t layer_scale_offset,
+    int q_heads, int kv_heads,
+        int head_dim, int chunk_tokens, int chunks, int sliding_window,
     float* partial_max, float* partial_denom, float* partial_accum) {
     const int flat = blockIdx.x;
     const int chunk = flat % chunks;
@@ -382,7 +397,8 @@ __global__ void gqa_decode_int8_paged_segment_partial_kernel(
     const int query_head = query_index % q_heads;
     if (row >= rows) return;
     const int seq_len = positions[row] + 1;
-    const int begin = chunk * chunk_tokens;
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
+    const int begin = max(chunk * chunk_tokens, first_token);
     const int end = min(begin + chunk_tokens, seq_len);
     const int lane = threadIdx.x;
     const size_t partial_index =
@@ -416,7 +432,8 @@ __global__ void gqa_decode_int8_paged_segment_partial_kernel(
             static_cast<size_t>(row) * page_table_stride + lp];
         const float dot = paged_int8_attention_dot(
             query, key_pool, key_scale_pool, page, attention_slot, ip,
-            kv_head, page_tokens, attention_layers, kv_heads, head_dim,
+            kv_head, page_tokens, page_vector_elements, layer_vector_offset,
+            page_scale_elements, layer_scale_offset, kv_heads, head_dim,
             warp_sums, &dot_total);
         if (lane == 0) {
             const float score = dot * scale;
@@ -429,10 +446,10 @@ __global__ void gqa_decode_int8_paged_segment_partial_kernel(
         if (lane < head_dim) {
             const size_t scale_index = paged_scale_offset(
                 page, attention_slot, ip, kv_head, page_tokens,
-                attention_layers, kv_heads);
+                page_scale_elements, layer_scale_offset, kv_heads);
             const size_t offset = paged_vector_offset(
                 page, attention_slot, ip, kv_head, lane, page_tokens,
-                attention_layers, kv_heads, head_dim);
+                page_vector_elements, layer_vector_offset, kv_heads, head_dim);
             accumulator = accumulator * alpha +
                 static_cast<float>(value_pool[offset]) *
                 value_scale_pool[scale_index] * beta_value;
@@ -486,19 +503,22 @@ void launch_gqa_decode_paged_batch(
     const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, int attention_layers,
-    int q_heads, int kv_heads, int head_dim, bool fast,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset,
+    int q_heads, int kv_heads, int head_dim, int sliding_window, bool fast,
     cudaStream_t stream) {
     if (fast) {
         gqa_decode_paged_batch_kernel<false><<<rows * q_heads, 64, 0, stream>>>(
             q, key_pool, value_pool, page_tables, page_table_stride, out,
-            positions, rows, attention_slot, page_tokens, attention_layers,
-            q_heads, kv_heads, head_dim);
+            positions, rows, attention_slot, page_tokens, page_vector_elements,
+            layer_vector_offset,
+            q_heads, kv_heads, head_dim, sliding_window);
     } else {
         gqa_decode_paged_batch_kernel<true><<<rows * q_heads, 64, 0, stream>>>(
             q, key_pool, value_pool, page_tables, page_table_stride, out,
-            positions, rows, attention_slot, page_tokens, attention_layers,
-            q_heads, kv_heads, head_dim);
+            positions, rows, attention_slot, page_tokens, page_vector_elements,
+            layer_vector_offset,
+            q_heads, kv_heads, head_dim, sliding_window);
     }
     CELEG_KERNEL_CHECK();
 }
@@ -509,21 +529,25 @@ void launch_gqa_decode_int8_paged_batch(
     const float* key_scale_pool, const float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, int attention_layers,
-    int q_heads, int kv_heads, int head_dim, bool fast,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, size_t page_scale_elements,
+    size_t layer_scale_offset,
+    int q_heads, int kv_heads, int head_dim, int sliding_window, bool fast,
     cudaStream_t stream) {
     if (fast) {
         gqa_decode_int8_paged_batch_kernel<false><<<rows * q_heads, 64, 0, stream>>>(
             q, key_pool, value_pool, key_scale_pool, value_scale_pool,
             page_tables, page_table_stride, out, positions, rows,
-            attention_slot, page_tokens, attention_layers, q_heads,
-            kv_heads, head_dim);
+            attention_slot, page_tokens, page_vector_elements, layer_vector_offset,
+            page_scale_elements, layer_scale_offset, q_heads,
+            kv_heads, head_dim, sliding_window);
     } else {
         gqa_decode_int8_paged_batch_kernel<true><<<rows * q_heads, 64, 0, stream>>>(
             q, key_pool, value_pool, key_scale_pool, value_scale_pool,
             page_tables, page_table_stride, out, positions, rows,
-            attention_slot, page_tokens, attention_layers, q_heads,
-            kv_heads, head_dim);
+            attention_slot, page_tokens, page_vector_elements, layer_vector_offset,
+            page_scale_elements, layer_scale_offset, q_heads,
+            kv_heads, head_dim, sliding_window);
     }
     CELEG_KERNEL_CHECK();
 }
@@ -533,15 +557,18 @@ void launch_gqa_decode_paged_segmented_batch(
     const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
     const uint32_t* page_tables, int page_table_stride,
     __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, int attention_layers,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset,
     int q_heads, int kv_heads, int head_dim, int chunk_tokens, int chunks,
+    int sliding_window,
     float* partial_max, float* partial_denom, float* partial_accum,
     cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_paged_segment_partial_kernel<<<rows * q_heads * chunks, threads, 0, stream>>>(
         q, key_pool, value_pool, page_tables, page_table_stride, positions,
-        rows, attention_slot, page_tokens, attention_layers, q_heads,
-        kv_heads, head_dim, chunk_tokens, chunks, partial_max,
+        rows, attention_slot, page_tokens, page_vector_elements,
+        layer_vector_offset, q_heads,
+        kv_heads, head_dim, chunk_tokens, chunks, sliding_window, partial_max,
         partial_denom, partial_accum);
     CELEG_KERNEL_CHECK();
     gqa_decode_segment_reduce_batch_kernel<<<rows * q_heads, threads, 0, stream>>>(
@@ -556,16 +583,21 @@ void launch_gqa_decode_int8_paged_segmented_batch(
     const float* key_scale_pool, const float* value_scale_pool,
     const uint32_t* page_tables, int page_table_stride,
     __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, int attention_layers,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, size_t page_scale_elements,
+    size_t layer_scale_offset,
     int q_heads, int kv_heads, int head_dim, int chunk_tokens, int chunks,
+    int sliding_window,
     float* partial_max, float* partial_denom, float* partial_accum,
     cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     gqa_decode_int8_paged_segment_partial_kernel<<<rows * q_heads * chunks, threads, 0, stream>>>(
         q, key_pool, value_pool, key_scale_pool, value_scale_pool,
         page_tables, page_table_stride, positions, rows, attention_slot,
-        page_tokens, attention_layers, q_heads, kv_heads, head_dim,
-        chunk_tokens, chunks, partial_max, partial_denom, partial_accum);
+        page_tokens, page_vector_elements, layer_vector_offset,
+        page_scale_elements, layer_scale_offset, q_heads, kv_heads, head_dim,
+        chunk_tokens, chunks, sliding_window, partial_max, partial_denom,
+        partial_accum);
     CELEG_KERNEL_CHECK();
     gqa_decode_segment_reduce_batch_kernel<<<rows * q_heads, threads, 0, stream>>>(
         out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,

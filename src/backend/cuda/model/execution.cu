@@ -44,6 +44,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         stream_.get());
     launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.embedding_multiplier,
                  stream_.get());
+    initialize_per_layer_input_device(sampling_.sampled_device.data());
     decode_phase_profile().end(DecodePhase::Embed, stream_.get());
 
     int layer_idx = 0;
@@ -60,123 +61,100 @@ void CudaCompiledModel::enqueue_decode_forward() {
                        stream_.get());
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
+            const AttentionSpec& layout = attention->layout;
+            AttentionLayer* owner = attention;
+            if (attention->kv_owner_layer >= 0) {
+                owner = as_attention(resources_.layers_.at(
+                    static_cast<size_t>(attention->kv_owner_layer)));
+                if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
+            }
+            const AttentionSpec& owner_layout = owner->layout;
             __nv_bfloat16* q = workspace_.qkv_output_.data();
-            __nv_bfloat16* k = q + resources_.shape_.q_width;
-            __nv_bfloat16* v = k + resources_.shape_.kv_width;
+            __nv_bfloat16* k = q + layout.query_width();
+            __nv_bfloat16* v = k + layout.key_value_width();
             decode_phase_profile().begin(stream_.get());
-            if (resources_.options_.fused_projections) {
-                linear(workspace_.normed_.data(), *attention->qkv, workspace_.qkv_output_.data(),
-                       1, resources_.shape_.qkv_width, resources_.shape_.hidden);
-            } else {
-                const LinearWeight q_weight =
-                    slice_rows(*attention->qkv, 0, resources_.shape_.q_width);
-                const LinearWeight k_weight = slice_rows(
-                    *attention->qkv, resources_.shape_.q_width, resources_.shape_.kv_width);
-                const LinearWeight v_weight = slice_rows(
-                    *attention->qkv, resources_.shape_.q_width + resources_.shape_.kv_width,
-                    resources_.shape_.kv_width);
-                linear(workspace_.normed_.data(), q_weight, q,
-                       1, resources_.shape_.q_width, resources_.shape_.hidden);
-                linear(workspace_.normed_.data(), k_weight, k,
-                       1, resources_.shape_.kv_width, resources_.shape_.hidden);
-                linear(workspace_.normed_.data(), v_weight, v,
-                       1, resources_.shape_.kv_width, resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), *attention->query, q,
+                   1, layout.query_width(), resources_.shape_.hidden);
+            if (attention->key && attention->value) {
+                linear(workspace_.normed_.data(), *attention->key, k,
+                       1, layout.key_value_width(), resources_.shape_.hidden);
+                linear(workspace_.normed_.data(), *attention->value, v,
+                       1, layout.key_value_width(), resources_.shape_.hidden);
             }
             decode_phase_profile().end(DecodePhase::Projection, stream_.get());
             decode_phase_profile().begin(stream_.get());
-            if (!resources_.shape_.query_key_norm) {
-                launch_rope_strict_device(
-                    q, k, workspace_.rope_cos_.data(), workspace_.rope_sin_.data(),
-                    resources_.shape_.num_attention_heads, resources_.shape_.num_key_value_heads,
-                    resources_.shape_.head_dim, position_device_.data(), stream_.get());
-                const float ratio = resources_.shape_.attention_multiplier /
-                    (1.0f / std::sqrt(static_cast<float>(resources_.shape_.head_dim)));
-                launch_scale(q, resources_.shape_.q_width, ratio, stream_.get());
-            } else if (resources_.options_.fast_attention) {
-                launch_qk_norm_rope_fast_device(
-                    q, k, attention->q_norm, attention->k_norm,
-                    workspace_.rope_cos_.data(), workspace_.rope_sin_.data(),
-                    resources_.shape_.num_attention_heads, resources_.shape_.num_key_value_heads,
-                    resources_.shape_.head_dim, position_device_.data(),
-                    resources_.shape_.norm_eps, stream_.get());
-            } else {
-                launch_qk_norm_rope_strict_device(
-                    q, k, attention->q_norm, attention->k_norm,
-                    workspace_.rope_cos_.data(), workspace_.rope_sin_.data(),
-                    resources_.shape_.num_attention_heads, resources_.shape_.num_key_value_heads,
-                    resources_.shape_.head_dim, position_device_.data(),
-                    resources_.shape_.norm_eps, stream_.get());
-            }
+            launch_dynamic_qk_norm_rope_device(
+                q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
+                layout.query_heads, layout.key_value_heads, layout.head_dim,
+                position_device_.data(), static_cast<float>(layout.rope_theta),
+                static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                layout.query_key_norm, stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                launch_store_kv_int8_device(
-                    k, v, attention->key_cache_int8.data(),
-                    attention->value_cache_int8.data(),
-                    attention->key_cache_scales.data(),
-                    attention->value_cache_scales.data(), position_device_.data(),
-                    resources_.shape_.num_key_value_heads, resources_.shape_.head_dim, stream_.get());
+                if (attention->key && attention->value) launch_store_kv_int8_device(
+                    k, v, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                    owner->key_cache_scales.data(), owner->value_cache_scales.data(), position_device_.data(),
+                    owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
                 if (session_.active_segmented_attention_) {
                     launch_gqa_decode_segmented_int8_device(
-                        q, attention->key_cache_int8.data(),
-                        attention->value_cache_int8.data(),
-                        attention->key_cache_scales.data(),
-                        attention->value_cache_scales.data(), workspace_.op_output_.data(),
-                        position_device_.data(), resources_.shape_.num_attention_heads,
-                        resources_.shape_.num_key_value_heads, resources_.shape_.head_dim,
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
+                        position_device_.data(), layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
                         resources_.options_.attention_chunk_tokens, workspace_.attention_chunks_,
+                        layout.sliding_window,
                         workspace_.attention_partial_max_.data(),
                         workspace_.attention_partial_denom_.data(),
                         workspace_.attention_partial_accum_.data(), stream_.get());
                 } else if (resources_.options_.fast_attention) {
                     launch_gqa_decode_online_int8_device(
-                        q, attention->key_cache_int8.data(),
-                        attention->value_cache_int8.data(),
-                        attention->key_cache_scales.data(),
-                        attention->value_cache_scales.data(), workspace_.op_output_.data(),
-                        position_device_.data(), resources_.shape_.num_attention_heads,
-                        resources_.shape_.num_key_value_heads, resources_.shape_.head_dim, stream_.get());
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
+                        position_device_.data(), layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
+                        layout.sliding_window, stream_.get());
                 } else {
                     launch_gqa_decode_strict_int8_device(
-                        q, attention->key_cache_int8.data(),
-                        attention->value_cache_int8.data(),
-                        attention->key_cache_scales.data(),
-                        attention->value_cache_scales.data(), workspace_.op_output_.data(),
-                        position_device_.data(), resources_.shape_.num_attention_heads,
-                        resources_.shape_.num_key_value_heads, resources_.shape_.head_dim, stream_.get());
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
+                        position_device_.data(), layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
+                        layout.sliding_window, stream_.get());
                 }
             } else {
-                launch_store_kv_device(
-                    k, v, attention->key_cache.data(), attention->value_cache.data(),
-                    position_device_.data(), resources_.shape_.kv_width, stream_.get());
+                if (attention->key && attention->value) launch_store_kv_device(
+                    k, v, owner->key_cache.data(), owner->value_cache.data(),
+                    position_device_.data(), owner_layout.key_value_width(), stream_.get());
                 if (session_.active_segmented_attention_) {
                     launch_gqa_decode_segmented_device(
-                        q, attention->key_cache.data(), attention->value_cache.data(),
+                        q, owner->key_cache.data(), owner->value_cache.data(),
                         workspace_.op_output_.data(), position_device_.data(),
-                        resources_.shape_.num_attention_heads, resources_.shape_.num_key_value_heads,
-                        resources_.shape_.head_dim, resources_.options_.attention_chunk_tokens,
-                        workspace_.attention_chunks_, workspace_.attention_partial_max_.data(),
+                        layout.query_heads, owner_layout.key_value_heads,
+                        owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
+                        workspace_.attention_chunks_, layout.sliding_window,
+                        workspace_.attention_partial_max_.data(),
                         workspace_.attention_partial_denom_.data(),
                         workspace_.attention_partial_accum_.data(), stream_.get());
                 } else if (resources_.options_.fast_attention) {
                     launch_gqa_decode_online_device(
-                        q, attention->key_cache.data(), attention->value_cache.data(),
+                        q, owner->key_cache.data(), owner->value_cache.data(),
                         workspace_.op_output_.data(), position_device_.data(),
-                        resources_.shape_.num_attention_heads, resources_.shape_.num_key_value_heads,
-                        resources_.shape_.head_dim, stream_.get());
+                        layout.query_heads, owner_layout.key_value_heads,
+                        owner_layout.head_dim, layout.sliding_window, stream_.get());
                 } else {
                     launch_gqa_decode_strict_device(
-                        q, attention->key_cache.data(), attention->value_cache.data(),
+                        q, owner->key_cache.data(), owner->value_cache.data(),
                         workspace_.op_output_.data(), position_device_.data(),
-                        resources_.shape_.num_attention_heads, resources_.shape_.num_key_value_heads,
-                        resources_.shape_.head_dim, stream_.get());
+                        layout.query_heads, owner_layout.key_value_heads,
+                        owner_layout.head_dim, layout.sliding_window, stream_.get());
                 }
             }
             decode_phase_profile().end(DecodePhase::Attention, stream_.get());
             decode_phase_profile().begin(stream_.get());
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
-                   1, resources_.shape_.hidden, resources_.shape_.hidden,
-                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
+                   1, resources_.shape_.hidden, layout.query_width(),
+                   resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
             launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.residual_multiplier,
                          stream_.get());
             decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
@@ -195,7 +173,12 @@ void CudaCompiledModel::enqueue_decode_forward() {
                    resources_.options_.fused_residuals ? 1.0f : 0.0f);
             decode_phase_profile().end(DecodePhase::Conv, stream_.get());
         }
-        if (!resources_.options_.fused_residuals) {
+        if (common_layer.post_attention_norm) {
+            launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
+                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           resources_.shape_.norm_eps, stream_.get());
+        }
+        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
             decode_phase_profile().begin(stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                                 resources_.shape_.hidden, stream_.get());
@@ -214,6 +197,10 @@ void CudaCompiledModel::enqueue_decode_forward() {
             1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
                  1.0f / resources_.shape_.logits_divisor, stream_.get());
+    if (resources_.shape_.final_logit_softcap > 0.0f) {
+        launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
+                            resources_.shape_.final_logit_softcap, stream_.get());
+    }
     decode_phase_profile().end(DecodePhase::Logits, stream_.get());
 }
 
@@ -365,7 +352,6 @@ ModelMemoryStats CudaCompiledModel::memory_stats() const {
             stats.conv_state += as_convolution(layer)->conv_state.bytes();
         }
     }
-    stats.rope_tables = workspace_.rope_cos_.bytes() + workspace_.rope_sin_.bytes();
     stats.activations =
         workspace_.hidden_.bytes() + workspace_.residual_.bytes() + workspace_.normed_.bytes() +
         workspace_.op_output_.bytes() + workspace_.qkv_output_.bytes() + workspace_.conv_projected_.bytes() +

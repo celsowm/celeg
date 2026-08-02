@@ -23,19 +23,17 @@ namespace celeg {
 // the live device buffers and topology snapshot per call.
 class SessionStore {
 public:
-    // Header layout for the v3 session file. Bumping the version requires
+    // Header layout for the v4 session file. Bumping the version requires
     // changing the magic and the version field; old files are rejected
     // cleanly without a migration path because the on-disk layout now
     // depends on the resolved-model fingerprint.
     struct Header {
-        std::array<char, 8> magic{{'C', 'E', 'L', 'E', 'G', 'S', 'S', '3'}};
-        uint32_t version = 3;
+        std::array<char, 8> magic{{'C', 'E', 'L', 'E', 'G', 'S', 'S', '4'}};
+        uint32_t version = 4;
         uint32_t kv_cache_mode = 0;
         int32_t position = 0;
         int32_t max_context = 0;
         int32_t layers = 0;
-        int32_t kv_width = 0;
-        int32_t kv_heads = 0;
         int32_t vocab = 0;
         int32_t attention_layers = 0;
         uint64_t rng_state = 0;
@@ -43,8 +41,8 @@ public:
     };
 
     static constexpr std::array<char, 8> kMagic{
-        {'C', 'E', 'L', 'E', 'G', 'S', 'S', '3'}};
-    static constexpr uint32_t kVersion = 3;
+        {'C', 'E', 'L', 'E', 'G', 'S', 'S', '4'}};
+    static constexpr uint32_t kVersion = 4;
 
     // Snapshot of the live session state that SessionStore reads from or
     // writes to. The host fills this struct and passes it in; the store
@@ -63,6 +61,7 @@ public:
         // pointers into the live AttentionLayer / ConvolutionLayer storage.
         struct LayerBuffers {
             bool is_attention = false;
+            bool owns_kv_cache = false;
             // BF16 path (when kv_cache_mode == Bf16):
             __nv_bfloat16* key_cache_bf16 = nullptr;
             __nv_bfloat16* value_cache_bf16 = nullptr;
