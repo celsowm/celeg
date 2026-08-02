@@ -1,6 +1,7 @@
 #include "celeg/detail/model/builtin_architectures.hpp"
 #include "celeg/detail/models/lfm2_layer_decoder.hpp"
 #include "celeg/detail/models/lfm2_metadata_decoder.hpp"
+#include "naming_policy.hpp"
 
 #include "celeg/model/weights/roles.hpp"
 
@@ -230,7 +231,6 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     result.definition = make_definition(t, m);
     result.topology = t;
     result.architecture_id = "lfm2";
-    result.is_gguf = gguf;
     result.tensor_naming = naming_policy();
     result.chat_profile_id = "lfm2-instruct";
     result.checkpoint_profile_id = m.repository_hint.empty() ? "lfm2" : m.repository_hint;

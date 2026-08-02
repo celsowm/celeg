@@ -83,9 +83,10 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
     } else if (tensor.dtype == TensorDType::Quantized) {
+        const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
         if (tensor.shape.size() != 2 ||
-            (tensor.ggml_type != GgmlType::Q4_K &&
-             tensor.ggml_type != GgmlType::Q6_K)) {
+            (ggml_type != GgmlType::Q4_K &&
+             ggml_type != GgmlType::Q6_K)) {
             throw std::runtime_error(
                 "router BF16 materialization supports only 2D GGUF Q4_K/Q6_K: " + name);
         }

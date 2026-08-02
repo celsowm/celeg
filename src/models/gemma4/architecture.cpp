@@ -2,6 +2,7 @@
 
 #include "celeg/model/graph_builder.hpp"
 #include "celeg/model/weights/roles.hpp"
+#include "naming_policy.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -260,7 +261,6 @@ public:
         ResolvedModel model;
         model.topology = topology;
         model.architecture_id = "gemma4";
-        model.is_gguf = false;
         model.tensor_naming = naming_policy();
         model.chat_profile_id = "gemma4-instruct";
         model.checkpoint_profile_id = checkpoint.metadata.repository_hint.empty()

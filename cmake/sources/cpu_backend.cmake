@@ -1,4 +1,5 @@
 set(CELEG_CPU_BACKEND_SOURCES
+    src/backend/cpu/compiler.cpp
     src/backend/cpu/model.cpp
     src/backend/cpu/weights.cpp
     src/backend/cpu/model_state.cpp

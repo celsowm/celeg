@@ -17,6 +17,13 @@ import sys
 import tempfile
 from typing import Callable, Iterable, Mapping, Sequence
 
+# Windows consoles default stdout/stderr to the active code page (e.g. cp1252),
+# which raises UnicodeEncodeError on non-ASCII bytes in echoed subprocess
+# command lines (paths, compiler diagnostics). Force UTF-8 so this script
+# never needs PYTHONIOENCODING/PYTHONUTF8 set externally.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HF_REPO = "LiquidAI/LFM2.5-230M"

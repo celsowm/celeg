@@ -155,7 +155,8 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     group_size = options.weight_format == CpuWeightFormat::Q4Group64 ? 64 : 32;
     const detail::ModelBootstrap bootstrap =
         detail::load_model_bootstrap(std::filesystem::path(model_path));
-    native_checkpoint = bootstrap.checkpoint.gguf != nullptr;
+    native_checkpoint =
+        dynamic_cast<const GgufRepository*>(bootstrap.checkpoint.repository.get()) != nullptr;
     shape = bootstrap.model.topology;
     final_logit_softcap = bootstrap.model.graph.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
@@ -492,13 +493,14 @@ CpuLinearWeight CpuCompiledModel::Shared::load_matrix(
         throw std::runtime_error("unexpected CPU linear tensor: " + name);
     }
     if (tensor.dtype == TensorDType::Quantized) {
-        if (tensor.ggml_type != GgmlType::Q4_K &&
-            tensor.ggml_type != GgmlType::Q6_K) {
+        const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
+        if (ggml_type != GgmlType::Q4_K &&
+            ggml_type != GgmlType::Q6_K) {
             throw std::runtime_error(
                 "CPU GGUF supports only Q4_K/Q6_K linear tensor: " + name);
         }
         CpuGgufMatrix matrix;
-        matrix.type = tensor.ggml_type;
+        matrix.type = ggml_type;
         matrix.rows = static_cast<uint32_t>(expected[0]);
         matrix.cols = static_cast<uint32_t>(expected[1]);
         matrix.data = tensor.data;
@@ -548,14 +550,15 @@ CpuLinearWeight CpuCompiledModel::Shared::load_concat(
         result.cols = static_cast<uint32_t>(cols);
         for (size_t index = 0; index < tensors.size(); ++index) {
             const HostTensorView& tensor = tensors[index];
-            if (tensor.ggml_type != GgmlType::Q4_K &&
-                tensor.ggml_type != GgmlType::Q6_K) {
+            const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
+            if (ggml_type != GgmlType::Q4_K &&
+                ggml_type != GgmlType::Q6_K) {
                 throw std::runtime_error(
                     "CPU GGUF concat supports only Q4_K/Q6_K: " +
                     parts[index].first);
             }
             CpuGgufMatrix matrix;
-            matrix.type = tensor.ggml_type;
+            matrix.type = ggml_type;
             matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
             matrix.cols = static_cast<uint32_t>(tensor.shape[1]);
             matrix.data = tensor.data;

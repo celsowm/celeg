@@ -458,9 +458,10 @@ if(CELEG_BUILD_TESTS)
         src/model/weight_plan.cpp
         src/model/graph_builder.cpp
         src/models/lfm2/architecture.cpp src/models/lfm2/layer_decoder.cpp
-        src/models/lfm2/metadata_decoder.cpp
+        src/models/lfm2/metadata_decoder.cpp src/models/lfm2/naming_policy.cpp
         src/models/granite/architecture.cpp src/models/granite/topology.cpp
-        src/models/gemma4/architecture.cpp
+        src/models/granite/naming_policy.cpp
+        src/models/gemma4/architecture.cpp src/models/gemma4/naming_policy.cpp
         src/model/weights/roles.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
@@ -522,7 +523,8 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(neutral_headers_compile_test PRIVATE include)
     add_test(NAME neutral_headers_compile_test COMMAND neutral_headers_compile_test)
 
-    add_executable(model_compiler_test tests/model_compiler_test.cpp)
+    add_executable(model_compiler_test tests/model_compiler_test.cpp
+        src/backend/cpu/compiler.cpp src/backend/cuda/compiler.cpp)
     target_include_directories(model_compiler_test PRIVATE include tests)
     target_link_libraries(model_compiler_test PRIVATE celeg_base)
     add_test(NAME model_compiler_test COMMAND model_compiler_test)
@@ -545,7 +547,8 @@ if(CELEG_BUILD_TESTS)
     add_executable(concurrent_metrics_test tests/concurrent_metrics_test.cpp)
     target_link_libraries(concurrent_metrics_test PRIVATE celeg_runtime)
     add_test(NAME concurrent_metrics_test COMMAND concurrent_metrics_test)
-    add_executable(execution_plan_test tests/execution_plan_test.cpp)
+    add_executable(execution_plan_test tests/execution_plan_test.cpp
+        src/backend/cuda/execution_plan.cpp)
     target_link_libraries(execution_plan_test PRIVATE celeg_runtime)
     add_test(NAME execution_plan_test COMMAND execution_plan_test)
     add_executable(prefix_cache_test tests/prefix_cache_test.cpp)

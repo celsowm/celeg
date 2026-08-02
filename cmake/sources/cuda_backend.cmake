@@ -1,4 +1,6 @@
 set(CELEG_CUDA_BACKEND_SOURCES
+    src/backend/cuda/compiler.cpp
+    src/backend/cuda/execution_plan.cpp
     src/backend/cuda/kernels/embedding.cu
     src/backend/cuda/kernels/transform.cu
     src/backend/cuda/kernels/attention.cu

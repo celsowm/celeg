@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/checkpoint/formats/safetensors.hpp"
+#include "celeg/checkpoint/weight_repository.hpp"
 
 #include <cstdint>
 #include <string>
@@ -61,22 +61,10 @@ public:
     virtual std::vector<std::string> candidates(const TensorRequest& request) const = 0;
 };
 
-// Canonical LFM names are kept in this policy rather than in loading or CUDA
-// code. Alternative checkpoint spellings can be added as another policy.
-class CelegTensorNamingPolicy final : public ITensorNamingPolicy {
-public:
-    std::vector<std::string> candidates(const TensorRequest& request) const override;
-};
-
-class GraniteTensorNamingPolicy final : public ITensorNamingPolicy {
-public:
-    std::vector<std::string> candidates(const TensorRequest& request) const override;
-};
-
-class Gemma4TensorNamingPolicy final : public ITensorNamingPolicy {
-public:
-    std::vector<std::string> candidates(const TensorRequest& request) const override;
-};
+// Concrete naming policies (CelegTensorNamingPolicy, GraniteTensorNamingPolicy,
+// Gemma4TensorNamingPolicy, ...) live in their owning src/models/<arch>/
+// module. This generic header depends on ITensorNamingPolicy only, so adding
+// an architecture never requires touching a central tensor-name switch.
 
 class TensorResolver {
 public:

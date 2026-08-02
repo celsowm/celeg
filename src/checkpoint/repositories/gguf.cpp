@@ -66,7 +66,7 @@ HostTensorView host_view(const GgufTensorView& gt) {
     view.shape = gt.shape;
     view.data = gt.data;
     view.bytes = gt.bytes;
-    view.ggml_type = gt.type;
+    view.block_encoding = block_encoding_from_ggml_type(gt.type);
     switch (gt.type) {
         case GgmlType::F32: view.dtype = TensorDType::F32; break;
         case GgmlType::F16: view.dtype = TensorDType::F16; break;

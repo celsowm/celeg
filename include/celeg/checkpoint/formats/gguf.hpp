@@ -1,5 +1,7 @@
 #pragma once
 
+#include "celeg/checkpoint/tensor.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -80,6 +82,17 @@ struct GgmlTypeTrait {
 
 GgmlTypeTrait ggml_type_trait(GgmlType type);
 const char* ggml_type_name(GgmlType type);
+
+// The GGUF module owns the mapping between the neutral TensorBlockEncoding
+// descriptor (celeg/checkpoint/tensor.hpp) and this module's concrete
+// GgmlType enum. Values round-trip exactly: GgmlType's ordinals already match
+// the on-disk ggml type ids, so the neutral descriptor simply carries that id.
+inline TensorBlockEncoding block_encoding_from_ggml_type(GgmlType type) {
+    return TensorBlockEncoding{static_cast<std::int32_t>(type)};
+}
+inline GgmlType ggml_type_from_block_encoding(const TensorBlockEncoding& encoding) {
+    return static_cast<GgmlType>(encoding.id);
+}
 
 // Raw view into a GGUF tensor's on-disk (memory-mapped) bytes. `data` points
 // into the mapping and stays valid for the lifetime of the owning GgufFile.

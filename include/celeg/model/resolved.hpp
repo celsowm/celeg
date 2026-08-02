@@ -107,7 +107,6 @@ struct ResolvedModel {
     std::string checkpoint_profile_id;
     std::string chat_profile_id;
     std::string identity;
-    bool is_gguf = false;
 
     const RuntimeTopology& shape() const { return topology; }
 };

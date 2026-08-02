@@ -4,6 +4,7 @@
 #include "celeg/text/chat_template.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/checkpoint/downloader.hpp"
+#include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
@@ -162,7 +163,9 @@ int main(int argc, char** argv) {
             celeg::detail::load_model_bootstrap(model);
         const auto& model_definition = bootstrap.model.definition;
         const auto& topology = bootstrap.model.topology;
-        if (bootstrap.checkpoint.gguf && args.group_size_explicit) {
+        const auto* gguf_repository = dynamic_cast<const celeg::GgufRepository*>(
+            bootstrap.checkpoint.repository.get());
+        if (gguf_repository && args.group_size_explicit) {
             throw std::runtime_error(
                 "--cpu-q4-group is only valid for Safetensors checkpoints");
         }
@@ -171,9 +174,9 @@ int main(int argc, char** argv) {
         }
         const std::filesystem::path model_dir =
             std::filesystem::is_directory(model) ? model : model.parent_path();
-        celeg::BpeTokenizer tokenizer = bootstrap.checkpoint.gguf
+        celeg::BpeTokenizer tokenizer = gguf_repository
             ? celeg::BpeTokenizer(
-                  celeg::BpeTokenizer::FromGguf{}, *bootstrap.checkpoint.gguf,
+                  celeg::BpeTokenizer::FromGguf{}, gguf_repository->file(),
                   celeg::make_chat_template(bootstrap.model.chat_profile_id))
             : celeg::BpeTokenizer(
                   (model_dir / "tokenizer.json").string(),

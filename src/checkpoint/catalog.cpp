@@ -31,7 +31,6 @@ public:
         auto file = std::make_shared<GgufFile>(path.string());
         CheckpointView result;
         result.path = path;
-        result.gguf = file;
         result.metadata = CheckpointMetadata::from_gguf(*file);
         result.repository = std::make_shared<GgufRepository>(std::move(file));
         return result;

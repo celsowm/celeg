@@ -127,6 +127,17 @@ def main() -> int:
             if forbidden_symbols.search(path.read_text(encoding="utf-8")):
                 errors.append(f"removed migration symbol remains: {path}")
 
+    # D12: base_runtime is backend-independent by declaration; it must not
+    # compile backend-specific sources. A src/backend/** entry here means the
+    # build graph does not match the declared dependency direction.
+    base_runtime_manifest = root / "cmake/sources/base_runtime.cmake"
+    if base_runtime_manifest.is_file():
+        backend_source = re.compile(r"^\s*src/backend/")
+        for line in base_runtime_manifest.read_text(encoding="utf-8").splitlines():
+            if backend_source.match(line):
+                errors.append(
+                    f"backend-specific source in CELEG_BASE_RUNTIME_SOURCES: {line.strip()}")
+
     generic_runtime = re.compile(r"\b(?:Lfm2|LFM2|Granite|GraniteModel)\b")
     for relative in ("include/celeg/runtime", "src/runtime"):
         for path in files(root / relative, "**/*"):

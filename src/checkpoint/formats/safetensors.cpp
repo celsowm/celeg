@@ -1,5 +1,7 @@
 #include "celeg/checkpoint/formats/safetensors.hpp"
 
+#include "celeg/checkpoint/formats/json.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cstring>

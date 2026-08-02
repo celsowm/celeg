@@ -3,6 +3,7 @@
 #include "celeg/model/weight_plan.hpp"
 #include "celeg/model/graph_builder.hpp"
 #include "celeg/model/weights/roles.hpp"
+#include "naming_policy.hpp"
 
 #include <stdexcept>
 
@@ -33,7 +34,6 @@ public:
         RuntimeTopology t = resolve_granite_topology(source);
 
         ResolvedModel result;
-        result.is_gguf = gguf;
         result.topology = t;
         result.architecture_id = "granite";
         result.checkpoint_profile_id = "granite";

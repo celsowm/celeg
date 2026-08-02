@@ -46,10 +46,11 @@ const LinearWeight* WeightLoader::load_linear_weight(
     // the matmul kernels dequantize on the fly, reading ~3x less memory per
     // decode token at the cost of scalar dequant inside the kernel.
     if (tensor.dtype == TensorDType::Quantized) {
-        if (tensor.ggml_type != GgmlType::Q4_K && tensor.ggml_type != GgmlType::Q6_K) {
+        const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
+        if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q6_K) {
             throw std::runtime_error("unsupported GGUF linear quantization (CUDA supports Q4_K/Q6_K only): " + name);
         }
-        const GgmlTypeTrait trait = ggml_type_trait(tensor.ggml_type);
+        const GgmlTypeTrait trait = ggml_type_trait(ggml_type);
         if (cols % trait.block_size != 0) {
             throw std::runtime_error("GGUF linear width is not block-aligned: " + name);
         }
@@ -69,7 +70,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                                 tensor.bytes, cudaMemcpyHostToDevice));
             GgufLinearSegment segment;
             segment.blocks = raw_blocks.data();
-            segment.type = tensor.ggml_type;
+            segment.type = ggml_type;
             segment.row_offset = 0;
             segment.rows = rows;
             segment.cols = cols;
@@ -77,7 +78,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             weight.gguf_segment_storage.push_back(std::move(raw_blocks));
             weight.linear.gguf_segments.push_back(segment);
             weight.linear.kind =
-                tensor.ggml_type == GgmlType::Q4_K
+                ggml_type == GgmlType::Q4_K
                     ? LinearStorageKind::Q4_K
                     : LinearStorageKind::Q6_K;
             weight.linear.rows = rows;
@@ -93,7 +94,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         CELEG_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                             tensor.bytes, cudaMemcpyHostToDevice));
         weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
-        launch_gguf_dequant(raw_blocks.data(), tensor.ggml_type,
+        launch_gguf_dequant(raw_blocks.data(), ggml_type,
                            weight.bf16_storage.data(), rows, cols,
                            nullptr);
         CELEG_CUDA(cudaStreamSynchronize(nullptr));
@@ -302,8 +303,9 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     // GGUF segment so the matmul kernels dequantize on the fly.
     if (views.front().dtype == TensorDType::Quantized) {
         for (const auto& v : views) {
+            const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
             if (v.dtype != TensorDType::Quantized ||
-                (v.ggml_type != GgmlType::Q4_K && v.ggml_type != GgmlType::Q6_K)) {
+                (v_ggml_type != GgmlType::Q4_K && v_ggml_type != GgmlType::Q6_K)) {
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " + synthetic_name);
             }
         }
@@ -313,7 +315,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             weight.shape = {total_rows, common_width};
             int row_offset = 0;
             for (const auto& v : views) {
-                const GgmlTypeTrait trait = ggml_type_trait(v.ggml_type);
+                const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
+                const GgmlTypeTrait trait = ggml_type_trait(v_ggml_type);
                 if (common_width % trait.block_size != 0) {
                     throw std::runtime_error("GGUF concat width is not block-aligned: " + synthetic_name);
                 }
@@ -324,7 +327,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                                     bytes, cudaMemcpyHostToDevice));
                 GgufLinearSegment segment;
                 segment.blocks = raw_blocks.data();
-                segment.type = v.ggml_type;
+                segment.type = v_ggml_type;
                 segment.row_offset = row_offset;
                 segment.rows = static_cast<int>(v.shape[0]);
                 segment.cols = static_cast<int>(common_width);
@@ -333,7 +336,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 weight.linear.gguf_segments.push_back(segment);
                 row_offset += static_cast<int>(v.shape[0]);
             }
-            weight.linear.kind = views.front().ggml_type == GgmlType::Q4_K
+            weight.linear.kind = ggml_type_from_block_encoding(views.front().block_encoding) == GgmlType::Q4_K
                 ? LinearStorageKind::Q4_K
                 : LinearStorageKind::Q6_K;
             weight.linear.rows = static_cast<int>(total_rows);
@@ -350,7 +353,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         weight.bf16_storage.reset(static_cast<size_t>(total_rows) * common_width);
         int row_offset = 0;
         for (const auto& v : views) {
-            const GgmlTypeTrait trait = ggml_type_trait(v.ggml_type);
+            const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
+            const GgmlTypeTrait trait = ggml_type_trait(v_ggml_type);
             if (common_width % trait.block_size != 0) {
                 throw std::runtime_error("GGUF concat width is not block-aligned: " + synthetic_name);
             }
@@ -360,7 +364,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             CELEG_CUDA(cudaMemcpy(raw_blocks.data(), v.data,
                                 bytes, cudaMemcpyHostToDevice));
             launch_gguf_dequant(
-                raw_blocks.data(), v.ggml_type,
+                raw_blocks.data(), v_ggml_type,
                 weight.bf16_storage.data() +
                     static_cast<size_t>(row_offset) * common_width,
                 static_cast<int>(v.shape[0]), static_cast<int>(common_width),

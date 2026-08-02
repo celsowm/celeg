@@ -56,13 +56,15 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
 
     if (first_w1.dtype == TensorDType::Quantized ||
         first_w3.dtype == TensorDType::Quantized) {
+        const GgmlType first_w1_ggml_type = ggml_type_from_block_encoding(first_w1.block_encoding);
+        const GgmlType first_w3_ggml_type = ggml_type_from_block_encoding(first_w3.block_encoding);
         if (first_w1.dtype != TensorDType::Quantized ||
             first_w3.dtype != TensorDType::Quantized ||
-            first_w1.ggml_type != first_w3.ggml_type ||
+            first_w1_ggml_type != first_w3_ggml_type ||
             first_w1.shape != shape || first_w3.shape != shape) {
             throw std::runtime_error("incompatible quantized MoE gate/up tensors");
         }
-        const size_t row_bytes = gguf_row_bytes(hidden, first_w1.ggml_type, first_w1_name);
+        const size_t row_bytes = gguf_row_bytes(hidden, first_w1_ggml_type, first_w1_name);
         const size_t source_bytes = static_cast<size_t>(moe_intermediate) * row_bytes;
         const size_t expert_bytes = rows * row_bytes;
         DeviceWeight weight;
@@ -73,8 +75,8 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
             const HostTensorView w3 = repo.tensor(expert_name(layer, e, "w3"));
             if (w1.dtype != TensorDType::Quantized ||
                 w3.dtype != TensorDType::Quantized ||
-                w1.ggml_type != first_w1.ggml_type ||
-                w3.ggml_type != first_w1.ggml_type ||
+                ggml_type_from_block_encoding(w1.block_encoding) != first_w1_ggml_type ||
+                ggml_type_from_block_encoding(w3.block_encoding) != first_w1_ggml_type ||
                 w1.shape != shape || w3.shape != shape ||
                 w1.bytes != source_bytes || w3.bytes != source_bytes) {
                 throw std::runtime_error("inconsistent quantized MoE gate/up tensor");
@@ -85,12 +87,12 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
             CELEG_CUDA(cudaMemcpy(dst + w1.bytes, w3.data, w3.bytes,
                                 cudaMemcpyHostToDevice));
         }
-        const LinearStorageKind kind = first_w1.ggml_type == GgmlType::Q4_K
+        const LinearStorageKind kind = first_w1_ggml_type == GgmlType::Q4_K
             ? LinearStorageKind::Q4_K : LinearStorageKind::Q6_K;
         ExpertLinearWeight view;
         view.kind = kind;
         view.gguf_blocks = weight.gguf_expert_storage.data();
-        view.gguf_type = first_w1.ggml_type;
+        view.gguf_type = first_w1_ggml_type;
         view.gguf_row_bytes = row_bytes;
         view.gguf_expert_stride = expert_bytes;
         view.experts = num_experts;
@@ -148,7 +150,8 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
     if (first.shape != shape) throw std::runtime_error("invalid MoE down tensor");
 
     if (first.dtype == TensorDType::Quantized) {
-        const size_t row_bytes = gguf_row_bytes(moe_intermediate, first.ggml_type,
+        const GgmlType first_ggml_type = ggml_type_from_block_encoding(first.block_encoding);
+        const size_t row_bytes = gguf_row_bytes(moe_intermediate, first_ggml_type,
                                                 first_name);
         const size_t expert_bytes = static_cast<size_t>(hidden) * row_bytes;
         DeviceWeight weight;
@@ -157,7 +160,8 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
         for (int e = 0; e < num_experts; ++e) {
             const HostTensorView tensor = repo.tensor(expert_name(layer, e, "w2"));
             if (tensor.dtype != TensorDType::Quantized ||
-                tensor.ggml_type != first.ggml_type || tensor.shape != shape ||
+                ggml_type_from_block_encoding(tensor.block_encoding) != first_ggml_type ||
+                tensor.shape != shape ||
                 tensor.bytes != expert_bytes) {
                 throw std::runtime_error("inconsistent quantized MoE down tensor");
             }
@@ -166,10 +170,10 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
                                 tensor.data, tensor.bytes, cudaMemcpyHostToDevice));
         }
         ExpertLinearWeight view;
-        view.kind = first.ggml_type == GgmlType::Q4_K
+        view.kind = first_ggml_type == GgmlType::Q4_K
             ? LinearStorageKind::Q4_K : LinearStorageKind::Q6_K;
         view.gguf_blocks = weight.gguf_expert_storage.data();
-        view.gguf_type = first.ggml_type;
+        view.gguf_type = first_ggml_type;
         view.gguf_row_bytes = row_bytes;
         view.gguf_expert_stride = expert_bytes;
         view.experts = num_experts;

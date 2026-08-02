@@ -18,13 +18,13 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/lfm2/architecture.cpp
     src/models/lfm2/layer_decoder.cpp
     src/models/lfm2/metadata_decoder.cpp
+    src/models/lfm2/naming_policy.cpp
     src/models/granite/architecture.cpp
     src/models/granite/topology.cpp
+    src/models/granite/naming_policy.cpp
     src/models/gemma4/architecture.cpp
+    src/models/gemma4/naming_policy.cpp
     src/model/execution/runtime_types.cpp
-    src/backend/cuda/execution_plan.cpp
-    src/backend/cpu/compiler.cpp
-    src/backend/cuda/compiler.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp
     src/model/reference.cpp

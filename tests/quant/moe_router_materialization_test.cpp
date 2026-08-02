@@ -130,7 +130,7 @@ public:
         view.shape = {experts_, hidden_};
         view.data = blocks_.data();
         view.bytes = blocks_.size();
-        view.ggml_type = celeg::GgmlType::Q4_K;
+        view.block_encoding = celeg::block_encoding_from_ggml_type(celeg::GgmlType::Q4_K);
         return view;
     }
 
