@@ -215,7 +215,7 @@ struct ExpertOffloadOptions {
 // times sizeof(__nv_bfloat16) == 2.
 std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape);
 
-// Number of MoE layers in the topology (layers at or beyond num_dense_layers).
+// Number of layers whose feed-forward node is a mixture of experts.
 int moe_layer_count(const RuntimeTopology& shape);
 
 // BF16 KV-cache bytes required for `context_tokens` tokens across all

@@ -117,10 +117,12 @@
     "schemas": {
       "ChatMessage": {
         "type": "object",
-        "required": ["role", "content"],
+        "required": ["role"],
         "properties": {
           "role": {"type": "string", "enum": ["system", "developer", "user", "assistant", "tool"]},
-          "content": {"type": "string"}
+          "content": {"type": ["string", "null"]},
+          "tool_call_id": {"type": "string"},
+          "tool_calls": {"type": "array", "items": {"$ref": "#/components/schemas/ToolCall"}}
         }
       },
       "ChatCompletionRequest": {
@@ -134,14 +136,18 @@
           "top_k": {"type": "integer"},
           "max_tokens": {"type": "integer"},
           "stream": {"type": "boolean"},
-          "seed": {"type": "integer"}
+          "seed": {"type": "integer"},
+          "tools": {"type": "array", "items": {"$ref": "#/components/schemas/Tool"}},
+          "tool_choice": {"oneOf": [{"type": "string"}, {"$ref": "#/components/schemas/ToolChoice"}]},
+          "parallel_tool_calls": {"type": "boolean"}
         }
       },
       "ChatCompletionResponseMessage": {
         "type": "object",
         "properties": {
           "role": {"type": "string", "example": "assistant"},
-          "content": {"type": "string"}
+          "content": {"type": ["string", "null"]},
+          "tool_calls": {"type": "array", "items": {"$ref": "#/components/schemas/ToolCall"}}
         }
       },
       "ChatCompletionChoice": {
@@ -149,7 +155,7 @@
         "properties": {
           "index": {"type": "integer"},
           "message": {"$ref": "#/components/schemas/ChatCompletionResponseMessage"},
-          "finish_reason": {"type": "string", "enum": ["", "stop", "length", "cancelled", "error"]}
+          "finish_reason": {"type": "string", "enum": ["", "stop", "length", "cancelled", "error", "tool_calls"]}
         }
       },
       "Usage": {
@@ -175,7 +181,8 @@
         "type": "object",
         "properties": {
           "role": {"type": "string"},
-          "content": {"type": "string"}
+          "content": {"type": "string"},
+          "tool_calls": {"type": "array", "items": {"$ref": "#/components/schemas/ToolCall"}}
         }
       },
       "ChatCompletionChunkChoice": {
@@ -195,6 +202,30 @@
           "model": {"type": "string"},
           "choices": {"type": "array", "items": {"$ref": "#/components/schemas/ChatCompletionChunkChoice"}}
         }
+      },
+      "FunctionDefinition": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "description": {"type": "string"},
+          "parameters": {"type": "object", "additionalProperties": true}
+        }
+      },
+      "Tool": {
+        "type": "object",
+        "required": ["type", "function"],
+        "properties": {"type": {"const": "function"}, "function": {"$ref": "#/components/schemas/FunctionDefinition"}}
+      },
+      "ToolCall": {
+        "type": "object",
+        "required": ["id", "type", "function"],
+        "properties": {"id": {"type": "string"}, "type": {"const": "function"}, "function": {"type": "object", "required": ["name", "arguments"], "properties": {"name": {"type": "string"}, "arguments": {"type": "string"}}}}
+      },
+      "ToolChoice": {
+        "type": "object",
+        "required": ["type", "function"],
+        "properties": {"type": {"const": "function"}, "function": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}}
       },
       "ModelList": {
         "type": "object",

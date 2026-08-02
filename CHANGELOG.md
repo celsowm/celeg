@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added OpenAI-compatible tool definitions, tool-call DTOs, nullable assistant
+  content, capability-aware request validation, `tool_calls` finish reasons,
+  and structured escaped error responses.
+- Added native LFM2 and Gemma 4 tool-call codecs. Their marker syntax follows
+  the checked-in llama.cpp templates; Granite remains explicitly unsupported
+  until its parser is verified against a checkpoint vocabulary.
+- Documented the checkpoint-to-protocol architecture chain and added boundary
+  rules for profile data, neutral checkpoint contracts, and serving isolation.
+
 ## v0.0.20
 
 - Added adaptive tile-parallel paged GQA over `query head × page tile` tasks.

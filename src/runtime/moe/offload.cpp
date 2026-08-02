@@ -75,7 +75,11 @@ std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape) {
 
 int moe_layer_count(const RuntimeTopology& shape) {
     if (shape.num_experts <= 0) return 0;
-    return std::max(0, shape.num_hidden_layers - shape.num_dense_layers);
+    int count = 0;
+    for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
+        if (shape.layer_uses_moe(layer)) ++count;
+    }
+    return count;
 }
 
 std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens) {

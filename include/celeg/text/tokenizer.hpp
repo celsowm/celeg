@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -15,35 +14,26 @@ namespace celeg {
 
 class BpeTokenizer {
 public:
-    // Loads the tokenizer with the default instruct chat profile.
     explicit BpeTokenizer(const std::string& tokenizer_json_path);
-    // Loads the tokenizer with an explicit chat template chosen by the model
-    // profile. Use this overload when the chat profile is known at construction.
-    BpeTokenizer(const std::string& tokenizer_json_path,
-                 std::unique_ptr<IChatTemplate> chat_template);
 
     // Builds the tokenizer from a GGUF metadata container (tokenizer.ggml.*
     // keys) instead of a tokenizer.json file. The tag disambiguates this from
     // the path-based constructor.
     struct FromGguf {};
-    BpeTokenizer(FromGguf, const class GgufFile& gguf,
-                 std::unique_ptr<IChatTemplate> chat_template);
+    BpeTokenizer(FromGguf, const class GgufFile& gguf);
 
     std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const;
     std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const;
-    std::string format_chat(std::span<const ChatMessage> messages,
-                            bool add_generation_prompt = true) const;
-
+    std::string decode_token(int32_t id, bool skip_special = true) const;
     int32_t bos_id() const { return bos_id_; }
     int32_t eos_id() const { return eos_id_; }
     int32_t pad_id() const { return pad_id_; }
 
 private:
-    enum class BpeProfile : uint8_t {
-        Generic,
-        ByteLevelLfm2,
-        ByteLevelGranite,
-        RawUtf8Gemma,
+    struct TokenizerPolicy {
+        bool lfm2_rules = false;
+        bool granite_rules = false;
+        bool raw_utf8 = false;
     };
 
     struct SpecialToken {
@@ -71,10 +61,9 @@ private:
     std::unordered_map<int32_t, bool> special_ids_;
     std::array<std::string, 256> byte_encoder_{};
     std::unordered_map<uint32_t, uint8_t> byte_decoder_;
-    BpeProfile profile_ = BpeProfile::Generic;
+    TokenizerPolicy policy_;
     bool gemma_normalization_ = false;
     bool byte_fallback_ = false;
-    std::unique_ptr<IChatTemplate> chat_template_;
     int32_t bos_id_ = 1;
     int32_t eos_id_ = 7;
     int32_t pad_id_ = 0;

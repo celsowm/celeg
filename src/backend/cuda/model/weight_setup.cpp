@@ -381,9 +381,9 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
-        const LayerType layer_type =
-            resources_.shape_.layer_types[static_cast<size_t>(i)];
-        if (layer_type == LayerType::FullAttention) {
+        const MixerKind layer_type =
+            resources_.shape_.mixer_kinds[static_cast<size_t>(i)];
+        if (layer_type == MixerKind::Attention) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
             attention_layer.layout = resources_.shape_.attention_layout(i);

@@ -14,10 +14,7 @@ namespace celeg {
 enum class MixerKind : uint8_t {
     Attention,
     ShortConvolution,
-    FullAttention = Attention,
-    Convolution = ShortConvolution,
 };
-using LayerType = MixerKind;
 enum class FeedForwardKind : uint8_t { Dense, MixtureOfExperts };
 
 enum class ActivationKind : uint8_t {
@@ -134,10 +131,6 @@ struct ModelGraph {
 
 struct WeightPlan {
     std::vector<TensorRequest> requests;
-};
-
-struct TensorBindings {
-    std::vector<std::string> source_names;
 };
 
 struct ModelCapabilities {

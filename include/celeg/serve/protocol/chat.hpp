@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <glaze/glaze.hpp>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace celeg::serve::protocol {
@@ -11,9 +13,54 @@ namespace celeg::serve::protocol {
 // JSON wire format exactly so Glaze's automatic reflection can (de)serialize
 // them without glz::meta specializations.
 
+struct FunctionDefinitionDto {
+    std::string name;
+    std::optional<std::string> description;
+    std::optional<glz::raw_json> parameters;
+    std::optional<bool> strict;
+};
+
+struct ToolDto {
+    std::string type;
+    FunctionDefinitionDto function;
+};
+
+struct FunctionCallDto {
+    std::string name;
+    std::string arguments;
+};
+
+struct ToolCallDto {
+    std::string id;
+    std::string type = "function";
+    FunctionCallDto function;
+};
+
 struct ChatMessageDto {
     std::string role;
-    std::string content;
+    std::optional<std::string> content;
+    std::optional<std::vector<ToolCallDto>> tool_calls;
+    std::optional<std::string> tool_call_id;
+};
+
+struct ToolChoiceFunctionDto {
+    std::string name;
+};
+
+struct ToolChoiceDto {
+    std::string type = "function";
+    ToolChoiceFunctionDto function;
+};
+
+struct ErrorDetailDto {
+    std::string message;
+    std::string type = "invalid_request_error";
+    std::optional<std::string> param;
+    std::optional<std::string> code;
+};
+
+struct ErrorResponseDto {
+    ErrorDetailDto error;
 };
 
 struct ChatCompletionRequest {
@@ -25,11 +72,15 @@ struct ChatCompletionRequest {
     std::optional<int> max_tokens;
     std::optional<bool> stream;
     std::optional<std::uint64_t> seed;
+    std::optional<std::vector<ToolDto>> tools;
+    std::optional<std::variant<std::string, ToolChoiceDto>> tool_choice;
+    std::optional<bool> parallel_tool_calls;
 };
 
 struct ChatCompletionResponseMessage {
     std::string role = "assistant";
-    std::string content;
+    std::optional<std::string> content;
+    std::optional<std::vector<ToolCallDto>> tool_calls;
 };
 
 struct ChatCompletionChoice {
@@ -57,6 +108,7 @@ struct ChatCompletionResponse {
 struct ChatCompletionChunkDelta {
     std::optional<std::string> role;
     std::optional<std::string> content;
+    std::optional<std::vector<ToolCallDto>> tool_calls;
 };
 
 struct ChatCompletionChunkChoice {

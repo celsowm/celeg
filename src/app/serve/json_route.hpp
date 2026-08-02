@@ -1,5 +1,6 @@
 #pragma once
 
+#include "celeg/serve/protocol/mapping.hpp"
 #include "celeg/serve/protocol/json.hpp"
 
 #include <memory>
@@ -30,7 +31,8 @@ void handle_json_post(Res* res, Fn&& fn) {
         } catch (const std::exception& error) {
             res->writeStatus("400 Bad Request")
                 ->writeHeader("Content-Type", "application/json")
-                ->end(std::string("{\"error\":\"") + error.what() + "\"}");
+                ->end(celeg::serve::protocol::to_json(
+                    celeg::serve::protocol::error_response(error.what())));
         }
     });
 }

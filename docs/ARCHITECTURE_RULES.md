@@ -73,3 +73,19 @@ abstraction is structurally wrong, replace it and delete the old path in the
 same pull request. A temporary adapter is allowed only when it (a) keeps the
 pull request small, (b) has an explicit deletion milestone in this plan, and
 (c) is not exposed as public API.
+
+## R9 — Text profiles are data, not central switches
+
+Text and tokenizer code must not branch on architecture or chat-profile enums.
+Profiles provide tokenizer configuration and declared chat capabilities through
+composition-root data.
+
+## R10 — Neutral contracts do not expose checkpoint formats
+
+Backend-neutral contracts may depend only on repository capabilities and
+neutral tensor descriptors, never on a concrete GGUF or Safetensors type.
+
+## R11 — Serving performs inference only
+
+The HTTP serving layer does not execute tools and may not access the filesystem,
+spawn subprocesses, or make outbound network calls.

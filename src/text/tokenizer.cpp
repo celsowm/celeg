@@ -32,17 +32,29 @@ void append_utf8(std::string& out, uint32_t cp) {
 std::pair<uint32_t, size_t> next_cp(std::string_view text, size_t offset) {
     const uint8_t c0 = static_cast<uint8_t>(text[offset]);
     if (c0 < 0x80) return {c0, 1};
-    if ((c0 >> 5) == 0x6 && offset + 1 < text.size()) {
-        return {static_cast<uint32_t>(((c0 & 0x1F) << 6) | (static_cast<uint8_t>(text[offset + 1]) & 0x3F)), 2};
+    const auto continuation = [&](size_t index) {
+        return index < text.size() &&
+            (static_cast<uint8_t>(text[index]) & 0xC0) == 0x80;
+    };
+    if ((c0 >> 5) == 0x6 && continuation(offset + 1)) {
+        const uint32_t cp = static_cast<uint32_t>(((c0 & 0x1F) << 6) |
+            (static_cast<uint8_t>(text[offset + 1]) & 0x3F));
+        return cp >= 0x80 ? std::pair<uint32_t, size_t>{cp, 2} : std::pair<uint32_t, size_t>{0xFFFD, 1};
     }
-    if ((c0 >> 4) == 0xE && offset + 2 < text.size()) {
-        return {static_cast<uint32_t>(((c0 & 0x0F) << 12) | ((static_cast<uint8_t>(text[offset + 1]) & 0x3F) << 6) |
-                                      (static_cast<uint8_t>(text[offset + 2]) & 0x3F)), 3};
+    if ((c0 >> 4) == 0xE && continuation(offset + 1) && continuation(offset + 2)) {
+        const uint32_t cp = static_cast<uint32_t>(((c0 & 0x0F) << 12) |
+            ((static_cast<uint8_t>(text[offset + 1]) & 0x3F) << 6) |
+            (static_cast<uint8_t>(text[offset + 2]) & 0x3F));
+        return cp >= 0x800 && !(cp >= 0xD800 && cp <= 0xDFFF)
+            ? std::pair<uint32_t, size_t>{cp, 3} : std::pair<uint32_t, size_t>{0xFFFD, 1};
     }
-    if ((c0 >> 3) == 0x1E && offset + 3 < text.size()) {
-        return {static_cast<uint32_t>(((c0 & 0x07) << 18) | ((static_cast<uint8_t>(text[offset + 1]) & 0x3F) << 12) |
-                                      ((static_cast<uint8_t>(text[offset + 2]) & 0x3F) << 6) |
-                                      (static_cast<uint8_t>(text[offset + 3]) & 0x3F)), 4};
+    if ((c0 >> 3) == 0x1E && continuation(offset + 1) && continuation(offset + 2) && continuation(offset + 3)) {
+        const uint32_t cp = static_cast<uint32_t>(((c0 & 0x07) << 18) |
+            ((static_cast<uint8_t>(text[offset + 1]) & 0x3F) << 12) |
+            ((static_cast<uint8_t>(text[offset + 2]) & 0x3F) << 6) |
+            (static_cast<uint8_t>(text[offset + 3]) & 0x3F));
+        return cp >= 0x10000 && cp <= 0x10FFFF
+            ? std::pair<uint32_t, size_t>{cp, 4} : std::pair<uint32_t, size_t>{0xFFFD, 1};
     }
     return {0xFFFD, 1};
 }
@@ -153,24 +165,11 @@ std::string pair_key(const std::string& a, const std::string& b) {
 } // namespace
 
 BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path)
-    : BpeTokenizer(tokenizer_json_path,
-                   std::make_unique<Lfm2InstructChatTemplate>()) {}
-
-BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path,
-                           std::unique_ptr<IChatTemplate> chat_template)
-    : chat_template_(std::move(chat_template)) {
-    if (!chat_template_) {
-        throw std::invalid_argument("BpeTokenizer requires a chat template");
-    }
+{
     load(tokenizer_json_path);
 }
 
-BpeTokenizer::BpeTokenizer(FromGguf, const GgufFile& gguf,
-                           std::unique_ptr<IChatTemplate> chat_template)
-    : chat_template_(std::move(chat_template)) {
-    if (!chat_template_) {
-        throw std::invalid_argument("BpeTokenizer requires a chat template");
-    }
+BpeTokenizer::BpeTokenizer(FromGguf, const GgufFile& gguf) {
     load_gguf(gguf);
 }
 
@@ -250,11 +249,11 @@ void BpeTokenizer::load_gguf(const GgufFile& gguf) {
     }
 
     const std::string tokenizer_pre = gguf.str_or("tokenizer.ggml.pre", "");
-    if (tokenizer_pre == "lfm2") profile_ = BpeProfile::ByteLevelLfm2;
-    else if (tokenizer_pre == "gemma4") profile_ = BpeProfile::RawUtf8Gemma;
+    if (tokenizer_pre == "lfm2") policy_.lfm2_rules = true;
+    else if (tokenizer_pre == "gemma4") policy_.raw_utf8 = true;
     else if (tokenizer_pre == "gpt2" ||
              tokenizer_pre.find("granite") != std::string::npos) {
-        profile_ = BpeProfile::ByteLevelGranite;
+        policy_.granite_rules = true;
     }
 
     init_byte_encoder();
@@ -321,15 +320,15 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
     // byte fallback. GPT-2/BPE tokenizers such as LFM2 may still carry a
     // JSON `normalizer: null`; that must remain on the byte-encoder path.
     gemma_normalization_ = byte_fallback_ && vocab_.contains("▁");
-    if (gemma_normalization_) profile_ = BpeProfile::RawUtf8Gemma;
+    if (gemma_normalization_) policy_.raw_utf8 = true;
     if (root.contains("pre_tokenizer")) {
         if (const Json* regex = find_regex_node(root["pre_tokenizer"])) {
             // LFM2's tokenizer.json uses the GPT-2 split with 1–3 digit
             // numeric pieces and direct vocabulary lookup before merges.
             if (regex->as_string().find("\\p{N}{1,3}") != std::string::npos) {
-                profile_ = BpeProfile::ByteLevelLfm2;
-            } else if (profile_ != BpeProfile::RawUtf8Gemma) {
-                profile_ = BpeProfile::ByteLevelGranite;
+                policy_.lfm2_rules = true;
+            } else if (!policy_.raw_utf8) {
+                policy_.granite_rules = true;
             }
         }
     }
@@ -345,7 +344,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
             static constexpr std::string_view suffixes[] = {"'s", "'t", "'re", "'ve", "'m", "'ll", "'d"};
             bool matched = false;
             for (auto suffix : suffixes) {
-                const bool case_insensitive = profile_ != BpeProfile::ByteLevelGranite;
+                const bool case_insensitive = !policy_.granite_rules;
                 const bool suffix_match = case_insensitive
                     ? ascii_case_equal(text, i, suffix)
                     : text.substr(i, suffix.size()) == suffix;
@@ -372,10 +371,10 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
                             const auto [cur, cur_len] = next_cp(text, end);
                             if (category(cur) != cat) break;
                             end += cur_len;
-                            if (cat == 2 && profile_ == BpeProfile::ByteLevelLfm2 &&
+                            if (cat == 2 && policy_.lfm2_rules &&
                                 ++category_count >= 3) break;
                         }
-                        if (cat == 3 && profile_ == BpeProfile::ByteLevelLfm2) {
+                        if (cat == 3 && policy_.lfm2_rules) {
                             while (end < text.size()) {
                                 const auto [cur, cur_len] = next_cp(text, end);
                                 if (cur != '\r' && cur != '\n') break;
@@ -399,7 +398,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
         }
 
         const int cat = category(cp);
-        if (profile_ == BpeProfile::ByteLevelLfm2 && cat == 3 &&
+        if (policy_.lfm2_rules && cat == 3 &&
             i + len < text.size()) {
             const auto [next, next_len] = next_cp(text, i + len);
             if (category(next) == 1) {
@@ -414,7 +413,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
                 continue;
             }
         }
-        if (profile_ == BpeProfile::ByteLevelLfm2 && cat == 3) {
+        if (policy_.lfm2_rules && cat == 3) {
             size_t end = i + len;
             while (end < text.size()) {
                 const auto [cur, cur_len] = next_cp(text, end);
@@ -430,7 +429,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
             i = end;
             continue;
         }
-        if (cat == 2 && profile_ == BpeProfile::ByteLevelLfm2) {
+        if (cat == 2 && policy_.lfm2_rules) {
             size_t end = i;
             while (end < text.size()) {
                 const auto [cur, cur_len] = next_cp(text, end);
@@ -481,22 +480,6 @@ std::vector<std::string> BpeTokenizer::bpe(std::string_view encoded_piece) const
         i += len;
     }
     return bpe_symbols(std::move(symbols));
-}
-
-void reject_gemma4_unsupported_input(const IChatTemplate& chat_template,
-                                     std::string_view text) {
-    if (chat_template.kind() != ChatTemplateKind::Gemma4Instruct) return;
-    static constexpr std::string_view forbidden[] = {
-        "<|image>", "<|audio>", "<|video>", "<|tool>",
-        "<tool|>", "<|tool_call>", "<tool_call|>",
-        "<|tool_response>", "<tool_response|>",
-    };
-    for (const std::string_view marker : forbidden) {
-        if (text.find(marker) != std::string_view::npos) {
-            throw std::invalid_argument(
-                "Gemma 4 text-only mode rejects multimodal and tool inputs");
-        }
-    }
 }
 
 std::vector<std::string> BpeTokenizer::bpe_symbols(std::vector<std::string> symbols) const {
@@ -623,7 +606,7 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
     }
     for (const std::string& piece : pretokenize(text)) {
         const std::string encoded = byte_encode(piece);
-        if (profile_ == BpeProfile::ByteLevelLfm2) {
+        if (policy_.lfm2_rules) {
             const auto direct = vocab_.find(encoded);
             if (direct != vocab_.end()) {
                 ids.push_back(direct->second);
@@ -640,7 +623,6 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
 }
 
 std::vector<int32_t> BpeTokenizer::encode(std::string_view text, bool add_bos) const {
-    reject_gemma4_unsupported_input(*chat_template_, text);
     std::vector<int32_t> out;
     if (add_bos) out.push_back(bos_id_);
     size_t cursor = 0;
@@ -699,9 +681,25 @@ std::string BpeTokenizer::decode(const std::vector<int32_t>& ids, bool skip_spec
     return byte_decode(encoded);
 }
 
-std::string BpeTokenizer::format_chat(std::span<const ChatMessage> messages,
-                                      bool add_generation_prompt) const {
-    return chat_template_->format(messages, add_generation_prompt);
+std::string BpeTokenizer::decode_token(int32_t id, bool skip_special) const {
+    if (id < 0 || static_cast<size_t>(id) >= id_to_token_.size()) return {};
+    if (skip_special && special_ids_.contains(id)) return {};
+    const std::string& token = id_to_token_[static_cast<size_t>(id)];
+    if (gemma_normalization_) {
+        std::string decoded;
+        if (token.size() == 6 && token.rfind("<0x", 0) == 0 && token.back() == '>') {
+            const unsigned value = std::stoul(token.substr(3, 2), nullptr, 16);
+            decoded.push_back(static_cast<char>(value));
+        } else {
+            decoded = token;
+        }
+        for (size_t offset = 0; (offset = decoded.find("▁", offset)) != std::string::npos;) {
+            decoded.replace(offset, std::string("▁").size(), " ");
+            ++offset;
+        }
+        return decoded;
+    }
+    return byte_decode(token);
 }
 
 } // namespace celeg

@@ -7,6 +7,14 @@ checkpoint formats -> model definitions -> runtime scheduling -> backend operato
                                       \-> architecture programs
 ```
 
+The complete composition chain is:
+
+```text
+checkpoint format plugin -> architecture resolver -> validated model graph
+-> backend compiler -> chat profile -> chat template -> tool-call codec
+-> protocol adapter
+```
+
 Public model definitions and checkpoint contracts are backend-neutral. CUDA
 headers live under `celeg/backend/cuda` and are intentionally absent from the
 installed public header manifest. The CUDA model implementation owns device
@@ -43,3 +51,16 @@ Add backend operators under `src/backend/<backend>`, keep backend types out of
 `celeg/model` and `celeg/checkpoint`, and register only the backend implementation
 at model construction. The generic scheduler, checkpoint capabilities, and
 sampling contracts should remain unchanged.
+
+## Native tool-call evidence
+
+The LFM2 codec follows `.externals/llama.cpp/models/templates/LFM2.5-8B-A1B.jinja`:
+tool declarations use the tool-list markers, assistant calls use
+`<|tool_call_start|>...[name(args)]<|tool_call_end|>`, and tool results use the
+corresponding response markers. The Gemma 4 codec follows
+`.externals/llama.cpp/models/templates/google-gemma-4-31B-it.jinja`: assistant
+calls use `<|tool_call>call:name{json}<tool_call|>` and results use
+`<|tool_response>response:name{...}<tool_response|>`. Both codecs preserve
+arguments as JSON strings at the protocol boundary and assign stable call IDs
+when the model format does not emit one. Granite is not advertised until its
+marker vocabulary and parser are verified together.

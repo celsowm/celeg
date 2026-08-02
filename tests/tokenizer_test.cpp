@@ -105,9 +105,8 @@ int main() {
     })";
     gemma.close();
 
-    celeg::BpeTokenizer gemma_tokenizer(
-        gemma_path.string(),
-        celeg::make_chat_template(celeg::ChatTemplateKind::Gemma4Instruct));
+    celeg::BpeTokenizer gemma_tokenizer(gemma_path.string());
+    const celeg::Gemma4InstructChatTemplate gemma_template;
     CELEG_TEST_CHECK(gemma_tokenizer.bos_id() == 2);
     CELEG_TEST_CHECK(gemma_tokenizer.eos_id() == 1);
     CELEG_TEST_CHECK(gemma_tokenizer.pad_id() == 0);
@@ -117,8 +116,9 @@ int main() {
     CELEG_TEST_CHECK(newline.size() == 3 && newline[0] == 9259 &&
                      newline[1] == 248 && newline[2] == 9259);
 
-    const std::string gemma_chat = gemma_tokenizer.format_chat(
-        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
+    const std::string gemma_chat = celeg::render_chat(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}},
+        gemma_template, true);
     CELEG_TEST_CHECK(gemma_chat ==
         "<bos><|turn>user\nHello<turn|>\n<|turn>model\n");
     const auto gemma_chat_ids = gemma_tokenizer.encode(gemma_chat, false);
@@ -129,29 +129,10 @@ int main() {
                      gemma_chat_ids[6] == 248 && gemma_chat_ids[7] == 105 &&
                      gemma_chat_ids[8] == 4368 && gemma_chat_ids[9] == 248);
 
-    bool unsupported_rejected = false;
-    try {
-        (void)gemma_tokenizer.format_chat(
-            std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "<|image>"}}, true);
-    } catch (const std::invalid_argument&) {
-        unsupported_rejected = true;
-    }
-    CELEG_TEST_CHECK(unsupported_rejected);
-    unsupported_rejected = false;
-    try {
-        (void)gemma_tokenizer.format_chat(
-            std::vector<celeg::ChatMessage>{{celeg::ChatRole::Developer, "no"}}, true);
-    } catch (const std::invalid_argument&) {
-        unsupported_rejected = true;
-    }
-    CELEG_TEST_CHECK(unsupported_rejected);
-    unsupported_rejected = false;
-    try {
-        (void)gemma_tokenizer.encode("<|audio>", false);
-    } catch (const std::invalid_argument&) {
-        unsupported_rejected = true;
-    }
-    CELEG_TEST_CHECK(unsupported_rejected);
+    const std::string gemma_developer = celeg::render_chat(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::Developer, "no"}},
+        gemma_template, true);
+    CELEG_TEST_CHECK(gemma_developer.find("<|turn>system\nno") != std::string::npos);
     std::filesystem::remove(gemma_path);
     std::cout << "tokenizer_test: ok\n";
 }

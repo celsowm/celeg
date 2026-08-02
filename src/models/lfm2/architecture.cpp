@@ -13,16 +13,6 @@
 namespace celeg::detail {
 namespace {
 
-bool contains_ci(std::string_view text, std::string_view needle) {
-    std::string lower;
-    lower.reserve(text.size());
-    for (const char c : text) lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    std::string target;
-    target.reserve(needle.size());
-    for (const char c : needle) target.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    return lower.find(target) != std::string::npos;
-}
-
 int read_int(const CheckpointMetadata& m, std::string_view json_key,
              std::string_view gguf_key) {
     return static_cast<int>(m.integer_for(json_key, gguf_key));
@@ -43,15 +33,15 @@ std::string read_string(const CheckpointMetadata& m, std::string_view json_key,
     return m.string_for_or(json_key, gguf_key, std::move(fallback));
 }
 
-std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+const ITensorNamingPolicy* naming_policy() {
     static const CelegTensorNamingPolicy policy;
-    return std::shared_ptr<const ITensorNamingPolicy>(&policy, [](const ITensorNamingPolicy*) {});
+    return &policy;
 }
 
 void add_request(ResolvedModel& model, TensorRequest request) {
     if (model.tensor_naming) {
         const auto names = model.tensor_naming->candidates(request);
-        if (!names.empty()) model.tensor_bindings.source_names.push_back(names.front());
+        if (!names.empty()) request.source_name = names.front();
     }
     model.weight_plan.requests.push_back(std::move(request));
 }
@@ -131,10 +121,6 @@ ModelDefinition make_definition(const RuntimeTopology& topology,
 
 ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     CheckpointProfile profile{"lfm2", "", {}, "lfm2-instruct"};
-    if (contains_ci(checkpoint.metadata.repository_hint, "1.2b")) {
-        profile = {"lfm2-1.2b", "1.2b",
-                   {{"intermediate_size", int64_t{8192}}}, "lfm2-instruct"};
-    }
     const CheckpointMetadata metadata = CheckpointProfileResolver::matches(
         profile, checkpoint.metadata)
         ? CheckpointProfileResolver::apply(profile, checkpoint.metadata)
@@ -178,31 +164,14 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
         t.normalize_topk = decoded.normalize_topk;
         t.use_expert_bias = decoded.use_expert_bias;
         t.routed_scaling_factor = decoded.routed_scaling_factor;
-        if (gguf) {
-            if (t.num_dense_layers == 0 && checkpoint.repository) {
-                while (checkpoint.repository->contains(
-                    "model.layers." + std::to_string(t.num_dense_layers) +
-                    ".feed_forward.w1.weight")) {
-                    ++t.num_dense_layers;
-                }
-            }
-            t.use_expert_bias = checkpoint.repository && checkpoint.repository->contains(
-                "model.layers." + std::to_string(t.num_dense_layers) + ".feed_forward.expert_bias.weight");
-        }
+        if (gguf) t.use_expert_bias = false;
     }
-    if (profile.id == "lfm2-1.2b" && checkpoint.repository && checkpoint.repository->contains(
-            "model.layers.0.feed_forward.w1.weight")) {
-        const auto shape = checkpoint.repository->tensor(
-            "model.layers.0.feed_forward.w1.weight").shape;
-        if (!shape.empty()) t.intermediate = static_cast<int>(shape.front());
-    } else if (t.intermediate == 12288 && t.hidden == 2048 && t.num_hidden_layers == 16) {
-        if (checkpoint.repository && checkpoint.repository->contains(
-                "model.layers.0.feed_forward.w1.weight")) {
-            const auto shape = checkpoint.repository->tensor(
-                "model.layers.0.feed_forward.w1.weight").shape;
-            if (!shape.empty()) t.intermediate = static_cast<int>(shape.front());
-        } else if (contains_ci(m.repository_hint, "1.2b")) {
-            t.intermediate = 8192;
+    t.feed_forward_kinds.assign(static_cast<size_t>(t.num_hidden_layers),
+                                FeedForwardKind::Dense);
+    if (moe) {
+        for (int layer = t.num_dense_layers; layer < t.num_hidden_layers; ++layer) {
+            t.feed_forward_kinds[static_cast<size_t>(layer)] =
+                FeedForwardKind::MixtureOfExperts;
         }
     }
     t.attention_layer_count = 0;
@@ -216,7 +185,6 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
             ++t.conv_layer_count;
         }
     }
-    t.layer_types = t.mixer_kinds;
     t.max_feed_forward_intermediate = t.intermediate;
     t.feed_forward_intermediates.assign(static_cast<size_t>(t.num_hidden_layers), t.intermediate);
     t.feed_forward_activations.assign(static_cast<size_t>(t.num_hidden_layers),

@@ -1,12 +1,14 @@
 #pragma once
 
 #include "celeg/serve/protocol/chat.hpp"
+#include "celeg/serve/chat_generation.hpp"
 #include "celeg/serve/types.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace celeg::serve::protocol {
@@ -17,11 +19,18 @@ namespace celeg::serve::protocol {
 ChatRole role_from_string(const std::string& role);
 std::string role_to_string(ChatRole role);
 
+void validate_chat_request(const ChatCompletionRequest& request,
+                           const ChatCapabilities& capabilities);
+ErrorResponseDto error_response(std::string message,
+                                std::optional<std::string> param = std::nullopt);
+
 // Builds a backend GenerateRequest from a chat completion request: renders
 // the message list through the tokenizer's chat template and tokenizes it.
 // eos_token_id is passed through unchanged (callers own the model's EOS id).
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::BpeTokenizer& tokenizer,
+                                    const celeg::IChatTemplate& chat_template,
+                                    const celeg::ChatCapabilities& capabilities,
                                     std::int32_t eos_token_id);
 
 // Maps a backend FinishReason to the OpenAI wire string. Returns "" for
@@ -35,7 +44,8 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    std::size_t prompt_token_count,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
-                                                   const celeg::BpeTokenizer& tokenizer);
+                                                   const celeg::BpeTokenizer& tokenizer,
+                                                   const celeg::ChatCapabilities& capabilities);
 
 // Builds one SSE chunk for a batch of newly generated tokens. include_role
 // should be true only for the first chunk of a stream. finish_reason is
@@ -46,7 +56,16 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              const std::vector<std::int32_t>& new_tokens,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
-                                             const celeg::BpeTokenizer& tokenizer);
+                                             const celeg::BpeTokenizer& tokenizer,
+                                             const celeg::ChatCapabilities& capabilities,
+                                             std::string_view accumulated_text = {});
+
+ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
+                                             const std::string& model,
+                                             std::int64_t created,
+                                             const celeg::serve::ChatGenerationDelta& delta,
+                                             bool include_role,
+                                             std::optional<FinishReason> finish);
 
 // Tokenizes a /tokenize request: renders `messages` through the chat template
 // if given, otherwise tokenizes `prompt` directly. Throws std::invalid_argument
@@ -54,6 +73,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
 // context window, echoed back as-is.
 TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
                                       const celeg::BpeTokenizer& tokenizer,
+                                      const celeg::IChatTemplate& chat_template,
                                       std::size_t max_model_len);
 
 } // namespace celeg::serve::protocol

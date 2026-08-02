@@ -13,13 +13,16 @@ celeg::RuntimeTopology make_8b_a1b_shape() {
     shape.hidden = 2048;
     shape.num_hidden_layers = 24;
     shape.num_dense_layers = 2;
+    shape.feed_forward_kinds.assign(static_cast<size_t>(shape.num_hidden_layers),
+                                    celeg::FeedForwardKind::MixtureOfExperts);
+    shape.feed_forward_kinds[0] = celeg::FeedForwardKind::Dense;
+    shape.feed_forward_kinds[1] = celeg::FeedForwardKind::Dense;
     shape.moe_intermediate = 1792;
     shape.num_experts = 32;
     shape.experts_per_token = 4;
     shape.mixer_kinds.assign(static_cast<size_t>(shape.num_hidden_layers),
-                             celeg::MixerKind::Convolution);
+                             celeg::MixerKind::ShortConvolution);
     std::fill_n(shape.mixer_kinds.begin(), 6, celeg::MixerKind::Attention);
-    shape.layer_types = shape.mixer_kinds;
     shape.attention_layouts.assign(
         static_cast<size_t>(shape.num_hidden_layers),
         celeg::AttentionSpec{32, 8, 64, false, celeg::AttentionMaskKind::Causal,

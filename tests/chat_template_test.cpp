@@ -2,19 +2,19 @@
 #include "support/assertions.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <vector>
 
 int main() {
-    auto tmpl = celeg::make_chat_template(celeg::ChatTemplateKind::Lfm2Instruct);
-    CELEG_TEST_CHECK(tmpl);
-    CELEG_TEST_CHECK(tmpl->kind() == celeg::ChatTemplateKind::Lfm2Instruct);
+    auto catalog = celeg::make_chat_profile_catalog();
+    const auto& tmpl = catalog.find("lfm2-instruct");
 
-    const std::string user_only = tmpl->format(
+    const std::string user_only = tmpl.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
     CELEG_TEST_CHECK(user_only == "<|startoftext|><|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n");
 
-    const std::string with_system = tmpl->format(
+    const std::string with_system = tmpl.format(
         std::vector<celeg::ChatMessage>{
             {celeg::ChatRole::System, "You are helpful."},
             {celeg::ChatRole::User, "Hi"},
@@ -24,7 +24,7 @@ int main() {
         "<|startoftext|><|im_start|>system\nYou are helpful.<|im_end|>\n"
         "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
 
-    const std::string multi_turn = tmpl->format(
+    const std::string multi_turn = tmpl.format(
         std::vector<celeg::ChatMessage>{
             {celeg::ChatRole::System, "You are helpful."},
             {celeg::ChatRole::User, "Hi"},
@@ -38,27 +38,36 @@ int main() {
         "<|im_start|>assistant\nHello!<|im_end|>\n"
         "<|im_start|>user\nHow are you?<|im_end|>\n<|im_start|>assistant\n");
 
-    const std::string no_generation_prompt = tmpl->format(
+    const std::string no_generation_prompt = tmpl.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hi"}}, false);
     CELEG_TEST_CHECK(no_generation_prompt ==
         "<|startoftext|><|im_start|>user\nHi<|im_end|>\n");
 
-    bool threw = false;
-    try {
-        (void)tmpl->format(
-            std::vector<celeg::ChatMessage>{{celeg::ChatRole::Tool, "result"}}, true);
-    } catch (const std::invalid_argument&) {
-        threw = true;
-    }
-    CELEG_TEST_CHECK(threw);
+    const std::string tool_turn = tmpl.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::Tool, "result"}}, true);
+    CELEG_TEST_CHECK(tool_turn.find("<|tool_response_start|>result<|tool_response_end|>") != std::string::npos);
+    const auto lfm2_capabilities = catalog.capabilities("lfm2-instruct");
+    CELEG_TEST_CHECK(lfm2_capabilities.native_tool_call_codec);
+    CELEG_TEST_CHECK(lfm2_capabilities.tool_call_codec != nullptr);
+    const auto lfm2_parse = lfm2_capabilities.tool_call_codec->parse_generation(
+        "<|tool_call_start|>[weather(city='Paris', unit='C')]<|tool_call_end|>");
+    CELEG_TEST_CHECK(lfm2_parse.status == celeg::ToolParseStatus::Complete);
+    CELEG_TEST_CHECK(lfm2_parse.calls.size() == 1);
+    CELEG_TEST_CHECK(lfm2_parse.calls[0].name == "weather");
+    CELEG_TEST_CHECK(lfm2_parse.calls[0].arguments == "{\"city\":\"Paris\",\"unit\":\"C\"}");
+    const auto lfm2_incomplete = lfm2_capabilities.tool_call_codec->parse_generation(
+        "<|tool_call_start|>[weather(city=\"Paris\")");
+    CELEG_TEST_CHECK(lfm2_incomplete.status == celeg::ToolParseStatus::Incomplete);
+    const celeg::ToolDefinition tool_definition{
+        "function", {"weather", "Weather lookup", {{"{\"type\":\"object\"}"}}, false}};
+    const celeg::ToolChoice tool_choice{celeg::ToolChoiceMode::Auto, {}};
+    CELEG_TEST_CHECK(lfm2_capabilities.tool_call_codec->render_tool_definitions(
+        std::span<const celeg::ToolDefinition>(&tool_definition, 1), tool_choice).find("weather") != std::string::npos);
 
-    auto granite = celeg::make_chat_template(celeg::ChatTemplateKind::GraniteInstruct);
-    CELEG_TEST_CHECK(granite);
-    CELEG_TEST_CHECK(granite->kind() == celeg::ChatTemplateKind::GraniteInstruct);
-    auto granite_by_id = celeg::make_chat_template("granite-instruct");
-    CELEG_TEST_CHECK(granite_by_id->kind() == celeg::ChatTemplateKind::GraniteInstruct);
+    const auto& granite = catalog.find("granite-instruct");
+    const auto& granite_by_id = catalog.find("granite-instruct");
 
-    const std::string granite_user_only = granite->format(
+    const std::string granite_user_only = granite.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
     CELEG_TEST_CHECK(granite_user_only ==
         "<|startoftext|><|start_of_role|>system<|end_of_role|>Knowledge Cutoff Date: April 2024. "
@@ -67,7 +76,7 @@ int main() {
         "<|start_of_role|>user<|end_of_role|>Hello<|end_of_text|>\n"
         "<|start_of_role|>assistant<|end_of_role|>");
 
-    const std::string granite_with_system = granite->format(
+    const std::string granite_with_system = granite.format(
         std::vector<celeg::ChatMessage>{
             {celeg::ChatRole::System, "You are helpful."},
             {celeg::ChatRole::User, "Hi"},
@@ -77,6 +86,16 @@ int main() {
         "<|startoftext|><|start_of_role|>system<|end_of_role|>You are helpful.<|end_of_text|>\n"
         "<|start_of_role|>user<|end_of_role|>Hi<|end_of_text|>\n"
         "<|start_of_role|>assistant<|end_of_role|>");
+
+    const auto& gemma = catalog.find("gemma4-instruct");
+    const auto gemma_capabilities = catalog.capabilities("gemma4-instruct");
+    CELEG_TEST_CHECK(gemma_capabilities.tool_call_codec != nullptr);
+    const auto gemma_parse = gemma_capabilities.tool_call_codec->parse_generation(
+        "<|tool_call>call:weather{\"city\":\"Paris\"}<tool_call|>");
+    CELEG_TEST_CHECK(gemma_parse.status == celeg::ToolParseStatus::Complete);
+    CELEG_TEST_CHECK(gemma_parse.calls.size() == 1);
+    CELEG_TEST_CHECK(gemma_parse.calls[0].name == "weather");
+    CELEG_TEST_CHECK(gemma_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
 
     std::cout << "chat_template_test: ok\n";
 }

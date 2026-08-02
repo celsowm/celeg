@@ -12,7 +12,7 @@ namespace {
 
 // Builds a tokenizer whose vocabulary covers exactly the characters used by
 // the LFM2 Instruct template rendering of a single "hi" user turn, so the
-// full format_chat -> encode pipeline in to_generate_request() is exercised
+// full chat rendering -> encode pipeline in to_generate_request() is exercised
 // end to end with a deterministic, hand-verifiable token sequence.
 celeg::BpeTokenizer make_test_tokenizer(const std::filesystem::path& path) {
     std::ofstream out(path);
@@ -89,12 +89,32 @@ int main() {
     CELEG_TEST_CHECK(parsed.seed && *parsed.seed == 42);
     CELEG_TEST_CHECK(!parsed.stream.has_value());
 
+    // Tool requests are validated before reaching the backend and use the
+    // profile capability contract rather than exception-based discovery.
+    protocol::ChatCompletionRequest tool_request;
+    tool_request.messages.push_back({"user", std::string("call weather"), std::nullopt, std::nullopt});
+    tool_request.tools = std::vector<protocol::ToolDto>{{
+        "function", {"weather", std::nullopt, glz::raw_json{"{\"type\":\"object\"}"}}}};
+    bool tool_rejected = false;
+    try { protocol::validate_chat_request(tool_request, {}); }
+    catch (const std::invalid_argument&) { tool_rejected = true; }
+    CELEG_TEST_CHECK(tool_rejected);
+    celeg::ChatCapabilities tool_capabilities;
+    tool_capabilities.assistant_tool_calls = true;
+    tool_capabilities.tool_messages = true;
+    protocol::validate_chat_request(tool_request, tool_capabilities);
+
+    protocol::ErrorResponseDto error = protocol::error_response("bad \"request\"");
+    CELEG_TEST_CHECK(protocol::to_json(error).find("\\\"request\\\"") != std::string::npos);
+
     // Full request -> GenerateRequest pipeline against a real tokenizer.
     const auto tokenizer_path = std::filesystem::temp_directory_path() / "celeg_chat_protocol_test.json";
     const celeg::BpeTokenizer tokenizer = make_test_tokenizer(tokenizer_path);
+    const celeg::Lfm2InstructChatTemplate chat_template;
     std::filesystem::remove(tokenizer_path);
 
-    const serve::GenerateRequest generate_request = protocol::to_generate_request(request, tokenizer, /*eos_token_id=*/2);
+    const serve::GenerateRequest generate_request = protocol::to_generate_request(
+        request, tokenizer, chat_template, {}, /*eos_token_id=*/2);
     CELEG_TEST_CHECK(generate_request.eos_token_id == 2);
     CELEG_TEST_CHECK(generate_request.max_output_tokens == 16);
     CELEG_TEST_CHECK(generate_request.generation.temperature == 0.5f);
@@ -112,7 +132,7 @@ int main() {
     empty_request.model = "lfm2.5-test";
     threw = false;
     try {
-        protocol::to_generate_request(empty_request, tokenizer, 2);
+        protocol::to_generate_request(empty_request, tokenizer, chat_template, {}, 2);
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -122,7 +142,7 @@ int main() {
     const std::vector<std::int32_t> completion_tokens = {7, 8};
     const protocol::ChatCompletionResponse response = protocol::to_chat_completion_response(
         "req-1", "lfm2.5-test", 1000, generate_request.prompt_tokens.size(),
-        completion_tokens, serve::FinishReason::Stop, tokenizer);
+        completion_tokens, serve::FinishReason::Stop, tokenizer, {});
     CELEG_TEST_CHECK(response.id == "req-1");
     CELEG_TEST_CHECK(response.object == "chat.completion");
     CELEG_TEST_CHECK(response.choices.size() == 1);
@@ -142,14 +162,14 @@ int main() {
     // only the terminal chunk carries a finish_reason.
     const protocol::ChatCompletionChunk first_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, completion_tokens, /*include_role=*/true,
-        /*finish=*/std::nullopt, tokenizer);
+        /*finish=*/std::nullopt, tokenizer, {});
     CELEG_TEST_CHECK(first_chunk.choices[0].delta.role && *first_chunk.choices[0].delta.role == "assistant");
     CELEG_TEST_CHECK(first_chunk.choices[0].delta.content && *first_chunk.choices[0].delta.content == "hi");
     CELEG_TEST_CHECK(!first_chunk.choices[0].finish_reason.has_value());
 
     const protocol::ChatCompletionChunk final_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, {}, /*include_role=*/false,
-        /*finish=*/serve::FinishReason::Stop, tokenizer);
+        /*finish=*/serve::FinishReason::Stop, tokenizer, {});
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.role.has_value());
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.content.has_value());
     CELEG_TEST_CHECK(final_chunk.choices[0].finish_reason && *final_chunk.choices[0].finish_reason == "stop");

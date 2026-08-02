@@ -174,20 +174,20 @@ int main(int argc, char** argv) {
         }
         const std::filesystem::path model_dir =
             std::filesystem::is_directory(model) ? model : model.parent_path();
+        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
         celeg::BpeTokenizer tokenizer = gguf_repository
             ? celeg::BpeTokenizer(
-                  celeg::BpeTokenizer::FromGguf{}, gguf_repository->file(),
-                  celeg::make_chat_template(bootstrap.model.chat_profile_id))
+                  celeg::BpeTokenizer::FromGguf{}, gguf_repository->file())
             : celeg::BpeTokenizer(
-                  (model_dir / "tokenizer.json").string(),
-                  celeg::make_chat_template(bootstrap.model.chat_profile_id));
+                  (model_dir / "tokenizer.json").string());
         std::vector<celeg::ChatMessage> chat_messages;
         if (!args.system.empty()) {
             chat_messages.push_back({celeg::ChatRole::System, args.system});
         }
         chat_messages.push_back({celeg::ChatRole::User, args.prompt});
         const std::string text = args.raw_prompt
-            ? args.prompt : tokenizer.format_chat(chat_messages);
+            ? args.prompt : celeg::render_chat(chat_messages, chat_template);
         const std::vector<int32_t> input = tokenizer.encode(text, args.raw_prompt);
         if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {
             throw std::runtime_error("prompt plus output exceeds context");

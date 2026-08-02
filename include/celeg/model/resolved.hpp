@@ -35,7 +35,7 @@ struct RuntimeTopology {
     float logits_divisor = 1.0f;
     float final_logit_softcap = 0.0f;
     std::vector<MixerKind> mixer_kinds;
-    std::vector<MixerKind> layer_types;
+    std::vector<FeedForwardKind> feed_forward_kinds;
     std::vector<int> attention_slot_for_layer;
     std::vector<int> layer_for_attention_slot;
     int attention_layer_count = 0;
@@ -79,8 +79,8 @@ struct RuntimeTopology {
     }
 
     bool layer_uses_moe(int layer) const {
-        return layer >= 0 && layer < static_cast<int>(mixer_kinds.size()) &&
-               num_experts > 0 && layer >= num_dense_layers;
+        return layer >= 0 && layer < static_cast<int>(feed_forward_kinds.size()) &&
+               feed_forward_kinds[static_cast<size_t>(layer)] == FeedForwardKind::MixtureOfExperts;
     }
     std::string fingerprint() const;
     std::string summary() const;
@@ -99,9 +99,10 @@ struct ResolvedModel {
     ModelGraph graph;
     RuntimeTopology topology;
     WeightPlan weight_plan;
-    TensorBindings tensor_bindings;
     ModelCapabilities capabilities;
-    std::shared_ptr<const ITensorNamingPolicy> tensor_naming;
+    // Non-owning: the architecture catalog owns the immutable policy for the
+    // lifetime of model resolution and compiled model instances.
+    const ITensorNamingPolicy* tensor_naming = nullptr;
     std::string architecture_id;
     CheckpointProfile profile;
     std::string checkpoint_profile_id;

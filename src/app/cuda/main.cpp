@@ -344,13 +344,13 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
         celeg::BpeTokenizer tokenizer =
             is_gguf
                 ? celeg::BpeTokenizer(celeg::BpeTokenizer::FromGguf{},
-                                    celeg::GgufFile(gguf_path.string()),
-                                    celeg::make_chat_template(bootstrap.model.chat_profile_id))
-                : celeg::BpeTokenizer((model / "tokenizer.json").string(),
-                                    celeg::make_chat_template(bootstrap.model.chat_profile_id));
+                                    celeg::GgufFile(gguf_path.string()))
+                : celeg::BpeTokenizer((model / "tokenizer.json").string());
         if (tokenizer.bos_id() != model_definition.tokens.bos ||
             tokenizer.eos_id() != model_definition.tokens.eos) {
             throw std::runtime_error("tokenizer special IDs disagree with config");
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
             }
             chat_messages.push_back({celeg::ChatRole::User, args.prompt});
             const std::string formatted = args.raw_prompt
-                ? args.prompt : tokenizer.format_chat(chat_messages);
+                ? args.prompt : celeg::render_chat(chat_messages, chat_template);
             // Chat formatting contains <|startoftext|>; raw prompts receive BOS automatically.
             input = tokenizer.encode(formatted, args.raw_prompt);
             if (args.benchmark_prefill_tokens > 0) {

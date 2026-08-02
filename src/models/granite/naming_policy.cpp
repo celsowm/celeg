@@ -40,7 +40,7 @@ std::vector<std::string> GraniteTensorNamingPolicy::candidates(
     case TensorRole::FfnDown:
         return {layer_name(request.layer, "mlp.down_proj.weight")};
     default:
-        throw std::invalid_argument("tensor role has no Granite spelling");
+        return {};
     }
 }
 

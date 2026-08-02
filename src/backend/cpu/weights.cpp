@@ -161,13 +161,19 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     final_logit_softcap = bootstrap.model.graph.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
     model_identity = bootstrap.model.identity;
-    tensor_naming = bootstrap.model.tensor_naming.get();
+    tensor_naming = bootstrap.model.tensor_naming;
     repository = bootstrap.checkpoint.repository;
     prepare_pack_path();
     load_weights();
     layer_to_kv_pool.assign(weight_store.layers.size(), -1);
     layer_to_kv_owner.assign(weight_store.layers.size(), -1);
-    std::vector<int> shared_owner(2, -1);
+    int shared_group_count = 0;
+    for (const AttentionSpec& attention : shape.attention_layouts) {
+        if (attention.kv_sharing.shared()) {
+            shared_group_count = std::max(shared_group_count, attention.kv_sharing.group + 1);
+        }
+    }
+    std::vector<int> shared_owner(static_cast<size_t>(shared_group_count), -1);
     for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
         if (!CpuCompiledModel::attention_operator(weight_store.layers[layer])) continue;
         const AttentionSpec& attention = shape.attention_layout(static_cast<int>(layer));
@@ -176,7 +182,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
                 static_cast<int>(layer);
         }
     }
-    std::vector<int> shared_pool(2, -1);
+    std::vector<int> shared_pool(static_cast<size_t>(shared_group_count), -1);
     for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
         if (CpuCompiledModel::attention_operator(weight_store.layers[layer])) {
             const AttentionSpec& attention = shape.attention_layout(static_cast<int>(layer));
@@ -184,7 +190,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
                 const int group = attention.kv_sharing.group;
                 if (group < 0 || group >= static_cast<int>(shared_pool.size()) ||
                     shared_pool[static_cast<size_t>(group)] < 0) {
-                    throw std::runtime_error("Gemma shared KV consumer has no owner pool");
+                    throw std::runtime_error("shared KV consumer has no owner pool");
                 }
                 layer_to_kv_pool[layer] = shared_pool[static_cast<size_t>(group)];
                 layer_to_kv_owner[layer] = shared_owner[static_cast<size_t>(group)];
@@ -345,9 +351,9 @@ void CpuCompiledModel::Shared::load_weights() {
     // Attention and short-convolution are identical between dense and MoE
     // layers. Keeping their loader in one place prevents the two checkpoint
     // paths from drifting when an operator tensor changes.
-    const auto load_operator = [&](int index, LayerType layer_type)
+    const auto load_operator = [&](int index, MixerKind layer_type)
         -> std::variant<AttentionWeights, ConvolutionWeights> {
-        if (layer_type == LayerType::FullAttention) {
+        if (layer_type == MixerKind::Attention) {
             AttentionWeights layer;
             const AttentionSpec& attention = shape.attention_layout(index);
             layer.q = load_matrix(source, reader.get(), writer.get(),
@@ -406,7 +412,7 @@ void CpuCompiledModel::Shared::load_weights() {
         // dense layers, then load only the remaining routed blocks as MoE.
         weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
         for (int index = 0; index < shape.num_hidden_layers; ++index) {
-            const LayerType layer_type = shape.layer_types[static_cast<size_t>(index)];
+            const MixerKind layer_type = shape.mixer_kinds[static_cast<size_t>(index)];
             if (!shape.layer_uses_moe(index)) {
                 CommonWeights common =
                     load_common(source, reader.get(), writer.get(), index);
@@ -471,7 +477,7 @@ void CpuCompiledModel::Shared::load_weights() {
             CommonWeights common =
                 load_common(source, reader.get(), writer.get(), index);
             auto layer = load_operator(
-                index, shape.layer_types[static_cast<size_t>(index)]);
+                index, shape.mixer_kinds[static_cast<size_t>(index)]);
             std::visit([&](auto& value) {
                 value.common = std::move(common);
                 weight_store.layers.emplace_back(std::move(value));

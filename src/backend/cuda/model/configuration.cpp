@@ -18,7 +18,7 @@ void CudaCompiledModel::configure_model(
          resources_.shape_.logits_divisor != 1.0f)) {
         resources_.options_.fused_residuals = false;
     }
-    resources_.tensor_naming_ = resources_.model_.tensor_naming.get();
+    resources_.tensor_naming_ = resources_.model_.tensor_naming;
     resources_.model_identity_ = resources_.model_.identity;
     check_moe_quantization_policy(resources_.options_.weight_mode, resources_.shape_.num_experts > 0);
 }

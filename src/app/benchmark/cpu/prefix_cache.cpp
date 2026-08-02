@@ -25,13 +25,17 @@ int main(int argc, char** argv) {
             celeg::detail::load_model_bootstrap(model_dir);
         const auto& topology = bootstrap.model.topology;
         celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
+        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
         const auto base = tokenizer.encode(
-            tokenizer.format_chat(
-                std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}}),
+            celeg::render_chat(
+                std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}},
+                chat_template),
             false);
         const auto longer = suffix.empty() ? base : tokenizer.encode(
-            tokenizer.format_chat(
-                std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt + suffix}}),
+            celeg::render_chat(
+                std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt + suffix}},
+                chat_template),
             false);
         celeg::CpuModelOptions model_options;
         model_options.kv_cache_mode = celeg::CpuKvCacheMode::Bf16;

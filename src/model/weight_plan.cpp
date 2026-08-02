@@ -10,9 +10,7 @@ namespace {
 void add_request(ResolvedModel& model, TensorRequest request) {
     if (model.tensor_naming) {
         const auto names = model.tensor_naming->candidates(request);
-        if (!names.empty()) {
-            model.tensor_bindings.source_names.push_back(names.front());
-        }
+        if (!names.empty()) request.source_name = names.front();
     }
     model.weight_plan.requests.push_back(std::move(request));
 }

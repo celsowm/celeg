@@ -1,6 +1,8 @@
 #include "docs.hpp"
 
 #include "../static_assets.hpp"
+#include "celeg/serve/protocol/json.hpp"
+#include "celeg/serve/protocol/mapping.hpp"
 #include "celeg/serve/protocol/openapi.hpp"
 
 #include <filesystem>
@@ -58,12 +60,16 @@ void register_docs_routes(uWS::App& app, const std::string& model_name) {
         const auto& assets = swagger_ui_assets();
         const auto asset = assets.find(file);
         if (asset == assets.end()) {
-            res->writeStatus("404 Not Found")->end("not found");
+            res->writeStatus("404 Not Found")
+                ->writeHeader("Content-Type", "application/json")
+                ->end(protocol::to_json(protocol::error_response("documentation asset not found")));
             return;
         }
         const auto contents = read_file(std::filesystem::path(CELEG_SWAGGER_UI_DIR) / file);
         if (!contents) {
-            res->writeStatus("404 Not Found")->end("not found");
+            res->writeStatus("404 Not Found")
+                ->writeHeader("Content-Type", "application/json")
+                ->end(protocol::to_json(protocol::error_response("documentation asset not found")));
             return;
         }
         res->writeHeader("Content-Type", asset->second)->end(*contents);

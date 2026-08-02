@@ -10,7 +10,7 @@ void CudaCompiledModel::initialize_per_layer_input_device(const int32_t* token) 
     if (!resources_.shape_.has_per_layer_input) return;
     if (!resources_.per_layer_embedding_ || !resources_.per_layer_embedding_->bf16 ||
         !resources_.per_layer_context_projection_ || !resources_.per_layer_projection_norm_) {
-        throw std::logic_error("Gemma per-layer input weights are not BF16-resident");
+        throw std::logic_error("per-layer input weights are not BF16-resident");
     }
     const int layers = resources_.shape_.num_hidden_layers;
     const int ple = resources_.shape_.per_layer_input_size;
@@ -37,7 +37,7 @@ void CudaCompiledModel::initialize_per_layer_input_host(int32_t token) {
     if (!resources_.shape_.has_per_layer_input) return;
     if (!resources_.per_layer_embedding_ || !resources_.per_layer_embedding_->bf16 ||
         !resources_.per_layer_context_projection_ || !resources_.per_layer_projection_norm_) {
-        throw std::logic_error("Gemma per-layer input weights are not BF16-resident");
+        throw std::logic_error("per-layer input weights are not BF16-resident");
     }
     const int layers = resources_.shape_.num_hidden_layers;
     const int ple = resources_.shape_.per_layer_input_size;
@@ -63,7 +63,7 @@ void CudaCompiledModel::initialize_per_layer_input_batch(const int32_t* tokens, 
     if (!resources_.shape_.has_per_layer_input) return;
     if (!resources_.per_layer_embedding_ || !resources_.per_layer_embedding_->bf16 ||
         !resources_.per_layer_context_projection_ || !resources_.per_layer_projection_norm_) {
-        throw std::logic_error("Gemma per-layer input weights are not BF16-resident");
+        throw std::logic_error("per-layer input weights are not BF16-resident");
     }
     const int layers = resources_.shape_.num_hidden_layers;
     const int ple = resources_.shape_.per_layer_input_size;

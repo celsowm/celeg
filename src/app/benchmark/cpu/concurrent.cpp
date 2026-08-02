@@ -34,11 +34,13 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_dir);
         const auto& topology = bootstrap.model.topology;
-        celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string(),
-            celeg::make_chat_template(bootstrap.model.chat_profile_id));
+        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
+        celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
         const std::vector<int32_t> tokens = tokenizer.encode(
-            tokenizer.format_chat(
-                std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}}),
+            celeg::render_chat(
+                std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}},
+                chat_template),
             false);
 
         celeg::CpuModelOptions model_options;

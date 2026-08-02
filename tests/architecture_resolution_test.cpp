@@ -106,7 +106,7 @@ int main() {
     checkpoint.metadata = metadata;
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
     CELEG_TEST_CHECK(model.architecture_id == "lfm2");
-    CELEG_TEST_CHECK(model.topology.intermediate == 8192);
+    CELEG_TEST_CHECK(model.topology.intermediate == 12288);
     CELEG_TEST_CHECK(model.graph.layers.size() == 16);
     CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
     CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);

@@ -67,7 +67,11 @@ int main(int argc, char** argv) {
         const auto& model = bootstrap.model;
         const auto& shape = model.topology;
 
-        int moe_layers = celeg::moe_layer_count(shape);
+        std::vector<int> moe_layer_ids;
+        for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
+            if (shape.layer_uses_moe(layer)) moe_layer_ids.push_back(layer);
+        }
+        const int moe_layers = static_cast<int>(moe_layer_ids.size());
         if (moe_layers == 0) {
             std::cout << "No MoE layers in this model, nothing to pack.\n";
             return 0;
@@ -123,7 +127,7 @@ int main(int argc, char** argv) {
         std::vector<char> down_stage(down_bytes);
 
         for (int l = 0; l < moe_layers; ++l) {
-            int actual_layer_idx = shape.num_dense_layers + l;
+            const int actual_layer_idx = moe_layer_ids[static_cast<size_t>(l)];
             std::cout << "Packing layer " << actual_layer_idx << " (" << (l + 1) << "/" << moe_layers << ")...\n";
 
             for (int e = 0; e < shape.num_experts; ++e) {

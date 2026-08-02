@@ -56,6 +56,8 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.logits_divisor = static_cast<float>(number_or(
         "logits_scaling", "logits_scaling", 1.0));
     t.mixer_kinds.assign(static_cast<size_t>(t.num_hidden_layers), MixerKind::Attention);
+    t.feed_forward_kinds.assign(static_cast<size_t>(t.num_hidden_layers),
+                                 FeedForwardKind::Dense);
     t.attention_layer_count = t.num_hidden_layers;
     t.layer_for_attention_slot.resize(static_cast<size_t>(t.num_hidden_layers));
     t.attention_slot_for_layer.resize(static_cast<size_t>(t.num_hidden_layers));
@@ -63,7 +65,6 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
         t.layer_for_attention_slot[static_cast<size_t>(i)] = i;
         t.attention_slot_for_layer[static_cast<size_t>(i)] = i;
     }
-    t.layer_types = t.mixer_kinds;
     t.max_feed_forward_intermediate = t.intermediate;
     t.feed_forward_intermediates.assign(static_cast<size_t>(t.num_hidden_layers), t.intermediate);
     t.feed_forward_activations.assign(static_cast<size_t>(t.num_hidden_layers),

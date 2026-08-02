@@ -137,7 +137,8 @@ if(CELEG_ENABLE_SERVE)
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_MakeAvailable(glaze)
 
-    add_library(celeg_serve_protocol src/serve/protocol/mapping.cpp src/serve/protocol/openapi.cpp)
+    add_library(celeg_serve_protocol src/serve/protocol/mapping.cpp src/serve/protocol/openapi.cpp
+        src/serve/chat_generation.cpp)
     target_include_directories(celeg_serve_protocol PUBLIC include)
     target_compile_definitions(celeg_serve_protocol PRIVATE
         CELEG_OPENAPI_SPEC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/serve/protocol/openapi.json")
@@ -422,6 +423,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/serve/cpu_inference_service.hpp
     include/celeg/backend/cuda/cuda_inference_service.hpp
     include/celeg/serve/generation_dispatcher.hpp
+    include/celeg/serve/chat_generation.hpp
     include/celeg/serve/inference_service.hpp
     include/celeg/serve/protocol/chat.hpp
     include/celeg/serve/protocol/json.hpp
@@ -430,6 +432,8 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/serve/types.hpp
     include/celeg/text/chat_template.hpp
     include/celeg/text/chat_profile.hpp
+    include/celeg/text/tool_call.hpp
+    include/celeg/text/conversation.hpp
     include/celeg/text/tokenizer.hpp)
 foreach(_celeg_public_header IN LISTS CELEG_PUBLIC_HEADERS)
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_celeg_public_header}")
@@ -470,9 +474,13 @@ if(CELEG_BUILD_TESTS)
         src/models/lfm2/layer_decoder.cpp)
     target_include_directories(lfm2_layer_decoder_test PRIVATE include)
     add_test(NAME lfm2_layer_decoder_test COMMAND lfm2_layer_decoder_test)
-    add_executable(chat_template_test tests/chat_template_test.cpp src/text/chat_template.cpp)
+    add_executable(chat_template_test tests/chat_template_test.cpp src/text/chat_template.cpp
+        src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp)
     target_include_directories(chat_template_test PRIVATE include)
     add_test(NAME chat_template_test COMMAND chat_template_test)
+    add_executable(conversation_test tests/conversation_test.cpp)
+    target_include_directories(conversation_test PRIVATE include)
+    add_test(NAME conversation_test COMMAND conversation_test)
     add_executable(reference_test tests/reference_test.cpp src/model/reference.cpp)
     target_include_directories(reference_test PRIVATE include)
     add_test(NAME reference_test COMMAND reference_test)
@@ -486,12 +494,18 @@ if(CELEG_BUILD_TESTS)
     add_executable(quantization_test tests/quantization_test.cpp src/model/weights/quantization.cpp)
     target_include_directories(quantization_test PRIVATE include)
     add_test(NAME quantization_test COMMAND quantization_test)
-    add_executable(tokenizer_test tests/tokenizer_test.cpp src/text/tokenizer.cpp src/text/chat_template.cpp src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
+    add_executable(tokenizer_test tests/tokenizer_test.cpp src/text/tokenizer.cpp src/text/chat_template.cpp
+        src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
-    add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp src/text/tokenizer.cpp src/text/chat_template.cpp src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
+    add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp src/text/tokenizer.cpp src/text/chat_template.cpp
+        src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_benchmark PRIVATE include)
-    add_executable(tokenizer_probe tests/tokenizer_probe.cpp src/text/tokenizer.cpp src/text/chat_template.cpp src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
+    add_executable(tokenizer_probe tests/tokenizer_probe.cpp src/text/tokenizer.cpp src/text/chat_template.cpp
+        src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_probe PRIVATE include)
     add_executable(safetensors_test tests/safetensors_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(safetensors_test PRIVATE include)

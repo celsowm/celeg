@@ -3,6 +3,7 @@
 #include "celeg/checkpoint/weight_repository.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,11 +44,14 @@ enum class TensorRole : uint8_t {
     MoeExpertDown,
 };
 
+std::string_view tensor_role_name(TensorRole role);
+
 struct TensorRequest {
     TensorRole role;
     int layer = -1;
     int expert = -1;
     std::vector<int64_t> expected_shape;
+    std::optional<std::string> source_name;
 };
 
 struct ResolvedTensor {

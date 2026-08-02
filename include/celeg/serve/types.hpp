@@ -23,6 +23,7 @@ enum class FinishReason : std::uint8_t {
     Length,
     Cancelled,
     Error,
+    ToolCalls,
 };
 
 struct GenerateRequest {

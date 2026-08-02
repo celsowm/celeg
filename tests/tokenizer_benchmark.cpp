@@ -10,6 +10,10 @@ namespace {
 
 std::string make_prompt(size_t target_bytes) {
     static constexpr const char* corpus =
+        "<|startoftext|><|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+        "<|im_start|>user\nWhat is the weather?<|im_end|>\n"
+        "<|im_start|>assistant\n<|tool_call_start|>[weather(city='Paris')]<|tool_call_end|><|im_end|>\n"
+        "<|im_start|>tool\n<|tool_response_start|>sunny<|tool_response_end|><|im_end|>\n"
         "The quick brown fox jumps over 1234567890.\n"
         "Unicode: café Ελληνικά 日本語 한국어 العربية.\n"
         "Code: for (size_t i = 0; i < 1024; ++i) value += i;\n";

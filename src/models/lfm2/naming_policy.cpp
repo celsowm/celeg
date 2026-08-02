@@ -56,8 +56,7 @@ std::vector<std::string> CelegTensorNamingPolicy::candidates(
     default: {
         const std::string suffix = role_suffix(request.role);
         if (suffix.empty()) {
-            throw std::invalid_argument("tensor role has no LFM spelling: " +
-                                        std::to_string(static_cast<int>(request.role)));
+            return {};
         }
         return {layer_name(request.layer, suffix)};
     }

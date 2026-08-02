@@ -10,9 +10,9 @@
 namespace celeg::detail {
 namespace {
 
-std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+const ITensorNamingPolicy* naming_policy() {
     static const GraniteTensorNamingPolicy policy;
-    return std::shared_ptr<const ITensorNamingPolicy>(&policy, [](const ITensorNamingPolicy*) {});
+    return &policy;
 }
 
 class GraniteArchitecture final : public IArchitecture {

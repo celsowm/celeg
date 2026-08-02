@@ -38,22 +38,17 @@ double optional_number(const CheckpointMetadata& metadata, std::string_view key,
     return metadata.contains(flattened) ? metadata.number(flattened) : fallback;
 }
 
-std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+const ITensorNamingPolicy* naming_policy() {
     static const Gemma4TensorNamingPolicy policy;
-    return std::shared_ptr<const ITensorNamingPolicy>(&policy,
-        [](const ITensorNamingPolicy*) {});
+    return &policy;
 }
 
 void add_request(ResolvedModel& model, TensorRequest request) {
     if (model.tensor_naming) {
         const auto names = model.tensor_naming->candidates(request);
-        if (!names.empty()) model.tensor_bindings.source_names.push_back(names.front());
+        if (!names.empty()) request.source_name = names.front();
     }
     model.weight_plan.requests.push_back(std::move(request));
-}
-
-int group_for_type(std::string_view layer_type) {
-    return layer_type == "sliding_attention" ? 0 : 1;
 }
 
 RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
@@ -99,12 +94,7 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
     if (metadata.contains(schedule_key)) {
         layer_types = metadata.strings(schedule_key);
     } else {
-        layer_types.resize(static_cast<size_t>(topology.num_hidden_layers));
-        for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-            layer_types[static_cast<size_t>(layer)] =
-                ((layer + 1) % 6 == 0 || layer == topology.num_hidden_layers - 1)
-                ? "full_attention" : "sliding_attention";
-        }
+        throw std::runtime_error("Gemma 4 layer_types metadata is required");
     }
     if (static_cast<int>(layer_types.size()) != topology.num_hidden_layers) {
         throw std::runtime_error("Gemma 4 layer_types length does not match num_hidden_layers");
@@ -122,7 +112,8 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
 
     topology.mixer_kinds.assign(static_cast<size_t>(topology.num_hidden_layers),
                                 MixerKind::Attention);
-    topology.layer_types = topology.mixer_kinds;
+    topology.feed_forward_kinds.assign(
+        static_cast<size_t>(topology.num_hidden_layers), FeedForwardKind::Dense);
     topology.attention_slot_for_layer.resize(static_cast<size_t>(topology.num_hidden_layers));
     topology.layer_for_attention_slot.resize(static_cast<size_t>(topology.num_hidden_layers));
     topology.attention_layouts.resize(static_cast<size_t>(topology.num_hidden_layers));
@@ -133,6 +124,7 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
     topology.attention_layer_count = topology.num_hidden_layers;
     topology.conv_layer_count = 0;
 
+    std::vector<std::string> kv_group_types;
     for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
         const bool full = layer_types[static_cast<size_t>(layer)] == "full_attention";
         if (!full && layer_types[static_cast<size_t>(layer)] != "sliding_attention") {
@@ -148,7 +140,11 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
         const double rotary_fraction = metadata.number_or(
             rope_prefix + "partial_rotary_factor", 1.0);
         const bool is_shared = layer >= shared_start && shared_start > 0;
-        const int group = group_for_type(type);
+        const auto group_it = std::find(kv_group_types.begin(), kv_group_types.end(), type);
+        const int group = group_it == kv_group_types.end()
+            ? static_cast<int>(kv_group_types.size())
+            : static_cast<int>(std::distance(kv_group_types.begin(), group_it));
+        if (group_it == kv_group_types.end()) kv_group_types.push_back(type);
         bool publishes = false;
         if (!is_shared && shared_start > 0) {
             publishes = true;
@@ -171,17 +167,8 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
         spec.kv_sharing = (is_shared || publishes)
             ? KvSharingSpec{group, publishes} : KvSharingSpec{};
         topology.attention_layouts[static_cast<size_t>(layer)] = spec;
-        if (spec.kv_sharing.shared()) ++topology.shared_kv_group_count;
     }
-    // Count each group once rather than once per owner/consumer layer.
-    topology.shared_kv_group_count = 0;
-    for (int group = 0; group < 2; ++group) {
-        const bool present = std::any_of(topology.attention_layouts.begin(),
-            topology.attention_layouts.end(), [group](const AttentionSpec& spec) {
-                return spec.kv_sharing.group == group;
-            });
-        if (present) ++topology.shared_kv_group_count;
-    }
+    topology.shared_kv_group_count = static_cast<int>(kv_group_types.size());
     topology.validate();
     return topology;
 }

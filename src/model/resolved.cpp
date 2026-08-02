@@ -31,12 +31,13 @@ void RuntimeTopology::validate() const {
         num_hidden_layers <= 0) {
         throw std::runtime_error("invalid resolved model topology");
     }
-    if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers ||
-        static_cast<int>(layer_types.size()) != num_hidden_layers) {
+    if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
-            std::to_string(mixer_kinds.size()) + " layers=" +
-            std::to_string(layer_types.size()) + " expected=" +
+            std::to_string(mixer_kinds.size()) + " expected=" +
             std::to_string(num_hidden_layers));
+    }
+    if (static_cast<int>(feed_forward_kinds.size()) != num_hidden_layers) {
+        throw std::runtime_error("resolved feed-forward schedule length mismatch");
     }
     if (attention_layer_count + conv_layer_count != num_hidden_layers) {
         throw std::runtime_error("resolved layer counts are inconsistent");

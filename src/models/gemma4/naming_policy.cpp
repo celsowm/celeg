@@ -59,7 +59,7 @@ std::vector<std::string> Gemma4TensorNamingPolicy::candidates(
     case TensorRole::LayerScalar:
         return {prefix + layer + "layer_scalar"};
     default:
-        throw std::invalid_argument("tensor role has no Gemma 4 spelling");
+        return {};
     }
 }
 

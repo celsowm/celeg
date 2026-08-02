@@ -74,8 +74,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
-        const celeg::BpeTokenizer tokenizer((model / "tokenizer.json").string(),
-            celeg::make_chat_template(bootstrap.model.chat_profile_id));
+        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
+        const celeg::BpeTokenizer tokenizer((model / "tokenizer.json").string());
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
@@ -114,9 +115,12 @@ int main(int argc, char** argv) {
         celeg::app::serve::register_health_routes(app);
         celeg::app::serve::register_docs_routes(app, model_name);
         celeg::app::serve::register_models_route(app, model_name);
-        celeg::app::serve::register_tokenize_route(app, tokenizer, static_cast<std::size_t>(args.context));
+        celeg::app::serve::register_tokenize_route(
+            app, tokenizer, chat_template, static_cast<std::size_t>(args.context));
         celeg::app::serve::register_chat_completions_route(
-            app, dispatcher, service->requests(), tokenizer, model_name, eos_token_id, loop);
+            app, dispatcher, service->requests(), tokenizer, chat_template,
+            chat_catalog.capabilities(bootstrap.model.chat_profile_id),
+            model_name, eos_token_id, loop);
 
         app.listen(args.port, [&](auto* listen_socket) {
               if (listen_socket) {

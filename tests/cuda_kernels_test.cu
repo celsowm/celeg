@@ -38,14 +38,14 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.pad_token_id = 0;
             shape.norm_eps = 1e-5f;
             shape.rope_type = "default";
-            shape.layer_types = {
-                celeg::LayerType::Convolution, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
+            shape.mixer_kinds = {
+                celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
             };
         } else {
             // The Thinking and Instruct profiles share the same topology.
@@ -61,18 +61,17 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.pad_token_id = 0;
             shape.norm_eps = 1e-5f;
             shape.rope_type = "default";
-            shape.layer_types = {
-                celeg::LayerType::Convolution, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::Convolution, celeg::LayerType::FullAttention,
-                celeg::LayerType::Convolution, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
-                celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
+            shape.mixer_kinds = {
+                celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::ShortConvolution, celeg::MixerKind::Attention,
+                celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
+                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
             };
         }
-        shape.mixer_kinds = shape.layer_types;
         const int query_heads = model == 0 ? 16 : 32;
         shape.attention_layouts.assign(
             static_cast<size_t>(shape.num_hidden_layers),
@@ -82,7 +81,7 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
         shape.attention_layer_count = 0;
         shape.conv_layer_count = 0;
         for (int i = 0; i < shape.num_hidden_layers; ++i) {
-            if (shape.layer_types[static_cast<size_t>(i)] == celeg::LayerType::FullAttention) {
+            if (shape.mixer_kinds[static_cast<size_t>(i)] == celeg::MixerKind::Attention) {
                 shape.attention_slot_for_layer.push_back(shape.attention_layer_count++);
                 shape.layer_for_attention_slot.push_back(i);
             } else {
