@@ -1,8 +1,10 @@
 #pragma once
 
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/model/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/concurrency/metrics.hpp"
+#include "celeg/runtime/request_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,10 +13,6 @@
 #include <vector>
 
 namespace celeg {
-
-using RequestId = uint64_t;
-
-const char* request_status_name(RequestStatus status);
 
 struct ConcurrentEngineOptions {
     int max_active_requests = 8;
@@ -34,29 +32,18 @@ struct ConcurrentEngineOptions {
     size_t prefix_cache_entries = 64;
 };
 
-struct ConcurrentRequestOptions {
-    int max_new_tokens = 128;
-    int eos_token = 7;
-    int priority = 0;
-    GenerationConfig generation{};
-};
-
-struct PollResult {
-    RequestStatus status = RequestStatus::Queued;
-    std::vector<int32_t> tokens;
-    bool finished = false;
-    std::string error;
-};
+struct CudaSchedulerDriver;
 
 // Stable serving facade. Scheduling, request ownership, worker lifecycle and
-// CUDA execution live behind Impl and can evolve independently of callers.
+// CUDA execution live behind CudaSchedulerDriver and can evolve independently
+// of callers.
 class ConcurrentEngine {
 public:
     using RequestId = celeg::RequestId;
 
     ConcurrentEngine(std::string model_path,
                      int max_context,
-                     ModelOptions model_options = {},
+                     CudaModelOptions model_options = {},
                      ConcurrentEngineOptions engine_options = {});
     ~ConcurrentEngine();
 
@@ -86,8 +73,7 @@ public:
     GroupedConcurrentMetrics grouped_metrics() const;
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<CudaSchedulerDriver> state_;
 };
 
 } // namespace celeg

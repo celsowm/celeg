@@ -8,59 +8,59 @@
 
 namespace celeg {
 
-CpuModel::Impl::Impl(std::shared_ptr<Shared> shared_weights,
+CpuCompiledModel::CpuCompiledModel(std::shared_ptr<Shared> shared_weights,
                      GenerationConfig generation_config,
                      int requested_numa_node)
-    : shared(std::move(shared_weights)), generation(generation_config),
+    : shared(std::move(shared_weights)), session_(generation_config),
       preferred_numa_node(requested_numa_node) {
     if (!shared) throw std::invalid_argument("shared CPU model weights are required");
-    generation.validate();
+    session_.generation.validate();
     allocate_state();
     allocate_activations();
     reset();
 }
 
-CpuModel::Impl::~Impl() {
-    for (LayerState& layer : states) {
+CpuCompiledModel::~CpuCompiledModel() {
+    for (LayerState& layer : session_.states) {
         if (auto* attention = std::get_if<AttentionState>(&layer)) {
             release_attention_pages(*attention);
         }
     }
 }
 
-void CpuModel::Impl::allocate_state() {
-    states.reserve(shared->layers.size());
-    for (size_t index = 0; index < shared->layers.size(); ++index) {
-        const WeightLayer& layer = shared->layers[index];
+void CpuCompiledModel::allocate_state() {
+    session_.states.reserve(shared->weight_store.layers.size());
+    for (size_t index = 0; index < shared->weight_store.layers.size(); ++index) {
+        const WeightLayer& layer = shared->weight_store.layers[index];
         if (attention_operator(layer)) {
             const int pool = shared->layer_to_kv_pool.at(index);
             if (pool < 0) throw std::logic_error("attention layer has no CPU KV page pool");
             AttentionState state;
             state.pool_index = static_cast<size_t>(pool);
-            states.emplace_back(std::move(state));
+            session_.states.emplace_back(std::move(state));
         } else {
             ConvolutionState state;
             state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
                                shared->shape.hidden);
-            states.emplace_back(std::move(state));
+            session_.states.emplace_back(std::move(state));
         }
     }
 }
 
-void CpuModel::Impl::allocate_activations() {
-    ensure(1, shared->shape);
-    logits.resize(shared->shape.vocab_size);
-    seen.resize(shared->shape.vocab_size);
+void CpuCompiledModel::allocate_activations() {
+    workspace_.ensure(1, shared->shape);
+    workspace_.logits.resize(shared->shape.vocab_size);
+    session_.seen.resize(shared->shape.vocab_size);
 }
 
-const CpuModel::Impl::CommonWeights& CpuModel::Impl::common_weights(
+const CpuCompiledModel::CommonWeights& CpuCompiledModel::common_weights(
     size_t layer) const {
     return std::visit([](const auto& value) -> const CommonWeights& {
         return value.common;
-    }, shared->layers.at(layer));
+    }, shared->weight_store.layers.at(layer));
 }
 
-const CpuModel::Impl::AttentionWeights* CpuModel::Impl::attention_operator(
+const CpuCompiledModel::AttentionWeights* CpuCompiledModel::attention_operator(
     const WeightLayer& layer) {
     if (const auto* attention = std::get_if<AttentionWeights>(&layer)) {
         return attention;
@@ -71,7 +71,7 @@ const CpuModel::Impl::AttentionWeights* CpuModel::Impl::attention_operator(
     return nullptr;
 }
 
-const CpuModel::Impl::ConvolutionWeights* CpuModel::Impl::convolution_operator(
+const CpuCompiledModel::ConvolutionWeights* CpuCompiledModel::convolution_operator(
     const WeightLayer& layer) {
     if (const auto* convolution = std::get_if<ConvolutionWeights>(&layer)) {
         return convolution;
@@ -82,26 +82,26 @@ const CpuModel::Impl::ConvolutionWeights* CpuModel::Impl::convolution_operator(
     return nullptr;
 }
 
-CpuModel::Impl::AttentionState& CpuModel::Impl::attention_state(size_t layer) {
-    return std::get<AttentionState>(states.at(layer));
+CpuCompiledModel::AttentionState& CpuCompiledModel::attention_state(size_t layer) {
+    return std::get<AttentionState>(session_.states.at(layer));
 }
 
-const CpuModel::Impl::AttentionState& CpuModel::Impl::attention_state(
+const CpuCompiledModel::AttentionState& CpuCompiledModel::attention_state(
     size_t layer) const {
-    return std::get<AttentionState>(states.at(layer));
+    return std::get<AttentionState>(session_.states.at(layer));
 }
 
-CpuModel::Impl::ConvolutionState& CpuModel::Impl::convolution_state(
+CpuCompiledModel::ConvolutionState& CpuCompiledModel::convolution_state(
     size_t layer) {
-    return std::get<ConvolutionState>(states.at(layer));
+    return std::get<ConvolutionState>(session_.states.at(layer));
 }
 
-const CpuModel::Impl::ConvolutionState& CpuModel::Impl::convolution_state(
+const CpuCompiledModel::ConvolutionState& CpuCompiledModel::convolution_state(
     size_t layer) const {
-    return std::get<ConvolutionState>(states.at(layer));
+    return std::get<ConvolutionState>(session_.states.at(layer));
 }
 
-void CpuModel::Impl::release_attention_pages(AttentionState& state) noexcept {
+void CpuCompiledModel::release_attention_pages(AttentionState& state) noexcept {
     if (!shared || state.pool_index >= shared->kv_pools.size()) return;
     auto& pool = *shared->kv_pools[state.pool_index];
     for (CpuKvPageId page : state.pages) {
@@ -117,7 +117,7 @@ void CpuModel::Impl::release_attention_pages(AttentionState& state) noexcept {
     state.token_count = 0;
 }
 
-void CpuModel::Impl::store_kv(AttentionState& state, int position,
+void CpuCompiledModel::store_kv(AttentionState& state, int position,
                               const float* key, const float* value) {
     if (position < 0) throw std::invalid_argument("negative CPU KV position");
     CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
@@ -138,7 +138,7 @@ void CpuModel::Impl::store_kv(AttentionState& state, int position,
     state.token_count = std::max(state.token_count, position_value + 1);
 }
 
-void CpuModel::Impl::run_attention(const AttentionState& state,
+void CpuCompiledModel::run_attention(const AttentionState& state,
                                    const float* q, float* output,
                                    int sequence_length) const {
     if (sequence_length <= 0 || static_cast<size_t>(sequence_length) > state.token_count) {
@@ -155,17 +155,17 @@ void CpuModel::Impl::run_attention(const AttentionState& state,
             shared->options.attention_page_tile},
         &attention_stats);
     if (attention_stats.parallel) {
-        ++const_cast<Impl*>(this)->attention_parallel_calls;
+        ++const_cast<CpuCompiledModel*>(this)->session_.attention_parallel_calls;
     }
 }
 
-CpuPrefixSnapshot CpuModel::Impl::export_prefix_snapshot() const {
+CpuPrefixSnapshot CpuCompiledModel::export_prefix_snapshot() const {
     CpuPrefixSnapshot snapshot;
-    snapshot.position = static_cast<size_t>(position_value);
+    snapshot.position = static_cast<size_t>(session_.position_value);
     snapshot.numa_node = preferred_numa_node;
-    snapshot.logits = logits;
-    snapshot.seen_tokens = seen;
-    for (const LayerState& layer : states) {
+    snapshot.logits = workspace_.logits;
+    snapshot.seen_tokens = session_.seen;
+    for (const LayerState& layer : session_.states) {
         if (const auto* attention = std::get_if<AttentionState>(&layer)) {
             snapshot.attention_pages.push_back(attention->pages);
             snapshot.attention_token_counts.push_back(attention->token_count);
@@ -177,19 +177,19 @@ CpuPrefixSnapshot CpuModel::Impl::export_prefix_snapshot() const {
     return snapshot;
 }
 
-void CpuModel::Impl::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
+void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
                                              bool ready_for_decode) {
     size_t expected_attention = 0;
     size_t expected_convolution = 0;
-    for (const LayerState& layer : states) {
+    for (const LayerState& layer : session_.states) {
         if (std::holds_alternative<AttentionState>(layer)) ++expected_attention;
         else ++expected_convolution;
     }
     if (snapshot.attention_pages.size() != expected_attention ||
         snapshot.attention_token_counts.size() != expected_attention ||
         snapshot.convolution_states.size() != expected_convolution ||
-        snapshot.logits.size() != logits.size() ||
-        snapshot.seen_tokens.size() != seen.size() ||
+        snapshot.logits.size() != workspace_.logits.size() ||
+        snapshot.seen_tokens.size() != session_.seen.size() ||
         snapshot.position > static_cast<size_t>(shared->max_context)) {
         throw std::invalid_argument("CPU prefix snapshot shape is invalid");
     }
@@ -207,7 +207,7 @@ void CpuModel::Impl::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
     size_t attention_index = 0;
     size_t convolution_index = 0;
     try {
-        for (LayerState& layer : states) {
+        for (LayerState& layer : session_.states) {
             if (auto* attention = std::get_if<AttentionState>(&layer)) {
                 attention->pages = std::move(snapshot.attention_pages[attention_index]);
                 attention->token_count = snapshot.attention_token_counts[attention_index];
@@ -218,12 +218,12 @@ void CpuModel::Impl::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
                 ++convolution_index;
             }
         }
-        logits = std::move(snapshot.logits);
-        seen = std::move(snapshot.seen_tokens);
-        position_value = static_cast<int>(snapshot.position);
+        workspace_.logits = std::move(snapshot.logits);
+        session_.seen = std::move(snapshot.seen_tokens);
+        session_.position_value = static_cast<int>(snapshot.position);
         preferred_numa_node = snapshot.numa_node;
-        phase = ready_for_decode ? SessionPhase::Ready : SessionPhase::Prefilling;
-        rng_state = generation.seed;
+        session_.phase = ready_for_decode ? SessionPhase::Ready : SessionPhase::Prefilling;
+        session_.rng_state = session_.generation.seed;
     } catch (...) {
         reset();
         // Pages not yet transferred remain owned by snapshot. Release them.
@@ -245,14 +245,14 @@ void CpuModel::Impl::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
     }
 }
 
-void CpuModel::Impl::reset() {
-    position_value = 0;
-    phase = SessionPhase::Empty;
-    metrics = {};
-    rng_state = generation.seed;
-    std::fill(seen.begin(), seen.end(), uint8_t{0});
-    std::fill(logits.begin(), logits.end(), 0.0f);
-    for (LayerState& state : states) {
+void CpuCompiledModel::reset() {
+    session_.position_value = 0;
+    session_.phase = SessionPhase::Empty;
+    session_.metrics = {};
+    session_.rng_state = session_.generation.seed;
+    std::fill(session_.seen.begin(), session_.seen.end(), uint8_t{0});
+    std::fill(workspace_.logits.begin(), workspace_.logits.end(), 0.0f);
+    for (LayerState& state : session_.states) {
         if (auto* attention = std::get_if<AttentionState>(&state)) {
             release_attention_pages(*attention);
         } else {
@@ -262,10 +262,16 @@ void CpuModel::Impl::reset() {
     }
 }
 
-CpuModelMemoryStats CpuModel::Impl::memory_stats() const {
+void CpuCompiledModel::set_generation(GenerationConfig config) {
+    config.validate();
+    session_.generation = std::move(config);
+    session_.rng_state = session_.generation.seed;
+}
+
+CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
     CpuModelMemoryStats stats;
     stats.weights = shared->weights_memory_bytes();
-    for (const LayerState& state : states) {
+    for (const LayerState& state : session_.states) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, AttentionState>) {
@@ -279,12 +285,12 @@ CpuModelMemoryStats CpuModel::Impl::memory_stats() const {
         }, state);
     }
     stats.activations =
-        (hidden.size() + residual.size() + normed.size() + op_output.size() +
-         qkv.size() + conv_projected.size() + gate_up.size() + activated.size() +
-         mlp_output.size() + logits.size() + chunk_hidden.size() +
-         chunk_residual.size() + chunk_normed.size() + chunk_op.size() +
-         chunk_qkv.size() + chunk_conv.size() + chunk_gate_up.size() +
-         chunk_activated.size() + chunk_mlp.size()) * sizeof(float) + seen.size();
+        (workspace_.hidden.size() + workspace_.residual.size() + workspace_.normed.size() + workspace_.op_output.size() +
+         workspace_.qkv.size() + workspace_.conv_projected.size() + workspace_.gate_up.size() + workspace_.activated.size() +
+         workspace_.mlp_output.size() + workspace_.logits.size() + workspace_.chunk_hidden.size() +
+         workspace_.chunk_residual.size() + workspace_.chunk_normed.size() + workspace_.chunk_op.size() +
+         workspace_.chunk_qkv.size() + workspace_.chunk_conv.size() + workspace_.chunk_gate_up.size() +
+         workspace_.chunk_activated.size() + workspace_.chunk_mlp.size()) * sizeof(float) + session_.seen.size();
     return stats;
 }
 

@@ -3,6 +3,8 @@
 #include "celeg/serve/types.hpp"
 
 #include <cstddef>
+#include <memory>
+#include <utility>
 
 namespace celeg::serve {
 
@@ -10,9 +12,9 @@ namespace celeg::serve {
 // neither has to branch on backend. CpuInferenceService and
 // CudaInferenceService are the only two implementations; callers must not
 // reach past this interface into CpuConcurrentEngine / ConcurrentEngine.
-class IInferenceService {
+class IRequestService {
 public:
-    virtual ~IInferenceService() = default;
+    virtual ~IRequestService() = default;
 
     virtual RequestId submit(GenerateRequest request) = 0;
 
@@ -27,14 +29,49 @@ public:
     // otherwise or if the id is unknown.
     virtual bool release(RequestId id) = 0;
 
-    virtual ModelInfo model_info() const = 0;
-    virtual ServingMetrics metrics() const = 0;
+};
+
+class ISchedulerDriver {
+public:
+    virtual ~ISchedulerDriver() = default;
 
     // Drives the underlying scheduler. Intended to be called from a single
     // dispatcher thread, never from the HTTP event loop.
     virtual bool step() = 0;
     virtual void start() = 0;
     virtual void stop() = 0;
+};
+
+class IServiceDiagnostics {
+public:
+    virtual ~IServiceDiagnostics() = default;
+
+    virtual ModelInfo model_info() const = 0;
+    virtual ServingMetrics metrics() const = 0;
+};
+
+// Owns one concrete service while exposing its three independent roles. The
+// role pointers are non-owning views into requests; destruction is performed
+// exactly once through the request interface.
+class ServiceBundle {
+public:
+    template <typename Service>
+    explicit ServiceBundle(std::unique_ptr<Service> service)
+        : requests_(std::move(service)) {
+        auto* concrete = static_cast<Service*>(requests_.get());
+        scheduler_ = concrete;
+        diagnostics_ = concrete;
+    }
+
+    IRequestService& requests() { return *requests_; }
+    const IRequestService& requests() const { return *requests_; }
+    ISchedulerDriver& scheduler() { return *scheduler_; }
+    IServiceDiagnostics& diagnostics() { return *diagnostics_; }
+
+private:
+    std::unique_ptr<IRequestService> requests_;
+    ISchedulerDriver* scheduler_ = nullptr;
+    IServiceDiagnostics* diagnostics_ = nullptr;
 };
 
 } // namespace celeg::serve

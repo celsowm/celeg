@@ -6,6 +6,18 @@
 
 namespace celeg {
 
+const char* request_status_name(RequestStatus status) {
+    switch (status) {
+        case RequestStatus::Queued: return "queued";
+        case RequestStatus::Prefill: return "prefilling";
+        case RequestStatus::Decoding: return "decoding";
+        case RequestStatus::Finished: return "completed";
+        case RequestStatus::Cancelled: return "cancelled";
+        case RequestStatus::Failed: return "failed";
+    }
+    return "unknown";
+}
+
 PagedBlockPool::PagedBlockPool(size_t pages, int page_tokens)
     : page_tokens_(page_tokens), ref_counts_(pages, 0) {
     if (pages == 0) throw std::invalid_argument("paged pool needs pages");

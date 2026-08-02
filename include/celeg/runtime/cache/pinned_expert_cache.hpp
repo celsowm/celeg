@@ -66,8 +66,13 @@ private:
 
 class PinnedExpertCache {
 public:
+    using HostAllocateFn = void* (*)(std::size_t);
+    using HostDeallocateFn = void (*)(void*);
+
     PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
-                      std::size_t gate_up_bytes, std::size_t down_bytes);
+                      std::size_t gate_up_bytes, std::size_t down_bytes,
+                      HostAllocateFn allocate = nullptr,
+                      HostDeallocateFn deallocate = nullptr);
     ~PinnedExpertCache();
 
     PinnedExpertCache(const PinnedExpertCache&) = delete;
@@ -81,22 +86,38 @@ public:
 
     void release_slot(int slot_idx);
 
-    std::size_t hits() const { return hits_; }
-    std::size_t misses() const { return misses_; }
-    std::size_t evictions() const { return evictions_; }
-    std::size_t bytes_read() const { return bytes_read_; }
-    double total_wait_time_ms() const { return total_wait_time_ms_; }
+    std::size_t hits() const {
+        std::lock_guard lock(mutex_);
+        return hits_;
+    }
+    std::size_t misses() const {
+        std::lock_guard lock(mutex_);
+        return misses_;
+    }
+    std::size_t evictions() const {
+        std::lock_guard lock(mutex_);
+        return evictions_;
+    }
+    std::size_t bytes_read() const {
+        std::lock_guard lock(mutex_);
+        return bytes_read_;
+    }
+    double total_wait_time_ms() const {
+        std::lock_guard lock(mutex_);
+        return total_wait_time_ms_;
+    }
 
 private:
     friend class ExpertHostLease;
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::size_t bytes_per_expert_ = 0;
     std::size_t gate_up_bytes_ = 0;
     std::size_t down_bytes_ = 0;
     int capacity_ = 0;
 
     void* arena_ = nullptr;
+    HostDeallocateFn deallocate_ = nullptr;
 
     struct CacheSlot {
         int layer = -1;

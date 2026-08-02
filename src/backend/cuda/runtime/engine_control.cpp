@@ -1,7 +1,7 @@
 #include "engine_internal.hpp"
 
 namespace celeg {
-bool ConcurrentEngine::Impl::step() {
+bool CudaSchedulerDriver::step() {
     std::lock_guard<std::mutex> step_lock(step_mutex_);
     const auto started = std::chrono::steady_clock::now();
     bool did_work = false;
@@ -22,7 +22,7 @@ bool ConcurrentEngine::Impl::step() {
     return did_work;
 }
 
-void ConcurrentEngine::Impl::start() {
+void CudaSchedulerDriver::start() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = false;
@@ -31,7 +31,7 @@ void ConcurrentEngine::Impl::start() {
                   engine_options_.idle_sleep_microseconds);
 }
 
-void ConcurrentEngine::Impl::stop() {
+void CudaSchedulerDriver::stop() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
@@ -39,11 +39,11 @@ void ConcurrentEngine::Impl::stop() {
     worker_.stop();
 }
 
-bool ConcurrentEngine::Impl::running() const {
+bool CudaSchedulerDriver::running() const {
     return worker_.running();
 }
 
-ConcurrentMetrics ConcurrentEngine::Impl::metrics() const {
+ConcurrentMetrics CudaSchedulerDriver::metrics() const {
     std::lock_guard<std::mutex> lock(mutex_);
     ConcurrentMetrics snapshot = metrics_;
     if (prefix_cache_) {
@@ -64,7 +64,7 @@ ConcurrentMetrics ConcurrentEngine::Impl::metrics() const {
     return snapshot;
 }
 
-GroupedConcurrentMetrics ConcurrentEngine::Impl::grouped_metrics() const {
+GroupedConcurrentMetrics CudaSchedulerDriver::grouped_metrics() const {
     return group_concurrent_metrics(metrics());
 }
 

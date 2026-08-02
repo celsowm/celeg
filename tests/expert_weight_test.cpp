@@ -1,4 +1,4 @@
-#include "celeg/model/weights/loader.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/detail/binary_codec.hpp"
 #include "support/assertions.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"

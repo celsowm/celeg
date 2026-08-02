@@ -7,6 +7,7 @@
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <filesystem>
@@ -21,7 +22,7 @@ namespace celeg {
 
 // Capacity-managed activation storage shared by all CPU execution modes.
 // The executor chooses the row count; buffers are retained between calls.
-struct CpuExecutionWorkspace {
+struct CpuWorkspace {
     void ensure(size_t rows, const RuntimeTopology& shape) {
         hidden.resize(rows * shape.hidden);
         residual.resize(rows * shape.hidden);
@@ -55,7 +56,7 @@ struct CpuExecutionWorkspace {
     std::vector<CpuGroupedGemmJob> moe_gemm_jobs;
 };
 
-struct CpuModel::Impl : CpuExecutionWorkspace {
+struct CpuCompiledModel {
     struct BatchScratch;
     struct CommonWeights {
         std::vector<float> operator_norm;
@@ -94,6 +95,13 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
     };
     using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights, MoeWeights>;
 
+    struct CpuWeightStore {
+        CpuLinearWeight embedding;
+        CpuLinearWeight lm_head;
+        std::vector<float> final_norm;
+        std::vector<WeightLayer> layers;
+    };
+
     struct Shared {
         Shared(const std::string& path, int context, CpuModelOptions requested);
 
@@ -123,7 +131,7 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
         size_t weights_memory_bytes() const;
 
         std::string model_path;
-        bool is_gguf = false;
+        bool native_checkpoint = false;
         std::shared_ptr<IWeightRepository> repository;
         int max_context = 0;
         CpuModelOptions options;
@@ -135,13 +143,11 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
         std::string source_id;
         bool loaded_pack = false;
         RuntimeTopology shape;
+        CompiledModelProgram program;
         std::string model_identity;
         const ITensorNamingPolicy* tensor_naming = nullptr;
         bool tie_word_embeddings = true;
-        CpuLinearWeight embedding;
-        CpuLinearWeight lm_head;
-        std::vector<float> final_norm;
-        std::vector<WeightLayer> layers;
+        CpuWeightStore weight_store;
         std::vector<std::shared_ptr<CpuKvPagePool>> kv_pools;
         std::vector<int> layer_to_kv_pool;
     };
@@ -156,20 +162,34 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
     };
     using LayerState = std::variant<AttentionState, ConvolutionState>;
 
-    Impl(std::shared_ptr<Shared> shared_weights,
+    struct CpuSessionState {
+        explicit CpuSessionState(GenerationConfig config)
+            : generation(std::move(config)) {}
+
+        GenerationConfig generation;
+        std::vector<LayerState> states;
+        std::vector<uint8_t> seen;
+        int position_value = 0;
+        uint64_t attention_parallel_calls = 0;
+        SessionPhase phase = SessionPhase::Empty;
+        uint64_t rng_state = 1;
+        RuntimeMetrics metrics;
+        CpuPrefillProfile prefill_profile;
+    };
+
+    CpuCompiledModel(std::shared_ptr<Shared> shared_weights,
          GenerationConfig generation_config,
          int preferred_numa_node = -1);
-    ~Impl();
+    ~CpuCompiledModel();
 
     void allocate_state();
     void allocate_activations();
     void reset();
     void forward_token(int32_t token, bool compute_logits);
     void forward_chunk(std::span<const int32_t> tokens, bool compute_logits);
-    static void forward_batch(std::span<Impl* const> sessions,
+    static void forward_batch(std::span<CpuCompiledModel* const> sessions,
                               std::span<const int32_t> tokens,
                               std::span<const uint8_t> compute_logits);
-    int32_t sample();
     void set_generation(GenerationConfig config);
     CpuModelMemoryStats memory_stats() const;
 
@@ -192,18 +212,9 @@ struct CpuModel::Impl : CpuExecutionWorkspace {
                                  bool ready_for_decode);
 
     std::shared_ptr<Shared> shared;
-    GenerationConfig generation;
-    std::vector<LayerState> states;
-
-    std::vector<uint8_t> seen;
-
-    int position_value = 0;
+    CpuWorkspace workspace_;
+    CpuSessionState session_;
     int preferred_numa_node = -1;
-    uint64_t attention_parallel_calls = 0;
-    SessionPhase phase = SessionPhase::Empty;
-    uint64_t rng_state = 1;
-    RuntimeMetrics metrics;
-    CpuPrefillProfile prefill_profile;
 };
 
 } // namespace celeg

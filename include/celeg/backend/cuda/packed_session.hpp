@@ -1,9 +1,9 @@
 #pragma once
 
 #include "celeg/backend/cuda/utils.cuh"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/model/resolved.hpp"
-#include "celeg/model/weights/layout.hpp"
+#include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/detail/model/types.hpp"
 
 #include <cstdint>
@@ -16,7 +16,7 @@ namespace celeg {
 // ragged-prefill batch.  It contains only the resources that the packed
 // executor is allowed to touch; model loading, graph capture, and unrelated
 // session operations are deliberately absent.  The context is copied into a
-// batch before execution, while its pointed-to state remains owned by Model.
+// batch before execution, while its pointed-to state remains owned by CudaModel.
 //
 // Callback fields are construction-time bindings to the concrete model
 // program. They avoid a virtual getter interface and keep architecture and
@@ -32,7 +32,7 @@ struct PackedSessionContext {
     int max_context_value = 0;
     const bool* local_kv_cache_available_state = nullptr;
     bool* active_segmented_attention_state = nullptr;
-    const ModelOptions* options_state = nullptr;
+    const CudaModelOptions* options_state = nullptr;
     const GenerationConfig* generation_state = nullptr;
     const RuntimeTopology* shape_state = nullptr;
     std::shared_ptr<SharedModelWeights> weights_state;
@@ -69,7 +69,7 @@ struct PackedSessionContext {
     void set_active_segmented_attention(bool value) const {
         *active_segmented_attention_state = value;
     }
-    const ModelOptions& options() const { return *options_state; }
+    const CudaModelOptions& options() const { return *options_state; }
     const GenerationConfig& generation() const { return *generation_state; }
     const RuntimeTopology& shape() const { return *shape_state; }
     const std::shared_ptr<SharedModelWeights>& weights() const {

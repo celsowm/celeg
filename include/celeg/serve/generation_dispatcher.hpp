@@ -11,7 +11,7 @@
 
 namespace celeg::serve {
 
-// Single background thread that drives IInferenceService::step() and fans
+// Single background thread that drives ISchedulerDriver::step() and fans
 // out poll() results to watchers. Intended to be the only caller of step()
 // and poll() for a given service; HTTP handlers register a callback via
 // watch() and receive GenerateEvents until the request finishes, at which
@@ -20,7 +20,8 @@ class GenerationDispatcher {
 public:
     using EventCallback = std::function<void(const GenerateEvent&)>;
 
-    explicit GenerationDispatcher(IInferenceService& service,
+    GenerationDispatcher(IRequestService& requests,
+                          ISchedulerDriver& scheduler,
                                   std::chrono::microseconds idle_interval =
                                       std::chrono::milliseconds(5));
     ~GenerationDispatcher();
@@ -43,7 +44,8 @@ private:
     void run();
     void dispatch_once();
 
-    IInferenceService& service_;
+    IRequestService& requests_;
+    ISchedulerDriver& scheduler_;
     std::chrono::microseconds idle_interval_;
 
     std::thread thread_;

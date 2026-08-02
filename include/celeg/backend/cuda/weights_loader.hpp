@@ -3,7 +3,7 @@
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/detail/model/types.hpp"
 
 #include <cstddef>
@@ -24,12 +24,12 @@ void dequantize_gguf_to_bf16(const HostTensorView& tensor,
 // Loads SafeTensor weights (and preserves native GGUF Q4_K/Q6_K blocks) into
 // device memory, with a
 // process-wide shared-weight cache keyed by (device, checkpoint path,
-// weight mode). Multiple Model sessions on the same device + checkpoint
+// weight mode). Multiple CudaModel sessions on the same device + checkpoint
 // + weight_mode share one SharedModelWeights instance to avoid duplicate
 // GPU allocations.
 //
-// Extracted from Model::Impl for Single Responsibility: this class does
-// only I/O + quantization + caching; the Impl retains the forward pass,
+// Extracted from the compiled model for Single Responsibility: this class does
+// only I/O + quantization + caching; the compiled model retains the forward pass,
 // session state, and graph capture. New weight formats are added by
 // extending the quantization branches here without touching the inference
 // path (Open/Closed Principle).

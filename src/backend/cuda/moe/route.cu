@@ -1,4 +1,4 @@
-#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 
 #include <cuda_runtime.h>

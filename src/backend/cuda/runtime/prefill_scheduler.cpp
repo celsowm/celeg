@@ -1,7 +1,8 @@
 #include "engine_internal.hpp"
+// Keep the prefill scheduler bound to the concrete CudaModel contract.
 
 namespace celeg {
-bool ConcurrentEngine::Impl::run_prefill_work() {
+bool CudaSchedulerDriver::run_prefill_work() {
     struct Work { Lane* lane; RequestId id; size_t begin; size_t count; bool first; bool final; };
     std::vector<Work> work;
     int token_budget = engine_options_.max_batched_tokens;

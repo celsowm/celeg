@@ -1,6 +1,7 @@
 #include "celeg/backend/cpu/model.hpp"
 
 #include "detail/model_internal.hpp"
+#include "celeg/backend/cpu/sampler.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -27,32 +28,32 @@ CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text) {
 
 CpuModel::CpuModel(const std::string& path, int context,
                    CpuModelOptions options, GenerationConfig generation)
-    : impl_(std::make_unique<Impl>(
-          std::make_shared<Impl::Shared>(path, context, std::move(options)),
+    : state_(std::make_unique<CpuCompiledModel>(
+          std::make_shared<CpuCompiledModel::Shared>(path, context, std::move(options)),
           generation, -1)),
       session_view_(*this),
       diagnostics_view_(*this),
       persistence_view_(*this) {}
 
-CpuModel::CpuModel(std::unique_ptr<Impl> impl)
-    : impl_(std::move(impl)),
+CpuModel::CpuModel(std::unique_ptr<CpuCompiledModel> impl)
+    : state_(std::move(impl)),
       session_view_(*this),
       diagnostics_view_(*this),
       persistence_view_(*this) {
-    if (!impl_) throw std::invalid_argument("CPU model implementation is required");
+    if (!state_) throw std::invalid_argument("CPU model implementation is required");
 }
 
 CpuModel::~CpuModel() = default;
 
 CpuModel::CpuModel(CpuModel&& other) noexcept
-    : impl_(std::move(other.impl_)),
+    : state_(std::move(other.state_)),
       session_view_(*this),
       diagnostics_view_(*this),
       persistence_view_(*this) {}
 
 CpuModel& CpuModel::operator=(CpuModel&& other) noexcept {
     if (this != &other) {
-        impl_ = std::move(other.impl_);
+        state_ = std::move(other.state_);
     }
     return *this;
 }
@@ -63,149 +64,152 @@ std::unique_ptr<CpuModel> CpuModel::clone_session() const {
 
 std::unique_ptr<CpuModel> CpuModel::clone_session_on_node(int numa_node) const {
     return std::unique_ptr<CpuModel>(new CpuModel(
-        std::make_unique<Impl>(impl_->shared, impl_->generation, numa_node)));
+        std::make_unique<CpuCompiledModel>(state_->shared, state_->session_.generation, numa_node)));
 }
 
 std::vector<std::shared_ptr<CpuKvPagePool>> CpuModel::shared_kv_pools() const {
-    return impl_->shared->kv_pools;
+    return state_->shared->kv_pools;
 }
 
-void CpuModel::reset_session() { impl_->reset(); }
+void CpuModel::reset_session() { state_->reset(); }
 
 void CpuModel::prefill_session(const std::vector<int32_t>& tokens) {
     if (tokens.empty()) throw std::invalid_argument("CPU prefill needs at least one token");
-    if (tokens.size() > static_cast<size_t>(impl_->shared->max_context)) {
+    if (tokens.size() > static_cast<size_t>(state_->shared->max_context)) {
         throw std::invalid_argument("CPU prefill exceeds context");
     }
     for (int32_t token : tokens) {
-        if (token < 0 || token >= impl_->shared->shape.vocab_size) {
+        if (token < 0 || token >= state_->shared->shape.vocab_size) {
             throw std::invalid_argument("CPU token out of range");
         }
     }
-    impl_->reset();
-    impl_->phase = SessionPhase::Prefilling;
-    impl_->prefill_profile = {};
+    state_->reset();
+    state_->session_.phase = SessionPhase::Prefilling;
+    state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    if (tokens.size() < impl_->shared->options.prefill_chunk_threshold) {
+    if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
-            impl_->seen[static_cast<size_t>(tokens[i])] = 1;
-            impl_->forward_token(tokens[i], i + 1 == tokens.size());
+            state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
+            state_->forward_token(tokens[i], i + 1 == tokens.size());
         }
     } else {
-        const size_t chunk = impl_->shared->options.prefill_chunk_tokens;
+        const size_t chunk = state_->shared->options.prefill_chunk_tokens;
         for (size_t begin = 0; begin < tokens.size(); begin += chunk) {
             const size_t end = std::min(tokens.size(), begin + chunk);
             for (size_t i = begin; i < end; ++i) {
-                impl_->seen[static_cast<size_t>(tokens[i])] = 1;
+                state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
             }
-            impl_->forward_chunk(
+            state_->forward_chunk(
                 std::span<const int32_t>(tokens.data() + begin, end - begin),
                 end == tokens.size());
         }
     }
     const auto ended = std::chrono::steady_clock::now();
-    impl_->metrics.last_prefill_ms =
+    state_->session_.metrics.last_prefill_ms =
         std::chrono::duration<double, std::milli>(ended - started).count();
-    impl_->metrics.prefill_tokens = tokens.size();
-    impl_->phase = SessionPhase::Ready;
+    state_->session_.metrics.prefill_tokens = tokens.size();
+    state_->session_.phase = SessionPhase::Ready;
 }
 
 int32_t CpuModel::decode_session() {
-    if (impl_->phase != SessionPhase::Ready) {
+    if (state_->session_.phase != SessionPhase::Ready) {
         throw std::runtime_error("CPU model is not ready for decode");
     }
     const auto started = std::chrono::steady_clock::now();
-    const int32_t token = impl_->sample();
-    impl_->seen[static_cast<size_t>(token)] = 1;
-    impl_->forward_token(token, true);
+    const int32_t token = CpuSampler::sample(
+        state_->workspace_.logits, state_->shared->shape,
+        state_->session_.generation, state_->session_.seen,
+        state_->session_.rng_state);
+    state_->session_.seen[static_cast<size_t>(token)] = 1;
+    state_->forward_token(token, true);
     const auto ended = std::chrono::steady_clock::now();
-    impl_->metrics.cumulative_decode_ms +=
+    state_->session_.metrics.cumulative_decode_ms +=
         std::chrono::duration<double, std::milli>(ended - started).count();
-    ++impl_->metrics.decoded_tokens;
+    ++state_->session_.metrics.decoded_tokens;
     return token;
 }
 
 void CpuModel::eval_token_session(int32_t token) {
-    if (impl_->phase != SessionPhase::Ready) {
+    if (state_->session_.phase != SessionPhase::Ready) {
         throw std::runtime_error("CPU model is not ready for token evaluation");
     }
-    if (token < 0 || token >= impl_->shared->shape.vocab_size) {
+    if (token < 0 || token >= state_->shared->shape.vocab_size) {
         throw std::invalid_argument("CPU token out of range");
     }
     const auto started = std::chrono::steady_clock::now();
-    impl_->seen[static_cast<size_t>(token)] = 1;
-    impl_->forward_token(token, true);
+    state_->session_.seen[static_cast<size_t>(token)] = 1;
+    state_->forward_token(token, true);
     const auto ended = std::chrono::steady_clock::now();
-    impl_->metrics.cumulative_decode_ms +=
+    state_->session_.metrics.cumulative_decode_ms +=
         std::chrono::duration<double, std::milli>(ended - started).count();
-    ++impl_->metrics.decoded_tokens;
+    ++state_->session_.metrics.decoded_tokens;
 }
 
 void CpuModel::set_session_generation(GenerationConfig generation) {
-    impl_->set_generation(generation);
+    state_->set_generation(generation);
 }
 
-int CpuModel::session_position() const { return impl_->position_value; }
+int CpuModel::session_position() const { return state_->session_.position_value; }
 
 bool CpuModel::session_ready_for_decode() const {
-    return impl_->phase == SessionPhase::Ready;
+    return state_->session_.phase == SessionPhase::Ready;
 }
 
-std::vector<float> CpuModel::session_logits() const { return impl_->logits; }
-RuntimeMetrics CpuModel::session_metrics() const { return impl_->metrics; }
-CpuPrefillProfile CpuModel::session_prefill_profile() const { return impl_->prefill_profile; }
-void CpuModel::clear_session_metrics() { impl_->metrics = {}; }
-CpuModelMemoryStats CpuModel::session_memory_stats() const { return impl_->memory_stats(); }
-int CpuModel::session_vocab_size() const { return impl_->shared->shape.vocab_size; }
-CpuIsa CpuModel::session_isa() const { return impl_->shared->options.isa; }
+std::vector<float> CpuModel::session_logits() const { return state_->workspace_.logits; }
+RuntimeMetrics CpuModel::session_metrics() const { return state_->session_.metrics; }
+CpuPrefillProfile CpuModel::session_prefill_profile() const { return state_->session_.prefill_profile; }
+void CpuModel::clear_session_metrics() { state_->session_.metrics = {}; }
+CpuModelMemoryStats CpuModel::session_memory_stats() const { return state_->memory_stats(); }
+int CpuModel::session_vocab_size() const { return state_->shared->shape.vocab_size; }
+CpuIsa CpuModel::session_isa() const { return state_->shared->options.isa; }
 CpuKvCacheMode CpuModel::session_kv_cache_mode() const {
-    return impl_->shared->options.kv_cache_mode;
+    return state_->shared->options.kv_cache_mode;
 }
 
 std::string CpuModel::session_backend_description() const {
     std::ostringstream out;
-    out << "cpu-native isa=" << cpu_isa_name(impl_->shared->options.isa)
+    out << "cpu-native isa=" << cpu_isa_name(state_->shared->options.isa)
         << " weights="
-        << (impl_->shared->is_gguf
+        << (state_->shared->native_checkpoint
                 ? "gguf-native(q4_k,q6_k)"
                 : "q4-group")
-        << (impl_->shared->is_gguf
-                ? "" : ("-" + std::to_string(impl_->shared->group_size)))
-        << " kv=" << cpu_kv_cache_mode_name(impl_->shared->options.kv_cache_mode)
-        << " kv-page=" << impl_->shared->options.kv_page_tokens
-        << " prefill-chunk=" << impl_->shared->options.prefill_chunk_tokens
-        << " threads=" << (impl_->shared->pool.size() + 1)
-        << " affinity=" << cpu_affinity_name(impl_->shared->options.affinity)
-        << " numa=" << cpu_numa_mode_name(impl_->shared->options.numa_mode)
-        << " attention-threshold=" << impl_->shared->options.attention_parallel_threshold
-        << " attention-page-tile=" << impl_->shared->options.attention_page_tile
-        << " pinned-workers=" << impl_->shared->pool.pinned_workers()
+        << (state_->shared->native_checkpoint
+                ? "" : ("-" + std::to_string(state_->shared->group_size)))
+        << " kv=" << cpu_kv_cache_mode_name(state_->shared->options.kv_cache_mode)
+        << " kv-page=" << state_->shared->options.kv_page_tokens
+        << " prefill-chunk=" << state_->shared->options.prefill_chunk_tokens
+        << " threads=" << (state_->shared->pool.size() + 1)
+        << " affinity=" << cpu_affinity_name(state_->shared->options.affinity)
+        << " numa=" << cpu_numa_mode_name(state_->shared->options.numa_mode)
+        << " attention-threshold=" << state_->shared->options.attention_parallel_threshold
+        << " attention-page-tile=" << state_->shared->options.attention_page_tile
+        << " pinned-workers=" << state_->shared->pool.pinned_workers()
         << " pack="
-        << (impl_->shared->is_gguf
+        << (state_->shared->native_checkpoint
                 ? "none"
-                : (impl_->shared->loaded_pack ? "hit" : "built"))
+                : (state_->shared->loaded_pack ? "hit" : "built"))
         << " hardware-best="
-        << cpu_isa_name(impl_->shared->capabilities.best_isa());
+        << cpu_isa_name(state_->shared->capabilities.best_isa());
     return out.str();
 }
 
 const std::filesystem::path& CpuModel::session_pack_path() const {
-    return impl_->shared->pack_file;
+    return state_->shared->pack_file;
 }
 
-bool CpuModel::session_loaded_from_pack() const { return impl_->shared->loaded_pack; }
+bool CpuModel::session_loaded_from_pack() const { return state_->shared->loaded_pack; }
 
 uint64_t CpuModel::session_attention_parallel_calls() const {
-    return impl_->attention_parallel_calls;
+    return state_->session_.attention_parallel_calls;
 }
 
 CpuPrefixSnapshot CpuModel::export_session_prefix() const {
-    return impl_->export_prefix_snapshot();
+    return state_->export_prefix_snapshot();
 }
 
 void CpuModel::restore_session_prefix(CpuPrefixSnapshot snapshot,
                                       bool ready_for_decode) {
-    impl_->restore_prefix_snapshot(std::move(snapshot), ready_for_decode);
+    state_->restore_prefix_snapshot(std::move(snapshot), ready_for_decode);
 }
 
 void CpuInferenceSession::reset() { owner_->reset_session(); }

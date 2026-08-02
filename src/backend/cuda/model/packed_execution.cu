@@ -1,8 +1,8 @@
 #include "celeg/backend/cuda/packed.hpp"
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
-#include "celeg/runtime/moe.hpp"
-#include "celeg/detail/model/impl.hpp"
+#include "celeg/backend/cuda/moe.hpp"
+#include "celeg/detail/model/compiled_model.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/backend/cuda/gemm_dispatcher.hpp"
 
@@ -208,12 +208,12 @@ struct PackedDecodeExecutorImpl {
     size_t segmented_accum_capacity = 0;
 
     std::unique_ptr<GemmDispatcher> gemm_;
-    ModelOptions cached_options_;
-    std::optional<ExecutionPlan> active_plan_;
+    CudaModelOptions cached_options_;
+    std::optional<CudaExecutionPlan> active_plan_;
     std::vector<PackedSessionContext> cached_sessions_;
     size_t cached_rows_ = 0;
 
-    void ensure_gemm_dispatcher(const ModelOptions& options) {
+    void ensure_gemm_dispatcher(const CudaModelOptions& options) {
         if (!gemm_ || cached_options_.gemm_backend != options.gemm_backend ||
             cached_options_.lt_workspace_bytes != options.lt_workspace_bytes ||
             cached_options_.lt_heuristics != options.lt_heuristics ||
@@ -241,8 +241,8 @@ struct PackedDecodeExecutorImpl {
     static bool options_compatible(const PackedSessionContext& left,
                                    const PackedSessionContext& right,
                                    std::string* reason) {
-        const ModelOptions& a = left.options();
-        const ModelOptions& b = right.options();
+            const CudaModelOptions& a = left.options();
+            const CudaModelOptions& b = right.options();
         if (left.weights().get() != right.weights().get()) {
             if (reason) *reason = "sessions do not share the same device weights";
             return false;
@@ -950,7 +950,7 @@ struct PackedDecodeExecutorImpl {
         if (models.empty()) return {};
         const PackedSessionContext& reference = validate_decode_batch(models);
         const int rows = static_cast<int>(models.size());
-        active_plan_ = ExecutionPlan::compile(reference.options(), reference.max_context());
+        active_plan_ = CudaExecutionPlan::compile(reference.options(), reference.max_context());
         ensure_gemm_dispatcher(reference.options());
         const auto started = std::chrono::steady_clock::now();
         const AttentionBatchPlan attention =
@@ -1044,7 +1044,7 @@ struct PackedDecodeExecutorImpl {
                 throw std::invalid_argument("ragged prefill page table has invalid length");
             }
         }
-        active_plan_ = ExecutionPlan::compile(reference.options(), reference.max_context());
+        active_plan_ = CudaExecutionPlan::compile(reference.options(), reference.max_context());
         ensure_gemm_dispatcher(reference.options());
         const auto started = std::chrono::steady_clock::now();
         copy_persistent_metadata(models);
@@ -1133,25 +1133,25 @@ PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,
                                            size_t maximum_prefill_tokens,
                                            PhysicalPagedKvCache* paged_kv,
                                            const RuntimeTopology& shape)
-    : impl_(std::make_unique<PackedDecodeExecutorImpl>(
+    : state_(std::make_unique<PackedDecodeExecutorImpl>(
           maximum_sessions, maximum_prefill_tokens, paged_kv, shape)) {}
 
 PackedDecodeExecutor::~PackedDecodeExecutor() = default;
 
 bool PackedDecodeExecutor::eligible(const PackedSessionContext& model,
                                     std::string* reason) const {
-    return impl_->eligible(model, reason);
+    return state_->eligible(model, reason);
 }
 
 std::vector<int32_t> PackedDecodeExecutor::decode(
     const std::vector<PackedSessionContext>& models) {
-    return impl_->decode(models, nullptr);
+    return state_->decode(models, nullptr);
 }
 
 std::vector<int32_t> PackedDecodeExecutor::decode(
     const std::vector<PackedSessionContext>& models,
     const std::vector<std::vector<uint32_t>>& page_tables) {
-    return impl_->decode(models, &page_tables);
+    return state_->decode(models, &page_tables);
 }
 
 void PackedDecodeExecutor::prefill(
@@ -1159,19 +1159,19 @@ void PackedDecodeExecutor::prefill(
     const std::vector<std::vector<uint32_t>>& page_tables,
     const std::vector<int32_t>& tokens,
     const std::vector<PackedPrefillRow>& rows) {
-    impl_->prefill(models, &page_tables, tokens, rows);
+    state_->prefill(models, &page_tables, tokens, rows);
 }
 
 size_t PackedDecodeExecutor::maximum_batch() const {
-    return impl_->maximum_batch;
+    return state_->maximum_batch;
 }
 
 size_t PackedDecodeExecutor::maximum_prefill_tokens() const {
-    return impl_->maximum_prefill_token_capacity;
+    return state_->maximum_prefill_token_capacity;
 }
 
 PackedDecodeMetrics PackedDecodeExecutor::metrics() const {
-    return impl_->metric;
+    return state_->metric;
 }
 
 } // namespace celeg

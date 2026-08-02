@@ -1,7 +1,7 @@
-#include "celeg/model/weights/layout.hpp"
+#include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/backend/cuda/kernels/embedding.hpp"
 #include "celeg/backend/cuda/kernels/gguf.cuh"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include <stdexcept>
 
 namespace celeg {

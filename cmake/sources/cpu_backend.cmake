@@ -3,7 +3,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/weights.cpp
     src/backend/cpu/model_state.cpp
     src/backend/cpu/model_forward.cpp
-    src/backend/cpu/model_sampling.cpp
+    src/backend/cpu/sampler.cpp
     src/backend/cpu/packed.cpp
     src/backend/cpu/concurrent.cpp
     src/backend/cpu/kernels/quantized_dot.cpp

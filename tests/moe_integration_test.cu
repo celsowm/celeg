@@ -1,4 +1,4 @@
-// Integration test for the MoE decode forward sequence wired into Model
+// Integration test for the MoE decode forward sequence wired into CudaModel
 // (run_mlp_moe_decode). It exercises the exact kernel pipeline the model uses:
 //   1. RMSNorm the hidden state (BF16)
 //   2. cast the normed BF16 activations to float (router input path)
@@ -12,7 +12,7 @@
 // NOTE: the router/FFN run in BF16, so a float CPU reference is expected to
 // differ by a few percent (BF16 rounding). Tolerances below reflect that.
 
-#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/backend/cuda/kernels/norm_conv.hpp"
 

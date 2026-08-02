@@ -1,39 +1,39 @@
-#include "celeg/model/execution/plan.hpp"
+#include "celeg/backend/cuda/execution_plan.hpp"
 #include "support/assertions.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <string>
 
-int main() {
+int main() try {
     using celeg::AttentionMode;
-    using celeg::ExecutionPlan;
+    using celeg::CudaExecutionPlan;
     using celeg::LinearKernelKind;
-    using celeg::ModelOptions;
+    using celeg::CudaModelOptions;
     using celeg::WeightMode;
 
-    ModelOptions bf16;
-    auto plan = ExecutionPlan::compile(bf16, 4096);
+    CudaModelOptions bf16;
+    auto plan = CudaExecutionPlan::compile(bf16, 4096);
     CELEG_TEST_CHECK(plan.linear_kernel() == LinearKernelKind::Bf16Cublas);
     CELEG_TEST_CHECK(!plan.segmented_attention(4096));
 
-    ModelOptions int4;
+    CudaModelOptions int4;
     int4.weight_mode = WeightMode::Int4;
-    auto int4_plan = ExecutionPlan::compile(int4, 4096);
+    auto int4_plan = CudaExecutionPlan::compile(int4, 4096);
     CELEG_TEST_CHECK(int4_plan.linear_kernel() == LinearKernelKind::W4A16);
 
-    ModelOptions automatic;
+    CudaModelOptions automatic;
     automatic.fast_attention = true;
     automatic.attention_mode = AttentionMode::Auto;
     automatic.attention_auto_threshold = 1024;
-    auto auto_plan = ExecutionPlan::compile(automatic, 4096);
+    auto auto_plan = CudaExecutionPlan::compile(automatic, 4096);
     CELEG_TEST_CHECK(!auto_plan.segmented_attention(1023));
     CELEG_TEST_CHECK(auto_plan.segmented_attention(1024));
 
     bool rejected = false;
     try {
-        ModelOptions invalid;
+        CudaModelOptions invalid;
         invalid.attention_mode = AttentionMode::Segmented;
-        (void)ExecutionPlan::compile(invalid, 4096);
+        (void)CudaExecutionPlan::compile(invalid, 4096);
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -44,9 +44,9 @@ int main() {
     // the plan label must be honest about that, or the diagnostics contradict
     // the real storage / kernels. See docs/ARCHITECTURE_RULES.md
     // section 1.4.
-    ModelOptions native;
+    CudaModelOptions native;
     native.weight_mode = WeightMode::NativeGguf;
-    auto native_plan = ExecutionPlan::compile(native, 4096);
+    auto native_plan = CudaExecutionPlan::compile(native, 4096);
     CELEG_TEST_CHECK(native_plan.linear_kernel() ==
                    LinearKernelKind::MixedBf16AndGgufMmq);
     {
@@ -59,4 +59,7 @@ int main() {
 
     std::cout << "execution_plan_test: ok\n";
     return 0;
+} catch (const std::exception& error) {
+    std::cerr << "execution_plan_test: " << error.what() << '\n';
+    return 1;
 }

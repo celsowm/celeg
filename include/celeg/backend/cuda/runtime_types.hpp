@@ -1,0 +1,46 @@
+#pragma once
+
+#include "celeg/model/runtime_types.hpp"
+#include "celeg/runtime/concurrency/policy_types.hpp"
+#include "celeg/backend/cuda/moe/offload.hpp"
+
+#include <cstddef>
+
+namespace celeg {
+
+enum class GemmBackend {
+    Cublas,
+    CublasLt,
+};
+
+enum class WeightMode {
+    Bf16,
+    Int8,
+    Int4,
+    NativeGguf,
+};
+
+enum class KvCacheMode {
+    Bf16,
+    Int8,
+};
+
+struct CudaModelOptions {
+    bool fused_residuals = false;
+    bool fast_attention = false;
+    bool fused_projections = false;
+    bool cuda_graph = true;
+    GemmBackend gemm_backend = GemmBackend::Cublas;
+    size_t lt_workspace_bytes = 64ULL * 1024ULL * 1024ULL;
+    int lt_heuristics = 8;
+    bool lt_autotune = false;
+    WeightMode weight_mode = WeightMode::Bf16;
+    KvCacheMode kv_cache_mode = KvCacheMode::Bf16;
+    AttentionMode attention_mode = AttentionMode::Single;
+    int attention_chunk_tokens = 32;
+    int attention_auto_threshold = 1;
+    bool allocate_local_kv_cache = true;
+    ExpertOffloadOptions expert_offload;
+};
+
+} // namespace celeg

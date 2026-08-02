@@ -4,7 +4,7 @@
 #include "celeg/backend/cpu/numa.hpp"
 #include "celeg/backend/cpu/runtime_types.hpp"
 #include "celeg/backend/cpu/topology.hpp"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/model/runtime_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +46,7 @@ class CpuConcurrentEngine;
 class CpuKvPagePool;
 struct CpuPrefixSnapshot;
 class CpuModel;
+struct CpuCompiledModel;
 
 struct CpuPrefillItem {
     CpuModel* session = nullptr;
@@ -181,9 +182,8 @@ private:
     CpuPrefixSnapshot export_session_prefix() const;
     void restore_session_prefix(CpuPrefixSnapshot snapshot, bool ready_for_decode);
 
-    struct Impl;
-    explicit CpuModel(std::unique_ptr<Impl> impl);
-    std::unique_ptr<Impl> impl_;
+    explicit CpuModel(std::unique_ptr<CpuCompiledModel> compiled_model);
+    std::unique_ptr<CpuCompiledModel> state_;
     CpuInferenceSession session_view_;
     CpuDiagnostics diagnostics_view_;
     CpuPersistence persistence_view_;

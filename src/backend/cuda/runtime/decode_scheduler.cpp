@@ -1,7 +1,8 @@
 #include "engine_internal.hpp"
+// Keep the decode scheduler bound to the concrete CudaModel contract.
 
 namespace celeg {
-bool ConcurrentEngine::Impl::run_decode_work() {
+bool CudaSchedulerDriver::run_decode_work() {
     struct Work { Lane* lane; RequestId id; bool paged_ready; };
     std::vector<Work> work;
     // Phase 1: build work list under a single lock.  Copy paged_ready so

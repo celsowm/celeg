@@ -1,7 +1,8 @@
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
+// CudaModel rename invalidates scheduler-owned model object code.
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/model/model.hpp"
+#include "celeg/backend/cuda/model.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/packed.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
@@ -23,9 +24,9 @@
 
 namespace celeg {
 
-ConcurrentEngine::Impl::Impl(std::string model_path,
+CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
                                    int max_context,
-                                   ModelOptions model_options,
+                                   CudaModelOptions model_options,
                                    ConcurrentEngineOptions engine_options)
     : model_path_(std::move(model_path)),
       max_context_(max_context),

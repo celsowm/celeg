@@ -1,7 +1,7 @@
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/detail/binary_codec.hpp"
-#include "celeg/runtime/moe/offload.hpp"
+#include "celeg/backend/cuda/moe/offload.hpp"
 
 #include <iostream>
 #include <fstream>

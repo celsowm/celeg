@@ -1,4 +1,4 @@
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <chrono>
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         celeg::BpeTokenizer tokenizer(argv[2]);
         const std::vector<int32_t> prompt = tokenizer.encode(argv[3], true);
 
-        celeg::ModelOptions model;
+        celeg::CudaModelOptions model;
         model.fast_attention = true;
         model.fused_projections = true;
         model.fused_residuals = true;

@@ -1,19 +1,19 @@
-#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/model/compiled_model.hpp"
 
 #include <cuda_runtime.h>
 namespace celeg {
 
-Model::Impl::~Impl() {
-    if (weights_ && !weights_->usage_profile_path.empty()) {
-        weights_->usage_stats.save(weights_->usage_profile_path);
+CudaCompiledModel::~CudaCompiledModel() {
+    if (resources_.weights_ && !resources_.weights_->usage_profile_path.empty()) {
+        resources_.weights_->usage_stats.save(resources_.weights_->usage_profile_path);
     }
-    if (moe_sel_host_ != nullptr) {
-        cudaFreeHost(moe_sel_host_);
-        moe_sel_host_ = nullptr;
+    if (workspace_.moe_sel_host_ != nullptr) {
+        cudaFreeHost(workspace_.moe_sel_host_);
+        workspace_.moe_sel_host_ = nullptr;
     }
-    if (moe_route_scores_host_ != nullptr) {
-        cudaFreeHost(moe_route_scores_host_);
-        moe_route_scores_host_ = nullptr;
+    if (workspace_.moe_route_scores_host_ != nullptr) {
+        cudaFreeHost(workspace_.moe_route_scores_host_);
+        workspace_.moe_route_scores_host_ = nullptr;
     }
 }
 

@@ -1,7 +1,7 @@
 #include "celeg/checkpoint/metadata.hpp"
 #include "celeg/model/architecture.hpp"
+#include "support/assertions.hpp"
 
-#include <cassert>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -58,25 +58,25 @@ celeg::CheckpointMetadata lfm_metadata(std::string name = "LiquidAI/LFM2.5-1.2B-
 
 int main() {
     const auto catalog = celeg::create_builtin_architecture_catalog();
-    assert(catalog->ids().size() == 2);
+    CELEG_TEST_CHECK(catalog->ids().size() == 2);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog->select(metadata);
-    assert(architecture.id() == "lfm2");
+    CELEG_TEST_CHECK(architecture.id() == "lfm2");
 
     celeg::CheckpointView checkpoint;
     checkpoint.metadata = metadata;
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
-    assert(model.architecture_id == "lfm2");
-    assert(model.topology.intermediate == 8192);
-    assert(model.graph.layers.size() == 16);
-    assert(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
-    assert(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
-    assert(!model.graph.has_moe());
+    CELEG_TEST_CHECK(model.architecture_id == "lfm2");
+    CELEG_TEST_CHECK(model.topology.intermediate == 8192);
+    CELEG_TEST_CHECK(model.graph.layers.size() == 16);
+    CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
+    CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(!model.graph.has_moe());
 
     auto granite = metadata;
     granite.values["model_type"] = std::string("granite");
     const auto& granite_architecture = catalog->select(granite);
-    assert(granite_architecture.id() == "granite");
+    CELEG_TEST_CHECK(granite_architecture.id() == "granite");
 
     celeg::CheckpointMetadata granite_gguf;
     granite_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
@@ -98,10 +98,10 @@ int main() {
     granite_gguf_checkpoint.metadata = granite_gguf;
     const celeg::ResolvedModel granite_gguf_model =
         granite_architecture.resolve(granite_gguf_checkpoint);
-    assert(granite_gguf_model.definition.source_format == "gguf");
-    assert(granite_gguf_model.chat_profile_id == "granite-instruct");
-    assert(granite_gguf_model.topology.vocab_size == 32);
-    assert(granite_gguf_model.graph.layers.size() == 1);
+    CELEG_TEST_CHECK(granite_gguf_model.definition.source_format == "gguf");
+    CELEG_TEST_CHECK(granite_gguf_model.chat_profile_id == "granite-instruct");
+    CELEG_TEST_CHECK(granite_gguf_model.topology.vocab_size == 32);
+    CELEG_TEST_CHECK(granite_gguf_model.graph.layers.size() == 1);
 
     celeg::ArchitectureCatalog mutable_catalog;
     mutable_catalog.add(std::make_unique<TestArchitecture>("one", 10));
@@ -111,7 +111,7 @@ int main() {
     } catch (const std::invalid_argument&) {
         duplicate_rejected = true;
     }
-    assert(duplicate_rejected);
+    CELEG_TEST_CHECK(duplicate_rejected);
     mutable_catalog.freeze();
     bool mutation_rejected = false;
     try {
@@ -119,7 +119,7 @@ int main() {
     } catch (const std::logic_error&) {
         mutation_rejected = true;
     }
-    assert(mutation_rejected);
+    CELEG_TEST_CHECK(mutation_rejected);
 
     celeg::ArchitectureCatalog ambiguous_catalog;
     ambiguous_catalog.add(std::make_unique<TestArchitecture>("one", 10));
@@ -130,7 +130,7 @@ int main() {
     } catch (const std::runtime_error&) {
         ambiguity_rejected = true;
     }
-    assert(ambiguity_rejected);
+    CELEG_TEST_CHECK(ambiguity_rejected);
 
     std::cout << "architecture_resolution_test: ok\n";
 }

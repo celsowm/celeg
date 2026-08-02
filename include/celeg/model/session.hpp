@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/model/runtime_types.hpp"
 
 #include <utility>
 

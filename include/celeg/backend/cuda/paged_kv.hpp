@@ -1,7 +1,7 @@
 #pragma once
 
 #include "celeg/backend/cuda/utils.cuh"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/cache/kv_page_allocator.hpp"
 #include "celeg/model/resolved.hpp"

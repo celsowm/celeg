@@ -3,6 +3,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp
     src/checkpoint/formats/gguf.cpp
+    src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp
     src/checkpoint/repositories/safetensors.cpp
     src/checkpoint/repositories/gguf.cpp
@@ -11,10 +12,18 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/definition.cpp
     src/model/architecture.cpp
     src/model/resolved.cpp
+    src/model/program.cpp
+    src/model/weight_plan.cpp
+    src/model/graph_builder.cpp
     src/models/lfm2/architecture.cpp
+    src/models/lfm2/layer_decoder.cpp
+    src/models/lfm2/metadata_decoder.cpp
     src/models/granite/architecture.cpp
+    src/models/granite/topology.cpp
     src/model/execution/runtime_types.cpp
-    src/model/execution/plan.cpp
+    src/backend/cuda/execution_plan.cpp
+    src/backend/cpu/compiler.cpp
+    src/backend/cuda/compiler.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp
     src/model/reference.cpp

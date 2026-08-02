@@ -70,6 +70,9 @@ struct CpuPackMetadata {
     uint32_t group_size = 32;
 };
 
+struct CpuPackWriterState;
+struct CpuPackReaderState;
+
 class CpuPackWriter {
 public:
     CpuPackWriter(const std::filesystem::path& path, CpuPackMetadata metadata);
@@ -83,8 +86,7 @@ public:
     void commit();
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<CpuPackWriterState> state_;
 };
 
 class CpuPackReader {
@@ -100,8 +102,7 @@ public:
     std::vector<float> read_bf16_vector(const std::string& name) const;
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<CpuPackReaderState> state_;
 };
 
 } // namespace celeg

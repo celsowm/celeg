@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/checkpoint/metadata.hpp"
+#include "celeg/checkpoint/view.hpp"
 #include "celeg/model/resolved.hpp"
 
 #include <filesystem>
@@ -11,13 +11,6 @@
 namespace celeg {
 
 class IWeightRepository;
-
-struct CheckpointView {
-    CheckpointMetadata metadata;
-    std::shared_ptr<IWeightRepository> repository;
-    std::shared_ptr<class GgufFile> gguf;
-    std::filesystem::path path;
-};
 
 struct ProbeResult {
     bool supported = false;

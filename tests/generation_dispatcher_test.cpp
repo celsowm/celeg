@@ -16,7 +16,9 @@ using celeg::serve::FinishReason;
 using celeg::serve::GenerateEvent;
 using celeg::serve::GenerateRequest;
 using celeg::serve::GenerationDispatcher;
-using celeg::serve::IInferenceService;
+using celeg::serve::IRequestService;
+using celeg::serve::ISchedulerDriver;
+using celeg::serve::IServiceDiagnostics;
 using celeg::serve::ModelInfo;
 using celeg::serve::RequestId;
 using celeg::serve::RequestStatus;
@@ -25,7 +27,9 @@ using celeg::serve::ServingMetrics;
 // Minimal in-memory stand-in for CpuInferenceService/CudaInferenceService:
 // each step() emits one token per active request until max_output_tokens is
 // reached, letting the dispatcher be exercised without a real model.
-class FakeInferenceService final : public IInferenceService {
+class FakeInferenceService final : public IRequestService,
+                                   public ISchedulerDriver,
+                                   public IServiceDiagnostics {
 public:
     RequestId submit(GenerateRequest request) override {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -112,7 +116,8 @@ private:
 
 int main() {
     FakeInferenceService service;
-    GenerationDispatcher dispatcher(service, std::chrono::milliseconds(1));
+    GenerationDispatcher dispatcher(service, service,
+                                     std::chrono::milliseconds(1));
 
     dispatcher.start();
     CELEG_TEST_CHECK(service.started());

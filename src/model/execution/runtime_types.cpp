@@ -1,9 +1,21 @@
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/model/runtime_types.hpp"
 
 #include <cmath>
 #include <stdexcept>
 
 namespace celeg {
+
+double RuntimeMetrics::prefill_tokens_per_second() const {
+    return last_prefill_ms > 0.0
+        ? static_cast<double>(prefill_tokens) * 1000.0 / last_prefill_ms
+        : 0.0;
+}
+
+double RuntimeMetrics::decode_tokens_per_second() const {
+    return cumulative_decode_ms > 0.0
+        ? static_cast<double>(decoded_tokens) * 1000.0 / cumulative_decode_ms
+        : 0.0;
+}
 
 void GenerationConfig::validate() const {
     if (!std::isfinite(temperature) || temperature < 0.0f) {

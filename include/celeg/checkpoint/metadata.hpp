@@ -48,6 +48,22 @@ struct CheckpointMetadata {
     bool boolean_or(std::string_view key, bool fallback) const;
     std::vector<std::string> strings(std::string_view key) const;
 
+    // Architecture-facing schema access. Format-specific key spelling stays
+    // here; architecture resolvers consume one normalized lookup surface.
+    bool is_gguf() const { return source_format == CheckpointSourceFormat::Gguf; }
+    std::string key(std::string_view safetensors_key,
+                    std::string_view gguf_key) const;
+    std::string architecture_type() const;
+    int64_t integer_for(std::string_view safetensors_key,
+                        std::string_view gguf_key) const;
+    int64_t integer_for_or(std::string_view safetensors_key,
+                           std::string_view gguf_key, int64_t fallback) const;
+    double number_for_or(std::string_view safetensors_key,
+                         std::string_view gguf_key, double fallback) const;
+    std::string string_for_or(std::string_view safetensors_key,
+                              std::string_view gguf_key,
+                              std::string fallback = {}) const;
+
     static CheckpointMetadata from_json(const Json& root);
     static CheckpointMetadata from_gguf(const GgufFile& file);
 };

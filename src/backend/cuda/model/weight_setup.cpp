@@ -1,15 +1,13 @@
-#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/model/compiled_model.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/paged_kv.hpp"
-#include "celeg/model/weights/policy.hpp"
+#include "celeg/backend/cuda/weight_policy.hpp"
 #include "celeg/model/weights/quantization.hpp"
-#include "celeg/model/weights/layout.hpp"
+#include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/runtime/weights_topology.hpp"
-#include "celeg/model/weights/loader.hpp"
-#include "celeg/checkpoint/formats/gguf.hpp"
-#include "celeg/checkpoint/repositories/gguf.hpp"
-#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
+#include "celeg/backend/cuda/moe.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -21,6 +19,15 @@
 namespace celeg {
 
 namespace {
+void* allocate_pinned_host(std::size_t bytes) {
+    void* pointer = nullptr;
+    return cudaMallocHost(&pointer, bytes) == cudaSuccess ? pointer : nullptr;
+}
+
+void deallocate_pinned_host(void* pointer) {
+    if (pointer) cudaFreeHost(pointer);
+}
+
 std::string layer_name(int index, const std::string& suffix) {
     return "model.layers." + std::to_string(index) + "." + suffix;
 }
@@ -33,52 +40,44 @@ std::string tensor_name(const ITensorNamingPolicy& policy, TensorRole role,
 }
 } // namespace
 
-void Model::Impl::load_checkpoint_weights(
+void CudaCompiledModel::load_checkpoint_weights(
     const std::string& model_path,
     const detail::ModelBootstrap& bootstrap) {
-    const bool is_gguf = bootstrap.is_gguf();
-    const std::shared_ptr<GgufFile> gguf_file = bootstrap.gguf_file;
     // Immutable device weights are shared across all request lanes that use
     // the same checkpoint, device and quantization mode. The WeightLoader
     // owns the process-wide cache and the SafeTensor I/O + quantization;
-    // the Impl only retains the resulting shared_ptr + the layer views.
-    weights_ = WeightLoader::acquire(
-        model_path, options_.weight_mode,
-        options_.expert_offload.fingerprint());
-    weight_loader_ = std::make_unique<WeightLoader>(weights_, options_.weight_mode);
+    // the compiled model only retains the resulting shared_ptr + the layer views.
+    resources_.weights_ = WeightLoader::acquire(
+        model_path, resources_.options_.weight_mode,
+        resources_.options_.expert_offload.fingerprint());
+    resources_.weight_loader_ = std::make_unique<WeightLoader>(resources_.weights_, resources_.options_.weight_mode);
 
     // Only one constructor populates a shared checkpoint at a time. Other
     // sessions wait, then reuse the immutable device buffers.
-    std::unique_lock<std::mutex> shared_weights_lock(weights_->mutex);
-    std::shared_ptr<IWeightRepository> repo_owner;
-    if (is_gguf) {
-        repo_owner = std::make_shared<GgufRepository>(gguf_file);
-    } else {
-        repo_owner = std::make_shared<SafeTensorRepository>(model_path);
-    }
-    weights_->repo = repo_owner;
-    const IWeightRepository& repo = *repo_owner;
-    embedding_ = weight_loader_->load_linear_weight(
-        repo, tensor_name(*tensor_naming_, TensorRole::TokenEmbedding),
-        {shape_.vocab_size, shape_.hidden});
-    final_norm_ = weight_loader_->load_weight(
-        repo, tensor_name(*tensor_naming_, TensorRole::FinalNorm),
-        {shape_.hidden});
+    std::unique_lock<std::mutex> shared_weights_lock(resources_.weights_->mutex);
+    resources_.weights_->repo = bootstrap.checkpoint.repository;
+    const IWeightRepository& repo = *resources_.weights_->repo;
+    resources_.embedding_ = resources_.weight_loader_->load_linear_weight(
+        repo, tensor_name(*resources_.tensor_naming_, TensorRole::TokenEmbedding),
+        {resources_.shape_.vocab_size, resources_.shape_.hidden});
+    resources_.final_norm_ = resources_.weight_loader_->load_weight(
+        repo, tensor_name(*resources_.tensor_naming_, TensorRole::FinalNorm),
+        {resources_.shape_.hidden});
     {
-        if (embedding_->gguf_quantized()) {
-            if (embedding_->gguf_segments.size() != 1) {
+        if (resources_.embedding_->gguf_quantized()) {
+            if (resources_.embedding_->gguf_segments.size() != 1) {
                 throw std::runtime_error("GGUF embedding must use one native segment");
             }
-            weight_layout_ = make_gguf_weight_layout(embedding_->gguf_segments.front());
-        } else if (options_.weight_mode == WeightMode::Int8) {
-            weight_layout_ = make_weight_layout(
-                options_.weight_mode, embedding_->int8, embedding_->scales);
-        } else if (options_.weight_mode == WeightMode::Int4) {
-            weight_layout_ = make_weight_layout(
-                options_.weight_mode, embedding_->int4, embedding_->scales);
+            resources_.weight_layout_ = make_gguf_weight_layout(resources_.embedding_->gguf_segments.front());
+        } else if (resources_.options_.weight_mode == WeightMode::Int8) {
+            resources_.weight_layout_ = make_weight_layout(
+                resources_.options_.weight_mode, resources_.embedding_->int8, resources_.embedding_->scales);
+        } else if (resources_.options_.weight_mode == WeightMode::Int4) {
+            resources_.weight_layout_ = make_weight_layout(
+                resources_.options_.weight_mode, resources_.embedding_->int4, resources_.embedding_->scales);
         } else {
-            weight_layout_ = make_weight_layout(
-                options_.weight_mode, embedding_->bf16, embedding_->scales);
+            resources_.weight_layout_ = make_weight_layout(
+                resources_.options_.weight_mode, resources_.embedding_->bf16, resources_.embedding_->scales);
         }
     }
     // Untied LM head: load the separate lm_head weight for the final logits
@@ -86,10 +85,10 @@ void Model::Impl::load_checkpoint_weights(
     // tie_word_embeddings unset; in that case the head is effectively tied to
     // the embedding table, so we fall back to it instead of erroring.
     const std::string lm_head_name =
-        tensor_name(*tensor_naming_, TensorRole::LanguageModelHead);
-    if (!model_.capabilities.tied_embeddings && repo.contains(lm_head_name)) {
-        lm_head_ = weight_loader_->load_linear_weight(
-            repo, lm_head_name, {shape_.vocab_size, shape_.hidden});
+        tensor_name(*resources_.tensor_naming_, TensorRole::LanguageModelHead);
+    if (!resources_.model_.capabilities.tied_embeddings && repo.contains(lm_head_name)) {
+        resources_.lm_head_ = resources_.weight_loader_->load_linear_weight(
+            repo, lm_head_name, {resources_.shape_.vocab_size, resources_.shape_.hidden});
     }
 
     // Resolve the MoE expert-offload plan before loading experts. Snapshot the
@@ -97,31 +96,31 @@ void Model::Impl::load_checkpoint_weights(
     // experts are loaded below) and estimate the always-resident non-expert
     // weight footprint analytically from the topology so the planner can decide
     // how many experts fit in the GPU cache per layer.
-    if (options_.expert_offload.enabled() &&
-        shape_.num_experts > 0) {
+    if (resources_.options_.expert_offload.enabled() &&
+        resources_.shape_.num_experts > 0) {
         size_t free_bytes = 0, total_bytes = 0;
         CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
-        const int moe_layers = moe_layer_count(shape_);
-        const size_t bpe = bytes_per_expert_bf16(shape_);
+        const int moe_layers = moe_layer_count(resources_.shape_);
+        const size_t bpe = bytes_per_expert_bf16(resources_.shape_);
         // All experts are BF16; non-expert weights = everything else already or
         // about to be resident on the GPU.
         const size_t all_expert_bytes =
-            static_cast<size_t>(shape_.num_experts) *
+            static_cast<size_t>(resources_.shape_.num_experts) *
             static_cast<size_t>(moe_layers) * bpe;
         // Conservative non-expert estimate: total checkpoint minus experts.
         // embed + lm-head + attention + conv + dense FFN + router + norms.
         const size_t embed_bytes =
-            static_cast<size_t>(shape_.vocab_size) * shape_.hidden *
+            static_cast<size_t>(resources_.shape_.vocab_size) * resources_.shape_.hidden *
             sizeof(__nv_bfloat16);
-        const size_t per_attn = static_cast<size_t>(shape_.qkv_width) * shape_.hidden +
-            static_cast<size_t>(shape_.hidden) * shape_.q_width;
+        const size_t per_attn = static_cast<size_t>(resources_.shape_.qkv_width) * resources_.shape_.hidden +
+            static_cast<size_t>(resources_.shape_.hidden) * resources_.shape_.q_width;
         const size_t attn_bytes = per_attn *
-            static_cast<size_t>(shape_.attention_layer_count) * sizeof(__nv_bfloat16);
+            static_cast<size_t>(resources_.shape_.attention_layer_count) * sizeof(__nv_bfloat16);
         const size_t dense_ffn_bytes =
-            static_cast<size_t>(shape_.num_dense_layers) *
-            (3ull * shape_.dense_intermediate * shape_.hidden) * sizeof(__nv_bfloat16);
+            static_cast<size_t>(resources_.shape_.num_dense_layers) *
+            (3ull * resources_.shape_.dense_intermediate * resources_.shape_.hidden) * sizeof(__nv_bfloat16);
         const size_t router_bytes =
-            static_cast<size_t>(moe_layers) * shape_.num_experts * shape_.hidden *
+            static_cast<size_t>(moe_layers) * resources_.shape_.num_experts * resources_.shape_.hidden *
             (sizeof(__nv_bfloat16) + sizeof(float));
         const size_t non_expert_bytes =
             embed_bytes + attn_bytes + dense_ffn_bytes + router_bytes +
@@ -129,83 +128,84 @@ void Model::Impl::load_checkpoint_weights(
         (void)all_expert_bytes;
 
         ExpertOffloadPlanInputs pin;
-        pin.shape = shape_;
-        pin.options = options_.expert_offload;
+        pin.shape = resources_.shape_;
+        pin.options = resources_.options_.expert_offload;
         pin.gpu_free_bytes = free_bytes;
         pin.non_expert_weight_bytes = non_expert_bytes;
-        pin.workspace_bytes = options_.lt_workspace_bytes + (256ull << 20);
+        pin.workspace_bytes = resources_.options_.lt_workspace_bytes + (256ull << 20);
         pin.context_tokens = max_context_;
-        expert_offload_plan_ = plan_expert_offload(pin);
-        expert_transfer_stream_ = std::make_unique<CudaStream>();
+        workspace_.expert_offload_plan_ = plan_expert_offload(pin);
+        workspace_.expert_transfer_stream_ = std::make_unique<CudaStream>();
 
-        weights_->expert_offload_plan = expert_offload_plan_;
-        if (options_.expert_offload.backing == ExpertBackingMode::DiskCached && !weights_->pinned_expert_cache) {
-            size_t bpe = bytes_per_expert_bf16(shape_);
-            size_t gu_bytes = 2 * shape_.moe_intermediate * shape_.hidden * sizeof(__nv_bfloat16);
-            size_t dn_bytes = shape_.hidden * shape_.moe_intermediate * sizeof(__nv_bfloat16);
-            weights_->pinned_expert_cache = std::make_unique<PinnedExpertCache>(
-                options_.expert_offload.host_expert_cache_bytes,
-                bpe, gu_bytes, dn_bytes);
+        resources_.weights_->expert_offload_plan = workspace_.expert_offload_plan_;
+        if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->pinned_expert_cache) {
+            size_t bpe = bytes_per_expert_bf16(resources_.shape_);
+            size_t gu_bytes = 2 * resources_.shape_.moe_intermediate * resources_.shape_.hidden * sizeof(__nv_bfloat16);
+            size_t dn_bytes = resources_.shape_.hidden * resources_.shape_.moe_intermediate * sizeof(__nv_bfloat16);
+            resources_.weights_->pinned_expert_cache = std::make_unique<PinnedExpertCache>(
+                resources_.options_.expert_offload.host_expert_cache_bytes,
+                bpe, gu_bytes, dn_bytes,
+                allocate_pinned_host, deallocate_pinned_host);
         }
-        if (options_.expert_offload.backing == ExpertBackingMode::DiskCached && !weights_->expert_io_manager) {
-            weights_->expert_io_manager = std::make_unique<ExpertIoManager>(
-                options_.expert_offload.io_workers,
-                options_.expert_offload.io_queue_depth);
+        if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->expert_io_manager) {
+            resources_.weights_->expert_io_manager = std::make_unique<ExpertIoManager>(
+                resources_.options_.expert_offload.io_workers,
+                resources_.options_.expert_offload.io_queue_depth);
         }
-        if (!options_.expert_offload.expert_sidecar_path.empty() && !weights_->expert_sidecar) {
+        if (!resources_.options_.expert_offload.expert_sidecar_path.empty() && !resources_.weights_->expert_sidecar) {
             auto sidecar = std::make_unique<ExpertSidecar>();
-            int moe_layers = moe_layer_count(shape_);
-            if (sidecar->load(options_.expert_offload.expert_sidecar_path,
-                             moe_layers, shape_.num_experts,
-                             shape_.moe_intermediate, shape_.hidden)) {
-                weights_->expert_sidecar = std::move(sidecar);
+            int moe_layers = moe_layer_count(resources_.shape_);
+            if (sidecar->load(resources_.options_.expert_offload.expert_sidecar_path,
+                             moe_layers, resources_.shape_.num_experts,
+                             resources_.shape_.moe_intermediate, resources_.shape_.hidden)) {
+                resources_.weights_->expert_sidecar = std::move(sidecar);
                 std::fprintf(stderr, "Loaded compatible expert sidecar from %s\n",
-                             options_.expert_offload.expert_sidecar_path.c_str());
+                             resources_.options_.expert_offload.expert_sidecar_path.c_str());
             } else {
                 std::fprintf(stderr, "WARNING: Sidecar %s is incompatible or could not be loaded; falling back to safetensors.\n",
-                             options_.expert_offload.expert_sidecar_path.c_str());
+                             resources_.options_.expert_offload.expert_sidecar_path.c_str());
             }
         }
-        if (!options_.expert_offload.usage_profile_path.empty()) {
-            weights_->usage_profile_path = options_.expert_offload.usage_profile_path;
-            if (weights_->usage_stats.layers.empty()) {
-                int moe_layers = moe_layer_count(shape_);
-                if (weights_->usage_stats.load(weights_->usage_profile_path, moe_layers, shape_.num_experts)) {
+        if (!resources_.options_.expert_offload.usage_profile_path.empty()) {
+            resources_.weights_->usage_profile_path = resources_.options_.expert_offload.usage_profile_path;
+            if (resources_.weights_->usage_stats.layers.empty()) {
+                int moe_layers = moe_layer_count(resources_.shape_);
+                if (resources_.weights_->usage_stats.load(resources_.weights_->usage_profile_path, moe_layers, resources_.shape_.num_experts)) {
                     std::fprintf(stderr, "Loaded persistent expert usage statistics from %s\n",
-                                 weights_->usage_profile_path.c_str());
+                                 resources_.weights_->usage_profile_path.c_str());
                 } else {
-                    weights_->usage_stats.layers.assign(
+                    resources_.weights_->usage_stats.layers.assign(
                         static_cast<size_t>(moe_layers),
-                        std::vector<ExpertUsageEntry>(static_cast<size_t>(shape_.num_experts)));
+                        std::vector<ExpertUsageEntry>(static_cast<size_t>(resources_.shape_.num_experts)));
                 }
             }
         }
-        std::fprintf(stderr, "%s", expert_offload_plan_.report().c_str());
+        std::fprintf(stderr, "%s", workspace_.expert_offload_plan_.report().c_str());
     }
-    expert_caches_.resize(static_cast<size_t>(shape_.num_hidden_layers));
-    if (weights_->expert_controllers.empty()) {
-        weights_->expert_controllers.resize(static_cast<size_t>(shape_.num_hidden_layers));
+    workspace_.expert_caches_.resize(static_cast<size_t>(resources_.shape_.num_hidden_layers));
+    if (resources_.weights_->expert_controllers.empty()) {
+        resources_.weights_->expert_controllers.resize(static_cast<size_t>(resources_.shape_.num_hidden_layers));
     }
-    expert_catalog_.resize(static_cast<size_t>(shape_.num_hidden_layers));
-    if (weights_->expert_catalog.empty()) {
-        weights_->expert_catalog.resize(static_cast<size_t>(shape_.num_hidden_layers));
+    workspace_.expert_catalog_.resize(static_cast<size_t>(resources_.shape_.num_hidden_layers));
+    if (resources_.weights_->expert_catalog.empty()) {
+        resources_.weights_->expert_catalog.resize(static_cast<size_t>(resources_.shape_.num_hidden_layers));
     }
 
-    layers_.reserve(static_cast<size_t>(shape_.num_hidden_layers));
-    for (int i = 0; i < shape_.num_hidden_layers; ++i) {
+    resources_.layers_.reserve(static_cast<size_t>(resources_.shape_.num_hidden_layers));
+    for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
-        common_layer.operator_norm = weight_loader_->load_weight(
-            repo, tensor_name(*tensor_naming_, TensorRole::AttentionInputNorm, i),
-            {shape_.hidden});
-        common_layer.ffn_norm = weight_loader_->load_weight(
-            repo, tensor_name(*tensor_naming_, TensorRole::FfnInputNorm, i),
-            {shape_.hidden});
-        if (shape_.layer_uses_moe(i)) {
+        common_layer.operator_norm = resources_.weight_loader_->load_weight(
+            repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionInputNorm, i),
+            {resources_.shape_.hidden});
+        common_layer.ffn_norm = resources_.weight_loader_->load_weight(
+            repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnInputNorm, i),
+            {resources_.shape_.hidden});
+        if (resources_.shape_.layer_uses_moe(i)) {
             // Mixture-of-experts feed-forward for this layer.
-            const int E = shape_.num_experts;
-            const int inter = shape_.moe_intermediate;
+            const int E = resources_.shape_.num_experts;
+            const int inter = resources_.shape_.moe_intermediate;
             const float* expert_bias = nullptr;
-            if (shape_.use_expert_bias) {
+            if (resources_.shape_.use_expert_bias) {
                 // Checkpoint naming varies: LFM2.5 ships
                 // "feed_forward.expert_bias.weight"; the earlier LFM2 MoE
                 // release ships "feed_forward.expert_bias" (no .weight suffix).
@@ -213,27 +213,27 @@ void Model::Impl::load_checkpoint_weights(
                     layer_name(i, "feed_forward.expert_bias.weight"))
                     ? layer_name(i, "feed_forward.expert_bias.weight")
                     : layer_name(i, "feed_forward.expert_bias");
-                expert_bias = weight_loader_->load_f32_weight(
+                expert_bias = resources_.weight_loader_->load_f32_weight(
                     repo, bias_name, {static_cast<int64_t>(E)});
             }
-            const LinearWeight* router = weight_loader_->load_router_weight(
-                repo, i, E, shape_.hidden);
+            const LinearWeight* router = resources_.weight_loader_->load_router_weight(
+                repo, i, E, resources_.shape_.hidden);
 
             // Cache a device float copy of the router weight for the CUDA
             // router kernel (it consumes float, the loaded weight is BF16 —
             // always non-null after Phase 1.1's load_router_weight contract).
-            DeviceBuffer<float>& router_float = moe_router_float_[static_cast<size_t>(i)];
-            router_float.reset(static_cast<size_t>(E) * shape_.hidden);
+            DeviceBuffer<float>& router_float = workspace_.moe_router_float_[static_cast<size_t>(i)];
+            router_float.reset(static_cast<size_t>(E) * resources_.shape_.hidden);
             launch_cast_bf16_to_float(
                 router->bf16, router_float.data(),
-                static_cast<int>(E) * shape_.hidden, stream_.get());
+                static_cast<int>(E) * resources_.shape_.hidden, stream_.get());
 
             MoeFfnWeights moe_weights{};
             moe_weights.router = router;
             moe_weights.expert_bias = expert_bias;
             moe_weights.router_float = router_float.data();
 
-            if (expert_offload_plan_.enabled) {
+            if (workspace_.expert_offload_plan_.enabled) {
                 const HostTensorView expert_probe = repo.tensor(
                     layer_name(i, "feed_forward.experts.0.w1.weight"));
                 if (expert_probe.dtype == TensorDType::Quantized) {
@@ -241,20 +241,20 @@ void Model::Impl::load_checkpoint_weights(
                         "native GGUF MoE experts do not support BF16 offload; "
                         "disable expert offload to keep packed Q4/Q6 weights resident");
                 }
-                if (options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
+                if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
                     std::vector<ExpertLocation> catalog =
-                        weight_loader_->build_expert_catalog(repo, i, E, inter, shape_.hidden);
-                    expert_catalog_[static_cast<size_t>(i)] = catalog;
-                    if (weights_->expert_catalog[static_cast<size_t>(i)].empty()) {
-                        weights_->expert_catalog[static_cast<size_t>(i)] = catalog;
+                        resources_.weight_loader_->build_expert_catalog(repo, i, E, inter, resources_.shape_.hidden);
+                    workspace_.expert_catalog_[static_cast<size_t>(i)] = catalog;
+                    if (resources_.weights_->expert_catalog[static_cast<size_t>(i)].empty()) {
+                        resources_.weights_->expert_catalog[static_cast<size_t>(i)] = catalog;
                     }
 
-                    size_t gate_up_bytes = 2 * inter * shape_.hidden * sizeof(__nv_bfloat16);
-                    size_t down_bytes = shape_.hidden * inter * sizeof(__nv_bfloat16);
+                    size_t gate_up_bytes = 2 * inter * resources_.shape_.hidden * sizeof(__nv_bfloat16);
+                    size_t down_bytes = resources_.shape_.hidden * inter * sizeof(__nv_bfloat16);
                     auto cache = std::make_unique<ExpertLayerCache>(
-                        E, expert_offload_plan_.experts_per_layer,
+                        E, workspace_.expert_offload_plan_.experts_per_layer,
                         gate_up_bytes, down_bytes);
-                    cache->set_policy(options_.expert_offload.policy);
+                    cache->set_policy(resources_.options_.expert_offload.policy);
                     std::vector<const __nv_bfloat16*> empty_host_dev(static_cast<size_t>(E), nullptr);
                     cache->set_host_sources(empty_host_dev, empty_host_dev);
 
@@ -262,12 +262,12 @@ void Model::Impl::load_checkpoint_weights(
                     controller->cache = std::move(cache);
                     controller->transfer_stream = std::make_unique<CudaStream>();
 
-                    if (expert_offload_plan_.experts_per_layer > 0) {
-                        for (int s = 0; s < expert_offload_plan_.experts_per_layer; ++s) {
+                    if (workspace_.expert_offload_plan_.experts_per_layer > 0) {
+                        for (int s = 0; s < workspace_.expert_offload_plan_.experts_per_layer; ++s) {
                             const ExpertLocation& loc = catalog[static_cast<size_t>(s)];
-                            ExpertHostLease lease = weights_->pinned_expert_cache->acquire(i, s, [&](std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) {
-                                if (weights_->expert_sidecar) {
-                                    weights_->expert_sidecar->read_expert(i, s, gu_dest, dn_dest);
+                            ExpertHostLease lease = resources_.weights_->pinned_expert_cache->acquire(i, s, [&](std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) {
+                                if (resources_.weights_->expert_sidecar) {
+                                    resources_.weights_->expert_sidecar->read_expert(i, s, gu_dest, dn_dest);
                                 } else {
                                     const auto& reader =
                                         require_random_access_tensor_reader(repo);
@@ -287,20 +287,20 @@ void Model::Impl::load_checkpoint_weights(
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                     moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
                     moe_weights.down_ptrs = controller->cache->down_ptrs();
-                    weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
-                    expert_caches_[static_cast<size_t>(i)] = weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
+                    resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
+                    workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 } else {
                     // Host-backed experts + per-layer GPU cache. Load expert bytes
                     // into the host store (no eager device upload), build the cache,
                     // and seed it with the first `experts_per_layer` experts.
                     WeightLoader::HostExpertLayer host_layer =
-                        weight_loader_->load_moe_experts_host(
-                            repo, i, E, inter, shape_.hidden, host_expert_store_,
-                            options_.expert_offload.host_mode);
+                        resources_.weight_loader_->load_moe_experts_host(
+                            repo, i, E, inter, resources_.shape_.hidden, workspace_.host_expert_store_,
+                            resources_.options_.expert_offload.host_mode);
                     auto cache = std::make_unique<ExpertLayerCache>(
-                        E, expert_offload_plan_.experts_per_layer,
+                        E, workspace_.expert_offload_plan_.experts_per_layer,
                         host_layer.gate_up_bytes, host_layer.down_bytes);
-                    cache->set_policy(options_.expert_offload.policy);
+                    cache->set_policy(resources_.options_.expert_offload.policy);
                     cache->set_host_sources(host_layer.gate_up_host_dev,
                                             host_layer.down_host_dev);
 
@@ -309,75 +309,75 @@ void Model::Impl::load_checkpoint_weights(
                     controller->transfer_stream = std::make_unique<CudaStream>();
 
                     std::vector<int> seed(static_cast<size_t>(
-                        expert_offload_plan_.experts_per_layer));
-                    for (int s = 0; s < expert_offload_plan_.experts_per_layer; ++s) {
+                        workspace_.expert_offload_plan_.experts_per_layer));
+                    for (int s = 0; s < workspace_.expert_offload_plan_.experts_per_layer; ++s) {
                         seed[static_cast<size_t>(s)] = s;
                     }
                     controller->cache->seed(seed, controller->transfer_stream->get());
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                     moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
                     moe_weights.down_ptrs = controller->cache->down_ptrs();
-                    weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
-                    expert_caches_[static_cast<size_t>(i)] = weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
+                    resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
+                    workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 }
             } else {
                 moe_weights.gate_up =
-                    weight_loader_->load_moe_gate_up(repo, i, E, inter, shape_.hidden);
+                    resources_.weight_loader_->load_moe_gate_up(repo, i, E, inter, resources_.shape_.hidden);
                 moe_weights.down =
-                    weight_loader_->load_moe_down(repo, i, E, inter, shape_.hidden);
+                    resources_.weight_loader_->load_moe_down(repo, i, E, inter, resources_.shape_.hidden);
             }
 
             common_layer.feed_forward = moe_weights;
         } else {
-            const LinearWeight* w13 = weight_loader_->load_concat_linear_weight(
+            const LinearWeight* w13 = resources_.weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "feed_forward.w13.weight"),
                 {
-                    {tensor_name(*tensor_naming_, TensorRole::FfnGate, i),
-                     {shape_.intermediate, shape_.hidden}},
-                    {tensor_name(*tensor_naming_, TensorRole::FfnUp, i),
-                     {shape_.intermediate, shape_.hidden}},
+                    {tensor_name(*resources_.tensor_naming_, TensorRole::FfnGate, i),
+                     {resources_.shape_.intermediate, resources_.shape_.hidden}},
+                    {tensor_name(*resources_.tensor_naming_, TensorRole::FfnUp, i),
+                     {resources_.shape_.intermediate, resources_.shape_.hidden}},
                 });
-            const LinearWeight* w2 = weight_loader_->load_linear_weight(
-                repo, tensor_name(*tensor_naming_, TensorRole::FfnDown, i),
-                {shape_.hidden, shape_.intermediate});
+            const LinearWeight* w2 = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnDown, i),
+                {resources_.shape_.hidden, resources_.shape_.intermediate});
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
         const LayerType layer_type =
-            shape_.layer_types[static_cast<size_t>(i)];
+            resources_.shape_.layer_types[static_cast<size_t>(i)];
         if (layer_type == LayerType::FullAttention) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
-            attention_layer.qkv = weight_loader_->load_concat_linear_weight(
+            attention_layer.qkv = resources_.weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "self_attn.qkv.weight"),
                 {
-                    {tensor_name(*tensor_naming_, TensorRole::AttentionQuery, i),
-                     {shape_.q_width, shape_.hidden}},
-                    {tensor_name(*tensor_naming_, TensorRole::AttentionKey, i),
-                     {shape_.kv_width, shape_.hidden}},
-                    {tensor_name(*tensor_naming_, TensorRole::AttentionValue, i),
-                     {shape_.kv_width, shape_.hidden}},
+                    {tensor_name(*resources_.tensor_naming_, TensorRole::AttentionQuery, i),
+                     {resources_.shape_.q_width, resources_.shape_.hidden}},
+                    {tensor_name(*resources_.tensor_naming_, TensorRole::AttentionKey, i),
+                     {resources_.shape_.kv_width, resources_.shape_.hidden}},
+                    {tensor_name(*resources_.tensor_naming_, TensorRole::AttentionValue, i),
+                     {resources_.shape_.kv_width, resources_.shape_.hidden}},
                 });
-            attention_layer.out = weight_loader_->load_linear_weight(
-                repo, tensor_name(*tensor_naming_, TensorRole::AttentionOutput, i),
-                {shape_.hidden, shape_.hidden});
-            if (shape_.query_key_norm) {
-                attention_layer.q_norm = weight_loader_->load_weight(
+            attention_layer.out = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionOutput, i),
+                {resources_.shape_.hidden, resources_.shape_.hidden});
+            if (resources_.shape_.query_key_norm) {
+                attention_layer.q_norm = resources_.weight_loader_->load_weight(
                     repo, layer_name(i, "self_attn.q_layernorm.weight"),
-                    {shape_.head_dim});
-                attention_layer.k_norm = weight_loader_->load_weight(
+                    {resources_.shape_.head_dim});
+                attention_layer.k_norm = resources_.weight_loader_->load_weight(
                     repo, layer_name(i, "self_attn.k_layernorm.weight"),
-                    {shape_.head_dim});
+                    {resources_.shape_.head_dim});
             }
 
-            if (options_.allocate_local_kv_cache) {
+            if (resources_.options_.allocate_local_kv_cache) {
                 const size_t cache_elements =
-                    static_cast<size_t>(max_context_) * shape_.kv_width;
-                if (options_.kv_cache_mode == KvCacheMode::Int8) {
+                    static_cast<size_t>(max_context_) * resources_.shape_.kv_width;
+                if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
                     attention_layer.key_cache_int8.reset(cache_elements);
                     attention_layer.value_cache_int8.reset(cache_elements);
                     const size_t scale_elements =
-                        static_cast<size_t>(max_context_) * shape_.num_key_value_heads;
+                        static_cast<size_t>(max_context_) * resources_.shape_.num_key_value_heads;
                     attention_layer.key_cache_scales.reset(scale_elements);
                     attention_layer.value_cache_scales.reset(scale_elements);
                 } else {
@@ -385,22 +385,22 @@ void Model::Impl::load_checkpoint_weights(
                     attention_layer.value_cache.reset(cache_elements);
                 }
             }
-            layers_.emplace_back(std::move(attention_layer));
+            resources_.layers_.emplace_back(std::move(attention_layer));
         } else {
             ConvolutionLayer convolution_layer;
             convolution_layer.common = common_layer;
-            convolution_layer.conv_in = weight_loader_->load_linear_weight(
+            convolution_layer.conv_in = resources_.weight_loader_->load_linear_weight(
                 repo, layer_name(i, "conv.in_proj.weight"),
-                {3 * shape_.hidden, shape_.hidden});
-            convolution_layer.conv_weight = weight_loader_->load_weight(
+                {3 * resources_.shape_.hidden, resources_.shape_.hidden});
+            convolution_layer.conv_weight = resources_.weight_loader_->load_weight(
                 repo, layer_name(i, "conv.conv.weight"),
-                {shape_.hidden, 1, shape_.conv_cache});
-            convolution_layer.conv_out = weight_loader_->load_linear_weight(
+                {resources_.shape_.hidden, 1, resources_.shape_.conv_cache});
+            convolution_layer.conv_out = resources_.weight_loader_->load_linear_weight(
                 repo, layer_name(i, "conv.out_proj.weight"),
-                {shape_.hidden, shape_.hidden});
+                {resources_.shape_.hidden, resources_.shape_.hidden});
             convolution_layer.conv_state.reset(
-                static_cast<size_t>(shape_.conv_cache) * shape_.hidden);
-            layers_.emplace_back(std::move(convolution_layer));
+                static_cast<size_t>(resources_.shape_.conv_cache) * resources_.shape_.hidden);
+            resources_.layers_.emplace_back(std::move(convolution_layer));
         }
     }
 

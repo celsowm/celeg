@@ -1,4 +1,4 @@
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
         // copy-on-write, so no artificial page alignment is required.
         constexpr int page_tokens = 16;
 
-        celeg::ModelOptions model;
+        celeg::CudaModelOptions model;
         model.fast_attention = true;
         model.fused_projections = true;
         model.fused_residuals = true;

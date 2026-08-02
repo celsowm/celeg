@@ -1,19 +1,21 @@
 #pragma once
 
 #include "celeg/serve/inference_service.hpp"
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/serve/request_lifecycle.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
 
-#include <mutex>
 #include <string>
-#include <unordered_map>
 
 namespace celeg::serve {
 
-class CudaInferenceService final : public IInferenceService {
+class CudaInferenceService final : public serve::IRequestService,
+                                   public serve::ISchedulerDriver,
+                                   public serve::IServiceDiagnostics {
 public:
     CudaInferenceService(std::string model_path,
                          int max_context,
-                         ModelOptions model_options = {},
+                         CudaModelOptions model_options = {},
                          ConcurrentEngineOptions engine_options = {});
 
     RequestId submit(GenerateRequest request) override;
@@ -30,16 +32,9 @@ public:
     void stop() override;
 
 private:
-    struct RequestMeta {
-        std::int32_t eos_token_id = 7;
-        bool saw_eos = false;
-    };
-
     ConcurrentEngine engine_;
     ModelInfo model_info_;
-
-    mutable std::mutex meta_mutex_;
-    std::unordered_map<RequestId, RequestMeta> meta_;
+    RequestLifecycle lifecycle_;
 };
 
 } // namespace celeg::serve

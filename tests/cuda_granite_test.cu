@@ -1,5 +1,5 @@
-#include "celeg/model/model.hpp"
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/backend/cuda/model.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
 #include "support/assertions.hpp"
 
 #include <cstdint>
@@ -102,7 +102,7 @@ int main() {
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / "celeg-granite-cuda-test";
     write_checkpoint(directory);
-    celeg::ModelOptions options;
+    celeg::CudaModelOptions options;
     options.cuda_graph = false;
     options.fast_attention = false;
     options.fused_projections = false;
@@ -112,7 +112,7 @@ int main() {
     generation.seed = 7;
     generation.top_k = 1;
     {
-        celeg::Model model(directory.string(), 32, options, generation);
+        celeg::CudaModel model(directory.string(), 32, options, generation);
         model.session().prefill({1, 3, 4});
         CELEG_TEST_CHECK(model.session().ready_for_decode());
         CELEG_TEST_CHECK(model.diagnostics().copy_logits().size() == 32);

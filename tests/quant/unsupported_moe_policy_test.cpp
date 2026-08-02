@@ -20,7 +20,7 @@
 // the unsupported pairs throw `std::invalid_argument` whose message mentions
 // the offending weight mode and the word "MoE".
 
-#include "celeg/model/weights/policy.hpp"
+#include "celeg/backend/cuda/weight_policy.hpp"
 
 #include "support/assertions.hpp"
 

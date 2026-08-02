@@ -79,8 +79,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
                 celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
                 celeg::LayerType::FullAttention, celeg::LayerType::Convolution,
             };
-        } else {
-            continue;
         }
         shape.mixer_kinds = shape.layer_types;
         shape.q_width = shape.num_attention_heads * shape.head_dim;

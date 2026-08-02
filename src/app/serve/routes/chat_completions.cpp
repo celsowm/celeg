@@ -19,7 +19,7 @@ namespace protocol = celeg::serve::protocol;
 using celeg::serve::GenerateEvent;
 using celeg::serve::GenerateRequest;
 using celeg::serve::GenerationDispatcher;
-using celeg::serve::IInferenceService;
+using celeg::serve::IRequestService;
 using celeg::serve::RequestId;
 
 std::int64_t now_seconds() {
@@ -38,7 +38,7 @@ std::string new_request_id() {
 // request once it reaches a terminal status, so re-watching with a no-op
 // callback is enough to let cancellation finish draining without touching
 // the now-invalid HttpResponse.
-void forget_after_abort(GenerationDispatcher& dispatcher, IInferenceService& service, RequestId id) {
+void forget_after_abort(GenerationDispatcher& dispatcher, IRequestService& service, RequestId id) {
     service.cancel(id);
     dispatcher.watch(id, [](const GenerateEvent&) {});
 }
@@ -47,7 +47,7 @@ void forget_after_abort(GenerationDispatcher& dispatcher, IInferenceService& ser
 
 void register_chat_completions_route(uWS::App& app,
                                      GenerationDispatcher& dispatcher,
-                                     IInferenceService& service,
+                                     IRequestService& service,
                                      const celeg::BpeTokenizer& tokenizer,
                                      const std::string& model_name,
                                      std::int32_t eos_token_id,

@@ -2,7 +2,7 @@
 
 #include "celeg/runtime/cache/kv_page_allocator.hpp"
 #include "celeg/runtime/cache/prefix_cache_index.hpp"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/model/runtime_types.hpp"
 
 #include <cstddef>
 #include <cstdint>

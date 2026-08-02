@@ -126,11 +126,15 @@ target_link_libraries(celeg-download PRIVATE celeg_base)
 
 if(CELEG_ENABLE_SERVE)
     include(FetchContent)
+    # Keep Celeg's dependency sub-builds isolated from a reused CMake build
+    # directory. CMake's --fresh resets the top-level cache but intentionally
+    # preserves the default `_deps` tree, whose sub-build cache can belong to
+    # another checkout at the same path.
+    set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_celeg_deps")
     FetchContent_Declare(
         glaze
-        GIT_REPOSITORY https://github.com/stephenberry/glaze.git
-        GIT_TAG v2.9.5
-        GIT_SHALLOW TRUE)
+        URL https://github.com/stephenberry/glaze/archive/refs/tags/v2.9.5.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_MakeAvailable(glaze)
 
     add_library(celeg_serve_protocol src/serve/protocol/mapping.cpp src/serve/protocol/openapi.cpp)
@@ -167,9 +171,8 @@ if(CELEG_ENABLE_SERVE)
     set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         libuv
-        GIT_REPOSITORY https://github.com/libuv/libuv.git
-        GIT_TAG v1.49.2
-        GIT_SHALLOW TRUE)
+        URL https://github.com/libuv/libuv/archive/refs/tags/v1.49.2.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_MakeAvailable(libuv)
     set(BUILD_SHARED_LIBS "${_celeg_saved_build_shared_libs}")
 
@@ -181,9 +184,8 @@ if(CELEG_ENABLE_SERVE)
     # for a libuv, no-TLS build.
     FetchContent_Declare(
         usockets
-        GIT_REPOSITORY https://github.com/uNetworking/uSockets.git
-        GIT_TAG 86097c490263ab662d62e8e7b541390bdec7d149 # pinned by uWebSockets v20.79.0
-        GIT_SHALLOW FALSE)
+        URL https://github.com/uNetworking/uSockets/archive/86097c490263ab662d62e8e7b541390bdec7d149.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_Populate(usockets)
     file(GLOB CELEG_USOCKETS_SOURCES
         "${usockets_SOURCE_DIR}/src/*.c"
@@ -198,9 +200,8 @@ if(CELEG_ENABLE_SERVE)
     # uWebSockets itself is header-only C++ on top of uSockets.
     FetchContent_Declare(
         uwebsockets
-        GIT_REPOSITORY https://github.com/uNetworking/uWebSockets.git
-        GIT_TAG v20.79.0
-        GIT_SHALLOW TRUE)
+        URL https://github.com/uNetworking/uWebSockets/archive/refs/tags/v20.79.0.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_Populate(uwebsockets)
     add_library(uwebsockets INTERFACE)
     target_include_directories(uwebsockets INTERFACE "${uwebsockets_SOURCE_DIR}/src")
@@ -213,9 +214,8 @@ if(CELEG_ENABLE_SERVE)
     # swagger-ui-bundle.js exceeds MSVC's string-literal size limit.
     FetchContent_Declare(
         swaggerui
-        GIT_REPOSITORY https://github.com/swagger-api/swagger-ui.git
-        GIT_TAG v5.17.14
-        GIT_SHALLOW TRUE)
+        URL https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.14.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
     FetchContent_Populate(swaggerui)
 
     add_executable(celeg-serve
@@ -236,6 +236,15 @@ endif()
 include(CheckLanguage)
 set(CELEG_CUDA_AVAILABLE OFF)
 if(CELEG_ENABLE_CUDA)
+    # CUDA 13.1 rejects the installed VS 18 host toolset during compiler
+    # identification.  The same flag must be present before check_language;
+    # applying it only to target compile options is too late for CMake's
+    # compiler probe.
+    if(MSVC AND MSVC_VERSION GREATER 1949)
+        set(CMAKE_CUDA_FLAGS_INIT
+            "${CMAKE_CUDA_FLAGS_INIT} -allow-unsupported-compiler"
+            CACHE STRING "Initial CUDA flags" FORCE)
+    endif()
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
@@ -384,11 +393,15 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/model/graph.hpp
     include/celeg/model/profiles.hpp
     include/celeg/model/resolved.hpp
-    include/celeg/model/execution/plan.hpp
-    include/celeg/model/execution/runtime_types.hpp
+    include/celeg/backend/cuda/execution_plan.hpp
+    include/celeg/backend/cuda/runtime_types.hpp
+    include/celeg/backend/cuda/weight_layout.hpp
+    include/celeg/backend/cuda/weight_policy.hpp
+    include/celeg/backend/cuda/weights_loader.hpp
+    include/celeg/model/runtime_types.hpp
     include/celeg/model/session.hpp
     include/celeg/model/weights/roles.hpp
-    include/celeg/model/model.hpp
+    include/celeg/backend/cuda/model.hpp
     include/celeg/model/reference.hpp
     include/celeg/runtime/cache/kv_page_allocator.hpp
     include/celeg/runtime/cache/page_layout.hpp
@@ -397,14 +410,17 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/runtime/cache/prefix_cache_index.hpp
     include/celeg/runtime/cache/prefix_cache.hpp
     include/celeg/runtime/cache/prefix_radix.hpp
-    include/celeg/runtime/concurrency.hpp
     include/celeg/runtime/concurrency/metrics.hpp
     include/celeg/runtime/concurrency/policy_types.hpp
     include/celeg/runtime/concurrency/policy.hpp
-    include/celeg/runtime/moe/offload.hpp
+    include/celeg/runtime/request_types.hpp
+    include/celeg/backend/cuda/concurrency.hpp
+    include/celeg/backend/cuda/moe.hpp
+    include/celeg/backend/cuda/moe/offload.hpp
+    include/celeg/backend/cuda/moe/expert_residency.hpp
     include/celeg/runtime/weights_topology.hpp
     include/celeg/serve/cpu_inference_service.hpp
-    include/celeg/serve/cuda_inference_service.hpp
+    include/celeg/backend/cuda/cuda_inference_service.hpp
     include/celeg/serve/generation_dispatcher.hpp
     include/celeg/serve/inference_service.hpp
     include/celeg/serve/protocol/chat.hpp
@@ -439,10 +455,19 @@ if(CELEG_BUILD_TESTS)
     add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/metadata.cpp
         src/model/definition.cpp src/model/resolved.cpp src/model/architecture.cpp
-        src/models/lfm2/architecture.cpp src/models/granite/architecture.cpp
+        src/model/weight_plan.cpp
+        src/model/graph_builder.cpp
+        src/models/lfm2/architecture.cpp src/models/lfm2/layer_decoder.cpp
+        src/models/lfm2/metadata_decoder.cpp
+        src/models/granite/architecture.cpp src/models/granite/topology.cpp
         src/model/weights/roles.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
+    add_executable(lfm2_layer_decoder_test tests/lfm2_layer_decoder_test.cpp
+        src/checkpoint/metadata.cpp src/checkpoint/formats/json.cpp
+        src/models/lfm2/layer_decoder.cpp)
+    target_include_directories(lfm2_layer_decoder_test PRIVATE include)
+    add_test(NAME lfm2_layer_decoder_test COMMAND lfm2_layer_decoder_test)
     add_executable(chat_template_test tests/chat_template_test.cpp src/text/chat_template.cpp)
     target_include_directories(chat_template_test PRIVATE include)
     add_test(NAME chat_template_test COMMAND chat_template_test)
@@ -488,6 +513,14 @@ if(CELEG_BUILD_TESTS)
     add_executable(api_header_test tests/api_header_test.c)
     target_include_directories(api_header_test PRIVATE include)
     add_test(NAME api_header_test COMMAND api_header_test)
+    add_executable(neutral_headers_compile_test tests/neutral_headers_compile_test.cpp)
+    target_include_directories(neutral_headers_compile_test PRIVATE include)
+    add_test(NAME neutral_headers_compile_test COMMAND neutral_headers_compile_test)
+
+    add_executable(model_compiler_test tests/model_compiler_test.cpp)
+    target_include_directories(model_compiler_test PRIVATE include tests)
+    target_link_libraries(model_compiler_test PRIVATE celeg_base)
+    add_test(NAME model_compiler_test COMMAND model_compiler_test)
     add_test(NAME architecture_boundary_test
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_architecture_boundaries.py
                 --root ${CMAKE_CURRENT_SOURCE_DIR})
@@ -500,6 +533,10 @@ if(CELEG_BUILD_TESTS)
     add_executable(checkpoint_capabilities_test tests/checkpoint_capabilities_test.cpp)
     target_include_directories(checkpoint_capabilities_test PRIVATE include tests)
     add_test(NAME checkpoint_capabilities_test COMMAND checkpoint_capabilities_test)
+    add_executable(checkpoint_format_catalog_test tests/checkpoint_format_catalog_test.cpp)
+    target_include_directories(checkpoint_format_catalog_test PRIVATE include tests)
+    target_link_libraries(checkpoint_format_catalog_test PRIVATE celeg_base)
+    add_test(NAME checkpoint_format_catalog_test COMMAND checkpoint_format_catalog_test)
     add_executable(concurrent_metrics_test tests/concurrent_metrics_test.cpp)
     target_link_libraries(concurrent_metrics_test PRIVATE celeg_runtime)
     add_test(NAME concurrent_metrics_test COMMAND concurrent_metrics_test)
@@ -518,6 +555,9 @@ if(CELEG_BUILD_TESTS)
     add_executable(generation_dispatcher_test tests/generation_dispatcher_test.cpp)
     target_link_libraries(generation_dispatcher_test PRIVATE celeg_serve_core)
     add_test(NAME generation_dispatcher_test COMMAND generation_dispatcher_test)
+    add_executable(request_lifecycle_test tests/request_lifecycle_test.cpp)
+    target_include_directories(request_lifecycle_test PRIVATE include tests)
+    add_test(NAME request_lifecycle_test COMMAND request_lifecycle_test)
     if(CELEG_ENABLE_SERVE)
         add_executable(chat_protocol_mapping_test tests/chat_protocol_mapping_test.cpp)
         target_link_libraries(chat_protocol_mapping_test PRIVATE celeg_serve_protocol)
@@ -578,6 +618,9 @@ if(CELEG_BUILD_TESTS)
     add_executable(cpu_model_options_test tests/cpu_model_options_test.cpp)
     target_link_libraries(cpu_model_options_test PRIVATE celeg_cpu_backend)
     add_test(NAME cpu_model_options_test COMMAND cpu_model_options_test)
+    add_executable(cpu_sampler_test tests/cpu_sampler_test.cpp)
+    target_link_libraries(cpu_sampler_test PRIVATE celeg_cpu_backend)
+    add_test(NAME cpu_sampler_test COMMAND cpu_sampler_test)
     add_executable(cpu_granite_test tests/cpu_granite_test.cpp)
     target_link_libraries(cpu_granite_test PRIVATE celeg_cpu_backend)
     add_test(NAME cpu_granite_test COMMAND cpu_granite_test)

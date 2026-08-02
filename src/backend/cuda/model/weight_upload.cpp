@@ -1,6 +1,6 @@
-#include "celeg/model/weights/loader.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/model/weights/quantization.hpp"
-#include "celeg/runtime/moe/expert_residency.hpp"
+#include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"

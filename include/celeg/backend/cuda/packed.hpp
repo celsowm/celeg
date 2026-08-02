@@ -12,13 +12,13 @@
 namespace celeg {
 
 class PhysicalPagedKvCache;
-class Model;
+class CudaModel;
 struct PackedDecodeExecutorImpl;
 
 // Backend-internal factory. Keeping this operation-specific context factory
-// out of the public Model surface prevents CUDA packed-execution types from
+// out of the public CudaModel surface prevents CUDA packed-execution types from
 // becoming part of the generic model API.
-PackedSessionContext packed_session_context(Model& model);
+PackedSessionContext packed_session_context(CudaModel& model);
 
 struct PackedDecodeMetrics {
     uint64_t steps = 0;
@@ -82,7 +82,7 @@ public:
     PackedDecodeMetrics metrics() const;
 
 private:
-    std::unique_ptr<PackedDecodeExecutorImpl> impl_;
+    std::unique_ptr<PackedDecodeExecutorImpl> state_;
 };
 
 } // namespace celeg

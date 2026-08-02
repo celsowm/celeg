@@ -7,7 +7,7 @@
 #include "celeg/serve/cpu_inference_service.hpp"
 #include "celeg/text/tokenizer.hpp"
 #ifdef CELEG_API_WITH_CUDA
-#include "celeg/serve/cuda_inference_service.hpp"
+#include "celeg/backend/cuda/cuda_inference_service.hpp"
 #endif
 
 #include <algorithm>
@@ -23,7 +23,7 @@ struct celeg_model {
     std::string error;
 };
 struct celeg_engine {
-    std::unique_ptr<celeg::serve::IInferenceService> service;
+    std::unique_ptr<celeg::serve::ServiceBundle> service;
     std::string error;
 };
 struct celeg_tokenizer { std::unique_ptr<celeg::BpeTokenizer> value; std::string error; };
@@ -204,11 +204,11 @@ celeg::AttentionMode cuda_attention_mode(int value) {
     }
 }
 
-celeg::ModelOptions cuda_options(const celeg_engine_model_options& source) {
+celeg::CudaModelOptions cuda_options(const celeg_engine_model_options& source) {
     const auto& input = source.backend_options.cuda;
     if (source.backend != CELEG_BACKEND_CUDA) throw std::invalid_argument("CUDA options require CUDA backend");
     if (input.flags != 0) throw std::invalid_argument("CUDA model option flags are reserved and must be zero");
-    celeg::ModelOptions result;
+    celeg::CudaModelOptions result;
     result.weight_mode = cuda_weight_mode(input.weight_mode);
     result.kv_cache_mode = cuda_kv_cache_mode(input.kv_cache_mode);
     result.gemm_backend = cuda_gemm_backend(input.gemm_backend);
@@ -373,14 +373,16 @@ celeg_engine* celeg_engine_create(const char* path, const celeg_engine_options* 
         }
         auto result = std::make_unique<celeg_engine>();
         if (options->backend == CELEG_BACKEND_CPU) {
-            result->service = std::make_unique<celeg::serve::CpuInferenceService>(
-                path, options->model.max_context, cpu_options(options->model),
-                cpu_engine_options(*options));
+            result->service = std::make_unique<celeg::serve::ServiceBundle>(
+                std::make_unique<celeg::serve::CpuInferenceService>(
+                    path, options->model.max_context, cpu_options(options->model),
+                    cpu_engine_options(*options)));
         } else if (options->backend == CELEG_BACKEND_CUDA) {
 #ifdef CELEG_API_WITH_CUDA
-            result->service = std::make_unique<celeg::serve::CudaInferenceService>(
-                path, options->model.max_context, cuda_options(options->model),
-                cuda_engine_options(*options));
+            result->service = std::make_unique<celeg::serve::ServiceBundle>(
+                std::make_unique<celeg::serve::CudaInferenceService>(
+                    path, options->model.max_context, cuda_options(options->model),
+                    cuda_engine_options(*options)));
 #else
             global_error = "CUDA backend is unavailable in this build";
             return nullptr;
@@ -403,25 +405,25 @@ celeg_status celeg_engine_submit(celeg_engine* engine, const int32_t* tokens, si
         request.eos_token_id = options->eos_token_id;
         request.priority = options->priority;
         request.generation = generation(options->generation);
-        *request_id = engine->service->submit(std::move(request));
+        *request_id = engine->service->requests().submit(std::move(request));
     });
 }
 celeg_status celeg_engine_poll(celeg_engine* engine, celeg_request_id id, int32_t* output, size_t capacity, size_t* count, int* finished) {
     if (!engine || !output || capacity == 0 || !count || !finished) return CELEG_STATUS_INVALID_ARGUMENT;
     return protect(engine, [&] {
-        const celeg::serve::GenerateEvent event = engine->service->poll(id, capacity);
+        const celeg::serve::GenerateEvent event = engine->service->requests().poll(id, capacity);
         std::copy(event.tokens.begin(), event.tokens.end(), output);
         *count = event.tokens.size();
         *finished = event.finished ? 1 : 0;
     });
 }
-celeg_status celeg_engine_status(celeg_engine* engine, celeg_request_id id, celeg_request_status* value) { if (!value) return CELEG_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *value = status(engine->service->status(id)); }); }
+celeg_status celeg_engine_status(celeg_engine* engine, celeg_request_id id, celeg_request_status* value) { if (!value) return CELEG_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *value = status(engine->service->requests().status(id)); }); }
 celeg_status celeg_engine_cancel(celeg_engine* engine, celeg_request_id id) {
     return protect(engine, [&] {
-        if (!engine->service->cancel(id)) throw std::out_of_range("unknown request id");
+        if (!engine->service->requests().cancel(id)) throw std::out_of_range("unknown request id");
     });
 }
-celeg_status celeg_engine_step(celeg_engine* engine, int* progressed) { if (!progressed) return CELEG_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *progressed = engine->service->step() ? 1 : 0; }); }
+celeg_status celeg_engine_step(celeg_engine* engine, int* progressed) { if (!progressed) return CELEG_STATUS_INVALID_ARGUMENT; return protect(engine, [&] { *progressed = engine->service->scheduler().step() ? 1 : 0; }); }
 const char* celeg_engine_last_error(const celeg_engine* engine) { return engine ? engine->error.c_str() : global_error.c_str(); }
 
 celeg_tokenizer* celeg_tokenizer_create(const char* path) { if (!path || !*path) return nullptr; try { auto result = std::make_unique<celeg_tokenizer>(); result->value = std::make_unique<celeg::BpeTokenizer>(path); return result.release(); } catch (const std::exception& error) { global_error = error.what(); return nullptr; } }

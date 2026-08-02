@@ -1,4 +1,4 @@
-#include "celeg/model/weights/loader.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 

@@ -31,11 +31,7 @@ run_case() {
         "$@"
 }
 
-run_case strict-cublas \
-    --gemm-backend cublas \
-    --legacy-sampling
-
-run_case fused-sampling-cublas \
+run_case cublas \
     --gemm-backend cublas
 
 run_case fast-cublas \

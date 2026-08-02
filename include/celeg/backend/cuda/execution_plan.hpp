@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 
 #include <string>
 
@@ -23,20 +23,14 @@ enum class LinearKernelKind : uint8_t {
     MixedBf16AndGgufMmq,
 };
 
-enum class SamplingKernelKind : uint8_t {
-    Legacy,
-    Fused,
-};
-
 // Immutable, validated runtime plan. User-facing options are compiled once at
 // construction so hot paths do not repeatedly reinterpret configuration.
-class ExecutionPlan {
+class CudaExecutionPlan {
 public:
-    static ExecutionPlan compile(ModelOptions requested, int max_context);
+    static CudaExecutionPlan compile(CudaModelOptions requested, int max_context);
 
-    const ModelOptions& options() const { return options_; }
+    const CudaModelOptions& options() const { return options_; }
     LinearKernelKind linear_kernel() const { return linear_kernel_; }
-    SamplingKernelKind sampling_kernel() const { return sampling_kernel_; }
     bool segmented_attention(int position) const;
     bool segmented_capable() const {
         return options_.attention_mode != AttentionMode::Single;
@@ -45,9 +39,8 @@ public:
     std::string description() const;
 
 private:
-    ModelOptions options_{};
+    CudaModelOptions options_{};
     LinearKernelKind linear_kernel_ = LinearKernelKind::Bf16Cublas;
-    SamplingKernelKind sampling_kernel_ = SamplingKernelKind::Fused;
     int attention_chunks_ = 0;
 };
 

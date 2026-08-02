@@ -4,7 +4,8 @@
 
 namespace celeg {
 
-// Flat compatibility snapshot retained for the existing C++/C adapters.
+// Backend-neutral aggregate snapshot used by scheduler diagnostics and
+// adapters. Backend-specific engines populate this value at their boundary.
 struct ConcurrentMetrics {
     uint64_t submitted = 0;
     uint64_t completed = 0;

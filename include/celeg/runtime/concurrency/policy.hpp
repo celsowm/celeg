@@ -16,6 +16,8 @@ enum class RequestStatus : uint8_t {
     Failed,
 };
 
+const char* request_status_name(RequestStatus status);
+
 inline constexpr bool is_terminal(RequestStatus status) {
     return status == RequestStatus::Finished ||
            status == RequestStatus::Cancelled ||

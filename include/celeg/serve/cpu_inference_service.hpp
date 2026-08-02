@@ -1,15 +1,16 @@
 #pragma once
 
 #include "celeg/serve/inference_service.hpp"
+#include "celeg/serve/request_lifecycle.hpp"
 #include "celeg/backend/cpu/concurrent.hpp"
 
-#include <mutex>
 #include <string>
-#include <unordered_map>
 
 namespace celeg::serve {
 
-class CpuInferenceService final : public IInferenceService {
+class CpuInferenceService final : public IRequestService,
+                                  public ISchedulerDriver,
+                                  public IServiceDiagnostics {
 public:
     CpuInferenceService(const std::string& model_path,
                         int max_context,
@@ -30,16 +31,9 @@ public:
     void stop() override;
 
 private:
-    struct RequestMeta {
-        std::int32_t eos_token_id = 7;
-        bool saw_eos = false;
-    };
-
     CpuConcurrentEngine engine_;
     ModelInfo model_info_;
-
-    mutable std::mutex meta_mutex_;
-    std::unordered_map<RequestId, RequestMeta> meta_;
+    RequestLifecycle lifecycle_;
 };
 
 } // namespace celeg::serve

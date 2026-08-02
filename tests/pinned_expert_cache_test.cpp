@@ -177,10 +177,13 @@ void test_slot_protection_and_generation() {
     // 1 slot capacity
     PinnedExpertCache cache(10, 10, 5, 5);
 
+    std::atomic<bool> loader_started{false};
     std::atomic<bool> loader_running{true};
     std::atomic<bool> waiter_running{false};
+    std::atomic<int> waiter_errors{0};
 
     auto slow_loader = [&](std::span<std::byte>, std::span<std::byte>) {
+        loader_started.store(true, std::memory_order_release);
         while (loader_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
@@ -188,20 +191,40 @@ void test_slot_protection_and_generation() {
 
     // Thread 1: starts a slow load
     std::thread t1([&]() {
-        auto lease = cache.acquire(0, 1, slow_loader);
+        try {
+            auto lease = cache.acquire(0, 1, slow_loader);
+        } catch (const std::exception& error) {
+            std::cerr << "slot loader error: " << error.what() << '\n';
+            waiter_errors.fetch_add(1);
+        } catch (...) {
+            std::cerr << "slot loader error: unknown exception\n";
+            waiter_errors.fetch_add(1);
+        }
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    while (!loader_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
 
     // Thread 2: waiter on the same expert (0, 1)
     std::thread t2([&]() {
-        waiter_running = true;
-        auto lease = cache.acquire(0, 1, [](std::span<std::byte>, std::span<std::byte>){});
-        CELEG_TEST_CHECK(lease.valid());
-        CELEG_TEST_CHECK(lease.expert() == 1);
+        try {
+            waiter_running = true;
+            auto lease = cache.acquire(0, 1, [](std::span<std::byte>, std::span<std::byte>){});
+            CELEG_TEST_CHECK(lease.valid());
+            CELEG_TEST_CHECK(lease.expert() == 1);
+        } catch (const std::exception& error) {
+            std::cerr << "slot waiter error: " << error.what() << '\n';
+            waiter_errors.fetch_add(1);
+        } catch (...) {
+            std::cerr << "slot waiter error: unknown exception\n";
+            waiter_errors.fetch_add(1);
+        }
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    while (!waiter_running.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
     CELEG_TEST_CHECK(waiter_running);
 
     // Thread 3: tries to evict the slot for expert (0, 2)
@@ -218,15 +241,22 @@ void test_slot_protection_and_generation() {
     loader_running = false;
     t1.join();
     t2.join();
+    CELEG_TEST_CHECK(waiter_errors.load() == 0);
 }
 
-int main() {
-    test_basic_hits_misses();
-    test_eviction_and_lease_protection();
-    test_coalescing_and_concurrency();
-    test_loader_failure();
-    test_failure_propagation_to_waiters();
-    test_slot_protection_and_generation();
-    std::cout << "pinned_expert_cache_test: ok\n";
-    return 0;
+int main(int argc, char** argv) {
+    try {
+        const std::string selected = argc > 1 ? argv[1] : "all";
+        if (selected == "basic" || selected == "all") test_basic_hits_misses();
+        if (selected == "eviction" || selected == "all") test_eviction_and_lease_protection();
+        if (selected == "coalescing" || selected == "all") test_coalescing_and_concurrency();
+        if (selected == "failure" || selected == "all") test_loader_failure();
+        if (selected == "propagation" || selected == "all") test_failure_propagation_to_waiters();
+        if (selected == "generation" || selected == "all") test_slot_protection_and_generation();
+        std::cout << "pinned_expert_cache_test: ok\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "pinned_expert_cache_test: " << error.what() << '\n';
+        return 1;
+    }
 }

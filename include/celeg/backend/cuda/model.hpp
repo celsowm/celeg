@@ -1,6 +1,7 @@
 #pragma once
 
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/model/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,12 +13,13 @@ namespace celeg {
 
 struct PackedDecodeExecutorImpl;
 class PhysicalPagedKvCache;
-class Model;
+class CudaModel;
+struct CudaCompiledModel;
 struct PackedSessionContext;
 
 // Narrow interface for token-processing operations. New C++ callers should
-// depend on this view instead of the complete Model surface.
-class InferenceSession {
+// depend on this view instead of the complete CudaModel surface.
+class CudaInferenceSession {
 public:
     void reset(bool allocate_local_kv = true);
     void prefill(const std::vector<int32_t>& tokens);
@@ -40,13 +42,13 @@ public:
     int position() const;
 
 private:
-    friend class Model;
-    explicit InferenceSession(Model& owner) : owner_(&owner) {}
-    Model* owner_;
+    friend class CudaModel;
+    explicit CudaInferenceSession(CudaModel& owner) : owner_(&owner) {}
+    CudaModel* owner_;
 };
 
 // Read-only operational and benchmarking surface.
-class ModelDiagnostics {
+class CudaModelDiagnostics {
 public:
     std::vector<float> copy_logits() const;
     DecodeBenchmark benchmark_decode(int warmup_steps, int measured_steps);
@@ -69,9 +71,9 @@ public:
     ExpertOffloadStats expert_offload_stats() const;
 
 private:
-    friend class Model;
-    explicit ModelDiagnostics(Model& owner) : owner_(&owner) {}
-    Model* owner_;
+    friend class CudaModel;
+    explicit CudaModelDiagnostics(CudaModel& owner) : owner_(&owner) {}
+    CudaModel* owner_;
 };
 
 // Persistence and deterministic prefix-state boundary.
@@ -83,43 +85,42 @@ public:
     void restore_prefix_state(const PrefixState& state);
 
 private:
-    friend class Model;
-    explicit SessionPersistence(Model& owner) : owner_(&owner) {}
-    Model* owner_;
+    friend class CudaModel;
+    explicit SessionPersistence(CudaModel& owner) : owner_(&owner) {}
+    CudaModel* owner_;
 };
 
 // Thin runtime facade. The implementation, CUDA resources and model
-// topology live in Impl; focused clients can use session(), diagnostics() and
+// topology live in CudaCompiledModel; focused clients can use session(), diagnostics() and
 // persistence() to avoid depending on the complete model implementation.
-class Model {
-    friend class InferenceSession;
-    friend class ModelDiagnostics;
+class CudaModel {
+    friend class CudaInferenceSession;
+    friend class CudaModelDiagnostics;
     friend class SessionPersistence;
-    friend PackedSessionContext packed_session_context(Model& model);
+    friend PackedSessionContext packed_session_context(CudaModel& model);
 public:
-    Model(const std::string& model_path,
+    CudaModel(const std::string& model_path,
              int max_context = 4096,
-             ModelOptions options = {},
+             CudaModelOptions options = {},
              GenerationConfig generation = {});
-    ~Model();
+    ~CudaModel();
 
-    Model(const Model&) = delete;
-    Model& operator=(const Model&) = delete;
-    Model(Model&&) = delete;
-    Model& operator=(Model&&) = delete;
+    CudaModel(const CudaModel&) = delete;
+    CudaModel& operator=(const CudaModel&) = delete;
+    CudaModel(CudaModel&&) = delete;
+    CudaModel& operator=(CudaModel&&) = delete;
 
-    InferenceSession& session() { return session_view_; }
-    const InferenceSession& session() const { return session_view_; }
-    ModelDiagnostics& diagnostics() { return diagnostics_view_; }
-    const ModelDiagnostics& diagnostics() const { return diagnostics_view_; }
+    CudaInferenceSession& session() { return session_view_; }
+    const CudaInferenceSession& session() const { return session_view_; }
+    CudaModelDiagnostics& diagnostics() { return diagnostics_view_; }
+    const CudaModelDiagnostics& diagnostics() const { return diagnostics_view_; }
     SessionPersistence& persistence() { return persistence_view_; }
     const SessionPersistence& persistence() const { return persistence_view_; }
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
-    InferenceSession session_view_;
-    ModelDiagnostics diagnostics_view_;
+    std::unique_ptr<CudaCompiledModel> state_;
+    CudaInferenceSession session_view_;
+    CudaModelDiagnostics diagnostics_view_;
     SessionPersistence persistence_view_;
 };
 

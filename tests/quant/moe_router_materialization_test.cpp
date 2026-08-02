@@ -16,7 +16,7 @@
 // DeviceWeight (CUDA-backed) so it requires a CUDA device; it links against
 // celeg_cuda_backend. See docs/ARCHITECTURE_RULES.md section 1.1.
 
-#include "celeg/model/weights/loader.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/detail/model/types.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"

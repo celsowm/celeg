@@ -1,7 +1,8 @@
 #pragma once
 
 #include "celeg/backend/cpu/model.hpp"
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/runtime/concurrency/policy.hpp"
+#include "celeg/runtime/request_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -66,6 +67,8 @@ struct CpuConcurrentMetrics {
     double average_itl_ms() const;
 };
 
+struct CpuSchedulerDriver;
+
 class CpuConcurrentEngine {
 public:
     CpuConcurrentEngine(const std::string& model_path,
@@ -97,8 +100,7 @@ public:
     std::string last_error() const;
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<CpuSchedulerDriver> state_;
 };
 
 } // namespace celeg

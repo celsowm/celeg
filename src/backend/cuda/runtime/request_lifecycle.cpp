@@ -1,13 +1,13 @@
 #include "engine_internal.hpp"
 
 namespace celeg {
-ConcurrentEngine::Impl::~Impl() {
+CudaSchedulerDriver::~CudaSchedulerDriver() {
     stop();
     std::lock_guard<std::mutex> lock(mutex_);
     if (prefix_cache_) prefix_cache_->clear();
 }
 
-ConcurrentEngine::RequestId ConcurrentEngine::Impl::submit(
+ConcurrentEngine::RequestId CudaSchedulerDriver::submit(
     std::vector<int32_t> prompt, ConcurrentRequestOptions options) {
     if (prompt.empty()) throw std::invalid_argument("request prompt is empty");
     if (prompt.size() > static_cast<size_t>(max_context_))
@@ -31,7 +31,7 @@ ConcurrentEngine::RequestId ConcurrentEngine::Impl::submit(
     return id;
 }
 
-bool ConcurrentEngine::Impl::cancel(RequestId id) {
+bool CudaSchedulerDriver::cancel(RequestId id) {
     std::lock_guard<std::mutex> lock(mutex_);
     Request* found = registry_.find(id);
     if (!found) return false;
@@ -44,7 +44,7 @@ bool ConcurrentEngine::Impl::cancel(RequestId id) {
     return true;
 }
 
-bool ConcurrentEngine::Impl::release(RequestId id) {
+bool CudaSchedulerDriver::release(RequestId id) {
     std::lock_guard<std::mutex> lock(mutex_);
     Request* found = registry_.find(id);
     if (!found) return false;
@@ -54,7 +54,7 @@ bool ConcurrentEngine::Impl::release(RequestId id) {
     return registry_.erase(id);
 }
 
-PollResult ConcurrentEngine::Impl::poll(RequestId id, size_t max_tokens) {
+PollResult CudaSchedulerDriver::poll(RequestId id, size_t max_tokens) {
     std::lock_guard<std::mutex> lock(mutex_);
     Request& request = registry_.at(id);
     PollResult result;
@@ -72,18 +72,18 @@ PollResult ConcurrentEngine::Impl::poll(RequestId id, size_t max_tokens) {
     return result;
 }
 
-RequestStatus ConcurrentEngine::Impl::status(RequestId id) const {
+RequestStatus CudaSchedulerDriver::status(RequestId id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     return registry_.at(id).status;
 }
 
-ConcurrentEngine::Impl::Lane* ConcurrentEngine::Impl::find_free_lane_locked() {
+CudaSchedulerDriver::Lane* CudaSchedulerDriver::find_free_lane_locked() {
     for (auto& lane : lanes_) if (lane->request_id == 0) return lane.get();
     return nullptr;
 }
 
 std::vector<detail::LaneSnapshot>
-ConcurrentEngine::Impl::lane_snapshots_locked() const {
+CudaSchedulerDriver::lane_snapshots_locked() const {
     std::vector<detail::LaneSnapshot> result;
     result.reserve(lanes_.size());
     for (const auto& lane : lanes_) {
@@ -100,7 +100,7 @@ ConcurrentEngine::Impl::lane_snapshots_locked() const {
     return result;
 }
 
-bool ConcurrentEngine::Impl::admit_requests_locked() {
+bool CudaSchedulerDriver::admit_requests_locked() {
     bool did_work = false;
     while (!registry_.empty_queue()) {
         Lane* lane = find_free_lane_locked();
@@ -136,10 +136,10 @@ bool ConcurrentEngine::Impl::admit_requests_locked() {
 
         try {
             if (!lane->model) {
-                ModelOptions lane_options = model_options_;
+                CudaModelOptions lane_options = model_options_;
                 lane_options.allocate_local_kv_cache =
                     !engine_options_.packed_decode;
-                lane->model = std::make_unique<Model>(
+                lane->model = std::make_unique<CudaModel>(
                     model_path_, max_context_, lane_options,
                     request.options.generation);
             } else {
@@ -187,7 +187,7 @@ bool ConcurrentEngine::Impl::admit_requests_locked() {
     return did_work;
 }
 
-void ConcurrentEngine::Impl::finish_request_locked(Request& request,
+void CudaSchedulerDriver::finish_request_locked(Request& request,
                                              RequestStatus status_value,
                                              std::string error) {
     if (request.lane_index >= 0) {
@@ -208,7 +208,7 @@ void ConcurrentEngine::Impl::finish_request_locked(Request& request,
 }
 
 
-void ConcurrentEngine::Impl::complete_prefill_locked(Request& request, Lane& lane) {
+void CudaSchedulerDriver::complete_prefill_locked(Request& request, Lane& lane) {
     request.paged_ready = packed_executor_ != nullptr;
     if (packed_executor_ && prefix_cache_->enabled()) {
         PrefixState state = lane.model->persistence().export_prefix_state();

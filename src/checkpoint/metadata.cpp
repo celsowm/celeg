@@ -126,6 +126,38 @@ std::vector<std::string> CheckpointMetadata::strings(std::string_view key) const
     return as<std::vector<std::string>>(value(key), key);
 }
 
+std::string CheckpointMetadata::key(std::string_view safetensors_key,
+                                    std::string_view gguf_key) const {
+    return std::string(is_gguf() ? gguf_key : safetensors_key);
+}
+
+std::string CheckpointMetadata::architecture_type() const {
+    return string_or(is_gguf() ? "general.architecture" : "model_type", {});
+}
+
+int64_t CheckpointMetadata::integer_for(std::string_view safetensors_key,
+                                        std::string_view gguf_key) const {
+    return integer(key(safetensors_key, gguf_key));
+}
+
+int64_t CheckpointMetadata::integer_for_or(std::string_view safetensors_key,
+                                           std::string_view gguf_key,
+                                           int64_t fallback) const {
+    return integer_or(key(safetensors_key, gguf_key), fallback);
+}
+
+double CheckpointMetadata::number_for_or(std::string_view safetensors_key,
+                                         std::string_view gguf_key,
+                                         double fallback) const {
+    return number_or(key(safetensors_key, gguf_key), fallback);
+}
+
+std::string CheckpointMetadata::string_for_or(std::string_view safetensors_key,
+                                              std::string_view gguf_key,
+                                              std::string fallback) const {
+    return string_or(key(safetensors_key, gguf_key), std::move(fallback));
+}
+
 CheckpointMetadata CheckpointMetadata::from_json(const Json& root) {
     CheckpointMetadata metadata;
     flatten_json(root, {}, metadata);

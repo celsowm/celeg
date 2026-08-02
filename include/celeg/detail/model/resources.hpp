@@ -1,9 +1,10 @@
 #pragma once
 
 #include "celeg/model/resolved.hpp"
-#include "celeg/model/execution/plan.hpp"
-#include "celeg/model/weights/layout.hpp"
-#include "celeg/model/weights/loader.hpp"
+#include "celeg/model/program.hpp"
+#include "celeg/backend/cuda/execution_plan.hpp"
+#include "celeg/backend/cuda/weight_layout.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <memory>
@@ -16,13 +17,14 @@ namespace celeg {
 // CUDA model resource owner for immutable/shared topology decisions. Device
 // weights and backend caches are attached by setup, while request-local
 // position, phase, and metrics live in SessionState.
-struct ModelResources {
-    explicit ModelResources(ExecutionPlan execution_plan)
+struct CudaModelResources {
+    explicit CudaModelResources(CudaExecutionPlan execution_plan)
         : plan_(std::move(execution_plan)), options_(plan_.options()) {}
 
-    ExecutionPlan plan_;
-    ModelOptions options_;
+    CudaExecutionPlan plan_;
+    CudaModelOptions options_;
     ResolvedModel model_;
+    CompiledModelProgram program_;
     RuntimeTopology shape_;
     const ITensorNamingPolicy* tensor_naming_ = nullptr;
     std::string model_identity_;

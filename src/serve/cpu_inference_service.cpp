@@ -6,20 +6,6 @@
 
 namespace celeg::serve {
 
-namespace {
-
-FinishReason finish_reason_for(RequestStatus status, bool saw_eos) {
-    switch (status) {
-        case RequestStatus::Cancelled: return FinishReason::Cancelled;
-        case RequestStatus::Failed: return FinishReason::Error;
-        case RequestStatus::Finished:
-            return saw_eos ? FinishReason::Stop : FinishReason::Length;
-        default: return FinishReason::None;
-    }
-}
-
-} // namespace
-
 CpuInferenceService::CpuInferenceService(const std::string& model_path,
                                          int max_context,
                                          CpuModelOptions model_options,
@@ -41,8 +27,7 @@ RequestId CpuInferenceService::submit(GenerateRequest request) {
     const RequestId id =
         engine_.submit(std::move(request.prompt_tokens), options);
 
-    std::lock_guard<std::mutex> lock(meta_mutex_);
-    meta_.emplace(id, RequestMeta{request.eos_token_id, false});
+    lifecycle_.submitted(id, request.eos_token_id);
     return id;
 }
 
@@ -55,15 +40,11 @@ GenerateEvent CpuInferenceService::poll(RequestId id, std::size_t max_tokens) {
     event.status = result.status;
     event.error = result.error;
 
-    std::lock_guard<std::mutex> lock(meta_mutex_);
-    auto it = meta_.find(id);
-    const std::int32_t eos_token_id = it != meta_.end() ? it->second.eos_token_id : 7;
-    if (it != meta_.end() && !event.tokens.empty() &&
-        event.tokens.back() == eos_token_id) {
-        it->second.saw_eos = true;
+    if (event.finished) {
+        event.finish_reason = lifecycle_.finish_reason(id, event.status, event.tokens);
+    } else {
+        lifecycle_.finish_reason(id, event.status, event.tokens);
     }
-    const bool saw_eos = it != meta_.end() && it->second.saw_eos;
-    if (event.finished) event.finish_reason = finish_reason_for(event.status, saw_eos);
     return event;
 }
 
@@ -78,8 +59,7 @@ bool CpuInferenceService::cancel(RequestId id) {
 bool CpuInferenceService::release(RequestId id) {
     const bool released = engine_.release(id);
     if (released) {
-        std::lock_guard<std::mutex> lock(meta_mutex_);
-        meta_.erase(id);
+        lifecycle_.released(id);
     }
     return released;
 }
@@ -95,10 +75,18 @@ ServingMetrics CpuInferenceService::metrics() const {
     result.failed_requests = snapshot.failed_requests;
     result.active_requests = snapshot.active_requests;
     result.queued_requests = snapshot.queued_requests;
-    result.prefill_tokens_per_second = snapshot.prefill_tokens_per_second();
-    result.decode_tokens_per_second = snapshot.decode_tokens_per_second();
-    result.average_ttft_ms = snapshot.average_ttft_ms();
-    result.average_itl_ms = snapshot.average_itl_ms();
+    if (snapshot.cumulative_prefill_ms > 0.0) {
+        result.prefill_tokens_per_second = snapshot.prefill_tokens_per_second();
+    }
+    if (snapshot.cumulative_decode_ms > 0.0) {
+        result.decode_tokens_per_second = snapshot.decode_tokens_per_second();
+    }
+    if (snapshot.ttft_samples != 0) {
+        result.average_ttft_ms = snapshot.average_ttft_ms();
+    }
+    if (snapshot.itl_samples != 0) {
+        result.average_itl_ms = snapshot.average_itl_ms();
+    }
     return result;
 }
 

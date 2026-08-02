@@ -236,7 +236,7 @@ Q8GroupVector quantize_float_groupwise_q8(const float* data,
     return result;
 }
 
-struct CpuPackWriter::Impl {
+struct CpuPackWriterState {
     std::filesystem::path path;
     CpuPackMetadata metadata;
     struct Entry {
@@ -250,48 +250,48 @@ struct CpuPackWriter::Impl {
 };
 
 CpuPackWriter::CpuPackWriter(const std::filesystem::path& path, CpuPackMetadata metadata)
-    : impl_(std::make_unique<Impl>(Impl{path, std::move(metadata), {}, false})) {}
+    : state_(std::make_unique<CpuPackWriterState>(CpuPackWriterState{path, std::move(metadata), {}, false})) {}
 CpuPackWriter::~CpuPackWriter() = default;
 
 void CpuPackWriter::add_q4_matrix(const std::string& name, const Q4GroupMatrix& matrix) {
-    if (impl_->committed || name.empty()) throw std::logic_error("invalid CPU pack writer state");
+    if (state_->committed || name.empty()) throw std::logic_error("invalid CPU pack writer state");
     matrix.validate();
-    Impl::Entry entry;
+    CpuPackWriterState::Entry entry;
     entry.name = name;
     entry.kind = kKindQ4;
     entry.q4 = matrix;
-    impl_->entries.push_back(std::move(entry));
+    state_->entries.push_back(std::move(entry));
 }
 
 void CpuPackWriter::add_bf16_vector(const std::string& name,
                                     const std::byte* data, size_t elements) {
-    if (impl_->committed || name.empty() || (!data && elements != 0)) {
+    if (state_->committed || name.empty() || (!data && elements != 0)) {
         throw std::logic_error("invalid CPU pack vector");
     }
-    Impl::Entry entry;
+    CpuPackWriterState::Entry entry;
     entry.name = name;
     entry.kind = kKindBf16;
     entry.bf16.resize(elements);
     if (elements) std::memcpy(entry.bf16.data(), data, elements * sizeof(uint16_t));
-    impl_->entries.push_back(std::move(entry));
+    state_->entries.push_back(std::move(entry));
 }
 
 void CpuPackWriter::commit() {
-    if (impl_->committed) throw std::logic_error("CPU pack already committed");
-    const auto temporary = impl_->path.string() + ".tmp";
+    if (state_->committed) throw std::logic_error("CPU pack already committed");
+    const auto temporary = state_->path.string() + ".tmp";
     std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
     if (!out) throw std::runtime_error("cannot create CPU pack: " + temporary);
     PackHeader header;
     header.magic = kMagic;
-    header.version = impl_->metadata.version;
-    header.entries = static_cast<uint32_t>(impl_->entries.size());
-    header.group_size = impl_->metadata.group_size;
-    header.source_len = impl_->metadata.source_id.size();
-    header.isa_len = impl_->metadata.isa.size();
+    header.version = state_->metadata.version;
+    header.entries = static_cast<uint32_t>(state_->entries.size());
+    header.group_size = state_->metadata.group_size;
+    header.source_len = state_->metadata.source_id.size();
+    header.isa_len = state_->metadata.isa.size();
     write_exact(out, &header, sizeof(header));
-    write_exact(out, impl_->metadata.source_id.data(), impl_->metadata.source_id.size());
-    write_exact(out, impl_->metadata.isa.data(), impl_->metadata.isa.size());
-    for (const Impl::Entry& entry : impl_->entries) {
+    write_exact(out, state_->metadata.source_id.data(), state_->metadata.source_id.size());
+    write_exact(out, state_->metadata.isa.data(), state_->metadata.isa.size());
+    for (const CpuPackWriterState::Entry& entry : state_->entries) {
         EntryHeader eh;
         eh.kind = entry.kind;
         eh.name_len = static_cast<uint32_t>(entry.name.size());
@@ -317,11 +317,11 @@ void CpuPackWriter::commit() {
     out.flush();
     if (!out) throw std::runtime_error("failed finalizing CPU pack");
     out.close();
-    std::filesystem::rename(temporary, impl_->path);
-    impl_->committed = true;
+    std::filesystem::rename(temporary, state_->path);
+    state_->committed = true;
 }
 
-struct CpuPackReader::Impl {
+struct CpuPackReaderState {
     CpuPackMetadata metadata;
     struct Entry {
         uint32_t kind = 0;
@@ -332,7 +332,7 @@ struct CpuPackReader::Impl {
 };
 
 CpuPackReader::CpuPackReader(const std::filesystem::path& path)
-    : impl_(std::make_unique<Impl>()) {
+    : state_(std::make_unique<CpuPackReaderState>()) {
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("cannot open CPU pack: " + path.string());
     PackHeader header;
@@ -342,12 +342,12 @@ CpuPackReader::CpuPackReader(const std::filesystem::path& path)
         header.entries > 10000) {
         throw std::runtime_error("invalid CPU pack header");
     }
-    impl_->metadata.version = header.version;
-    impl_->metadata.group_size = header.group_size;
-    impl_->metadata.source_id.resize(static_cast<size_t>(header.source_len));
-    impl_->metadata.isa.resize(static_cast<size_t>(header.isa_len));
-    read_exact(in, impl_->metadata.source_id.data(), impl_->metadata.source_id.size());
-    read_exact(in, impl_->metadata.isa.data(), impl_->metadata.isa.size());
+    state_->metadata.version = header.version;
+    state_->metadata.group_size = header.group_size;
+    state_->metadata.source_id.resize(static_cast<size_t>(header.source_len));
+    state_->metadata.isa.resize(static_cast<size_t>(header.isa_len));
+    read_exact(in, state_->metadata.source_id.data(), state_->metadata.source_id.size());
+    read_exact(in, state_->metadata.isa.data(), state_->metadata.isa.size());
     for (uint32_t i = 0; i < header.entries; ++i) {
         EntryHeader eh;
         read_exact(in, &eh, sizeof(eh));
@@ -357,7 +357,7 @@ CpuPackReader::CpuPackReader(const std::filesystem::path& path)
         }
         std::string name(eh.name_len, '\0');
         read_exact(in, name.data(), name.size());
-        Impl::Entry entry;
+        CpuPackReaderState::Entry entry;
         entry.kind = eh.kind;
         if (eh.kind == kKindQ4) {
             entry.q4.rows = eh.rows; entry.q4.cols = eh.cols;
@@ -375,23 +375,23 @@ CpuPackReader::CpuPackReader(const std::filesystem::path& path)
         } else {
             throw std::runtime_error("unknown CPU pack entry kind");
         }
-        if (!impl_->entries.emplace(std::move(name), std::move(entry)).second) {
+        if (!state_->entries.emplace(std::move(name), std::move(entry)).second) {
             throw std::runtime_error("duplicate CPU pack entry");
         }
     }
 }
 CpuPackReader::~CpuPackReader() = default;
 
-const CpuPackMetadata& CpuPackReader::metadata() const { return impl_->metadata; }
-bool CpuPackReader::contains(const std::string& name) const { return impl_->entries.contains(name); }
+const CpuPackMetadata& CpuPackReader::metadata() const { return state_->metadata; }
+bool CpuPackReader::contains(const std::string& name) const { return state_->entries.contains(name); }
 Q4GroupMatrix CpuPackReader::read_q4_matrix(const std::string& name) const {
-    const auto it = impl_->entries.find(name);
-    if (it == impl_->entries.end() || it->second.kind != kKindQ4) throw std::runtime_error("missing Q4 CPU pack entry: " + name);
+    const auto it = state_->entries.find(name);
+    if (it == state_->entries.end() || it->second.kind != kKindQ4) throw std::runtime_error("missing Q4 CPU pack entry: " + name);
     return it->second.q4;
 }
 std::vector<float> CpuPackReader::read_bf16_vector(const std::string& name) const {
-    const auto it = impl_->entries.find(name);
-    if (it == impl_->entries.end() || it->second.kind != kKindBf16) throw std::runtime_error("missing BF16 CPU pack entry: " + name);
+    const auto it = state_->entries.find(name);
+    if (it == state_->entries.end() || it->second.kind != kKindBf16) throw std::runtime_error("missing BF16 CPU pack entry: " + name);
     std::vector<float> result(it->second.bf16.size());
     for (size_t i = 0; i < result.size(); ++i) result[i] = bf16_bits_to_float(it->second.bf16[i]);
     return result;

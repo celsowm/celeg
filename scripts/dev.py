@@ -112,9 +112,22 @@ def env_value(env: Mapping[str, str], name: str) -> str | None:
 
 
 def prepend_path(env: dict[str, str], paths: Iterable[pathlib.Path]) -> None:
-    additions = [str(path) for path in paths if path.is_dir()]
-    if additions:
-        env["PATH"] = os.pathsep.join(additions + [env_value(env, "PATH") or ""])
+    current = env_value(env, "PATH") or ""
+    candidates = [str(path) for path in paths if path.is_dir()]
+    candidates.extend(current.split(os.pathsep))
+    seen: set[str] = set()
+    entries: list[str] = []
+    for entry in candidates:
+        if not entry:
+            continue
+        normalized = os.path.normcase(entry.rstrip("\\/"))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        entries.append(entry)
+    if entries:
+        key = next((name for name in env if name.casefold() == "path"), "PATH")
+        env[key] = os.pathsep.join(entries)
 
 
 def find_vswhere(env: Mapping[str, str]) -> pathlib.Path | None:
@@ -528,6 +541,14 @@ def discover_environment(
     ninja = Tool(ninja_path, executable_version(ninja_path, runner)) if ninja_path else None
     compiler = Tool(compiler_path, executable_version(compiler_path, runner)) if compiler_path else None
 
+    # CMake can use an absolute C/CXX compiler path while nvcc still invokes
+    # the MSVC host compiler by the bare name `cl.exe` during CUDA compiler
+    # identification.  Keep the selected toolchain self-contained in the
+    # child environment so the official CUDA configure path behaves exactly
+    # like the direct VS developer shell.
+    if compiler and system == "windows":
+        prepend_path(values, [compiler.path.parent])
+
     if not cmake:
         errors.append("CMake was not found on PATH.")
     if not ninja:
@@ -698,8 +719,9 @@ def configure_command(
             [
                 f"-DCMAKE_CUDA_COMPILER={environment.nvcc.path}",
                 f"-DCMAKE_CUDA_ARCHITECTURES={environment.gpu_arch}",
-                # NVCC must use the already activated PATH. Supplying
-                # -ccbin makes it re-run vcvars and fails in headless shells.
+                # Pin the host compiler by absolute path. NVCC's compiler
+                # identification can otherwise invoke bare `cl.exe` from a
+                # different process environment than CMake's CXX compiler.
                 "-DCMAKE_CUDA_FLAGS_INIT=--use-local-env",
             ]
         )

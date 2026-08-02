@@ -1,4 +1,6 @@
 #include "celeg/detail/model/builtin_architectures.hpp"
+#include "celeg/detail/models/lfm2_layer_decoder.hpp"
+#include "celeg/detail/models/lfm2_metadata_decoder.hpp"
 
 #include "celeg/model/weights/roles.hpp"
 
@@ -22,40 +24,22 @@ bool contains_ci(std::string_view text, std::string_view needle) {
 
 int read_int(const CheckpointMetadata& m, std::string_view json_key,
              std::string_view gguf_key) {
-    return static_cast<int>(m.source_format == CheckpointSourceFormat::Gguf
-        ? m.integer(gguf_key) : m.integer(json_key));
+    return static_cast<int>(m.integer_for(json_key, gguf_key));
 }
 
 int read_int_or(const CheckpointMetadata& m, std::string_view json_key,
                 std::string_view gguf_key, int fallback) {
-    const std::string_view key = m.source_format == CheckpointSourceFormat::Gguf
-        ? gguf_key : json_key;
-    return m.contains(key) ? static_cast<int>(m.integer(key)) : fallback;
+    return static_cast<int>(m.integer_for_or(json_key, gguf_key, fallback));
 }
 
 double read_number(const CheckpointMetadata& m, std::string_view json_key,
                    std::string_view gguf_key, double fallback) {
-    const std::string_view key = m.source_format == CheckpointSourceFormat::Gguf
-        ? gguf_key : json_key;
-    return m.number_or(key, fallback);
+    return m.number_for_or(json_key, gguf_key, fallback);
 }
 
 std::string read_string(const CheckpointMetadata& m, std::string_view json_key,
                         std::string_view gguf_key, std::string fallback = {}) {
-    const std::string_view key = m.source_format == CheckpointSourceFormat::Gguf
-        ? gguf_key : json_key;
-    return m.string_or(key, std::move(fallback));
-}
-
-std::vector<int64_t> read_layer_heads(const CheckpointMetadata& m, std::string_view prefix) {
-    if (m.source_format == CheckpointSourceFormat::Gguf) {
-        return std::get<std::vector<int64_t>>(m.value(std::string(prefix) + ".attention.head_count_kv"));
-    }
-    const auto values = m.strings("layer_types");
-    std::vector<int64_t> heads;
-    heads.reserve(values.size());
-    for (const std::string& value : values) heads.push_back(value == "conv" ? 0 : 1);
-    return heads;
+    return m.string_for_or(json_key, gguf_key, std::move(fallback));
 }
 
 std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
@@ -136,7 +120,7 @@ ModelDefinition make_definition(const RuntimeTopology& topology,
     definition.numerics.logits_divisor = topology.logits_divisor;
     definition.tokens = {topology.bos_token_id, topology.eos_token_id, topology.pad_token_id};
     definition.architecture = "lfm2";
-    definition.source_format = metadata.source_format == CheckpointSourceFormat::Gguf
+    definition.source_format = metadata.is_gguf()
         ? "gguf" : "safetensors";
     definition.validate();
     return definition;
@@ -153,83 +137,47 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
         ? CheckpointProfileResolver::apply(profile, checkpoint.metadata)
         : checkpoint.metadata;
     const auto& m = metadata;
-    const bool gguf = m.source_format == CheckpointSourceFormat::Gguf;
-    const std::string model_type = gguf ? m.string("general.architecture")
-                                        : m.string("model_type");
-    const bool moe = model_type == "lfm2moe" || model_type == "lfm2_moe";
-    const std::string prefix = gguf ? (moe ? "lfm2moe" : "lfm2") : "";
-    auto key = [&](std::string_view json, std::string_view suffix) {
-        return gguf ? prefix + "." + std::string(suffix) : std::string(json);
-    };
-    auto integer = [&](std::string_view json, std::string_view suffix) {
-        return static_cast<int>(m.integer(key(json, suffix)));
-    };
-    auto integer_or = [&](std::string_view json, std::string_view suffix, int fallback) {
-        const std::string full = key(json, suffix);
-        return m.contains(full) ? static_cast<int>(m.integer(full)) : fallback;
-    };
-    auto number = [&](std::string_view json, std::string_view suffix, double fallback) {
-        return m.number_or(key(json, suffix), fallback);
-    };
+    const Lfm2Metadata decoded = decode_lfm2_metadata(m);
+    const bool gguf = decoded.gguf;
+    const bool moe = decoded.moe;
+    const std::string& prefix = decoded.tensor_prefix;
 
     RuntimeTopology t;
-    t.hidden = integer("hidden_size", "embedding_length");
-    t.intermediate = integer("intermediate_size", "feed_forward_length");
+    t.hidden = decoded.hidden;
+    t.intermediate = decoded.intermediate;
     t.dense_intermediate = t.intermediate;
-    t.num_hidden_layers = integer("num_hidden_layers", "block_count");
-    t.num_attention_heads = integer("num_attention_heads", "attention.head_count");
-    t.num_key_value_heads = gguf
-        ? 0 : integer("num_key_value_heads", "attention.head_count_kv");
-    t.vocab_size = integer_or("vocab_size", "vocab_size",
-                              static_cast<int>(m.integer_or("llama.vocab_size", 0)));
-    t.conv_cache = integer("conv_L_cache", "shortconv.l_cache");
-    t.conv_dim = integer_or("conv_dim", "embedding_length", t.hidden);
-    t.max_position_embeddings = integer("max_position_embeddings", "context_length");
-    t.norm_eps = static_cast<float>(number("norm_eps", "attention.layer_norm_rms_epsilon", 1.0e-5));
-    t.rope_theta = static_cast<float>(number("rope_theta", "rope.freq_base", 1.0e6));
-    t.bos_token_id = integer_or("bos_token_id", "", 1);
-    t.eos_token_id = integer_or("eos_token_id", "", 7);
-    t.pad_token_id = integer_or("pad_token_id", "", 0);
+    t.num_hidden_layers = decoded.num_hidden_layers;
+    t.num_attention_heads = decoded.num_attention_heads;
+    t.num_key_value_heads = decoded.num_key_value_heads;
+    t.vocab_size = decoded.vocab_size;
+    t.conv_cache = decoded.conv_cache;
+    t.conv_dim = decoded.conv_dim;
+    t.max_position_embeddings = decoded.max_position_embeddings;
+    t.norm_eps = decoded.norm_eps;
+    t.rope_theta = decoded.rope_theta;
+    t.bos_token_id = decoded.bos_token_id;
+    t.eos_token_id = decoded.eos_token_id;
+    t.pad_token_id = decoded.pad_token_id;
     t.embedding_multiplier = 1.0f;
     t.attention_multiplier = 0.0f;
     t.residual_multiplier = 1.0f;
     t.logits_divisor = 1.0f;
     t.query_key_norm = true;
 
-    if (gguf) {
-        const auto heads = read_layer_heads(m, prefix);
-        t.mixer_kinds.reserve(heads.size());
-        for (const int64_t value : heads) {
-            if (value == 0) t.mixer_kinds.push_back(MixerKind::ShortConvolution);
-            else {
-                t.mixer_kinds.push_back(MixerKind::Attention);
-                if (t.num_key_value_heads == 0) t.num_key_value_heads = static_cast<int>(value);
-                else if (t.num_key_value_heads != value) throw std::runtime_error("heterogeneous KV heads");
-            }
-        }
-        t.head_dim = integer_or("head_dim", "attention.key_length",
-                                t.hidden / t.num_attention_heads);
-    } else {
-        const auto layers = m.strings("layer_types");
-        for (const std::string& layer : layers) {
-            if (layer == "conv") t.mixer_kinds.push_back(MixerKind::ShortConvolution);
-            else if (layer == "full_attention") t.mixer_kinds.push_back(MixerKind::Attention);
-            else throw std::runtime_error("unsupported LFM2 layer type: " + layer);
-        }
-        t.head_dim = integer_or("head_dim", "attention.key_length",
-                                t.hidden / t.num_attention_heads);
-    }
+    const auto decoded_layers = decode_lfm2_layer_types(m, prefix, t.num_key_value_heads);
+    t.mixer_kinds = decoded_layers.mixer_kinds;
+    t.num_key_value_heads = decoded_layers.num_key_value_heads;
+    t.head_dim = decoded.head_dim;
     if (t.num_key_value_heads == 0) throw std::runtime_error("checkpoint has no attention layers");
 
     if (moe) {
-        t.moe_intermediate = integer_or("moe_intermediate_size", "expert_feed_forward_length", 0);
-        t.num_dense_layers = integer_or("num_dense_layers", "num_dense_layers", 0);
-        t.num_experts = integer_or("num_experts", "expert_count", 0);
-        t.experts_per_token = integer_or("num_experts_per_tok", "expert_used_count", 0);
-        t.normalize_topk = gguf ? true : m.boolean_or("norm_topk_prob", true);
-        t.use_expert_bias = gguf ? false : m.boolean_or("use_expert_bias", false);
-        t.routed_scaling_factor = static_cast<float>(m.number_or(
-            "routed_scaling_factor", 1.0));
+        t.moe_intermediate = decoded.moe_intermediate;
+        t.num_dense_layers = decoded.num_dense_layers;
+        t.num_experts = decoded.num_experts;
+        t.experts_per_token = decoded.experts_per_token;
+        t.normalize_topk = decoded.normalize_topk;
+        t.use_expert_bias = decoded.use_expert_bias;
+        t.routed_scaling_factor = decoded.routed_scaling_factor;
         if (gguf) {
             if (t.num_dense_layers == 0 && checkpoint.repository) {
                 while (checkpoint.repository->contains(
@@ -317,9 +265,7 @@ class Lfm2Architecture final : public IArchitecture {
 public:
     std::string_view id() const override { return "lfm2"; }
     ProbeResult probe(const CheckpointMetadata& metadata) const override {
-        const std::string type = metadata.string_or(
-            metadata.source_format == CheckpointSourceFormat::Gguf
-                ? "general.architecture" : "model_type", {});
+        const std::string type = metadata.architecture_type();
         const bool supported = type == "lfm2" || type == "lfm2_moe" || type == "lfm2moe";
         return {supported, supported ? 100 : 0, supported ? "LFM2 checkpoint" : "not LFM2"};
     }

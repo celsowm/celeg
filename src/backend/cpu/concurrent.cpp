@@ -44,19 +44,7 @@ double CpuConcurrentMetrics::average_itl_ms() const {
     return itl_samples ? cumulative_itl_ms / static_cast<double>(itl_samples) : 0.0;
 }
 
-const char* request_status_name(RequestStatus status) {
-    switch (status) {
-        case RequestStatus::Queued: return "queued";
-        case RequestStatus::Prefill: return "prefilling";
-        case RequestStatus::Decoding: return "decoding";
-        case RequestStatus::Finished: return "completed";
-        case RequestStatus::Cancelled: return "cancelled";
-        case RequestStatus::Failed: return "failed";
-    }
-    return "unknown";
-}
-
-struct CpuConcurrentEngine::Impl {
+struct CpuSchedulerDriver {
     struct Request {
         RequestId id = 0;
         RequestStatus status = RequestStatus::Queued;
@@ -77,7 +65,7 @@ struct CpuConcurrentEngine::Impl {
         std::string error;
     };
 
-    Impl(const std::string& path, int context, CpuModelOptions model_options,
+    CpuSchedulerDriver(const std::string& path, int context, CpuModelOptions model_options,
          CpuConcurrentEngineOptions requested)
         : max_context(context), engine_options(std::move(requested)),
           numa_mode(model_options.numa_mode),
@@ -107,7 +95,7 @@ struct CpuConcurrentEngine::Impl {
         }
     }
 
-    ~Impl() {
+    ~CpuSchedulerDriver() {
         {
             std::lock_guard lock(mutex);
             stopping = true;
@@ -551,7 +539,7 @@ struct CpuConcurrentEngine::Impl {
 CpuConcurrentEngine::CpuConcurrentEngine(
     const std::string& path, int max_context, CpuModelOptions model_options,
     CpuConcurrentEngineOptions engine_options)
-    : impl_(std::make_unique<Impl>(path, max_context, std::move(model_options),
+    : state_(std::make_unique<CpuSchedulerDriver>(path, max_context, std::move(model_options),
                                    std::move(engine_options))) {}
 
 CpuConcurrentEngine::~CpuConcurrentEngine() = default;
@@ -564,35 +552,35 @@ RequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
         throw std::invalid_argument("CPU request max_new_tokens must be positive");
     }
     if (prompt.size() + options.max_new_tokens >
-        static_cast<size_t>(impl_->max_context)) {
+        static_cast<size_t>(state_->max_context)) {
         throw std::invalid_argument("CPU request exceeds configured context");
     }
     for (int32_t token : prompt) {
-        if (token < 0 || token >= impl_->base_model.diagnostics().vocab_size()) {
+        if (token < 0 || token >= state_->base_model.diagnostics().vocab_size()) {
             throw std::invalid_argument("CPU request token out of range");
         }
     }
-    auto request = std::make_shared<Impl::Request>();
+    auto request = std::make_shared<CpuSchedulerDriver::Request>();
     {
-        std::lock_guard lock(impl_->mutex);
-        request->id = impl_->next_id++;
-        request->sequence = impl_->next_sequence++;
+        std::lock_guard lock(state_->mutex);
+        request->id = state_->next_id++;
+        request->sequence = state_->next_sequence++;
         request->prompt = std::move(prompt);
         request->options = options;
         request->submitted_at = Clock::now();
-        impl_->requests.emplace(request->id, request);
-        ++impl_->metrics.submitted_requests;
-        impl_->refresh_counts_locked();
+        state_->requests.emplace(request->id, request);
+        ++state_->metrics.submitted_requests;
+        state_->refresh_counts_locked();
     }
-    impl_->engine_worker.notify();
+    state_->engine_worker.notify();
     return request->id;
 }
 
 PollResult CpuConcurrentEngine::poll(RequestId id, size_t max_tokens) {
-    std::lock_guard lock(impl_->mutex);
-    auto it = impl_->requests.find(id);
-    if (it == impl_->requests.end()) throw std::out_of_range("unknown CPU request id");
-    Impl::Request& request = *it->second;
+    std::lock_guard lock(state_->mutex);
+    auto it = state_->requests.find(id);
+    if (it == state_->requests.end()) throw std::out_of_range("unknown CPU request id");
+    CpuSchedulerDriver::Request& request = *it->second;
     const size_t available = request.generated.size() - request.poll_offset;
     const size_t count = max_tokens == 0 ? available : std::min(max_tokens, available);
     std::vector<int32_t> result(
@@ -609,22 +597,22 @@ PollResult CpuConcurrentEngine::poll(RequestId id, size_t max_tokens) {
 }
 
 RequestStatus CpuConcurrentEngine::status(RequestId id) const {
-    std::lock_guard lock(impl_->mutex);
-    auto it = impl_->requests.find(id);
-    if (it == impl_->requests.end()) throw std::out_of_range("unknown CPU request id");
+    std::lock_guard lock(state_->mutex);
+    auto it = state_->requests.find(id);
+    if (it == state_->requests.end()) throw std::out_of_range("unknown CPU request id");
     return it->second->status;
 }
 
 bool CpuConcurrentEngine::cancel(RequestId id) {
-    std::lock_guard lock(impl_->mutex);
-    auto it = impl_->requests.find(id);
-    if (it == impl_->requests.end()) return false;
-    Impl::Request& request = *it->second;
+    std::lock_guard lock(state_->mutex);
+    auto it = state_->requests.find(id);
+    if (it == state_->requests.end()) return false;
+    CpuSchedulerDriver::Request& request = *it->second;
     if (is_terminal(request.status)) return false;
     if (request.status == RequestStatus::Queued) {
         request.status = RequestStatus::Cancelled;
-        ++impl_->metrics.cancelled_requests;
-        impl_->refresh_counts_locked();
+        ++state_->metrics.cancelled_requests;
+        state_->refresh_counts_locked();
     } else {
         // Active execution owns the session until the scheduler returns.
         request.cancel_requested = true;
@@ -633,34 +621,34 @@ bool CpuConcurrentEngine::cancel(RequestId id) {
 }
 
 bool CpuConcurrentEngine::release(RequestId id) {
-    std::lock_guard lock(impl_->mutex);
-    auto it = impl_->requests.find(id);
-    if (it == impl_->requests.end()) return false;
+    std::lock_guard lock(state_->mutex);
+    auto it = state_->requests.find(id);
+    if (it == state_->requests.end()) return false;
     if (!is_terminal(it->second->status)) return false;
-    impl_->requests.erase(it);
+    state_->requests.erase(it);
     return true;
 }
 
-bool CpuConcurrentEngine::step() { return impl_->step_once(); }
+bool CpuConcurrentEngine::step() { return state_->step_once(); }
 
 void CpuConcurrentEngine::start() {
     {
-        std::lock_guard lock(impl_->mutex);
-        impl_->running = true;
+        std::lock_guard lock(state_->mutex);
+        state_->running = true;
     }
-    impl_->engine_worker.notify();
+    state_->engine_worker.notify();
 }
 
 void CpuConcurrentEngine::stop() {
-    std::lock_guard lock(impl_->mutex);
-    impl_->running = false;
+    std::lock_guard lock(state_->mutex);
+    state_->running = false;
 }
 
 CpuConcurrentMetrics CpuConcurrentEngine::metrics() const {
-    std::lock_guard lock(impl_->mutex);
-    CpuConcurrentMetrics result = impl_->metrics;
-    if (impl_->prefix_cache) {
-        const auto& source = impl_->prefix_cache->metrics();
+    std::lock_guard lock(state_->mutex);
+    CpuConcurrentMetrics result = state_->metrics;
+    if (state_->prefix_cache) {
+        const auto& source = state_->prefix_cache->metrics();
         result.prefix_cache_hits = source.hits;
         result.prefix_cache_misses = source.misses;
         result.prefix_cache_partial_hits = source.partial_hits;
@@ -670,18 +658,18 @@ CpuConcurrentMetrics CpuConcurrentEngine::metrics() const {
         result.prefix_cow_pages = source.cow_pages;
         result.prefix_cow_bytes = source.cow_bytes;
     }
-    result.active_requests = impl_->active_count_locked();
-    result.queued_requests = impl_->queued_count_locked();
+    result.active_requests = state_->active_count_locked();
+    result.queued_requests = state_->queued_count_locked();
     return result;
 }
 
 std::string CpuConcurrentEngine::backend_description() const {
-    return impl_->base_model.diagnostics().backend_description() + " continuous-batching prefix-radix numa-aware";
+    return state_->base_model.diagnostics().backend_description() + " continuous-batching prefix-radix numa-aware";
 }
 
 std::string CpuConcurrentEngine::last_error() const {
-    std::lock_guard lock(impl_->mutex);
-    return impl_->last_error_text;
+    std::lock_guard lock(state_->mutex);
+    return state_->last_error_text;
 }
 
 } // namespace celeg

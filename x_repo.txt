@@ -1,2 +1,0 @@
-DEBUG index size=147 head='{"metadata":{},"weig'
-safetensors_repo_test: ok

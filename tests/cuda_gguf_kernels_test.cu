@@ -3,7 +3,7 @@
 #include "celeg/backend/cuda/gemm_dispatcher.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
-#include "celeg/model/model.hpp"
+#include "celeg/backend/cuda/model.hpp"
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -84,7 +84,7 @@ int main() {
 
     // Exercise the dispatcher with disjoint GGUF segments. Every segment
     // owns a separate output range, so each must receive the caller's beta.
-    celeg::ModelOptions dispatcher_options;
+    celeg::CudaModelOptions dispatcher_options;
     celeg::GemmDispatcher dispatcher(nullptr, dispatcher_options);
     celeg::LinearWeight segmented;
     segmented.kind = celeg::LinearStorageKind::Q4_K;
@@ -94,8 +94,8 @@ int main() {
         {d_q4, celeg::GgmlType::Q4_K, 0, 1, k, q4_bytes},
         {d_q6, celeg::GgmlType::Q6_K, 1, 1, k, q6_bytes},
     };
-    const celeg::ExecutionPlan dispatcher_plan =
-        celeg::ExecutionPlan::compile(dispatcher_options, 1024);
+    const celeg::CudaExecutionPlan dispatcher_plan =
+        celeg::CudaExecutionPlan::compile(dispatcher_options, 1024);
     std::vector<__nv_bfloat16> segmented_y(2, __float2bfloat16(9.0f));
     check(cudaMemcpy(d_y, segmented_y.data(), 2 * sizeof(*d_y),
                      cudaMemcpyHostToDevice), "copy segmented y");
@@ -232,12 +232,12 @@ int main() {
     if (const char* real_path = std::getenv("CELEG_GGUF_TEST_FILE");
         real_path != nullptr && *real_path != '\0') {
         const auto bootstrap = celeg::detail::load_model_bootstrap(std::filesystem::path(real_path));
-        celeg::Model model(real_path, 1024);
-        model.session().prefill({bootstrap.config.bos_token_id});
+        celeg::CudaModel model(real_path, 1024);
+        model.session().prefill({bootstrap.model.topology.bos_token_id});
         const std::vector<float> first = model.diagnostics().copy_logits();
         for (float value : first) if (!std::isfinite(value)) return 6;
         model.session().reset();
-        model.session().prefill({bootstrap.config.bos_token_id});
+        model.session().prefill({bootstrap.model.topology.bos_token_id});
         const std::vector<float> second = model.diagnostics().copy_logits();
         if (first.size() != second.size()) return 7;
         for (size_t i = 0; i < std::min<size_t>(first.size(), 64); ++i) {

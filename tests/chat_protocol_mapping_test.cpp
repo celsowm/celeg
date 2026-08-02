@@ -41,34 +41,34 @@ celeg::BpeTokenizer make_test_tokenizer(const std::filesystem::path& path) {
 } // namespace
 
 int main() {
-    using namespace celeg::serve;
-    using namespace celeg::serve::protocol;
+    namespace serve = celeg::serve;
+    namespace protocol = celeg::serve::protocol;
 
     // Role mapping.
-    CELEG_TEST_CHECK(role_from_string("system") == celeg::ChatRole::System);
-    CELEG_TEST_CHECK(role_from_string("developer") == celeg::ChatRole::Developer);
-    CELEG_TEST_CHECK(role_from_string("user") == celeg::ChatRole::User);
-    CELEG_TEST_CHECK(role_from_string("assistant") == celeg::ChatRole::Assistant);
-    CELEG_TEST_CHECK(role_from_string("tool") == celeg::ChatRole::Tool);
+    CELEG_TEST_CHECK(protocol::role_from_string("system") == celeg::ChatRole::System);
+    CELEG_TEST_CHECK(protocol::role_from_string("developer") == celeg::ChatRole::Developer);
+    CELEG_TEST_CHECK(protocol::role_from_string("user") == celeg::ChatRole::User);
+    CELEG_TEST_CHECK(protocol::role_from_string("assistant") == celeg::ChatRole::Assistant);
+    CELEG_TEST_CHECK(protocol::role_from_string("tool") == celeg::ChatRole::Tool);
     bool threw = false;
     try {
-        role_from_string("narrator");
+        protocol::role_from_string("narrator");
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     CELEG_TEST_CHECK(threw);
-    CELEG_TEST_CHECK(role_to_string(celeg::ChatRole::User) == "user");
+    CELEG_TEST_CHECK(protocol::role_to_string(celeg::ChatRole::User) == "user");
 
     // Finish reason mapping.
-    CELEG_TEST_CHECK(finish_reason_to_string(FinishReason::None) == "");
-    CELEG_TEST_CHECK(finish_reason_to_string(FinishReason::Stop) == "stop");
-    CELEG_TEST_CHECK(finish_reason_to_string(FinishReason::Length) == "length");
-    CELEG_TEST_CHECK(finish_reason_to_string(FinishReason::Cancelled) == "cancelled");
-    CELEG_TEST_CHECK(finish_reason_to_string(FinishReason::Error) == "error");
+    CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::None) == "");
+    CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Stop) == "stop");
+    CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Length) == "length");
+    CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Cancelled) == "cancelled");
+    CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Error) == "error");
 
     // Request JSON round-trip: absent optional fields must not appear on the
     // wire, and present ones must survive a write/read cycle.
-    ChatCompletionRequest request;
+    protocol::ChatCompletionRequest request;
     request.model = "lfm2.5-test";
     request.messages.push_back({"user", "hi"});
     request.max_tokens = 16;
@@ -77,10 +77,10 @@ int main() {
     request.top_k = 40;
     request.seed = 42;
 
-    const std::string request_json = to_json(request);
+    const std::string request_json = protocol::to_json(request);
     CELEG_TEST_CHECK(request_json.find("\"stream\"") == std::string::npos);
 
-    const ChatCompletionRequest parsed = from_json<ChatCompletionRequest>(request_json);
+    const protocol::ChatCompletionRequest parsed = protocol::from_json<protocol::ChatCompletionRequest>(request_json);
     CELEG_TEST_CHECK(parsed.model == "lfm2.5-test");
     CELEG_TEST_CHECK(parsed.messages.size() == 1);
     CELEG_TEST_CHECK(parsed.messages[0].role == "user");
@@ -94,7 +94,7 @@ int main() {
     const celeg::BpeTokenizer tokenizer = make_test_tokenizer(tokenizer_path);
     std::filesystem::remove(tokenizer_path);
 
-    const GenerateRequest generate_request = to_generate_request(request, tokenizer, /*eos_token_id=*/2);
+    const serve::GenerateRequest generate_request = protocol::to_generate_request(request, tokenizer, /*eos_token_id=*/2);
     CELEG_TEST_CHECK(generate_request.eos_token_id == 2);
     CELEG_TEST_CHECK(generate_request.max_output_tokens == 16);
     CELEG_TEST_CHECK(generate_request.generation.temperature == 0.5f);
@@ -108,11 +108,11 @@ int main() {
     CELEG_TEST_CHECK(generate_request.prompt_tokens == expected_prompt_tokens);
 
     // Missing messages must be rejected before touching the tokenizer.
-    ChatCompletionRequest empty_request;
+    protocol::ChatCompletionRequest empty_request;
     empty_request.model = "lfm2.5-test";
     threw = false;
     try {
-        to_generate_request(empty_request, tokenizer, 2);
+        protocol::to_generate_request(empty_request, tokenizer, 2);
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -120,9 +120,9 @@ int main() {
 
     // Response mapping: decode completion tokens "h","i" -> "hi".
     const std::vector<std::int32_t> completion_tokens = {7, 8};
-    const ChatCompletionResponse response = to_chat_completion_response(
+    const protocol::ChatCompletionResponse response = protocol::to_chat_completion_response(
         "req-1", "lfm2.5-test", 1000, generate_request.prompt_tokens.size(),
-        completion_tokens, FinishReason::Stop, tokenizer);
+        completion_tokens, serve::FinishReason::Stop, tokenizer);
     CELEG_TEST_CHECK(response.id == "req-1");
     CELEG_TEST_CHECK(response.object == "chat.completion");
     CELEG_TEST_CHECK(response.choices.size() == 1);
@@ -133,23 +133,23 @@ int main() {
     CELEG_TEST_CHECK(response.usage.completion_tokens == 2);
     CELEG_TEST_CHECK(response.usage.total_tokens == generate_request.prompt_tokens.size() + 2);
 
-    const std::string response_json = to_json(response);
-    const ChatCompletionResponse reparsed = from_json<ChatCompletionResponse>(response_json);
+    const std::string response_json = protocol::to_json(response);
+    const protocol::ChatCompletionResponse reparsed = protocol::from_json<protocol::ChatCompletionResponse>(response_json);
     CELEG_TEST_CHECK(reparsed.choices[0].message.content == "hi");
     CELEG_TEST_CHECK(reparsed.usage.total_tokens == response.usage.total_tokens);
 
     // Streaming chunk mapping: first chunk carries the role, later ones don't;
     // only the terminal chunk carries a finish_reason.
-    const ChatCompletionChunk first_chunk = to_chat_completion_chunk(
+    const protocol::ChatCompletionChunk first_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, completion_tokens, /*include_role=*/true,
         /*finish=*/std::nullopt, tokenizer);
     CELEG_TEST_CHECK(first_chunk.choices[0].delta.role && *first_chunk.choices[0].delta.role == "assistant");
     CELEG_TEST_CHECK(first_chunk.choices[0].delta.content && *first_chunk.choices[0].delta.content == "hi");
     CELEG_TEST_CHECK(!first_chunk.choices[0].finish_reason.has_value());
 
-    const ChatCompletionChunk final_chunk = to_chat_completion_chunk(
+    const protocol::ChatCompletionChunk final_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, {}, /*include_role=*/false,
-        /*finish=*/FinishReason::Stop, tokenizer);
+        /*finish=*/serve::FinishReason::Stop, tokenizer);
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.role.has_value());
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.content.has_value());
     CELEG_TEST_CHECK(final_chunk.choices[0].finish_reason && *final_chunk.choices[0].finish_reason == "stop");

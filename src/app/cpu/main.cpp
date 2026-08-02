@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
             celeg::detail::load_model_bootstrap(model);
         const auto& model_definition = bootstrap.model.definition;
         const auto& topology = bootstrap.model.topology;
-        if (bootstrap.is_gguf() && args.group_size_explicit) {
+        if (bootstrap.checkpoint.gguf && args.group_size_explicit) {
             throw std::runtime_error(
                 "--cpu-q4-group is only valid for Safetensors checkpoints");
         }
@@ -171,9 +171,9 @@ int main(int argc, char** argv) {
         }
         const std::filesystem::path model_dir =
             std::filesystem::is_directory(model) ? model : model.parent_path();
-        celeg::BpeTokenizer tokenizer = bootstrap.is_gguf()
+        celeg::BpeTokenizer tokenizer = bootstrap.checkpoint.gguf
             ? celeg::BpeTokenizer(
-                  celeg::BpeTokenizer::FromGguf{}, *bootstrap.gguf_file,
+                  celeg::BpeTokenizer::FromGguf{}, *bootstrap.checkpoint.gguf,
                   celeg::make_chat_template(bootstrap.model.chat_profile_id))
             : celeg::BpeTokenizer(
                   (model_dir / "tokenizer.json").string(),

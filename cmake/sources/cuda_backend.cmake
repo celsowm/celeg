@@ -17,6 +17,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/lifecycle.cpp
     src/backend/cuda/model/residency.cu
     src/backend/cuda/model/execution.cu
+    src/backend/cuda/model/sampler.cu
     src/backend/cuda/model/decode.cpp
     src/backend/cuda/model/prefill.cpp
     src/backend/cuda/model/prefill_batched.cpp

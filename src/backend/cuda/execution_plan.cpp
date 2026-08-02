@@ -1,11 +1,11 @@
-#include "celeg/model/execution/plan.hpp"
+#include "celeg/backend/cuda/execution_plan.hpp"
 
 #include <sstream>
 #include <stdexcept>
 
 namespace celeg {
 
-ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
+CudaExecutionPlan CudaExecutionPlan::compile(CudaModelOptions requested, int max_context) {
     if (max_context <= 0) {
         throw std::invalid_argument("max_context must be positive");
     }
@@ -37,7 +37,7 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
     }
 #endif
 
-    ExecutionPlan plan;
+    CudaExecutionPlan plan;
     plan.options_ = requested;
 
     // MoE expert offload resolves residency at decode time using host-roundtrip
@@ -68,9 +68,6 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
             plan.linear_kernel_ = LinearKernelKind::MixedBf16AndGgufMmq;
             break;
     }
-    plan.sampling_kernel_ = requested.fused_sampling
-        ? SamplingKernelKind::Fused
-        : SamplingKernelKind::Legacy;
     if (segmented_capable) {
         plan.attention_chunks_ =
             (max_context + requested.attention_chunk_tokens - 1) /
@@ -79,12 +76,12 @@ ExecutionPlan ExecutionPlan::compile(ModelOptions requested, int max_context) {
     return plan;
 }
 
-bool ExecutionPlan::segmented_attention(int position) const {
+bool CudaExecutionPlan::segmented_attention(int position) const {
     return select_segmented_attention(
         options_.attention_mode, position, options_.attention_auto_threshold);
 }
 
-std::string ExecutionPlan::description() const {
+std::string CudaExecutionPlan::description() const {
     std::ostringstream out;
     out << "linear=";
     switch (linear_kernel_) {
@@ -97,9 +94,7 @@ std::string ExecutionPlan::description() const {
         case LinearKernelKind::MixedBf16AndGgufMmq:
             out << "mixed-bf16-and-gguf-mmq"; break;
     }
-    out << ", sampling="
-        << (sampling_kernel_ == SamplingKernelKind::Fused ? "fused" : "legacy")
-        << ", attention=";
+    out << ", sampling=fused, attention=";
     switch (options_.attention_mode) {
         case AttentionMode::Single: out << "single"; break;
         case AttentionMode::Segmented: out << "segmented"; break;

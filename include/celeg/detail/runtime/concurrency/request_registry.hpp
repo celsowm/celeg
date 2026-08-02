@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
 
 #include <chrono>
 #include <cstddef>

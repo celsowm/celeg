@@ -1,18 +1,16 @@
 #include "celeg/runtime/cache/pinned_expert_cache.hpp"
 
-#if __has_include(<cuda_runtime.h>)
-#include <cuda_runtime.h>
-#define HAVE_CUDA 1
-#else
-#define HAVE_CUDA 0
-#endif
-
 #include <cstring>
 #include <cstdlib>
 #include <limits>
 #include <algorithm>
 
 namespace celeg {
+
+namespace {
+void* default_host_allocate(std::size_t bytes) { return std::malloc(bytes); }
+void default_host_deallocate(void* pointer) { std::free(pointer); }
+} // namespace
 
 ExpertHostLease::ExpertHostLease(PinnedExpertCache* cache, int slot_idx)
     : cache_(cache), slot_idx_(slot_idx) {
@@ -75,10 +73,12 @@ void ExpertHostLease::release() {
 // PinnedExpertCache implementation
 
 PinnedExpertCache::PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
-                                     std::size_t gate_up_bytes, std::size_t down_bytes)
+                                     std::size_t gate_up_bytes, std::size_t down_bytes,
+                                     HostAllocateFn allocate, HostDeallocateFn deallocate)
     : bytes_per_expert_(bytes_per_expert),
       gate_up_bytes_(gate_up_bytes),
-      down_bytes_(down_bytes) {
+      down_bytes_(down_bytes),
+      deallocate_(deallocate ? deallocate : default_host_deallocate) {
     if (bytes_per_expert == 0 || budget_bytes < bytes_per_expert) {
         // Fallback to at least 1 expert slot capacity
         capacity_ = 1;
@@ -88,14 +88,10 @@ PinnedExpertCache::PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes
 
     std::size_t arena_bytes = capacity_ * bytes_per_expert_;
 
-#if HAVE_CUDA
-    cudaError_t err = cudaMallocHost(&arena_, arena_bytes);
-    if (err != cudaSuccess) {
-        arena_ = std::malloc(arena_bytes);
-    }
-#else
-    arena_ = std::malloc(arena_bytes);
-#endif
+    // Allocation policy is injected by the owning backend.  The neutral
+    // default is ordinary host storage; CUDA can provide pinned storage
+    // without leaking CUDA headers into this runtime translation unit.
+    arena_ = (allocate ? allocate : default_host_allocate)(arena_bytes);
 
     if (!arena_) {
         throw std::runtime_error("PinnedExpertCache: failed to allocate arena of size " +
@@ -117,14 +113,7 @@ PinnedExpertCache::PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes
 
 PinnedExpertCache::~PinnedExpertCache() {
     if (arena_) {
-#if HAVE_CUDA
-        // Try cudaFreeHost, fallback to free if it wasn't registered/allocated by CUDA
-        if (cudaFreeHost(arena_) != cudaSuccess) {
-            std::free(arena_);
-        }
-#else
-        std::free(arena_);
-#endif
+        deallocate_(arena_);
         arena_ = nullptr;
     }
 }
@@ -245,7 +234,10 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
         std::span<std::byte> down_dest(slots_[slot_idx].down_ptr, down_bytes_);
 
         loader_fn(gate_up_dest, down_dest);
-        bytes_read_ += gate_up_bytes_ + down_bytes_;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            bytes_read_ += gate_up_bytes_ + down_bytes_;
+        }
     } catch (...) {
         // Rollback state under lock
         std::lock_guard<std::mutex> lock(mutex_);
@@ -275,7 +267,10 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> total_elapsed = end_time - start_time;
-    total_wait_time_ms_ += total_elapsed.count();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        total_wait_time_ms_ += total_elapsed.count();
+    }
 
     return ExpertHostLease(this, slot_idx);
 }

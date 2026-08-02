@@ -1,7 +1,7 @@
 #pragma once
 
-#include "celeg/runtime/concurrency.hpp"
-#include "celeg/model/model.hpp"
+#include "celeg/backend/cuda/concurrency.hpp"
+#include "celeg/backend/cuda/model.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/packed.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
@@ -17,19 +17,19 @@
 
 namespace celeg {
 
-struct ConcurrentEngine::Impl {
+struct CudaSchedulerDriver {
     using RequestId = ConcurrentEngine::RequestId;
     using Request = detail::RequestRecord;
 
     struct Lane {
         int index = -1;
-        std::unique_ptr<Model> model;
+        std::unique_ptr<CudaModel> model;
         RequestId request_id = 0;
     };
 
-    Impl(std::string model_path, int max_context,
-         ModelOptions model_options, ConcurrentEngineOptions engine_options);
-    ~Impl();
+    CudaSchedulerDriver(std::string model_path, int max_context,
+         CudaModelOptions model_options, ConcurrentEngineOptions engine_options);
+    ~CudaSchedulerDriver();
 
     RequestId submit(std::vector<int32_t> prompt, ConcurrentRequestOptions options);
     bool cancel(RequestId id);
@@ -55,7 +55,7 @@ private:
 
     std::string model_path_;
     int max_context_;
-    ModelOptions model_options_;
+    CudaModelOptions model_options_;
     ConcurrentEngineOptions engine_options_;
     RuntimeTopology shape_;
 

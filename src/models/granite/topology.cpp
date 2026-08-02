@@ -1,0 +1,74 @@
+#include "celeg/detail/models/granite_topology.hpp"
+
+namespace celeg::detail {
+
+RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
+    const bool gguf = source.is_gguf();
+    auto integer = [&](std::string_view json_key, std::string_view gguf_key) {
+        return static_cast<int>(source.integer_for(json_key, "granite." + std::string(gguf_key)));
+    };
+    auto integer_or = [&](std::string_view json_key, std::string_view gguf_key, int fallback) {
+        return static_cast<int>(source.integer_for_or(
+            json_key, "granite." + std::string(gguf_key), fallback));
+    };
+    auto number_or = [&](std::string_view json_key, std::string_view gguf_key, double fallback) {
+        return source.number_for_or(json_key, "granite." + std::string(gguf_key), fallback);
+    };
+    RuntimeTopology t;
+    t.hidden = integer("hidden_size", "embedding_length");
+    t.intermediate = integer("intermediate_size", "feed_forward_length");
+    t.dense_intermediate = t.intermediate;
+    t.num_hidden_layers = integer("num_hidden_layers", "block_count");
+    t.num_attention_heads = integer("num_attention_heads", "attention.head_count");
+    t.num_key_value_heads = integer("num_key_value_heads", "attention.head_count_kv");
+    t.head_dim = integer_or("head_dim", "attention.key_length",
+                            t.hidden / t.num_attention_heads);
+    t.vocab_size = integer_or("vocab_size", "vocab_size", 0);
+    if (gguf && t.vocab_size == 0 && source.contains("tokenizer.ggml.tokens")) {
+        t.vocab_size = static_cast<int>(source.strings("tokenizer.ggml.tokens").size());
+    }
+    t.conv_cache = 1;
+    t.conv_dim = t.hidden;
+    t.max_position_embeddings = integer("max_position_embeddings", "context_length");
+    t.bos_token_id = integer_or("bos_token_id", "", 1);
+    t.eos_token_id = integer_or("eos_token_id", "", 2);
+    t.pad_token_id = integer_or("pad_token_id", "", 0);
+    if (gguf) {
+        t.bos_token_id = static_cast<int>(source.integer_or(
+            "tokenizer.ggml.bos_token_id", t.bos_token_id));
+        t.eos_token_id = static_cast<int>(source.integer_or(
+            "tokenizer.ggml.eos_token_id", t.eos_token_id));
+        t.pad_token_id = static_cast<int>(source.integer_or(
+            "tokenizer.ggml.padding_token_id", t.pad_token_id));
+    }
+    t.norm_eps = static_cast<float>(number_or(
+        "rms_norm_eps", "attention.layer_norm_rms_epsilon",
+        source.number_or("norm_eps", 1.0e-5)));
+    t.rope_theta = static_cast<float>(number_or("rope_theta", "rope.freq_base", 1.0e6));
+    t.embedding_multiplier = static_cast<float>(number_or(
+        "embedding_multiplier", "embedding_multiplier", 1.0));
+    t.attention_multiplier = static_cast<float>(number_or(
+        "attention_multiplier", "attention_multiplier", 1.0));
+    t.residual_multiplier = static_cast<float>(number_or(
+        "residual_multiplier", "residual_multiplier", 1.0));
+    t.logits_divisor = static_cast<float>(number_or(
+        "logits_scaling", "logits_scaling", 1.0));
+    t.query_key_norm = false;
+    t.mixer_kinds.assign(static_cast<size_t>(t.num_hidden_layers), MixerKind::Attention);
+    t.attention_layer_count = t.num_hidden_layers;
+    t.layer_for_attention_slot.resize(static_cast<size_t>(t.num_hidden_layers));
+    t.attention_slot_for_layer.resize(static_cast<size_t>(t.num_hidden_layers));
+    for (int i = 0; i < t.num_hidden_layers; ++i) {
+        t.layer_for_attention_slot[static_cast<size_t>(i)] = i;
+        t.attention_slot_for_layer[static_cast<size_t>(i)] = i;
+    }
+    t.layer_types = t.mixer_kinds;
+    t.q_width = t.num_attention_heads * t.head_dim;
+    t.kv_width = t.num_key_value_heads * t.head_dim;
+    t.qkv_width = t.q_width + 2 * t.kv_width;
+    t.rope_pairs = t.head_dim / 2;
+    t.validate();
+    return t;
+}
+
+} // namespace celeg::detail

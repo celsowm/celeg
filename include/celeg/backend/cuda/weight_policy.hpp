@@ -21,7 +21,7 @@
 // then mixed or unsupported modes are reported honestly rather than silently
 // misreported.
 
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 
 #include <string>
 #include <stdexcept>

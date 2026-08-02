@@ -23,7 +23,7 @@ void launch_bf16_gemv(const __nv_bfloat16* x, const __nv_bfloat16* weight,
 } // namespace
 
 GemmDispatcher::GemmDispatcher(cudaStream_t stream,
-                               const ModelOptions& options)
+                               const CudaModelOptions& options)
     : stream_(stream),
       options_(options),
       cublas_(stream),
@@ -194,7 +194,7 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
                             __nv_bfloat16* y,
                             int m, int n, int k,
                             float beta,
-                            const ExecutionPlan& plan) {
+                            const CudaExecutionPlan& plan) {
     if (weight.rows != n || weight.cols != k) {
         throw std::runtime_error("linear weight shape does not match the requested GEMM");
     }

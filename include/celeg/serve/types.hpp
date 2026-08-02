@@ -1,10 +1,12 @@
 #pragma once
 
-#include "celeg/model/execution/runtime_types.hpp"
-#include "celeg/runtime/concurrency.hpp"
+#include "celeg/model/runtime_types.hpp"
+#include "celeg/runtime/concurrency/policy.hpp"
+#include "celeg/runtime/request_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,10 +55,10 @@ struct ServingMetrics {
     std::uint64_t failed_requests = 0;
     std::uint64_t active_requests = 0;
     std::uint64_t queued_requests = 0;
-    double prefill_tokens_per_second = 0.0;
-    double decode_tokens_per_second = 0.0;
-    double average_ttft_ms = 0.0;
-    double average_itl_ms = 0.0;
+    std::optional<double> prefill_tokens_per_second;
+    std::optional<double> decode_tokens_per_second;
+    std::optional<double> average_ttft_ms;
+    std::optional<double> average_itl_ms;
 };
 
 } // namespace celeg::serve

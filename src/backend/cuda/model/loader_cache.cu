@@ -1,4 +1,4 @@
-#include "celeg/model/weights/loader.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
 
 #include <filesystem>
 #include <mutex>

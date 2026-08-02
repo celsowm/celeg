@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/detail/model/types.hpp"
 
 #include <cuda_bf16.h>
@@ -11,7 +11,7 @@
 namespace celeg {
 
 // Strategy interface for weight-format dispatch. The runtime picks one
-// concrete IWeightLayout per ModelOptions::weight_mode at model-construction
+// concrete IWeightLayout per CudaModelOptions::weight_mode at model-construction
 // time and binds it to the live embedding table + scales; the forward pass
 // then calls embed_token / embed_batch / embed_token_device through the
 // interface without branching on int4/int8/bf16 at every call site

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "celeg/backend/cuda/utils.cuh"
-#include "celeg/model/execution/plan.hpp"
-#include "celeg/model/execution/runtime_types.hpp"
+#include "celeg/backend/cuda/execution_plan.hpp"
+#include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/detail/model/types.hpp"
 
 #include <cublasLt.h>
@@ -18,18 +18,18 @@
 namespace celeg {
 
 // Dispatches linear (GEMM) operations across cuBLAS, cuBLASLt, and
-// specialized INT4/INT8 kernels based on the active ExecutionPlan and the
-// weight storage kind. Extracted from Model::Impl for Single
+// specialized INT4/INT8 kernels based on the active CudaExecutionPlan and the
+// weight storage kind. Extracted from the compiled model for Single
 // Responsibility: this class owns the cuBLAS handles, the cuBLASLt plan
-// cache, and the autotuning workspace; the Impl retains the forward pass,
+// cache, and the autotuning workspace; the compiled model retains the forward pass,
 // session state, and graph capture. New GEMM backends (e.g. CUTLASS) are
 // added by extending the dispatch switch (Open/Closed Principle).
 class GemmDispatcher {
 public:
-    // Constructs a dispatcher bound to a stream + ModelOptions. Allocates
+    // Constructs a dispatcher bound to a stream + CudaModelOptions. Allocates
     // the cuBLAS / cuBLASLt handles and the cuBLASLt workspace.
     GemmDispatcher(cudaStream_t stream,
-                   const ModelOptions& options);
+                   const CudaModelOptions& options);
     ~GemmDispatcher();
 
     GemmDispatcher(const GemmDispatcher&) = delete;
@@ -42,7 +42,7 @@ public:
                 __nv_bfloat16* y,
                 int m, int n, int k,
                 float beta,
-                const ExecutionPlan& plan);
+                const CudaExecutionPlan& plan);
 
     // Direct cuBLAS GEMM (BF16, transposed weight).
     void linear_cublas(const __nv_bfloat16* x,
@@ -72,7 +72,7 @@ public:
 
 private:
     cudaStream_t stream_;
-    const ModelOptions& options_;
+    const CudaModelOptions& options_;
     CublasHandle cublas_;
     CublasLtHandle cublas_lt_;
     DeviceBuffer<std::byte> lt_workspace_;

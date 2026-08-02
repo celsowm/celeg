@@ -2,7 +2,7 @@
 #include "celeg/checkpoint/downloader.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
-#include "celeg/model/model.hpp"
+#include "celeg/backend/cuda/model.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <algorithm>
@@ -55,8 +55,6 @@ struct Args {
     bool print_config = false;
     bool tokens_only = false;
     bool no_cuda_graph = false;
-    bool legacy_prefill = false;
-    bool legacy_sampling = false;
     bool lt_autotune = false;
     bool memory_report = false;
     bool runtime_metrics = false;
@@ -119,8 +117,6 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--print-config") args.print_config = true;
         else if (key == "--tokens-only") args.tokens_only = true;
         else if (key == "--no-cuda-graph") args.no_cuda_graph = true;
-        else if (key == "--legacy-prefill") args.legacy_prefill = true;
-        else if (key == "--legacy-sampling") args.legacy_sampling = true;
         else if (key == "--lt-autotune") args.lt_autotune = true;
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--runtime-metrics") args.runtime_metrics = true;
@@ -140,14 +136,12 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--expert-sidecar") args.expert_sidecar = value();
         else if (key == "--expert-usage-profile") args.expert_usage_profile = value();
         else if (key == "--expert-direct-io") args.expert_direct_io = true;
-        else if (key == "--segmented-attention") args.attention_mode = "segmented";
         else if (key == "--help") {
             std::cout
                 << "celeg-run [--model DIR | --repo REPO_ID] [--prompt TEXT] [--system TEXT]\n"
                 << "  [--max-new-tokens N] [--context N] [--raw]\n"
                 << "  [--fused-residuals] [--fast-attention] [--fused-projections]\n"
-                << "  [--print-config] [--tokens-only] [--legacy-prefill]\n"
-                << "  [--legacy-sampling] [--no-cuda-graph]\n"
+                << "  [--print-config] [--tokens-only] [--no-cuda-graph]\n"
                 << "  [--gemm-backend cublas|cublaslt] [--lt-autotune]\n"
                 << "  [--lt-workspace-mb N] [--lt-heuristics N]\n"
                 << "  [--weight-mode auto|bf16|int8|int4|native] [--kv-cache bf16|int8]\n"
@@ -398,13 +392,11 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--tokens-only cannot be used with --load-session");
         }
 
-        celeg::ModelOptions model_options;
+        celeg::CudaModelOptions model_options;
         model_options.fused_residuals = args.fused_residuals;
         model_options.fast_attention = args.fast_attention;
         model_options.fused_projections = args.fused_projections;
-        model_options.fused_sampling = !args.legacy_sampling;
         model_options.cuda_graph = !args.no_cuda_graph;
-        model_options.legacy_prefill = args.legacy_prefill;
         model_options.gemm_backend = args.gemm_backend == "cublaslt"
             ? celeg::GemmBackend::CublasLt
             : celeg::GemmBackend::Cublas;
@@ -516,7 +508,7 @@ int main(int argc, char** argv) {
                                            ? model.string()
                                            : single.string();
                       }();
-        celeg::Model engine(
+        celeg::CudaModel engine(
             model_path, args.context,
             model_options, generation);
         if (is_gguf) {
@@ -557,7 +549,7 @@ int main(int argc, char** argv) {
                       << "benchmark.decode_tokens_per_second="
                       << benchmark.tokens_per_second() << '\n';
 
-        const celeg::ModelDiagnostics::ExpertOffloadStats off =
+        const celeg::CudaModelDiagnostics::ExpertOffloadStats off =
                 engine.diagnostics().expert_offload_stats();
             if (off.hit_rate >= 0.0) {
                 std::cerr << "expert_offload.experts_per_layer="

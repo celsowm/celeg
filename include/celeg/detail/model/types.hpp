@@ -1,18 +1,18 @@
 #pragma once
 
 // Hoisted model implementation types. These were previously nested inside
-// Model::Impl and are now at namespace celeg:: scope so that WeightLoader,
+// The extracted model components are now at namespace celeg:: scope so that WeightLoader,
 // GemmDispatcher and PackedSessionContext can depend on them without being
-// friends of Model::Impl (Interface Segregation + Dependency Inversion).
+// friends of the compiled model (Interface Segregation + Dependency Inversion).
 //
 // All types in this header are implementation details; they are not part of
 // the public API and live under celeg:: so the detail/ headers can reference
-// them without leaking the Impl class.
+// them without leaking backend state classes.
 
 #include "celeg/backend/cuda/utils.cuh"
-#include "celeg/runtime/moe/offload.hpp"
-#include "celeg/runtime/moe/expert_residency.hpp"
-#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/moe/offload.hpp"
+#include "celeg/backend/cuda/moe/expert_residency.hpp"
+#include "celeg/backend/cuda/moe.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/runtime/cache/pinned_expert_cache.hpp"
@@ -160,7 +160,7 @@ struct MoeFfnWeights {
     const ExpertLinearWeight* down = nullptr;
     // Device-resident float copy of `router` ([num_experts * hidden]), produced
     // once at load time so the CUDA router kernel (which expects float) does
-    // not re-cast every token. Owned by the session Impl, not by this view.
+    // not re-cast every token. Owned by the session state, not by this view.
     const float* router_float = nullptr;
 
     // Expert-offload indirection tables ([num_experts] device pointer arrays).
@@ -241,7 +241,7 @@ struct ResidencyController {
     std::vector<InflightTransfer> inflight_transfers;
 };
 
-// Process-wide shared weight arena. Multiple Model sessions on the same
+// Process-wide shared weight arena. Multiple CudaModel sessions on the same
 // device + checkpoint + weight_mode share one instance to avoid duplicate
 // GPU allocations.
 struct SharedModelWeights {
@@ -307,7 +307,7 @@ struct ConvolutionLayer {
 
 using Layer = std::variant<AttentionLayer, ConvolutionLayer>;
 
-// Free-function visitors (replaces the old Impl::common / as_attention /
+// Free-function visitors replace the old common / as_attention /
 // as_convolution statics). Putting them at namespace scope means callers
 // in packed.cu no longer need `friend struct PackedDecodeExecutorImpl`.
 inline LayerCommon& common(Layer& layer) {

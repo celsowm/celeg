@@ -1,5 +1,5 @@
-#include "celeg/runtime/moe/expert_residency.hpp"
-#include "celeg/runtime/moe.hpp"
+#include "celeg/backend/cuda/moe/expert_residency.hpp"
+#include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/detail/model/types.hpp"
 #include "celeg/model/resolved.hpp"
@@ -176,7 +176,7 @@ void check_close(const std::vector<__nv_bfloat16>& a,
 
 } // namespace
 
-// Drives the exact model-level path used by Model::Impl when offload is
+// Drives the exact model-level path used by the compiled model when offload is
 // enabled: build an offloaded MoeFfnWeights with indirect pointer tables from
 // an ExpertLayerCache, resolve it through moe_ffn_device(), and run the kernel.
 std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
@@ -262,7 +262,7 @@ int main() {
                         /*resident=*/{0, 1, 2, 3, 4, 5}, stream);
         check_close(baseline, full, "full cache");
 
-        // Model-level path: MoeFfnWeights + moe_ffn_device() indirection.
+        // CudaModel-level path: MoeFfnWeights + moe_ffn_device() indirection.
         const std::vector<__nv_bfloat16> model_off =
             run_model_offload(p, /*capacity=*/3, /*resident=*/{0, 3, 5}, stream);
         check_close(baseline, model_off, "model-level offload (moe_ffn_device)");

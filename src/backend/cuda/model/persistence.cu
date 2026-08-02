@@ -1,5 +1,5 @@
 #include "celeg/backend/cuda/session_store.hpp"
-#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/model/compiled_model.hpp"
 
 #include <cstring>
 #include <fstream>
@@ -9,14 +9,14 @@
 
 namespace celeg {
 
-SessionStore::SessionState Model::Impl::make_session_state() {
+SessionStore::SessionState CudaCompiledModel::make_session_state() {
     SessionStore::SessionState state{
-        .shape = shape_, .max_context = max_context_, .position = position_,
-        .kv_cache_mode = options_.kv_cache_mode, .model_identity = model_identity_,
-        .stream = stream_.get(), .seen_tokens = &seen_tokens_,
-        .logits = &logits_, .rng_state = &rng_state_};
-    state.layer_buffers.reserve(layers_.size());
-    for (Layer& layer : layers_) {
+        .shape = resources_.shape_, .max_context = max_context_, .position = session_.position_,
+        .kv_cache_mode = resources_.options_.kv_cache_mode, .model_identity = resources_.model_identity_,
+        .stream = stream_.get(), .seen_tokens = &sampling_.seen_tokens,
+        .logits = &workspace_.logits_, .rng_state = &sampling_.rng_state};
+    state.layer_buffers.reserve(resources_.layers_.size());
+    for (Layer& layer : resources_.layers_) {
         SessionStore::SessionState::LayerBuffers buffers{};
         if (AttentionLayer* attention = as_attention(layer)) {
             buffers.is_attention = true;
@@ -35,31 +35,31 @@ SessionStore::SessionState Model::Impl::make_session_state() {
     return state;
 }
 
-void Model::Impl::save_session(const std::string& path) {
+void CudaCompiledModel::save_session(const std::string& path) {
     if (!local_kv_cache_available_)
         throw std::runtime_error("save_session requires a model with a local contiguous KV cache");
-    if (phase_ != SessionPhase::Ready)
+    if (session_.phase_ != SessionPhase::Ready)
         throw std::runtime_error("cannot save a session before prefill or load_session");
     auto state = make_session_state();
     SessionStore::save(path, state);
 }
 
-void Model::Impl::load_session(const std::string& path) {
+void CudaCompiledModel::load_session(const std::string& path) {
     reset();
     auto state = make_session_state();
     SessionStore::load(path, state);
-    position_ = state.position;
-    CELEG_CUDA(cudaMemcpy(position_device_.data(), &position_, sizeof(position_), cudaMemcpyHostToDevice));
-    phase_ = SessionPhase::Ready;
-    active_segmented_attention_ = use_segmented_attention(position_);
-    metrics_ = {};
+    session_.position_ = state.position;
+    CELEG_CUDA(cudaMemcpy(position_device_.data(), &session_.position_, sizeof(session_.position_), cudaMemcpyHostToDevice));
+    session_.phase_ = SessionPhase::Ready;
+    session_.active_segmented_attention_ = use_segmented_attention(session_.position_);
+    session_.metrics_ = {};
 }
 
-PrefixState Model::Impl::export_prefix_state() const {
-    if (phase_ != SessionPhase::Ready)
+PrefixState CudaCompiledModel::export_prefix_state() const {
+    if (session_.phase_ != SessionPhase::Ready)
         throw std::runtime_error("cannot export prefix state before prefill");
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
-    auto state = const_cast<Impl*>(this)->make_session_state();
+    auto state = const_cast<CudaCompiledModel*>(this)->make_session_state();
     auto snapshot = SessionStore::export_prefix(state);
     PrefixState out;
     out.position = snapshot.position;
@@ -69,34 +69,34 @@ PrefixState Model::Impl::export_prefix_state() const {
     return out;
 }
 
-void Model::Impl::restore_prefix_state(const PrefixState& state) {
+void CudaCompiledModel::restore_prefix_state(const PrefixState& state) {
     SessionStore::PrefixSnapshot snapshot;
     snapshot.position = state.position;
     snapshot.seen_tokens = state.seen_tokens;
     snapshot.logits_bf16 = state.logits_bf16;
     snapshot.conv_state_bf16 = state.conv_state_bf16;
     auto session = make_session_state();
-    SessionStore::restore_prefix(snapshot, session, generation_.seed);
-    phase_ = SessionPhase::Prefilling;
-    position_ = session.position;
-    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &position_, sizeof(position_),
+    SessionStore::restore_prefix(snapshot, session, session_.generation_.seed);
+    session_.phase_ = SessionPhase::Prefilling;
+    session_.position_ = session.position;
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &session_.position_, sizeof(session_.position_),
                              cudaMemcpyHostToDevice, stream_.get()));
-    phase_ = SessionPhase::Ready;
-    active_segmented_attention_ = use_segmented_attention(position_);
-    metrics_ = {};
+    session_.phase_ = SessionPhase::Ready;
+    session_.active_segmented_attention_ = use_segmented_attention(session_.position_);
+    session_.metrics_ = {};
 }
 
 void SessionPersistence::save_session(const std::string& path) const {
-    owner_->impl_->save_session(path);
+    owner_->state_->save_session(path);
 }
 void SessionPersistence::load_session(const std::string& path) {
-    owner_->impl_->load_session(path);
+    owner_->state_->load_session(path);
 }
 PrefixState SessionPersistence::export_prefix_state() const {
-    return owner_->impl_->export_prefix_state();
+    return owner_->state_->export_prefix_state();
 }
 void SessionPersistence::restore_prefix_state(const PrefixState& state) {
-    owner_->impl_->restore_prefix_state(state);
+    owner_->state_->restore_prefix_state(state);
 }
 
 namespace {

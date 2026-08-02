@@ -3,7 +3,7 @@
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/serve/cpu_inference_service.hpp"
 #ifdef CELEG_SERVE_CUDA
-#include "celeg/serve/cuda_inference_service.hpp"
+#include "celeg/backend/cuda/cuda_inference_service.hpp"
 #endif
 #include "celeg/serve/generation_dispatcher.hpp"
 #include "celeg/text/tokenizer.hpp"
@@ -81,21 +81,23 @@ int main(int argc, char** argv) {
             args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
         const std::int32_t eos_token_id = model_definition.tokens.eos;
 
-        std::unique_ptr<celeg::serve::IInferenceService> service;
+        std::unique_ptr<celeg::serve::ServiceBundle> service;
         if (args.backend == "cpu") {
             celeg::CpuModelOptions model_options;
             model_options.threads = static_cast<std::size_t>(args.threads);
             celeg::CpuConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
-            service = std::make_unique<celeg::serve::CpuInferenceService>(
-                (model / "model.safetensors").string(), args.context,
-                model_options, engine_options);
+            service = std::make_unique<celeg::serve::ServiceBundle>(
+                std::make_unique<celeg::serve::CpuInferenceService>(
+                    (model / "model.safetensors").string(), args.context,
+                    model_options, engine_options));
         } else if (args.backend == "cuda") {
 #ifdef CELEG_SERVE_CUDA
             celeg::ConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
-            service = std::make_unique<celeg::serve::CudaInferenceService>(
-                model.string(), args.context, celeg::ModelOptions{}, engine_options);
+            service = std::make_unique<celeg::serve::ServiceBundle>(
+                std::make_unique<celeg::serve::CudaInferenceService>(
+                    model.string(), args.context, celeg::CudaModelOptions{}, engine_options));
 #else
             throw std::runtime_error("CUDA serving is not available in this build");
 #endif
@@ -103,7 +105,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--backend must be cpu or cuda");
         }
 
-        GenerationDispatcher dispatcher(*service);
+        GenerationDispatcher dispatcher(service->requests(), service->scheduler());
         dispatcher.start();
 
         uWS::Loop* loop = uWS::Loop::get();
@@ -114,7 +116,7 @@ int main(int argc, char** argv) {
         celeg::app::serve::register_models_route(app, model_name);
         celeg::app::serve::register_tokenize_route(app, tokenizer, static_cast<std::size_t>(args.context));
         celeg::app::serve::register_chat_completions_route(
-            app, dispatcher, *service, tokenizer, model_name, eos_token_id, loop);
+            app, dispatcher, service->requests(), tokenizer, model_name, eos_token_id, loop);
 
         app.listen(args.port, [&](auto* listen_socket) {
               if (listen_socket) {

@@ -1,4 +1,4 @@
-#include "celeg/detail/model/impl.hpp"
+#include "celeg/detail/model/compiled_model.hpp"
 
 #include <stdexcept>
 

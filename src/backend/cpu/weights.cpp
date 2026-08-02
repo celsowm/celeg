@@ -1,6 +1,7 @@
 #include "detail/model_internal.hpp"
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/backend/cpu/compiler.hpp"
 #include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
@@ -129,7 +130,7 @@ std::filesystem::path default_cache_directory() {
 }
 }
 
-CpuModel::Impl::Shared::Shared(const std::string& path, int context,
+CpuCompiledModel::Shared::Shared(const std::string& path, int context,
                                CpuModelOptions requested)
     : model_path(path), max_context(context), options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
@@ -154,21 +155,17 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     group_size = options.weight_format == CpuWeightFormat::Q4Group64 ? 64 : 32;
     const detail::ModelBootstrap bootstrap =
         detail::load_model_bootstrap(std::filesystem::path(model_path));
-    is_gguf = bootstrap.is_gguf();
+    native_checkpoint = bootstrap.checkpoint.gguf != nullptr;
     shape = bootstrap.model.topology;
+    program = CpuModelCompiler{}.compile(bootstrap.model);
     model_identity = bootstrap.model.identity;
     tensor_naming = bootstrap.model.tensor_naming.get();
-    if (is_gguf) {
-        repository = std::make_shared<GgufRepository>(bootstrap.gguf_file);
-    } else {
-        repository = std::make_shared<SafeTensorRepository>(
-            std::filesystem::path(model_path));
-    }
+    repository = bootstrap.checkpoint.repository;
     prepare_pack_path();
     load_weights();
-    layer_to_kv_pool.assign(layers.size(), -1);
-    for (size_t layer = 0; layer < layers.size(); ++layer) {
-        if (Impl::attention_operator(layers[layer])) {
+    layer_to_kv_pool.assign(weight_store.layers.size(), -1);
+    for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
+        if (CpuCompiledModel::attention_operator(weight_store.layers[layer])) {
             layer_to_kv_pool[layer] = static_cast<int>(kv_pools.size());
             kv_pools.push_back(std::make_shared<CpuKvPagePool>(
                 options.kv_cache_mode, options.kv_page_tokens,
@@ -177,7 +174,7 @@ CpuModel::Impl::Shared::Shared(const std::string& path, int context,
     }
 }
 
-CpuIsa CpuModel::Impl::Shared::resolve_isa(CpuIsa requested) {
+CpuIsa CpuCompiledModel::Shared::resolve_isa(CpuIsa requested) {
     const CpuCapabilities caps = detect_cpu_capabilities();
     if (requested == CpuIsa::Auto) return caps.best_isa();
     if (requested != CpuIsa::Scalar && requested != CpuIsa::Avx2 &&
@@ -198,8 +195,8 @@ CpuIsa CpuModel::Impl::Shared::resolve_isa(CpuIsa requested) {
     return requested;
 }
 
-void CpuModel::Impl::Shared::prepare_pack_path() {
-    if (is_gguf || !options.use_pack_cache) return;
+void CpuCompiledModel::Shared::prepare_pack_path() {
+    if (native_checkpoint || !options.use_pack_cache) return;
     std::filesystem::path directory = options.pack_cache_directory.empty()
         ? default_cache_directory() : options.pack_cache_directory;
     std::error_code error;
@@ -215,7 +212,7 @@ void CpuModel::Impl::Shared::prepare_pack_path() {
     source_id = source;
 }
 
-CpuModel::Impl::CommonWeights CpuModel::Impl::Shared::load_common(
+CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     int layer) {
     CommonWeights common;
@@ -238,7 +235,7 @@ CpuModel::Impl::CommonWeights CpuModel::Impl::Shared::load_common(
     return common;
 }
 
-void CpuModel::Impl::Shared::load_weights() {
+void CpuCompiledModel::Shared::load_weights() {
     std::unique_ptr<CpuPackReader> reader;
     if (!pack_file.empty() && std::filesystem::exists(pack_file)) {
         try {
@@ -271,10 +268,10 @@ void CpuModel::Impl::Shared::load_weights() {
     }
 
     IWeightRepository* source = reader ? nullptr : repository.get();
-    embedding = load_matrix(source, reader.get(), writer.get(),
+    weight_store.embedding = load_matrix(source, reader.get(), writer.get(),
         tensor_name(tensor_naming, TensorRole::TokenEmbedding),
         {shape.vocab_size, shape.hidden});
-    final_norm = load_vector(source, reader.get(), writer.get(),
+    weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
         tensor_name(tensor_naming, TensorRole::FinalNorm),
         {shape.hidden});
 
@@ -335,7 +332,7 @@ void CpuModel::Impl::Shared::load_weights() {
     if (shape.num_experts > 0) {
         // MoE checkpoints begin with ordinary dense FFN blocks. Keep them as
         // dense layers, then load only the remaining routed blocks as MoE.
-        layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
+        weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
         for (int index = 0; index < shape.num_hidden_layers; ++index) {
             const LayerType layer_type = shape.layer_types[static_cast<size_t>(index)];
             if (!shape.layer_uses_moe(index)) {
@@ -344,7 +341,7 @@ void CpuModel::Impl::Shared::load_weights() {
                 auto layer = load_operator(index, layer_type);
                 std::visit([&](auto& value) {
                     value.common = std::move(common);
-                    layers.emplace_back(std::move(value));
+                    weight_store.layers.emplace_back(std::move(value));
                 }, layer);
                 continue;
             }
@@ -394,10 +391,10 @@ void CpuModel::Impl::Shared::load_weights() {
                     layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w2.weight"),
                     {shape.hidden, moe_inter});
             }
-            layers.push_back(std::move(layer));
+            weight_store.layers.push_back(std::move(layer));
         }
     } else {
-        layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
+        weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
         for (int index = 0; index < shape.num_hidden_layers; ++index) {
             CommonWeights common =
                 load_common(source, reader.get(), writer.get(), index);
@@ -405,14 +402,14 @@ void CpuModel::Impl::Shared::load_weights() {
                 index, shape.layer_types[static_cast<size_t>(index)]);
             std::visit([&](auto& value) {
                 value.common = std::move(common);
-                layers.emplace_back(std::move(value));
+                weight_store.layers.emplace_back(std::move(value));
             }, layer);
         }
     }
     if (writer) writer->commit();
 }
 
-CpuLinearWeight CpuModel::Impl::Shared::load_matrix(
+CpuLinearWeight CpuCompiledModel::Shared::load_matrix(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
     if (reader) {
@@ -448,7 +445,7 @@ CpuLinearWeight CpuModel::Impl::Shared::load_matrix(
     return CpuLinearWeight::from_q4(std::move(matrix));
 }
 
-CpuLinearWeight CpuModel::Impl::Shared::load_concat(
+CpuLinearWeight CpuCompiledModel::Shared::load_concat(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& synthetic,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
@@ -528,7 +525,7 @@ CpuLinearWeight CpuModel::Impl::Shared::load_concat(
     return CpuLinearWeight::from_q4(std::move(matrix));
 }
 
-std::vector<float> CpuModel::Impl::Shared::load_vector(
+std::vector<float> CpuCompiledModel::Shared::load_vector(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
     if (reader) return reader->read_bf16_vector(name);
@@ -545,9 +542,10 @@ std::vector<float> CpuModel::Impl::Shared::load_vector(
     return result;
 }
 
-size_t CpuModel::Impl::Shared::weights_memory_bytes() const {
-    size_t bytes = embedding.memory_bytes() + final_norm.size() * sizeof(float);
-    for (const WeightLayer& layer : layers) {
+size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
+    size_t bytes = weight_store.embedding.memory_bytes() +
+        weight_store.final_norm.size() * sizeof(float);
+    for (const WeightLayer& layer : weight_store.layers) {
         std::visit([&](const auto& value) {
             bytes += value.common.operator_norm.size() * sizeof(float) +
                      value.common.ffn_norm.size() * sizeof(float) +
