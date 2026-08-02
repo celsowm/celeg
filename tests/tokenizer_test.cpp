@@ -28,6 +28,53 @@ int main() {
     CELEG_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
     std::filesystem::remove(path);
 
+    const auto lfm_path = std::filesystem::temp_directory_path() /
+        "celeg_lfm2_tokenizer_test.json";
+    std::ofstream lfm(lfm_path);
+    lfm << R"({
+      "model": {
+        "type": "BPE",
+        "vocab": {
+          "hello":10,"Ġworld":11,"Ġ123":12,
+          "456":13,"789":14,"0":15
+        },
+        "merges": []
+      },
+      "pre_tokenizer": {"type":"Split", "pattern": {
+        "Regex": "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+      }}
+    })";
+    lfm.close();
+    celeg::BpeTokenizer lfm_tokenizer(lfm_path.string());
+    const auto lfm_ids = lfm_tokenizer.encode("hello world 1234567890", false);
+    CELEG_TEST_CHECK(lfm_ids.size() == 6 && lfm_ids[0] == 10 &&
+                     lfm_ids[1] == 11 && lfm_ids[2] == 12 &&
+                     lfm_ids[3] == 13 && lfm_ids[4] == 14 &&
+                     lfm_ids[5] == 15);
+    std::filesystem::remove(lfm_path);
+
+    const auto granite_path = std::filesystem::temp_directory_path() /
+        "celeg_granite_tokenizer_test.json";
+    std::ofstream granite(granite_path);
+    granite << R"({
+      "model": {
+        "type": "BPE",
+        "vocab": {"1":20,"2":21,"3":22,"123":23,"'":24,"S":25},
+        "merges": ["1 2", "12 3"]
+      },
+      "pre_tokenizer": {"type":"Split", "pattern": {
+        "Regex": "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+"
+      }}
+    })";
+    granite.close();
+    celeg::BpeTokenizer granite_tokenizer(granite_path.string());
+    const auto granite_numbers = granite_tokenizer.encode("123", false);
+    CELEG_TEST_CHECK(granite_numbers.size() == 1 && granite_numbers[0] == 23);
+    const auto granite_contraction = granite_tokenizer.encode("'S", false);
+    CELEG_TEST_CHECK(granite_contraction.size() == 2 &&
+                     granite_contraction[0] == 24 && granite_contraction[1] == 25);
+    std::filesystem::remove(granite_path);
+
     const auto gemma_path = std::filesystem::temp_directory_path() /
         "celeg_gemma_tokenizer_test.json";
     std::ofstream gemma(gemma_path);

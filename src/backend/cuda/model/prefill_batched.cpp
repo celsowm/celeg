@@ -81,6 +81,9 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 layout.key_value_heads, layout.head_dim, static_cast<float>(layout.rope_theta),
                 static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
                 layout.query_key_norm, stream_.get());
+            launch_scale(workspace_.prefill_q_.data(),
+                         static_cast<size_t>(rows) * layout.query_width(),
+                         layout.query_scale, stream_.get());
             prof.end(PrefillPhase::RopeKv, stream_.get());
 
             prof.begin(stream_.get());

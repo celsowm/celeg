@@ -56,6 +56,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits) {
                 session_.position_, static_cast<float>(layout.rope_theta),
                 static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
                 layout.query_key_norm, stream_.get());
+            launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             const AttentionSpec& owner_layout = owner->layout;
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8(
@@ -181,6 +182,7 @@ void CudaCompiledModel::forward_token_paged_host(
                 session_.position_, static_cast<float>(layout.rope_theta),
                 static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
                 layout.query_key_norm, stream_.get());
+            launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             const int cache_model_layer = attention->kv_owner_layer >= 0
                 ? attention->kv_owner_layer : layer_index;
             const int slot = paged_kv.attention_slot(cache_model_layer);

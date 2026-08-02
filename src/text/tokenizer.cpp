@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
-#include <limits>
+#include <queue>
 #include <stdexcept>
 #include <utility>
 
@@ -45,6 +45,22 @@ std::pair<uint32_t, size_t> next_cp(std::string_view text, size_t offset) {
                                       (static_cast<uint8_t>(text[offset + 3]) & 0x3F)), 4};
     }
     return {0xFFFD, 1};
+}
+
+const Json* find_regex_node(const Json& value) {
+    if (value.is_object()) {
+        if (value.contains("Regex") && value["Regex"].is_string()) {
+            return &value["Regex"];
+        }
+        for (const auto& [_, child] : value.as_object()) {
+            if (const Json* found = find_regex_node(child)) return found;
+        }
+    } else if (value.is_array()) {
+        for (const Json& child : value.as_array()) {
+            if (const Json* found = find_regex_node(child)) return found;
+        }
+    }
+    return nullptr;
 }
 
 bool in_range(uint32_t cp, uint32_t first, uint32_t last) {
@@ -233,6 +249,14 @@ void BpeTokenizer::load_gguf(const GgufFile& gguf) {
         pad_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.padding_token_id"));
     }
 
+    const std::string tokenizer_pre = gguf.str_or("tokenizer.ggml.pre", "");
+    if (tokenizer_pre == "lfm2") profile_ = BpeProfile::ByteLevelLfm2;
+    else if (tokenizer_pre == "gemma4") profile_ = BpeProfile::RawUtf8Gemma;
+    else if (tokenizer_pre == "gpt2" ||
+             tokenizer_pre.find("granite") != std::string::npos) {
+        profile_ = BpeProfile::ByteLevelGranite;
+    }
+
     init_byte_encoder();
 }
 
@@ -277,9 +301,15 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
             SpecialToken token{item["content"].as_string(), static_cast<int32_t>(item["id"].as_i64())};
             specials_.push_back(token);
             special_ids_[token.id] = true;
-            if (token.text == "<|startoftext|>" || token.text == "<bos>") bos_id_ = token.id;
-            if (token.text == "<|im_end|>" || token.text == "<eos>") eos_id_ = token.id;
-            if (token.text == "<pad>") pad_id_ = token.id;
+            if (token.text == "<|startoftext|>" || token.text == "<|start_of_text|>" ||
+                token.text == "<bos>" || token.text == "<|end_of_text|>") {
+                bos_id_ = token.id;
+            }
+            if (token.text == "<|im_end|>" || token.text == "<eos>" ||
+                token.text == "<|end_of_text|>") {
+                eos_id_ = token.id;
+            }
+            if (token.text == "<pad>" || token.text == "<|pad|>") pad_id_ = token.id;
         }
         std::sort(specials_.begin(), specials_.end(), [](const auto& a, const auto& b) {
             return a.text.size() > b.text.size();
@@ -291,6 +321,18 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
     // byte fallback. GPT-2/BPE tokenizers such as LFM2 may still carry a
     // JSON `normalizer: null`; that must remain on the byte-encoder path.
     gemma_normalization_ = byte_fallback_ && vocab_.contains("▁");
+    if (gemma_normalization_) profile_ = BpeProfile::RawUtf8Gemma;
+    if (root.contains("pre_tokenizer")) {
+        if (const Json* regex = find_regex_node(root["pre_tokenizer"])) {
+            // LFM2's tokenizer.json uses the GPT-2 split with 1–3 digit
+            // numeric pieces and direct vocabulary lookup before merges.
+            if (regex->as_string().find("\\p{N}{1,3}") != std::string::npos) {
+                profile_ = BpeProfile::ByteLevelLfm2;
+            } else if (profile_ != BpeProfile::RawUtf8Gemma) {
+                profile_ = BpeProfile::ByteLevelGranite;
+            }
+        }
+    }
     init_byte_encoder();
 }
 
@@ -303,7 +345,11 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
             static constexpr std::string_view suffixes[] = {"'s", "'t", "'re", "'ve", "'m", "'ll", "'d"};
             bool matched = false;
             for (auto suffix : suffixes) {
-                if (ascii_case_equal(text, i, suffix)) {
+                const bool case_insensitive = profile_ != BpeProfile::ByteLevelGranite;
+                const bool suffix_match = case_insensitive
+                    ? ascii_case_equal(text, i, suffix)
+                    : text.substr(i, suffix.size()) == suffix;
+                if (suffix_match) {
                     pieces.emplace_back(text.substr(i, suffix.size()));
                     i += suffix.size();
                     matched = true;
@@ -317,15 +363,25 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
         if (is_space_cp(cp)) {
             // A single ASCII space is attached to the following non-space group, matching GPT-2's optional leading space.
             if (cp == ' ' && i + len < text.size()) {
-                const auto [next, _] = next_cp(text, i + len);
-                if (!is_space_cp(next)) {
-                    const int cat = category(next);
-                    size_t end = i + len;
-                    while (end < text.size()) {
-                        const auto [cur, cur_len] = next_cp(text, end);
-                        if (category(cur) != cat) break;
-                        end += cur_len;
-                    }
+                    const auto [next, _] = next_cp(text, i + len);
+                    if (!is_space_cp(next)) {
+                        const int cat = category(next);
+                        size_t end = i + len;
+                        size_t category_count = 0;
+                        while (end < text.size()) {
+                            const auto [cur, cur_len] = next_cp(text, end);
+                            if (category(cur) != cat) break;
+                            end += cur_len;
+                            if (cat == 2 && profile_ == BpeProfile::ByteLevelLfm2 &&
+                                ++category_count >= 3) break;
+                        }
+                        if (cat == 3 && profile_ == BpeProfile::ByteLevelLfm2) {
+                            while (end < text.size()) {
+                                const auto [cur, cur_len] = next_cp(text, end);
+                                if (cur != '\r' && cur != '\n') break;
+                                end += cur_len;
+                            }
+                        }
                     pieces.emplace_back(text.substr(i, end - i));
                     i = end;
                     continue;
@@ -343,6 +399,49 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
         }
 
         const int cat = category(cp);
+        if (profile_ == BpeProfile::ByteLevelLfm2 && cat == 3 &&
+            i + len < text.size()) {
+            const auto [next, next_len] = next_cp(text, i + len);
+            if (category(next) == 1) {
+                size_t end = i + len + next_len;
+                while (end < text.size()) {
+                    const auto [cur, cur_len] = next_cp(text, end);
+                    if (category(cur) != 1) break;
+                    end += cur_len;
+                }
+                pieces.emplace_back(text.substr(i, end - i));
+                i = end;
+                continue;
+            }
+        }
+        if (profile_ == BpeProfile::ByteLevelLfm2 && cat == 3) {
+            size_t end = i + len;
+            while (end < text.size()) {
+                const auto [cur, cur_len] = next_cp(text, end);
+                if (category(cur) == 3) end += cur_len;
+                else break;
+            }
+            while (end < text.size()) {
+                const auto [cur, cur_len] = next_cp(text, end);
+                if (cur != '\r' && cur != '\n') break;
+                end += cur_len;
+            }
+            pieces.emplace_back(text.substr(i, end - i));
+            i = end;
+            continue;
+        }
+        if (cat == 2 && profile_ == BpeProfile::ByteLevelLfm2) {
+            size_t end = i;
+            while (end < text.size()) {
+                const auto [cur, cur_len] = next_cp(text, end);
+                if (category(cur) != cat) break;
+                end += cur_len;
+                if ((end - i) >= 3) break;
+            }
+            pieces.emplace_back(text.substr(i, end - i));
+            i = end;
+            continue;
+        }
         size_t end = i + len;
         while (end < text.size()) {
             const auto [cur, cur_len] = next_cp(text, end);
@@ -403,33 +502,74 @@ void reject_gemma4_unsupported_input(const IChatTemplate& chat_template,
 std::vector<std::string> BpeTokenizer::bpe_symbols(std::vector<std::string> symbols) const {
     if (symbols.size() < 2) return symbols;
 
-    while (true) {
-        int32_t best_rank = std::numeric_limits<int32_t>::max();
-        std::string best_left;
-        std::string best_right;
-        for (size_t j = 0; j + 1 < symbols.size(); ++j) {
-            const auto it = merge_rank_.find(pair_key(symbols[j], symbols[j + 1]));
-            if (it != merge_rank_.end() && it->second < best_rank) {
-                best_rank = it->second;
-                best_left = symbols[j];
-                best_right = symbols[j + 1];
-            }
+    struct Node {
+        std::string text;
+        int prev = -1;
+        int next = -1;
+        bool alive = true;
+    };
+    struct Candidate {
+        int32_t rank;
+        int left;
+        int right;
+    };
+    struct CandidateGreater {
+        bool operator()(const Candidate& a, const Candidate& b) const {
+            return a.rank > b.rank ||
+                   (a.rank == b.rank && a.left > b.left);
         }
-        if (best_rank == std::numeric_limits<int32_t>::max()) break;
+    };
 
-        std::vector<std::string> merged;
-        for (size_t j = 0; j < symbols.size();) {
-            if (j + 1 < symbols.size() && symbols[j] == best_left && symbols[j + 1] == best_right) {
-                merged.push_back(symbols[j] + symbols[j + 1]);
-                j += 2;
-            } else {
-                merged.push_back(symbols[j]);
-                ++j;
-            }
-        }
-        symbols.swap(merged);
+    std::vector<Node> nodes;
+    nodes.reserve(symbols.size());
+    for (size_t i = 0; i < symbols.size(); ++i) {
+        nodes.push_back(Node{std::move(symbols[i]), static_cast<int>(i) - 1,
+                             i + 1 < symbols.size() ? static_cast<int>(i) + 1 : -1,
+                             true});
     }
-    return symbols;
+
+    std::priority_queue<Candidate, std::vector<Candidate>, CandidateGreater> queue;
+    const auto add_candidate = [&](int left, int right,
+                                   auto& candidate_queue) {
+        if (left < 0 || right < 0 || !nodes[left].alive || !nodes[right].alive ||
+            nodes[left].next != right) return;
+        const auto it = merge_rank_.find(pair_key(nodes[left].text, nodes[right].text));
+        if (it != merge_rank_.end()) candidate_queue.push(Candidate{it->second, left, right});
+    };
+    for (size_t i = 1; i < nodes.size(); ++i) {
+        add_candidate(static_cast<int>(i) - 1, static_cast<int>(i), queue);
+    }
+
+    while (!queue.empty()) {
+        const Candidate candidate = queue.top();
+        queue.pop();
+        if (!nodes[candidate.left].alive || !nodes[candidate.right].alive ||
+            nodes[candidate.left].next != candidate.right ||
+            nodes[candidate.right].prev != candidate.left) {
+            continue;
+        }
+        const auto current = merge_rank_.find(
+            pair_key(nodes[candidate.left].text, nodes[candidate.right].text));
+        if (current == merge_rank_.end() || current->second != candidate.rank) continue;
+
+        Node& left = nodes[candidate.left];
+        Node& right = nodes[candidate.right];
+        const int previous = left.prev;
+        const int following = right.next;
+        left.text += right.text;
+        left.next = following;
+        right.alive = false;
+        if (following >= 0) nodes[following].prev = candidate.left;
+        add_candidate(previous, candidate.left, queue);
+        add_candidate(candidate.left, following, queue);
+    }
+
+    std::vector<std::string> result;
+    for (int index = 0; index >= 0;) {
+        if (nodes[index].alive) result.push_back(std::move(nodes[index].text));
+        index = nodes[index].next;
+    }
+    return result;
 }
 
 std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const {
@@ -483,6 +623,13 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
     }
     for (const std::string& piece : pretokenize(text)) {
         const std::string encoded = byte_encode(piece);
+        if (profile_ == BpeProfile::ByteLevelLfm2) {
+            const auto direct = vocab_.find(encoded);
+            if (direct != vocab_.end()) {
+                ids.push_back(direct->second);
+                continue;
+            }
+        }
         for (const std::string& token : bpe(encoded)) {
             const auto it = vocab_.find(token);
             if (it == vocab_.end()) throw std::runtime_error("BPE produced token absent from vocabulary");

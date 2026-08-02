@@ -58,7 +58,10 @@ std::string Lfm2InstructChatTemplate::format(std::span<const ChatMessage> messag
 
 std::string GraniteInstructChatTemplate::format(std::span<const ChatMessage> messages,
                                                 bool add_generation_prompt) const {
-    std::string out;
+    // Granite's Hub chat template omits BOS because Transformers adds the
+    // configured BOS token when tokenizing the rendered template. Keep that
+    // tokenizer-side behavior explicit in the native text representation.
+    std::string out = "<|startoftext|>";
     const bool has_system_message = !messages.empty() &&
         messages.front().role == ChatRole::System;
     if (!has_system_message) {

@@ -39,6 +39,13 @@ public:
     int32_t pad_id() const { return pad_id_; }
 
 private:
+    enum class BpeProfile : uint8_t {
+        Generic,
+        ByteLevelLfm2,
+        ByteLevelGranite,
+        RawUtf8Gemma,
+    };
+
     struct SpecialToken {
         std::string text;
         int32_t id;
@@ -64,6 +71,7 @@ private:
     std::unordered_map<int32_t, bool> special_ids_;
     std::array<std::string, 256> byte_encoder_{};
     std::unordered_map<uint32_t, uint8_t> byte_decoder_;
+    BpeProfile profile_ = BpeProfile::Generic;
     bool gemma_normalization_ = false;
     bool byte_fallback_ = false;
     std::unique_ptr<IChatTemplate> chat_template_;

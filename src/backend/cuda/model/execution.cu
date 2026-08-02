@@ -89,6 +89,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
                 position_device_.data(), static_cast<float>(layout.rope_theta),
                 static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
                 layout.query_key_norm, stream_.get());
+            launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {

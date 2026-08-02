@@ -1,5 +1,7 @@
 #include "celeg/detail/models/granite_topology.hpp"
 
+#include <cmath>
+
 namespace celeg::detail {
 
 RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
@@ -69,6 +71,11 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.attention_layouts.assign(static_cast<size_t>(t.num_hidden_layers),
         AttentionSpec{query_heads, key_value_heads, head_dim,
                       false, AttentionMaskKind::Causal, 0, rope_theta, 1.0, {}});
+    const float query_scale = t.attention_multiplier /
+        (1.0f / std::sqrt(static_cast<float>(head_dim)));
+    for (AttentionSpec& layout : t.attention_layouts) {
+        layout.query_scale = query_scale;
+    }
     t.validate();
     return t;
 }

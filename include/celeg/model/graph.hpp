@@ -54,6 +54,7 @@ struct AttentionSpec {
     double rope_theta = 0.0;
     double rotary_fraction = 1.0;
     KvSharingSpec kv_sharing;
+    float query_scale = 1.0f;
 
     int query_width() const { return query_heads * head_dim; }
     int key_value_width() const { return key_value_heads * head_dim; }

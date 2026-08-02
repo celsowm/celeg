@@ -61,7 +61,7 @@ int main() {
     const std::string granite_user_only = granite->format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
     CELEG_TEST_CHECK(granite_user_only ==
-        "<|start_of_role|>system<|end_of_role|>Knowledge Cutoff Date: April 2024. "
+        "<|startoftext|><|start_of_role|>system<|end_of_role|>Knowledge Cutoff Date: April 2024. "
         "You are Granite, developed by IBM. You are a helpful AI assistant."
         "<|end_of_text|>\n"
         "<|start_of_role|>user<|end_of_role|>Hello<|end_of_text|>\n"
@@ -74,7 +74,7 @@ int main() {
         },
         true);
     CELEG_TEST_CHECK(granite_with_system ==
-        "<|start_of_role|>system<|end_of_role|>You are helpful.<|end_of_text|>\n"
+        "<|startoftext|><|start_of_role|>system<|end_of_role|>You are helpful.<|end_of_text|>\n"
         "<|start_of_role|>user<|end_of_role|>Hi<|end_of_text|>\n"
         "<|start_of_role|>assistant<|end_of_role|>");
 
