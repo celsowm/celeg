@@ -74,6 +74,11 @@ std::vector<std::shared_ptr<CpuKvPagePool>> CpuModel::shared_kv_pools() const {
 void CpuModel::reset_session() { state_->reset(); }
 
 void CpuModel::prefill_session(const std::vector<int32_t>& tokens) {
+    prefill_session(tokens, {});
+}
+
+void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
+                               const PromptEmbedding& embeddings) {
     if (tokens.empty()) throw std::invalid_argument("CPU prefill needs at least one token");
     if (tokens.size() > static_cast<size_t>(state_->shared->max_context)) {
         throw std::invalid_argument("CPU prefill exceeds context");
@@ -83,11 +88,22 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens) {
             throw std::invalid_argument("CPU token out of range");
         }
     }
+    if (!embeddings.empty() &&
+        (embeddings.width <= 0 ||
+         embeddings.values.size() != embeddings.positions.size() *
+             static_cast<size_t>(embeddings.width))) {
+        throw std::invalid_argument("invalid CPU prompt embedding layout");
+    }
     state_->reset();
     state_->session_.phase = SessionPhase::Prefilling;
     state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
+    if (!embeddings.empty()) {
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
+            state_->forward_token(tokens[i], i + 1 == tokens.size(), &embeddings);
+        }
+    } else if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
             state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
             state_->forward_token(tokens[i], i + 1 == tokens.size());
@@ -215,6 +231,10 @@ void CpuModel::restore_session_prefix(CpuPrefixSnapshot snapshot,
 void CpuInferenceSession::reset() { owner_->reset_session(); }
 void CpuInferenceSession::prefill(const std::vector<int32_t>& tokens) {
     owner_->prefill_session(tokens);
+}
+void CpuInferenceSession::prefill(const std::vector<int32_t>& tokens,
+                                  const PromptEmbedding& embeddings) {
+    owner_->prefill_session(tokens, embeddings);
 }
 int32_t CpuInferenceSession::decode() { return owner_->decode_session(); }
 void CpuInferenceSession::eval_token(int32_t token) {

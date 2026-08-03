@@ -84,6 +84,12 @@ GgufRepository::GgufRepository(std::shared_ptr<GgufFile> gguf)
 }
 
 std::string GgufRepository::translate(std::string_view hf_name) const {
+    constexpr std::string_view language_model_prefix = "model.language_model.";
+    std::string normalized;
+    if (hf_name.starts_with(language_model_prefix)) {
+        normalized = "model." + std::string(hf_name.substr(language_model_prefix.size()));
+        hf_name = normalized;
+    }
     if (hf_name == "model.embed_tokens.weight") return "token_embd.weight";
     if (hf_name == "model.embedding_norm.weight") return "token_embd_norm.weight";
     if (hf_name == "model.norm.weight") return "output_norm.weight";

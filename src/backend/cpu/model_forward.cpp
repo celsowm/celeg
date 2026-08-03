@@ -29,12 +29,24 @@ void parallel_rows(CpuThreadPool& pool, size_t rows, const Body& body) {
 }
 }
 
-void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
+void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
+                                     const PromptEmbedding* embeddings) {
     if (session_.position_value >= shared->max_context) {
         throw std::runtime_error("CPU context limit reached");
     }
-    shared->linear.embedding(shared->weight_store.embedding, token, workspace_.hidden.data());
-    if (shared->shape.embedding_multiplier != 1.0f) {
+    const float* raw_embedding = embeddings
+        ? embeddings->at_position(static_cast<std::size_t>(session_.position_value))
+        : nullptr;
+    if (raw_embedding) {
+        if (embeddings->width != shared->shape.hidden) {
+            throw std::invalid_argument("raw embedding width does not match model hidden size");
+        }
+        std::copy(raw_embedding, raw_embedding + shared->shape.hidden,
+                  workspace_.hidden.begin());
+    } else {
+        shared->linear.embedding(shared->weight_store.embedding, token, workspace_.hidden.data());
+    }
+    if (!raw_embedding && shared->shape.embedding_multiplier != 1.0f) {
         for (float& value : workspace_.hidden) value *= shared->shape.embedding_multiplier;
     }
     if (shared->shape.has_per_layer_input) {
@@ -43,7 +55,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits) {
         workspace_.per_layer_input.resize(packed);
         workspace_.per_layer_context.resize(packed);
         workspace_.per_layer_gate.resize(static_cast<size_t>(shared->shape.per_layer_input_size));
-        shared->linear.embedding(shared->weight_store.per_layer_embedding, token,
+        shared->linear.embedding(shared->weight_store.per_layer_embedding,
+                                 raw_embedding ? 0 : token,
                                  workspace_.per_layer_input.data());
         const float token_scale = std::sqrt(static_cast<float>(shared->shape.per_layer_input_size));
         for (float& value : workspace_.per_layer_input) value *= token_scale;

@@ -5,6 +5,40 @@
 #include <stdexcept>
 #include <unordered_set>
 
+namespace {
+
+struct NormalizedContent {
+    std::string text;
+    std::vector<celeg::serve::MultimodalImage> images;
+};
+
+NormalizedContent normalize_content(
+    const std::optional<celeg::serve::protocol::ChatContentDto>& content) {
+    if (!content) return {};
+    if (std::holds_alternative<std::string>(*content)) {
+        return {std::get<std::string>(*content), {}};
+    }
+
+    NormalizedContent result;
+    for (const auto& part : std::get<std::vector<celeg::serve::protocol::ChatContentPartDto>>(*content)) {
+        if (part.type == "text") {
+            if (!part.text) throw std::invalid_argument("text content parts require text");
+            result.text += *part.text;
+        } else if (part.type == "image_url") {
+            if (!part.image_url || part.image_url->url.empty()) {
+                throw std::invalid_argument("image_url content parts require image_url.url");
+            }
+            result.text += "<|image|>";
+            result.images.push_back({part.image_url->url});
+        } else {
+            throw std::invalid_argument("unsupported content part type: " + part.type);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 namespace celeg::serve::protocol {
 
 ChatRole role_from_string(const std::string& role) {
@@ -69,6 +103,10 @@ void validate_chat_request(const ChatCompletionRequest& request,
     }
     std::unordered_set<std::string> pending_tool_calls;
     for (const ChatMessageDto& message : request.messages) {
+        const NormalizedContent normalized = normalize_content(message.content);
+        if (!normalized.images.empty() && !capabilities.vision) {
+            throw std::invalid_argument("image content is not supported by this model");
+        }
         const ChatRole role = role_from_string(message.role);
         if (role == ChatRole::Developer && !capabilities.developer_messages) {
             throw std::invalid_argument("developer messages are not supported by this chat profile");
@@ -133,8 +171,11 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                 tool.function.strict.value_or(false)}});
         }
     }
+    std::vector<celeg::serve::MultimodalImage> images;
     for (const ChatMessageDto& message : request.messages) {
-        celeg::ChatMessage mapped{role_from_string(message.role), message.content,
+        const NormalizedContent normalized = normalize_content(message.content);
+        images.insert(images.end(), normalized.images.begin(), normalized.images.end());
+        celeg::ChatMessage mapped{role_from_string(message.role), normalized.text,
                                   {}, message.tool_call_id, std::nullopt};
         if (message.tool_calls) {
             for (const ToolCallDto& call : *message.tool_calls) {
@@ -149,6 +190,15 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         messages, tools, chat_template, /*add_generation_prompt=*/true);
 
     GenerateRequest generate_request;
+    generate_request.rendered_prompt = prompt_text;
+    generate_request.images = std::move(images);
+    if (!generate_request.images.empty()) {
+        const auto image_token = tokenizer.token_id("<|image|>");
+        if (!image_token) {
+            throw std::invalid_argument("Gemma image marker is absent from the tokenizer vocabulary");
+        }
+        generate_request.image_token_id = *image_token;
+    }
     generate_request.prompt_tokens = tokenizer.encode(prompt_text, /*add_bos=*/false);
     generate_request.eos_token_id = eos_token_id;
     if (request.max_tokens && *request.max_tokens <= 0) {
@@ -307,7 +357,8 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
         std::vector<celeg::ChatMessage> messages;
         messages.reserve(request.messages->size());
         for (const ChatMessageDto& message : *request.messages) {
-        messages.push_back({role_from_string(message.role), message.content.value_or("")});
+            messages.push_back({role_from_string(message.role),
+                                normalize_content(message.content).text});
         }
         const std::string prompt_text = celeg::render_chat(
             messages, chat_template, /*add_generation_prompt=*/true);

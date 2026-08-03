@@ -10,6 +10,12 @@
 #include <utility>
 
 namespace celeg {
+
+std::optional<int32_t> BpeTokenizer::token_id(std::string_view text) const {
+    const auto it = vocab_.find(std::string(text));
+    if (it == vocab_.end()) return std::nullopt;
+    return it->second;
+}
 namespace {
 
 void append_utf8(std::string& out, uint32_t cp) {

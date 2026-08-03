@@ -61,6 +61,10 @@ PackedSessionContext packed_session_context(CudaModel& model) {
 
 void CudaInferenceSession::reset(bool allocate_local_kv) { owner_->state_->reset(allocate_local_kv); }
 void CudaInferenceSession::prefill(const std::vector<int32_t>& tokens) { owner_->state_->prefill(tokens); }
+void CudaInferenceSession::prefill(const std::vector<int32_t>& tokens,
+                                   const PromptEmbedding& embeddings) {
+    owner_->state_->prefill(tokens, embeddings);
+}
 void CudaInferenceSession::prefill_chunk(const std::vector<int32_t>& tokens, bool begin, bool finalize) {
     owner_->state_->prefill_chunk(tokens, begin, finalize);
 }

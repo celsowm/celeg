@@ -78,6 +78,8 @@ struct CudaCompiledModel {
 
     void reset(bool allocate_local_kv = true);
     void prefill(const std::vector<int32_t>& tokens);
+    void prefill(const std::vector<int32_t>& tokens,
+                 const PromptEmbedding& embeddings);
     void prefill_chunk(const std::vector<int32_t>& tokens,
                        bool begin, bool finalize);
     void prefill_chunk_paged(const std::vector<int32_t>& tokens,
@@ -162,7 +164,8 @@ struct CudaCompiledModel {
     void ensure_moe_experts_resident_packed(
         int layer, const int* sel_dev, int rows, cudaStream_t stream,
         const float* route_scores_dev);
-    void forward_token_host(int32_t token, bool compute_logits);
+    void forward_token_host(int32_t token, bool compute_logits,
+                            const float* raw_embedding = nullptr);
     void forward_token_paged_host(int32_t token, bool compute_logits,
                                   PhysicalPagedKvCache& paged_kv,
                                   const uint32_t* device_page_table,

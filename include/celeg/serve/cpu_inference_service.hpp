@@ -15,7 +15,8 @@ public:
     CpuInferenceService(const std::string& model_path,
                         int max_context,
                         CpuModelOptions model_options = {},
-                        CpuConcurrentEngineOptions engine_options = {});
+                        CpuConcurrentEngineOptions engine_options = {},
+                        VisualEmbeddingProvider visual_embeddings = {});
 
     RequestId submit(GenerateRequest request) override;
     GenerateEvent poll(RequestId id, std::size_t max_tokens) override;
@@ -34,6 +35,7 @@ private:
     CpuConcurrentEngine engine_;
     ModelInfo model_info_;
     RequestLifecycle lifecycle_;
+    VisualEmbeddingProvider visual_embeddings_;
 };
 
 } // namespace celeg::serve

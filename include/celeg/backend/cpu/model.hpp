@@ -72,6 +72,8 @@ class CpuInferenceSession {
 public:
     void reset();
     void prefill(const std::vector<int32_t>& tokens);
+    void prefill(const std::vector<int32_t>& tokens,
+                 const PromptEmbedding& embeddings);
     int32_t decode();
     // Advances the session with a caller-supplied token without sampling.
     // Intended for direct-evaluation benchmarks and deterministic replay.
@@ -162,6 +164,8 @@ private:
 
     void reset_session();
     void prefill_session(const std::vector<int32_t>& tokens);
+    void prefill_session(const std::vector<int32_t>& tokens,
+                         const PromptEmbedding& embeddings);
     int32_t decode_session();
     void eval_token_session(int32_t token);
     void set_session_generation(GenerationConfig generation);

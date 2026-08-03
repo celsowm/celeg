@@ -32,6 +32,38 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
     session_.metrics_.decoded_tokens = 0;
 }
 
+void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
+                                const PromptEmbedding& embeddings) {
+    if (tokens.empty()) throw std::invalid_argument("prefill needs at least one token");
+    if (tokens.size() > static_cast<size_t>(max_context_)) {
+        throw std::invalid_argument("prefill exceeds max_context");
+    }
+    if (!embeddings.empty() &&
+        (embeddings.width <= 0 ||
+         embeddings.values.size() != embeddings.positions.size() *
+             static_cast<size_t>(embeddings.width))) {
+        throw std::invalid_argument("invalid CUDA prompt embedding layout");
+    }
+    reset();
+    session_.phase_ = SessionPhase::Prefilling;
+    session_.metrics_ = {};
+    const auto begin = std::chrono::steady_clock::now();
+    for (size_t index = 0; index < tokens.size(); ++index) {
+        const float* raw = embeddings.at_position(index);
+        forward_token_host(tokens[index], index + 1 == tokens.size(), raw);
+    }
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &session_.position_,
+                               sizeof(session_.position_), cudaMemcpyHostToDevice,
+                               stream_.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
+    const auto end = std::chrono::steady_clock::now();
+    session_.metrics_.last_prefill_ms =
+        std::chrono::duration<double, std::milli>(end - begin).count();
+    session_.metrics_.prefill_tokens = tokens.size();
+    session_.phase_ = SessionPhase::Ready;
+    session_.active_segmented_attention_ = use_segmented_attention(session_.position_);
+}
+
 void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
                               bool begin, bool finalize) {
     if (tokens.empty()) {

@@ -153,7 +153,8 @@ struct CpuSchedulerDriver {
     }
 
     void cache_completed_prefix_locked(Request& request) {
-        if (!prefix_cache || request.prefix_inserted || !request.session ||
+        if (!prefix_cache || !request.options.prompt_embedding.empty() ||
+            request.prefix_inserted || !request.session ||
             request.prompt_offset != request.prompt.size()) return;
         try {
             request.prefix_inserted = prefix_cache->insert(
@@ -201,7 +202,7 @@ struct CpuSchedulerDriver {
                 request->session = base_model.clone_session_on_node(request->numa_node);
                 request->session->session().set_generation_config(request->options.generation);
                 request->status = RequestStatus::Prefill;
-                if (prefix_cache) {
+                if (prefix_cache && request->options.prompt_embedding.empty()) {
                     if (auto match = prefix_cache->acquire(
                             request->prompt, request->numa_node)) {
                         const bool exact = match->matched_tokens == request->prompt.size();
@@ -343,11 +344,22 @@ struct CpuSchedulerDriver {
     bool run_prefill_batch(size_t& budget) {
         std::vector<std::shared_ptr<Request>> plan;
         bool chunked = false;
+        bool embedded = false;
         size_t chunk_tokens = 0;
         {
             std::lock_guard lock(mutex);
             auto candidates = plan_prefill_locked(engine_options.max_active_requests);
-            if (candidates.size() == 1) {
+            for (const auto& candidate : candidates) {
+                if (!candidate->options.prompt_embedding.empty()) {
+                    plan = {candidate};
+                    embedded = true;
+                    break;
+                }
+            }
+            if (embedded) {
+                budget = 0;
+            }
+            if (!embedded && candidates.size() == 1) {
                 const auto& request = candidates.front();
                 const size_t remaining = request->prompt.size() - request->prompt_offset;
                 if (remaining >= engine_options.long_prefill_threshold &&
@@ -358,7 +370,7 @@ struct CpuSchedulerDriver {
                     plan = std::move(candidates);
                 }
             }
-            if (!chunked) {
+            if (!embedded && !chunked) {
                 const size_t limit = std::min({budget,
                     engine_options.max_prefill_batch,
                     engine_options.max_active_requests});
@@ -367,6 +379,37 @@ struct CpuSchedulerDriver {
             }
         }
         if (plan.empty()) return false;
+
+        if (embedded) {
+            const auto& request = plan.front();
+            try {
+                request->session->session().prefill(
+                    request->prompt, request->options.prompt_embedding);
+                std::lock_guard lock(mutex);
+                if (request->cancel_requested) {
+                    request->status = RequestStatus::Cancelled;
+                    request->session.reset();
+                    ++metrics.cancelled_requests;
+                } else if (request->status != RequestStatus::Cancelled) {
+                    request->prompt_offset = request->prompt.size();
+                    request->status = RequestStatus::Decoding;
+                    metrics.prefill_tokens += request->prompt.size();
+                    cache_completed_prefix_locked(*request);
+                }
+                refresh_counts_locked();
+            } catch (const std::exception& error) {
+                std::lock_guard lock(mutex);
+                last_error_text = error.what();
+                request->status = request->cancel_requested
+                    ? RequestStatus::Cancelled : RequestStatus::Failed;
+                request->error = error.what();
+                request->session.reset();
+                if (request->status == RequestStatus::Failed) ++metrics.failed_requests;
+                else ++metrics.cancelled_requests;
+                refresh_counts_locked();
+            }
+            return true;
+        }
 
         if (chunked) {
             const auto& request = plan.front();

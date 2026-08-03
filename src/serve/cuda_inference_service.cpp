@@ -1,4 +1,5 @@
 #include "celeg/backend/cuda/cuda_inference_service.hpp"
+#include "celeg/serve/visual_request.hpp"
 
 #include <filesystem>
 #include <limits>
@@ -25,15 +26,18 @@ RequestStatus map_status(celeg::RequestStatus status) {
 CudaInferenceService::CudaInferenceService(std::string model_path,
                                            int max_context,
                                            CudaModelOptions model_options,
-                                           ConcurrentEngineOptions engine_options)
+                                           ConcurrentEngineOptions engine_options,
+                                           VisualEmbeddingProvider visual_embeddings)
     : engine_(model_path, max_context, std::move(model_options),
-              std::move(engine_options)) {
+              std::move(engine_options)),
+      visual_embeddings_(std::move(visual_embeddings)) {
     model_info_.name = std::filesystem::path(model_path).stem().string();
     model_info_.backend = "cuda";
     model_info_.max_context = max_context;
 }
 
 RequestId CudaInferenceService::submit(GenerateRequest request) {
+    materialize_visual_prompt(request, visual_embeddings_);
     if (request.max_output_tokens > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         throw std::invalid_argument("max_output_tokens exceeds CUDA request limit");
     }
@@ -42,6 +46,7 @@ RequestId CudaInferenceService::submit(GenerateRequest request) {
     options.eos_token = request.eos_token_id;
     options.priority = request.priority;
     options.generation = request.generation;
+    options.prompt_embedding = std::move(request.prompt_embedding);
 
     const ConcurrentEngine::RequestId id =
         engine_.submit(std::move(request.prompt_tokens), options);

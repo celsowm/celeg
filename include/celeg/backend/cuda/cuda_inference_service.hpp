@@ -16,7 +16,8 @@ public:
     CudaInferenceService(std::string model_path,
                          int max_context,
                          CudaModelOptions model_options = {},
-                         ConcurrentEngineOptions engine_options = {});
+                         ConcurrentEngineOptions engine_options = {},
+                         VisualEmbeddingProvider visual_embeddings = {});
 
     RequestId submit(GenerateRequest request) override;
     GenerateEvent poll(RequestId id, std::size_t max_tokens) override;
@@ -35,6 +36,7 @@ private:
     ConcurrentEngine engine_;
     ModelInfo model_info_;
     RequestLifecycle lifecycle_;
+    VisualEmbeddingProvider visual_embeddings_;
 };
 
 } // namespace celeg::serve

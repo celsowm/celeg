@@ -72,7 +72,7 @@ if(NOT MSVC)
 endif()
 target_link_libraries(celeg_base PUBLIC Threads::Threads)
 if(WIN32)
-    target_link_libraries(celeg_base PUBLIC winhttp)
+    target_link_libraries(celeg_base PUBLIC winhttp windowscodecs ole32 shlwapi)
 endif()
 
 add_library(celeg_runtime INTERFACE)
@@ -146,6 +146,7 @@ if(CELEG_ENABLE_SERVE)
         target_compile_options(celeg_serve_protocol PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     target_link_libraries(celeg_serve_protocol PUBLIC celeg_runtime glaze::glaze)
+
 endif()
 
 add_library(celeg_serve_core src/serve/generation_dispatcher.cpp)
@@ -400,6 +401,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cuda/weight_policy.hpp
     include/celeg/backend/cuda/weights_loader.hpp
     include/celeg/model/runtime_types.hpp
+    include/celeg/model/visual_embeddings.hpp
     include/celeg/model/session.hpp
     include/celeg/model/weights/roles.hpp
     include/celeg/backend/cuda/model.hpp
@@ -585,6 +587,14 @@ if(CELEG_BUILD_TESTS)
         target_link_libraries(chat_protocol_mapping_test PRIVATE celeg_serve_protocol)
         add_test(NAME chat_protocol_mapping_test COMMAND chat_protocol_mapping_test)
     endif()
+    add_executable(visual_request_test tests/visual_request_test.cpp)
+    target_link_libraries(visual_request_test PRIVATE celeg_runtime)
+    target_include_directories(visual_request_test PRIVATE include tests)
+    add_test(NAME visual_request_test COMMAND visual_request_test)
+    add_executable(gemma4_vision_test tests/gemma4_vision_test.cpp)
+    target_link_libraries(gemma4_vision_test PRIVATE celeg_base)
+    target_include_directories(gemma4_vision_test PRIVATE include tests)
+    add_test(NAME gemma4_vision_test COMMAND gemma4_vision_test)
     add_executable(batch_planner_test tests/batch_planner_test.cpp)
     target_link_libraries(batch_planner_test PRIVATE celeg_runtime)
     add_test(NAME batch_planner_test COMMAND batch_planner_test)

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -28,6 +29,7 @@ public:
     int32_t bos_id() const { return bos_id_; }
     int32_t eos_id() const { return eos_id_; }
     int32_t pad_id() const { return pad_id_; }
+    std::optional<int32_t> token_id(std::string_view text) const;
 
 private:
     struct TokenizerPolicy {

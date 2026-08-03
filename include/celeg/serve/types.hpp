@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/model/runtime_types.hpp"
+#include "celeg/model/visual_embeddings.hpp"
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/request_types.hpp"
 
@@ -13,6 +14,10 @@
 namespace celeg::serve {
 
 using RequestId = celeg::RequestId;
+
+struct MultimodalImage {
+    std::string data_url;
+};
 
 // Backend-neutral request lifecycle shared by both inference backends.
 using RequestStatus = celeg::RequestStatus;
@@ -28,6 +33,10 @@ enum class FinishReason : std::uint8_t {
 
 struct GenerateRequest {
     std::vector<std::int32_t> prompt_tokens;
+    std::string rendered_prompt;
+    std::vector<MultimodalImage> images;
+    std::int32_t image_token_id = -1;
+    PromptEmbedding prompt_embedding;
     GenerationConfig generation;
     std::size_t max_output_tokens = 128;
     std::int32_t eos_token_id = 7;

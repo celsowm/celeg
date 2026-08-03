@@ -184,6 +184,48 @@ int main() {
         CELEG_TEST_CHECK(resolved.graph.final_logit_softcap == 30.0f);
         CELEG_TEST_CHECK(resolved.chat_profile_id == "gemma4-instruct");
     }
+
+    celeg::CheckpointMetadata gemma_gguf;
+    gemma_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
+    gemma_gguf.values["general.architecture"] = std::string("gemma4");
+    gemma_gguf.values["gemma4.embedding_length"] = int64_t(1536);
+    gemma_gguf.values["gemma4.feed_forward_length"] = int64_t(6144);
+    gemma_gguf.values["gemma4.block_count"] = int64_t(35);
+    gemma_gguf.values["gemma4.vocab_size"] = int64_t(262144);
+    gemma_gguf.values["gemma4.context_length"] = int64_t(131072);
+    gemma_gguf.values["gemma4.attention.head_count"] = int64_t(8);
+    gemma_gguf.values["gemma4.attention.head_count_kv"] = int64_t(1);
+    gemma_gguf.values["gemma4.attention.key_length"] = int64_t(512);
+    gemma_gguf.values["gemma4.attention.key_length_swa"] = int64_t(256);
+    gemma_gguf.values["gemma4.attention.layer_norm_rms_epsilon"] = 1.0e-6;
+    gemma_gguf.values["gemma4.attention.sliding_window"] = int64_t(512);
+    gemma_gguf.values["gemma4.attention.shared_kv_layers"] = int64_t(20);
+    gemma_gguf.values["gemma4.embedding_length_per_layer_input"] = int64_t(256);
+    gemma_gguf.values["gemma4.final_logit_softcapping"] = 30.0;
+    gemma_gguf.values["gemma4.rope.freq_base"] = 1000000.0;
+    gemma_gguf.values["gemma4.rope.freq_base_swa"] = 10000.0;
+    gemma_gguf.values["gemma4.attention.sliding_window_pattern"] =
+        std::vector<int64_t>(35, 1);
+    auto& gguf_schedule = std::get<std::vector<int64_t>>(
+        gemma_gguf.values["gemma4.attention.sliding_window_pattern"]);
+    gguf_schedule[5] = 0;
+    gguf_schedule.back() = 0;
+    gemma_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(2);
+    gemma_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(1);
+    gemma_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
+    celeg::CheckpointView gemma_gguf_checkpoint;
+    gemma_gguf_checkpoint.metadata = gemma_gguf;
+    const auto& gemma_gguf_architecture = catalog->select(gemma_gguf);
+    const auto gemma_gguf_model = gemma_gguf_architecture.resolve(gemma_gguf_checkpoint);
+    CELEG_TEST_CHECK(gemma_gguf_model.definition.source_format == "gguf");
+    CELEG_TEST_CHECK(gemma_gguf_model.topology.hidden == 1536);
+    CELEG_TEST_CHECK(gemma_gguf_model.topology.intermediate == 6144);
+    CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].mask ==
+                     celeg::AttentionMaskKind::Causal);
+    CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[6].mask ==
+                     celeg::AttentionMaskKind::SlidingCausal);
+    CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].head_dim == 512);
+
     auto malformed_gemma = gemma_metadata(1536, 6144, 35, 1, 20, "bad");
     malformed_gemma.values["text_config.model_type"] = std::string("gemma4_vision");
     bool malformed_rejected = false;

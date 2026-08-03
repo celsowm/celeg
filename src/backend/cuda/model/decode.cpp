@@ -7,18 +7,31 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 namespace celeg {
 
-void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits) {
+void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
+                                           const float* raw_embedding) {
     if (session_.position_ >= max_context_) {
         throw std::runtime_error("context limit reached");
     }
-    resources_.weight_layout_->embed_token(
-        token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
-    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
-                 resources_.shape_.embedding_multiplier, stream_.get());
-    initialize_per_layer_input_host(token);
+    if (raw_embedding) {
+        std::vector<__nv_bfloat16> converted(static_cast<size_t>(resources_.shape_.hidden));
+        for (int index = 0; index < resources_.shape_.hidden; ++index) {
+            converted[static_cast<size_t>(index)] = __float2bfloat16(raw_embedding[index]);
+        }
+        CELEG_CUDA(cudaMemcpyAsync(workspace_.hidden_.data(), converted.data(),
+                                   converted.size() * sizeof(__nv_bfloat16),
+                                   cudaMemcpyHostToDevice, stream_.get()));
+        initialize_per_layer_input_host(0);
+    } else {
+        resources_.weight_layout_->embed_token(
+            token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
+        launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+                     resources_.shape_.embedding_multiplier, stream_.get());
+        initialize_per_layer_input_host(token);
+    }
 
     int layer_idx = 0;
     for (Layer& layer : resources_.layers_) {

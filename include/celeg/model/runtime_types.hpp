@@ -6,6 +6,25 @@
 
 namespace celeg {
 
+// Raw multimodal inputs replace selected token positions during prefill.
+// Values are row-major by override, with one vector per position.
+struct PromptEmbedding {
+    int width = 0;
+    std::vector<std::size_t> positions;
+    std::vector<float> values;
+
+    bool empty() const { return positions.empty(); }
+
+    const float* at_position(std::size_t position) const {
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            if (positions[index] == position) {
+                return values.data() + index * static_cast<std::size_t>(width);
+            }
+        }
+        return nullptr;
+    }
+};
+
 // Public generation limit shared by CPU and CUDA samplers.
 inline constexpr int kMaxTopK = 128;
 

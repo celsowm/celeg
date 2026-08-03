@@ -36,9 +36,22 @@ struct ToolCallDto {
     FunctionCallDto function;
 };
 
+struct ChatImageUrlDto {
+    std::string url;
+    std::optional<std::string> detail;
+};
+
+struct ChatContentPartDto {
+    std::string type;
+    std::optional<std::string> text;
+    std::optional<ChatImageUrlDto> image_url;
+};
+
+using ChatContentDto = std::variant<std::string, std::vector<ChatContentPartDto>>;
+
 struct ChatMessageDto {
     std::string role;
-    std::optional<std::string> content;
+    std::optional<ChatContentDto> content;
     std::optional<std::vector<ToolCallDto>> tool_calls;
     std::optional<std::string> tool_call_id;
 };

@@ -204,7 +204,8 @@ struct CpuCompiledModel {
     void allocate_state();
     void allocate_activations();
     void reset();
-    void forward_token(int32_t token, bool compute_logits);
+    void forward_token(int32_t token, bool compute_logits,
+                       const PromptEmbedding* embeddings = nullptr);
     void forward_chunk(std::span<const int32_t> tokens, bool compute_logits);
     static void forward_batch(std::span<CpuCompiledModel* const> sessions,
                               std::span<const int32_t> tokens,

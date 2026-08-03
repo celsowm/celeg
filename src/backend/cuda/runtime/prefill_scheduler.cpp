@@ -20,7 +20,6 @@ bool CudaSchedulerDriver::run_prefill_work() {
             planner_.order_prefill(lane_snapshots_locked());
         for (const int lane_index : ordered) {
             auto& lane_ptr = lanes_.at(static_cast<size_t>(lane_index));
-            if (token_budget <= 0) break;
             Lane& lane = *lane_ptr;
             if (lane.request_id == 0) continue;
             Request& request = registry_.at(lane.request_id);
@@ -30,17 +29,28 @@ bool CudaSchedulerDriver::run_prefill_work() {
                 continue;
             }
             const size_t remaining = request.prompt.size() - request.prefill_offset;
-            const size_t count = std::min<size_t>(
-                remaining, std::min(engine_options_.prefill_chunk_tokens,
-                                    token_budget));
+            const bool embedded = !request.options.prompt_embedding.empty();
+            const size_t count = embedded
+                ? remaining
+                : std::min<size_t>(remaining, std::min(
+                    engine_options_.prefill_chunk_tokens,
+                    token_budget));
             if (count == 0) continue;
             work.push_back({&lane, request.id, request.prefill_offset, count,
                             request.prefill_offset == 0,
                             count == remaining});
+            if (embedded) {
+                token_budget = 0;
+                break;
+            }
             token_budget -= static_cast<int>(count);
         }
     }
-    if (packed_executor_ && engine_options_.ragged_packed_prefill &&
+    const bool has_embedded = std::any_of(work.begin(), work.end(), [&](const Work& item) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !registry_.at(item.id).options.prompt_embedding.empty();
+    });
+    if (!has_embedded && packed_executor_ && engine_options_.ragged_packed_prefill &&
         work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)) {
         std::vector<Work> active;
         std::vector<PackedSessionContext> models;
@@ -111,14 +121,26 @@ bool CudaSchedulerDriver::run_prefill_work() {
         try {
             std::vector<int32_t> chunk;
             std::vector<uint32_t> page_table;
+            bool embedded = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 Request& request = registry_.at(item.id);
+                embedded = !request.options.prompt_embedding.empty();
                 chunk.assign(request.prompt.begin() + static_cast<ptrdiff_t>(item.begin),
                              request.prompt.begin() + static_cast<ptrdiff_t>(item.begin + item.count));
                 page_table = request.pages;
             }
-            if (packed_executor_) {
+            if (embedded) {
+                PromptEmbedding embeddings;
+                std::vector<int32_t> prompt;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    const Request& request = registry_.at(item.id);
+                    prompt = request.prompt;
+                    embeddings = request.options.prompt_embedding;
+                }
+                item.lane->model->session().prefill(prompt, embeddings);
+            } else if (packed_executor_) {
                 item.lane->model->session().prefill_chunk_paged(
                     chunk, item.first, item.final, *paged_kv_, page_table);
             } else if (item.first && item.final) {

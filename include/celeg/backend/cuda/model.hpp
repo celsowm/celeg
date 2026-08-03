@@ -23,6 +23,8 @@ class CudaInferenceSession {
 public:
     void reset(bool allocate_local_kv = true);
     void prefill(const std::vector<int32_t>& tokens);
+    void prefill(const std::vector<int32_t>& tokens,
+                 const PromptEmbedding& embeddings);
     void prefill_chunk(const std::vector<int32_t>& tokens,
                        bool begin, bool finalize);
     void prefill_chunk_paged(const std::vector<int32_t>& tokens,

@@ -70,7 +70,7 @@ int main() {
     // wire, and present ones must survive a write/read cycle.
     protocol::ChatCompletionRequest request;
     request.model = "lfm2.5-test";
-    request.messages.push_back({"user", "hi"});
+    request.messages.push_back({"user", std::string("hi")});
     request.max_tokens = 16;
     request.temperature = 0.5;
     request.top_p = 0.9;
@@ -84,7 +84,8 @@ int main() {
     CELEG_TEST_CHECK(parsed.model == "lfm2.5-test");
     CELEG_TEST_CHECK(parsed.messages.size() == 1);
     CELEG_TEST_CHECK(parsed.messages[0].role == "user");
-    CELEG_TEST_CHECK(parsed.messages[0].content == "hi");
+    CELEG_TEST_CHECK(parsed.messages[0].content.has_value());
+    CELEG_TEST_CHECK(std::get<std::string>(*parsed.messages[0].content) == "hi");
     CELEG_TEST_CHECK(parsed.max_tokens && *parsed.max_tokens == 16);
     CELEG_TEST_CHECK(parsed.seed && *parsed.seed == 42);
     CELEG_TEST_CHECK(!parsed.stream.has_value());
@@ -173,6 +174,20 @@ int main() {
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.role.has_value());
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.content.has_value());
     CELEG_TEST_CHECK(final_chunk.choices[0].finish_reason && *final_chunk.choices[0].finish_reason == "stop");
+
+    protocol::ChatCompletionRequest image_request;
+    image_request.model = "gemma4-test";
+    image_request.messages.push_back({
+        "user", protocol::ChatContentDto{std::vector<protocol::ChatContentPartDto>{
+            {"text", std::string("describe"), std::nullopt},
+            {"image_url", std::nullopt,
+             protocol::ChatImageUrlDto{"data:image/png;base64,AA==", std::nullopt}}}}});
+    const std::string image_json = protocol::to_json(image_request);
+    const auto image_round_trip =
+        protocol::from_json<protocol::ChatCompletionRequest>(image_json);
+    CELEG_TEST_CHECK(image_round_trip.messages[0].content.has_value());
+    CELEG_TEST_CHECK(std::holds_alternative<std::vector<protocol::ChatContentPartDto>>(
+        *image_round_trip.messages[0].content));
 
     std::cout << "chat_protocol_mapping_test: ok\n";
     return 0;

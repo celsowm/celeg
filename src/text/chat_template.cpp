@@ -252,13 +252,13 @@ ChatProfileCatalog make_chat_profile_catalog() {
     ChatProfileCatalog catalog;
     catalog.add("lfm2-instruct", std::make_unique<Lfm2InstructChatTemplate>(),
                 make_lfm2_tool_call_codec(),
-                ChatCapabilities{true, true, true, true, true});
+                ChatCapabilities{false, true, true, true, true, true});
     catalog.add("granite-instruct", std::make_unique<GraniteInstructChatTemplate>(),
                 nullptr,
-                ChatCapabilities{false, false, false, false, false});
+                ChatCapabilities{false, false, false, false, false, false});
     catalog.add("gemma4-instruct", std::make_unique<Gemma4InstructChatTemplate>(),
                 make_gemma4_tool_call_codec(),
-                ChatCapabilities{true, true, true, true, true});
+                ChatCapabilities{true, true, true, true, true, true});
     catalog.freeze();
     return catalog;
 }

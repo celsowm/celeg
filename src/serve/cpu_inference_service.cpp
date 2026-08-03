@@ -1,4 +1,5 @@
 #include "celeg/serve/cpu_inference_service.hpp"
+#include "celeg/serve/visual_request.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -9,20 +10,24 @@ namespace celeg::serve {
 CpuInferenceService::CpuInferenceService(const std::string& model_path,
                                          int max_context,
                                          CpuModelOptions model_options,
-                                         CpuConcurrentEngineOptions engine_options)
+                                         CpuConcurrentEngineOptions engine_options,
+                                         VisualEmbeddingProvider visual_embeddings)
     : engine_(model_path, max_context, std::move(model_options),
-              std::move(engine_options)) {
+              std::move(engine_options)),
+      visual_embeddings_(std::move(visual_embeddings)) {
     model_info_.name = std::filesystem::path(model_path).stem().string();
     model_info_.backend = "cpu";
     model_info_.max_context = max_context;
 }
 
 RequestId CpuInferenceService::submit(GenerateRequest request) {
+    materialize_visual_prompt(request, visual_embeddings_);
     ConcurrentRequestOptions options;
     options.max_new_tokens = request.max_output_tokens;
     options.eos_token = request.eos_token_id;
     options.priority = request.priority;
     options.generation = request.generation;
+    options.prompt_embedding = std::move(request.prompt_embedding);
 
     const RequestId id =
         engine_.submit(std::move(request.prompt_tokens), options);

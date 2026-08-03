@@ -120,8 +120,12 @@ bool CudaSchedulerDriver::admit_requests_locked() {
             engine_options_.scheduler_policy == SchedulerPolicy::GuaranteedNoEvict
                 ? request.prompt.size() + static_cast<size_t>(request.options.max_new_tokens)
                 : request.prompt.size() + static_cast<size_t>(engine_options_.page_tokens);
-        PrefixAcquireResult prefix = prefix_cache_->acquire(
-            request.prompt, reserved_tokens);
+        PrefixAcquireResult prefix;
+        if (request.options.prompt_embedding.empty()) {
+            prefix = prefix_cache_->acquire(request.prompt, reserved_tokens);
+        } else {
+            prefix.status = PrefixAcquireStatus::Miss;
+        }
         if (prefix.status == PrefixAcquireStatus::OutOfMemory) break;
 
         const bool prefix_hit = prefix.status == PrefixAcquireStatus::Hit;
@@ -210,7 +214,8 @@ void CudaSchedulerDriver::finish_request_locked(Request& request,
 
 void CudaSchedulerDriver::complete_prefill_locked(Request& request, Lane& lane) {
     request.paged_ready = packed_executor_ != nullptr;
-    if (packed_executor_ && prefix_cache_->enabled()) {
+    if (packed_executor_ && prefix_cache_->enabled() &&
+        request.options.prompt_embedding.empty()) {
         PrefixState state = lane.model->persistence().export_prefix_state();
         (void)prefix_cache_->insert_or_update(
             request.prompt, request.pages, std::move(state));

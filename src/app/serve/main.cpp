@@ -1,12 +1,15 @@
 #include "App.h"
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/checkpoint/downloader.hpp"
+#include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/serve/cpu_inference_service.hpp"
 #ifdef CELEG_SERVE_CUDA
 #include "celeg/backend/cuda/cuda_inference_service.hpp"
 #endif
 #include "celeg/serve/generation_dispatcher.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/models/gemma4/vision.hpp"
 #include "routes/chat_completions.hpp"
 #include "routes/docs.hpp"
 #include "routes/health.hpp"
@@ -32,6 +35,8 @@ struct Args {
     int context = 4096;
     int threads = 0;
     std::string backend = "cpu";
+    std::string repo;
+    std::string quant = "Q4_K_M";
 };
 
 Args parse_args(int argc, char** argv) {
@@ -48,15 +53,20 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--threads") args.threads = std::stoi(value());
         else if (key == "--backend") args.backend = value();
+        else if (key == "--repo") args.repo = value();
+        else if (key == "--quant") args.quant = value();
         else if (key == "--help") {
-            std::cout << "celeg-serve --model DIR [--port 8080] [--context 4096] "
-                         "[--threads N] [--backend cpu|cuda] [--served-model-name NAME]\n";
+            std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--port 8080] [--context 4096] "
+                         "[--threads N] [--backend cpu|cuda] "
+                         "[--served-model-name NAME]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + key);
         }
     }
-    if (args.model_dir.empty()) throw std::runtime_error("--model is required");
+    if (args.model_dir.empty() == args.repo.empty()) {
+        throw std::runtime_error("exactly one of --model or --repo is required");
+    }
     return args;
 }
 
@@ -65,7 +75,11 @@ Args parse_args(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
-        const std::filesystem::path model(args.model_dir);
+        const std::filesystem::path model = args.repo.empty()
+            ? std::filesystem::path(args.model_dir)
+            : celeg::resolve_hf_gguf(args.repo, args.quant);
+        const bool direct_gguf = std::filesystem::is_regular_file(model) &&
+            model.extension() == ".gguf";
 
         const celeg::detail::ModelBootstrap bootstrap = celeg::detail::load_model_bootstrap(model);
         const auto& model_definition = bootstrap.model.definition;
@@ -76,11 +90,23 @@ int main(int argc, char** argv) {
 
         const auto chat_catalog = celeg::make_chat_profile_catalog();
         const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
-        const celeg::BpeTokenizer tokenizer((model / "tokenizer.json").string());
+        const auto* gguf_repository = dynamic_cast<const celeg::GgufRepository*>(
+            bootstrap.checkpoint.repository.get());
+        const celeg::BpeTokenizer tokenizer = gguf_repository
+            ? celeg::BpeTokenizer(celeg::BpeTokenizer::FromGguf{}, gguf_repository->file())
+            : celeg::BpeTokenizer((std::filesystem::is_directory(model)
+                ? model / "tokenizer.json" : model.parent_path() / "tokenizer.json").string());
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
         const std::int32_t eos_token_id = model_definition.tokens.eos;
+
+        celeg::VisualEmbeddingProvider visual_embeddings;
+        const std::filesystem::path projector = model.parent_path() / "mmproj-BF16.gguf";
+        if (bootstrap.model.chat_profile_id == "gemma4-instruct" &&
+            std::filesystem::is_regular_file(projector)) {
+            visual_embeddings = celeg::make_gemma4_visual_embedding_provider(projector);
+        }
 
         std::unique_ptr<celeg::serve::ServiceBundle> service;
         if (args.backend == "cpu") {
@@ -90,21 +116,26 @@ int main(int argc, char** argv) {
             engine_options.worker_thread = false;
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CpuInferenceService>(
-                    (model / "model.safetensors").string(), args.context,
-                    model_options, engine_options));
+                    (direct_gguf ? model : model / "model.safetensors").string(), args.context,
+                    model_options, engine_options, visual_embeddings));
         } else if (args.backend == "cuda") {
 #ifdef CELEG_SERVE_CUDA
             celeg::ConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CudaInferenceService>(
-                    model.string(), args.context, celeg::CudaModelOptions{}, engine_options));
+                    model.string(), args.context, celeg::CudaModelOptions{}, engine_options,
+                    visual_embeddings));
 #else
             throw std::runtime_error("CUDA serving is not available in this build");
 #endif
         } else {
             throw std::runtime_error("--backend must be cpu or cuda");
         }
+
+        celeg::ChatCapabilities chat_capabilities =
+            chat_catalog.capabilities(bootstrap.model.chat_profile_id);
+        chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());
         dispatcher.start();
@@ -119,7 +150,7 @@ int main(int argc, char** argv) {
             app, tokenizer, chat_template, static_cast<std::size_t>(args.context));
         celeg::app::serve::register_chat_completions_route(
             app, dispatcher, service->requests(), tokenizer, chat_template,
-            chat_catalog.capabilities(bootstrap.model.chat_profile_id),
+            chat_capabilities,
             model_name, eos_token_id, loop);
 
         app.listen(args.port, [&](auto* listen_socket) {

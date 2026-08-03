@@ -17,24 +17,29 @@ namespace celeg::detail {
 namespace {
 
 constexpr std::string_view kTextPrefix = "text_config.";
+constexpr std::string_view kGgufPrefix = "gemma4.";
 
 std::string text_key(std::string_view key) {
     return std::string(kTextPrefix) + std::string(key);
 }
 
+std::string metadata_key(const CheckpointMetadata& metadata, std::string_view key) {
+    return std::string(metadata.is_gguf() ? kGgufPrefix : kTextPrefix) + std::string(key);
+}
+
 int required_int(const CheckpointMetadata& metadata, std::string_view key) {
-    return static_cast<int>(metadata.integer(text_key(key)));
+    return static_cast<int>(metadata.integer(metadata_key(metadata, key)));
 }
 
 int optional_int(const CheckpointMetadata& metadata, std::string_view key, int fallback) {
-    const std::string flattened = text_key(key);
+    const std::string flattened = metadata_key(metadata, key);
     return metadata.contains(flattened)
         ? static_cast<int>(metadata.integer(flattened)) : fallback;
 }
 
 double optional_number(const CheckpointMetadata& metadata, std::string_view key,
                        double fallback) {
-    const std::string flattened = text_key(key);
+    const std::string flattened = metadata_key(metadata, key);
     return metadata.contains(flattened) ? metadata.number(flattened) : fallback;
 }
 
@@ -52,47 +57,83 @@ void add_request(ResolvedModel& model, TensorRequest request) {
 }
 
 RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
-    if (metadata.is_gguf()) {
-        throw std::runtime_error("Gemma 4 native SafeTensors support does not accept GGUF");
-    }
     if (metadata.architecture_type() != "gemma4" ||
-        metadata.string_or(text_key("model_type"), {}) != "gemma4_text") {
+        (!metadata.is_gguf() && metadata.string_or(text_key("model_type"), {}) != "gemma4_text")) {
         throw std::runtime_error("Gemma 4 requires model_type=gemma4 and text_config.model_type=gemma4_text");
     }
 
     RuntimeTopology topology;
-    topology.hidden = required_int(metadata, "hidden_size");
-    topology.intermediate = required_int(metadata, "intermediate_size");
+    topology.hidden = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer("gemma4.embedding_length"))
+        : required_int(metadata, "hidden_size");
+    topology.intermediate = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer("gemma4.feed_forward_length"))
+        : required_int(metadata, "intermediate_size");
     topology.dense_intermediate = topology.intermediate;
     topology.max_feed_forward_intermediate = topology.intermediate;
-    topology.num_hidden_layers = required_int(metadata, "num_hidden_layers");
-    const int query_heads = required_int(metadata, "num_attention_heads");
-    const int local_kv_heads = required_int(metadata, "num_key_value_heads");
-    const int local_head_dim = required_int(metadata, "head_dim");
+    topology.num_hidden_layers = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer("gemma4.block_count"))
+        : required_int(metadata, "num_hidden_layers");
+    const int query_heads = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer("gemma4.attention.head_count"))
+        : required_int(metadata, "num_attention_heads");
+    const int local_kv_heads = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer("gemma4.attention.head_count_kv"))
+        : required_int(metadata, "num_key_value_heads");
+    const int local_head_dim = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("gemma4.attention.key_length_swa",
+                                               metadata.integer("gemma4.attention.key_length")))
+        : required_int(metadata, "head_dim");
     topology.vocab_size = required_int(metadata, "vocab_size");
-    topology.max_position_embeddings = required_int(metadata, "max_position_embeddings");
+    topology.max_position_embeddings = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer("gemma4.context_length"))
+        : required_int(metadata, "max_position_embeddings");
     topology.conv_cache = 0;
     topology.conv_dim = 0;
-    topology.norm_eps = static_cast<float>(optional_number(metadata, "rms_norm_eps", 1.0e-6));
-    topology.rope_type = metadata.string_or(
-        text_key("rope_parameters.sliding_attention.rope_type"), "default");
-    topology.bos_token_id = optional_int(metadata, "bos_token_id", 2);
-    topology.eos_token_id = optional_int(metadata, "eos_token_id", 1);
-    topology.pad_token_id = optional_int(metadata, "pad_token_id", 0);
+    topology.norm_eps = static_cast<float>(metadata.is_gguf()
+        ? metadata.number_or("gemma4.attention.layer_norm_rms_epsilon", 1.0e-6)
+        : optional_number(metadata, "rms_norm_eps", 1.0e-6));
+    topology.rope_type = metadata.is_gguf()
+        ? "default"
+        : metadata.string_or(text_key("rope_parameters.sliding_attention.rope_type"), "default");
+    topology.bos_token_id = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("tokenizer.ggml.bos_token_id", 2))
+        : optional_int(metadata, "bos_token_id", 2);
+    topology.eos_token_id = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("tokenizer.ggml.eos_token_id", 1))
+        : optional_int(metadata, "eos_token_id", 1);
+    topology.pad_token_id = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("tokenizer.ggml.padding_token_id", 0))
+        : optional_int(metadata, "pad_token_id", 0);
     topology.embedding_multiplier = std::sqrt(static_cast<float>(topology.hidden));
     topology.attention_multiplier = 1.0f;
     topology.residual_multiplier = 1.0f;
     topology.logits_divisor = 1.0f;
-    topology.final_logit_softcap = static_cast<float>(optional_number(
-        metadata, "final_logit_softcapping", 0.0));
+    topology.final_logit_softcap = static_cast<float>(metadata.is_gguf()
+        ? metadata.number_or("gemma4.final_logit_softcapping", 0.0)
+        : optional_number(metadata, "final_logit_softcapping", 0.0));
     topology.has_split_attention_norms = true;
-    topology.has_per_layer_input = optional_int(metadata, "hidden_size_per_layer_input", 0) > 0;
-    topology.per_layer_input_size = optional_int(metadata, "hidden_size_per_layer_input", 0);
+    const int per_layer_input = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or(
+            "gemma4.embedding_length_per_layer_input", 0))
+        : optional_int(metadata, "hidden_size_per_layer_input", 0);
+    topology.has_per_layer_input = per_layer_input > 0;
+    topology.per_layer_input_size = per_layer_input;
 
-    const std::string schedule_key = text_key("layer_types");
     std::vector<std::string> layer_types;
-    if (metadata.contains(schedule_key)) {
-        layer_types = metadata.strings(schedule_key);
+    if (metadata.is_gguf()) {
+        const std::string schedule_key = "gemma4.attention.sliding_window_pattern";
+        if (metadata.contains(schedule_key)) {
+            for (const int64_t value : metadata.integers(schedule_key)) {
+                layer_types.push_back(value == 0 ? "full_attention" : "sliding_attention");
+            }
+        } else {
+            layer_types.assign(static_cast<size_t>(topology.num_hidden_layers),
+                               "sliding_attention");
+            if (!layer_types.empty()) layer_types.back() = "full_attention";
+        }
+    } else if (metadata.contains(text_key("layer_types"))) {
+        layer_types = metadata.strings(text_key("layer_types"));
     } else {
         throw std::runtime_error("Gemma 4 layer_types metadata is required");
     }
@@ -100,12 +141,20 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
         throw std::runtime_error("Gemma 4 layer_types length does not match num_hidden_layers");
     }
 
-    const int global_head_dim = optional_int(metadata, "global_head_dim", 512);
-    const int global_kv_heads = optional_int(metadata, "num_global_key_value_heads",
-                                             local_kv_heads);
-    const int sliding_window = optional_int(metadata, "sliding_window", 512);
+    const int global_head_dim = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("gemma4.attention.key_length", local_head_dim))
+        : optional_int(metadata, "global_head_dim", 512);
+    const int global_kv_heads = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("gemma4.attention.head_count_kv", local_kv_heads))
+        : optional_int(metadata, "num_global_key_value_heads", local_kv_heads);
+    const int sliding_window = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("gemma4.attention.sliding_window", 512))
+        : optional_int(metadata, "sliding_window", 512);
+    const int shared_layers = metadata.is_gguf()
+        ? static_cast<int>(metadata.integer_or("gemma4.attention.shared_kv_layers", 0))
+        : optional_int(metadata, "num_kv_shared_layers", 0);
     const int shared_start = topology.num_hidden_layers -
-        optional_int(metadata, "num_kv_shared_layers", 0);
+        shared_layers;
     if (shared_start < 0 || shared_start > topology.num_hidden_layers) {
         throw std::runtime_error("Gemma 4 num_kv_shared_layers is out of range");
     }
@@ -133,12 +182,16 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
         topology.attention_slot_for_layer[static_cast<size_t>(layer)] = layer;
         topology.layer_for_attention_slot[static_cast<size_t>(layer)] = layer;
         const std::string type = full ? "full_attention" : "sliding_attention";
-        const std::string rope_prefix = text_key(
-            std::string("rope_parameters.") + type + ".");
-        const double theta = metadata.number_or(rope_prefix + "rope_theta",
-                                                full ? 1.0e6 : 1.0e4);
-        const double rotary_fraction = metadata.number_or(
-            rope_prefix + "partial_rotary_factor", 1.0);
+        const double theta = metadata.is_gguf()
+            ? metadata.number_or(full ? "gemma4.rope.freq_base"
+                                      : "gemma4.rope.freq_base_swa",
+                                 full ? 1.0e6 : 1.0e4)
+            : metadata.number_or(text_key(std::string("rope_parameters.") + type + ".") +
+                                 "rope_theta", full ? 1.0e6 : 1.0e4);
+        const double rotary_fraction = metadata.is_gguf()
+            ? 1.0
+            : metadata.number_or(text_key(std::string("rope_parameters.") + type + ".") +
+                                 "partial_rotary_factor", 1.0);
         const bool is_shared = layer >= shared_start && shared_start > 0;
         const auto group_it = std::find(kv_group_types.begin(), kv_group_types.end(), type);
         const int group = group_it == kv_group_types.end()
@@ -234,9 +287,9 @@ public:
     std::string_view id() const override { return "gemma4"; }
 
     ProbeResult probe(const CheckpointMetadata& metadata) const override {
-        if (metadata.is_gguf()) return {false, 0, "Gemma 4 GGUF is not supported"};
         const bool match = metadata.architecture_type() == "gemma4" &&
-            metadata.string_or(text_key("model_type"), {}) == "gemma4_text";
+            (metadata.is_gguf() ||
+             metadata.string_or(text_key("model_type"), {}) == "gemma4_text");
         return {match, match ? 200 : 0,
                 match ? "Gemma 4 text configuration" : "not a Gemma 4 text configuration"};
     }
@@ -267,15 +320,18 @@ public:
         model.definition.tokens = {topology.bos_token_id, topology.eos_token_id,
                                    topology.pad_token_id};
         model.definition.architecture = "gemma4";
-        model.definition.source_format = "safetensors";
+        model.definition.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
         model.definition.validate();
         model.graph.embedding_multiplier = topology.embedding_multiplier;
         model.graph.logits_divisor = topology.logits_divisor;
         model.graph.final_norm.epsilon = topology.norm_eps;
-        model.graph.final_logit_softcap = static_cast<float>(
-            optional_number(checkpoint.metadata, "final_logit_softcapping", 0.0));
-        const int per_layer_size = optional_int(checkpoint.metadata,
-                                                "hidden_size_per_layer_input", 0);
+        model.graph.final_logit_softcap = static_cast<float>(checkpoint.metadata.is_gguf()
+            ? checkpoint.metadata.number_or("gemma4.final_logit_softcapping", 0.0)
+            : optional_number(checkpoint.metadata, "final_logit_softcapping", 0.0));
+        const int per_layer_size = checkpoint.metadata.is_gguf()
+            ? static_cast<int>(checkpoint.metadata.integer_or(
+                "gemma4.embedding_length_per_layer_input", 0))
+            : optional_int(checkpoint.metadata, "hidden_size_per_layer_input", 0);
         for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
             LayerSpec spec;
             spec.operator_norm.epsilon = topology.norm_eps;
@@ -284,10 +340,16 @@ public:
             spec.post_feed_forward_norm.epsilon = topology.norm_eps;
             spec.per_layer_input_norm.epsilon = topology.norm_eps;
             spec.mixer = topology.attention_layout(layer);
-        const bool wide = layer >= topology.num_hidden_layers -
-                optional_int(checkpoint.metadata, "num_kv_shared_layers", 0) &&
-                checkpoint.metadata.boolean_or(text_key("use_double_wide_mlp"), false);
-        spec.feed_forward = DenseFeedForwardSpec{
+            const int shared_layers = checkpoint.metadata.is_gguf()
+                ? static_cast<int>(checkpoint.metadata.integer_or(
+                    "gemma4.attention.shared_kv_layers", 0))
+                : optional_int(checkpoint.metadata, "num_kv_shared_layers", 0);
+            const bool double_wide = checkpoint.metadata.is_gguf()
+                ? checkpoint.metadata.boolean_or("gemma4.use_double_wide_mlp", false)
+                : checkpoint.metadata.boolean_or(text_key("use_double_wide_mlp"), false);
+            const bool wide = layer >= topology.num_hidden_layers - shared_layers &&
+                double_wide;
+            spec.feed_forward = DenseFeedForwardSpec{
                 topology.intermediate * (wide ? 2 : 1), ActivationKind::GeluTanh};
             topology.max_feed_forward_intermediate = std::max(
                 topology.max_feed_forward_intermediate,

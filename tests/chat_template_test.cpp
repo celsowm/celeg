@@ -89,6 +89,7 @@ int main() {
 
     const auto& gemma = catalog.find("gemma4-instruct");
     const auto gemma_capabilities = catalog.capabilities("gemma4-instruct");
+    CELEG_TEST_CHECK(gemma_capabilities.vision);
     CELEG_TEST_CHECK(gemma_capabilities.tool_call_codec != nullptr);
     const auto gemma_parse = gemma_capabilities.tool_call_codec->parse_generation(
         "<|tool_call>call:weather{\"city\":\"Paris\"}<tool_call|>");

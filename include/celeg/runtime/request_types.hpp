@@ -16,6 +16,7 @@ struct ConcurrentRequestOptions {
     int eos_token = 7;
     int priority = 0;
     GenerationConfig generation{};
+    PromptEmbedding prompt_embedding;
 };
 
 struct PollResult {
