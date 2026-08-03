@@ -1,562 +1,581 @@
 # Celeg SOLID and Packed CUDA Execution Refactoring Plan
 
 **Project:** `celsowm/celeg`  
-**Primary scope:** architecture, extensibility, dependency boundaries, runtime contracts, CUDA packed decode, ragged prefill, and hot-path maintainability  
-**Baseline:** static source review of the current `master` branch around commit `8907e01cadede5c1c28426d2362e9effb9a53a53`  
-**Important limitation:** this plan is based on static analysis. Build, correctness, benchmark, Nsight Systems, Nsight Compute, sanitizer, and hardware validation must be performed during implementation.
+**Primary branch:** `master`  
+**Reviewed head:** `e2c88d8e92fcd468f1b9c818f4bde6b950f880d1`  
+**Previous plan baseline:** `8907e01cadede5c1c28426d2362e9effb9a53a53`  
+**Review date:** 2026-08-03  
+**Scope:** runtime composition, dependency boundaries, resolved-model contracts, model-family extensibility, C/C++ API composition, serving, chat/tool calling, CUDA packed decode, ragged prefill, GEMM dispatch, and performance governance.
+
+> This is a source-level review. The repository contains useful correctness and benchmark infrastructure, but this revision did not execute builds, tests, sanitizers, CUDA benchmarks, Nsight Systems, or Nsight Compute. Every runtime-sensitive phase below still requires hardware validation.
 
 ---
 
-## 1. Executive Summary
+## 1. Status Legend
 
-Celeg already has a substantially better architecture than a typical early-stage inference runtime. It has:
+| Status | Meaning |
+|---|---|
+| **DONE** | The intended boundary or capability exists and the reviewed source supports the claim. |
+| **PARTIAL** | Meaningful work exists, but the original acceptance criteria are not yet met. |
+| **NOT STARTED** | The current source still substantially matches the problem statement. |
+| **BLOCKED** | Work should not begin until a prerequisite correctness or characterization task is complete. |
+| **REPLACED** | The old task no longer matches the current project direction and has been rewritten. |
 
-- explicit architecture resolution;
-- checkpoint format abstractions;
-- a neutral resolved-model representation;
-- CPU and CUDA backend separation;
-- backend compiler concepts;
-- capability-oriented interfaces;
-- focused public diagnostic, persistence, and session views;
-- architecture boundary documentation;
-- a structural boundary checker;
-- an OpenAI-compatible serving layer;
-- support for multiple model families and checkpoint formats.
+---
 
-The project is therefore not structurally broken. Its current problem is that the intended architecture is more mature than several important implementation areas.
+## 2. Executive Summary
 
-The main architectural gaps are:
+Celeg has improved materially since the original plan was written. The project now has stronger neutral checkpoint contracts, explicit architecture and checkpoint catalogs, CPU and CUDA model compilers, richer chat/tool-call support, additional model families, benchmark manifests, native-GGUF performance tooling, and a growing set of architecture boundaries.
 
-1. **Composition is still hardcoded.**
-   Built-in architectures, checkpoint formats, chat profiles, tokenizers, API backends, and serving behavior are selected in central factories or composition roots.
+However, the highest-risk findings from the original review remain present in the current source, especially in packed CUDA execution.
 
-2. **Backend code still leaks checkpoint-specific knowledge.**
-   CPU weight materialization knows concrete GGUF and SafeTensors repository types, weakening dependency inversion.
+### 2.1 What has changed since the previous plan
 
-3. **Resolved-model state is too broad and duplicated.**
-   `ModelDefinition`, `RuntimeTopology`, `ResolvedModel`, and `CompiledModelProgram` overlap in responsibilities and metadata.
+The following work is already present and must no longer be described as entirely missing:
 
-4. **Architecture modules have excessive responsibilities.**
-   A model architecture implementation often performs detection, metadata decoding, validation, graph construction, topology construction, weight planning, capability definition, tensor naming, and chat-profile selection.
+- neutral tensor and weight-repository contracts were extracted into `checkpoint/tensor.hpp` and `checkpoint/weight_repository.hpp`;
+- `CheckpointView::gguf` and `ResolvedModel::is_gguf` were removed;
+- generic tensor roles were separated from family-owned naming-policy implementations;
+- CPU and CUDA model compiler concepts exist;
+- architecture and checkpoint catalogs support `add`, duplicate detection, and `freeze`;
+- baseline manifests, numerical-comparison helpers, compile measurement, and benchmark documentation exist;
+- native same-file GGUF benchmarking against llama.cpp exists;
+- tool-call codecs and conversation/generation support are split by family more than before;
+- MiniCPM5 and SmolLM3 were added;
+- native-GGUF fan-out reuse was added to the CUDA GEMM path;
+- the project documentation direction changed: several architecture documents were deliberately removed and replaced with focused `API.md` and `BENCHMARK.md` material.
 
-5. **The C API and serving composition roots are oversized.**
-   They contain mapping, validation, construction, dispatch, backend selection, tokenizer selection, vision handling, lifecycle, and protocol logic.
+### 2.2 Critical findings that remain current
 
-6. **Closed variants and switches are not consistently treated as closed domains.**
-   Some are legitimate and performance-oriented; others are extension bottlenecks incorrectly described as Open/Closed-compliant.
+1. **`packed_execution.cu` is still a monolith.**  
+   `PackedDecodeExecutorImpl` owns capacities, stream and cuBLAS resources, the GEMM dispatcher, plan lifetime, all GPU and pinned buffers, validation, metadata staging, attention, convolution, dense FFN, MoE, decode, prefill, metrics, and host session mutation.
 
-7. **`packed_execution.cu` is the most severe SRP hotspot in the CUDA backend.**
-   It combines workspace ownership, metadata staging, validation, sampling, embedding, attention, KV management, convolution, dense FFN, MoE, decode, ragged prefill, session mutation, and metrics.
+2. **Packed attention still assumes output projection input width equals `hidden`.**  
+   `run_attention_layer` calls the attention output projection with `k_width = shape_.hidden`, although the actual input width is the layer's `AttentionSpec::query_width()`.
 
-8. **The packed execution path contains correctness and performance risks.**
-   Examples include global-dimension assumptions, incomplete compatibility checks, per-call execution-plan compilation, avoidable allocations, and prefill timing that may not measure actual GPU execution.
+3. **Packed dense FFN still uses a global intermediate width.**  
+   Workspace sizing and execution use `shape_.intermediate`, even though `RuntimeTopology` already exposes `feed_forward_intermediates` and `max_feed_forward_intermediate`.
 
-### Baseline SOLID assessment
+4. **Packed execution plans are compiled per call.**  
+   Both `decode` and `prefill` call `CudaExecutionPlan::compile(...)` and clear `active_plan_` afterward.
 
-| Principle | Baseline score | Main reason |
+5. **Packed compatibility checks are incomplete.**  
+   `options_compatible` checks shared weights, context, weight mode, KV mode, fast attention, fused projections, and fused residuals, but omits other execution-relevant options such as GEMM backend, Lt workspace and heuristic settings, autotune, attention mode and thresholds, chunk sizing, offload/residency policy, and any compiled-program identity.
+
+6. **Packed lifecycle validation contains an unreachable branch.**  
+   `eligible` rejects every phase other than `Ready` before separately checking `DecodePending`.
+
+7. **Ragged prefill allocates on every call.**  
+   It creates a temporary `std::vector<uint8_t*> flat_seen` and a temporary `DeviceBuffer<uint8_t*> d_flat_seen`.
+
+8. **Ragged prefill projects vocabulary logits for all flattened tokens.**  
+   When any request finalizes, final norm and LM-head projection run on every flattened row, followed by selected-row scattering. The expensive work should run only on finalized rows.
+
+9. **Ragged prefill timing is enqueue timing, not GPU execution timing.**  
+   `std::chrono` surrounds asynchronous CUDA launches without a completion event or stream synchronization before recording the elapsed value. Host session state is also advanced before an explicit completion boundary is established.
+
+10. **Persistent packed metadata invalidation is too weak.**  
+    `session_layout_changed` compares only session owner pointers. Replaced cache storage, changed layer backing, or a storage-generation change may not trigger rebinding.
+
+11. **The CPU backend still knows concrete checkpoint formats.**  
+    `src/backend/cpu/weights.cpp` includes GGUF and SafeTensors repository headers, uses `dynamic_cast<const GgufRepository*>`, and carries a raw architecture naming-policy pointer into weight loading.
+
+12. **Runtime composition remains hardcoded.**  
+    `load_model_bootstrap` uses process-static built-in checkpoint and architecture catalogs. `create_builtin_architecture_catalog` centrally edits the list of every built-in family.
+
+13. **`ResolvedModel` still overlaps responsibilities.**  
+    It carries `ModelDefinition`, `ModelGraph`, `RuntimeTopology`, `WeightPlan`, capabilities, architecture identity, checkpoint profile, chat profile, diagnostic identity, and a raw non-owning naming-policy pointer.
+
+14. **Architecture-family implementations remain broad.**  
+    Family `architecture.cpp` files still perform probing, metadata decoding, topology construction, graph construction, weight-plan construction, profile assignment, capability assignment, and identity construction.
+
+15. **The C API remains a large composition and mapping unit.**  
+    `src/api/api.cpp` still owns handles, error translation, ABI validation, enum mapping, CPU/CUDA option mapping, backend construction, engine/model/tokenizer functions, and lifecycle entry points.
+
+16. **Chat ownership improved, but capability representation can still be inconsistent.**  
+    `ChatProfileCatalog` owns templates and codecs, while `ChatCapabilities` exposes a raw codec pointer and parallel boolean flags. The valid-state rules are not encoded in the type.
+
+17. **The latest native fan-out optimization adds a manual scope protocol.**  
+    `GemmDispatcher::begin_native_fanout` and `end_native_fanout` rely on callers pairing operations correctly before the source activation is overwritten. This should become an RAII scope or an immutable compiled fan-out operation.
+
+18. **The `GemmDispatcher` documentation still mislabels switch extension as OCP.**  
+    Extending a central dispatch switch may be a valid closed-domain design, but it is not Open/Closed compliance. The code and documentation should state whether the domain is intentionally closed.
+
+### 2.3 Updated SOLID assessment
+
+This score is a static architectural assessment, not a runtime-quality score.
+
+| Principle | Current score | Current reason |
 |---|---:|---|
-| Single Responsibility | 4.0/10 | Oversized architecture implementations, C API, serving roots, CPU setup, GEMM dispatcher, and especially `packed_execution.cu` |
-| Open/Closed | 5.5/10 | Backends are mostly model-neutral, but registration, chat, formats, graph variants, quantization dispatch, and packed execution require central edits |
-| Liskov Substitution | 7.0/10 | Most capability interfaces are sound, but some interfaces expose broader contracts than implementations consistently support |
-| Interface Segregation | 8.0/10 | Strong public views and capability interfaces, weakened by large internal context bags and service objects implementing several roles |
-| Dependency Inversion | 6.0/10 | Good abstractions exist, but static catalogs, concrete repository dependencies, raw policy pointers, and hardcoded composition reduce effective inversion |
-| **Overall** | **~6.4/10** | Good architectural direction with several high-impact implementation hotspots |
+| Single Responsibility | 4.5/10 | Stronger compiler/catalog concepts exist, but packed execution, CPU weight setup, C API, serving composition, architecture resolution, and GEMM dispatch remain broad. |
+| Open/Closed | 5.8/10 | Catalogs and family modules help, but built-in registration, runtime bootstrap, chat profiles, backend selection, graph variants, and layout dispatch still require central edits. |
+| Liskov Substitution | 7.0/10 | Capability interfaces are generally sound, but narrower backend constraints, chat-role support, raw borrowed state, and async completion semantics need stronger contracts. |
+| Interface Segregation | 7.8/10 | Repository capabilities and serving views are relatively narrow; internal context bags and multi-role concrete services still weaken the result. |
+| Dependency Inversion | 6.4/10 | Neutral repository contracts are a real improvement, but CPU checkpoint casts, naming-policy leakage, static built-in catalogs, and composition roots still invert dependencies incompletely. |
+| **Overall** | **~6.3/10** | The architectural direction is good, but the most performance-sensitive implementation remains insufficiently separated and contains confirmed correctness/performance risks. |
 
-### Target outcome
+### 2.4 Target outcome
 
-After completing the high-priority phases in this plan, Celeg should reach approximately:
+The target remains approximately:
 
 - **SRP:** 8.0+
 - **OCP:** 8.0+
 - **LSP:** 8.0+
-- **ISP:** 9.0
+- **ISP:** 8.5+
 - **DIP:** 8.5+
-- **Overall:** approximately 8.3–8.7
+- **Overall:** 8.3–8.7
 
-The target is not to introduce virtual dispatch into CUDA hot paths. The target is to move policy decisions and binding to construction or compilation time, then execute compact, concrete plans.
+The target does **not** require virtual dispatch in CUDA layer loops. The preferred pattern remains:
+
+```text
+resolve once
+compile once
+bind once
+allocate once
+execute many times
+```
 
 ---
 
-## 2. Refactoring Principles
+## 3. Non-Negotiable Refactoring Rules
 
-All implementation work should follow these rules.
+### 3.1 Preserve hot-path behavior
 
-### 2.1 Preserve hot-path performance
-
-Do not replace direct calls with deep virtual object graphs inside:
+Do not introduce deep virtual object graphs into:
 
 - transformer layer loops;
-- GEMM dispatch loops;
-- attention kernel launches;
-- sampling loops;
+- attention launch loops;
+- GEMM dispatch;
 - MoE expert execution;
-- decode scheduler loops.
+- decode scheduling;
+- token sampling.
 
-Prefer:
+Use virtual interfaces or registries during composition and compilation. Execute compact immutable bindings, function pointers, tagged records, or direct concrete calls afterward.
 
-- construction-time binding;
-- immutable execution plans;
-- function pointers or compact tagged records where appropriate;
-- precomputed dimensions and offsets;
-- arrays of layer bindings;
-- templates only where compile-time specialization is valuable;
-- contiguous workspace ownership.
+### 3.2 Correctness before extraction
 
-### 2.2 Separate policy from mechanism
+Do not split `packed_execution.cu` until the current behavior is characterized and the confirmed shape, allocation, timing, and final-row issues are fixed or covered by failing tests.
+
+### 3.3 Separate policy from mechanism
 
 Examples:
 
-- **Policy:** which checkpoint format is selected.
-- **Mechanism:** reading bytes from a tensor repository.
+- checkpoint selection is policy; tensor reading is mechanism;
+- architecture selection is policy; graph compilation is mechanism;
+- attention-mode selection is policy; kernel launch is mechanism;
+- weight-layout selection is policy; linear execution is mechanism;
+- fan-out detection is policy; activation quantization reuse is mechanism.
 
-- **Policy:** which attention implementation should be used.
-- **Mechanism:** launching a concrete CUDA kernel.
+### 3.4 Use capabilities for optional behavior
 
-- **Policy:** which weight layout is selected.
-- **Mechanism:** embedding lookup or linear execution.
+Keep optional repository operations in separate interfaces. Apply the same rule to:
 
-- **Policy:** whether segmented attention is required.
-- **Mechanism:** workspace sizing and kernel launch.
+- vision encoders;
+- tokenizer providers;
+- chat/tool support;
+- backend limits;
+- native checkpoint storage;
+- fan-out-capable linear execution;
+- asynchronous completion.
 
-Policy should be resolved before the hot path whenever possible.
+### 3.5 Avoid file-only refactoring
 
-### 2.3 Prefer capabilities over flag combinations
+A valid SRP refactor changes ownership, lifetime, contracts, tests, and dependency direction. Merely moving methods into more files is not sufficient.
 
-Avoid combinations such as:
+### 3.6 Explicitly classify closed domains
+
+A switch is acceptable for a deliberately closed domain. Mark and document it as closed. Do not describe “add another switch case” as OCP compliance.
+
+Suggested annotation:
 
 ```cpp
-supports_tools = true;
-tool_codec = nullptr;
+// CELEG_CLOSED_DOMAIN: LinearStorageKind
 ```
-
-Prefer coherent capability objects where invalid states are unrepresentable.
-
-### 2.4 Make extension points explicit
-
-There should be a documented answer to each question:
-
-- How does an external application add a checkpoint format?
-- How does it add a model architecture?
-- How does it add a chat profile?
-- How does it add a tokenizer provider?
-- How does it add a backend?
-- How does it add a new operator family?
-- How does it add a new CUDA weight layout?
-- Which extensions require rebuilding Celeg?
-- Which extensions can be injected by a consumer?
-
-### 2.5 Avoid file-only refactoring
-
-Splitting one 1,100-line file into ten files without separating ownership and responsibilities does not solve SRP.
-
-A valid refactoring must change:
-
-- ownership;
-- public and internal contracts;
-- dependency direction;
-- lifecycle boundaries;
-- testability;
-- compilation boundaries;
-- extension behavior.
-
-### 2.6 Add characterization tests before behavior changes
-
-Before refactoring complex execution code:
-
-1. capture current behavior;
-2. add deterministic fixtures;
-3. add parity tests;
-4. record benchmark baselines;
-5. refactor;
-6. compare correctness and performance.
 
 ---
 
-## 3. Architectural Target
-
-The intended high-level dependency chain should remain:
+## 4. Target Architecture
 
 ```text
-checkpoint formats
-    -> architecture resolution
-        -> neutral resolved model
-            -> backend compiler
-                -> backend execution
-                    -> serving/protocol adapters
-```
+RuntimeBuilder
+    -> immutable RuntimeContext
+        ├── ArchitectureCatalog
+        ├── CheckpointFormatCatalog
+        ├── ChatProfileCatalog
+        ├── TokenizerProviderCatalog
+        ├── BackendFactoryCatalog
+        ├── VisionProviderCatalog
+        └── DiagnosticsSink
 
-The concrete target should be:
-
-```text
-RuntimeContext / RuntimeBuilder
-    ├── CheckpointFormatCatalog
-    ├── ArchitectureCatalog
-    ├── ChatProfileCatalog
-    ├── TokenizerProviderCatalog
-    ├── BackendFactoryCatalog
-    ├── DiagnosticsSink
-    └── Optional application policies
-
-CheckpointSource
+Checkpoint source
     -> ICheckpointFormat
-        -> IWeightRepository
-        -> CheckpointMetadataView
+        -> CheckpointMetadata
+        -> IWeightRepository capabilities
 
-CheckpointMetadataView
-    -> IArchitecture
-        -> ResolvedModelDefinition
-        -> ModelGraph
-        -> WeightPlan
-        -> ModelCapabilities
-        -> TextProfileReference
+CheckpointMetadata + architecture resolver
+    -> ResolvedModel
+        ├── authoritative neutral graph
+        ├── resolved source tensor requests
+        ├── model capabilities
+        ├── token/numerical policies
+        └── diagnostic provenance
 
-ResolvedModel
-    -> IBackendCompiler
-        -> CompiledModelProgram
-        -> Backend-specific immutable bindings
-        -> Backend workspace/resource factories
+ResolvedModel + backend options
+    -> backend compiler
+        -> immutable compiled program
+        -> immutable execution plan
+        -> compiled linear/operator bindings
+        -> resource/workspace requirements
 
 Compiled backend
-    -> inference sessions
-    -> schedulers
-    -> serving adapters
+    -> sessions
+    -> packed/non-packed executors
+    -> scheduler adapters
+    -> serving/protocol adapters
 ```
 
-### Key rule
-
-A backend should receive resolved, format-neutral data. It should not need to ask:
-
-- whether the source was GGUF;
-- whether the source was SafeTensors;
-- which architecture produced it;
-- how architecture-specific tensor names are generated;
-- which chat profile was selected;
-- which repository concrete type is in use.
-
-Diagnostic metadata may preserve this information separately, but executable code should not depend on it.
+A backend must not need architecture-specific tensor-name generation or concrete checkpoint repository types.
 
 ---
 
-## 4. Phase Overview
+## 5. Updated Phase Overview
 
-| Phase | Priority | Goal |
-|---|---:|---|
-| 0 | P0 | Establish correctness and performance baselines |
-| 1 | P0 | Fix packed execution correctness risks |
-| 2 | P0 | Introduce injectable runtime composition |
-| 3 | P0 | Remove checkpoint-format knowledge from backends |
-| 4 | P1 | Redesign resolved-model contracts and ownership |
-| 5 | P1 | Split architecture modules by responsibility |
-| 6 | P1 | Refactor `packed_execution.cu` into explicit subsystems |
-| 7 | P1 | Compile immutable packed execution plans |
-| 8 | P1 | Refactor CUDA GEMM and weight-layout dispatch |
-| 9 | P1 | Refactor C API and backend construction |
-| 10 | P1 | Refactor serving composition and service roles |
-| 11 | P2 | Refactor chat profiles, templates, codecs, and tokenizer composition |
-| 12 | P2 | Reassess graph extensibility and operator families |
-| 13 | P2 | Strengthen LSP, capability, and lifetime contracts |
-| 14 | P2 | Expand architecture-boundary automation |
-| 15 | P2 | Performance validation and cleanup |
-| 16 | P3 | Documentation, migration guides, and extension examples |
-
-Phases 0–3 should be completed before broad structural experimentation. Phase 6 must not start without Phase 0 characterization coverage.
+| Phase | Priority | Status | Goal |
+|---|---:|---|---|
+| 0 | P0 | **PARTIAL** | Finish correctness, allocation, timing, and performance baselines. |
+| 1 | P0 | **NOT STARTED** | Fix confirmed packed shape, lifecycle, timing, allocation, and final-row defects. |
+| 2 | P0 | **NOT STARTED** | Compile immutable CUDA plans and complete packed compatibility identity. |
+| 3 | P0/P1 | **PARTIAL** | Finish checkpoint/backend dependency inversion and resolve weight names before compilation. |
+| 4 | P1 | **NOT STARTED** | Introduce injectable `RuntimeContext` and `RuntimeBuilder`. |
+| 5 | P1 | **NOT STARTED** | Make resolved-model ownership authoritative and remove duplicated execution state. |
+| 6 | P1 | **PARTIAL** | Split family resolution by responsibility and register families through composition. |
+| 7 | P1 | **BLOCKED** | Extract packed workspace, validator, metadata staging, operators, and pipelines after Phase 1. |
+| 8 | P1 | **PARTIAL** | Refactor GEMM/layout dispatch, including safe native fan-out scope. |
+| 9 | P1 | **NOT STARTED** | Split C API mapping, handles, factories, and entry-point modules. |
+| 10 | P1/P2 | **PARTIAL** | Reduce serving duplication and make modalities/backend limits capability-driven. |
+| 11 | P2 | **PARTIAL** | Make chat, codecs, roles, and tokenizer providers coherent and injectable. |
+| 12 | P2 | **DECISION PENDING** | Declare graph operator families closed or add a compile-time registry model. |
+| 13 | P2 | **PARTIAL** | Strengthen LSP, lifetime, completion, and backend-limit contracts. |
+| 14 | P2 | **PARTIAL** | Expand automated boundary checks and stale-plan detection. |
+| 15 | P0–P2 | **PARTIAL** | Continuously validate correctness, throughput, latency, memory, and compile cost. |
+| 16 | P2/P3 | **REPLACED** | Align documentation with the current focused-doc strategy; do not recreate deleted docs blindly. |
 
 ---
 
-# Part I — Baseline and Safety
+# Part I — Safety and Confirmed Packed Corrections
 
-## 5. Phase 0 — Establish Baselines
+## 6. Phase 0 — Finish the Safety Net
 
-### Objective
+### Current status: PARTIAL
 
-Create a reproducible reference for correctness, compatibility, memory usage, and performance before changing architecture or CUDA execution.
+Already present:
 
-### 5.1 Build matrix
+- benchmark manifests and reproducibility tooling;
+- numerical comparison helpers;
+- compile-time measurement tooling;
+- native same-file GGUF benchmark support;
+- benchmark documentation;
+- CPU/CUDA test coverage reported by prior commits;
+- model-family manifests including MiniCPM5 and SmolLM3.
 
-Create CI and local scripts covering at least:
+Still required:
 
-| Dimension | Values |
+- packed vs non-packed decode parity across supported paths;
+- standard vs ragged prefill parity;
+- synthetic `query_width != hidden` fixture;
+- synthetic per-layer FFN-width fixture;
+- allocation counters for host and device buffers;
+- CUDA-event timing for packed decode and prefill;
+- mixed `finalize` ragged tests;
+- persistent-metadata rebinding tests;
+- native-fan-out misuse tests;
+- machine-readable before/after results for every packed milestone.
+
+### Build/test matrix
+
+At minimum:
+
+| Dimension | Required values |
 |---|---|
 | Backend | CPU, CUDA |
-| Build type | Debug, RelWithDebInfo, Release |
-| Checkpoint | GGUF, SafeTensors where supported |
-| Model family | LFM2/LFM2.5, Granite, Gemma4, MiniCPM5 |
-| Weight mode | BF16, INT8, INT4, supported GGUF layouts |
+| Build | Debug, RelWithDebInfo, Release |
+| Checkpoint | GGUF, SafeTensors where supported, fake in-memory repository |
+| Model family | LFM2/LFM2.5, Granite, Gemma4, MiniCPM5, SmolLM3 |
+| Weight mode | BF16, INT8, INT4, native GGUF layouts |
 | KV mode | BF16, INT8 |
-| Execution | single-session, packed decode, ragged prefill |
-| Attention | normal, paged, segmented where available |
-| FFN | dense, MoE |
-| Mixer | attention, short convolution |
-
-### 5.2 Deterministic correctness tests
-
-For each supported model shape:
-
-- fixed prompt;
-- fixed RNG seed;
-- greedy decoding where possible;
-- fixed generation settings;
-- expected token sequence or logits checksum;
-- single-session vs packed decode parity;
-- normal prefill vs ragged prefill parity;
-- local KV vs paged KV parity;
-- BF16 KV vs INT8 KV tolerance;
-- fused vs unfused projection parity;
-- fused vs unfused residual parity.
-
-### 5.3 Shape-focused synthetic models
-
-Add tiny synthetic fixtures where:
-
-1. `query_width == hidden`;
-2. `query_width != hidden`;
-3. FFN intermediate is constant;
-4. FFN intermediate differs by layer;
-5. shared KV owner layers are used;
-6. short convolution and attention alternate;
-7. dense and MoE layers coexist;
-8. sliding-window attention is enabled;
-9. final logit softcap is enabled;
-10. embedding and logits weights use different layouts if supported.
-
-These tests are critical because normal production models may accidentally hide generic-shape defects.
-
-### 5.4 Performance baseline
-
-Record:
-
-- prefill tokens/s;
-- decode tokens/s;
-- packed decode aggregate tokens/s;
-- per-request latency;
-- p50/p95/p99 latency;
-- scheduler overhead;
-- CUDA kernel count per token;
-- host-to-device copy count per token;
-- device allocation count during steady state;
-- cuBLAS/cuBLASLt heuristic calls during steady state;
-- VRAM peak;
-- workspace size;
-- CPU-side enqueue time;
-- actual GPU elapsed time using CUDA events;
-- Nsight Systems timeline;
-- Nsight Compute metrics for key kernels.
-
-### 5.5 Required artifacts
-
-Create:
-
-```text
-benchmarks/baselines/
-  hardware.json
-  build.json
-  correctness.json
-  performance.json
-  nsight-systems/
-  nsight-compute/
-```
+| Execution | single, packed decode, standard prefill, ragged prefill |
+| Mixer | attention, short convolution, hybrid |
+| FFN | dense, MoE, per-layer dense widths |
+| Attention | local, paged, segmented, shared KV, non-equal projection width |
 
 ### Acceptance criteria
 
-- Reproducible build scripts exist.
-- Packed and non-packed parity is tested.
-- At least one synthetic nontraditional shape is tested.
-- No steady-state CUDA allocation goes unmeasured.
-- Baseline benchmark results are stored in machine-readable format.
-- CI can detect correctness regressions.
-- Performance comparison scripts tolerate normal noise and report significant regressions.
+- A failing regression test exists for every confirmed packed issue before the behavior is changed.
+- CUDA metrics distinguish host preparation, GPU execution, host commit, and end-to-end time.
+- Steady-state allocation count is measurable.
+- Baseline results identify exact model file, hash, build commit, GPU, driver, CUDA version, options, warmup, and repetitions.
 
 ---
 
-# Part II — Immediate Packed Execution Corrections
+## 7. Phase 1 — Fix Packed Execution Before Modularizing It
 
-## 6. Phase 1 — Fix Packed Execution Correctness Risks
+### Current status: NOT STARTED
 
-### Scope
+### 7.1 Use layer-specific attention widths
 
-Primary file:
-
-```text
-src/backend/cuda/model/packed_execution.cu
-```
-
-Related contracts:
-
-```text
-include/celeg/backend/cuda/packed.hpp
-include/celeg/backend/cuda/packed_session.hpp
-include/celeg/model/graph.hpp
-include/celeg/model/resolved.hpp
-include/celeg/backend/cuda/execution_plan.hpp
-```
-
-### 6.1 Use layer-specific attention dimensions
-
-Current packed attention code appears to assume that the attention output projection input width equals `hidden`.
-
-Replace global assumptions with values derived from the concrete `AttentionSpec` or a compiled packed-layer binding.
-
-Required fields should include:
+Current defect:
 
 ```cpp
-struct PackedAttentionBinding {
-    int query_width;
-    int key_value_width;
-    int query_heads;
-    int key_value_heads;
-    int head_dim;
-    int output_width;
-    int sliding_window;
-    int kv_owner_layer;
-};
+linear(op_output.data(), *attention.out, hidden.data(), rows,
+       shape_.hidden, shape_.hidden, beta);
 ```
 
-The output projection must use the actual operator input width:
+The input width must be the layer's actual query projection width:
 
 ```cpp
-linear(
-    attention_output,
-    *attention.out,
-    hidden,
-    rows,
-    topology.hidden,
-    binding.query_width,
-    beta
-);
+const int query_width = attention.layout.query_width();
+linear(op_output.data(), *attention.out, hidden.data(), rows,
+       shape_.hidden, query_width, beta);
 ```
 
-### 6.2 Use layer-specific FFN dimensions
+Compile and validate this value once rather than reading architecture identity in execution.
 
-Do not use one global `shape_.intermediate` for every dense FFN layer.
+### 7.2 Use layer-specific dense FFN widths
 
-Compile:
+Current execution and workspace use `shape_.intermediate`. Replace execution-time uses with the current layer's width and size workspace from the maximum.
+
+Required invariant:
+
+```text
+workspace capacity = topology.max_feed_forward_intermediate
+layer execution width = topology.feed_forward_intermediates[layer]
+```
+
+The compiled dense binding should include:
 
 ```cpp
 struct PackedDenseFfnBinding {
-    int intermediate;
-    bool fused_w13;
-    const LinearWeight* w13;
-    const LinearWeight* w1;
-    const LinearWeight* w3;
-    const LinearWeight* w2;
+    int intermediate = 0;
+    const LinearWeight* w13 = nullptr;
+    const LinearWeight* w2 = nullptr;
 };
 ```
 
-Workspace capacity should use:
+### 7.3 Centralize operation eligibility
 
-```text
-maximum dense intermediate across the compiled program
-```
-
-Execution should use:
-
-```text
-current layer intermediate
-```
-
-### 6.3 Validate all execution-relevant compatibility
-
-Replace manual field-by-field partial checks with a stable fingerprint.
-
-Example:
+Replace contradictory checks with one pure validator:
 
 ```cpp
-struct PackedExecutionCompatibilityKey {
-    const SharedModelWeights* weights;
-    uint64_t compiled_program_id;
-    uint64_t execution_plan_hash;
-    int max_context;
-};
+enum class PackedOperation { Decode, Prefill };
+
+PackedEligibility validate_session(
+    const PackedSessionContext& session,
+    PackedOperation operation,
+    const PackedExecutorCapabilities& capabilities);
 ```
 
-The execution-plan hash must include every option that changes:
+### 7.4 Remove per-prefill allocations
 
-- kernel selection;
-- workspace requirements;
-- numerical behavior;
-- caching behavior;
-- MoE residency behavior;
-- attention behavior;
-- GEMM dispatch;
-- KV representation;
-- fusion behavior.
+Move the following into persistent executor workspace:
 
-### 6.4 Eliminate unreachable lifecycle checks
+- flattened seen-token pointer host storage;
+- flattened seen-token pointer device storage;
+- gathered hidden rows;
+- gathered normalized rows;
+- finalized-request indices;
+- any temporary page-table expansion storage.
 
-Centralize session-phase validation.
+No `DeviceBuffer` construction or capacity-growing `std::vector` is allowed in steady-state prefill.
 
-Example:
+### 7.5 Gather finalized rows before final norm and LM head
+
+Current behavior runs final norm and LM-head over all flattened tokens if any request finalizes.
+
+Target sequence:
+
+```text
+transform all flattened tokens
+build finalized-row indices
+gather finalized hidden rows
+final norm only finalized rows
+LM head only finalized rows
+scale/softcap only finalized rows
+scatter one logits row per finalized request
+```
+
+Rows with `finalize == 0` must advance position and remain `Prefilling` without vocabulary projection.
+
+### 7.6 Define completion semantics and fix metrics
+
+Introduce CUDA events or an explicit completion object:
 
 ```cpp
-enum class PackedOperation {
-    Decode,
-    Prefill
+struct PackedCompletion {
+    CudaEvent completed;
+    PackedTiming timing;
 };
-
-PackedEligibilityResult validate_phase(
-    SessionPhase phase,
-    PackedOperation operation
-);
 ```
 
-Avoid independent condition chains that can become contradictory.
-
-### 6.5 Correct prefill timing
-
-Use CUDA events for GPU execution timing.
-
-Keep separate metrics:
+At minimum:
 
 ```cpp
 struct PackedTiming {
-    double host_prepare_ms;
-    double gpu_execute_ms;
-    double host_commit_ms;
-    double end_to_end_ms;
+    double host_prepare_ms = 0.0;
+    double gpu_execute_ms = 0.0;
+    double host_commit_ms = 0.0;
+    double end_to_end_ms = 0.0;
 };
 ```
 
-Do not describe host enqueue time as prefill execution time.
+Do not update host phase/position as completed until the operation's completion contract is satisfied.
 
-### 6.6 Add assertions for compiled shape consistency
+### 7.7 Strengthen persistent metadata invalidation
 
-At construction or compile time, validate:
-
-- all weight rows and columns;
-- query, key, and value projection widths;
-- attention output projection width;
-- dense FFN widths;
-- MoE widths;
-- workspace maximums;
-- cache layer ownership;
-- paged-KV slot mapping;
-- convolution state width.
+Add a stable storage generation or binding fingerprint to each session context. Rebind when any relevant pointer table changes, not only when `owner` changes.
 
 ### Acceptance criteria
 
-- Packed execution passes synthetic `query_width != hidden` tests.
-- Packed execution passes variable-FFN-width tests.
-- Compatibility checks reject sessions with different execution plans.
-- CUDA-event timing matches external profiler measurements within expected tolerance.
-- Lifecycle validation contains no unreachable branch.
-- No shape decision in the layer loop depends on architecture identity.
+- synthetic non-equal query-width packed parity passes;
+- per-layer FFN-width packed parity passes;
+- no unreachable lifecycle branch remains;
+- zero steady-state host/device allocation occurs in decode and prefill;
+- LM-head rows equal finalized request count;
+- partial prefill performs no logits projection;
+- GPU timing correlates with profiler timing;
+- session state is not partially committed after a failed launch or completion error;
+- metadata rebinds after cache-storage replacement.
 
 ---
 
-# Part III — Dependency Inversion and Composition
+## 8. Phase 2 — Immutable CUDA Plans and Complete Compatibility
 
-## 7. Phase 2 — Introduce `RuntimeContext` and `RuntimeBuilder`
+### Current status: NOT STARTED
 
-### Problem
+Both packed paths currently compile `CudaExecutionPlan` per call. Compile it when model/session options become immutable.
 
-Celeg has abstract catalogs, but built-in catalogs are created through static functions and used globally. This limits:
+### Target objects
 
-- consumer injection;
-- test isolation;
-- custom architecture support;
-- custom checkpoint support;
-- replacement of chat/tokenizer policies;
-- deterministic composition.
+```cpp
+struct CudaPlanKey {
+    WeightMode weight_mode;
+    KvCacheMode kv_cache_mode;
+    GemmBackend gemm_backend;
+    AttentionMode attention_mode;
+    int attention_chunk_tokens;
+    int attention_auto_threshold;
+    bool fast_attention;
+    bool fused_projections;
+    bool fused_residuals;
+    size_t lt_workspace_bytes;
+    int lt_heuristics;
+    bool lt_autotune;
+    uint64_t moe_policy_fingerprint;
+    int max_context;
+};
+
+class CudaCompiledExecutionPlan {
+public:
+    uint64_t fingerprint() const noexcept;
+};
+```
+
+The actual key must include every option that changes kernels, numerics, workspace, cache layout, offload/residency, fusion, or dispatch.
+
+### Packed compatibility key
+
+```cpp
+struct PackedCompatibilityKey {
+    const SharedModelWeights* weights = nullptr;
+    uint64_t compiled_program_id = 0;
+    uint64_t execution_plan_fingerprint = 0;
+    int max_context = 0;
+};
+```
+
+### Acceptance criteria
+
+- no plan compile occurs in steady-state decode or prefill;
+- plan compilation count is visible in diagnostics;
+- batch validation compares immutable fingerprints;
+- incompatible GEMM, attention, fusion, KV, workspace, autotune, and MoE policies are rejected;
+- plans are immutable and thread-safe.
+
+---
+
+# Part II — Dependency Inversion and Neutral Contracts
+
+## 9. Phase 3 — Finish the Checkpoint/Backend Boundary
+
+### Current status: PARTIAL
+
+Completed foundation:
+
+- neutral `TensorDType`, `TensorLocator`, `HostTensorView`, and repository interfaces;
+- separate optional location and random-access capabilities;
+- removal of direct `CheckpointView::gguf` and `ResolvedModel::is_gguf` flags;
+- family-owned naming-policy implementations.
+
+Remaining violations:
+
+- CPU backend includes concrete GGUF and SafeTensors headers;
+- CPU backend detects native checkpoint storage with `dynamic_cast<const GgufRepository*>`;
+- CPU backend receives and calls an architecture-owned naming policy;
+- `ResolvedModel` carries an unresolved raw naming-policy pointer;
+- native-source behavior is represented as concrete type identity rather than a neutral capability or resolved storage policy.
+
+### 9.1 Add a neutral native-storage capability
+
+Do not replace one concrete cast with another format flag. Model the actual need.
+
+Possible contract:
+
+```cpp
+class INativeBlockTensorRepository {
+public:
+    virtual ~INativeBlockTensorRepository() = default;
+    virtual std::optional<NativeBlockTensorView> native_block_view(
+        std::string_view resolved_name) const = 0;
+};
+```
+
+Or represent the choice in resolved weight requests:
+
+```cpp
+struct ResolvedWeightRequest {
+    WeightSemantic semantic;
+    std::string source_tensor_name;
+    TensorShape source_shape;
+    TensorShape destination_shape;
+    WeightTransform transform;
+    NativeStoragePreference native_storage;
+    int layer = -1;
+};
+```
+
+### 9.2 Resolve names before backend compilation
+
+The architecture layer should turn logical tensor roles into concrete source candidates and select the existing source name. Backend code should not call `ITensorNamingPolicy`.
+
+### 9.3 Separate pack-cache policy from format identity
+
+CPU pack-cache decisions should depend on resolved storage/layout capabilities and requested output format, not `GgufRepository` identity.
+
+### Acceptance criteria
+
+- backend directories do not include concrete GGUF/SafeTensors repository headers;
+- no backend casts to a concrete checkpoint repository;
+- no backend receives `ITensorNamingPolicy`;
+- all source names and expected shapes are resolved before backend compilation;
+- fake in-memory repositories load through CPU and CUDA compiler tests;
+- native GGUF paths continue to preserve performance and memory behavior.
+
+---
+
+## 10. Phase 4 — Injectable Runtime Composition
+
+### Current status: NOT STARTED
+
+`ArchitectureCatalog` and `CheckpointFormatCatalog` already support registration and freezing, but bootstrap creates process-static built-in catalogs and built-ins are centrally enumerated.
 
 ### Target API
 
@@ -568,217 +587,86 @@ public:
     const ChatProfileCatalog& chat_profiles() const;
     const TokenizerProviderCatalog& tokenizer_providers() const;
     const BackendFactoryCatalog& backends() const;
+    const VisionProviderCatalog& vision_providers() const;
 };
 
 class RuntimeBuilder {
 public:
-    RuntimeBuilder& add_builtin_components();
-    RuntimeBuilder& add_architecture(
-        std::unique_ptr<IArchitecture> architecture);
-    RuntimeBuilder& add_checkpoint_format(
-        std::unique_ptr<ICheckpointFormat> format);
-    RuntimeBuilder& add_chat_profile(
-        ChatProfile profile);
-    RuntimeBuilder& add_tokenizer_provider(
-        std::unique_ptr<ITokenizerProvider> provider);
-    RuntimeBuilder& add_backend_factory(
-        std::unique_ptr<IBackendFactory> factory);
-
+    RuntimeBuilder& add_builtins();
+    RuntimeBuilder& add_architecture(std::unique_ptr<IArchitecture>);
+    RuntimeBuilder& add_checkpoint_format(std::unique_ptr<ICheckpointFormat>);
+    RuntimeBuilder& add_chat_profile(ChatProfileRegistration);
+    RuntimeBuilder& add_tokenizer_provider(std::unique_ptr<ITokenizerProvider>);
+    RuntimeBuilder& add_backend_factory(std::unique_ptr<IBackendFactory>);
+    RuntimeBuilder& add_vision_provider(std::unique_ptr<IVisualEmbeddingProviderFactory>);
     RuntimeContext build();
 };
 ```
 
-### Rules
-
-- No process-global mutable catalogs.
-- Built-ins are a composition convenience, not the only path.
-- Tests can construct minimal contexts.
-- Catalog freeze should occur when `RuntimeContext` is built.
-- Registration IDs must be unique.
-- Duplicate registration must produce explicit errors.
-- Runtime context lifetime must outlive objects that borrow catalog-owned data, or ownership must be transferred safely.
-
 ### Migration
 
-Replace:
-
 ```cpp
-load_model_bootstrap(source)
+ModelBootstrap load_model_bootstrap(
+    const RuntimeContext& runtime,
+    const std::filesystem::path& model_path);
 ```
 
-with:
+A convenience default may delegate to a process-immutable built-in context, but internal code and tests must be able to inject a context.
+
+### Family registration
 
 ```cpp
-load_model_bootstrap(runtime_context, source)
+void register_lfm2(RuntimeBuilder&);
+void register_granite(RuntimeBuilder&);
+void register_gemma4(RuntimeBuilder&);
+void register_minicpm5(RuntimeBuilder&);
+void register_smollm3(RuntimeBuilder&);
 ```
-
-Optionally retain a convenience overload:
-
-```cpp
-load_model_bootstrap(source)
-```
-
-that delegates to an immutable default built-in context.
 
 ### Acceptance criteria
 
-- A test can register a fake architecture without editing Celeg source.
-- A test can register a fake checkpoint format without editing Celeg source.
-- Built-in registration is isolated in one composition module.
-- No internal code depends on a mutable singleton catalog.
-- Public documentation explains lifetime and thread-safety.
+- custom architecture and checkpoint-format tests require no Celeg source edit;
+- duplicate IDs fail explicitly;
+- catalog lifetime and thread safety are documented;
+- built-in registration is isolated in one composition module;
+- no mutable global catalog exists;
+- bootstrap, C API, CLI, and serving can receive a runtime context.
 
 ---
 
-## 8. Phase 3 — Remove Concrete Checkpoint Knowledge from Backends
+## 11. Phase 5 — Make `ResolvedModel` Authoritative
 
-### Problem
+### Current status: NOT STARTED
 
-Backend weight code currently knows concrete repository implementations such as GGUF and SafeTensors and uses concrete-type checks.
+Current overlapping data includes:
 
-This violates the intended dependency direction:
-
-```text
-checkpoint format -> neutral model -> backend
-```
-
-### Target abstraction
-
-Extend capability interfaces rather than using concrete casts.
-
-Possible contracts:
-
-```cpp
-class IWeightRepository {
-public:
-    virtual ~IWeightRepository() = default;
-    virtual TensorDescriptor describe(std::string_view name) const = 0;
-    virtual void read(
-        std::string_view name,
-        MutableByteSpan destination) const = 0;
-};
-
-class INativeTensorViewRepository {
-public:
-    virtual ~INativeTensorViewRepository() = default;
-    virtual std::optional<NativeTensorView> native_view(
-        std::string_view name) const = 0;
-};
-
-class IRandomAccessTensorReader {
-public:
-    virtual ~IRandomAccessTensorReader() = default;
-    virtual void read_range(
-        std::string_view name,
-        uint64_t offset,
-        MutableByteSpan destination) const = 0;
-};
-```
-
-The backend may depend on capabilities, not concrete formats.
-
-### Resolve tensor names before backend compilation
-
-Current backends should not receive an architecture-specific naming policy and construct names at runtime.
-
-Change `WeightPlan` from requests such as:
-
-```text
-logical tensor request + naming policy
-```
-
-to:
-
-```text
-fully resolved source tensor name
-+ destination semantic
-+ expected shape
-+ layout conversion
-+ optional slicing/transform
-```
-
-Example:
-
-```cpp
-struct ResolvedWeightRequest {
-    WeightSemantic semantic;
-    std::string source_tensor_name;
-    TensorShape expected_source_shape;
-    TensorShape expected_destination_shape;
-    WeightTransform transform;
-    LayerIndex layer;
-};
-```
-
-### Diagnostic metadata
-
-Preserve format information separately:
-
-```cpp
-struct ModelProvenance {
-    std::string architecture_id;
-    std::string checkpoint_format_id;
-    std::string source_description;
-};
-```
-
-Execution code should not branch on it.
-
-### Acceptance criteria
-
-- No backend includes concrete GGUF repository headers.
-- No backend includes concrete SafeTensors repository headers.
-- No backend uses `dynamic_cast<GgufRepository*>`.
-- No backend uses `dynamic_cast<SafeTensorRepository*>`.
-- Tensor names are fully resolved before backend compilation.
-- A synthetic checkpoint repository can load a model through CPU and CUDA tests.
-
----
-
-# Part IV — Neutral Model Contracts
-
-## 9. Phase 4 — Redesign `ResolvedModel` and Related Types
-
-### Problems
-
-`ModelDefinition`, `RuntimeTopology`, `ResolvedModel`, and `CompiledModelProgram` overlap.
-
-Potential duplication includes:
-
-- hidden size;
-- layer count;
-- head dimensions;
-- token IDs;
-- numerical scales;
-- architecture identity;
-- source format;
-- per-layer values;
-- capability state.
-
-This creates ambiguity:
-
-- Which object is authoritative?
-- Which fields are runtime requirements?
-- Which fields are diagnostics?
-- Which values are global defaults versus per-layer values?
-- Which values survive backend compilation?
+- `ModelDefinition`;
+- `ModelGraph`;
+- `RuntimeTopology`;
+- `WeightPlan`;
+- capabilities;
+- architecture/checkpoint/chat IDs;
+- profile objects;
+- raw naming-policy pointer;
+- diagnostic identity.
 
 ### Target decomposition
 
 ```cpp
-struct ModelIdentity {
-    std::string architecture_id;
-    std::string model_profile_id;
-};
-
 struct ModelDimensions {
-    int vocab_size;
     int hidden;
     int layers;
+    int vocab_size;
     int maximum_attention_projection_width;
     int maximum_attention_head_dim;
     int maximum_dense_intermediate;
     int maximum_moe_intermediate;
+};
+
+struct TokenPolicy {
+    std::optional<int32_t> bos;
+    std::vector<int32_t> eos;
+    std::optional<int32_t> pad;
 };
 
 struct NumericalPolicy {
@@ -789,94 +677,61 @@ struct NumericalPolicy {
     float final_logit_softcap;
 };
 
-struct TokenPolicy {
-    std::optional<int32_t> bos;
-    std::vector<int32_t> eos;
-    std::optional<int32_t> pad;
-};
-
-struct ModelCapabilities {
-    AttentionCapabilities attention;
-    MixerCapabilities mixers;
-    FfnCapabilities ffn;
-    ModalCapabilities modalities;
-    TextCapabilities text;
+struct ModelProvenance {
+    std::string architecture_id;
+    std::string checkpoint_format_id;
+    std::string checkpoint_profile_id;
+    std::string source_description;
 };
 
 struct ResolvedModel {
-    ModelIdentity identity;
     ModelDimensions dimensions;
-    NumericalPolicy numerics;
     TokenPolicy tokens;
+    NumericalPolicy numerics;
     ModelGraph graph;
     ResolvedWeightPlan weights;
     ModelCapabilities capabilities;
+    TextProfileReference text_profile;
     ModelProvenance provenance;
 };
 ```
 
-### Compiled program
+### Rules
 
-`CompiledModelProgram` should contain only execution-relevant state.
-
-Do not require:
-
-- checkpoint source format;
-- architecture ID for execution decisions;
-- unresolved tensor naming policies;
-- metadata probing state.
-
-Diagnostic identity can be attached in a sidecar object.
-
-### Ownership
-
-Eliminate ambiguous raw ownership comments.
-
-Use one of:
-
-- value ownership;
-- `shared_ptr<const T>`;
-- runtime-context-owned immutable object with explicit documented lifetime;
-- stable interned IDs rather than raw policy pointers.
+- one authoritative owner per value;
+- per-layer dimensions are explicit in the graph/program;
+- maxima are derived from per-layer data;
+- compiled programs contain execution state only;
+- provenance never drives backend execution;
+- raw policy pointers are removed.
 
 ### Acceptance criteria
 
-- Each field has one authoritative owner.
-- Execution program contains no checkpoint-format branching data.
-- All per-layer widths are represented explicitly.
-- Maximum workspace dimensions are derived and validated.
-- Diagnostic provenance is available without affecting execution.
-- Raw pointer lifetime assumptions are either removed or formally documented and tested.
+- no duplicated hidden/layer/head/token/numerical fields remain without a documented derivation;
+- backend execution does not branch on architecture or checkpoint identity;
+- workspace requirements derive from the compiled program;
+- all lifetimes are value-owned, shared immutable, or referenced through stable IDs.
 
 ---
 
-# Part V — Architecture Modules
+# Part III — Model Families and Packed Subsystems
 
-## 10. Phase 5 — Split Architecture Implementations
+## 12. Phase 6 — Split Architecture-Family Responsibilities
 
-### Current concern
+### Current status: PARTIAL
 
-Architecture files often perform all of the following:
+Progress:
 
-- architecture detection;
-- repository hint processing;
-- metadata key lookup;
-- JSON parsing;
-- GGUF metadata parsing;
-- shape validation;
-- token extraction;
-- topology construction;
-- graph construction;
-- weight-plan construction;
-- tensor naming;
-- chat-profile assignment;
-- capability assignment.
+- each major family has its own source directory;
+- naming policies are family-owned;
+- tool-call codecs are increasingly family-owned;
+- generic dense graph and weight-plan builders exist.
 
-This creates many reasons to modify one file.
+Remaining issue:
 
-### Target layout
+A family `architecture.cpp` still commonly performs probing, metadata access, validation, topology building, graph building, weight-plan building, identity/profile assignment, token extraction, and capability assignment.
 
-For each model family:
+### Target family layout
 
 ```text
 src/models/<family>/
@@ -888,872 +743,137 @@ src/models/<family>/
   graph.cpp
   weights.cpp
   capabilities.cpp
+  naming_policy.cpp
   text_profile.cpp
-  tensor_names.cpp
+  tool_call_codec.cpp
   architecture.cpp
 ```
 
-Not every family needs every file, but the conceptual boundaries should remain.
-
-### Suggested contracts
-
-```cpp
-class IArchitectureProbe {
-public:
-    virtual ProbeResult probe(
-        const CheckpointMetadataView& metadata) const = 0;
-};
-
-class IArchitectureResolver {
-public:
-    virtual ResolvedModel resolve(
-        const ArchitectureResolutionInput& input) const = 0;
-};
-```
-
-Internally, a family can use concrete functions rather than virtual interfaces:
-
-```cpp
-FamilyMetadata decode_metadata(...);
-void validate_metadata(const FamilyMetadata&);
-ModelGraph build_graph(const FamilyMetadata&);
-ResolvedWeightPlan build_weight_plan(
-    const FamilyMetadata&,
-    const ModelGraph&);
-```
-
-### Registration
-
-A family registration function should register:
-
-- probe/resolver;
-- chat profile;
-- tokenizer provider if family-specific;
-- optional multimodal components.
-
-Example:
-
-```cpp
-void register_minicpm5(RuntimeBuilder& builder);
-```
-
-Adding a family should not require editing several central switch files.
+Not every family needs every file. The boundaries matter more than the file count.
 
 ### Acceptance criteria
 
-- Adding a test architecture requires no change to a central built-in factory.
-- Architecture resolution functions are independently unit-testable.
-- Metadata parsing tests do not require CUDA or CPU backend construction.
-- Graph tests do not require checkpoint I/O.
-- Weight-plan tests validate source names and shapes independently.
-- Chat-profile selection is not embedded in backend code.
+- metadata decoding tests need no backend construction;
+- graph tests need no checkpoint I/O;
+- resolved-weight tests validate concrete names and shapes independently;
+- adding a family edits only its registration and composition entry;
+- backend code contains no family identity switch.
 
 ---
 
-# Part VI — Packed CUDA Execution
+## 13. Phase 7 — Refactor Packed Execution into Owned Subsystems
 
-## 11. Phase 6 — Refactor `packed_execution.cu`
+### Current status: BLOCKED by Phase 1
 
-### Current responsibility inventory
+Do not begin this extraction until Phase 1 tests and fixes are in place.
 
-`PackedDecodeExecutorImpl` currently combines:
-
-1. executor capacity validation;
-2. stream ownership;
-3. cuBLAS ownership;
-4. GEMM dispatcher ownership;
-5. active execution-plan ownership;
-6. persistent GPU workspace;
-7. persistent pinned-host workspace;
-8. segmented attention scratch growth;
-9. session compatibility checks;
-10. decode eligibility;
-11. prefill eligibility;
-12. session-layout change detection;
-13. persistent pointer-table assembly;
-14. per-step metadata assembly;
-15. page-table flattening;
-16. ragged row flattening;
-17. host-to-device copies;
-18. embedding layout dispatch;
-19. linear shape validation;
-20. QKV projection;
-21. Q/K normalization and RoPE;
-22. paged KV store;
-23. local KV store;
-24. BF16 KV execution;
-25. INT8 KV execution;
-26. segmented attention;
-27. standard attention;
-28. shared-KV owner resolution;
-29. short convolution;
-30. dense FFN;
-31. fused and unfused projections;
-32. fused and unfused residuals;
-33. MoE routing;
-34. expert residency;
-35. MoE execution;
-36. transformer layer loop;
-37. sampling;
-38. decode pipeline;
-39. ragged prefill pipeline;
-40. logits projection;
-41. session-state scatter;
-42. host session mutation;
-43. timing;
-44. metrics.
-
-This is the largest SRP violation in the CUDA model layer.
-
-### Target directory
+### Target modules
 
 ```text
 src/backend/cuda/model/packed/
-  types.hpp
-  compatibility.hpp
-  compatibility.cpp
-  workspace.hpp
-  workspace.cu
-  metadata_stager.hpp
-  metadata_stager.cu
-  attention_workspace.hpp
-  attention_workspace.cu
-  layer_program.hpp
-  layer_program.cpp
-  embedding_executor.hpp
-  embedding_executor.cu
-  attention_executor.hpp
-  attention_executor.cu
-  convolution_executor.hpp
-  convolution_executor.cu
-  dense_ffn_executor.hpp
-  dense_ffn_executor.cu
-  moe_executor.hpp
-  moe_executor.cu
-  transformer_executor.hpp
-  transformer_executor.cu
-  final_projection.hpp
-  final_projection.cu
-  decode_pipeline.hpp
-  decode_pipeline.cu
-  prefill_pipeline.hpp
-  prefill_pipeline.cu
-  metrics.hpp
+  compatibility.hpp/.cpp
+  validator.hpp/.cpp
+  workspace.hpp/.cu
+  metadata_stager.hpp/.cu
+  compiled_program.hpp/.cpp
+  embedding_executor.hpp/.cu
+  attention_executor.hpp/.cu
+  convolution_executor.hpp/.cu
+  dense_ffn_executor.hpp/.cu
+  moe_executor.hpp/.cu
+  transformer_executor.hpp/.cu
+  final_projection.hpp/.cu
+  decode_pipeline.hpp/.cu
+  prefill_pipeline.hpp/.cu
+  metrics.hpp/.cpp
   executor.cpp
 ```
 
-Do not create files only for aesthetic reasons. Each module must own a coherent state or operation.
+### Required ownership boundaries
 
----
+#### `PackedWorkspace`
 
-## 12. `PackedWorkspace`
+Own every reusable host/device buffer and capacity. No pipeline owns scratch allocation.
 
-### Responsibility
+#### `PackedBatchValidator`
 
-Own and resize all reusable buffers.
+Pure host-side validation, structured error codes, no CUDA dependency.
 
-### Proposed structure
+#### `PackedMetadataStager`
 
-```cpp
-class PackedWorkspace {
-public:
-    PackedWorkspace(
-        const PackedWorkspaceRequirements& requirements,
-        cudaStream_t stream);
+Own persistent pointer binding, step metadata, ragged flattening, page-table staging, and storage-generation tracking.
 
-    void ensure_segmented_attention_capacity(
-        int rows,
-        int chunks);
+#### `PackedCompiledProgram`
 
-    void ensure_flattened_prefill_capacity(
-        size_t flattened_tokens);
+Precompute layer kinds, dimensions, weights, KV owner/slot, fusion behavior, residual policy, and compiled linear bindings.
 
-    PackedCoreBuffers& core();
-    PackedSamplingBuffers& sampling();
-    PackedMetadataBuffers& metadata();
-    PackedKvPointerBuffers& kv_pointers();
-    PackedMoeBuffers& moe();
-    PackedSegmentedAttentionBuffers& segmented();
-};
-```
+#### Operator executors
 
-### Requirements object
+Attention, convolution, dense FFN, and MoE receive narrow explicit contexts and do not mutate session lifecycle.
 
-```cpp
-struct PackedWorkspaceRequirements {
-    size_t maximum_sessions;
-    size_t maximum_prefill_tokens;
-    int hidden;
-    int vocab_size;
-    int maximum_attention_projection_width;
-    int maximum_dense_intermediate;
-    int maximum_moe_intermediate;
-    int maximum_experts_per_token;
-    int maximum_experts;
-    int layers;
-    int maximum_pages_per_request;
-};
-```
+#### Decode/prefill pipelines
 
-### Move into workspace
-
-- `positions`;
-- sampled-token buffers;
-- generation parameter buffers;
-- hidden/residual/norm buffers;
-- Q/K/V buffers;
-- convolution buffers;
-- dense FFN buffers;
-- MoE scratch;
-- logits scratch;
-- sampling scratch;
-- host pointer tables;
-- device pointer tables;
-- page tables;
-- span metadata;
-- final-row metadata;
-- segmented attention buffers;
-- flattened seen-pointer buffers.
-
-### Rules
-
-- No `cudaMalloc` or equivalent steady-state allocation inside decode.
-- No device allocation inside ragged prefill.
-- Growth should be explicit, logged, and testable.
-- Capacity should never shrink during executor lifetime unless explicitly reset.
-- Workspace sizing must be based on the compiled model program, not one global topology assumption.
+Orchestration only. Completion and host commit are separate steps.
 
 ### Acceptance criteria
 
-- Allocation tracing shows zero steady-state allocations.
-- Workspace requirements are independently unit-testable.
-- Decode and prefill pipelines do not own raw scratch buffers.
-- Segmented workspace growth occurs only when capacity is exceeded.
+- `PackedDecodeExecutorImpl` no longer owns all packed responsibilities;
+- the transformer loop does not repeatedly call `as_attention`, `as_convolution`, `as_dense_ffn`, or `as_moe_ffn`;
+- dimensions are immutable and prevalidated;
+- no architecture identity appears in execution;
+- extraction causes no unexplained throughput, latency, or VRAM regression.
 
 ---
 
-## 13. `PackedBatchValidator` and Compatibility
+# Part IV — CUDA Linear Dispatch
 
-### Responsibility
+## 14. Phase 8 — Refactor `GemmDispatcher` and Weight-Layout Binding
 
-Pure host-side validation.
+### Current status: PARTIAL
 
-### Proposed API
+Current strengths:
+
+- GEMM dispatch is extracted from the compiled model;
+- cuBLAS/cuBLASLt and native GGUF paths are centralized;
+- Lt plan caching/autotuning exists;
+- native activation fan-out reuse exists.
+
+Current problems:
+
+- one object owns handles, Lt cache, autotuning, Lt workspace, MMQ workspace, BF16/INT8/INT4/native layouts, GEMV fallback, storage dispatch, and fan-out scope state;
+- comments describe central switch extension as OCP;
+- manual `begin_native_fanout`/`end_native_fanout` pairing is error-prone;
+- packed execution bypasses a compile-time weight-layout binding and repeats storage-kind decisions in execution;
+- dispatcher option lifetime and mutability contracts should be explicit.
+
+### 14.1 Introduce an RAII fan-out scope
 
 ```cpp
-struct PackedValidationResult {
-    const PackedSessionContext* reference;
-    PackedExecutionCompatibilityKey key;
-    size_t session_count;
-    size_t flattened_token_count;
-};
-
-class PackedBatchValidator {
+class NativeFanoutScope {
 public:
-    PackedValidationResult validate_decode(
-        std::span<const PackedSessionContext> sessions) const;
+    NativeFanoutScope(GemmDispatcher&, const __nv_bfloat16* x, int m, int k);
+    ~NativeFanoutScope();
 
-    PackedValidationResult validate_prefill(
-        std::span<const PackedSessionContext> sessions,
-        std::span<const int32_t> tokens,
-        std::span<const PackedPrefillRow> rows,
-        std::span<const PageTableView> page_tables) const;
+    NativeFanoutScope(const NativeFanoutScope&) = delete;
+    NativeFanoutScope& operator=(const NativeFanoutScope&) = delete;
 };
 ```
 
-### Validate
+Better long-term target: compile a projection group that quantizes once and executes all bound projections without mutable ambient scope state.
 
-- non-empty batch;
-- capacity;
-- null ownership;
-- duplicate sessions;
-- operation-compatible lifecycle;
-- context limit;
-- local or paged KV availability;
-- page-table length;
-- dense ragged offsets;
-- non-empty prefill rows;
-- same shared weights;
-- same compiled packed program;
-- same execution-plan fingerprint;
-- compatible generation constraints where required.
-
-### Error model
-
-Use structured errors internally:
-
-```cpp
-enum class PackedValidationErrorCode {
-    EmptyBatch,
-    CapacityExceeded,
-    DuplicateSession,
-    InvalidPhase,
-    ContextLimitReached,
-    MissingKvStorage,
-    IncompatibleProgram,
-    IncompatibleExecutionPlan,
-    InvalidPageTable,
-    InvalidRaggedRows
-};
-```
-
-Convert to exceptions only at the boundary currently using exceptions.
-
-### Acceptance criteria
-
-- Validator has no CUDA dependency.
-- Every failure mode has a focused unit test.
-- No pipeline contains repeated batch-validation logic.
-- Compatibility is based on immutable keys, not partial option comparisons.
-
----
-
-## 14. `PackedMetadataStager`
-
-### Responsibility
-
-Convert session state into contiguous host/device metadata required by kernels.
-
-### Split metadata by lifetime
-
-#### Persistent while session layout is unchanged
-
-- logits pointers;
-- seen-token pointers;
-- RNG pointers;
-- sampled destination pointers;
-- position destination pointers;
-- per-layer KV pointers;
-- per-layer convolution state pointers.
-
-#### Per execution step
-
-- positions;
-- temperatures;
-- repetition penalties;
-- top-k;
-- top-p;
-- page tables;
-- segmented attention plan inputs.
-
-#### Per ragged prefill call
-
-- span offsets;
-- span counts;
-- final rows;
-- flattened positions;
-- flattened page tables;
-- flattened seen pointers.
-
-### Proposed API
-
-```cpp
-class PackedMetadataStager {
-public:
-    void bind_sessions(
-        std::span<const PackedSessionContext> sessions);
-
-    PackedAttentionBatchMetadata stage_decode_step(
-        std::span<const PackedSessionContext> sessions,
-        std::span<const PageTableView> page_tables);
-
-    PackedPrefillMetadata stage_prefill(
-        std::span<const PackedSessionContext> sessions,
-        std::span<const PackedPrefillRow> rows,
-        std::span<const PageTableView> page_tables);
-};
-```
-
-### Improvements
-
-- Use generation/version IDs instead of comparing only `owner` pointers.
-- Detect changes to layer storage even if session identity remains constant.
-- Avoid re-copying persistent pointer tables when unchanged.
-- Use a compact page-table representation or batched copy where useful.
-- Measure copy volume per token.
-
-### Acceptance criteria
-
-- Metadata staging is independently benchmarked.
-- Persistent metadata is not copied on every decode if unchanged.
-- Prefill does not allocate temporary pointer arrays.
-- Session rebinding after cache replacement is correctly detected.
-
----
-
-## 15. Compiled Packed Layer Program
-
-### Problem
-
-The packed layer loop repeatedly inspects variants and global topology values.
-
-### Target
-
-Compile a backend-specific packed program once.
-
-```cpp
-enum class PackedMixerKind {
-    Attention,
-    ShortConvolution
-};
-
-enum class PackedFfnKind {
-    Dense,
-    Moe
-};
-
-struct PackedLayerProgram {
-    PackedMixerKind mixer_kind;
-    PackedFfnKind ffn_kind;
-
-    LayerCommonBinding common;
-    PackedAttentionBinding attention;
-    PackedConvolutionBinding convolution;
-    PackedDenseFfnBinding dense_ffn;
-    PackedMoeBinding moe;
-};
-```
-
-Only fields relevant to the active kind need to be present, possibly through a compact union or variant outside the hot inner operations.
-
-### Precompute
-
-- layer dimensions;
-- pointer bindings;
-- KV owner index;
-- paged-KV slot;
-- projection widths;
-- dense intermediate;
-- MoE intermediate;
-- scale values;
-- norm pointers;
-- fusion choices;
-- residual beta;
-- kernel function bindings where stable;
-- workspace offsets if one arena is used.
-
-### Layer loop target
-
-```cpp
-for (const PackedLayerProgram& layer : program.layers()) {
-    execute_operator_norm(layer, workspace, rows);
-    execute_mixer(layer, context);
-    execute_residual_transition(layer, context);
-    execute_ffn(layer, context);
-}
-```
-
-Architecture identity must not appear in this loop.
-
-### Acceptance criteria
-
-- No repeated `as_attention`, `as_convolution`, `as_dense_ffn`, or `as_moe_ffn` resolution is required in steady-state execution.
-- Layer-specific dimensions are immutable and prevalidated.
-- The compiled program can be inspected in diagnostics.
-- Program creation fails early on unsupported graph combinations.
-
----
-
-## 16. Operator Executors
-
-### 16.1 Embedding executor
-
-Responsibility:
-
-- invoke the selected weight-layout embedding operation;
-- apply embedding scale.
-
-Do not duplicate BF16/INT8/INT4 dispatch if `IWeightLayout` already owns it.
-
-Target:
-
-```cpp
-class PackedEmbeddingExecutor {
-public:
-    void run(
-        const PackedEmbeddingBinding& binding,
-        std::span<const int32_t> token_ids,
-        DeviceMatrixView output,
-        cudaStream_t stream);
-};
-```
-
-### 16.2 Attention executor
-
-Responsibility:
-
-- QKV projection;
-- Q/K norm and RoPE;
-- KV store;
-- local or paged attention;
-- BF16 or INT8 KV path;
-- segmented or standard path;
-- output projection.
-
-Inputs should be explicit:
-
-```cpp
-struct PackedAttentionExecutionContext {
-    const PackedAttentionBinding& layer;
-    const PackedAttentionPlan& plan;
-    PackedWorkspace& workspace;
-    PackedMetadataDeviceView metadata;
-    PhysicalPagedKvCache* paged_kv;
-    int rows;
-    cudaStream_t stream;
-};
-```
-
-Do not pass the entire session context unless strictly necessary.
-
-### 16.3 Convolution executor
-
-Responsibility:
-
-- input projection;
-- decode or ragged-prefill convolution;
-- output projection.
-
-It should not know about sampling or general session lifecycle.
-
-### 16.4 Dense FFN executor
-
-Responsibility:
-
-- FFN norm if not performed by outer loop;
-- fused or split gate/up projection;
-- activation;
-- down projection;
-- residual behavior.
-
-Use the layer-specific intermediate width.
-
-### 16.5 MoE executor
-
-Responsibility:
-
-- norm/cast;
-- router;
-- expert selection;
-- residency coordination;
-- expert FFN;
-- accumulation;
-- final residual.
-
-Expert residency is a separate collaborator:
-
-```cpp
-class IMoeResidencyCoordinator {
-public:
-    virtual void ensure_resident(
-        const MoeResidencyRequest&) = 0;
-};
-```
-
-For hot-path avoidance of virtual calls, bind a concrete callback in the compiled executor context.
-
-### Acceptance criteria
-
-- Each executor has focused unit or integration tests.
-- Operator executors do not mutate session lifecycle directly.
-- Dimensions come from compiled layer bindings.
-- No architecture-specific switch exists.
-- Weight-layout dispatch is not duplicated.
-
----
-
-## 17. Decode Pipeline
-
-### Responsibility
-
-Orchestrate one packed decode step.
-
-### Target sequence
+### 14.2 Separate collaborators
 
 ```text
-validate batch
-bind or refresh persistent session metadata
-stage step metadata
-resolve immutable execution plan
-sample previous logits
-embed sampled tokens
-execute transformer
-compute final logits
-scatter logits and decode state
-synchronize or record completion event
-commit host session state
-record metrics
+CudaLinearRuntime
+  ├── CublasHandles
+  ├── LtPlanCache
+  ├── LtAutotuner
+  ├── LinearWorkspace
+  ├── NativeQuantWorkspace
+  └── compiled linear bindings
 ```
 
-### Target API
-
-```cpp
-class PackedDecodePipeline {
-public:
-    PackedDecodeResult execute(
-        std::span<const PackedSessionContext> sessions,
-        std::span<const PageTableView> page_tables);
-};
-```
-
-### Session commit
-
-Separate GPU launch from host mutation:
-
-```cpp
-struct PackedDecodeCompletion {
-    std::vector<int32_t> sampled_tokens;
-    int position_increment;
-    PackedTiming timing;
-};
-```
-
-Then:
-
-```cpp
-commit_decode_completion(sessions, completion);
-```
-
-This makes completion logic testable and prepares future asynchronous execution.
-
-### Metrics
-
-Record:
-
-- rows;
-- segmented rows;
-- local/paged KV path;
-- GPU elapsed time;
-- host preparation;
-- host commit;
-- H2D bytes;
-- D2H bytes;
-- kernel count if instrumented.
-
-### Acceptance criteria
-
-- Decode pipeline source remains small and orchestration-focused.
-- No workspace allocation occurs.
-- No execution-plan compilation occurs per token.
-- Host state is committed only after successful completion.
-- Failure behavior does not leave sessions partially advanced.
-
----
-
-## 18. Ragged Prefill Pipeline
-
-### Responsibility
-
-Orchestrate one flattened ragged prefill pass.
-
-### Target sequence
-
-```text
-validate sessions, rows, tokens, and page tables
-bind persistent metadata
-stage spans and flattened metadata
-upload explicit tokens
-mark seen tokens
-embed all tokens
-execute transformer once
-gather only final rows requiring logits
-run final norm only on gathered rows
-run LM head only on gathered rows
-scatter final logits and session state
-record completion
-commit host state
-record metrics
-```
-
-### Major performance improvement: final-row gather
-
-Current behavior can project vocabulary logits for every flattened token when only final rows are needed.
-
-Introduce:
-
-```cpp
-launch_gather_bf16_rows(
-    hidden,
-    final_rows,
-    gathered_hidden,
-    finalized_request_count,
-    hidden_width,
-    stream
-);
-```
-
-Then execute final norm and LM head only for finalized requests.
-
-This reduces:
-
-- LM-head GEMM rows;
-- logits scratch size;
-- VRAM;
-- memory bandwidth;
-- execution time for long ragged prompts.
-
-### Partial prefill
-
-Rows with `finalize == 0` should:
-
-- advance position;
-- preserve prefilling phase;
-- avoid unnecessary logits projection.
-
-### Asynchrony
-
-Use CUDA events and avoid mandatory stream synchronization unless the public contract requires immediate host-visible results.
-
-### Acceptance criteria
-
-- One transformer pass per ragged batch remains guaranteed.
-- LM-head rows equal finalized request count, not flattened token count.
-- No temporary device allocation occurs.
-- Timing represents actual GPU execution.
-- Partial prefill transitions are tested.
-- Mixed finalized/non-finalized rows are tested.
-- Results match non-ragged reference execution.
-
----
-
-## 19. Executor Facade
-
-After extraction, the public facade should remain compact.
-
-```cpp
-class PackedInferenceExecutor {
-public:
-    PackedInferenceExecutor(
-        std::shared_ptr<const PackedCompiledProgram> program,
-        PackedExecutorResources resources,
-        PackedExecutorOptions options);
-
-    PackedEligibilityResult eligible(
-        const PackedSessionContext& session,
-        PackedOperation operation) const;
-
-    PackedDecodeResult decode(
-        std::span<const PackedSessionContext> sessions,
-        std::span<const PageTableView> page_tables = {});
-
-    PackedPrefillResult prefill(
-        std::span<const PackedSessionContext> sessions,
-        std::span<const PageTableView> page_tables,
-        std::span<const int32_t> tokens,
-        std::span<const PackedPrefillRow> rows);
-
-    PackedDecodeMetrics metrics() const;
-};
-```
-
-Consider renaming from `PackedDecodeExecutor` to `PackedInferenceExecutor`, because it executes decode and prefill.
-
-Provide a compatibility alias or migration period if the class is public.
-
-### Acceptance criteria
-
-- Facade implementation is orchestration only.
-- Decode and prefill are separate collaborators.
-- Metrics are collected through one focused component.
-- Existing callers require minimal migration.
-
----
-
-# Part VII — CUDA Dispatch and Weight Policies
-
-## 20. Phase 7 — Immutable CUDA Execution Plans
-
-### Problem
-
-Packed decode and prefill compile an execution plan per call.
-
-### Target
-
-Compile once when:
-
-- model options are finalized;
-- maximum context is known;
-- backend resources are created.
-
-```cpp
-class CudaCompiledExecutionPlan {
-public:
-    uint64_t fingerprint() const;
-    const LinearExecutionPolicy& linear() const;
-    const AttentionExecutionPolicy& attention() const;
-    const KvExecutionPolicy& kv() const;
-    const MoeExecutionPolicy& moe() const;
-    const FusionPolicy& fusion() const;
-};
-```
-
-### Plan caching
-
-If sessions may legitimately use different options over shared weights:
-
-```cpp
-class CudaExecutionPlanCache {
-public:
-    std::shared_ptr<const CudaCompiledExecutionPlan> get_or_compile(
-        const CudaPlanKey& key);
-};
-```
-
-The packed batch requires identical plan fingerprints.
-
-### Acceptance criteria
-
-- No plan compile occurs in steady-state decode.
-- Plan compilation count is exposed in diagnostics.
-- Batch compatibility uses the plan fingerprint.
-- Plan objects are immutable and thread-safe.
-
----
-
-## 21. Phase 8 — Refactor `GemmDispatcher`
-
-### Current concern
-
-`GemmDispatcher` combines:
-
-- CUDA library handles;
-- cuBLAS;
-- cuBLASLt;
-- plan cache;
-- heuristics;
-- autotuning;
-- workspace;
-- MMQ scratch;
-- quantization-specific execution;
-- BF16;
-- INT8;
-- INT4;
-- GGUF layouts;
-- GEMV fallback;
-- central storage dispatch.
-
-### Target collaborators
-
-```text
-CudaLinearExecutor
-  ├── Bf16LinearExecutor
-  ├── Int8LinearExecutor
-  ├── Int4LinearExecutor
-  ├── GgufQ4KLinearExecutor
-  ├── GgufQ6KLinearExecutor
-  └── GemvExecutor
-
-LtPlanCache
-LtAutotuner
-CudaLinearWorkspace
-MmqWorkspace
-```
-
-### Hot-path design
-
-Do not necessarily call a virtual interface for every linear operation.
-
-Compile the selected function into the weight or layer binding:
+### 14.3 Compile linear bindings
 
 ```cpp
 using LinearExecutionFn = void (*)(
@@ -1761,97 +881,41 @@ using LinearExecutionFn = void (*)(
     CudaLinearRuntime&);
 
 struct CompiledLinearBinding {
-    LinearExecutionFn execute;
+    LinearExecutionFn execute = nullptr;
     LinearKernelKind kind;
-    LinearWeight weight;
+    const LinearWeight* weight = nullptr;
 };
 ```
 
-### Correct OCP language
-
-A switch over a deliberately closed enum is acceptable, but extending that switch is not itself evidence of OCP compliance.
-
-Document each domain as either:
-
-- **closed and centrally versioned**, or
-- **open and registry-driven**.
+Virtual/registry selection occurs at compile time; execution uses the binding.
 
 ### Acceptance criteria
 
-- GEMM library lifecycle is separate from quantized-kernel selection.
-- New layout execution can be added without editing unrelated code.
-- Hot-path dispatch overhead does not regress measurably.
-- Plan cache and autotuning can be tested independently.
-- Comments accurately describe extension behavior.
+- fan-out scopes are exception-safe and cannot remain accidentally active;
+- nested, mismatched-input, and overwritten-source cases are tested;
+- plan cache and autotuner are independently testable;
+- new layouts do not require edits to packed operator code;
+- hot-path overhead does not regress measurably;
+- comments correctly distinguish closed domains from extensible registries.
 
 ---
 
-## 22. Weight Layout Strategy
+# Part V — API, Serving, Chat, and Graph Contracts
 
-### Problem
+## 15. Phase 9 — Split the C API
 
-`IWeightLayout` is a useful abstraction, but central factories and packed execution may bypass it.
+### Current status: NOT STARTED
 
-### Target
-
-A compiled model should receive a concrete layout strategy selected at construction.
-
-Potential API:
-
-```cpp
-class IWeightLayout {
-public:
-    virtual ~IWeightLayout() = default;
-
-    virtual CompiledEmbeddingBinding compile_embedding(
-        const LinearWeight&) const = 0;
-
-    virtual CompiledLinearBinding compile_linear(
-        const LinearWeight&,
-        const LinearCompileContext&) const = 0;
-};
-```
-
-Virtual calls occur at compile time. Execution uses concrete bindings.
-
-### Acceptance criteria
-
-- Packed embedding uses compiled layout behavior.
-- Adding a layout does not require editing packed execution.
-- Layout validation occurs before execution.
-- Unsupported combinations fail during model compilation.
-
----
-
-# Part VIII — API and Serving
-
-## 23. Phase 9 — Refactor the C API
-
-### Current responsibility inventory
-
-`src/api/api.cpp` includes:
-
-- C ABI handle definitions;
-- exception translation;
-- default option initialization;
-- struct version validation;
-- enum conversion;
-- CPU option conversion;
-- CUDA option conversion;
-- backend construction;
-- direct model APIs;
-- engine APIs;
-- tokenizer APIs;
-- lifecycle operations.
-
-### Target layout
+Target layout:
 
 ```text
 src/api/
   handles.hpp
   errors.cpp
   validation.cpp
-  option_mapping.cpp
+  generation_mapping.cpp
+  cpu_option_mapping.cpp
+  cuda_option_mapping.cpp
   backend_factory.cpp
   model_api.cpp
   engine_api.cpp
@@ -1859,72 +923,31 @@ src/api/
   diagnostics_api.cpp
 ```
 
-### Backend factory
+### Rules
 
-Replace hardcoded CPU/CUDA branching with an injected or catalog-driven factory.
-
-```cpp
-class IBackendFactory {
-public:
-    virtual ~IBackendFactory() = default;
-    virtual std::string_view id() const = 0;
-    virtual BackendCapabilities capabilities() const = 0;
-    virtual std::unique_ptr<IBackendModel> create(
-        const BackendCreateRequest&) const = 0;
-};
-```
-
-The C API maps stable enums or strings to registered factories.
-
-### ABI safety
-
-Keep:
-
-- opaque handles;
-- versioned structs;
-- strict validation;
-- no exceptions crossing C boundaries.
-
-Add:
-
-- handle kind tags;
-- optional debug generation counters;
-- consistent null handling;
-- consistent ownership documentation.
+- preserve opaque handles and versioned structs;
+- no exception crosses the C boundary;
+- add handle-kind tags and optional debug generations;
+- backend construction goes through factories or runtime context;
+- enum switches are treated as ABI mapping, not backend composition;
+- mapping functions have table-driven tests.
 
 ### Acceptance criteria
 
-- `api.cpp` no longer exists as a monolith.
-- Option mapping has table-driven tests.
-- Backend construction is independently testable.
-- Adding a backend does not require editing all API entry points.
-- ABI compatibility tests pass.
+- `src/api/api.cpp` is no longer a monolith;
+- adding a backend does not edit unrelated model/tokenizer entry points;
+- CPU and CUDA mappings are independently tested;
+- ABI compatibility tests remain green.
 
 ---
 
-## 24. Phase 10 — Refactor Serving Composition
+## 16. Phase 10 — Refactor Serving Composition
 
-### Current concern
+### Current status: PARTIAL
 
-Serving interfaces are segregated, but one concrete service implements:
+The project already has service views and a `ServiceBundle`, but concrete services and composition roots still combine lifecycle, scheduler control, diagnostics, tokenizer/profile selection, modality selection, backend construction, and protocol behavior.
 
-- request submission;
-- polling;
-- release;
-- scheduler control;
-- diagnostics.
-
-CPU and CUDA services duplicate orchestration. The main serving executable also selects:
-
-- checkpoint behavior;
-- tokenizer;
-- chat profile;
-- vision handling;
-- mmproj conventions;
-- backend;
-- routes.
-
-### Target service roles
+### Target roles
 
 ```cpp
 class IRequestService;
@@ -1933,80 +956,58 @@ class ISchedulerController;
 class IServiceDiagnostics;
 ```
 
-Composition:
+One object may implement several roles, but callers should depend on the narrow role they need.
 
-```cpp
-struct ServiceBundle {
-    std::shared_ptr<IRequestService> requests;
-    std::shared_ptr<IRequestResultStore> results;
-    std::shared_ptr<ISchedulerController> scheduler;
-    std::shared_ptr<IServiceDiagnostics> diagnostics;
-};
-```
+### Required changes
 
-One object may implement multiple roles, but the bundle should not require it.
-
-### Shared orchestration
-
-Extract backend-neutral request lifecycle:
-
-```text
-request validation
-tokenization
-scheduler submission
-result polling
-streaming adaptation
-release
-metrics mapping
-```
-
-Backend-specific adapters should provide:
-
-- session creation;
-- prefill;
-- decode;
-- cancellation;
-- backend metrics.
-
-### Model capability-driven vision
-
-Do not branch on a chat profile string such as `"gemma4-instruct"`.
-
-Use:
-
-```cpp
-if (resolved.capabilities.modalities.vision) {
-    vision_provider = runtime.vision_providers().resolve(...);
-}
-```
-
-Do not encode a fixed `mmproj-BF16.gguf` convention in the generic main function.
+- extract backend-neutral request lifecycle;
+- share CPU/CUDA orchestration where semantics match;
+- publish backend limits explicitly;
+- make vision selection capability-driven;
+- remove fixed profile-string and fixed mmproj filename conventions from generic composition;
+- obtain tokenizers through providers rather than concrete checkpoint casts;
+- define cancellation and asynchronous completion semantics consistently.
 
 ### Acceptance criteria
 
-- CPU and CUDA serving code share backend-neutral orchestration.
-- Service interfaces do not impose narrower hidden limits in one implementation.
-- CUDA output-token limits are represented explicitly as capabilities or validated before generic submission.
-- Vision behavior is capability-driven.
-- Main composition root is declarative and small.
+- main composition roots are small and declarative;
+- CPU/CUDA lifecycle duplication is reduced;
+- no implementation silently narrows a public request contract;
+- modalities and tokenizer selection are provider/capability-driven.
 
 ---
 
-# Part IX — Text, Chat, and Tokenization
+## 17. Phase 11 — Make Chat and Tokenizer Composition Coherent
 
-## 25. Phase 11 — Refactor Chat Profiles and Templates
+### Current status: PARTIAL
 
-### Problems
+Current progress:
 
-- concrete chat templates are declared centrally;
-- one source file contains templates, JSON serialization, role mapping, tool encoding, parsers, and built-in catalog construction;
-- capability flags and raw codec pointers can form inconsistent states;
-- some templates reject roles accepted by the nominal common interface.
+- conversation and generation abstractions exist;
+- family-specific tool-call codecs exist;
+- the catalog owns templates and codecs;
+- MiniCPM5 and SmolLM3 tool behavior is represented.
 
-### Target profile
+Remaining issues:
+
+- built-in profile construction is central;
+- template classes are declared centrally;
+- `ChatCapabilities` mixes raw codec pointer and booleans;
+- role support is represented incompletely;
+- tokenizer/provider composition is not part of a runtime context.
+
+### Target registration
 
 ```cpp
-struct ChatProfile {
+struct ChatRoleCapabilities {
+    bool system;
+    bool developer;
+    bool user;
+    bool assistant;
+    bool tool;
+};
+
+struct ChatProfileRegistration {
     std::string id;
     std::shared_ptr<const IChatTemplate> template_engine;
     std::shared_ptr<const IChatToolCallCodec> tool_codec;
@@ -2016,1036 +1017,514 @@ struct ChatProfile {
 };
 ```
 
-Invalid states should be rejected on construction.
-
-### Role contract
-
-Instead of assuming every template supports every role:
-
-```cpp
-struct ChatRoleCapabilities {
-    bool system;
-    bool user;
-    bool assistant;
-    bool tool;
-};
-```
-
-Validate before formatting.
-
-Alternatively, make formatting return a structured unsupported-role error rather than throwing unexpectedly.
-
-### Source layout
-
-```text
-src/text/
-  chat_profile_catalog.cpp
-  common/json.cpp
-  common/tool_serialization.cpp
-  profiles/lfm2.cpp
-  profiles/granite.cpp
-  profiles/gemma4.cpp
-  profiles/minicpm5.cpp
-```
-
-### Tokenizer providers
-
-Resolve tokenizer support through a catalog or provider abstraction. Serving should not need concrete repository casts to construct tokenizers.
+Invalid combinations must fail during registration.
 
 ### Acceptance criteria
 
-- A chat profile can be registered through `RuntimeBuilder`.
-- Capability flags and codec lifetime are coherent.
-- Unsupported roles are validated explicitly.
-- Adding a profile does not require editing one central template file.
-- Serving constructs tokenizers through providers, not checkpoint-type casts.
+- capability state cannot say “native codec supported” while codec is null;
+- unsupported roles fail through a structured result or pre-validation;
+- profiles and tokenizer providers register through `RuntimeBuilder`;
+- adding a profile does not edit one central template implementation file;
+- serving does not cast checkpoint repositories to create tokenizers.
 
 ---
 
-# Part X — Graph Extensibility
+## 18. Phase 12 — Declare the Graph Extension Model
 
-## 26. Phase 12 — Reassess Closed Graph Variants
+### Current status: DECISION PENDING
 
-### Current state
+Closed variants such as attention/convolution and dense/MoE remain reasonable for a performance runtime if Celeg intentionally owns the operator universe.
 
-The graph currently uses closed variants such as:
+### Option A — Closed operator universe
 
-```cpp
-variant<AttentionSpec, ShortConvolutionSpec>
-variant<DenseFeedForwardSpec, MixtureOfExpertsSpec>
-```
+Keep variants and document that adding an operator requires coordinated graph, CPU compiler, CUDA compiler, tests, and diagnostics changes.
 
-This is not automatically wrong.
+### Option B — Open compiler registry
 
-Advantages:
+Use stable operator IDs and compile-time registries, while execution still receives concrete backend bindings.
 
-- compact representation;
-- exhaustive compiler handling;
-- no virtual dispatch;
-- easy validation;
-- explicit supported operator universe.
+### Recommendation
 
-Disadvantages:
+Use a two-level design:
 
-- every new mixer or FFN family requires central edits;
-- backend compilers must be updated;
-- visitors and variants grow;
-- external operator plugins are difficult;
-- architectures such as Mamba, DeltaNet, RWKV, or future hybrid operators may stress the design.
-
-### Decision gate
-
-Do not immediately replace variants with inheritance.
-
-First classify the intended extension model.
-
-#### Option A — Closed internal operator universe
-
-Keep variants if Celeg intentionally supports a centrally controlled set of operator families.
-
-Requirements:
-
-- document the domain as closed;
-- central changes are expected;
-- exhaustive compiler errors are valuable;
-- extension tests cover every backend;
-- do not claim plugin-level OCP.
-
-#### Option B — Open operator compiler registry
-
-Introduce stable operator IDs and compiler registries:
-
-```cpp
-struct OperatorNode {
-    OperatorTypeId type;
-    OperatorAttributes attributes;
-};
-
-class IOperatorCompiler {
-public:
-    virtual CompiledOperator compile(
-        const OperatorNode&,
-        const BackendCompileContext&) const = 0;
-};
-```
-
-Execution still uses backend-specific compiled bindings.
-
-### Recommended approach
-
-Use a two-level model:
-
-1. stable neutral operator categories for common families;
-2. backend-specific compiled operator bindings.
-
-Keep the neutral graph explicit, but avoid architecture switches in backends.
+1. a small explicit neutral set for stable common categories;
+2. backend-specific compiled bindings;
+3. only introduce a public operator registry after at least one genuinely new family such as Mamba/DeltaNet/RWKV demonstrates the need.
 
 ### Acceptance criteria
 
-- The project documents whether graph operator types are open or closed.
-- Adding one test mixer has a measured change surface.
-- Unsupported backend/operator combinations fail during compilation.
-- Hot-path execution remains concretely bound.
+- the repository explicitly states whether each operator domain is open or closed;
+- unsupported backend/operator pairs fail during compilation;
+- no architecture switch appears in backend execution loops;
+- the change surface for adding one synthetic operator is measured.
 
 ---
 
-# Part XI — Contracts and SOLID Completion
+## 19. Phase 13 — Strengthen Contracts and Lifetimes
 
-## 27. Phase 13 — Strengthen LSP and Capability Contracts
+### Current status: PARTIAL
 
-### 27.1 Serving limits
+Audit and formalize:
 
-If CUDA requires `max_output_tokens <= INT_MAX`, do not hide that narrower precondition inside an implementation of a broader interface.
-
-Options:
-
-- use a common validated type;
-- publish backend limits;
-- reject at service construction;
-- make the interface use a type whose range matches all implementations.
-
-Example:
-
-```cpp
-struct ServiceLimits {
-    uint64_t maximum_output_tokens;
-    uint64_t maximum_context_tokens;
-    uint64_t maximum_concurrent_requests;
-};
-```
-
-### 27.2 Chat-template role support
-
-Do not expose an interface suggesting universal role support when Granite or another profile rejects tool messages.
-
-Use capabilities or a result type.
-
-### 27.3 Optional repository operations
-
-Continue the existing good pattern of separate capability interfaces.
-
-Avoid adding optional methods returning “unsupported” to a broad base interface when capability interfaces can model them safely.
-
-### 27.4 Raw pointer cleanup
-
-Audit:
-
-- tensor naming policies;
-- chat codecs;
-- service bundle role pointers;
-- session context pointers;
-- architecture-owned statics;
-- model provenance strings.
-
-For each pointer document:
-
-- owner;
-- lifetime;
-- thread safety;
-- mutation;
-- invalidation condition.
-
-Prefer stable shared immutable ownership where overhead is not in the hot loop.
+- packed session borrowed pointers;
+- storage invalidation generations;
+- runtime-context-owned catalogs;
+- naming-policy lifetime until removed;
+- chat codec ownership;
+- `GemmDispatcher` option lifetime;
+- native fan-out scope lifetime;
+- service limits;
+- asynchronous prefill/decode completion;
+- cancellation and failure rollback.
 
 ### Acceptance criteria
 
-- No implementation imposes undocumented narrower preconditions.
-- Optional features are represented through explicit capabilities.
-- Raw non-owning pointers have verified lifetime or are replaced.
-- Contract tests run across CPU and CUDA implementations.
+- no undocumented narrower backend precondition exists;
+- borrowed pointers document owner, mutation, invalidation, and thread safety;
+- async operations expose a completion contract;
+- raw policy pointers are removed or replaced by stable immutable ownership;
+- CPU/CUDA contract tests run against the same request semantics.
 
 ---
 
-# Part XII — Automation and Governance
+# Part VI — Governance, Performance, and Documentation
 
-## 28. Phase 14 — Expand Architecture Boundary Checks
+## 20. Phase 14 — Expand Automated Boundaries
 
-### Existing good foundation
+### Current status: PARTIAL
 
-The project already has structural checks for:
+Keep existing checks and add rules that reject:
 
-- CUDA leakage into neutral headers;
-- architecture names in backend code;
-- source-format types in backend code;
-- architecture-specific types in generic runtime;
-- build graph boundaries.
+- concrete checkpoint repository headers/types under backend directories;
+- architecture IDs in backend execution;
+- chat-profile string branching outside registration/composition/diagnostics;
+- `CudaExecutionPlan::compile` in decode/prefill/layer paths;
+- `DeviceBuffer` construction or `cudaMalloc` in steady-state execution;
+- unresolved `ITensorNamingPolicy` use in backends;
+- manual fan-out scope use without an RAII guard;
+- claims that extending a switch is OCP unless the domain is explicitly registry-driven.
 
-### Add rules
+Add extension tests for:
 
-#### Backend checkpoint isolation
+- custom architecture;
+- custom checkpoint format;
+- custom chat profile;
+- custom tokenizer provider;
+- fake backend factory if public;
+- fake repository through CPU and CUDA compilation.
 
-Reject in backend directories:
+### Plan maintenance rule
 
-```text
-GgufRepository
-SafeTensorRepository
-dynamic_cast<...Repository>
-checkpoint/gguf
-checkpoint/safetensors
-```
+This document must be updated whenever a milestone is completed. Every status change should include:
 
-#### Architecture identity leakage
-
-Reject in backend runtime code:
-
-```text
-architecture_id ==
-model_type ==
-chat_profile_id ==
-```
-
-Allow identity only in diagnostics or explicit composition modules.
-
-#### Chat-profile string branching
-
-Reject profile-string decisions outside:
-
-```text
-text profile registration
-composition roots
-diagnostics
-```
-
-#### Hot-path plan compilation
-
-Reject calls to:
-
-```text
-CudaExecutionPlan::compile
-```
-
-inside known execution paths such as decode, prefill, or layer loops.
-
-#### Steady-state allocation lint
-
-Flag obvious:
-
-- `DeviceBuffer` construction inside decode/prefill;
-- `cudaMalloc` inside execution paths;
-- temporary vectors in known hot paths.
-
-This will not replace profiling, but it catches regressions.
-
-#### Concrete factory switches
-
-Track central switches and require annotation:
-
-```cpp
-// CELEG_CLOSED_DOMAIN: WeightMode
-```
-
-This forces maintainers to declare that the switch is intentionally closed.
-
-### Extension tests
-
-Add compile-time or runtime tests proving:
-
-1. custom architecture registration;
-2. custom checkpoint registration;
-3. custom chat profile registration;
-4. custom tokenizer provider registration;
-5. fake backend registration if public;
-6. no edits to built-in central files are required.
+- commit SHA;
+- tests added;
+- benchmark artifact;
+- remaining deviations.
 
 ### Acceptance criteria
 
-- CI rejects concrete checkpoint dependencies in backends.
-- CI rejects architecture/profile strings in execution code.
-- CI detects execution-plan compilation in hot paths.
-- Extension tests use only public registration APIs.
-- Boundary exceptions are explicit and reviewed.
+- CI rejects dependency-direction regressions;
+- hot-path plan compilation and obvious allocation regressions are caught;
+- public extension tests edit no built-in central file;
+- stale checked tasks are linked to evidence or reverted to partial.
 
 ---
 
-# Part XIII — Performance Validation
+## 21. Phase 15 — Continuous Performance Validation
 
-## 29. Phase 15 — Benchmark and Optimize After Refactoring
+### Current status: PARTIAL
 
-### Required benchmark comparisons
+The repository has meaningful benchmark tooling. Expand it around the refactoring milestones rather than creating a separate final optimization phase.
 
-For every major phase compare against Phase 0.
+### Required packed measurements
 
 #### Decode
 
-- batch 1;
-- batch 2;
-- batch 4;
-- batch 8;
-- batch 16;
-- maximum supported packed batch.
-
-Measure:
-
+- batch 1, 2, 4, 8, 16, maximum supported;
 - aggregate tokens/s;
-- per-request latency;
-- kernel launches/token;
-- H2D bytes/token;
-- CPU overhead/token;
-- GPU utilization;
-- GEMM occupancy;
-- attention occupancy;
-- synchronization count.
+- per-request p50/p95/p99;
+- kernels/token;
+- H2D and D2H bytes/token;
+- synchronization count;
+- host prepare/GPU execute/host commit;
+- device and host allocation count;
+- VRAM peak and workspace size.
 
-#### Prefill
+#### Ragged prefill
 
-Use ragged prompts such as:
+Use at least:
 
 ```text
 [16, 32, 64, 128]
 [4, 512, 32, 2048]
 [1024, 1024, 1024, 1024]
 mixed finalize flags
+all non-finalizing rows
 ```
 
 Measure:
 
 - flattened tokens/s;
 - finalized rows;
-- LM-head rows;
-- logits scratch VRAM;
-- host allocation count;
-- device allocation count;
-- page-table copy volume.
+- actual LM-head rows;
+- logits scratch size;
+- page-table copy volume;
+- allocation count;
+- host prepare/GPU execute/host commit.
 
-#### Model shapes
+#### Shapes
 
-Test:
-
-- normal hidden/query width;
-- non-equal hidden/query width;
-- variable FFN intermediate;
-- dense;
-- MoE;
-- attention-only;
-- convolution/attention hybrid;
+- `query_width == hidden`;
+- `query_width != hidden`;
+- constant and per-layer FFN widths;
+- dense and MoE;
+- attention and convolution;
 - shared KV;
-- paged and local KV.
+- local, paged, and segmented attention;
+- BF16, INT8, INT4, native Q4_K/Q6_K;
+- native fan-out enabled and disabled.
 
-### Regression policy
-
-Suggested initial thresholds:
+### Initial regression thresholds
 
 | Metric | Allowed regression |
 |---|---:|
 | Correctness | zero unexplained regressions |
-| Decode tokens/s | no more than 2% |
-| Prefill tokens/s | no more than 2% |
-| p95 latency | no more than 3% |
-| VRAM | no more than 2%, unless explicitly traded for speed |
-| Host allocation count | must improve or remain zero in steady state |
-| Device allocation count | zero in steady-state decode and prefill |
-
-Thresholds should be hardware-specific and statistically evaluated.
-
-### Expected improvements
-
-Potential gains from the plan:
-
-- no per-token plan compilation;
-- no per-prefill device buffer allocation;
-- smaller prefill LM-head GEMM;
-- smaller logits scratch;
-- fewer repeated variant inspections;
-- fewer persistent metadata copies;
-- more predictable workspace;
-- better profiling visibility;
-- easier specialized kernel binding.
+| Decode throughput | <= 2% |
+| Prefill throughput | <= 2% |
+| p95 latency | <= 3% |
+| VRAM | <= 2%, unless an explicit speed trade is documented |
+| Host allocation | zero in steady-state packed execution |
+| Device allocation | zero in steady-state packed execution |
 
 ### Acceptance criteria
 
-- Performance reports are attached to each relevant change.
-- No architectural refactor is merged with unknown hot-path impact.
-- CUDA event metrics agree with profiler timelines.
-- Improvements and regressions are documented by model and hardware.
+- every CUDA structural change has a machine-readable comparison;
+- event timing agrees with external profiling within expected tolerance;
+- same-file/same-hash benchmark rules are preserved;
+- fan-out reuse has both correctness and performance evidence.
 
 ---
 
-# Part XIV — Documentation and Migration
+## 22. Phase 16 — Documentation Aligned with Current Project Direction
 
-## 30. Phase 16 — Documentation
+### Current status: REPLACED
 
-Create or update:
+The previous plan required recreating a large documentation suite. That is stale because architecture documents were deliberately removed and focused API/benchmark guides were introduced.
 
-```text
-docs/ARCHITECTURE.md
-docs/ARCHITECTURE_RULES.md
-docs/EXTENDING_CELEG.md
-docs/BACKEND_COMPILATION.md
-docs/PACKED_EXECUTION.md
-docs/CHECKPOINT_FORMATS.md
-docs/CHAT_PROFILES.md
-docs/PERFORMANCE_VALIDATION.md
-docs/MIGRATION_GUIDE.md
-```
+Do not recreate deleted files automatically.
 
-### `EXTENDING_CELEG.md`
+### Near-term documentation policy
 
-Include complete examples for:
+Keep the following authoritative while contracts are changing:
 
-- registering an architecture;
-- registering a checkpoint format;
-- registering a chat profile;
-- registering a tokenizer provider;
-- compiling a new operator;
-- adding a CUDA weight layout;
-- adding a backend.
+- `README.md` — supported models, formats, quick start, project status;
+- `API.md` — stable C API and ownership contracts;
+- `BENCHMARK.md` — reproducible benchmark methodology;
+- this plan — architecture debt, phase status, acceptance criteria;
+- `AGENTS.md` — contributor/refactoring constraints;
+- focused code-level diagnostics and generated API docs.
 
-### `PACKED_EXECUTION.md`
+### Add only when the interfaces stabilize
 
-Document:
-
-- session compatibility;
-- workspace lifetime;
-- packed program compilation;
-- metadata staging;
-- local vs paged KV;
-- BF16 vs INT8 KV;
-- segmented attention;
-- ragged prefill;
-- final-row gather;
-- metrics semantics;
-- asynchronous behavior;
-- failure and rollback behavior.
+- `docs/EXTENDING_CELEG.md` after `RuntimeBuilder` is real;
+- `docs/PACKED_EXECUTION.md` after packed ownership and completion contracts stabilize;
+- `docs/BACKEND_COMPILATION.md` after resolved weight and compiled binding contracts stabilize;
+- migration notes when public interfaces actually change.
 
 ### Acceptance criteria
 
-- A contributor can add a test architecture using documentation alone.
-- Packed execution invariants are explicit.
-- Closed domains are labeled as closed.
-- No documentation describes “add another switch case” as Open/Closed compliance.
+- documentation describes implemented APIs, not planned names as if they exist;
+- deleted architecture docs are not recreated as stale snapshots;
+- extension examples compile in CI;
+- packed metrics, completion, compatibility, and workspace semantics are documented after implementation.
 
 ---
 
-# Part XV — Recommended Commit Sequence
+# Part VII — Recommended Commit Sequence
 
-## 31. Incremental Implementation Order
+## 23. Immediate Milestone Order
 
-The following order minimizes risk.
+### Milestone A — Confirmed packed correctness
 
-### Milestone A — Safety net
+1. Add non-equal attention-width fixture.
+2. Add per-layer FFN-width fixture.
+3. Fix attention output projection width.
+4. Fix dense FFN layer width and workspace maximum.
+5. Centralize lifecycle validation.
+6. Add complete compatibility-key tests.
 
-1. Add packed/non-packed parity tests.
-2. Add synthetic nontraditional-shape fixtures.
-3. Add allocation instrumentation.
-4. Add CUDA event timing.
-5. Store benchmark baseline.
+### Milestone B — Prefill completion and allocation
 
-### Milestone B — Packed correctness
+1. Add CUDA-event timing.
+2. Define synchronous/asynchronous completion contract.
+3. Move flattened seen-pointer buffers into workspace.
+4. Add allocation assertions.
+5. Gather finalized rows.
+6. Run final norm and LM head only on finalized rows.
+7. Test mixed and zero-finalize batches.
 
-1. Fix layer-specific attention widths.
-2. Fix layer-specific dense FFN widths.
-3. Add full compatibility key.
-4. Centralize lifecycle validation.
-5. Fix prefill timing.
+### Milestone C — Immutable plans
 
-### Milestone C — Packed allocation and LM-head improvements
+1. Define complete `CudaPlanKey`.
+2. Compile plan during model/session resource creation.
+3. Add plan fingerprint.
+4. Remove per-call plan compilation.
+5. Use fingerprint in packed compatibility.
 
-1. Move flat seen-pointer buffers into persistent workspace.
-2. Remove per-call device allocation.
-3. Add final-row gather.
-4. Project logits only for finalized rows.
-5. Benchmark memory and throughput.
+### Milestone D — Checkpoint/backend boundary
 
-### Milestone D — Composition inversion
+1. Add neutral native-storage capability or resolved storage policy.
+2. Resolve tensor source names before backend compilation.
+3. Remove CPU concrete repository includes/casts.
+4. Remove backend naming-policy dependency.
+5. Add fake repository tests.
+6. Strengthen boundary checker.
 
-1. Introduce `RuntimeBuilder`.
-2. Wrap existing built-ins.
-3. Inject catalogs into bootstrap.
-4. Add custom-extension tests.
-5. Deprecate global catalog access.
+### Milestone E — Runtime composition
 
-### Milestone E — Checkpoint/backend boundary
+1. Implement immutable `RuntimeContext`.
+2. Implement `RuntimeBuilder`.
+3. Wrap built-ins in family registration functions.
+4. Inject runtime into bootstrap.
+5. Inject runtime into CLI, C API, and serving.
+6. Add public extension tests.
 
-1. Add repository capability interfaces.
-2. Fully resolve weight-plan names.
-3. Remove concrete repository casts from CPU.
-4. Remove concrete repository knowledge from CUDA if present.
-5. Strengthen boundary checker.
+### Milestone F — Packed subsystem extraction
 
-### Milestone F — Packed workspace extraction
+1. Extract workspace requirements and ownership.
+2. Extract validator and compatibility.
+3. Extract metadata binding and staging.
+4. Compile layer bindings.
+5. Extract operator executors.
+6. Split decode and prefill pipelines.
+7. Compare performance after every extraction.
 
-1. Create requirements object.
-2. Move core buffers.
-3. Move metadata buffers.
-4. Move MoE scratch.
-5. Move segmented scratch.
-6. Verify zero performance regression.
+### Milestone G — GEMM and native fan-out safety
 
-### Milestone G — Packed staging and validation extraction
+1. Add RAII fan-out guard.
+2. Add fan-out lifecycle tests.
+3. Separate Lt cache/autotuner/workspace.
+4. Compile linear bindings.
+5. Correct closed-domain/OCP documentation.
 
-1. Extract validator.
-2. Extract compatibility key.
-3. Extract persistent metadata binding.
-4. Extract per-step staging.
-5. Extract ragged staging.
+### Milestone H — Broader SRP cleanup
 
-### Milestone H — Packed compiled program
-
-1. Compile layer-specific bindings.
-2. Prevalidate all shapes.
-3. Prebind weight-layout execution.
-4. Remove repeated variant resolution.
-5. Cache immutable execution plan.
-
-### Milestone I — Packed pipeline split
-
-1. Extract attention executor.
-2. Extract convolution executor.
-3. Extract dense FFN executor.
-4. Extract MoE executor.
-5. Extract transformer executor.
-6. Extract decode pipeline.
-7. Extract prefill pipeline.
-8. Rename facade if desired.
-
-### Milestone J — Broader SRP cleanup
-
-1. Split architecture families.
-2. Split C API.
-3. Split serving composition.
-4. Split chat profiles.
-5. Split GEMM dispatcher.
-
-### Milestone K — Contract and extension completion
-
-1. Publish backend limits.
-2. Fix role capability contracts.
-3. Remove unsafe raw policy pointers.
-4. Decide open vs closed graph operator model.
-5. Complete extension documentation.
+1. Make `ResolvedModel` authoritative.
+2. Split family resolution stages.
+3. Split C API.
+4. Reduce serving duplication.
+5. Complete chat/tokenizer providers.
+6. Decide graph extension model.
+7. Publish stabilized extension documentation.
 
 ---
 
-# Part XVI — Detailed Task Backlog
+# Part VIII — Actionable Backlog
 
-## 32. P0 Backlog
+## 24. P0 Backlog
 
-### P0.1 Packed shape correctness
+### Packed shape correctness
 
-- [ ] Add synthetic attention model where `query_width != hidden`.
-- [ ] Add synthetic model with per-layer FFN intermediate widths.
-- [ ] Replace output-projection global width assumption.
-- [ ] Replace dense-FFN global intermediate assumption.
-- [ ] Validate workspace maximums against compiled layer program.
-- [ ] Add shape mismatch diagnostics with layer index and semantic name.
+- [ ] Add synthetic `query_width != hidden` fixture.
+- [ ] Add synthetic per-layer FFN-width fixture.
+- [ ] Use `attention.layout.query_width()` for output projection input.
+- [ ] Use the current layer intermediate in dense FFN execution.
+- [ ] Size dense workspace by `max_feed_forward_intermediate`.
+- [ ] Add layer-indexed shape diagnostics.
 
-### P0.2 Compatibility correctness
+### Packed compatibility and lifecycle
 
-- [ ] Define `CudaPlanKey`.
-- [ ] Define stable hash/fingerprint.
-- [ ] Include all execution-relevant options.
-- [ ] Include compiled program identity.
-- [ ] Replace `options_compatible`.
-- [ ] Test incompatible GEMM backend.
-- [ ] Test incompatible attention chunk size.
-- [ ] Test incompatible fusion settings.
-- [ ] Test incompatible MoE offload behavior.
+- [ ] Define complete `CudaPlanKey`.
+- [ ] Define compiled-program ID.
+- [ ] Define stable plan fingerprint.
+- [ ] Replace partial `options_compatible`.
+- [ ] Centralize decode/prefill eligibility.
+- [ ] Remove unreachable `DecodePending` branch.
+- [ ] Add storage-generation metadata invalidation.
 
-### P0.3 Metrics correctness
+### Prefill correctness and performance
 
-- [ ] Add reusable CUDA event wrapper if absent.
-- [ ] Measure prefill GPU time.
-- [ ] Separate host prepare and commit time.
-- [ ] Document metric definitions.
-- [ ] Add profiler correlation test.
+- [ ] Move flat seen host/device storage into workspace.
+- [ ] Add finalized-row index storage.
+- [ ] Gather final hidden rows.
+- [ ] Final-normalize only gathered rows.
+- [ ] Project LM-head only gathered rows.
+- [ ] Test mixed finalize.
+- [ ] Test zero finalize.
+- [ ] Test failure before host commit.
 
-### P0.4 Allocation correctness
+### Timing and allocation
 
+- [ ] Add reusable CUDA event timer.
+- [ ] Separate host prepare/GPU execute/host commit/end-to-end.
+- [ ] Define completion semantics.
 - [ ] Instrument `DeviceBuffer` allocation.
-- [ ] Move `d_flat_seen` into persistent workspace.
-- [ ] Move host flattened pointer arrays into persistent workspace.
-- [ ] Assert no steady-state allocation in tests.
+- [ ] Instrument relevant host allocations.
+- [ ] Assert zero steady-state allocation.
+
+### Immutable plans
+
+- [ ] Compile CUDA plan outside packed call paths.
+- [ ] Expose plan compile count.
+- [ ] Remove `active_plan_` set/reset per call.
+- [ ] Reject mixed plan fingerprints in a packed batch.
 
 ---
 
-## 33. P1 Backlog
+## 25. P1 Backlog
 
-### P1.1 Runtime composition
+### Checkpoint/backend boundary
 
+- [x] Extract neutral tensor contracts.
+- [x] Extract optional repository capabilities.
+- [x] Remove `CheckpointView::gguf` and `ResolvedModel::is_gguf`.
+- [x] Move family naming policies out of generic roles.
+- [ ] Model native block storage as a neutral capability/policy.
+- [ ] Resolve concrete source names before backend compilation.
+- [ ] Remove backend concrete repository includes/casts.
+- [ ] Remove backend naming-policy pointer.
+- [ ] Add fake repository CPU/CUDA tests.
+
+### Runtime composition
+
+- [x] Add/freeze architecture catalog.
+- [x] Add/freeze checkpoint-format catalog.
+- [ ] Implement `RuntimeContext`.
 - [ ] Implement `RuntimeBuilder`.
-- [ ] Implement immutable `RuntimeContext`.
-- [ ] Register built-ins through functions.
+- [ ] Register family bundles.
 - [ ] Inject runtime into bootstrap.
-- [ ] Add minimal test runtime.
-- [ ] Add duplicate-ID validation.
-- [ ] Document thread safety.
+- [ ] Add tokenizer/backend/vision provider catalogs.
+- [ ] Add public custom-extension tests.
 
-### P1.2 Weight-plan resolution
-
-- [ ] Define `ResolvedWeightRequest`.
-- [ ] Resolve tensor names in architecture layer.
-- [ ] Attach transforms and expected shapes.
-- [ ] Remove backend naming-policy dependency.
-- [ ] Remove concrete checkpoint repository dependencies.
-- [ ] Add fake repository test.
-
-### P1.3 Packed workspace
+### Packed ownership
 
 - [ ] Create `PackedWorkspaceRequirements`.
-- [ ] Extract core buffers.
-- [ ] Extract metadata buffers.
-- [ ] Extract KV pointer buffers.
-- [ ] Extract sampling buffers.
-- [ ] Extract MoE buffers.
-- [ ] Extract segmented attention buffers.
-- [ ] Add capacity-growth tests.
-
-### P1.4 Packed validation and staging
-
+- [ ] Extract workspace.
 - [ ] Extract pure validator.
-- [ ] Add structured error codes.
-- [ ] Extract session binding.
-- [ ] Track session storage generations.
-- [ ] Extract decode-step staging.
-- [ ] Extract ragged prefill staging.
-- [ ] Benchmark staging overhead.
-
-### P1.5 Packed program and executors
-
-- [ ] Compile attention bindings.
-- [ ] Compile convolution bindings.
-- [ ] Compile dense FFN bindings.
-- [ ] Compile MoE bindings.
-- [ ] Bind embedding strategy.
-- [ ] Bind linear strategies.
-- [ ] Extract transformer loop.
-- [ ] Extract final projection.
+- [ ] Extract metadata stager.
+- [ ] Compile packed layer program.
+- [ ] Extract attention executor.
+- [ ] Extract convolution executor.
+- [ ] Extract dense FFN executor.
+- [ ] Extract MoE executor.
 - [ ] Split decode and prefill pipelines.
 
-### P1.6 Prefill optimization
+### GEMM/layout dispatch
 
-- [ ] Add final-row gather kernel.
-- [ ] Allocate gathered-hidden scratch by maximum finalized sessions.
-- [ ] Run final norm on gathered rows.
-- [ ] Run LM head on gathered rows.
-- [ ] Reduce logits scratch capacity.
-- [ ] Test mixed finalize flags.
-- [ ] Benchmark long ragged prompts.
+- [x] Extract `GemmDispatcher` from compiled model.
+- [x] Add Lt cache/autotune infrastructure.
+- [x] Add native GGUF linear paths.
+- [x] Add native activation fan-out reuse.
+- [ ] Replace manual fan-out scope with RAII/compiled group.
+- [ ] Separate handles, cache, autotuner, and workspaces.
+- [ ] Compile linear execution bindings.
+- [ ] Correct OCP/closed-domain comments.
 
-### P1.7 API and serving
+### API and serving
 
 - [ ] Split C API modules.
 - [ ] Add backend factory catalog.
-- [ ] Extract shared serving lifecycle.
-- [ ] Separate scheduler controller.
-- [ ] Separate diagnostics role.
-- [ ] Make vision capability-driven.
+- [ ] Extract shared request lifecycle.
+- [ ] Publish backend limits.
+- [ ] Make vision provider-driven.
 - [ ] Remove tokenizer repository casts.
 
 ---
 
-## 34. P2 Backlog
+## 26. P2 Backlog
 
-### P2.1 Model contracts
+### Resolved model
 
-- [ ] Remove duplicated topology/definition fields.
+- [ ] Remove duplicated definition/topology fields.
 - [ ] Split provenance from execution.
-- [ ] Define coherent token policy.
-- [ ] Define coherent numerical policy.
-- [ ] Make per-layer dimensions authoritative.
-- [ ] Remove unresolved policy pointers from compiled program.
+- [ ] Define authoritative token policy.
+- [ ] Define authoritative numerical policy.
+- [ ] Make per-layer values authoritative.
+- [ ] Remove raw policy pointers.
 
-### P2.2 Architecture modules
+### Architecture families
 
-- [ ] Split LFM2 implementation.
-- [ ] Split Granite implementation.
-- [ ] Split Gemma4 implementation.
-- [ ] Split MiniCPM5 implementation.
-- [ ] Add unit tests per stage.
+- [x] Move families into dedicated directories.
+- [x] Add MiniCPM5.
+- [x] Add SmolLM3.
+- [x] Split several naming policies and tool codecs.
+- [ ] Split probe/metadata/topology/graph/weights/capabilities.
 - [ ] Add family registration functions.
+- [ ] Add stage-focused unit tests.
 
-### P2.3 Chat and tokenizer
+### Chat and tokenizer
 
-- [ ] Define owned `ChatProfile`.
-- [ ] Replace raw codec pointers.
-- [ ] Split profile source files.
-- [ ] Validate role support.
+- [x] Add conversation/generation abstractions.
+- [x] Add family tool-call codecs.
+- [x] Catalog-own templates/codecs.
+- [ ] Replace raw codec pointer in capabilities.
+- [ ] Encode role capabilities.
 - [ ] Add tokenizer providers.
-- [ ] Register profiles through runtime builder.
+- [ ] Register through runtime context.
 
-### P2.4 GEMM and layouts
+### Governance and docs
 
-- [ ] Separate handle ownership.
-- [ ] Separate Lt plan cache.
-- [ ] Separate autotuner.
-- [ ] Separate quantized executors.
-- [ ] Compile linear function bindings.
-- [ ] Remove packed-path layout duplication.
-
-### P2.5 Boundary automation
-
-- [ ] Reject concrete repository types in backends.
-- [ ] Reject profile-string branching in execution.
-- [ ] Reject architecture branching in backends.
-- [ ] Detect plan compilation in hot paths.
-- [ ] Detect obvious hot-path allocation.
-- [ ] Add public extension tests.
+- [x] Add benchmark manifests and numerical helpers.
+- [x] Add focused API and benchmark guides.
+- [ ] Add packed allocation/plan boundary checks.
+- [ ] Add public extension compilation tests.
+- [ ] Add evidence links for plan status transitions.
+- [ ] Create extension/packed docs only after interfaces stabilize.
 
 ---
 
-# Part XVII — Test Plan
+# Part IX — Definition of Done
 
-## 35. Unit Tests
-
-### Runtime composition
-
-- custom architecture registration;
-- custom checkpoint format registration;
-- duplicate ID;
-- catalog freeze;
-- context lifetime;
-- concurrent read access.
-
-### Architecture resolution
-
-- probe scoring;
-- ambiguous architecture;
-- missing metadata;
-- malformed metadata;
-- shape validation;
-- token extraction;
-- graph construction;
-- weight-plan names.
-
-### Packed validator
-
-- empty batch;
-- duplicate session;
-- invalid phase;
-- context exhausted;
-- missing local KV;
-- missing paged KV;
-- incompatible weights;
-- incompatible plan;
-- invalid page table;
-- ragged gap;
-- ragged overlap;
-- zero-token row;
-- capacity overflow.
-
-### Workspace
-
-- initial sizing;
-- segmented growth;
-- flattened prefill growth;
-- no shrink;
-- bounds;
-- maximum model dimensions.
-
-### Layer program
-
-- attention dimensions;
-- shared KV owner;
-- convolution;
-- variable FFN;
-- MoE;
-- unsupported operator;
-- invalid weight shapes.
-
----
-
-## 36. Integration Tests
-
-### CPU and CUDA backend neutrality
-
-- load from fake repository;
-- load from GGUF;
-- load from SafeTensors;
-- compare resolved model;
-- ensure backend source format independence.
-
-### Packed execution
-
-- batch 1 parity;
-- batch N parity;
-- local KV;
-- paged KV;
-- INT8 KV;
-- segmented attention;
-- shared KV;
-- short convolution;
-- dense FFN;
-- MoE;
-- variable FFN width;
-- non-equal query width;
-- final logit softcap.
-
-### Ragged prefill
-
-- one request;
-- multiple equal lengths;
-- highly uneven lengths;
-- partial rows;
-- mixed finalize;
-- context boundary;
-- page boundary;
-- long prompts;
-- gathered logits parity.
-
-### Serving
-
-- CPU request lifecycle;
-- CUDA request lifecycle;
-- cancellation;
-- output limit validation;
-- diagnostics;
-- tool calls;
-- unsupported role;
-- vision capability selection.
-
----
-
-## 37. Performance Tests
-
-Add automated microbenchmarks for:
-
-```text
-packed validation
-persistent metadata bind
-step metadata stage
-page table flatten
-embedding
-attention
-convolution
-dense FFN
-MoE
-final-row gather
-LM head
-session commit
-```
-
-Add end-to-end benchmarks for:
-
-- single decode;
-- packed decode;
-- standard prefill;
-- ragged prefill;
-- serving scheduler.
-
-Use warmup and statistical repetition.
-
----
-
-# Part XVIII — Risks and Mitigations
-
-## 38. Risk: Abstraction Overhead
-
-### Risk
-
-Refactoring into collaborators may introduce:
-
-- virtual dispatch;
-- pointer chasing;
-- reduced inlining;
-- larger compile-time interfaces;
-- additional synchronization.
-
-### Mitigation
-
-- virtual calls only during construction/compilation;
-- immutable compiled bindings;
-- direct function pointers in hot paths;
-- contiguous program arrays;
-- benchmark every extraction;
-- inspect generated SASS where critical.
-
----
-
-## 39. Risk: Hidden Behavior Changes
-
-### Risk
-
-Large monolithic code often contains implicit ordering and synchronization dependencies.
-
-### Mitigation
-
-- characterization tests first;
-- one responsibility extraction per commit;
-- preserve launch order initially;
-- add CUDA event and stream assertions;
-- use Nsight Systems comparison;
-- do not combine structural and algorithmic changes unless necessary.
-
----
-
-## 40. Risk: Pointer Lifetime and Session Mutation
-
-### Risk
-
-`PackedSessionContext` exposes many borrowed pointers. Extraction may accidentally lengthen their lifetime or cache invalid state.
-
-### Mitigation
-
-- introduce storage generation IDs;
-- document invalidation;
-- bind sessions per layout generation;
-- avoid caching raw pointers across model storage replacement without validation;
-- consider stable session-state objects owned by `shared_ptr`.
-
----
-
-## 41. Risk: Workspace Memory Growth
-
-### Risk
-
-A generalized workspace based on maxima may consume excessive VRAM.
-
-### Mitigation
-
-- separate decode and prefill capacity classes;
-- separate dense and MoE scratch where lifetimes do not overlap;
-- use arena aliasing for non-overlapping buffers;
-- calculate lifetime intervals;
-- expose workspace estimates before allocation;
-- support configurable capacity;
-- retain lazy growth for segmented attention and rare paths.
-
----
-
-## 42. Risk: Extension API Instability
-
-### Risk
-
-Publishing registries too early may freeze weak interfaces.
-
-### Mitigation
-
-- mark extension APIs experimental initially;
-- provide semantic versioning rules;
-- keep neutral metadata views narrow;
-- prefer value objects;
-- add real external test plugins or examples before stabilization.
-
----
-
-# Part XIX — Definition of Done
-
-## 43. Architectural Definition of Done
+## 27. Architectural Definition of Done
 
 The refactoring is complete when:
 
-- backends do not depend on concrete checkpoint formats;
 - runtime composition is injectable;
-- architectures can be registered without editing central factories;
-- chat profiles and tokenizers can be registered coherently;
+- built-in families register without central runtime switches;
+- backends do not depend on concrete checkpoint formats;
+- tensor names and transforms are resolved before backend compilation;
 - resolved-model fields have one authoritative owner;
 - compiled programs contain only execution-relevant state;
-- optional capabilities are explicit;
-- raw pointer lifetimes are controlled;
-- graph extension policy is documented;
-- architecture boundary CI enforces the intended direction.
+- optional behavior is capability-driven;
+- raw borrowed policy lifetimes are removed or formally safe;
+- graph domains are explicitly open or closed;
+- C API and serving composition roots are small and declarative;
+- boundary CI enforces the dependency direction.
 
----
+## 28. Packed Execution Definition of Done
 
-## 44. Packed Execution Definition of Done
+Packed execution is complete when:
 
-`packed_execution.cu` is considered successfully refactored when:
-
-- no single implementation object owns every packed subsystem;
+- non-equal attention widths and variable FFN widths pass;
+- no per-call CUDA plan compilation occurs;
+- compatibility uses immutable complete fingerprints;
 - workspace is a dedicated component;
 - validation is pure host-side logic;
-- metadata staging is isolated;
-- layer dimensions are compiled per layer;
-- execution plans are immutable and reused;
-- embedding dispatch uses the weight-layout strategy;
-- attention, convolution, dense FFN, and MoE execution are separated;
-- decode and prefill are separate pipelines;
-- prefill projects logits only for required final rows;
-- no steady-state host or device allocation occurs;
-- metrics measure actual GPU execution;
-- batch compatibility is complete;
-- synthetic nontraditional shapes pass;
-- performance is equal or better within defined thresholds.
+- metadata staging is isolated and generation-aware;
+- layer dimensions and bindings are compiled once;
+- attention, convolution, dense FFN, and MoE execution are separate;
+- decode and prefill are separate orchestration pipelines;
+- prefill projects logits only for finalized rows;
+- zero steady-state host/device allocation occurs;
+- metrics measure actual GPU work;
+- completion and host commit semantics are explicit;
+- no partial state remains after failure;
+- performance stays within the agreed thresholds.
 
----
+## 29. Final Priority
 
-## 45. Final Recommended Priority
+The highest-value order is now:
 
-The highest-value implementation order is:
+1. **Fix confirmed packed shape defects.**
+2. **Fix prefill allocation, final-row projection, completion, and timing.**
+3. **Compile immutable plans and complete compatibility identity.**
+4. **Finish checkpoint/backend dependency inversion.**
+5. **Introduce runtime composition.**
+6. **Extract packed ownership boundaries.**
+7. **Make native fan-out scope safe and compile linear bindings.**
+8. **Make resolved-model ownership authoritative.**
+9. **Split architecture, C API, serving, and chat responsibilities.**
+10. **Stabilize and document extension contracts.**
 
-1. **Create correctness and performance baselines.**
-2. **Fix packed shape assumptions and compatibility.**
-3. **Fix prefill timing and allocations.**
-4. **Project logits only for finalized ragged rows.**
-5. **Introduce injectable runtime composition.**
-6. **Remove concrete checkpoint dependencies from backends.**
-7. **Extract packed workspace, validation, and metadata staging.**
-8. **Compile immutable packed layer and execution plans.**
-9. **Split packed operator executors and pipelines.**
-10. **Split architecture modules, API, serving, chat, and GEMM responsibilities.**
-11. **Strengthen automated architecture enforcement.**
-12. **Document extension points and performance contracts.**
-
-The first objective should not be to make every source file short. The first objective should be to make each subsystem have one clear reason to change while preserving Celeg’s performance-oriented design.
-
-The critical architectural pattern is:
-
-```text
-resolve once
-compile once
-bind once
-allocate once
-execute many times
-```
-
-That pattern should guide the entire Celeg runtime, and especially the CUDA packed decode and ragged prefill paths.
+The project should optimize for clear ownership and precompiled execution, not merely shorter source files.
