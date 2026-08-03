@@ -65,6 +65,13 @@ public:
                                   const __nv_bfloat16* weight,
                                   int m, int n, int k);
 
+    // Begins an explicit fan-out scope for native GGUF projections sharing
+    // exactly one input matrix. The activation is quantized once and reused
+    // by subsequent linear() calls in the scope. Call end_native_fanout()
+    // before the source buffer is written again.
+    void begin_native_fanout(const __nv_bfloat16* x, int m, int k);
+    void end_native_fanout();
+
     cudaStream_t stream() const { return stream_; }
     CublasHandle& cublas() { return cublas_; }
     CublasLtHandle& cublas_lt() { return cublas_lt_; }
@@ -87,8 +94,12 @@ private:
     DeviceBuffer<float> mmq_sums_;
     int mmq_capacity_m_ = 0;
     int mmq_capacity_k_ = 0;
+    const __nv_bfloat16* native_fanout_input_ = nullptr;
+    int native_fanout_m_ = 0;
+    int native_fanout_k_ = 0;
 
     void ensure_mmq_capacity(int m, int k);
+    bool has_native_fanout(const __nv_bfloat16* x, int m, int k) const;
 };
 
 } // namespace celeg

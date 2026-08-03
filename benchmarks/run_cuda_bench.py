@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Reproducible CUDA GGUF benchmark for celeg versus llama.cpp.
+"""Reproducible native-GGUF CUDA comparison: Celeg versus llama.cpp.
 
-Both engines receive the exact same Q4_K_M file.  The first of six one-shot
-runs is discarded; the remaining five are summarized in one JSON report.
+The benchmark intentionally measures only the same on-device Q4_K_M file.
+Neither engine is allowed to silently materialize the GGUF into BF16/INT8.
+One complete run is discarded, then five measurements are reported.
 """
 from __future__ import annotations
 
@@ -11,43 +12,48 @@ import hashlib
 import json
 import os
 import platform
-import shutil
+import re
 import statistics
 import subprocess
-import sys
-import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RESULT = ROOT / "benchmarks" / "results" / "cuda_gguf_q4_k_m.json"
-LLAMA_REVISION = "0e4a0362239713ea95a6864a17a8de4b0ad90d62"
-GGUF_REVISION = "fa224d4cb60cffe61eb58726712ef255bb64d0b7"
-BUILD_ENV: dict[str, str] | None = None
-
-
-def run(cmd: list[str], capture: bool = False) -> subprocess.CompletedProcess:
-    print("+", " ".join(map(str, cmd)))
-    return subprocess.run(cmd, check=True, text=True,
-                          capture_output=capture, env=BUILD_ENV)
+RESULT = ROOT / "benchmarks" / "results" / "smollm3_cuda_q4_k_m_native.json"
+LLAMA_REVISION = "6b36c2305644fd30db7cce3f4840c74574f31ce9"
+SMOLLM3_REVISION = "4965cb60b150737b68a0408c36aeefb65078f894"
+PREFILL_TOKENS = 512
+DECODE_TOKENS = 128
+BATCH = 512
+CONTEXT = 1024
+REPETITIONS = 5
+MIN_WIN_RATIO = 1.05
+MAX_NATIVE_WEIGHT_GIB = 2.0
 
 
 def sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def find_binary(root: Path, name: str) -> Path:
     suffix = ".exe" if platform.system() == "Windows" else ""
-    for candidate in (root / "bin" / "Release" / (name + suffix),
-                      root / "bin" / (name + suffix),
-                      root / "Release" / (name + suffix),
-                      root / (name + suffix)):
+    for candidate in (root / f"{name}{suffix}", root / "bin" / f"{name}{suffix}",
+                      root / "Release" / f"{name}{suffix}"):
         if candidate.is_file():
             return candidate
     raise RuntimeError(f"cannot find {name} under {root}")
+
+
+def find_smollm3_gguf() -> Path:
+    cache = Path.home() / ".cache" / "huggingface" / "hub"
+    snapshot = cache / "models--ggml-org--SmolLM3-3B-GGUF" / "snapshots" / SMOLLM3_REVISION
+    model = snapshot / "SmolLM3-Q4_K_M.gguf"
+    if not model.is_file():
+        raise RuntimeError(f"SmolLM3 Q4_K_M is not cached at {model}")
+    return model
 
 
 def git_head(path: Path) -> str:
@@ -57,137 +63,123 @@ def git_head(path: Path) -> str:
 
 
 def gpu_info() -> dict[str, str]:
-    result = subprocess.run(["nvidia-smi", "--query-gpu=name,compute_cap,driver_version",
-                             "--format=csv,noheader,nounits"],
-                            text=True, capture_output=True, check=False)
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,compute_cap,driver_version",
+         "--format=csv,noheader,nounits"], text=True, capture_output=True, check=False)
     if result.returncode != 0 or not result.stdout.strip():
         return {"name": "unknown", "compute_capability": "unknown", "driver": "unknown"}
-    name, cap, driver = [item.strip() for item in result.stdout.splitlines()[0].split(",")]
-    return {"name": name, "compute_capability": cap, "driver": driver}
+    name, capability, driver = [part.strip() for part in result.stdout.splitlines()[0].split(",")]
+    return {"name": name, "compute_capability": capability, "driver": driver}
 
 
-def setup_llama(build_dir: Path) -> None:
-    global BUILD_ENV
-    if BUILD_ENV is None:
-        sys.path.insert(0, str(ROOT))
-        from scripts.dev import discover_environment
-        environment = discover_environment("cuda", "86")
-        if not environment.ok:
-            raise RuntimeError("CUDA toolchain is not ready for llama.cpp")
-        BUILD_ENV = environment.values
-    source = build_dir.parent
-    if not (source / ".git").is_dir():
-        raise RuntimeError(f"llama.cpp checkout not found at {source}")
-    compiler = shutil.which("cl.exe", path=BUILD_ENV["PATH"])
-    if compiler is None:
-        raise RuntimeError("MSVC compiler is not available for llama.cpp")
-    if git_head(source) != LLAMA_REVISION:
-        raise RuntimeError(
-            f"llama.cpp must be pinned to {LLAMA_REVISION}; found {git_head(source)}")
-    run(["cmake", "-S", str(source), "-B", str(build_dir), "-G", "Ninja",
-         "-DGGML_NATIVE=ON", "-DGGML_CUDA=ON", "-DGGML_CUDA_F16=ON",
-         "-DCMAKE_CUDA_ARCHITECTURES=86", "-DLLAMA_BUILD_TESTS=OFF",
-         "-DLLAMA_BUILD_EXAMPLES=ON", "-DCMAKE_BUILD_TYPE=Release",
-         "-DCMAKE_CUDA_FLAGS_INIT=--use-local-env",
-         f"-DCMAKE_C_COMPILER={compiler}", f"-DCMAKE_CXX_COMPILER={compiler}"])
-    run(["cmake", "--build", str(build_dir), "--config", "Release",
-         "--target", "llama-bench", "-j", "8"])
-
-
-def parse_lfm(stderr: str) -> tuple[float, float]:
-    values = {}
-    for line in stderr.splitlines():
+def parse_celeg(output: str) -> tuple[float, float, float]:
+    values: dict[str, float] = {}
+    for line in output.splitlines():
         if line.startswith("benchmark.") and "=" in line:
             key, value = line.split("=", 1)
             values[key] = float(value)
-    return values["benchmark.prefill_tokens_per_second"], values["benchmark.decode_tokens_per_second"]
+    weight_match = re.search(r"memory\.weights=([0-9.]+) GiB", output)
+    if not weight_match:
+        raise RuntimeError("celeg-run did not emit memory.weights")
+    return (values["benchmark.prefill_tokens_per_second"],
+            values["benchmark.decode_tokens_per_second"], float(weight_match.group(1)))
 
 
-def parse_llama(stdout: str, expected: Path) -> tuple[float, float]:
-    prompt = re.search(r'"n_prompt":\s*512,.*?"avg_ts":\s*([0-9.]+)', stdout, re.S)
-    decode = re.search(r'"n_prompt":\s*0,\s*"n_gen":\s*128,.*?"avg_ts":\s*([0-9.]+)', stdout, re.S)
+def parse_llama(output: str) -> tuple[float, float]:
+    prompt = re.search(
+        rf'"n_prompt":\s*{PREFILL_TOKENS},.*?"avg_ts":\s*([0-9.]+)', output, re.S)
+    decode = re.search(
+        rf'"n_prompt":\s*0,\s*"n_gen":\s*{DECODE_TOKENS},.*?"avg_ts":\s*([0-9.]+)',
+        output, re.S)
     if not prompt or not decode:
-        raise RuntimeError("llama-bench JSON did not contain prompt/decode rows")
+        raise RuntimeError("llama-bench JSON did not contain the requested rows")
     return float(prompt.group(1)), float(decode.group(1))
 
 
+def summary(values: list[float]) -> dict[str, float]:
+    return {
+        "mean": statistics.mean(values),
+        "median": statistics.median(values),
+        "stddev": statistics.stdev(values) if len(values) > 1 else 0.0,
+        "samples": values,
+    }
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("gguf", type=Path)
-    parser.add_argument("--celeg-build", type=Path, default=ROOT / "out" / "windows-cuda-release")
-    parser.add_argument("--llama-build", type=Path, default=ROOT / ".externals" / "llama.cpp" / "build-cuda")
-    parser.add_argument("--reps", type=int, default=5)
-    parser.add_argument("--setup-llama", action="store_true")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", type=Path, default=None)
+    parser.add_argument("--celeg-build", type=Path,
+                        default=ROOT / "out" / "windows-cuda-relwithdebinfo")
+    parser.add_argument("--llama-build", type=Path,
+                        default=ROOT / "out" / "third_party" / "llama-cuda")
     args = parser.parse_args()
-    if args.reps <= 0 or args.gguf.suffix.lower() != ".gguf":
-        raise SystemExit("expected a .gguf file and positive --reps")
-    if args.setup_llama:
-        setup_llama(args.llama_build)
-    model = args.gguf.resolve()
-    digest = sha256(model)
+
+    model = (args.model or find_smollm3_gguf()).resolve()
+    if model.name != "SmolLM3-Q4_K_M.gguf":
+        raise SystemExit("the native comparison is pinned to SmolLM3-Q4_K_M.gguf")
+    llama_source = args.llama_build.parent / "llama.cpp"
+    if git_head(llama_source) != LLAMA_REVISION:
+        raise SystemExit(f"llama.cpp must be {LLAMA_REVISION}; found {git_head(llama_source)}")
     celeg = find_binary(args.celeg_build, "celeg-run")
     llama = find_binary(args.llama_build, "llama-bench")
-    env = dict(os.environ, OMP_NUM_THREADS="8", MKL_NUM_THREADS="8")
-    cuda_bin = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin")
-    env["PATH"] = os.pathsep.join([str(llama.parent), str(cuda_bin),
-                                    str(cuda_bin / "x64"), env.get("PATH", "")])
+    env = dict(os.environ)
+    cuda_bin = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin\x64")
+    env["PATH"] = os.pathsep.join([str(cuda_bin), str(llama.parent), env.get("PATH", "")])
+
+    celeg_command = [str(celeg), "--model", str(model), "--weight-mode", "native",
+                     "--prompt", "benchmark", "--raw", "--benchmark-prefill-tokens",
+                     str(PREFILL_TOKENS), "--benchmark-decode", str(DECODE_TOKENS),
+                     "--benchmark-warmup", "1", "--max-new-tokens", str(DECODE_TOKENS),
+                     "--context", str(CONTEXT), "--prefill-chunk", str(BATCH),
+                     "--kv-cache", "bf16", "--fused-residuals", "--fused-projections",
+                     "--fast-attention", "--gemm-backend", "cublaslt", "--memory-report"]
+    llama_command = [str(llama), "-m", str(model), "-p", str(PREFILL_TOKENS),
+                     "-n", str(DECODE_TOKENS), "-b", str(BATCH), "-ub", str(BATCH),
+                     "-ngl", "99", "-ctk", "bf16", "-ctv", "bf16", "-r", "1", "-o", "json"]
 
     celeg_prefill: list[float] = []
     celeg_decode: list[float] = []
+    celeg_weights: list[float] = []
     llama_prefill: list[float] = []
     llama_decode: list[float] = []
-    for iteration in range(args.reps + 1):
-        celeg_result = subprocess.run([
-            str(celeg), "--model", str(model), "--prompt", "benchmark",
-            "--raw", "--benchmark-prefill-tokens", "512",
-            "--benchmark-decode", "128", "--benchmark-warmup", "1",
-            "--max-new-tokens", "128", "--context", "1024",
-            "--fused-residuals", "--fused-projections", "--fast-attention",
-            "--gemm-backend", "cublaslt", "--kv-cache", "bf16",
-            "--prefill-chunk", "256",
-        ], text=True, capture_output=True, env=env, check=True)
-        lp, ld = parse_lfm(celeg_result.stderr)
-        llama_result = subprocess.run([
-            str(llama), "-m", str(model), "-p", "512", "-n", "128", "-r", "1",
-            "-o", "json", "-t", "8", "-b", "256", "-ub", "256",
-            "-ngl", "99", "-ctk", "bf16", "-ctv", "bf16",
-        ], text=True, capture_output=True, env=env, check=True)
-        cp, cd = parse_llama(llama_result.stdout, model)
-        if iteration == 0:
-            continue
-        celeg_prefill.append(lp); celeg_decode.append(ld)
-        llama_prefill.append(cp); llama_decode.append(cd)
+    for iteration in range(REPETITIONS + 1):
+        celeg_done = subprocess.run(celeg_command, text=True, capture_output=True, env=env, check=True)
+        llama_done = subprocess.run(llama_command, text=True, capture_output=True, env=env, check=True)
+        cp, cd, weights = parse_celeg(celeg_done.stdout + celeg_done.stderr)
+        lp, ld = parse_llama(llama_done.stdout)
+        if iteration:
+            celeg_prefill.append(cp); celeg_decode.append(cd); celeg_weights.append(weights)
+            llama_prefill.append(lp); llama_decode.append(ld)
 
     report = {
-        "valid": True,
-        "backend": "cuda",
-        "quant": "Q4_K_M",
-        "gguf_revision": GGUF_REVISION,
-        "llama_cpp_revision": LLAMA_REVISION,
-        "celeg_commit": git_head(ROOT),
-        "gpu": gpu_info(),
-        "model_path": str(model),
-        "model_sha256": digest,
-        "model_size_bytes": model.stat().st_size,
-        "threads": 8, "prefill_tokens": 512, "decode_tokens": 128,
-        "batch": 256, "ubatch": 256, "kv": "bf16", "gpu_layers": 99,
-        "repetitions": args.reps,
-        "celeg": {"prefill_tps": statistics.mean(celeg_prefill),
-                  "prefill_stddev": statistics.stdev(celeg_prefill) if len(celeg_prefill) > 1 else 0.0,
-                  "decode_tps": statistics.mean(celeg_decode),
-                  "decode_stddev": statistics.stdev(celeg_decode) if len(celeg_decode) > 1 else 0.0},
-        "llama_cpp": {"prefill_tps": statistics.mean(llama_prefill),
-                      "prefill_stddev": statistics.stdev(llama_prefill) if len(llama_prefill) > 1 else 0.0,
-                      "decode_tps": statistics.mean(llama_decode),
-                      "decode_stddev": statistics.stdev(llama_decode) if len(llama_decode) > 1 else 0.0},
+        "valid": False,
+        "contract": {"model": "ggml-org/SmolLM3-3B-GGUF:SmolLM3-Q4_K_M.gguf",
+                     "gguf_revision": SMOLLM3_REVISION, "weight_mode": "native",
+                     "max_native_weight_gib": MAX_NATIVE_WEIGHT_GIB,
+                     "prefill_tokens": PREFILL_TOKENS, "decode_tokens": DECODE_TOKENS,
+                     "batch": BATCH, "ubatch": BATCH, "context": CONTEXT,
+                     "kv_cache": "bf16", "gpu_layers": 99, "timed_repetitions": REPETITIONS,
+                     "discarded_warmup_runs": 1, "minimum_win_ratio": MIN_WIN_RATIO},
+        "gpu": gpu_info(), "llama_cpp_revision": LLAMA_REVISION,
+        "celeg_commit": git_head(ROOT), "model_path": str(model),
+        "model_sha256": sha256(model), "model_size_bytes": model.stat().st_size,
+        "commands": {"celeg": celeg_command, "llama_cpp": llama_command},
+        "celeg": {"prefill_tps": summary(celeg_prefill), "decode_tps": summary(celeg_decode),
+                  "weight_gib": summary(celeg_weights)},
+        "llama_cpp": {"prefill_tps": summary(llama_prefill), "decode_tps": summary(llama_decode)},
     }
     report["ratio"] = {
-        "prefill": report["celeg"]["prefill_tps"] / report["llama_cpp"]["prefill_tps"],
-        "decode": report["celeg"]["decode_tps"] / report["llama_cpp"]["decode_tps"],
+        "prefill": report["celeg"]["prefill_tps"]["mean"] / report["llama_cpp"]["prefill_tps"]["mean"],
+        "decode": report["celeg"]["decode_tps"]["mean"] / report["llama_cpp"]["decode_tps"]["mean"],
     }
+    report["valid"] = (report["celeg"]["weight_gib"]["mean"] <= MAX_NATIVE_WEIGHT_GIB and
+                       report["ratio"]["prefill"] >= MIN_WIN_RATIO and
+                       report["ratio"]["decode"] >= MIN_WIN_RATIO)
     RESULT.parent.mkdir(parents=True, exist_ok=True)
     RESULT.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
+    if not report["valid"]:
+        raise SystemExit("native GGUF win contract was not met")
 
 
 if __name__ == "__main__":

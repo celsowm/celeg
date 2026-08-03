@@ -61,6 +61,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             }
             const AttentionSpec& owner_layout = owner->layout;
             prof.begin(stream_.get());
+            begin_native_fanout(workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
             linear(workspace_.prefill_normed_.data(), *attention->query,
                    workspace_.prefill_q_.data(), rows, layout.query_width(),
                    resources_.shape_.hidden);
@@ -72,6 +73,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                        workspace_.prefill_v_.data(), rows, layout.key_value_width(),
                        resources_.shape_.hidden);
             }
+            end_native_fanout();
             prof.end(PrefillPhase::QkvProj, stream_.get());
 
             prof.begin(stream_.get());

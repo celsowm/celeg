@@ -36,6 +36,16 @@ bool close(float a, float b) {
 } // namespace
 
 int main() {
+    // The tensor-core prefill path is opt-in in production but must always be
+    // covered here. An explicit environment setting still wins, so the same
+    // binary can bisect a failure between the MMA and DP4A prefill kernels.
+    if (std::getenv("CELEG_MMQ_TENSOR_CORES") == nullptr) {
+#if defined(_WIN32)
+        _putenv_s("CELEG_MMQ_TENSOR_CORES", "1");
+#else
+        setenv("CELEG_MMQ_TENSOR_CORES", "1", 1);
+#endif
+    }
     constexpr int k = 256;
     constexpr int q4_bytes = 144;
     constexpr int q6_bytes = 210;
@@ -81,6 +91,84 @@ int main() {
     std::vector<__nv_bfloat16> gemm_y(2);
     check(cudaMemcpy(gemm_y.data(), d_y, 2 * sizeof(y), cudaMemcpyDeviceToHost), "copy y gemm");
     if (!close(host_bf16(gemm_y[0]), 512.0f) || !close(host_bf16(gemm_y[1]), 512.0f)) return 4;
+
+    // Native MMQ must use its tiled prefill path for m > 1. Exercise both
+    // block formats with a deterministic matrix before the randomized decode
+    // coverage below: this catches row-stride, tile-tail and beta regressions.
+    {
+        constexpr int blocks_per_row = k / celeg::kMmqQ8_1BlockSize;
+        int8_t* d_prefill_q8 = nullptr;
+        float* d_prefill_scales = nullptr;
+        float* d_prefill_sums = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_prefill_q8), 2 * k), "cudaMalloc prefill q8");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_prefill_scales),
+                         2 * blocks_per_row * sizeof(float)), "cudaMalloc prefill scales");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_prefill_sums),
+                         2 * blocks_per_row * sizeof(float)), "cudaMalloc prefill sums");
+        celeg::launch_quantize_q8_1(d_x, d_prefill_q8, d_prefill_scales, d_prefill_sums,
+                                  2, k, nullptr);
+        celeg::launch_q4k_mmq(d_prefill_q8, d_prefill_scales, d_prefill_sums, d_q4, d_y,
+                              2, 1, k, q4_bytes, 1, 0.0f, nullptr);
+        check(cudaMemcpy(gemm_y.data(), d_y, 2 * sizeof(y), cudaMemcpyDeviceToHost),
+              "copy tiled q4 prefill");
+        if (!close(host_bf16(gemm_y[0]), 512.0f) || !close(host_bf16(gemm_y[1]), 512.0f)) return 12;
+        gemm_y.assign(2, __float2bfloat16(4.0f));
+        check(cudaMemcpy(d_y, gemm_y.data(), 2 * sizeof(y), cudaMemcpyHostToDevice),
+              "copy tiled q6 beta");
+        celeg::launch_q6k_mmq(d_prefill_q8, d_prefill_scales, d_prefill_sums, d_q6, d_y,
+                              2, 1, k, q6_bytes, 1, 3.0f, nullptr);
+        check(cudaMemcpy(gemm_y.data(), d_y, 2 * sizeof(y), cudaMemcpyDeviceToHost),
+              "copy tiled q6 prefill");
+        if (!close(host_bf16(gemm_y[0]), 12.0f) || !close(host_bf16(gemm_y[1]), 12.0f)) return 13;
+        cudaFree(d_prefill_sums); cudaFree(d_prefill_scales); cudaFree(d_prefill_q8);
+    }
+
+    // Exercise the 16x16 integer-Tensor-Core prefill tile. The deterministic
+    // rows make an incorrect WMMA orientation immediately visible.
+    {
+        constexpr int tensor_rows = 16;
+        constexpr int tensor_blocks_per_row = k / celeg::kMmqQ8_1BlockSize;
+        std::vector<uint8_t> q4_matrix(static_cast<size_t>(tensor_rows) * q4_bytes);
+        std::vector<uint8_t> q6_matrix(static_cast<size_t>(tensor_rows) * q6_bytes);
+        for (int row = 0; row < tensor_rows; ++row) {
+            std::memcpy(q4_matrix.data() + static_cast<size_t>(row) * q4_bytes, q4.data(), q4_bytes);
+            std::memcpy(q6_matrix.data() + static_cast<size_t>(row) * q6_bytes, q6.data(), q6_bytes);
+        }
+        std::vector<__nv_bfloat16> tensor_x(static_cast<size_t>(tensor_rows) * k, __float2bfloat16(2.0f));
+        uint8_t* d_tensor_q4 = nullptr; uint8_t* d_tensor_q6 = nullptr;
+        __nv_bfloat16* d_tensor_x = nullptr; __nv_bfloat16* d_tensor_y = nullptr;
+        int8_t* d_tensor_q8 = nullptr; float* d_tensor_scales = nullptr; float* d_tensor_sums = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_q4), q4_matrix.size()), "cudaMalloc tensor q4");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_q6), q6_matrix.size()), "cudaMalloc tensor q6");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_x), tensor_x.size() * sizeof(*d_tensor_x)), "cudaMalloc tensor x");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_y), tensor_rows * tensor_rows * sizeof(*d_tensor_y)), "cudaMalloc tensor y");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_q8), tensor_x.size()), "cudaMalloc tensor q8");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_scales),
+                         tensor_rows * tensor_blocks_per_row * sizeof(float)), "cudaMalloc tensor scales");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_sums),
+                         tensor_rows * tensor_blocks_per_row * sizeof(float)), "cudaMalloc tensor sums");
+        check(cudaMemcpy(d_tensor_q4, q4_matrix.data(), q4_matrix.size(), cudaMemcpyHostToDevice), "copy tensor q4");
+        check(cudaMemcpy(d_tensor_q6, q6_matrix.data(), q6_matrix.size(), cudaMemcpyHostToDevice), "copy tensor q6");
+        check(cudaMemcpy(d_tensor_x, tensor_x.data(), tensor_x.size() * sizeof(*d_tensor_x), cudaMemcpyHostToDevice), "copy tensor x");
+        celeg::launch_quantize_q8_1(d_tensor_x, d_tensor_q8, d_tensor_scales, d_tensor_sums,
+                                  tensor_rows, k, nullptr);
+        celeg::launch_q4k_mmq(d_tensor_q8, d_tensor_scales, d_tensor_sums, d_tensor_q4, d_tensor_y,
+                              tensor_rows, tensor_rows, k, q4_bytes, tensor_rows, 0.0f, nullptr);
+        std::vector<__nv_bfloat16> tensor_y(static_cast<size_t>(tensor_rows) * tensor_rows);
+        check(cudaMemcpy(tensor_y.data(), d_tensor_y, tensor_y.size() * sizeof(*d_tensor_y), cudaMemcpyDeviceToHost),
+              "copy tensor q4 result");
+        for (const __nv_bfloat16 value : tensor_y) if (!close(host_bf16(value), 512.0f)) return 14;
+        std::fill(tensor_y.begin(), tensor_y.end(), __float2bfloat16(4.0f));
+        check(cudaMemcpy(d_tensor_y, tensor_y.data(), tensor_y.size() * sizeof(*d_tensor_y), cudaMemcpyHostToDevice),
+              "copy tensor q6 beta");
+        celeg::launch_q6k_mmq(d_tensor_q8, d_tensor_scales, d_tensor_sums, d_tensor_q6, d_tensor_y,
+                              tensor_rows, tensor_rows, k, q6_bytes, tensor_rows, 3.0f, nullptr);
+        check(cudaMemcpy(tensor_y.data(), d_tensor_y, tensor_y.size() * sizeof(*d_tensor_y), cudaMemcpyDeviceToHost),
+              "copy tensor q6 result");
+        for (const __nv_bfloat16 value : tensor_y) if (!close(host_bf16(value), 12.0f)) return 15;
+        cudaFree(d_tensor_sums); cudaFree(d_tensor_scales); cudaFree(d_tensor_q8); cudaFree(d_tensor_y);
+        cudaFree(d_tensor_x); cudaFree(d_tensor_q6); cudaFree(d_tensor_q4);
+    }
 
     // Exercise the dispatcher with disjoint GGUF segments. Every segment
     // owns a separate output range, so each must receive the caller's beta.
@@ -131,7 +219,8 @@ int main() {
     {
         std::mt19937 rng(12345);
         std::uniform_int_distribution<int> byte_dist(0, 255);
-        constexpr int mmq_n = 3;
+        constexpr int mmq_n = 16;
+        constexpr int mmq_m = 16;
         constexpr int mmq_k = 512; // 2 super-blocks
         constexpr int mmq_super_blocks = mmq_k / 256;
         const size_t mmq_row_bytes = static_cast<size_t>(mmq_super_blocks) * q4_bytes;
@@ -169,12 +258,12 @@ int main() {
                          cudaMemcpyDeviceToHost), "copy mmq dequant");
 
         std::uniform_real_distribution<float> act_dist(-3.0f, 3.0f);
-        std::vector<__nv_bfloat16> mmq_activation(mmq_k);
-        std::vector<float> mmq_activation_f(mmq_k);
-        for (int i = 0; i < mmq_k; ++i) {
+        std::vector<__nv_bfloat16> mmq_activation(static_cast<size_t>(mmq_m) * mmq_k);
+        std::vector<float> mmq_activation_f(static_cast<size_t>(mmq_m) * mmq_k);
+        for (size_t i = 0; i < mmq_activation.size(); ++i) {
             const float value = act_dist(rng);
-            mmq_activation_f[static_cast<size_t>(i)] = value;
-            mmq_activation[static_cast<size_t>(i)] = __float2bfloat16(value);
+            mmq_activation_f[i] = value;
+            mmq_activation[i] = __float2bfloat16(value);
         }
         __nv_bfloat16* d_mmq_activation = nullptr;
         check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_activation),
@@ -191,42 +280,251 @@ int main() {
         check(cudaMalloc(reinterpret_cast<void**>(&d_q8), mmq_activation.size()),
               "cudaMalloc q8");
         check(cudaMalloc(reinterpret_cast<void**>(&d_q8_scale),
-                         static_cast<size_t>(mmq_blocks_per_row) * sizeof(float)),
+                         static_cast<size_t>(mmq_m) * mmq_blocks_per_row * sizeof(float)),
               "cudaMalloc q8 scale");
         check(cudaMalloc(reinterpret_cast<void**>(&d_q8_sum),
-                         static_cast<size_t>(mmq_blocks_per_row) * sizeof(float)),
+                         static_cast<size_t>(mmq_m) * mmq_blocks_per_row * sizeof(float)),
               "cudaMalloc q8 sum");
         celeg::launch_quantize_q8_1(d_mmq_activation, d_q8, d_q8_scale, d_q8_sum,
-                                  1, mmq_k, nullptr);
+                                  mmq_m, mmq_k, nullptr);
 
         __nv_bfloat16* d_mmq_y = nullptr;
         check(cudaMalloc(reinterpret_cast<void**>(&d_mmq_y),
-                         static_cast<size_t>(mmq_n) * sizeof(__nv_bfloat16)),
+                         static_cast<size_t>(mmq_m) * mmq_n * sizeof(__nv_bfloat16)),
               "cudaMalloc mmq y");
         celeg::launch_q4k_mmq(d_q8, d_q8_scale, d_q8_sum, d_mmq_weight, d_mmq_y,
-                            1, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
-        std::vector<__nv_bfloat16> mmq_y(mmq_n);
+                            mmq_m, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
+        std::vector<__nv_bfloat16> mmq_y(static_cast<size_t>(mmq_m) * mmq_n);
         check(cudaMemcpy(mmq_y.data(), d_mmq_y, mmq_y.size() * sizeof(__nv_bfloat16),
                          cudaMemcpyDeviceToHost), "copy mmq y");
 
-        for (int row = 0; row < mmq_n; ++row) {
-            double reference = 0.0;
-            for (int i = 0; i < mmq_k; ++i) {
-                reference += static_cast<double>(
-                                 host_bf16(mmq_weight_dequant[static_cast<size_t>(row) * mmq_k + i])) *
-                             static_cast<double>(mmq_activation_f[static_cast<size_t>(i)]);
+        // Replay the same data one activation row at a time. m == 1 always
+        // takes the long-validated decode kernel, so this is the reference the
+        // prefill kernels must reproduce: it consumes the identical Q8_1
+        // activations, which the float reference below does not.
+        __nv_bfloat16* d_decode_y = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_decode_y),
+                         static_cast<size_t>(mmq_m) * mmq_n * sizeof(__nv_bfloat16)),
+              "cudaMalloc decode y");
+        for (int activation_row = 0; activation_row < mmq_m; ++activation_row) {
+            celeg::launch_q4k_mmq(d_q8 + static_cast<size_t>(activation_row) * mmq_k,
+                                  d_q8_scale + static_cast<size_t>(activation_row) * mmq_blocks_per_row,
+                                  d_q8_sum + static_cast<size_t>(activation_row) * mmq_blocks_per_row,
+                                  d_mmq_weight,
+                                  d_decode_y + static_cast<size_t>(activation_row) * mmq_n,
+                                  1, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
+        }
+        std::vector<__nv_bfloat16> decode_y(static_cast<size_t>(mmq_m) * mmq_n);
+        check(cudaMemcpy(decode_y.data(), d_decode_y, decode_y.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyDeviceToHost), "copy decode y");
+
+        for (int activation_row = 0; activation_row < mmq_m; ++activation_row) {
+        // Per-block activation quantization step, used for the noise bound.
+        std::vector<double> block_step(mmq_blocks_per_row);
+        for (int block = 0; block < mmq_blocks_per_row; ++block) {
+            float absmax = 0.0f;
+            for (int i = 0; i < celeg::kMmqQ8_1BlockSize; ++i) {
+                absmax = std::max(absmax, std::abs(mmq_activation_f[
+                    static_cast<size_t>(activation_row) * mmq_k +
+                    block * celeg::kMmqQ8_1BlockSize + i]));
             }
-            const float mmq_value = host_bf16(mmq_y[static_cast<size_t>(row)]);
-            const double relative_error =
-                std::abs(mmq_value - reference) / std::max(1.0, std::abs(reference));
-            // Q8_1 quantizes each 32-element activation block to 127 levels;
-            // a few percent relative error against the unquantized-activation
-            // reference is expected quantization noise, not a bug.
-            if (relative_error > 0.05) return 11;
+            block_step[block] = absmax > 0.0f ? absmax / 127.0 : 1.0;
         }
 
+        for (int row = 0; row < mmq_n; ++row) {
+            const float mmq_value = host_bf16(mmq_y[
+                static_cast<size_t>(activation_row) * mmq_n + row]);
+
+            // Primary assertion: the prefill kernels must reproduce the decode
+            // kernel on identical Q8_1 input. Only the float accumulation order
+            // and the final bf16 rounding may differ.
+            const float decode_value = host_bf16(decode_y[
+                static_cast<size_t>(activation_row) * mmq_n + row]);
+            if (std::abs(mmq_value - decode_value) >
+                std::max(1.0, 0.02 * std::abs(static_cast<double>(decode_value)))) {
+                std::cerr << "prefill/decode mismatch row=" << row
+                          << " activation_row=" << activation_row
+                          << " prefill=" << mmq_value
+                          << " decode=" << decode_value << "\n";
+                return 11;
+            }
+
+            // Secondary assertion: agreement with the unquantized-activation
+            // dot product. Random Q4_K weights cancel heavily, so the result
+            // can be orders of magnitude smaller than the individual terms.
+            // Bounding by a fraction of the result would then only measure
+            // Q8_1 noise; bound by that noise directly instead. Each element
+            // carries at most step/2 of activation error, and the signs are
+            // independent, so the errors add in quadrature.
+            double reference = 0.0;
+            double noise_variance = 0.0;
+            for (int i = 0; i < mmq_k; ++i) {
+                const double weight = static_cast<double>(
+                    host_bf16(mmq_weight_dequant[static_cast<size_t>(row) * mmq_k + i]));
+                reference += weight * static_cast<double>(mmq_activation_f[
+                    static_cast<size_t>(activation_row) * mmq_k + i]);
+                const double term = weight * block_step[i / celeg::kMmqQ8_1BlockSize] * 0.5;
+                noise_variance += term * term;
+            }
+            // Three sigma, plus the bf16 rounding of the stored result. A real
+            // layout or scale bug produces an error proportional to the full
+            // term magnitude, which is far outside this band.
+            const double tolerance = std::max(1.0, 3.0 * std::sqrt(noise_variance) +
+                                                   0.01 * std::abs(reference));
+            if (std::abs(mmq_value - reference) > tolerance) {
+                std::cerr << "random mmq mismatch row=" << row
+                          << " activation_row=" << activation_row
+                          << " got=" << mmq_value
+                          << " reference=" << reference
+                          << " tolerance=" << tolerance << "\n";
+                return 11;
+            }
+        }
+        }
+
+        cudaFree(d_decode_y);
         cudaFree(d_mmq_y); cudaFree(d_q8_sum); cudaFree(d_q8_scale); cudaFree(d_q8);
         cudaFree(d_mmq_activation); cudaFree(d_mmq_dequant); cudaFree(d_mmq_weight);
+    }
+
+    // Same randomized cross-check for Q6_K. Its prefill kernels split every
+    // 32-element activation block across two scale sub-blocks and fold the -32
+    // weight offset through the activation sums, which is exactly the kind of
+    // arithmetic the constant-valued cases above cannot distinguish.
+    {
+        std::mt19937 rng(6789);
+        std::uniform_int_distribution<int> byte_dist(0, 255);
+        constexpr int mmq_n = 16;
+        constexpr int mmq_m = 16;
+        constexpr int mmq_k = 512;
+        constexpr int mmq_super_blocks = mmq_k / 256;
+        constexpr int mmq_blocks_per_row = mmq_k / celeg::kMmqQ8_1BlockSize;
+        const size_t mmq_row_bytes = static_cast<size_t>(mmq_super_blocks) * q6_bytes;
+
+        std::vector<uint8_t> weight(static_cast<size_t>(mmq_n) * mmq_row_bytes);
+        for (auto& byte : weight) byte = static_cast<uint8_t>(byte_dist(rng));
+        // d is the last two bytes of a Q6_K super-block. Arbitrary half bit
+        // patterns can be inf/nan, so pin it to a sane magnitude; ql/qh/scales
+        // stay fully random.
+        for (int row = 0; row < mmq_n; ++row) {
+            for (int sb = 0; sb < mmq_super_blocks; ++sb) {
+                uint8_t* blk = weight.data() +
+                    (static_cast<size_t>(row) * mmq_super_blocks + sb) * q6_bytes;
+                const __half d = __float2half(0.005f + 0.01f * (byte_dist(rng) % 100));
+                std::memcpy(blk + q6_bytes - sizeof(d), &d, sizeof(d));
+            }
+        }
+
+        uint8_t* d_weight = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_weight), weight.size()), "cudaMalloc q6 rand weight");
+        check(cudaMemcpy(d_weight, weight.data(), weight.size(), cudaMemcpyHostToDevice),
+              "copy q6 rand weight");
+
+        __nv_bfloat16* d_dequant = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_dequant),
+                         static_cast<size_t>(mmq_n) * mmq_k * sizeof(__nv_bfloat16)),
+              "cudaMalloc q6 rand dequant");
+        celeg::launch_gguf_dequant(d_weight, celeg::GgmlType::Q6_K, d_dequant, mmq_n, mmq_k, nullptr);
+        std::vector<__nv_bfloat16> dequant(static_cast<size_t>(mmq_n) * mmq_k);
+        check(cudaMemcpy(dequant.data(), d_dequant, dequant.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyDeviceToHost), "copy q6 rand dequant");
+
+        std::uniform_real_distribution<float> act_dist(-3.0f, 3.0f);
+        std::vector<__nv_bfloat16> activation(static_cast<size_t>(mmq_m) * mmq_k);
+        std::vector<float> activation_f(static_cast<size_t>(mmq_m) * mmq_k);
+        for (size_t i = 0; i < activation.size(); ++i) {
+            const float value = act_dist(rng);
+            activation_f[i] = value;
+            activation[i] = __float2bfloat16(value);
+        }
+        __nv_bfloat16* d_activation = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_activation),
+                         activation.size() * sizeof(__nv_bfloat16)), "cudaMalloc q6 rand activation");
+        check(cudaMemcpy(d_activation, activation.data(), activation.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyHostToDevice), "copy q6 rand activation");
+
+        int8_t* d_q8 = nullptr; float* d_q8_scale = nullptr; float* d_q8_sum = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_q8), activation.size()), "cudaMalloc q6 rand q8");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_q8_scale),
+                         static_cast<size_t>(mmq_m) * mmq_blocks_per_row * sizeof(float)),
+              "cudaMalloc q6 rand scale");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_q8_sum),
+                         static_cast<size_t>(mmq_m) * mmq_blocks_per_row * sizeof(float)),
+              "cudaMalloc q6 rand sum");
+        celeg::launch_quantize_q8_1(d_activation, d_q8, d_q8_scale, d_q8_sum, mmq_m, mmq_k, nullptr);
+
+        __nv_bfloat16* d_prefill = nullptr; __nv_bfloat16* d_decode = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_prefill),
+                         static_cast<size_t>(mmq_m) * mmq_n * sizeof(__nv_bfloat16)),
+              "cudaMalloc q6 rand prefill");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_decode),
+                         static_cast<size_t>(mmq_m) * mmq_n * sizeof(__nv_bfloat16)),
+              "cudaMalloc q6 rand decode");
+        celeg::launch_q6k_mmq(d_q8, d_q8_scale, d_q8_sum, d_weight, d_prefill,
+                              mmq_m, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
+        for (int activation_row = 0; activation_row < mmq_m; ++activation_row) {
+            celeg::launch_q6k_mmq(d_q8 + static_cast<size_t>(activation_row) * mmq_k,
+                                  d_q8_scale + static_cast<size_t>(activation_row) * mmq_blocks_per_row,
+                                  d_q8_sum + static_cast<size_t>(activation_row) * mmq_blocks_per_row,
+                                  d_weight, d_decode + static_cast<size_t>(activation_row) * mmq_n,
+                                  1, mmq_n, mmq_k, mmq_row_bytes, mmq_n, 0.0f, nullptr);
+        }
+        std::vector<__nv_bfloat16> prefill_y(static_cast<size_t>(mmq_m) * mmq_n);
+        std::vector<__nv_bfloat16> decode_y(static_cast<size_t>(mmq_m) * mmq_n);
+        check(cudaMemcpy(prefill_y.data(), d_prefill, prefill_y.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyDeviceToHost), "copy q6 rand prefill");
+        check(cudaMemcpy(decode_y.data(), d_decode, decode_y.size() * sizeof(__nv_bfloat16),
+                         cudaMemcpyDeviceToHost), "copy q6 rand decode");
+
+        for (int activation_row = 0; activation_row < mmq_m; ++activation_row) {
+            std::vector<double> block_step(mmq_blocks_per_row);
+            for (int block = 0; block < mmq_blocks_per_row; ++block) {
+                float absmax = 0.0f;
+                for (int i = 0; i < celeg::kMmqQ8_1BlockSize; ++i) {
+                    absmax = std::max(absmax, std::abs(activation_f[
+                        static_cast<size_t>(activation_row) * mmq_k +
+                        block * celeg::kMmqQ8_1BlockSize + i]));
+                }
+                block_step[block] = absmax > 0.0f ? absmax / 127.0 : 1.0;
+            }
+            for (int row = 0; row < mmq_n; ++row) {
+                const float prefill_value =
+                    host_bf16(prefill_y[static_cast<size_t>(activation_row) * mmq_n + row]);
+                const float decode_value =
+                    host_bf16(decode_y[static_cast<size_t>(activation_row) * mmq_n + row]);
+                if (std::abs(prefill_value - decode_value) >
+                    std::max(1.0, 0.02 * std::abs(static_cast<double>(decode_value)))) {
+                    std::cerr << "q6 prefill/decode mismatch row=" << row
+                              << " activation_row=" << activation_row
+                              << " prefill=" << prefill_value
+                              << " decode=" << decode_value << "\n";
+                    return 16;
+                }
+                double reference = 0.0;
+                double noise_variance = 0.0;
+                for (int i = 0; i < mmq_k; ++i) {
+                    const double w = static_cast<double>(
+                        host_bf16(dequant[static_cast<size_t>(row) * mmq_k + i]));
+                    reference += w * static_cast<double>(activation_f[
+                        static_cast<size_t>(activation_row) * mmq_k + i]);
+                    const double term = w * block_step[i / celeg::kMmqQ8_1BlockSize] * 0.5;
+                    noise_variance += term * term;
+                }
+                const double tolerance = std::max(1.0, 3.0 * std::sqrt(noise_variance) +
+                                                       0.01 * std::abs(reference));
+                if (std::abs(prefill_value - reference) > tolerance) {
+                    std::cerr << "q6 random mmq mismatch row=" << row
+                              << " activation_row=" << activation_row
+                              << " got=" << prefill_value
+                              << " reference=" << reference
+                              << " tolerance=" << tolerance << "\n";
+                    return 17;
+                }
+            }
+        }
+
+        cudaFree(d_decode); cudaFree(d_prefill); cudaFree(d_q8_sum); cudaFree(d_q8_scale);
+        cudaFree(d_q8); cudaFree(d_activation); cudaFree(d_dequant); cudaFree(d_weight);
     }
 
     if (const char* real_path = std::getenv("CELEG_GGUF_TEST_FILE");

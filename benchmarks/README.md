@@ -87,6 +87,23 @@ Any comparison produced before native same-file GGUF support is invalid. Those
 older runs compared different checkpoint formats or quantizations; only reports
 whose JSON rows contain the same canonical path, size and SHA-256 are valid.
 
+## CUDA native-GGUF race
+
+`run_cuda_bench.py` is the separate, reproducible RTX 3060 comparison for
+`ggml-org/SmolLM3-3B-GGUF:SmolLM3-Q4_K_M.gguf`. It requires the cached model,
+the CUDA build under `out/windows-cuda-relwithdebinfo`, and the local pinned
+llama.cpp checkout at commit `6b36c2305644fd30db7cce3f4840c74574f31ce9`.
+
+```bash
+python benchmarks/run_cuda_bench.py
+```
+
+It forces Celeg's `--weight-mode native`, uses BF16 KV with prefill 512 / decode
+128 and batch/microbatch 512, discards one full run, then records five samples.
+The JSON report includes the commands, GGUF SHA-256, GPU identity, mean,
+median and standard deviation. It succeeds only when native weights stay at or
+below 2.0 GiB and Celeg is at least 1.05x llama.cpp in both phases.
+
 ---
 
 # Benchmark manifests (Phase 0 reference fixtures)

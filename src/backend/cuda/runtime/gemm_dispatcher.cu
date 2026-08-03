@@ -202,9 +202,11 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
     }
     weight.validate_storage();
     if (weight.gguf_quantized()) {
-        ensure_mmq_capacity(m, k);
-        launch_quantize_q8_1(x, mmq_q8_.data(), mmq_scales_.data(),
-                             mmq_sums_.data(), m, k, stream_);
+        if (!has_native_fanout(x, m, k)) {
+            ensure_mmq_capacity(m, k);
+            launch_quantize_q8_1(x, mmq_q8_.data(), mmq_scales_.data(),
+                                 mmq_sums_.data(), m, k, stream_);
+        }
         for (const GgufLinearSegment& segment : weight.gguf_segments) {
             if (segment.cols != k) {
                 throw std::runtime_error("GGUF segment width does not match GEMM");
@@ -282,6 +284,27 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
     throw std::runtime_error("unknown linear execution plan");
 }
 
+void GemmDispatcher::begin_native_fanout(const __nv_bfloat16* x, int m, int k) {
+    if (x == nullptr || m <= 0 || k <= 0 || k % kMmqQ8_1BlockSize != 0) {
+        throw std::invalid_argument("native GGUF fan-out requires a non-empty Q8_1-aligned input");
+    }
+    if (native_fanout_input_ != nullptr) {
+        throw std::logic_error("nested native GGUF fan-out is not supported");
+    }
+    ensure_mmq_capacity(m, k);
+    launch_quantize_q8_1(x, mmq_q8_.data(), mmq_scales_.data(), mmq_sums_.data(),
+                         m, k, stream_);
+    native_fanout_input_ = x;
+    native_fanout_m_ = m;
+    native_fanout_k_ = k;
+}
+
+void GemmDispatcher::end_native_fanout() {
+    native_fanout_input_ = nullptr;
+    native_fanout_m_ = 0;
+    native_fanout_k_ = 0;
+}
+
 void GemmDispatcher::ensure_mmq_capacity(int m, int k) {
     if (m <= mmq_capacity_m_ && k <= mmq_capacity_k_) return;
     mmq_capacity_m_ = std::max(mmq_capacity_m_, m);
@@ -291,6 +314,10 @@ void GemmDispatcher::ensure_mmq_capacity(int m, int k) {
                           (mmq_capacity_k_ / kMmqQ8_1BlockSize);
     mmq_scales_.reset(blocks);
     mmq_sums_.reset(blocks);
+}
+
+bool GemmDispatcher::has_native_fanout(const __nv_bfloat16* x, int m, int k) const {
+    return native_fanout_input_ == x && native_fanout_m_ == m && native_fanout_k_ == k;
 }
 
 } // namespace celeg

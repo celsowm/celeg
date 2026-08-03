@@ -68,6 +68,17 @@ struct CudaCompiledModel {
         gemm_->linear(x, weight, y, m, n, k, beta, resources_.plan_);
     }
 
+    void begin_native_fanout(const __nv_bfloat16* x, int m, int k) {
+        if (resources_.plan_.options().weight_mode == WeightMode::NativeGguf) {
+            gemm_->begin_native_fanout(x, m, k);
+        }
+    }
+    void end_native_fanout() {
+        if (resources_.plan_.options().weight_mode == WeightMode::NativeGguf) {
+            gemm_->end_native_fanout();
+        }
+    }
+
     void warmup_decode_gemms();
     void warmup_prefill_attention_gemm();
 
