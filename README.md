@@ -1,9 +1,9 @@
 # Celeg
 
-Celeg is a native C++20 inference runtime for LFM2, LFM2.5, and Granite
-language models. It provides independent CPU and NVIDIA CUDA backends, direct
-checkpoint loading, quantized execution, an OpenAI-compatible server, and a
-public C API.
+Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, and
+MiniCPM5 language models. It provides independent CPU and NVIDIA CUDA
+backends, direct checkpoint loading, quantized execution, an OpenAI-compatible
+server, and a public C API.
 
 Celeg does not bundle model weights. Supply a Hugging Face repository, a local
 Safetensors checkpoint directory, or a local GGUF file.
@@ -15,10 +15,11 @@ Safetensors checkpoint directory, or a local GGUF file.
 | LFM2/LFM2.5 dense | Yes | Yes | Yes | Yes |
 | LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes |
 | Granite dense | Yes | No | Yes | Yes |
+| MiniCPM5-1B | Yes | Yes | Yes | Yes |
 
-GGUF loading currently recognizes the LFM2 and LFM2-MoE metadata namespaces
-(`lfm2.*` and `lfm2moe.*`). Granite GGUF files are not supported by the
-current GGUF loader.
+MiniCPM5-1B uses the standard Llama tensor layout with GQA (16 query heads,
+2 KV heads), 131072-token context metadata, and both EOS markers from the
+official checkpoint. Its GGUF variants are selected with the `--quant` tag.
 
 ## Supported LFM checkpoints
 
@@ -33,6 +34,23 @@ current GGUF loader.
 Granite checkpoints are selected from their `config.json`. The runtime
 expects the architecture metadata to identify Granite with
 `model_type: "granite"`.
+
+## MiniCPM5 checkpoints
+
+The BF16 repository is `openbmb/MiniCPM5-1B`; the GGUF repository is
+`openbmb/MiniCPM5-1B-GGUF`, with `Q4_K_M`, `Q8_0`, and `F16` files. After the
+repositories are present in the Hugging Face cache, run either format with:
+
+```text
+celeg-run --repo openbmb/MiniCPM5-1B --prompt "Hello" --max-new-tokens 32
+celeg-run --repo openbmb/MiniCPM5-1B-GGUF:Q4_K_M --prompt "Hello" --max-new-tokens 32
+```
+
+For the OpenAI-compatible server, `--repo openbmb/MiniCPM5-1B` selects
+Safetensors automatically, while `--repo openbmb/MiniCPM5-1B-GGUF` selects the
+GGUF repository and its `--quant` tag. The `minicpm5-instruct` profile renders
+the official `<|im_start|>` template, tool definitions, `<function>` calls,
+tool responses, and multiple EOS markers.
 
 ## Requirements
 

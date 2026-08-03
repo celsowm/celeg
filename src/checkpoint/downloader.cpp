@@ -534,7 +534,10 @@ std::filesystem::path resolve_hf_model(
 
     if (is_commit_hash(commit)) {
         std::filesystem::path snap = storage / "snapshots" / commit;
-        if (std::filesystem::exists(snap / "model.safetensors")
+        const bool has_safetensors =
+            std::filesystem::exists(snap / "model.safetensors") ||
+            std::filesystem::exists(snap / "model.safetensors.index.json");
+        if (has_safetensors
             && std::filesystem::exists(snap / "config.json")
             && std::filesystem::exists(snap / "tokenizer.json"))
             return snap;
@@ -625,7 +628,8 @@ std::filesystem::path resolve_hf_model(
 
     if (is_commit_hash(commit)) {
         std::filesystem::path snap = storage / "snapshots" / commit;
-        if (std::filesystem::exists(snap / "model.safetensors"))
+        if (std::filesystem::exists(snap / "model.safetensors") ||
+            std::filesystem::exists(snap / "model.safetensors.index.json"))
             return snap;
     }
     throw std::runtime_error(

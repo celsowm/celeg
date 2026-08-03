@@ -24,7 +24,7 @@ RequestId CpuInferenceService::submit(GenerateRequest request) {
     materialize_visual_prompt(request, visual_embeddings_);
     ConcurrentRequestOptions options;
     options.max_new_tokens = request.max_output_tokens;
-    options.eos_token = request.eos_token_id;
+    options.eos_tokens = request.eos_token_ids;
     options.priority = request.priority;
     options.generation = request.generation;
     options.prompt_embedding = std::move(request.prompt_embedding);
@@ -32,7 +32,7 @@ RequestId CpuInferenceService::submit(GenerateRequest request) {
     const RequestId id =
         engine_.submit(std::move(request.prompt_tokens), options);
 
-    lifecycle_.submitted(id, request.eos_token_id);
+    lifecycle_.submitted(id, request.eos_token_ids);
     return id;
 }
 

@@ -99,9 +99,9 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
     topology.bos_token_id = metadata.is_gguf()
         ? static_cast<int>(metadata.integer_or("tokenizer.ggml.bos_token_id", 2))
         : optional_int(metadata, "bos_token_id", 2);
-    topology.eos_token_id = metadata.is_gguf()
+    topology.eos_token_ids = {metadata.is_gguf()
         ? static_cast<int>(metadata.integer_or("tokenizer.ggml.eos_token_id", 1))
-        : optional_int(metadata, "eos_token_id", 1);
+        : optional_int(metadata, "eos_token_id", 1)};
     topology.pad_token_id = metadata.is_gguf()
         ? static_cast<int>(metadata.integer_or("tokenizer.ggml.padding_token_id", 0))
         : optional_int(metadata, "pad_token_id", 0);
@@ -317,7 +317,7 @@ public:
         model.definition.numerics = {topology.norm_eps, topology.embedding_multiplier,
             topology.attention_multiplier, 1.0f, topology.residual_multiplier,
             topology.logits_divisor};
-        model.definition.tokens = {topology.bos_token_id, topology.eos_token_id,
+        model.definition.tokens = {topology.bos_token_id, topology.eos_token_ids,
                                    topology.pad_token_id};
         model.definition.architecture = "gemma4";
         model.definition.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";

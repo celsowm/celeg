@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < repeats; ++i) {
             celeg::ConcurrentRequestOptions request;
             request.max_new_tokens = max_new;
-            request.eos_token = -1;
+            request.eos_tokens = {-1};
             request.generation.seed = static_cast<uint64_t>(i + 1);
             const bool use_suffix = extended_prompt.size() > prompt.size() && i > 0;
             const std::vector<int32_t>& submitted_prompt =

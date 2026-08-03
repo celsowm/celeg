@@ -37,6 +37,7 @@ struct Args {
     std::string backend = "cpu";
     std::string repo;
     std::string quant = "Q4_K_M";
+    std::string format = "auto";
 };
 
 Args parse_args(int argc, char** argv) {
@@ -55,9 +56,11 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--backend") args.backend = value();
         else if (key == "--repo") args.repo = value();
         else if (key == "--quant") args.quant = value();
+        else if (key == "--format") args.format = value();
         else if (key == "--help") {
             std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--port 8080] [--context 4096] "
                          "[--threads N] [--backend cpu|cuda] "
+                         "[--format auto|safetensors|gguf] [--quant TAG] "
                          "[--served-model-name NAME]\n";
             std::exit(0);
         } else {
@@ -67,7 +70,15 @@ Args parse_args(int argc, char** argv) {
     if (args.model_dir.empty() == args.repo.empty()) {
         throw std::runtime_error("exactly one of --model or --repo is required");
     }
+    if (args.format != "auto" && args.format != "safetensors" && args.format != "gguf") {
+        throw std::runtime_error("--format must be auto, safetensors, or gguf");
+    }
     return args;
+}
+
+bool looks_like_gguf_repo(const std::string& repo) {
+    return repo.size() >= 5 &&
+        repo.compare(repo.size() - 5, 5, "-GGUF") == 0;
 }
 
 } // namespace
@@ -75,14 +86,14 @@ Args parse_args(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
+        const bool use_gguf = !args.repo.empty() &&
+            (args.format == "gguf" || (args.format == "auto" && looks_like_gguf_repo(args.repo)));
         const std::filesystem::path model = args.repo.empty()
             ? std::filesystem::path(args.model_dir)
-            : celeg::resolve_hf_gguf(args.repo, args.quant);
-        const bool direct_gguf = std::filesystem::is_regular_file(model) &&
-            model.extension() == ".gguf";
-
+            : (use_gguf
+                ? celeg::resolve_hf_gguf(args.repo, args.quant)
+                : celeg::resolve_hf_model(args.repo, "main", false));
         const celeg::detail::ModelBootstrap bootstrap = celeg::detail::load_model_bootstrap(model);
-        const auto& model_definition = bootstrap.model.definition;
         const auto& topology = bootstrap.model.topology;
         if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
@@ -99,7 +110,9 @@ int main(int argc, char** argv) {
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
-        const std::int32_t eos_token_id = model_definition.tokens.eos;
+        const std::vector<std::int32_t> eos_token_ids(
+            bootstrap.model.topology.eos_token_ids.begin(),
+            bootstrap.model.topology.eos_token_ids.end());
 
         celeg::VisualEmbeddingProvider visual_embeddings;
         const std::filesystem::path projector = model.parent_path() / "mmproj-BF16.gguf";
@@ -116,7 +129,7 @@ int main(int argc, char** argv) {
             engine_options.worker_thread = false;
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CpuInferenceService>(
-                    (direct_gguf ? model : model / "model.safetensors").string(), args.context,
+                    model.string(), args.context,
                     model_options, engine_options, visual_embeddings));
         } else if (args.backend == "cuda") {
 #ifdef CELEG_SERVE_CUDA
@@ -151,7 +164,7 @@ int main(int argc, char** argv) {
         celeg::app::serve::register_chat_completions_route(
             app, dispatcher, service->requests(), tokenizer, chat_template,
             chat_capabilities,
-            model_name, eos_token_id, loop);
+            model_name, eos_token_ids, loop);
 
         app.listen(args.port, [&](auto* listen_socket) {
               if (listen_socket) {

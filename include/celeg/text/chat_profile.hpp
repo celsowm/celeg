@@ -25,6 +25,7 @@ public:
 
 std::unique_ptr<IChatToolCallCodec> make_lfm2_tool_call_codec();
 std::unique_ptr<IChatToolCallCodec> make_gemma4_tool_call_codec();
+std::unique_ptr<IChatToolCallCodec> make_minicpm5_tool_call_codec();
 
 struct ChatCapabilities {
     bool vision = false;

@@ -97,7 +97,7 @@ celeg::CheckpointMetadata gemma_metadata(int hidden, int intermediate, int layer
 
 int main() {
     const auto catalog = celeg::create_builtin_architecture_catalog();
-    CELEG_TEST_CHECK(catalog->ids().size() == 3);
+    CELEG_TEST_CHECK(catalog->ids().size() == 4);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog->select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -111,6 +111,59 @@ int main() {
     CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
     CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(!model.graph.has_moe());
+
+    celeg::CheckpointMetadata minicpm5;
+    minicpm5.repository_hint = "openbmb/MiniCPM5-1B";
+    minicpm5.values["model_type"] = std::string("llama");
+    minicpm5.values["hidden_size"] = int64_t(1536);
+    minicpm5.values["intermediate_size"] = int64_t(4608);
+    minicpm5.values["num_hidden_layers"] = int64_t(24);
+    minicpm5.values["num_attention_heads"] = int64_t(16);
+    minicpm5.values["num_key_value_heads"] = int64_t(2);
+    minicpm5.values["head_dim"] = int64_t(128);
+    minicpm5.values["vocab_size"] = int64_t(130560);
+    minicpm5.values["max_position_embeddings"] = int64_t(131072);
+    minicpm5.values["bos_token_id"] = int64_t(0);
+    minicpm5.values["eos_token_id"] = std::vector<int64_t>{1, 130073};
+    minicpm5.values["pad_token_id"] = int64_t(1);
+    minicpm5.values["rms_norm_eps"] = 1.0e-6;
+    minicpm5.values["rope_theta"] = 5.0e6;
+    const auto& minicpm5_architecture = catalog->select(minicpm5);
+    CELEG_TEST_CHECK(minicpm5_architecture.id() == "minicpm5");
+    celeg::CheckpointView minicpm5_checkpoint;
+    minicpm5_checkpoint.metadata = minicpm5;
+    const auto minicpm5_model = minicpm5_architecture.resolve(minicpm5_checkpoint);
+    CELEG_TEST_CHECK(minicpm5_model.topology.num_hidden_layers == 24);
+    CELEG_TEST_CHECK(minicpm5_model.topology.attention_layouts.front().key_value_heads == 2);
+    CELEG_TEST_CHECK(minicpm5_model.topology.eos_token_ids == (std::vector<int>{1, 130073}));
+    CELEG_TEST_CHECK(minicpm5_model.definition.tokens.eos == (std::vector<int>{1, 130073}));
+    CELEG_TEST_CHECK(minicpm5_model.chat_profile_id == "minicpm5-instruct");
+
+    celeg::CheckpointMetadata minicpm5_gguf;
+    minicpm5_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
+    minicpm5_gguf.repository_hint = "openbmb/MiniCPM5-1B-GGUF";
+    minicpm5_gguf.values["general.architecture"] = std::string("llama");
+    minicpm5_gguf.values["llama.embedding_length"] = int64_t(1536);
+    minicpm5_gguf.values["llama.feed_forward_length"] = int64_t(4608);
+    minicpm5_gguf.values["llama.block_count"] = int64_t(24);
+    minicpm5_gguf.values["llama.attention.head_count"] = int64_t(16);
+    minicpm5_gguf.values["llama.attention.head_count_kv"] = int64_t(2);
+    minicpm5_gguf.values["llama.attention.key_length"] = int64_t(128);
+    minicpm5_gguf.values["llama.context_length"] = int64_t(131072);
+    minicpm5_gguf.values["llama.attention.layer_norm_rms_epsilon"] = 1.0e-6;
+    minicpm5_gguf.values["llama.rope.freq_base"] = 5.0e6;
+    minicpm5_gguf.values["llama.vocab_size"] = int64_t(130560);
+    minicpm5_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(0);
+    minicpm5_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(1);
+    minicpm5_gguf.values["tokenizer.ggml.eot_token_id"] = int64_t(130073);
+    minicpm5_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(1);
+    const auto& minicpm5_gguf_architecture = catalog->select(minicpm5_gguf);
+    CELEG_TEST_CHECK(minicpm5_gguf_architecture.id() == "minicpm5");
+    celeg::CheckpointView minicpm5_gguf_checkpoint;
+    minicpm5_gguf_checkpoint.metadata = minicpm5_gguf;
+    const auto minicpm5_gguf_model = minicpm5_gguf_architecture.resolve(minicpm5_gguf_checkpoint);
+    CELEG_TEST_CHECK(minicpm5_gguf_model.definition.source_format == "gguf");
+    CELEG_TEST_CHECK(minicpm5_gguf_model.topology.eos_token_ids == (std::vector<int>{1, 130073}));
 
     auto granite = metadata;
     granite.values["model_type"] = std::string("granite");

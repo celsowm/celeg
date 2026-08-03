@@ -155,7 +155,7 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::BpeTokenizer& tokenizer,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
-                                    std::int32_t eos_token_id) {
+                                    std::span<const std::int32_t> eos_token_ids) {
     validate_chat_request(request, capabilities);
 
     std::vector<celeg::ChatMessage> messages;
@@ -200,7 +200,7 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         generate_request.image_token_id = *image_token;
     }
     generate_request.prompt_tokens = tokenizer.encode(prompt_text, /*add_bos=*/false);
-    generate_request.eos_token_id = eos_token_id;
+    generate_request.eos_token_ids.assign(eos_token_ids.begin(), eos_token_ids.end());
     if (request.max_tokens && *request.max_tokens <= 0) {
         throw std::invalid_argument("max_tokens must be positive");
     }

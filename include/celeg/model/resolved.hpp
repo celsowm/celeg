@@ -25,7 +25,7 @@ struct RuntimeTopology {
     int conv_dim = 0;
     int max_position_embeddings = 0;
     int bos_token_id = -1;
-    int eos_token_id = -1;
+    std::vector<int> eos_token_ids;
     int pad_token_id = -1;
     float norm_eps = 0.0f;
     std::string rope_type = "default";

@@ -111,7 +111,7 @@ ModelDefinition make_definition(const RuntimeTopology& topology,
     definition.numerics.attention_multiplier = topology.attention_multiplier;
     definition.numerics.residual_multiplier = topology.residual_multiplier;
     definition.numerics.logits_divisor = topology.logits_divisor;
-    definition.tokens = {topology.bos_token_id, topology.eos_token_id, topology.pad_token_id};
+    definition.tokens = {topology.bos_token_id, topology.eos_token_ids, topology.pad_token_id};
     definition.architecture = "lfm2";
     definition.source_format = metadata.is_gguf()
         ? "gguf" : "safetensors";
@@ -143,7 +143,7 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     t.max_position_embeddings = decoded.max_position_embeddings;
     t.norm_eps = decoded.norm_eps;
     t.bos_token_id = decoded.bos_token_id;
-    t.eos_token_id = decoded.eos_token_id;
+    t.eos_token_ids = {decoded.eos_token_id};
     t.pad_token_id = decoded.pad_token_id;
     t.embedding_multiplier = 1.0f;
     t.attention_multiplier = 0.0f;

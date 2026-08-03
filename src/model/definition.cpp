@@ -41,6 +41,9 @@ void ModelDefinition::validate() const {
     dimensions.validate();
     rope.validate();
     numerics.validate();
+    if (tokens.bos < 0 || tokens.eos.empty() || tokens.pad < 0) {
+        throw std::invalid_argument("model token ids are invalid");
+    }
     if (architecture.empty()) {
         throw std::invalid_argument("model architecture identifier is empty");
     }

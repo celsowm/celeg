@@ -98,5 +98,30 @@ int main() {
     CELEG_TEST_CHECK(gemma_parse.calls[0].name == "weather");
     CELEG_TEST_CHECK(gemma_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
 
+    const auto& minicpm5 = catalog.find("minicpm5-instruct");
+    const auto minicpm5_capabilities = catalog.capabilities("minicpm5-instruct");
+    CELEG_TEST_CHECK(!minicpm5_capabilities.vision);
+    CELEG_TEST_CHECK(minicpm5_capabilities.developer_messages);
+    CELEG_TEST_CHECK(minicpm5_capabilities.parallel_tool_calls);
+    CELEG_TEST_CHECK(minicpm5_capabilities.tool_call_codec != nullptr);
+    const std::string minicpm5_prompt = minicpm5.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "What is the weather?"}}, true);
+    CELEG_TEST_CHECK(minicpm5_prompt.find("<bos><|im_start|>user\nWhat is the weather?") == 0);
+    CELEG_TEST_CHECK(minicpm5_prompt.find("<|im_start|>assistant\n<think>\n\n</think>\n\n") != std::string::npos);
+
+    const auto minicpm5_tool_parse = minicpm5_capabilities.tool_call_codec->parse_generation(
+        "I will check. <function name=\"weather\"><param name=\"city\">\"Paris\"</param>"
+        "<param name=\"unit\">\"C\"</param></function>");
+    CELEG_TEST_CHECK(minicpm5_tool_parse.status == celeg::ToolParseStatus::Complete);
+    CELEG_TEST_CHECK(minicpm5_tool_parse.calls.size() == 1);
+    CELEG_TEST_CHECK(minicpm5_tool_parse.calls[0].name == "weather");
+    CELEG_TEST_CHECK(minicpm5_tool_parse.calls[0].arguments ==
+                     "{\"city\":\"Paris\",\"unit\":\"C\"}");
+    const std::string minicpm5_tools = minicpm5.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "weather"}},
+        std::vector<celeg::ChatToolDefinition>{tool_definition}, true);
+    CELEG_TEST_CHECK(minicpm5_tools.find("<tools>") != std::string::npos);
+    CELEG_TEST_CHECK(minicpm5_tools.find("\"name\":\"weather\"") != std::string::npos);
+
     std::cout << "chat_template_test: ok\n";
 }

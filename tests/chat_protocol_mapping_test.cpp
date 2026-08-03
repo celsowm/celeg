@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -114,9 +115,10 @@ int main() {
     const celeg::Lfm2InstructChatTemplate chat_template;
     std::filesystem::remove(tokenizer_path);
 
+    const std::vector<std::int32_t> eos_token_ids{2, 130073};
     const serve::GenerateRequest generate_request = protocol::to_generate_request(
-        request, tokenizer, chat_template, {}, /*eos_token_id=*/2);
-    CELEG_TEST_CHECK(generate_request.eos_token_id == 2);
+        request, tokenizer, chat_template, {}, eos_token_ids);
+    CELEG_TEST_CHECK(generate_request.eos_token_ids == eos_token_ids);
     CELEG_TEST_CHECK(generate_request.max_output_tokens == 16);
     CELEG_TEST_CHECK(generate_request.generation.temperature == 0.5f);
     CELEG_TEST_CHECK(generate_request.generation.top_p == 0.9f);
@@ -133,7 +135,7 @@ int main() {
     empty_request.model = "lfm2.5-test";
     threw = false;
     try {
-        protocol::to_generate_request(empty_request, tokenizer, chat_template, {}, 2);
+        protocol::to_generate_request(empty_request, tokenizer, chat_template, {}, eos_token_ids);
     } catch (const std::invalid_argument&) {
         threw = true;
     }

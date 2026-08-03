@@ -49,7 +49,7 @@ struct ModelNumerics {
 
 struct TokenIds {
     int bos = -1;
-    int eos = -1;
+    std::vector<int> eos;
     int pad = -1;
 };
 

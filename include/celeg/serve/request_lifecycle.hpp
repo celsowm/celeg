@@ -2,6 +2,7 @@
 
 #include "celeg/serve/types.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <mutex>
 #include <span>
@@ -13,9 +14,9 @@ namespace celeg::serve {
 // statuses; this component owns EOS observation and the public finish reason.
 class RequestLifecycle final {
 public:
-    void submitted(RequestId id, std::int32_t eos_token_id) {
+    void submitted(RequestId id, std::span<const std::int32_t> eos_token_ids) {
         std::lock_guard<std::mutex> lock(mutex_);
-        states_[id] = State{eos_token_id, false};
+        states_[id] = State{std::vector<std::int32_t>(eos_token_ids.begin(), eos_token_ids.end()), false};
     }
 
     FinishReason finish_reason(RequestId id, RequestStatus status,
@@ -23,7 +24,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = states_.find(id);
         if (it != states_.end() && !tokens.empty() &&
-            tokens.back() == it->second.eos_token_id) {
+            std::find(it->second.eos_token_ids.begin(), it->second.eos_token_ids.end(),
+                      tokens.back()) != it->second.eos_token_ids.end()) {
             it->second.saw_eos = true;
         }
         const bool saw_eos = it != states_.end() && it->second.saw_eos;
@@ -43,7 +45,7 @@ public:
 
 private:
     struct State {
-        std::int32_t eos_token_id;
+        std::vector<std::int32_t> eos_token_ids;
         bool saw_eos;
     };
 

@@ -93,7 +93,7 @@ bool CudaSchedulerDriver::run_decode_work() {
         ++metrics_.decoded_tokens;
         if (packed_path) ++metrics_.packed_decode_tokens;
         else ++metrics_.lane_decode_tokens;
-        if (token == request.options.eos_token ||
+        if (is_stop_token(request.options.eos_tokens, token) ||
             request.generated >= request.options.max_new_tokens) {
             finish_request_locked(request, RequestStatus::Finished);
         }

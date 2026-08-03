@@ -27,6 +27,9 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/gemma4/naming_policy.cpp
     src/models/gemma4/tool_call_codec.cpp
     src/models/gemma4/vision.cpp
+    src/models/minicpm5/architecture.cpp
+    src/models/minicpm5/naming_policy.cpp
+    src/models/minicpm5/tool_call_codec.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp

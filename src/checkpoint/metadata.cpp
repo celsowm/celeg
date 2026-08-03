@@ -169,7 +169,8 @@ std::string CheckpointMetadata::string_for_or(std::string_view safetensors_key,
 CheckpointMetadata CheckpointMetadata::from_json(const Json& root) {
     CheckpointMetadata metadata;
     flatten_json(root, {}, metadata);
-    metadata.repository_hint = metadata.string_or("_name", {});
+    metadata.repository_hint = metadata.string_or(
+        "_name_or_path", metadata.string_or("_name", {}));
     return metadata;
 }
 
@@ -177,7 +178,8 @@ CheckpointMetadata CheckpointMetadata::from_gguf(const GgufFile& file) {
     CheckpointMetadata metadata;
     metadata.source_format = CheckpointSourceFormat::Gguf;
     for (const auto& [key, value] : file.metadata()) metadata.values[key] = gguf_value(value);
-    metadata.repository_hint = metadata.string_or("general.name", {});
+    metadata.repository_hint = metadata.string_or("general.name",
+                                                   metadata.string_or("general.basename", {}));
     return metadata;
 }
 

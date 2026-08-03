@@ -6,6 +6,7 @@
 #include "celeg/text/tokenizer.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace celeg::app::serve {
@@ -19,7 +20,7 @@ void register_chat_completions_route(uWS::App& app,
                                      const celeg::IChatTemplate& chat_template,
                                      const celeg::ChatCapabilities& capabilities,
                                      const std::string& model_name,
-                                     std::int32_t eos_token_id,
+                                     std::span<const std::int32_t> eos_token_ids,
                                      uWS::Loop* loop);
 
 } // namespace celeg::app::serve

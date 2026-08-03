@@ -309,7 +309,7 @@ struct CpuSchedulerDriver {
                 }
                 request.last_token_at = now;
                 record_attention_parallel_locked(request);
-                if (token == request.options.eos_token ||
+                if (is_stop_token(request.options.eos_tokens, token) ||
                     request.generated.size() >= request.options.max_new_tokens) {
                     request.status = RequestStatus::Finished;
                     request.session.reset();

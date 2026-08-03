@@ -3,6 +3,7 @@
 #include "celeg/backend/cpu/topology.hpp"
 #include "celeg/text/chat_template.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/runtime/request_types.hpp"
 #include "celeg/checkpoint/downloader.hpp"
 #include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/text/tokenizer.hpp"
@@ -230,7 +231,7 @@ int main(int argc, char** argv) {
         std::string pending;
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t token = engine.session().decode();
-            if (token == model_definition.tokens.eos) break;
+            if (celeg::is_stop_token(model_definition.tokens.eos, token)) break;
             pending += tokenizer.decode({token}, true);
             std::cout << pending << std::flush;
             pending.clear();

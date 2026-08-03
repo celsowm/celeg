@@ -90,5 +90,12 @@ public:
                        bool add_generation_prompt) const override;
 };
 
+class MiniCpm5InstructChatTemplate final : public IChatTemplate {
+public:
+    std::string format(std::span<const ChatMessage> messages,
+                       std::span<const ChatToolDefinition> tools,
+                       bool add_generation_prompt) const override;
+};
+
 
 } // namespace celeg

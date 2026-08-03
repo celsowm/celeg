@@ -1,5 +1,8 @@
 #include "celeg/text/chat_template.hpp"
 
+#include <cctype>
+#include <utility>
+#include <vector>
 #include <stdexcept>
 
 namespace celeg {
@@ -80,6 +83,71 @@ std::string granite_tools_block(std::span<const ChatToolDefinition> tools) {
     }
     out += "\n</tools>\n\nFor each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>.";
     return out;
+}
+
+std::string minicpm5_tools_block(std::span<const ChatToolDefinition> tools) {
+    if (tools.empty()) return {};
+    std::string out =
+        "# Tools\n\nYou may call one or more functions to assist with the user query.\n\n<tools>\n";
+    for (const ChatToolDefinition& tool : tools) {
+        out += "{\"type\":\"function\",\"function\":{\"name\":";
+        out += json_string(tool.function.name);
+        out += ",\"description\":" + json_string(tool.function.description);
+        out += ",\"parameters\":";
+        out += tool.function.parameters.serialized.empty() ? "{}" : tool.function.parameters.serialized;
+        out += "}}\n";
+    }
+    out += "</tools>\n\nFor each function call, return the function name and arguments inside <function></function> XML tags.\n";
+    return out;
+}
+
+const char* minicpm5_role_tag(ChatRole role) {
+    switch (role) {
+        case ChatRole::System:
+        case ChatRole::Developer: return "system";
+        case ChatRole::User:
+        case ChatRole::Tool: return "user";
+        case ChatRole::Assistant: return "assistant";
+    }
+    throw std::invalid_argument("unknown chat role");
+}
+
+std::vector<std::pair<std::string, std::string>> minicpm5_object_members(std::string_view object) {
+    std::vector<std::pair<std::string, std::string>> members;
+    if (object.size() < 2 || object.front() != '{' || object.back() != '}') return members;
+    std::size_t cursor = 1;
+    while (cursor + 1 < object.size()) {
+        while (cursor + 1 < object.size() &&
+               (std::isspace(static_cast<unsigned char>(object[cursor])) || object[cursor] == ',')) ++cursor;
+        if (cursor + 1 >= object.size() || object[cursor] != '"') break;
+        const std::size_t key_begin = ++cursor;
+        while (cursor < object.size() && object[cursor] != '"') ++cursor;
+        if (cursor >= object.size()) break;
+        const std::string key(object.substr(key_begin, cursor - key_begin));
+        ++cursor;
+        while (cursor < object.size() && (std::isspace(static_cast<unsigned char>(object[cursor])) || object[cursor] == ':')) ++cursor;
+        const std::size_t value_begin = cursor;
+        int depth = 0;
+        bool quoted = false;
+        bool escaped = false;
+        for (; cursor < object.size(); ++cursor) {
+            const char ch = object[cursor];
+            if (escaped) { escaped = false; continue; }
+            if (quoted && ch == '\\') { escaped = true; continue; }
+            if (ch == '"') { quoted = !quoted; continue; }
+            if (quoted) continue;
+            if (ch == '{' || ch == '[') ++depth;
+            else if (ch == '}' || ch == ']') {
+                if (ch == '}' && depth == 0) break;
+                --depth;
+            } else if (ch == ',' && depth == 0) break;
+        }
+        std::string value(object.substr(value_begin, cursor - value_begin));
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
+        members.emplace_back(key, std::move(value));
+        if (cursor < object.size() && object[cursor] == ',') ++cursor;
+    }
+    return members;
 }
 
 } // namespace
@@ -215,6 +283,54 @@ std::string Gemma4InstructChatTemplate::format(std::span<const ChatMessage> mess
     return out;
 }
 
+std::string MiniCpm5InstructChatTemplate::format(
+    std::span<const ChatMessage> messages,
+    std::span<const ChatToolDefinition> tools,
+    bool add_generation_prompt) const {
+    std::string out = "<bos>";
+    const std::string tool_block = minicpm5_tools_block(tools);
+    std::size_t first_message = 0;
+    if (!tool_block.empty()) {
+        out += "<|im_start|>system\n";
+        if (!messages.empty() && messages.front().role == ChatRole::System) {
+            out += messages.front().content.value_or("");
+            out += "\n\n";
+            first_message = 1;
+        }
+        out += tool_block;
+        out += "<|im_end|>\n";
+    }
+    for (std::size_t index = first_message; index < messages.size(); ++index) {
+        const ChatMessage& message = messages[index];
+        if (message.role == ChatRole::Tool) {
+            out += "<|im_start|>user\n<tool_response>\n";
+            out += message.content.value_or("");
+            out += "\n</tool_response><|im_end|>\n";
+            continue;
+        }
+        out += "<|im_start|>";
+        out += minicpm5_role_tag(message.role);
+        out += "\n";
+        out += message.content.value_or("");
+        if (message.role == ChatRole::Assistant) {
+            for (const ToolCall& call : message.tool_calls) {
+                out += "<function name=\"" + call.name + "\">";
+                for (const auto& pair : minicpm5_object_members(call.arguments)) {
+                    out += "<param name=\"" + pair.first + "\">" + pair.second + "</param>";
+                }
+                out += "</function>";
+            }
+        }
+        out += "<|im_end|>\n";
+    }
+    if (add_generation_prompt) {
+        // The native profile selects enable_thinking=false, matching the
+        // official template's empty think block before the answer.
+        out += "<|im_start|>assistant\n<think>\n\n</think>\n\n";
+    }
+    return out;
+}
+
 void ChatProfileCatalog::add(std::string profile_id,
                               std::unique_ptr<IChatTemplate> chat_template,
                               std::unique_ptr<IChatToolCallCodec> tool_call_codec,
@@ -259,6 +375,9 @@ ChatProfileCatalog make_chat_profile_catalog() {
     catalog.add("gemma4-instruct", std::make_unique<Gemma4InstructChatTemplate>(),
                 make_gemma4_tool_call_codec(),
                 ChatCapabilities{true, true, true, true, true, true});
+    catalog.add("minicpm5-instruct", std::make_unique<MiniCpm5InstructChatTemplate>(),
+                make_minicpm5_tool_call_codec(),
+                ChatCapabilities{false, true, true, true, true, true});
     catalog.freeze();
     return catalog;
 }

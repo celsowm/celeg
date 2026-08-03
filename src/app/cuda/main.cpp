@@ -1,6 +1,7 @@
 #include "celeg/text/chat_template.hpp"
 #include "celeg/checkpoint/downloader.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/runtime/request_types.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/backend/cuda/model.hpp"
 #include "celeg/text/tokenizer.hpp"
@@ -352,7 +353,7 @@ int main(int argc, char** argv) {
                                     celeg::GgufFile(gguf_path.string()))
                 : celeg::BpeTokenizer((model / "tokenizer.json").string());
         if (tokenizer.bos_id() != model_definition.tokens.bos ||
-            tokenizer.eos_id() != model_definition.tokens.eos) {
+            !celeg::is_stop_token(model_definition.tokens.eos, tokenizer.eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config");
         }
 
@@ -572,7 +573,7 @@ int main(int argc, char** argv) {
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t next = engine.session().decode();
-            if (next == tokenizer.eos_id()) break;
+            if (celeg::is_stop_token(model_definition.tokens.eos, next)) break;
             generated.push_back(next);
             std::cout << tokenizer.decode({next}, true) << std::flush;
         }

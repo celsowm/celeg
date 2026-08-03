@@ -10,7 +10,8 @@ int main() {
     using celeg::serve::RequestStatus;
 
     RequestLifecycle lifecycle;
-    lifecycle.submitted(7, 99);
+    const std::vector<std::int32_t> single_eos{99};
+    lifecycle.submitted(7, single_eos);
 
     const std::vector<std::int32_t> first{1, 2};
     CELEG_TEST_CHECK(lifecycle.finish_reason(7, RequestStatus::Decoding, first) ==
@@ -22,13 +23,13 @@ int main() {
     CELEG_TEST_CHECK(lifecycle.finish_reason(7, RequestStatus::Finished, {}) ==
                      FinishReason::Stop);
 
-    lifecycle.submitted(8, 99);
+    lifecycle.submitted(8, single_eos);
     CELEG_TEST_CHECK(lifecycle.finish_reason(8, RequestStatus::Finished, {}) ==
                      FinishReason::Length);
     CELEG_TEST_CHECK(lifecycle.finish_reason(8, RequestStatus::Cancelled, {}) ==
                      FinishReason::Cancelled);
 
-    lifecycle.submitted(9, 99);
+    lifecycle.submitted(9, single_eos);
     CELEG_TEST_CHECK(lifecycle.finish_reason(9, RequestStatus::Failed, {}) ==
                      FinishReason::Error);
     lifecycle.released(9);

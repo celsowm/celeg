@@ -135,7 +135,7 @@ int main() {
                                      engine_options);
         celeg::ConcurrentRequestOptions request;
         request.max_new_tokens = 2;
-        request.eos_token = 31;
+        request.eos_tokens = {31};
         request.generation.seed = 7;
         request.generation.top_k = 1;
         const auto first = engine.submit({1, 3, 4}, request);

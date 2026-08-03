@@ -53,9 +53,10 @@ void register_chat_completions_route(uWS::App& app,
                                      const celeg::IChatTemplate& chat_template,
                                      const celeg::ChatCapabilities& capabilities,
                                      const std::string& model_name,
-                                     std::int32_t eos_token_id,
+                                     std::span<const std::int32_t> eos_token_ids,
                                      uWS::Loop* loop) {
-    app.post("/v1/chat/completions", [&dispatcher, &service, &tokenizer, &chat_template, &capabilities, &model_name, eos_token_id,
+    const std::vector<std::int32_t> stop_tokens(eos_token_ids.begin(), eos_token_ids.end());
+    app.post("/v1/chat/completions", [&dispatcher, &service, &tokenizer, &chat_template, &capabilities, &model_name, stop_tokens,
                                       loop](auto* res, auto* /*req*/) {
         struct State {
             std::string body;
@@ -70,7 +71,7 @@ void register_chat_completions_route(uWS::App& app,
         });
 
         res->onData([res, state, &dispatcher, &service, &tokenizer, &chat_template, &capabilities, &model_name,
-                     eos_token_id, loop](std::string_view chunk, bool last) {
+                     stop_tokens, loop](std::string_view chunk, bool last) {
             state->body.append(chunk);
             if (!last) return;
 
@@ -79,7 +80,7 @@ void register_chat_completions_route(uWS::App& app,
             try {
                 request = protocol::from_json<protocol::ChatCompletionRequest>(state->body);
                 generate_request = protocol::to_generate_request(
-                    request, tokenizer, chat_template, capabilities, eos_token_id);
+                    request, tokenizer, chat_template, capabilities, stop_tokens);
             } catch (const std::exception& error) {
                 res->writeStatus("400 Bad Request")
                     ->writeHeader("Content-Type", "application/json")

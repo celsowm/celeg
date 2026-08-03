@@ -31,6 +31,9 @@ void RuntimeTopology::validate() const {
         num_hidden_layers <= 0) {
         throw std::runtime_error("invalid resolved model topology");
     }
+    if (bos_token_id < 0 || eos_token_ids.empty() || pad_token_id < 0) {
+        throw std::runtime_error("invalid resolved model token ids");
+    }
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
             std::to_string(mixer_kinds.size()) + " expected=" +

@@ -39,7 +39,7 @@ struct GenerateRequest {
     PromptEmbedding prompt_embedding;
     GenerationConfig generation;
     std::size_t max_output_tokens = 128;
-    std::int32_t eos_token_id = 7;
+    std::vector<std::int32_t> eos_token_ids = {7};
     int priority = 0;
 };
 

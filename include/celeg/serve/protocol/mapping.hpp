@@ -6,6 +6,7 @@
 #include "celeg/text/tokenizer.hpp"
 
 #include <cstdint>
+#include <span>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,12 +27,12 @@ ErrorResponseDto error_response(std::string message,
 
 // Builds a backend GenerateRequest from a chat completion request: renders
 // the message list through the tokenizer's chat template and tokenizes it.
-// eos_token_id is passed through unchanged (callers own the model's EOS id).
+// Stop token ids are passed through unchanged (callers own the model's token ids).
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::BpeTokenizer& tokenizer,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
-                                    std::int32_t eos_token_id);
+                                    std::span<const std::int32_t> eos_token_ids);
 
 // Maps a backend FinishReason to the OpenAI wire string. Returns "" for
 // FinishReason::None (request still in progress).

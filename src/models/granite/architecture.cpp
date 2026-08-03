@@ -49,7 +49,7 @@ public:
         result.definition.rope = {PositionalEncodingKind::Rope, attention.rope_theta, {}};
         result.definition.numerics = {t.norm_eps, t.embedding_multiplier,
             t.attention_multiplier, 1.0f, t.residual_multiplier, t.logits_divisor};
-        result.definition.tokens = {t.bos_token_id, t.eos_token_id, t.pad_token_id};
+        result.definition.tokens = {t.bos_token_id, t.eos_token_ids, t.pad_token_id};
         result.definition.architecture = "granite";
         result.definition.source_format = gguf ? "gguf" : "safetensors";
         result.definition.validate();

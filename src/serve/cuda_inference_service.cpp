@@ -43,7 +43,7 @@ RequestId CudaInferenceService::submit(GenerateRequest request) {
     }
     ConcurrentRequestOptions options;
     options.max_new_tokens = static_cast<int>(request.max_output_tokens);
-    options.eos_token = request.eos_token_id;
+    options.eos_tokens = request.eos_token_ids;
     options.priority = request.priority;
     options.generation = request.generation;
     options.prompt_embedding = std::move(request.prompt_embedding);
@@ -51,7 +51,7 @@ RequestId CudaInferenceService::submit(GenerateRequest request) {
     const ConcurrentEngine::RequestId id =
         engine_.submit(std::move(request.prompt_tokens), options);
 
-    lifecycle_.submitted(id, request.eos_token_id);
+    lifecycle_.submitted(id, request.eos_token_ids);
     return id;
 }
 

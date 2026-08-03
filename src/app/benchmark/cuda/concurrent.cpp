@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < requests; ++i) {
             celeg::ConcurrentRequestOptions options;
             options.max_new_tokens = max_new;
-            options.eos_token = tokenizer.eos_id();
+        options.eos_tokens = {tokenizer.eos_id()};
             options.generation.seed = static_cast<uint64_t>(i + 1);
             ids.push_back(engine.submit(prompt, options));
         }

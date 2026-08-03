@@ -33,13 +33,14 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.conv_dim = t.hidden;
     t.max_position_embeddings = integer("max_position_embeddings", "context_length");
     t.bos_token_id = integer_or("bos_token_id", "", 1);
-    t.eos_token_id = integer_or("eos_token_id", "", 2);
+    t.eos_token_ids = {integer_or("eos_token_id", "", 2)};
     t.pad_token_id = integer_or("pad_token_id", "", 0);
     if (gguf) {
         t.bos_token_id = static_cast<int>(source.integer_or(
             "tokenizer.ggml.bos_token_id", t.bos_token_id));
-        t.eos_token_id = static_cast<int>(source.integer_or(
-            "tokenizer.ggml.eos_token_id", t.eos_token_id));
+        t.eos_token_ids = {static_cast<int>(source.integer_or(
+            "tokenizer.ggml.eos_token_id", t.eos_token_ids.front()))
+        };
         t.pad_token_id = static_cast<int>(source.integer_or(
             "tokenizer.ggml.padding_token_id", t.pad_token_id));
     }

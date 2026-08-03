@@ -402,7 +402,7 @@ celeg_status celeg_engine_submit(celeg_engine* engine, const int32_t* tokens, si
         celeg::serve::GenerateRequest request;
         request.prompt_tokens.assign(tokens, tokens + count);
         request.max_output_tokens = options->max_new_tokens;
-        request.eos_token_id = options->eos_token_id;
+        request.eos_token_ids = {options->eos_token_id};
         request.priority = options->priority;
         request.generation = generation(options->generation);
         *request_id = engine->service->requests().submit(std::move(request));
