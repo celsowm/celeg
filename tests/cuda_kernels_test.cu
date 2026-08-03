@@ -34,7 +34,7 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.conv_dim = 1024;
             shape.max_position_embeddings = 128000;
             shape.bos_token_id = 1;
-            shape.eos_token_id = 7;
+            shape.eos_token_ids = {7};
             shape.pad_token_id = 0;
             shape.norm_eps = 1e-5f;
             shape.rope_type = "default";
@@ -57,7 +57,7 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.conv_dim = 2048;
             shape.max_position_embeddings = 128000;
             shape.bos_token_id = 1;
-            shape.eos_token_id = 7;
+            shape.eos_token_ids = {7};
             shape.pad_token_id = 0;
             shape.norm_eps = 1e-5f;
             shape.rope_type = "default";

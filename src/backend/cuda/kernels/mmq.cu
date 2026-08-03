@@ -29,12 +29,34 @@ constexpr int kSubBlocksPerSuperBlock = kSuperBlock / kMmqQ8_1BlockSize;
 constexpr int kMmqPrefillTileRows = 8;
 constexpr int kMmqTensorCoreTile = 16;
 
+bool mmq_tensor_core_supported() {
+    // int8 mma.sync (nvcuda::wmma with signed-char fragments) requires
+    // sm_72+; querying once per process avoids a device-attribute round
+    // trip on every launch.
+    static const bool supported = [] {
+        int device = 0;
+        if (cudaGetDevice(&device) != cudaSuccess) return false;
+        int major = 0;
+        int minor = 0;
+        if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device) != cudaSuccess)
+            return false;
+        if (cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device) != cudaSuccess)
+            return false;
+        return (major * 10 + minor) >= 72;
+    }();
+    return supported;
+}
+
 bool mmq_tensor_core_enabled() {
+    // The randomized Q4_K/Q6_K reference suite (see cuda_gguf_kernels_test.cu)
+    // cross-checks the MMA prefill kernels exactly against the validated
+    // decode kernel, so tensor cores are the default whenever the GPU
+    // supports int8 mma.sync. CELEG_MMQ_TENSOR_CORES is left as an explicit
+    // override only so the same binary can still bisect a regression between
+    // the MMA and DP4A prefill kernels; it is not meant to be user-facing.
     const char* setting = std::getenv("CELEG_MMQ_TENSOR_CORES");
-    // The MMA implementation is opt-in until its randomized Q4_K/Q6_K
-    // reference suite covers every production shape. Native GGUF remains
-    // numerically conservative by default.
-    return setting != nullptr && setting[0] == '1';
+    if (setting != nullptr) return setting[0] == '1';
+    return mmq_tensor_core_supported();
 }
 
 __global__ void quantize_q8_1_kernel(const __nv_bfloat16* __restrict__ x,
