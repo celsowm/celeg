@@ -469,6 +469,7 @@ if(CELEG_BUILD_TESTS)
         src/models/granite/naming_policy.cpp
         src/models/gemma4/architecture.cpp src/models/gemma4/naming_policy.cpp
         src/models/minicpm5/architecture.cpp src/models/minicpm5/naming_policy.cpp
+        src/models/smollm3/architecture.cpp src/models/smollm3/naming_policy.cpp
         src/model/weights/roles.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
@@ -479,7 +480,7 @@ if(CELEG_BUILD_TESTS)
     add_test(NAME lfm2_layer_decoder_test COMMAND lfm2_layer_decoder_test)
     add_executable(chat_template_test tests/chat_template_test.cpp src/text/chat_template.cpp
         src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
-        src/models/minicpm5/tool_call_codec.cpp)
+        src/models/minicpm5/tool_call_codec.cpp src/models/smollm3/tool_call_codec.cpp)
     target_include_directories(chat_template_test PRIVATE include)
     add_test(NAME chat_template_test COMMAND chat_template_test)
     add_executable(conversation_test tests/conversation_test.cpp)
@@ -500,18 +501,18 @@ if(CELEG_BUILD_TESTS)
     add_test(NAME quantization_test COMMAND quantization_test)
     add_executable(tokenizer_test tests/tokenizer_test.cpp src/text/tokenizer.cpp src/text/chat_template.cpp
         src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
-        src/models/minicpm5/tool_call_codec.cpp
+        src/models/minicpm5/tool_call_codec.cpp src/models/smollm3/tool_call_codec.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
     add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp src/text/tokenizer.cpp src/text/chat_template.cpp
         src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
-        src/models/minicpm5/tool_call_codec.cpp
+        src/models/minicpm5/tool_call_codec.cpp src/models/smollm3/tool_call_codec.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_benchmark PRIVATE include)
     add_executable(tokenizer_probe tests/tokenizer_probe.cpp src/text/tokenizer.cpp src/text/chat_template.cpp
         src/models/lfm2/tool_call_codec.cpp src/models/gemma4/tool_call_codec.cpp
-        src/models/minicpm5/tool_call_codec.cpp
+        src/models/minicpm5/tool_call_codec.cpp src/models/smollm3/tool_call_codec.cpp
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_probe PRIVATE include)
     add_executable(safetensors_test tests/safetensors_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/formats/json.cpp)

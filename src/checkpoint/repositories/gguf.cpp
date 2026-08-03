@@ -76,6 +76,10 @@ HostTensorView host_view(const GgufTensorView& gt) {
     return view;
 }
 
+bool rows_rope_permuted(std::string_view name) {
+    return name.ends_with(".attn_q.weight") || name.ends_with(".attn_k.weight");
+}
+
 } // namespace
 
 GgufRepository::GgufRepository(std::shared_ptr<GgufFile> gguf)
@@ -183,7 +187,9 @@ HostTensorView GgufRepository::tensor(std::string_view name) const {
     }
     const GgufTensorView gt = gguf_->tensor(gguf_name);
 
-    return host_view(gt);
+    HostTensorView view = host_view(gt);
+    view.rows_rope_permuted = rows_rope_permuted(gguf_name);
+    return view;
 }
 
 std::vector<std::string> GgufRepository::names() const {

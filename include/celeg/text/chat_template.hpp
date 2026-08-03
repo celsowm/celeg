@@ -3,6 +3,7 @@
 #include "celeg/text/chat_profile.hpp"
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -12,6 +13,10 @@
 namespace celeg {
 
 using ChatToolDefinition = ToolDefinition;
+
+struct ChatTemplateOptions {
+    std::optional<bool> enable_thinking;
+};
 
 // Interface Segregation Principle: tokenizer chat formatting depends only on
 // this narrow interface, not on model metadata.
@@ -28,6 +33,12 @@ public:
     virtual std::string format(std::span<const ChatMessage> messages,
                                std::span<const ChatToolDefinition> tools,
                                bool add_generation_prompt) const = 0;
+    virtual std::string format(std::span<const ChatMessage> messages,
+                               std::span<const ChatToolDefinition> tools,
+                               bool add_generation_prompt,
+                               const ChatTemplateOptions&) const {
+        return format(messages, tools, add_generation_prompt);
+    }
 };
 
 // Instruct chat template:
@@ -49,6 +60,11 @@ std::string render_chat(std::span<const ChatMessage> messages,
                         std::span<const ChatToolDefinition> tools,
                         const IChatTemplate& chat_template,
                         bool add_generation_prompt = true);
+std::string render_chat(std::span<const ChatMessage> messages,
+                        std::span<const ChatToolDefinition> tools,
+                        const IChatTemplate& chat_template,
+                        bool add_generation_prompt,
+                        const ChatTemplateOptions& options);
 
 class ChatProfileCatalog {
 public:
@@ -95,6 +111,27 @@ public:
     std::string format(std::span<const ChatMessage> messages,
                        std::span<const ChatToolDefinition> tools,
                        bool add_generation_prompt) const override;
+};
+
+class SmolLm3InstructChatTemplate final : public IChatTemplate {
+public:
+    explicit SmolLm3InstructChatTemplate(bool enable_thinking = true)
+        : enable_thinking_(enable_thinking) {}
+
+    std::string format(std::span<const ChatMessage> messages,
+                       std::span<const ChatToolDefinition> tools,
+                       bool add_generation_prompt) const override;
+    std::string format(std::span<const ChatMessage> messages,
+                       std::span<const ChatToolDefinition> tools,
+                       bool add_generation_prompt,
+                       const ChatTemplateOptions& options) const override;
+
+private:
+    std::string format_with_thinking(std::span<const ChatMessage> messages,
+                                     std::span<const ChatToolDefinition> tools,
+                                     bool add_generation_prompt,
+                                     bool enable_thinking) const;
+    bool enable_thinking_;
 };
 
 

@@ -50,7 +50,8 @@ void CudaCompiledModel::load_checkpoint_weights(
     resources_.weights_ = WeightLoader::acquire(
         model_path, resources_.options_.weight_mode,
         resources_.options_.expert_offload.fingerprint());
-    resources_.weight_loader_ = std::make_unique<WeightLoader>(resources_.weights_, resources_.options_.weight_mode);
+    resources_.weight_loader_ = std::make_unique<WeightLoader>(
+        resources_.weights_, resources_.options_.weight_mode);
 
     // Only one constructor populates a shared checkpoint at a time. Other
     // sessions wait, then reuse the immutable device buffers.

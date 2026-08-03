@@ -62,6 +62,7 @@ std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog()
     catalog->add(detail::make_granite_architecture());
     catalog->add(detail::make_gemma4_architecture());
     catalog->add(detail::make_minicpm5_architecture());
+    catalog->add(detail::make_smollm3_architecture());
     catalog->freeze();
     return catalog;
 }

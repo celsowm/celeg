@@ -75,12 +75,14 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.end(PrefillPhase::QkvProj, stream_.get());
 
             prof.begin(stream_.get());
-            launch_dynamic_qk_norm_rope_prefill(
-                workspace_.prefill_q_.data(), attention->key ? workspace_.prefill_k_.data() : nullptr,
-                attention->q_norm, attention->k_norm, rows, layout.query_heads,
-                layout.key_value_heads, layout.head_dim, static_cast<float>(layout.rope_theta),
-                static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
-                layout.query_key_norm, stream_.get());
+            if (layout.positional_encoding == PositionalEncodingKind::Rope) {
+                launch_dynamic_qk_norm_rope_prefill(
+                    workspace_.prefill_q_.data(), attention->key ? workspace_.prefill_k_.data() : nullptr,
+                    attention->q_norm, attention->k_norm, rows, layout.query_heads,
+                    layout.key_value_heads, layout.head_dim, static_cast<float>(layout.rope_theta),
+                    static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                    layout.query_key_norm, stream_.get());
+            }
             launch_scale(workspace_.prefill_q_.data(),
                          static_cast<size_t>(rows) * layout.query_width(),
                          layout.query_scale, stream_.get());

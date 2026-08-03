@@ -95,7 +95,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 shared->linear.gemv(attention->k, workspace_.normed.data(), k);
                 shared->linear.gemv(attention->v, workspace_.normed.data(), v);
             }
-            if (layout.query_key_norm) {
+            if (layout.positional_encoding == PositionalEncodingKind::None) {
+                const float ratio = shared->shape.attention_multiplier /
+                    (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
+                for (int i = 0; i < q_width; ++i) q[i] *= ratio;
+            } else if (layout.query_key_norm) {
                 cpu_qk_norm_rope(q, attention->q_norm.data(), layout.query_heads,
                     layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
                     shared->shape.norm_eps, static_cast<float>(layout.rotary_fraction));

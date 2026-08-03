@@ -39,6 +39,10 @@ struct HostTensorView {
     // verbatim. The owning checkpoint format module maps this to/from its
     // concrete block-type enum; this header stays neutral.
     TensorBlockEncoding block_encoding;
+    // GGUF attention Q/K rows can use the source format's RoPE layout.
+    // Format repositories set this source-layout fact; backends consume it
+    // without branching on an architecture or checkpoint implementation.
+    bool rows_rope_permuted = false;
 };
 
 } // namespace celeg

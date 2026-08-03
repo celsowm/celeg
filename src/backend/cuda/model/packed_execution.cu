@@ -642,11 +642,13 @@ struct PackedDecodeExecutorImpl {
             linear(normed.data(), *attention.value, v.data(), rows,
                    layout.key_value_width(), shape_.hidden);
         }
-        launch_dynamic_qk_norm_rope_device(
-            q.data(), attention.key ? k.data() : nullptr, attention.q_norm, attention.k_norm,
-            layout.query_heads, layout.key_value_heads, layout.head_dim, positions.data(),
-            static_cast<float>(layout.rope_theta), static_cast<float>(layout.rotary_fraction),
-            shape_.norm_eps, layout.query_key_norm, stream.get());
+        if (layout.positional_encoding == PositionalEncodingKind::Rope) {
+            launch_dynamic_qk_norm_rope_device(
+                q.data(), attention.key ? k.data() : nullptr, attention.q_norm, attention.k_norm,
+                layout.query_heads, layout.key_value_heads, layout.head_dim, positions.data(),
+                static_cast<float>(layout.rope_theta), static_cast<float>(layout.rotary_fraction),
+                shape_.norm_eps, layout.query_key_norm, stream.get());
+        }
         launch_scale(q.data(), static_cast<size_t>(rows) * layout.query_width(),
                      layout.query_scale, stream.get());
     }

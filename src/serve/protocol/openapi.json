@@ -145,7 +145,11 @@
           "seed": {"type": "integer"},
           "tools": {"type": "array", "items": {"$ref": "#/components/schemas/Tool"}},
           "tool_choice": {"oneOf": [{"type": "string"}, {"$ref": "#/components/schemas/ToolChoice"}]},
-          "parallel_tool_calls": {"type": "boolean"}
+          "parallel_tool_calls": {"type": "boolean"},
+          "chat_template_kwargs": {
+            "type": "object",
+            "properties": {"enable_thinking": {"type": "boolean"}}
+          }
         }
       },
       "ChatCompletionResponseMessage": {

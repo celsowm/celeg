@@ -32,7 +32,8 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::BpeTokenizer& tokenizer,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
-                                    std::span<const std::int32_t> eos_token_ids);
+                                    std::span<const std::int32_t> eos_token_ids,
+                                    const celeg::ChatTemplateOptions& template_options = {});
 
 // Maps a backend FinishReason to the OpenAI wire string. Returns "" for
 // FinishReason::None (request still in progress).

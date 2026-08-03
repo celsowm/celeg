@@ -52,11 +52,13 @@ struct AttentionSpec {
     double rotary_fraction = 1.0;
     KvSharingSpec kv_sharing;
     float query_scale = 1.0f;
+    PositionalEncodingKind positional_encoding = PositionalEncodingKind::Rope;
 
     int query_width() const { return query_heads * head_dim; }
     int key_value_width() const { return key_value_heads * head_dim; }
     int projection_width() const { return query_width() + 2 * key_value_width(); }
     int rotary_pairs() const {
+        if (positional_encoding == PositionalEncodingKind::None) return 0;
         return static_cast<int>(static_cast<double>(head_dim) * rotary_fraction) / 2;
     }
 };

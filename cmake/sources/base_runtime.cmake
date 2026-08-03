@@ -30,6 +30,9 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/minicpm5/architecture.cpp
     src/models/minicpm5/naming_policy.cpp
     src/models/minicpm5/tool_call_codec.cpp
+    src/models/smollm3/architecture.cpp
+    src/models/smollm3/naming_policy.cpp
+    src/models/smollm3/tool_call_codec.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp

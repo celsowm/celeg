@@ -48,6 +48,24 @@ bool is_commit_hash(const std::string& s) {
                        [](char c) { return std::isxdigit(static_cast<unsigned char>(c)); });
 }
 
+bool contains_case_insensitive(std::string_view value, std::string_view needle) {
+    if (needle.empty() || value.size() < needle.size()) return false;
+    for (size_t start = 0; start + needle.size() <= value.size(); ++start) {
+        bool match = true;
+        for (size_t index = 0; index < needle.size(); ++index) {
+            const auto lower = [](char c) {
+                return static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+            };
+            if (lower(value[start + index]) != lower(needle[index])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
 std::string format_bytes(size_t bytes) {
     static const char* units[] = {"B", "KiB", "MiB", "GiB"};
     double v = static_cast<double>(bytes);
@@ -573,13 +591,13 @@ std::filesystem::path resolve_hf_gguf(
         if (candidates.empty()) continue;
         if (!quant_tag.empty()) {
             for (const auto& c : candidates) {
-                if (c.filename().string().find(quant_tag) != std::string::npos)
+                if (contains_case_insensitive(c.filename().string(), quant_tag))
                     return c;
             }
         }
         // Prefer a Q4_K_M shard, else the first .gguf found.
         for (const auto& c : candidates) {
-            if (c.filename().string().find("Q4_K_M") != std::string::npos)
+            if (contains_case_insensitive(c.filename().string(), "Q4_K_M"))
                 return c;
         }
         return candidates.front();
@@ -660,12 +678,12 @@ std::filesystem::path resolve_hf_gguf(
         if (candidates.empty()) continue;
         if (!quant_tag.empty()) {
             for (const auto& c : candidates) {
-                if (c.filename().string().find(quant_tag) != std::string::npos)
+                if (contains_case_insensitive(c.filename().string(), quant_tag))
                     return c;
             }
         }
         for (const auto& c : candidates) {
-            if (c.filename().string().find("Q4_K_M") != std::string::npos)
+            if (contains_case_insensitive(c.filename().string(), "Q4_K_M"))
                 return c;
         }
         return candidates.front();

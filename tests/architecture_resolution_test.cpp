@@ -97,7 +97,7 @@ celeg::CheckpointMetadata gemma_metadata(int hidden, int intermediate, int layer
 
 int main() {
     const auto catalog = celeg::create_builtin_architecture_catalog();
-    CELEG_TEST_CHECK(catalog->ids().size() == 4);
+    CELEG_TEST_CHECK(catalog->ids().size() == 5);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog->select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -164,6 +164,66 @@ int main() {
     const auto minicpm5_gguf_model = minicpm5_gguf_architecture.resolve(minicpm5_gguf_checkpoint);
     CELEG_TEST_CHECK(minicpm5_gguf_model.definition.source_format == "gguf");
     CELEG_TEST_CHECK(minicpm5_gguf_model.topology.eos_token_ids == (std::vector<int>{1, 130073}));
+
+    celeg::CheckpointMetadata smollm3;
+    smollm3.repository_hint = "HuggingFaceTB/SmolLM3-3B";
+    smollm3.values["model_type"] = std::string("smollm3");
+    smollm3.values["hidden_size"] = int64_t(2048);
+    smollm3.values["intermediate_size"] = int64_t(11008);
+    smollm3.values["num_hidden_layers"] = int64_t(36);
+    smollm3.values["num_attention_heads"] = int64_t(16);
+    smollm3.values["num_key_value_heads"] = int64_t(4);
+    smollm3.values["head_dim"] = int64_t(128);
+    smollm3.values["vocab_size"] = int64_t(128256);
+    smollm3.values["max_position_embeddings"] = int64_t(65536);
+    smollm3.values["bos_token_id"] = int64_t(128000);
+    smollm3.values["eos_token_id"] = int64_t(128012);
+    smollm3.values["pad_token_id"] = int64_t(128004);
+    smollm3.values["rms_norm_eps"] = 1.0e-6;
+    smollm3.values["rope_theta"] = 5.0e6;
+    std::vector<int64_t> no_rope_layers(36, 1);
+    for (int layer = 3; layer < 36; layer += 4) no_rope_layers[static_cast<size_t>(layer)] = 0;
+    smollm3.values["no_rope_layers"] = no_rope_layers;
+    const auto& smollm3_architecture = catalog->select(smollm3);
+    CELEG_TEST_CHECK(smollm3_architecture.id() == "smollm3");
+    celeg::CheckpointView smollm3_checkpoint;
+    smollm3_checkpoint.metadata = smollm3;
+    const auto smollm3_model = smollm3_architecture.resolve(smollm3_checkpoint);
+    CELEG_TEST_CHECK(smollm3_model.topology.num_hidden_layers == 36);
+    CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[0].positional_encoding ==
+                     celeg::PositionalEncodingKind::Rope);
+    CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[3].positional_encoding ==
+                     celeg::PositionalEncodingKind::None);
+    CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[0].key_value_heads == 4);
+    CELEG_TEST_CHECK(smollm3_model.capabilities.tied_embeddings);
+    CELEG_TEST_CHECK(smollm3_model.definition.tokens.eos == (std::vector<int>{128012}));
+
+    celeg::CheckpointMetadata smollm3_gguf;
+    smollm3_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
+    smollm3_gguf.repository_hint = "ggml-org/SmolLM3-3B-GGUF";
+    smollm3_gguf.values["general.architecture"] = std::string("smollm3");
+    smollm3_gguf.values["smollm3.embedding_length"] = int64_t(2048);
+    smollm3_gguf.values["smollm3.feed_forward_length"] = int64_t(11008);
+    smollm3_gguf.values["smollm3.block_count"] = int64_t(36);
+    smollm3_gguf.values["smollm3.attention.head_count"] = int64_t(16);
+    smollm3_gguf.values["smollm3.attention.head_count_kv"] = int64_t(4);
+    smollm3_gguf.values["smollm3.attention.key_length"] = int64_t(128);
+    smollm3_gguf.values["smollm3.context_length"] = int64_t(65536);
+    smollm3_gguf.values["smollm3.attention.layer_norm_rms_epsilon"] = 1.0e-6;
+    smollm3_gguf.values["smollm3.rope.freq_base"] = 5.0e6;
+    smollm3_gguf.values["smollm3.vocab_size"] = int64_t(128256);
+    smollm3_gguf.values["smollm3.no_rope_layers"] = no_rope_layers;
+    smollm3_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(128000);
+    smollm3_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(128012);
+    smollm3_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(128004);
+    const auto& smollm3_gguf_architecture = catalog->select(smollm3_gguf);
+    CELEG_TEST_CHECK(smollm3_gguf_architecture.id() == "smollm3");
+    celeg::CheckpointView smollm3_gguf_checkpoint;
+    smollm3_gguf_checkpoint.metadata = smollm3_gguf;
+    const auto smollm3_gguf_model = smollm3_gguf_architecture.resolve(smollm3_gguf_checkpoint);
+    CELEG_TEST_CHECK(smollm3_gguf_model.definition.source_format == "gguf");
+    CELEG_TEST_CHECK(smollm3_gguf_model.topology.attention_layouts[0].positional_encoding ==
+                     celeg::PositionalEncodingKind::Rope);
 
     auto granite = metadata;
     granite.values["model_type"] = std::string("granite");

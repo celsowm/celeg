@@ -83,12 +83,14 @@ void CudaCompiledModel::enqueue_decode_forward() {
             }
             decode_phase_profile().end(DecodePhase::Projection, stream_.get());
             decode_phase_profile().begin(stream_.get());
-            launch_dynamic_qk_norm_rope_device(
-                q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                position_device_.data(), static_cast<float>(layout.rope_theta),
-                static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
-                layout.query_key_norm, stream_.get());
+            if (layout.positional_encoding == PositionalEncodingKind::Rope) {
+                launch_dynamic_qk_norm_rope_device(
+                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
+                    layout.query_heads, layout.key_value_heads, layout.head_dim,
+                    position_device_.data(), static_cast<float>(layout.rope_theta),
+                    static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                    layout.query_key_norm, stream_.get());
+            }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());

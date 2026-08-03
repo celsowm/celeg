@@ -76,6 +76,10 @@ struct ErrorResponseDto {
     ErrorDetailDto error;
 };
 
+struct ChatTemplateKwargsDto {
+    bool enable_thinking = true;
+};
+
 struct ChatCompletionRequest {
     std::string model;
     std::vector<ChatMessageDto> messages;
@@ -88,6 +92,7 @@ struct ChatCompletionRequest {
     std::optional<std::vector<ToolDto>> tools;
     std::optional<std::variant<std::string, ToolChoiceDto>> tool_choice;
     std::optional<bool> parallel_tool_calls;
+    std::optional<ChatTemplateKwargsDto> chat_template_kwargs;
 };
 
 struct ChatCompletionResponseMessage {

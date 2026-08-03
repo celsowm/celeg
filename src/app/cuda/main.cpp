@@ -332,7 +332,6 @@ int main(int argc, char** argv) {
             model = std::filesystem::path(args.model_dir);
             if (direct_gguf) gguf_path = model;
         }
-
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model);
         const auto& model_definition = bootstrap.model.definition;
@@ -354,7 +353,10 @@ int main(int argc, char** argv) {
                 : celeg::BpeTokenizer((model / "tokenizer.json").string());
         if (tokenizer.bos_id() != model_definition.tokens.bos ||
             !celeg::is_stop_token(model_definition.tokens.eos, tokenizer.eos_id())) {
-            throw std::runtime_error("tokenizer special IDs disagree with config");
+            throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +
+                std::to_string(tokenizer.bos_id()) + "/" +
+                std::to_string(model_definition.tokens.bos) + " eos=" +
+                std::to_string(tokenizer.eos_id()));
         }
 
         std::vector<int32_t> input;

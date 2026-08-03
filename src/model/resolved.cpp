@@ -56,7 +56,11 @@ void RuntimeTopology::validate() const {
             if (layout.query_heads <= 0 || layout.key_value_heads <= 0 ||
                 layout.query_heads % layout.key_value_heads != 0 ||
                 layout.head_dim <= 0 || (layout.head_dim % 2) != 0 ||
-                layout.rope_theta <= 0.0 || layout.rotary_fraction <= 0.0 ||
+                (layout.positional_encoding == PositionalEncodingKind::Rope &&
+                 (layout.rope_theta <= 0.0 || layout.rotary_fraction <= 0.0 ||
+                  layout.rotary_fraction > 1.0)) ||
+                (layout.positional_encoding == PositionalEncodingKind::None &&
+                 layout.query_key_norm) ||
                 layout.rotary_fraction > 1.0) {
                 throw std::runtime_error("invalid per-layer attention layout");
             }

@@ -155,7 +155,8 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::BpeTokenizer& tokenizer,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
-                                    std::span<const std::int32_t> eos_token_ids) {
+                                    std::span<const std::int32_t> eos_token_ids,
+                                    const celeg::ChatTemplateOptions& template_options) {
     validate_chat_request(request, capabilities);
 
     std::vector<celeg::ChatMessage> messages;
@@ -186,8 +187,14 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
     }
     celeg::validate_conversation(messages);
 
+    celeg::ChatTemplateOptions effective_template_options = template_options;
+    if (request.chat_template_kwargs) {
+        effective_template_options.enable_thinking =
+            request.chat_template_kwargs->enable_thinking;
+    }
     const std::string prompt_text = celeg::render_chat(
-        messages, tools, chat_template, /*add_generation_prompt=*/true);
+        messages, tools, chat_template, /*add_generation_prompt=*/true,
+        effective_template_options);
 
     GenerateRequest generate_request;
     generate_request.rendered_prompt = prompt_text;

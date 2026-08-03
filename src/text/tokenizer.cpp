@@ -255,7 +255,27 @@ void BpeTokenizer::load_gguf(const GgufFile& gguf) {
     }
 
     const std::string tokenizer_pre = gguf.str_or("tokenizer.ggml.pre", "");
-    if (tokenizer_pre == "lfm2") policy_.lfm2_rules = true;
+    if (tokenizer_pre == "lfm2" || tokenizer_pre == "smaug-bpe") {
+        // SmolLM3 uses the same GPT-2 split as the tokenizer.json pattern:
+        // numeric runs are isolated into groups of at most three digits.
+        policy_.lfm2_rules = true;
+    }
+    if (tokenizer_pre == "smaug-bpe") {
+        // The SmolLM3 GGUF conversion keeps the reasoning delimiters in the
+        // vocabulary but does not mark them as CONTROL tokens. Transformers
+        // treats them as added special tokens, so preserve them verbatim.
+        for (const std::string_view text : {"<think>", "</think>"}) {
+            const auto it = vocab_.find(std::string(text));
+            if (it != vocab_.end() && !special_ids_.contains(it->second)) {
+                specials_.push_back({std::string(text), it->second});
+                special_ids_[it->second] = true;
+            }
+        }
+        std::sort(specials_.begin(), specials_.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.text.size() > b.text.size();
+                  });
+    }
     else if (tokenizer_pre == "gemma4") policy_.raw_utf8 = true;
     else if (tokenizer_pre == "gpt2" ||
              tokenizer_pre.find("granite") != std::string::npos) {
@@ -302,12 +322,21 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
 
     if (root.contains("added_tokens")) {
         for (const Json& item : root["added_tokens"].as_array()) {
-            if (!item.contains("special") || !item["special"].as_bool()) continue;
             SpecialToken token{item["content"].as_string(), static_cast<int32_t>(item["id"].as_i64())};
+            // Added vocabulary entries are matched verbatim even when the
+            // tokenizer marks them non-special. SmolLM3 uses this for its
+            // reasoning delimiters (<think> and </think>).
+            if (!item.contains("special") || !item["special"].as_bool()) {
+                if (token.text == "<think>" || token.text == "</think>") {
+                    specials_.push_back(std::move(token));
+                }
+                continue;
+            }
             specials_.push_back(token);
             special_ids_[token.id] = true;
             if (token.text == "<|startoftext|>" || token.text == "<|start_of_text|>" ||
-                token.text == "<bos>" || token.text == "<|end_of_text|>") {
+                token.text == "<|begin_of_text|>" || token.text == "<bos>" ||
+                (token.text == "<|end_of_text|>" && bos_id_ == 1)) {
                 bos_id_ = token.id;
             }
             if (token.text == "<|im_end|>" || token.text == "<eos>" ||

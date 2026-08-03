@@ -77,6 +77,7 @@ int main() {
     request.top_p = 0.9;
     request.top_k = 40;
     request.seed = 42;
+    request.chat_template_kwargs = protocol::ChatTemplateKwargsDto{false};
 
     const std::string request_json = protocol::to_json(request);
     CELEG_TEST_CHECK(request_json.find("\"stream\"") == std::string::npos);
@@ -89,6 +90,8 @@ int main() {
     CELEG_TEST_CHECK(std::get<std::string>(*parsed.messages[0].content) == "hi");
     CELEG_TEST_CHECK(parsed.max_tokens && *parsed.max_tokens == 16);
     CELEG_TEST_CHECK(parsed.seed && *parsed.seed == 42);
+    CELEG_TEST_CHECK(parsed.chat_template_kwargs.has_value());
+    CELEG_TEST_CHECK(!parsed.chat_template_kwargs->enable_thinking);
     CELEG_TEST_CHECK(!parsed.stream.has_value());
 
     // Tool requests are validated before reaching the backend and use the

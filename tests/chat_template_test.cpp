@@ -123,5 +123,32 @@ int main() {
     CELEG_TEST_CHECK(minicpm5_tools.find("<tools>") != std::string::npos);
     CELEG_TEST_CHECK(minicpm5_tools.find("\"name\":\"weather\"") != std::string::npos);
 
+    const auto& smollm3 = catalog.find("smollm3-instruct");
+    const auto smollm3_capabilities = catalog.capabilities("smollm3-instruct");
+    CELEG_TEST_CHECK(smollm3_capabilities.tool_call_codec != nullptr);
+    const std::string smollm3_think = smollm3.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);
+    CELEG_TEST_CHECK(smollm3_think.find("Reasoning Mode: /think") != std::string::npos);
+    CELEG_TEST_CHECK(smollm3_think.ends_with("<|im_start|>assistant\n"));
+    const std::string smollm3_no_think = smollm3.format(
+        std::vector<celeg::ChatMessage>{
+            {celeg::ChatRole::System, "/no_think"},
+            {celeg::ChatRole::User, "Solve this"}}, true);
+    CELEG_TEST_CHECK(smollm3_no_think.find("Reasoning Mode: /no_think") != std::string::npos);
+    CELEG_TEST_CHECK(smollm3_no_think.ends_with(
+        "<|im_start|>assistant\n<think>\n\n</think>\n"));
+    const celeg::ChatTemplateOptions no_think_options{false};
+    const std::string smollm3_option_no_think = smollm3.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Explain"}},
+        {}, true, no_think_options);
+    CELEG_TEST_CHECK(smollm3_option_no_think.find("Reasoning Mode: /no_think") !=
+                     std::string::npos);
+    const auto smollm3_parse = smollm3_capabilities.tool_call_codec->parse_generation(
+        "<tool_call>{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}</tool_call>");
+    CELEG_TEST_CHECK(smollm3_parse.status == celeg::ToolParseStatus::Complete);
+    CELEG_TEST_CHECK(smollm3_parse.calls.size() == 1);
+    CELEG_TEST_CHECK(smollm3_parse.calls[0].name == "get_weather");
+    CELEG_TEST_CHECK(smollm3_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
+
     std::cout << "chat_template_test: ok\n";
 }

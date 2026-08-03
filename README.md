@@ -1,7 +1,7 @@
 # Celeg
 
-Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, and
-MiniCPM5 language models. It provides independent CPU and NVIDIA CUDA
+Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, MiniCPM5,
+and SmolLM3 language models. It provides independent CPU and NVIDIA CUDA
 backends, direct checkpoint loading, quantized execution, an OpenAI-compatible
 server, and a public C API.
 
@@ -16,6 +16,7 @@ Safetensors checkpoint directory, or a local GGUF file.
 | LFM2/LFM2.5 MoE | Yes | Yes | Yes | Yes |
 | Granite dense | Yes | No | Yes | Yes |
 | MiniCPM5-1B | Yes | Yes | Yes | Yes |
+| SmolLM3-3B | Yes | Yes | Yes | Yes |
 
 MiniCPM5-1B uses the standard Llama tensor layout with GQA (16 query heads,
 2 KV heads), 131072-token context metadata, and both EOS markers from the
@@ -51,6 +52,22 @@ Safetensors automatically, while `--repo openbmb/MiniCPM5-1B-GGUF` selects the
 GGUF repository and its `--quant` tag. The `minicpm5-instruct` profile renders
 the official `<|im_start|>` template, tool definitions, `<function>` calls,
 tool responses, and multiple EOS markers.
+
+## SmolLM3 checkpoints
+
+The BF16 checkpoint is `HuggingFaceTB/SmolLM3-3B`; GGUF files are available in
+`ggml-org/SmolLM3-3B-GGUF` as `Q4_K_M`, `Q8_0`, and `F16`. SmolLM3 uses a
+hybrid NoPE/RoPE attention schedule and defaults to extended thinking. Use
+`/no_think` or `/think` in the system message to select the reasoning mode:
+
+```text
+celeg-run --repo HuggingFaceTB/SmolLM3-3B --prompt "Explain gravity" --max-new-tokens 32
+celeg-run --repo ggml-org/SmolLM3-3B-GGUF:Q4_K_M --prompt "Explain gravity" --max-new-tokens 32
+```
+
+The `smollm3-instruct` profile supports the official `<|im_start|>` format,
+NoPE-aware execution, XML tool calls, `/system_override`, and `/think` /
+`/no_think` system flags.
 
 ## Requirements
 

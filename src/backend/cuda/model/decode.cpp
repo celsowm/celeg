@@ -63,12 +63,14 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                 linear(workspace_.normed_.data(), *attention->value, v,
                        1, layout.key_value_width(), resources_.shape_.hidden);
             }
-            launch_dynamic_qk_norm_rope(
-                q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                session_.position_, static_cast<float>(layout.rope_theta),
-                static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
-                layout.query_key_norm, stream_.get());
+            if (layout.positional_encoding == PositionalEncodingKind::Rope) {
+                launch_dynamic_qk_norm_rope(
+                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
+                    layout.query_heads, layout.key_value_heads, layout.head_dim,
+                    session_.position_, static_cast<float>(layout.rope_theta),
+                    static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                    layout.query_key_norm, stream_.get());
+            }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             const AttentionSpec& owner_layout = owner->layout;
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
@@ -189,12 +191,14 @@ void CudaCompiledModel::forward_token_paged_host(
                 linear(workspace_.normed_.data(), *attention->value, v, 1,
                        layout.key_value_width(), resources_.shape_.hidden);
             }
-            launch_dynamic_qk_norm_rope(
-                q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                layout.query_heads, layout.key_value_heads, layout.head_dim,
-                session_.position_, static_cast<float>(layout.rope_theta),
-                static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
-                layout.query_key_norm, stream_.get());
+            if (layout.positional_encoding == PositionalEncodingKind::Rope) {
+                launch_dynamic_qk_norm_rope(
+                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
+                    layout.query_heads, layout.key_value_heads, layout.head_dim,
+                    session_.position_, static_cast<float>(layout.rope_theta),
+                    static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                    layout.query_key_norm, stream_.get());
+            }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             const int cache_model_layer = attention->kv_owner_layer >= 0
                 ? attention->kv_owner_layer : layer_index;
