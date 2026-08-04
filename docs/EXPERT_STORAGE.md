@@ -46,15 +46,23 @@ Sessions cloned from the same model share that cache, and concurrent misses for
 the same expert coalesce into one read. Leases keep weights alive until both
 expert GEMVs finish, even if another request evicts the cache entry.
 
+The pack I/O is genuinely storage-backed:
+
+- `CpuPackWriter` writes each matrix directly to the temporary pack instead of
+  retaining all entries until `commit()`.
+- `CpuPackReader` scans only entry headers and keeps a compact name-to-offset
+  index. Matrix payloads remain on SSD until `read_q4_matrix()` is called.
+- During the first pack build, disk-backed MoE experts are quantized, written,
+  and released one at a time. The model never accumulates the full expert set
+  in `weight_store`.
+- When an existing pack is opened, expert entries are validated through the
+  index without reading their payloads. Only routed experts enter the RAM cache.
+
+The peak attributable to MoE expert preparation is therefore bounded by the
+largest expert being quantized plus its temporary conversion buffers, rather
+than the sum of every expert in the model. Steady-state expert residency remains
+bounded by `--cpu-expert-cache-mib`.
+
 Native GGUF matrices already reference the memory-mapped checkpoint, so the OS
 page cache supplies SSD-backed demand paging and Celeg does not add a second
 expert cache for that path.
-
-### Current first-build limitation
-
-When a Safetensors `.lfmpack` does not exist yet, Celeg still quantizes and
-writes all experts while constructing the pack before releasing the eager
-expert vectors. Steady-state residency is bounded by `--cpu-expert-cache-mib`,
-but the first pack creation can temporarily require the original eager-loading
-peak. A later loader refactor can stream each expert directly into the pack to
-remove that one-time peak.
