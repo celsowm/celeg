@@ -80,9 +80,6 @@ public:
     uint64_t misses() const { return misses_; }
 
     void evict(int slot, cudaStream_t stream);
-
-    // Ensure a promotion batch has enough non-protected slots to keep all
-    // currently routed experts alive until the FFN finishes.
     bool reserve_probation_slots(int required);
 
     void seed(const std::vector<int>& experts, cudaStream_t stream,
@@ -136,6 +133,7 @@ private:
         uint64_t last_used = 0;
         uint32_t observed_accesses = 0;
         bool protected_entry = false;
+        bool batch_pinned = false;
     };
 
     int choose_victim(bool speculative = false) const;
