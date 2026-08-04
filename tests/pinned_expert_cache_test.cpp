@@ -74,6 +74,37 @@ void test_eviction_and_lease_protection() {
     CELEG_TEST_CHECK(cache.evictions() == 1);
 }
 
+void test_frequency_aware_eviction() {
+    // Two slots: expert 1 becomes hot, expert 2 is only touched once. Even
+    // though expert 2 is more recent, admitting expert 3 must evict expert 2.
+    PinnedExpertCache cache(20, 10, 5, 5);
+    int load_count = 0;
+    auto loader = [&](std::span<std::byte>, std::span<std::byte>) {
+        load_count++;
+    };
+
+    for (int i = 0; i < 6; ++i) {
+        auto lease = cache.acquire(0, 1, loader);
+    }
+    {
+        auto lease = cache.acquire(0, 2, loader);
+    }
+    {
+        auto lease = cache.acquire(0, 3, loader);
+    }
+
+    const int after_three_experts = load_count;
+    {
+        auto lease = cache.acquire(0, 1, loader);
+    }
+    CELEG_TEST_CHECK(load_count == after_three_experts); // hot expert survived
+
+    {
+        auto lease = cache.acquire(0, 2, loader);
+    }
+    CELEG_TEST_CHECK(load_count == after_three_experts + 1); // cold expert was evicted
+}
+
 void test_coalescing_and_concurrency() {
     PinnedExpertCache cache(20, 10, 5, 5);
     std::atomic<int> load_starts{0};
@@ -249,6 +280,7 @@ int main(int argc, char** argv) {
         const std::string selected = argc > 1 ? argv[1] : "all";
         if (selected == "basic" || selected == "all") test_basic_hits_misses();
         if (selected == "eviction" || selected == "all") test_eviction_and_lease_protection();
+        if (selected == "frequency" || selected == "all") test_frequency_aware_eviction();
         if (selected == "coalescing" || selected == "all") test_coalescing_and_concurrency();
         if (selected == "failure" || selected == "all") test_loader_failure();
         if (selected == "propagation" || selected == "all") test_failure_propagation_to_waiters();
