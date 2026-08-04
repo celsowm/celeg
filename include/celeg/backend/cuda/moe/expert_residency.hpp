@@ -81,8 +81,10 @@ public:
 
     void evict(int slot, cudaStream_t stream);
 
-    // Seeded experts remain probationary by default. A seed derived from a
-    // persisted usage profile may be protected immediately.
+    // Ensure a promotion batch has enough non-protected slots to keep all
+    // currently routed experts alive until the FFN finishes.
+    bool reserve_probation_slots(int required);
+
     void seed(const std::vector<int>& experts, cudaStream_t stream,
               bool protect = false);
 
@@ -138,6 +140,7 @@ private:
 
     int choose_victim(bool speculative = false) const;
     int choose_coldest_protected(int except_slot = -1) const;
+    int probation_entries() const;
     double priority(int expert) const;
     void mark_probation(int slot);
     void promote_to_protected(int slot);
@@ -156,6 +159,7 @@ private:
     std::size_t down_bytes_ = 0;
     ExpertCachePolicy policy_ = ExpertCachePolicy::Lru;
     uint64_t lru_tick_ = 0;
+    bool requires_full_residency_ = false;
 
     std::vector<Slot> slots_;
     std::vector<int> expert_slot_;
