@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -12,6 +13,9 @@
 namespace celeg {
 
 namespace {
+
+constexpr uint64_t kLfuDecayInterval = 256;
+constexpr float kLfuDecayFactor = 0.5f;
 
 // Device kernel: for each selected expert, check if it is GPU-resident.
 // Outputs a compact list of cold experts that need promotion.
@@ -240,7 +244,9 @@ void ExpertLayerCache::promote(int expert, int slot, cudaStream_t stream,
     s.expert = expert;
     expert_slot_[static_cast<size_t>(expert)] = slot;
     last_used_[static_cast<size_t>(expert)] = ++lru_tick_;
-    last_score_[static_cast<size_t>(expert)] = score;
+    if (policy_ != ExpertCachePolicy::LayerLocalLfuLru) {
+        last_score_[static_cast<size_t>(expert)] = score;
+    }
     // Point the table at the slot only after the copies are ordered on-stream.
     publish_pointer(expert, s.gate_up.data(), s.down.data(), stream);
 }
@@ -274,7 +280,9 @@ void ExpertLayerCache::promote(int expert, int slot, const __nv_bfloat16* gate_u
     s.expert = expert;
     expert_slot_[static_cast<size_t>(expert)] = slot;
     last_used_[static_cast<size_t>(expert)] = ++lru_tick_;
-    last_score_[static_cast<size_t>(expert)] = score;
+    if (policy_ != ExpertCachePolicy::LayerLocalLfuLru) {
+        last_score_[static_cast<size_t>(expert)] = score;
+    }
     // Point the table at the slot only after the copies are ordered on-stream.
     publish_pointer(expert, s.gate_up.data(), s.down.data(), stream);
 }
@@ -295,8 +303,9 @@ void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
 int ExpertLayerCache::choose_victim() const {
     if (capacity_ <= 0) return -1;
     // Prefer an empty slot; otherwise evict per the cache policy:
-    //  * Lru   -> least-recently-used (default; best measured on LFM2-8B-A1B).
-    //  * Score -> lowest routing-likelihood (router-guided residency).
+    //  * Lru   -> least-recently-used.
+    //  * LayerLocalLfuLru -> lowest decayed frequency plus recency bonus.
+    //  * Score -> lowest routing-likelihood.
     // Ties break to the lowest slot index for determinism.
     int best = -1;
     auto better = [this](int a_slot, int b_slot) {
@@ -306,6 +315,17 @@ int ExpertLayerCache::choose_victim() const {
             const float sa = last_score_[static_cast<size_t>(a.expert)];
             const float sb = last_score_[static_cast<size_t>(b.expert)];
             return sa < sb;
+        }
+        if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
+            const float a_heat = std::max(0.0f, last_score_[static_cast<size_t>(a.expert)]);
+            const float b_heat = std::max(0.0f, last_score_[static_cast<size_t>(b.expert)]);
+            const uint64_t a_age = lru_tick_ - last_used_[static_cast<size_t>(a.expert)];
+            const uint64_t b_age = lru_tick_ - last_used_[static_cast<size_t>(b.expert)];
+            const double a_priority = static_cast<double>(a_heat) +
+                1.0 / (1.0 + static_cast<double>(a_age));
+            const double b_priority = static_cast<double>(b_heat) +
+                1.0 / (1.0 + static_cast<double>(b_age));
+            if (a_priority != b_priority) return a_priority < b_priority;
         }
         const uint64_t ua = last_used_[static_cast<size_t>(a.expert)];
         const uint64_t ub = last_used_[static_cast<size_t>(b.expert)];
@@ -321,17 +341,41 @@ int ExpertLayerCache::choose_victim() const {
 
 void ExpertLayerCache::touch(int expert) {
     if (expert < 0 || expert >= num_experts_) return;
+    const uint64_t tick = ++lru_tick_;
+    if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
+        if (tick % kLfuDecayInterval == 0) {
+            for (float& heat : last_score_) {
+                if (heat > 0.0f) heat *= kLfuDecayFactor;
+            }
+        }
+        float& heat = last_score_[static_cast<size_t>(expert)];
+        if (heat == kUnseen || heat < 0.0f) heat = 0.0f;
+        heat += 1.0f;
+    }
     const int slot = expert_slot_[static_cast<size_t>(expert)];
-    if (slot < 0) return;  // host-resident experts have no cache slot
-    last_used_[static_cast<size_t>(expert)] = ++lru_tick_;
+    if (slot < 0) return;  // host-resident experts still accumulate heat
+    last_used_[static_cast<size_t>(expert)] = tick;
 }
 
 void ExpertLayerCache::touch(int expert, float score) {
     if (expert < 0 || expert >= num_experts_) return;
+    const uint64_t tick = ++lru_tick_;
+    if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
+        if (tick % kLfuDecayInterval == 0) {
+            for (float& heat : last_score_) {
+                if (heat > 0.0f) heat *= kLfuDecayFactor;
+            }
+        }
+        float& heat = last_score_[static_cast<size_t>(expert)];
+        if (heat == kUnseen || heat < 0.0f) heat = 0.0f;
+        heat += 1.0f;
+    }
     const int slot = expert_slot_[static_cast<size_t>(expert)];
-    if (slot < 0) return;  // host-resident experts have no cache slot
-    last_used_[static_cast<size_t>(expert)] = ++lru_tick_;
-    last_score_[static_cast<size_t>(expert)] = score;
+    if (slot < 0) return;  // host-resident experts still accumulate heat
+    last_used_[static_cast<size_t>(expert)] = tick;
+    if (policy_ != ExpertCachePolicy::LayerLocalLfuLru) {
+        last_score_[static_cast<size_t>(expert)] = score;
+    }
 }
 
 bool ExpertLayerCache::ensure_resident(int expert, cudaStream_t stream,
@@ -340,8 +384,11 @@ bool ExpertLayerCache::ensure_resident(int expert, cudaStream_t stream,
         throw std::invalid_argument("ensure_resident: expert out of range");
     }
     if (expert_slot_[static_cast<size_t>(expert)] >= 0) {
-        touch(expert, score);  // already cached: refresh recency + score
+        touch(expert, score);  // already cached: refresh policy metadata
         return false;
+    }
+    if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
+        touch(expert, score);  // record the miss as an access before admission
     }
     const int slot = choose_victim();
     if (slot < 0) return false;  // capacity 0 -> everything stays host-resident
@@ -356,8 +403,11 @@ bool ExpertLayerCache::ensure_resident(int expert, const __nv_bfloat16* gate_up_
         throw std::invalid_argument("ensure_resident: expert out of range");
     }
     if (expert_slot_[static_cast<size_t>(expert)] >= 0) {
-        touch(expert, score);  // already cached: refresh recency + score
+        touch(expert, score);  // already cached: refresh policy metadata
         return false;
+    }
+    if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
+        touch(expert, score);  // record the miss as an access before admission
     }
     const int slot = choose_victim();
     if (slot < 0) return false;  // capacity 0 -> everything stays host-resident
@@ -392,6 +442,11 @@ int ExpertLayerCache::prefetch(int n, cudaStream_t stream) {
         if (expert_slot_[static_cast<size_t>(e)] >= 0) continue;
         const int slot = choose_victim();
         if (slot < 0) break;
+        // Speculative traffic must not evict an observed hot resident.
+        if (policy_ == ExpertCachePolicy::LayerLocalLfuLru &&
+            slots_[static_cast<size_t>(slot)].expert >= 0) {
+            break;
+        }
         promote(e, slot, stream);
         ++promoted;
     }
@@ -411,18 +466,25 @@ int ExpertLayerCache::prefetch_list(const std::vector<int>& ranked,
     for (int i = 0; i < limit; ++i) {
         const int e = ranked[static_cast<size_t>(i)];
         if (e < 0 || e >= num_experts_) continue;
-        // Already resident: refresh its score so it stays where it is.
+        // Already resident: refresh router score only for score-based policies;
+        // speculative prefetch must not count as an LFU access.
         if (expert_slot_[static_cast<size_t>(e)] >= 0) {
-            last_score_[static_cast<size_t>(e)] = scores[static_cast<size_t>(i)];
+            if (policy_ != ExpertCachePolicy::LayerLocalLfuLru) {
+                last_score_[static_cast<size_t>(e)] = scores[static_cast<size_t>(i)];
+            }
             continue;
         }
         const int slot = choose_victim();
         if (slot < 0) break;
-        // Anti-thrash: never evict a resident expert whose score is >= this
-        // candidate's, since `ranked` is descending in likelihood any further
-        // candidate is also <=. Stop prefetching for this step.
         const Slot& victim = slots_[static_cast<size_t>(slot)];
         if (victim.expert >= 0) {
+            if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
+                // A prediction alone is not enough to displace a proven hot expert.
+                break;
+            }
+            // Anti-thrash: never evict a resident expert whose score is >= this
+            // candidate's, since `ranked` is descending in likelihood any further
+            // candidate is also <=. Stop prefetching for this step.
             const float victim_score =
                 last_score_[static_cast<size_t>(victim.expert)];
             const float cand_score = scores[static_cast<size_t>(i)];
