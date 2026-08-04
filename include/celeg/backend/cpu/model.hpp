@@ -165,7 +165,7 @@ private:
     friend class CpuDiagnostics;
     friend class CpuPersistence;
 
-    explicit CpuModel(std::unique_ptr<CpuCompiledModel> impl);
+    explicit CpuModel(std::unique_ptr<CpuCompiledModel> compiled_model);
 
     void reset_session();
     void prefill_session(const std::vector<int32_t>& tokens);
@@ -197,5 +197,8 @@ private:
     CpuDiagnostics diagnostics_view_;
     CpuPersistence persistence_view_;
 };
+
+const char* cpu_kv_cache_mode_name(CpuKvCacheMode mode);
+CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text);
 
 } // namespace celeg
