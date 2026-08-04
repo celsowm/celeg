@@ -9,6 +9,25 @@
 #include <thread>
 #include <vector>
 
+namespace {
+
+void write_pack(const std::filesystem::path& path,
+                const celeg::Q4GroupMatrix& matrix,
+                const std::vector<uint16_t>& bf16) {
+    celeg::CpuPackMetadata metadata;
+    metadata.source_id = "unit-test";
+    metadata.isa = "scalar";
+    metadata.group_size = 32;
+    celeg::CpuPackWriter writer(path, metadata);
+    writer.add_q4_matrix("matrix", matrix);
+    writer.add_bf16_vector(
+        "vector", reinterpret_cast<const std::byte*>(bf16.data()),
+        bf16.size());
+    writer.commit();
+}
+
+} // namespace
+
 int main() {
     constexpr size_t rows = 3, cols = 67;
     std::vector<float> values(rows * cols);
@@ -48,8 +67,12 @@ int main() {
     }
     const auto path =
         std::filesystem::temp_directory_path() / "celeg-cpu-pack-test.bin";
+    const auto replacement_path =
+        std::filesystem::temp_directory_path() /
+        "celeg-cpu-pack-test-replacement.bin";
     const auto temporary = std::filesystem::path(path.string() + ".tmp");
     std::filesystem::remove(path);
+    std::filesystem::remove(replacement_path);
     std::filesystem::remove(temporary);
     {
         celeg::CpuPackMetadata metadata;
@@ -101,8 +124,19 @@ int main() {
                 std::abs(vector[i] - celeg::bf16_bits_to_float(bf16[i])) <
                 1e-6f);
         }
+
+        celeg::Q4GroupMatrix replacement = pack;
+        replacement.values.front() ^= 0x01U;
+        replacement.validate();
+        write_pack(replacement_path, replacement, bf16);
+        std::filesystem::remove(path);
+        std::filesystem::rename(replacement_path, path);
+        const auto lazy = reader.read_q4_matrix("matrix");
+        CELEG_TEST_CHECK(lazy.values == replacement.values);
+        CELEG_TEST_CHECK(lazy.scales_bf16 == replacement.scales_bf16);
     }
     std::filesystem::remove(path);
+    std::filesystem::remove(replacement_path);
     std::cout << "cpu_quantization_test: max_q4_error=" << max_error
               << " max_q8_error=" << max_q8_error << '\n';
 }
