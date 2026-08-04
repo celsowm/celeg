@@ -16,6 +16,7 @@
 #include <thread>
 #include <condition_variable>
 #include <atomic>
+#include <unordered_map>
 
 namespace celeg {
 
@@ -132,8 +133,15 @@ private:
         std::shared_future<void> shared_fut;
     };
 
+    struct HeatEntry {
+        double heat = 0.0;
+        uint64_t last_touch = 0;
+    };
+
     std::vector<CacheSlot> slots_;
+    std::unordered_map<uint64_t, HeatEntry> heat_;
     uint64_t tick_ = 0;
+    uint64_t last_decay_tick_ = 0;
 
     std::size_t hits_ = 0;
     std::size_t misses_ = 0;
@@ -141,6 +149,13 @@ private:
     std::size_t bytes_read_ = 0;
     double total_wait_time_ms_ = 0.0;
 
+    static constexpr uint64_t kHeatDecayInterval = 256;
+    static constexpr double kHeatDecayFactor = 0.5;
+
+    static uint64_t expert_key(int layer, int expert);
+    void decay_heat_if_needed();
+    void record_access(int layer, int expert);
+    double current_heat(int layer, int expert) const;
     int find_slot(int layer, int expert);
     int choose_victim_slot();
 };
