@@ -7,7 +7,6 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <mutex>
 #include <stdexcept>
 #include <system_error>
 #include <unordered_map>
@@ -130,6 +129,12 @@ void seek_to(std::ifstream& in, uint64_t offset) {
     in.clear();
     in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
     if (!in) throw std::runtime_error("cannot seek CPU pack");
+}
+
+std::ifstream open_pack(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error("cannot open CPU pack: " + path.string());
+    return in;
 }
 
 PackHeader make_header(const CpuPackMetadata& metadata, uint32_t entries) {
@@ -396,18 +401,12 @@ struct CpuPackReaderState {
     std::filesystem::path path;
     CpuPackMetadata metadata;
     std::unordered_map<std::string, Entry> entries;
-    mutable std::mutex mutex;
-    mutable std::ifstream in;
 };
 
 CpuPackReader::CpuPackReader(const std::filesystem::path& path)
     : state_(std::make_unique<CpuPackReaderState>()) {
     state_->path = path;
-    state_->in.open(path, std::ios::binary);
-    if (!state_->in) {
-        throw std::runtime_error("cannot open CPU pack: " + path.string());
-    }
-    std::ifstream& in = state_->in;
+    std::ifstream in = open_pack(path);
     PackHeader header;
     read_exact(in, &header, sizeof(header));
     if (header.magic != kMagic || header.version != 2 ||
@@ -506,11 +505,11 @@ Q4GroupMatrix CpuPackReader::read_q4_matrix(const std::string& name) const {
     matrix.scales_bf16.resize(
         static_cast<size_t>(entry.scales_bytes / sizeof(uint16_t)));
 
-    std::lock_guard lock(state_->mutex);
-    seek_to(state_->in, entry.values_offset);
-    read_exact(state_->in, matrix.values.data(), matrix.values.size());
-    seek_to(state_->in, entry.scales_offset);
-    read_exact(state_->in, matrix.scales_bf16.data(),
+    std::ifstream in = open_pack(state_->path);
+    seek_to(in, entry.values_offset);
+    read_exact(in, matrix.values.data(), matrix.values.size());
+    seek_to(in, entry.scales_offset);
+    read_exact(in, matrix.scales_bf16.data(),
                static_cast<size_t>(entry.scales_bytes));
     matrix.validate();
     return matrix;
@@ -524,11 +523,10 @@ std::vector<float> CpuPackReader::read_bf16_vector(const std::string& name) cons
     const CpuPackReaderState::Entry& entry = iterator->second;
     std::vector<uint16_t> bits(
         static_cast<size_t>(entry.values_bytes / sizeof(uint16_t)));
-    {
-        std::lock_guard lock(state_->mutex);
-        seek_to(state_->in, entry.values_offset);
-        read_exact(state_->in, bits.data(), static_cast<size_t>(entry.values_bytes));
-    }
+    std::ifstream in = open_pack(state_->path);
+    seek_to(in, entry.values_offset);
+    read_exact(in, bits.data(), static_cast<size_t>(entry.values_bytes));
+
     std::vector<float> result(bits.size());
     for (size_t index = 0; index < result.size(); ++index) {
         result[index] = bf16_bits_to_float(bits[index]);
