@@ -8,12 +8,15 @@
 
 namespace celeg {
 
+void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared);
+
 CpuCompiledModel::CpuCompiledModel(std::shared_ptr<Shared> shared_weights,
-                     GenerationConfig generation_config,
-                     int requested_numa_node)
+                                   GenerationConfig generation_config,
+                                   int requested_numa_node)
     : shared(std::move(shared_weights)), session_(generation_config),
       preferred_numa_node(requested_numa_node) {
     if (!shared) throw std::invalid_argument("shared CPU model weights are required");
+    configure_cpu_expert_backing(*shared);
     session_.generation.validate();
     allocate_state();
     allocate_activations();
@@ -118,7 +121,7 @@ void CpuCompiledModel::release_attention_pages(AttentionState& state) noexcept {
 }
 
 void CpuCompiledModel::store_kv(AttentionState& state, int position,
-                              const float* key, const float* value) {
+                                const float* key, const float* value) {
     if (position < 0) throw std::invalid_argument("negative CPU KV position");
     CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
     const size_t position_value = static_cast<size_t>(position);
@@ -139,9 +142,9 @@ void CpuCompiledModel::store_kv(AttentionState& state, int position,
 }
 
 void CpuCompiledModel::run_attention(const AttentionState& state,
-                                   const AttentionSpec& attention,
-                                   const float* q, float* output,
-                                   int sequence_length) const {
+                                     const AttentionSpec& attention,
+                                     const float* q, float* output,
+                                     int sequence_length) const {
     if (sequence_length <= 0 || static_cast<size_t>(sequence_length) > state.token_count) {
         throw std::invalid_argument("CPU paged attention sequence length is invalid");
     }
@@ -181,7 +184,7 @@ CpuPrefixSnapshot CpuCompiledModel::export_prefix_snapshot() const {
 }
 
 void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
-                                             bool ready_for_decode) {
+                                               bool ready_for_decode) {
     size_t expected_attention = 0;
     size_t expected_convolution = 0;
     for (const LayerState& layer : session_.states) {
@@ -229,7 +232,6 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
         session_.rng_state = session_.generation.seed;
     } catch (...) {
         reset();
-        // Pages not yet transferred remain owned by snapshot. Release them.
         for (size_t index = attention_index;
              index < snapshot.attention_pages.size(); ++index) {
             auto& pool = *shared->kv_pools.at(index);
@@ -274,6 +276,9 @@ void CpuCompiledModel::set_generation(GenerationConfig config) {
 CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
     CpuModelMemoryStats stats;
     stats.weights = shared->weights_memory_bytes();
+    if (shared->expert_cache) {
+        stats.weights += shared->expert_cache->resident_bytes();
+    }
     for (const LayerState& state : session_.states) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
