@@ -55,7 +55,8 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
         throw std::logic_error("CPU disk-backed expert cache is not configured");
     }
     if (layer < 0 || layer >= shape.num_hidden_layers ||
-        expert < 0 || expert >= shape.num_experts) {
+        expert < 0 || expert >= shape.num_experts ||
+        !shape.layer_uses_moe(layer)) {
         throw std::out_of_range("CPU expert cache request is out of range");
     }
 
@@ -67,12 +68,23 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
         const std::string w2_name =
             layer_name(layer, prefix + ".w2.weight");
 
-        std::lock_guard lock(expert_pack_mutex);
         CpuExpertWeights weights;
         weights.w13 = CpuLinearWeight::from_q4(
             expert_pack_reader->read_q4_matrix(w13_name));
         weights.w2 = CpuLinearWeight::from_q4(
             expert_pack_reader->read_q4_matrix(w2_name));
+
+        const int intermediate = shape.moe_intermediate > 0
+            ? shape.moe_intermediate : shape.intermediate;
+        if (weights.w13.rows != static_cast<uint32_t>(2 * intermediate) ||
+            weights.w13.cols != static_cast<uint32_t>(shape.hidden) ||
+            weights.w2.rows != static_cast<uint32_t>(shape.hidden) ||
+            weights.w2.cols != static_cast<uint32_t>(intermediate)) {
+            throw std::runtime_error(
+                "CPU expert pack entry has unexpected dimensions for layer " +
+                std::to_string(layer) + ", expert " +
+                std::to_string(expert));
+        }
         return weights;
     });
 }
