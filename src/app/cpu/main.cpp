@@ -30,6 +30,7 @@ struct Args {
     std::string affinity = "none";
     std::string kv_cache = "bf16";
     std::string numa = "disabled";
+    std::string expert_backing = "memory";
     int context = 4096;
     int max_new_tokens = 128;
     int threads = 0;
@@ -40,6 +41,7 @@ struct Args {
     int prefill_chunk_threshold = 16;
     int attention_parallel_threshold = 256;
     int attention_page_tile = 4;
+    int expert_cache_mib = 512;
     int top_k = 50;
     float top_p = 1.0f;
     float temperature = 0.1f;
@@ -68,6 +70,8 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--cpu-affinity") args.affinity = value();
         else if (key == "--cpu-kv-cache") args.kv_cache = value();
         else if (key == "--cpu-numa") args.numa = value();
+        else if (key == "--cpu-expert-backing") args.expert_backing = value();
+        else if (key == "--cpu-expert-cache-mib") args.expert_cache_mib = std::stoi(value());
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--max-new-tokens") args.max_new_tokens = std::stoi(value());
         else if (key == "--threads") args.threads = std::stoi(value());
@@ -93,12 +97,14 @@ Args parse_args(int argc, char** argv) {
             std::cout
                 << "celeg-cpu-run [--model DIR | --repo REPO_ID] --prompt TEXT [options]\n"
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
-                << "    (AMX/I8MM/SME2 remain diagnostic-only in v0.0.20)\n"
+                << "    (AMX/I8MM/SME2 remain diagnostic-only in v0.0.21)\n"
                 << "  --cpu-q4-group 32|64 --threads N\n"
                 << "  --cpu-affinity none|compact|scatter\n"
                 << "  --cpu-kv-cache fp32|bf16 --cpu-kv-page-tokens N\n"
                 << "  --cpu-prefill-chunk N --cpu-prefill-threshold N\n"
                 << "  --cpu-pack-cache DIR | --no-pack-cache\n"
+                << "  --cpu-expert-backing memory|disk\n"
+                << "  --cpu-expert-cache-mib N\n"
                 << "  --context N --max-new-tokens N --memory-report\n"
                 << "  --temperature F --top-k N --top-p F\n";
             std::exit(0);
@@ -114,8 +120,13 @@ Args parse_args(int argc, char** argv) {
         args.kv_page_tokens <= 0 || args.prefill_chunk_tokens <= 0 ||
         args.prefill_chunk_threshold <= 0 ||
         args.attention_parallel_threshold <= 0 || args.attention_page_tile <= 0 ||
+        args.expert_cache_mib < 0 ||
         (args.group_size != 32 && args.group_size != 64)) {
         throw std::runtime_error("invalid CPU numeric argument");
+    }
+    if (args.expert_backing != "memory" && args.expert_backing != "disk") {
+        throw std::runtime_error(
+            "--cpu-expert-backing must be memory or disk");
     }
     return args;
 }
@@ -129,7 +140,7 @@ std::string bytes(size_t count) {
     out << std::fixed << std::setprecision(unit ? 2 : 0) << value << ' ' << units[unit];
     return out.str();
 }
-}
+} // namespace
 
 int main(int argc, char** argv) {
     try {
@@ -204,6 +215,11 @@ int main(int argc, char** argv) {
         options.numa_mode = celeg::parse_cpu_numa_mode(args.numa);
         options.use_pack_cache = !args.no_pack_cache;
         if (!args.pack_cache.empty()) options.pack_cache_directory = args.pack_cache;
+        options.expert_backing = args.expert_backing == "disk"
+            ? celeg::CpuExpertBacking::DiskCached
+            : celeg::CpuExpertBacking::Memory;
+        options.expert_cache_bytes =
+            static_cast<size_t>(args.expert_cache_mib) * 1024ULL * 1024ULL;
         celeg::GenerationConfig generation;
         generation.temperature = args.temperature;
         generation.top_k = args.top_k;
@@ -212,7 +228,9 @@ int main(int argc, char** argv) {
         generation.seed = args.seed;
         celeg::CpuModel engine(model.string(), args.context, options, generation);
         std::cerr << "backend=" << engine.diagnostics().backend_description() << '\n';
-        if (!engine.diagnostics().pack_path().empty()) std::cerr << "cpu.pack_path=" << engine.diagnostics().pack_path() << '\n';
+        if (!engine.diagnostics().pack_path().empty()) {
+            std::cerr << "cpu.pack_path=" << engine.diagnostics().pack_path() << '\n';
+        }
         if (args.memory_report) {
             const auto stats = engine.diagnostics().memory_stats();
             std::cerr << "memory.weights=" << bytes(stats.weights) << '\n'
