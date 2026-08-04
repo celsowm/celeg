@@ -164,6 +164,11 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
     prepare_pack_path();
+    if (options.expert_backing == CpuExpertBacking::DiskCached &&
+        !native_checkpoint && (!options.use_pack_cache || pack_file.empty())) {
+        throw std::invalid_argument(
+            "CPU disk-backed experts require the CPU pack cache");
+    }
     load_weights();
     layer_to_kv_pool.assign(weight_store.layers.size(), -1);
     layer_to_kv_owner.assign(weight_store.layers.size(), -1);
@@ -330,6 +335,9 @@ void CpuCompiledModel::Shared::load_weights() {
     }
 
     IWeightRepository* source = reader ? nullptr : repository.get();
+    const bool disk_cached_experts =
+        options.expert_backing == CpuExpertBacking::DiskCached &&
+        !native_checkpoint;
     weight_store.embedding = load_matrix(source, reader.get(), writer.get(),
         tensor_name(weight_requests, TensorRole::TokenEmbedding),
         {shape.vocab_size, shape.hidden});
@@ -348,9 +356,6 @@ void CpuCompiledModel::Shared::load_weights() {
             {shape.per_layer_input_size});
     }
 
-    // Attention and short-convolution are identical between dense and MoE
-    // layers. Keeping their loader in one place prevents the two checkpoint
-    // paths from drifting when an operator tensor changes.
     const auto load_operator = [&](int index, MixerKind layer_type)
         -> std::variant<AttentionWeights, ConvolutionWeights> {
         if (layer_type == MixerKind::Attention) {
@@ -408,8 +413,6 @@ void CpuCompiledModel::Shared::load_weights() {
     };
 
     if (shape.num_experts > 0) {
-        // MoE checkpoints begin with ordinary dense FFN blocks. Keep them as
-        // dense layers, then load only the remaining routed blocks as MoE.
         weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
         for (int index = 0; index < shape.num_hidden_layers; ++index) {
             const MixerKind layer_type = shape.mixer_kinds[static_cast<size_t>(index)];
@@ -430,44 +433,66 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
                 layer_name(index, "ffn_norm.weight"), {shape.hidden});
             layer.operator_layer = load_operator(index, layer_type);
-
-            // Load MoE-specific weights: router + per-expert gate_up (w1+w3) and down (w2).
             layer.num_experts = shape.num_experts;
             layer.experts_per_token = shape.experts_per_token;
             layer.normalize_topk = shape.normalize_topk;
             layer.use_expert_bias = shape.use_expert_bias;
             layer.routed_scaling_factor = shape.routed_scaling_factor;
-
-            // Router weight: [num_experts, hidden]
             layer.router = load_vector(source, reader.get(), writer.get(),
                 layer_name(index, "feed_forward.gate.weight"),
                 {shape.num_experts, shape.hidden});
 
-            // Optional expert bias.
-            if (source && source->contains(layer_name(index, "feed_forward.expert_bias.weight"))) {
+            const std::string bias_name =
+                layer_name(index, "feed_forward.expert_bias.weight");
+            if ((source && source->contains(bias_name)) ||
+                (reader && reader->contains(bias_name))) {
                 layer.router_bias = load_vector(source, reader.get(), writer.get(),
-                    layer_name(index, "feed_forward.expert_bias.weight"),
-                    {shape.num_experts});
+                    bias_name, {shape.num_experts});
             }
 
-            layer.expert_w13.resize(static_cast<size_t>(shape.num_experts));
-            layer.expert_w2.resize(static_cast<size_t>(shape.num_experts));
-            for (int e = 0; e < shape.num_experts; ++e) {
+            if (!disk_cached_experts) {
+                layer.expert_w13.resize(static_cast<size_t>(shape.num_experts));
+                layer.expert_w2.resize(static_cast<size_t>(shape.num_experts));
+            }
+            for (int expert = 0; expert < shape.num_experts; ++expert) {
                 const int moe_inter = shape.moe_intermediate > 0
                     ? shape.moe_intermediate : shape.intermediate;
-                layer.expert_w13[static_cast<size_t>(e)] = load_concat(
-                    source, reader.get(), writer.get(),
-                    layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w13.weight"),
-                    {
-                        {layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w1.weight"),
-                         {moe_inter, shape.hidden}},
-                        {layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w3.weight"),
-                         {moe_inter, shape.hidden}},
-                    });
-                layer.expert_w2[static_cast<size_t>(e)] = load_matrix(
-                    source, reader.get(), writer.get(),
-                    layer_name(index, "feed_forward.experts." + std::to_string(e) + ".w2.weight"),
-                    {shape.hidden, moe_inter});
+                const std::string prefix =
+                    "feed_forward.experts." + std::to_string(expert);
+                const std::string w13_name =
+                    layer_name(index, prefix + ".w13.weight");
+                const std::string w2_name =
+                    layer_name(index, prefix + ".w2.weight");
+
+                if (disk_cached_experts && reader) {
+                    if (!reader->contains(w13_name) ||
+                        !reader->contains(w2_name)) {
+                        throw std::runtime_error(
+                            "CPU pack is missing disk-backed expert entries for layer " +
+                            std::to_string(index) + ", expert " +
+                            std::to_string(expert));
+                    }
+                    continue;
+                }
+
+                const std::vector<std::pair<std::string, std::vector<int64_t>>> parts{
+                    {layer_name(index, prefix + ".w1.weight"),
+                     {moe_inter, shape.hidden}},
+                    {layer_name(index, prefix + ".w3.weight"),
+                     {moe_inter, shape.hidden}},
+                };
+                if (disk_cached_experts) {
+                    (void)load_concat(source, nullptr, writer.get(),
+                                      w13_name, parts);
+                    (void)load_matrix(source, nullptr, writer.get(),
+                                      w2_name, {shape.hidden, moe_inter});
+                } else {
+                    layer.expert_w13[static_cast<size_t>(expert)] = load_concat(
+                        source, reader.get(), writer.get(), w13_name, parts);
+                    layer.expert_w2[static_cast<size_t>(expert)] = load_matrix(
+                        source, reader.get(), writer.get(), w2_name,
+                        {shape.hidden, moe_inter});
+                }
             }
             weight_store.layers.push_back(std::move(layer));
         }
