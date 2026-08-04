@@ -28,7 +28,8 @@ struct CudaSchedulerDriver {
     };
 
     CudaSchedulerDriver(std::string model_path, int max_context,
-         CudaModelOptions model_options, ConcurrentEngineOptions engine_options);
+         CudaModelOptions model_options, ConcurrentEngineOptions engine_options,
+         std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~CudaSchedulerDriver();
 
     RequestId submit(std::vector<int32_t> prompt, ConcurrentRequestOptions options);
@@ -57,6 +58,7 @@ private:
     int max_context_;
     CudaModelOptions model_options_;
     ConcurrentEngineOptions engine_options_;
+    std::shared_ptr<const RuntimeContext> runtime_;
     RuntimeTopology shape_;
 
     mutable std::mutex mutex_;
@@ -68,6 +70,7 @@ private:
     std::unique_ptr<PhysicalPagedKvCache> paged_kv_;
     std::unique_ptr<PrefixCacheManager> prefix_cache_;
     std::unique_ptr<PackedDecodeExecutor> packed_executor_;
+    std::vector<int32_t> packed_decode_output_;
     ConcurrentMetrics metrics_;
     bool stopping_ = false;
 };

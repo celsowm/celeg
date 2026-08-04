@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -158,6 +159,35 @@ int main() {
         check(cudaMemcpy(tensor_y.data(), d_tensor_y, tensor_y.size() * sizeof(*d_tensor_y), cudaMemcpyDeviceToHost),
               "copy tensor q4 result");
         for (const __nv_bfloat16 value : tensor_y) if (!close(host_bf16(value), 512.0f)) return 14;
+        __nv_bfloat16* d_tensor_y_dp4a = nullptr;
+        __nv_bfloat16* d_tensor_y_mma = nullptr;
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_y_dp4a),
+                         tensor_y.size() * sizeof(*d_tensor_y_dp4a)),
+              "cudaMalloc tensor dp4a result");
+        check(cudaMalloc(reinterpret_cast<void**>(&d_tensor_y_mma),
+                         tensor_y.size() * sizeof(*d_tensor_y_mma)),
+              "cudaMalloc tensor mma result");
+        celeg::launch_q4k_mmq_with_policy(
+            d_tensor_q8, d_tensor_scales, d_tensor_sums, d_tensor_q4,
+            d_tensor_y_dp4a, tensor_rows, tensor_rows, k, q4_bytes,
+            tensor_rows, 0.0f, false, nullptr);
+        celeg::launch_q4k_mmq_with_policy(
+            d_tensor_q8, d_tensor_scales, d_tensor_sums, d_tensor_q4,
+            d_tensor_y_mma, tensor_rows, tensor_rows, k, q4_bytes,
+            tensor_rows, 0.0f, true, nullptr);
+        std::vector<__nv_bfloat16> tensor_y_dp4a(tensor_y.size());
+        std::vector<__nv_bfloat16> tensor_y_mma(tensor_y.size());
+        check(cudaMemcpy(tensor_y_dp4a.data(), d_tensor_y_dp4a,
+                         tensor_y_dp4a.size() * sizeof(*d_tensor_y_dp4a),
+                         cudaMemcpyDeviceToHost), "copy tensor dp4a result");
+        check(cudaMemcpy(tensor_y_mma.data(), d_tensor_y_mma,
+                         tensor_y_mma.size() * sizeof(*d_tensor_y_mma),
+                         cudaMemcpyDeviceToHost), "copy tensor mma result");
+        for (size_t i = 0; i < tensor_y.size(); ++i) {
+            if (!close(host_bf16(tensor_y_dp4a[i]), host_bf16(tensor_y_mma[i]))) return 16;
+        }
+        cudaFree(d_tensor_y_mma);
+        cudaFree(d_tensor_y_dp4a);
         std::fill(tensor_y.begin(), tensor_y.end(), __float2bfloat16(4.0f));
         check(cudaMemcpy(d_tensor_y, tensor_y.data(), tensor_y.size() * sizeof(*d_tensor_y), cudaMemcpyHostToDevice),
               "copy tensor q6 beta");
@@ -200,6 +230,42 @@ int main() {
                      cudaMemcpyDeviceToHost), "copy segmented beta result");
     if (!close(host_bf16(segmented_y[0]), 518.0f) ||
         !close(host_bf16(segmented_y[1]), 6.0f)) return 10;
+
+    // A plan compiled for a different device must be rejected before any
+    // kernel launch; capability state is device-scoped, not process-global.
+    celeg::CudaDeviceCapabilities wrong_device =
+        celeg::discover_cuda_device_capabilities();
+    wrong_device.device_ordinal += 1;
+    const auto wrong_device_plan = celeg::CudaExecutionPlan::compile(
+        dispatcher_options, 1024, wrong_device);
+    bool rejected_wrong_device = false;
+    try {
+        dispatcher.linear(d_x, segmented, d_y, 1, 2, k, 0.0f,
+                          wrong_device_plan);
+    } catch (const std::invalid_argument&) {
+        rejected_wrong_device = true;
+    }
+    if (!rejected_wrong_device) return 11;
+
+    bool rejected_bad_fanout = false;
+    try {
+        const celeg::GemmDispatcher::NativeFanoutScope invalid_scope(
+            &dispatcher, d_x, 1, k - 1);
+    } catch (const std::invalid_argument&) {
+        rejected_bad_fanout = true;
+    }
+    if (!rejected_bad_fanout) return 12;
+    bool rejected_nested_fanout = false;
+    {
+        celeg::GemmDispatcher::NativeFanoutScope outer(&dispatcher, d_x, 1, k);
+        try {
+            const celeg::GemmDispatcher::NativeFanoutScope inner(
+                &dispatcher, d_x, 1, k);
+        } catch (const std::logic_error&) {
+            rejected_nested_fanout = true;
+        }
+    }
+    if (!rejected_nested_fanout) return 13;
 
     celeg::GgufLinearSegment segment{d_q4, celeg::GgmlType::Q4_K, 0, 1, k, q4_bytes};
     __nv_bfloat16* d_embed = nullptr;

@@ -5,6 +5,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <mma.h>
+#include <mutex>
+#include <unordered_map>
 
 namespace celeg {
 namespace {
@@ -31,19 +33,24 @@ constexpr int kMmqTensorCoreTile = 16;
 
 bool mmq_tensor_core_supported() {
     // int8 mma.sync (nvcuda::wmma with signed-char fragments) requires
-    // sm_72+; querying once per process avoids a device-attribute round
-    // trip on every launch.
-    static const bool supported = [] {
-        int device = 0;
-        if (cudaGetDevice(&device) != cudaSuccess) return false;
-        int major = 0;
-        int minor = 0;
-        if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device) != cudaSuccess)
-            return false;
-        if (cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device) != cudaSuccess)
-            return false;
-        return (major * 10 + minor) >= 72;
-    }();
+    // sm_72+. The result is cached by device, not process-wide: callers may
+    // legally switch the current CUDA device between model operations.
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) return false;
+    static std::mutex mutex;
+    static std::unordered_map<int, bool> supported_by_device;
+    std::lock_guard lock(mutex);
+    if (const auto it = supported_by_device.find(device);
+        it != supported_by_device.end()) {
+        return it->second;
+    }
+    int major = 0;
+    int minor = 0;
+    const bool supported =
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device) == cudaSuccess &&
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device) == cudaSuccess &&
+        (major * 10 + minor) >= 72;
+    supported_by_device.emplace(device, supported);
     return supported;
 }
 
@@ -661,6 +668,25 @@ __global__ void q6k_mmq_prefill_kernel(
 
 } // namespace
 
+CudaDeviceCapabilities discover_cuda_device_capabilities() {
+    CudaDeviceCapabilities result;
+    if (cudaGetDevice(&result.device_ordinal) != cudaSuccess) return result;
+    if (cudaDeviceGetAttribute(&result.compute_major,
+                               cudaDevAttrComputeCapabilityMajor,
+                               result.device_ordinal) != cudaSuccess) {
+        return result;
+    }
+    if (cudaDeviceGetAttribute(&result.compute_minor,
+                               cudaDevAttrComputeCapabilityMinor,
+                               result.device_ordinal) != cudaSuccess) {
+        return result;
+    }
+    result.mmq_tensor_core_supported = mmq_tensor_core_supported();
+    result.mmq_tensor_core_enabled = mmq_tensor_core_enabled() &&
+                                      result.mmq_tensor_core_supported;
+    return result;
+}
+
 void launch_quantize_q8_1(const __nv_bfloat16* x, int8_t* q8, float* scales,
                           float* sums, int rows, int k, cudaStream_t stream) {
     const dim3 grid(static_cast<unsigned>(k / kMmqQ8_1BlockSize),
@@ -670,10 +696,11 @@ void launch_quantize_q8_1(const __nv_bfloat16* x, int8_t* q8, float* scales,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
+void launch_q4k_mmq_with_policy(const int8_t* q8, const float* q8_scales,
                     const float* q8_sums, const uint8_t* blocks,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
-                    int output_stride, float beta, cudaStream_t stream) {
+                    int output_stride, float beta, bool use_tensor_cores,
+                    cudaStream_t stream) {
     constexpr int warps_per_block = 8;
     const unsigned grid_x = static_cast<unsigned>((n + warps_per_block - 1) / warps_per_block);
     const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);
@@ -681,7 +708,7 @@ void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
     if (m == 1) {
         q4k_mmq_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
-    } else if (mmq_tensor_core_enabled() && m >= kMmqTensorCoreTile && n >= kMmqTensorCoreTile) {
+    } else if (use_tensor_cores && m >= kMmqTensorCoreTile && n >= kMmqTensorCoreTile) {
         const dim3 tensor_grid(static_cast<unsigned>((n + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile),
                                static_cast<unsigned>((m + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile));
         q4k_mmq_tensor_core_kernel<<<tensor_grid, 32, 0, stream>>>(
@@ -695,10 +722,20 @@ void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
+void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
                     const float* q8_sums, const uint8_t* blocks,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
                     int output_stride, float beta, cudaStream_t stream) {
+    launch_q4k_mmq_with_policy(q8, q8_scales, q8_sums, blocks, y, m, n, k,
+                               row_bytes, output_stride, beta,
+                               mmq_tensor_core_enabled(), stream);
+}
+
+void launch_q6k_mmq_with_policy(const int8_t* q8, const float* q8_scales,
+                    const float* q8_sums, const uint8_t* blocks,
+                    __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
+                    int output_stride, float beta, bool use_tensor_cores,
+                    cudaStream_t stream) {
     constexpr int warps_per_block = 8;
     const unsigned grid_x = static_cast<unsigned>((n + warps_per_block - 1) / warps_per_block);
     const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);
@@ -706,7 +743,7 @@ void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
     if (m == 1) {
         q6k_mmq_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
-    } else if (mmq_tensor_core_enabled() && m >= kMmqTensorCoreTile && n >= kMmqTensorCoreTile) {
+    } else if (use_tensor_cores && m >= kMmqTensorCoreTile && n >= kMmqTensorCoreTile) {
         const dim3 tensor_grid(static_cast<unsigned>((n + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile),
                                static_cast<unsigned>((m + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile));
         q6k_mmq_tensor_core_kernel<<<tensor_grid, 32, 0, stream>>>(
@@ -718,6 +755,15 @@ void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
+                    const float* q8_sums, const uint8_t* blocks,
+                    __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
+                    int output_stride, float beta, cudaStream_t stream) {
+    launch_q6k_mmq_with_policy(q8, q8_scales, q8_sums, blocks, y, m, n, k,
+                               row_bytes, output_stride, beta,
+                               mmq_tensor_core_enabled(), stream);
 }
 
 } // namespace celeg

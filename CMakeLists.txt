@@ -387,6 +387,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/checkpoint/formats/safetensors.hpp
     include/celeg/checkpoint/metadata.hpp
     include/celeg/checkpoint/gguf_blocks.hpp
+    include/celeg/checkpoint/tokenizer.hpp
     include/celeg/checkpoint/repositories/gguf.hpp
     include/celeg/checkpoint/repositories/safetensors.hpp
     include/celeg/checkpoint/tensor_names.hpp
@@ -566,6 +567,10 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(checkpoint_format_catalog_test PRIVATE include tests)
     target_link_libraries(checkpoint_format_catalog_test PRIVATE celeg_base)
     add_test(NAME checkpoint_format_catalog_test COMMAND checkpoint_format_catalog_test)
+    add_executable(runtime_context_test tests/runtime_context_test.cpp)
+    target_include_directories(runtime_context_test PRIVATE include tests)
+    target_link_libraries(runtime_context_test PRIVATE celeg_base)
+    add_test(NAME runtime_context_test COMMAND runtime_context_test)
     add_executable(concurrent_metrics_test tests/concurrent_metrics_test.cpp)
     target_link_libraries(concurrent_metrics_test PRIVATE celeg_runtime)
     add_test(NAME concurrent_metrics_test COMMAND concurrent_metrics_test)
@@ -681,6 +686,11 @@ if(CELEG_BUILD_TESTS)
         if(CELEG_RUN_CUDA_TESTS)
             add_test(NAME cuda_gguf_kernels_test COMMAND cuda_gguf_kernels_test)
         endif()
+
+        add_executable(packed_workspace_test tests/packed_workspace_test.cpp)
+        target_link_libraries(packed_workspace_test PRIVATE celeg_cuda_backend)
+        target_include_directories(packed_workspace_test PRIVATE include)
+        add_test(NAME packed_workspace_test COMMAND packed_workspace_test)
 
         add_executable(moe_route_test tests/moe_route_test.cu)
         target_link_libraries(moe_route_test PRIVATE celeg_cuda_backend)

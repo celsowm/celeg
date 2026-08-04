@@ -120,7 +120,8 @@ struct CpuCompiledModel {
     };
 
     struct Shared {
-        Shared(const std::string& path, int context, CpuModelOptions requested);
+        Shared(const std::string& path, int context, CpuModelOptions requested,
+               std::shared_ptr<const RuntimeContext> runtime);
 
         static CpuIsa resolve_isa(CpuIsa requested);
         void prepare_pack_path();
@@ -148,6 +149,7 @@ struct CpuCompiledModel {
         size_t weights_memory_bytes() const;
 
         std::string model_path;
+        std::shared_ptr<const RuntimeContext> runtime;
         bool native_checkpoint = false;
         std::shared_ptr<IWeightRepository> repository;
         int max_context = 0;
@@ -162,7 +164,7 @@ struct CpuCompiledModel {
         RuntimeTopology shape;
         CompiledModelProgram program;
         std::string model_identity;
-        const ITensorNamingPolicy* tensor_naming = nullptr;
+        std::vector<TensorRequest> weight_requests;
         bool tie_word_embeddings = true;
         float final_logit_softcap = 0.0f;
         CpuWeightStore weight_store;

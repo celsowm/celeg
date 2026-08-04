@@ -145,7 +145,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
                     !engine_options_.packed_decode;
                 lane->model = std::make_unique<CudaModel>(
                     model_path_, max_context_, lane_options,
-                    request.options.generation);
+                    request.options.generation, runtime_);
             } else {
                 lane->model->session().set_generation_config(request.options.generation);
             }

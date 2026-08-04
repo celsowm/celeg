@@ -32,7 +32,9 @@ public:
         CheckpointView result;
         result.path = path;
         result.metadata = CheckpointMetadata::from_gguf(*file);
-        result.repository = std::make_shared<GgufRepository>(std::move(file));
+        auto repository = std::make_shared<GgufRepository>(file);
+        result.tokenizer = std::make_shared<TokenizerData>(repository->tokenizer_data());
+        result.repository = std::move(repository);
         return result;
     }
 };
@@ -115,10 +117,14 @@ std::vector<std::string_view> CheckpointFormatCatalog::ids() const {
 std::shared_ptr<const CheckpointFormatCatalog>
 create_builtin_checkpoint_format_catalog() {
     auto catalog = std::make_shared<CheckpointFormatCatalog>();
-    catalog->add(std::make_unique<GgufFormat>());
-    catalog->add(std::make_unique<SafeTensorsFormat>());
+    add_builtin_checkpoint_formats(*catalog);
     catalog->freeze();
     return catalog;
+}
+
+void add_builtin_checkpoint_formats(CheckpointFormatCatalog& catalog) {
+    catalog.add(std::make_unique<GgufFormat>());
+    catalog.add(std::make_unique<SafeTensorsFormat>());
 }
 
 } // namespace celeg

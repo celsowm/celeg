@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace celeg {
 namespace {
@@ -28,6 +29,7 @@ GemmDispatcher::GemmDispatcher(cudaStream_t stream,
       options_(options),
       cublas_(stream),
       cublas_lt_() {
+    CELEG_CUDA(cudaGetDevice(&device_ordinal_));
     if (options.gemm_backend == GemmBackend::CublasLt &&
         options.lt_workspace_bytes > 0) {
         lt_workspace_.reset(options.lt_workspace_bytes);
@@ -35,6 +37,28 @@ GemmDispatcher::GemmDispatcher(cudaStream_t stream,
 }
 
 GemmDispatcher::~GemmDispatcher() = default;
+
+GemmDispatcher::NativeFanoutScope::NativeFanoutScope(
+    GemmDispatcher* dispatcher, const __nv_bfloat16* x, int m, int k)
+    : dispatcher_(dispatcher) {
+    if (dispatcher_ != nullptr) dispatcher_->begin_native_fanout(x, m, k);
+}
+
+GemmDispatcher::NativeFanoutScope::~NativeFanoutScope() {
+    if (dispatcher_ != nullptr) dispatcher_->end_native_fanout();
+}
+
+GemmDispatcher::NativeFanoutScope::NativeFanoutScope(
+    NativeFanoutScope&& other) noexcept
+    : dispatcher_(std::exchange(other.dispatcher_, nullptr)) {}
+
+GemmDispatcher::NativeFanoutScope&
+GemmDispatcher::NativeFanoutScope::operator=(NativeFanoutScope&& other) noexcept {
+    if (this == &other) return *this;
+    if (dispatcher_ != nullptr) dispatcher_->end_native_fanout();
+    dispatcher_ = std::exchange(other.dispatcher_, nullptr);
+    return *this;
+}
 
 void GemmDispatcher::linear_cublas(const __nv_bfloat16* x,
                                    const __nv_bfloat16* weight,
@@ -195,6 +219,11 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
                             int m, int n, int k,
                             float beta,
                             const CudaExecutionPlan& plan) {
+    if (plan.device().device_ordinal >= 0 &&
+        plan.device().device_ordinal != device_ordinal_) {
+        throw std::invalid_argument(
+            "execution plan device does not match GEMM dispatcher device");
+    }
     if (weight.rows != n || weight.cols != k) {
         throw std::runtime_error("linear weight shape does not match the requested GEMM: weight=" +
             std::to_string(weight.rows) + "x" + std::to_string(weight.cols) +
@@ -213,15 +242,17 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             }
             __nv_bfloat16* seg_y = y + static_cast<size_t>(segment.row_offset);
             if (segment.type == GgmlType::Q4_K) {
-                launch_q4k_mmq(mmq_q8_.data(), mmq_scales_.data(),
+                launch_q4k_mmq_with_policy(mmq_q8_.data(), mmq_scales_.data(),
                                mmq_sums_.data(), segment.blocks,
                                seg_y, m, segment.rows, k,
-                               segment.row_bytes, n, beta, stream_);
+                               segment.row_bytes, n, beta,
+                               plan.mmq_tensor_cores_enabled(), stream_);
             } else {
-                launch_q6k_mmq(mmq_q8_.data(), mmq_scales_.data(),
+                launch_q6k_mmq_with_policy(mmq_q8_.data(), mmq_scales_.data(),
                                mmq_sums_.data(), segment.blocks,
                                seg_y, m, segment.rows, k,
-                               segment.row_bytes, n, beta, stream_);
+                               segment.row_bytes, n, beta,
+                               plan.mmq_tensor_cores_enabled(), stream_);
             }
         }
         return;

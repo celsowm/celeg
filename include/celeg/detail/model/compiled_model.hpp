@@ -52,12 +52,14 @@ struct CudaCompiledModel {
     static constexpr int kMaxGemmAttentionRows = 2048;
 
     CudaModelResources resources_;
+    std::shared_ptr<const RuntimeContext> runtime_;
     SessionState session_;
 
     CudaCompiledModel(const std::string& model_path,
          int max_context,
          CudaModelOptions options,
-         GenerationConfig generation);
+         GenerationConfig generation,
+         std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~CudaCompiledModel();
 
     // Thin wrapper around gemm_->linear(..., plan_) so call sites in the
@@ -68,15 +70,11 @@ struct CudaCompiledModel {
         gemm_->linear(x, weight, y, m, n, k, beta, resources_.plan_);
     }
 
-    void begin_native_fanout(const __nv_bfloat16* x, int m, int k) {
-        if (resources_.plan_.options().weight_mode == WeightMode::NativeGguf) {
-            gemm_->begin_native_fanout(x, m, k);
-        }
-    }
-    void end_native_fanout() {
-        if (resources_.plan_.options().weight_mode == WeightMode::NativeGguf) {
-            gemm_->end_native_fanout();
-        }
+    GemmDispatcher::NativeFanoutScope native_fanout_scope(
+        const __nv_bfloat16* x, int m, int k) {
+        return GemmDispatcher::NativeFanoutScope(
+            resources_.plan_.options().weight_mode == WeightMode::NativeGguf
+                ? gemm_.get() : nullptr, x, m, k);
     }
 
     void warmup_decode_gemms();
@@ -107,6 +105,7 @@ struct CudaCompiledModel {
     CudaModelDiagnostics::ExpertOffloadStats expert_offload_stats() const;
     RuntimeMetrics runtime_metrics() const { return session_.metrics_; }
     void clear_runtime_metrics() { session_.metrics_ = {}; }
+    std::string execution_plan_description() const { return resources_.plan_.description(); }
     void save_session(const std::string& path);
     void load_session(const std::string& path);
     PrefixState export_prefix_state() const;
@@ -202,6 +201,7 @@ struct CudaCompiledModel {
     CudaWorkspace workspace_;
     int max_context_;
     bool local_kv_cache_available_ = true;
+    uint64_t storage_generation_ = 0;
     std::chrono::steady_clock::time_point decode_async_begin_time_{};
     DeviceBuffer<int32_t> position_device_{1};
     CudaSamplingState sampling_;

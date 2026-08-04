@@ -4,9 +4,11 @@ namespace celeg {
 ConcurrentEngine::ConcurrentEngine(std::string model_path,
                                    int max_context,
                                    CudaModelOptions model_options,
-                                   ConcurrentEngineOptions engine_options)
+                                   ConcurrentEngineOptions engine_options,
+                                   std::shared_ptr<const RuntimeContext> runtime)
     : state_(std::make_unique<CudaSchedulerDriver>(std::move(model_path), max_context,
-                                   model_options, engine_options)) {}
+                                   model_options, engine_options,
+                                   std::move(runtime))) {}
 
 ConcurrentEngine::~ConcurrentEngine() = default;
 

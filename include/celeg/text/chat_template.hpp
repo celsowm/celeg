@@ -78,7 +78,7 @@ public:
 private:
     struct Entry {
         std::unique_ptr<IChatTemplate> chat_template;
-        std::unique_ptr<IChatToolCallCodec> tool_call_codec;
+        std::shared_ptr<const IChatToolCallCodec> tool_call_codec;
         ChatCapabilities capabilities;
     };
     std::unordered_map<std::string, Entry> entries_;
@@ -86,6 +86,7 @@ private:
 };
 
 ChatProfileCatalog make_chat_profile_catalog();
+void add_builtin_chat_profiles(ChatProfileCatalog& catalog);
 
 // Granite instruct chat template:
 //   (<|start_of_role|>{role}<|end_of_role|>{content}<|end_of_text|>\n)*

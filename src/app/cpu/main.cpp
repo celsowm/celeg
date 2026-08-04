@@ -5,8 +5,8 @@
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/runtime/request_types.hpp"
 #include "celeg/checkpoint/downloader.hpp"
-#include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/runtime/context.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -160,28 +160,24 @@ int main(int argc, char** argv) {
         } else {
             model = std::filesystem::path(args.model_dir);
         }
+        const auto runtime = celeg::create_builtin_runtime_context();
         const celeg::detail::ModelBootstrap bootstrap =
-            celeg::detail::load_model_bootstrap(model);
-        const auto& model_definition = bootstrap.model.definition;
+            celeg::detail::load_model_bootstrap(model, *runtime);
         const auto& topology = bootstrap.model.topology;
-        const auto* gguf_repository = dynamic_cast<const celeg::GgufRepository*>(
-            bootstrap.checkpoint.repository.get());
-        if (gguf_repository && args.group_size_explicit) {
+        if (bootstrap.checkpoint.tokenizer && args.group_size_explicit) {
             throw std::runtime_error(
                 "--cpu-q4-group is only valid for Safetensors checkpoints");
         }
         if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
-        const std::filesystem::path model_dir =
-            std::filesystem::is_directory(model) ? model : model.parent_path();
         const auto chat_catalog = celeg::make_chat_profile_catalog();
         const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
-        celeg::BpeTokenizer tokenizer = gguf_repository
-            ? celeg::BpeTokenizer(
-                  celeg::BpeTokenizer::FromGguf{}, gguf_repository->file())
-            : celeg::BpeTokenizer(
-                  (model_dir / "tokenizer.json").string());
+        const auto& tokenizer_provider = celeg::select_tokenizer_provider(
+            *runtime, bootstrap.checkpoint, model);
+        const auto tokenizer_storage = tokenizer_provider.create(
+            bootstrap.checkpoint, model);
+        const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
         std::vector<celeg::ChatMessage> chat_messages;
         if (!args.system.empty()) {
             chat_messages.push_back({celeg::ChatRole::System, args.system});
@@ -231,7 +227,7 @@ int main(int argc, char** argv) {
         std::string pending;
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t token = engine.session().decode();
-            if (celeg::is_stop_token(model_definition.tokens.eos, token)) break;
+            if (celeg::is_stop_token(topology.eos_token_ids, token)) break;
             pending += tokenizer.decode({token}, true);
             std::cout << pending << std::flush;
             pending.clear();

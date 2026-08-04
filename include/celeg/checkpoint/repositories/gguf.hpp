@@ -2,6 +2,7 @@
 
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
+#include "celeg/checkpoint/tokenizer.hpp"
 
 #include <memory>
 #include <string>
@@ -19,13 +20,17 @@ namespace celeg {
 // file and stay valid for the lifetime of this repository. Quantized tensors
 // (Q4_K/Q6_K/...) are reported with dtype == Quantized and the matching
 // GgmlType; F32/F16 tensors map to the plain TensorDType values.
-class GgufRepository : public IWeightRepository {
+class GgufRepository : public IWeightRepository,
+                       public INativeBlockStorageRepository,
+                       public ITokenizerDataRepository {
 public:
     explicit GgufRepository(std::shared_ptr<GgufFile> gguf);
 
     bool contains(std::string_view name) const override;
     HostTensorView tensor(std::string_view name) const override;
     std::vector<std::string> names() const override;
+    bool has_native_block_storage() const override { return true; }
+    TokenizerData tokenizer_data() const override;
 
     const GgufFile& file() const { return *gguf_; }
 

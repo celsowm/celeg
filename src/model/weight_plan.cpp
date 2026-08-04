@@ -8,16 +8,13 @@ namespace celeg {
 namespace {
 
 void add_request(ResolvedModel& model, TensorRequest request) {
-    if (model.tensor_naming) {
-        const auto names = model.tensor_naming->candidates(request);
-        if (!names.empty()) request.source_name = names.front();
-    }
     model.weight_plan.requests.push_back(std::move(request));
 }
 
 } // namespace
 
-void build_dense_weight_plan(ResolvedModel& model) {
+void build_dense_weight_plan(ResolvedModel& model,
+                             const ITensorNamingPolicy& naming_policy) {
     const RuntimeTopology& t = model.topology;
     add_request(model, {TensorRole::TokenEmbedding, -1, -1,
                         {t.vocab_size, t.hidden}});
@@ -46,6 +43,15 @@ void build_dense_weight_plan(ResolvedModel& model) {
                             {t.intermediate, t.hidden}});
         add_request(model, {TensorRole::FfnDown, layer, -1,
                             {t.hidden, t.intermediate}});
+    }
+    resolve_weight_plan(model, naming_policy);
+}
+
+void resolve_weight_plan(ResolvedModel& model,
+                         const ITensorNamingPolicy& naming_policy) {
+    for (TensorRequest& request : model.weight_plan.requests) {
+        const auto names = naming_policy.candidates(request);
+        if (!names.empty()) request.source_name = names.front();
     }
 }
 

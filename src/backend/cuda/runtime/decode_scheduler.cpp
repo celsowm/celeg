@@ -104,9 +104,11 @@ bool CudaSchedulerDriver::run_decode_work() {
     packed_work.reserve(work.size());
     lane_work.reserve(work.size());
     for (const Work& item : work) {
-        std::string reason;
-        if (item.paged_ready && packed_executor_ &&
-            packed_executor_->eligible(packed_session_context(*item.lane->model), &reason)) {
+        const PackedEligibility eligibility = packed_executor_
+            ? packed_executor_->validate_session(
+                packed_session_context(*item.lane->model), PackedOperation::Decode)
+            : PackedEligibility{};
+        if (item.paged_ready && packed_executor_ && eligibility.accepted) {
             packed_work.push_back(item);
         } else {
             lane_work.push_back(item);
@@ -141,8 +143,9 @@ bool CudaSchedulerDriver::run_decode_work() {
         }
         try {
             const PackedDecodeMetrics before = packed_executor_->metrics();
-            const std::vector<int32_t> tokens =
-                packed_executor_->decode(models, page_tables);
+            packed_executor_->decode_into(
+                models, page_tables,
+                std::span<int32_t>(packed_decode_output_).first(packed_work.size()));
             const PackedDecodeMetrics after = packed_executor_->metrics();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -158,7 +161,7 @@ bool CudaSchedulerDriver::run_decode_work() {
                     static_cast<uint64_t>(packed_work.size()));
             }
             for (size_t i = 0; i < packed_work.size(); ++i) {
-                accept_token(packed_work[i], tokens[i], true);
+                accept_token(packed_work[i], packed_decode_output_[i], true);
             }
         } catch (const std::invalid_argument& error) {
             // A paged request normally has no local KV after prefill import.

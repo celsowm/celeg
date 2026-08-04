@@ -1,5 +1,6 @@
 #include "celeg/backend/cuda/model.hpp"
 #include "celeg/backend/cuda/concurrency.hpp"
+#include "celeg/backend/cuda/utils.cuh"
 #include "support/assertions.hpp"
 
 #include <cstdint>
@@ -123,7 +124,10 @@ int main() {
         celeg::ConcurrentEngineOptions engine_options;
         engine_options.max_active_requests = 2;
         engine_options.max_batched_tokens = 16;
-        engine_options.prefill_chunk_tokens = 8;
+        // Force an initial mixed ragged wave with no finalized rows; the
+        // following wave finalizes both requests and exercises the zero-row
+        // projection path.
+        engine_options.prefill_chunk_tokens = 1;
         engine_options.page_tokens = 4;
         engine_options.worker_thread = false;
         engine_options.packed_decode = true;
@@ -140,11 +144,17 @@ int main() {
         request.generation.top_k = 1;
         const auto first = engine.submit({1, 3, 4}, request);
         const auto second = engine.submit({2, 5}, request);
-        for (int step = 0; step < 32; ++step) {
+        (void)engine.step();
+        const celeg::CudaAllocationScope steady_state_allocations;
+        for (int step = 1; step < 32; ++step) {
             if (celeg::is_terminal(engine.status(first)) &&
                 celeg::is_terminal(engine.status(second))) break;
             (void)engine.step();
         }
+        const celeg::CudaAllocationSnapshot allocation_delta =
+            steady_state_allocations.delta();
+        CELEG_TEST_CHECK(allocation_delta.device_allocations == 0);
+        CELEG_TEST_CHECK(allocation_delta.host_allocations == 0);
         const celeg::PollResult first_result = engine.poll(first);
         const celeg::PollResult second_result = engine.poll(second);
         CELEG_TEST_CHECK(first_result.status == celeg::RequestStatus::Finished);

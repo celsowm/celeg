@@ -58,13 +58,25 @@ std::vector<std::string_view> ArchitectureCatalog::ids() const {
 
 std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog() {
     auto catalog = std::make_shared<ArchitectureCatalog>();
-    catalog->add(detail::make_lfm2_architecture());
-    catalog->add(detail::make_granite_architecture());
-    catalog->add(detail::make_gemma4_architecture());
-    catalog->add(detail::make_minicpm5_architecture());
-    catalog->add(detail::make_smollm3_architecture());
+    add_builtin_architectures(*catalog);
     catalog->freeze();
     return catalog;
 }
+
+void add_builtin_architectures(ArchitectureCatalog& catalog) {
+    detail::register_builtin_family_bundles(catalog);
+}
+
+namespace detail {
+
+void register_builtin_family_bundles(ArchitectureCatalog& catalog) {
+    register_lfm2_architecture(catalog);
+    register_granite_architecture(catalog);
+    register_gemma4_architecture(catalog);
+    register_minicpm5_architecture(catalog);
+    register_smollm3_architecture(catalog);
+}
+
+} // namespace detail
 
 } // namespace celeg

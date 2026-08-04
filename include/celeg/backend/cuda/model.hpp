@@ -2,6 +2,7 @@
 
 #include "celeg/model/runtime_types.hpp"
 #include "celeg/backend/cuda/runtime_types.hpp"
+#include "celeg/runtime/context.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +58,7 @@ public:
     ModelMemoryStats memory_stats() const;
     RuntimeMetrics runtime_metrics() const;
     void clear_runtime_metrics();
+    std::string execution_plan_description() const;
     bool cuda_graph_ready() const;
     int vocab_size() const;
 
@@ -104,7 +106,8 @@ public:
     CudaModel(const std::string& model_path,
              int max_context = 4096,
              CudaModelOptions options = {},
-             GenerationConfig generation = {});
+             GenerationConfig generation = {},
+             std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~CudaModel();
 
     CudaModel(const CudaModel&) = delete;

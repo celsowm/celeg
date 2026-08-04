@@ -1,5 +1,4 @@
 #include "celeg/text/tokenizer.hpp"
-#include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/formats/json.hpp"
 
 #include <algorithm>
@@ -175,8 +174,8 @@ BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path)
     load(tokenizer_json_path);
 }
 
-BpeTokenizer::BpeTokenizer(FromGguf, const GgufFile& gguf) {
-    load_gguf(gguf);
+BpeTokenizer::BpeTokenizer(const TokenizerData& data) {
+    load_data(data);
 }
 
 void BpeTokenizer::init_byte_encoder() {
@@ -200,70 +199,46 @@ void BpeTokenizer::init_byte_encoder() {
     }
 }
 
-void BpeTokenizer::load_gguf(const GgufFile& gguf) {
-    const GgufValue& tokens = gguf.value("tokenizer.ggml.tokens");
-    if (tokens.kind != GgufValueKind::Array ||
-        tokens.array_kind != GgufValueKind::String) {
-        throw std::runtime_error("gguf tokenizer.ggml.tokens missing or not string array");
+void BpeTokenizer::load_data(const TokenizerData& data) {
+    if (data.tokens.empty() || data.merges.empty()) {
+        throw std::runtime_error("checkpoint tokenizer data is incomplete");
     }
-    const std::vector<std::string>& toks = tokens.array_strings;
+    const std::vector<std::string>& toks = data.tokens;
     id_to_token_.resize(toks.size());
     for (size_t id = 0; id < toks.size(); ++id) {
         vocab_[toks[id]] = static_cast<int32_t>(id);
         id_to_token_[id] = toks[id];
     }
 
-    const GgufValue& merges = gguf.value("tokenizer.ggml.merges");
-    if (merges.kind != GgufValueKind::Array ||
-        merges.array_kind != GgufValueKind::String) {
-        throw std::runtime_error("gguf tokenizer.ggml.merges missing or not string array");
-    }
     int32_t rank = 0;
-    for (const std::string& line : merges.array_strings) {
+    for (const std::string& line : data.merges) {
         const size_t sep = line.find(' ');
         if (sep == std::string::npos) continue;
         merge_rank_[pair_key(line.substr(0, sep), line.substr(sep + 1))] = rank++;
     }
 
     // Special (CONTROL, type == 3) tokens drive verbatim matching in encode().
-    if (gguf.has("tokenizer.ggml.token_type")) {
-        const GgufValue& types = gguf.value("tokenizer.ggml.token_type");
-        if (types.kind == GgufValueKind::Array) {
-            for (size_t id = 0; id < types.array_integers.size() && id < toks.size();
-                 ++id) {
-                if (types.array_integers[id] == 3) {  // GGUF_TOKEN_TYPE_CONTROL
-                    SpecialToken token{toks[id], static_cast<int32_t>(id)};
-                    specials_.push_back(token);
-                    special_ids_[token.id] = true;
-                }
-            }
-            std::sort(specials_.begin(), specials_.end(),
-                      [](const auto& a, const auto& b) {
-                          return a.text.size() > b.text.size();
-                      });
+    for (size_t id = 0; id < data.token_types.size() && id < toks.size(); ++id) {
+        if (data.token_types[id] == 3) {  // GGUF_TOKEN_TYPE_CONTROL
+            SpecialToken token{toks[id], static_cast<int32_t>(id)};
+            specials_.push_back(token);
+            special_ids_[token.id] = true;
         }
     }
+    std::sort(specials_.begin(), specials_.end(),
+              [](const auto& a, const auto& b) {
+                  return a.text.size() > b.text.size();
+              });
 
-    if (gguf.has("tokenizer.ggml.bos_token_id")) {
-        bos_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.bos_token_id"));
-    }
-    if (gguf.has("tokenizer.ggml.eos_token_id")) {
-        eos_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.eos_token_id"));
-    }
-    if (gguf.has("tokenizer.ggml.padding_token_id")) {
-        pad_id_ = static_cast<int32_t>(gguf.i64("tokenizer.ggml.padding_token_id"));
-    }
+    bos_id_ = data.bos_id;
+    eos_id_ = data.eos_id;
+    pad_id_ = data.pad_id;
 
-    const std::string tokenizer_pre = gguf.str_or("tokenizer.ggml.pre", "");
+    const std::string& tokenizer_pre = data.pre_tokenizer;
     if (tokenizer_pre == "lfm2" || tokenizer_pre == "smaug-bpe") {
-        // SmolLM3 uses the same GPT-2 split as the tokenizer.json pattern:
-        // numeric runs are isolated into groups of at most three digits.
         policy_.lfm2_rules = true;
     }
     if (tokenizer_pre == "smaug-bpe") {
-        // The SmolLM3 GGUF conversion keeps the reasoning delimiters in the
-        // vocabulary but does not mark them as CONTROL tokens. Transformers
-        // treats them as added special tokens, so preserve them verbatim.
         for (const std::string_view text : {"<think>", "</think>"}) {
             const auto it = vocab_.find(std::string(text));
             if (it != vocab_.end() && !special_ids_.contains(it->second)) {

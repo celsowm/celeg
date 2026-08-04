@@ -47,4 +47,18 @@ ResolvedTensor TensorResolver::resolve(const TensorRequest& request) const {
     throw std::runtime_error(message.str());
 }
 
+std::string resolved_tensor_name(std::span<const TensorRequest> requests,
+                                 TensorRole role, int layer, int expert) {
+    for (const TensorRequest& request : requests) {
+        if (request.role != role || request.layer != layer || request.expert != expert) {
+            continue;
+        }
+        if (request.source_name) return *request.source_name;
+        throw std::logic_error("tensor request has no resolved source name: " +
+                               std::string(tensor_role_name(role)));
+    }
+    throw std::out_of_range("resolved tensor request not found: " +
+                            std::string(tensor_role_name(role)));
+}
+
 } // namespace celeg

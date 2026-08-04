@@ -5,6 +5,7 @@
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/backend/cuda/model.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/runtime/context.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -332,9 +333,9 @@ int main(int argc, char** argv) {
             model = std::filesystem::path(args.model_dir);
             if (direct_gguf) gguf_path = model;
         }
+        const auto runtime = celeg::create_builtin_runtime_context();
         const celeg::detail::ModelBootstrap bootstrap =
-            celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model);
-        const auto& model_definition = bootstrap.model.definition;
+            celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model, *runtime);
         const auto& topology = bootstrap.model.topology;
         if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds max_position_embeddings");
@@ -346,16 +347,16 @@ int main(int argc, char** argv) {
 
         const auto chat_catalog = celeg::make_chat_profile_catalog();
         const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
-        celeg::BpeTokenizer tokenizer =
-            is_gguf
-                ? celeg::BpeTokenizer(celeg::BpeTokenizer::FromGguf{},
-                                    celeg::GgufFile(gguf_path.string()))
-                : celeg::BpeTokenizer((model / "tokenizer.json").string());
-        if (tokenizer.bos_id() != model_definition.tokens.bos ||
-            !celeg::is_stop_token(model_definition.tokens.eos, tokenizer.eos_id())) {
+        const auto& tokenizer_provider = celeg::select_tokenizer_provider(
+            *runtime, bootstrap.checkpoint, is_gguf ? gguf_path : model);
+        const auto tokenizer_storage = tokenizer_provider.create(
+            bootstrap.checkpoint, is_gguf ? gguf_path : model);
+        const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
+        if (tokenizer.bos_id() != topology.bos_token_id ||
+            !celeg::is_stop_token(topology.eos_token_ids, tokenizer.eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +
                 std::to_string(tokenizer.bos_id()) + "/" +
-                std::to_string(model_definition.tokens.bos) + " eos=" +
+                std::to_string(topology.bos_token_id) + " eos=" +
                 std::to_string(tokenizer.eos_id()));
         }
 
@@ -575,7 +576,7 @@ int main(int argc, char** argv) {
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t next = engine.session().decode();
-            if (celeg::is_stop_token(model_definition.tokens.eos, next)) break;
+            if (celeg::is_stop_token(topology.eos_token_ids, next)) break;
             generated.push_back(next);
             std::cout << tokenizer.decode({next}, true) << std::flush;
         }

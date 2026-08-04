@@ -1,5 +1,6 @@
 #pragma once
 
+#include "celeg/checkpoint/tokenizer.hpp"
 #include "celeg/text/chat_template.hpp"
 
 #include <array>
@@ -17,11 +18,8 @@ class BpeTokenizer {
 public:
     explicit BpeTokenizer(const std::string& tokenizer_json_path);
 
-    // Builds the tokenizer from a GGUF metadata container (tokenizer.ggml.*
-    // keys) instead of a tokenizer.json file. The tag disambiguates this from
-    // the path-based constructor.
-    struct FromGguf {};
-    BpeTokenizer(FromGguf, const class GgufFile& gguf);
+    // Builds the tokenizer from format-neutral checkpoint metadata.
+    explicit BpeTokenizer(const TokenizerData& data);
 
     std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const;
     std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const;
@@ -44,7 +42,7 @@ private:
     };
 
     void load(const std::string& tokenizer_json_path);
-    void load_gguf(const class GgufFile& gguf);
+    void load_data(const TokenizerData& data);
     // Initializes the GPT-2 byte<->unicode encoder tables shared by both the
     // JSON and GGUF load paths.
     void init_byte_encoder();

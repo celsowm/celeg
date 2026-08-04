@@ -34,6 +34,16 @@ __global__ void scatter_bf16_selected_rows_kernel(
         source[static_cast<size_t>(source_rows[request]) * width + index % width];
 }
 
+__global__ void gather_bf16_rows_kernel(
+    const __nv_bfloat16* source, const int32_t* source_rows,
+    __nv_bfloat16* destination, int rows, int width) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * width;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / width);
+    destination[index] = source[static_cast<size_t>(source_rows[row]) * width + index % width];
+}
+
 __global__ void scatter_selected_decode_state_kernel(
     const int32_t* sampled, const int32_t* positions,
     const int32_t* source_rows, int32_t* const* sampled_destinations,
@@ -64,6 +74,15 @@ void launch_scatter_bf16_selected_rows(
     const size_t count = static_cast<size_t>(rows) * width;
     scatter_bf16_selected_rows_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
         source, source_rows, destinations, rows, width);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_gather_bf16_rows(
+    const __nv_bfloat16* source, const int32_t* source_rows,
+    __nv_bfloat16* destination, int rows, int width, cudaStream_t stream) {
+    const size_t count = static_cast<size_t>(rows) * width;
+    gather_bf16_rows_kernel<<<static_cast<unsigned>((count + 255) / 256), 256, 0, stream>>>(
+        source, source_rows, destination, rows, width);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

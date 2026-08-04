@@ -4,6 +4,7 @@
 #include "naming_policy.hpp"
 
 #include "celeg/model/weights/roles.hpp"
+#include "celeg/model/weight_plan.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -33,16 +34,12 @@ std::string read_string(const CheckpointMetadata& m, std::string_view json_key,
     return m.string_for_or(json_key, gguf_key, std::move(fallback));
 }
 
-const ITensorNamingPolicy* naming_policy() {
-    static const CelegTensorNamingPolicy policy;
-    return &policy;
+std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+    static const auto policy = std::make_shared<const CelegTensorNamingPolicy>();
+    return policy;
 }
 
 void add_request(ResolvedModel& model, TensorRequest request) {
-    if (model.tensor_naming) {
-        const auto names = model.tensor_naming->candidates(request);
-        if (!names.empty()) request.source_name = names.front();
-    }
     model.weight_plan.requests.push_back(std::move(request));
 }
 
@@ -93,30 +90,6 @@ void build_weight_plan(ResolvedModel& model) {
                                 {t.hidden, t.intermediate}});
         }
     }
-}
-
-ModelDefinition make_definition(const RuntimeTopology& topology,
-                                const CheckpointMetadata& metadata) {
-    ModelDefinition definition;
-    definition.dimensions = {
-        topology.hidden, topology.intermediate, topology.num_hidden_layers,
-        topology.attention_layouts.front().query_heads,
-        topology.attention_layouts.front().key_value_heads,
-        topology.attention_layouts.front().head_dim,
-        topology.vocab_size, topology.max_position_embeddings};
-    definition.rope.kind = PositionalEncodingKind::Rope;
-    definition.rope.theta = topology.attention_layouts.front().rope_theta;
-    definition.numerics.norm_epsilon = topology.norm_eps;
-    definition.numerics.embedding_multiplier = topology.embedding_multiplier;
-    definition.numerics.attention_multiplier = topology.attention_multiplier;
-    definition.numerics.residual_multiplier = topology.residual_multiplier;
-    definition.numerics.logits_divisor = topology.logits_divisor;
-    definition.tokens = {topology.bos_token_id, topology.eos_token_ids, topology.pad_token_id};
-    definition.architecture = "lfm2";
-    definition.source_format = metadata.is_gguf()
-        ? "gguf" : "safetensors";
-    definition.validate();
-    return definition;
 }
 
 ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
@@ -196,10 +169,9 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     t.validate();
 
     ResolvedModel result;
-    result.definition = make_definition(t, m);
     result.topology = t;
     result.architecture_id = "lfm2";
-    result.tensor_naming = naming_policy();
+    result.source_format = m.is_gguf() ? "gguf" : "safetensors";
     result.chat_profile_id = "lfm2-instruct";
     result.checkpoint_profile_id = m.repository_hint.empty() ? "lfm2" : m.repository_hint;
     result.profile = std::move(profile);
@@ -228,6 +200,7 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
         result.graph.layers.push_back(std::move(layer));
     }
     build_weight_plan(result);
+    resolve_weight_plan(result, *naming_policy());
     return result;
 }
 
@@ -250,6 +223,10 @@ public:
 
 std::unique_ptr<IArchitecture> make_lfm2_architecture() {
     return std::make_unique<Lfm2Architecture>();
+}
+
+void register_lfm2_architecture(ArchitectureCatalog& catalog) {
+    catalog.add(make_lfm2_architecture());
 }
 
 } // namespace celeg::detail

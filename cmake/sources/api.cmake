@@ -1,1 +1,6 @@
-set(CELEG_API_SOURCES src/api/api.cpp)
+set(CELEG_API_SOURCES
+    src/api/api_common.cpp
+    src/api/options.cpp
+    src/api/model.cpp
+    src/api/engine.cpp
+    src/api/tokenizer.cpp)

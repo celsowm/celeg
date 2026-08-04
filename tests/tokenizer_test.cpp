@@ -28,6 +28,19 @@ int main() {
     CELEG_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
     std::filesystem::remove(path);
 
+    celeg::TokenizerData checkpoint_data;
+    checkpoint_data.tokens = {"h", "i", "hi"};
+    checkpoint_data.merges = {"h i"};
+    checkpoint_data.bos_id = 11;
+    checkpoint_data.eos_id = 12;
+    checkpoint_data.pad_id = 13;
+    celeg::BpeTokenizer checkpoint_tokenizer(checkpoint_data);
+    const auto checkpoint_ids = checkpoint_tokenizer.encode("hi", false);
+    CELEG_TEST_CHECK(checkpoint_ids.size() == 1 && checkpoint_ids[0] == 2);
+    CELEG_TEST_CHECK(checkpoint_tokenizer.bos_id() == 11 &&
+                     checkpoint_tokenizer.eos_id() == 12 &&
+                     checkpoint_tokenizer.pad_id() == 13);
+
     const auto lfm_path = std::filesystem::temp_directory_path() /
         "celeg_lfm2_tokenizer_test.json";
     std::ofstream lfm(lfm_path);

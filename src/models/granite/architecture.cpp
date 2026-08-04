@@ -10,9 +10,9 @@
 namespace celeg::detail {
 namespace {
 
-const ITensorNamingPolicy* naming_policy() {
-    static const GraniteTensorNamingPolicy policy;
-    return &policy;
+std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+    static const auto policy = std::make_shared<const GraniteTensorNamingPolicy>();
+    return policy;
 }
 
 class GraniteArchitecture final : public IArchitecture {
@@ -30,31 +30,19 @@ public:
             throw std::runtime_error("Granite architecture cannot resolve checkpoint");
         }
         const auto& source = checkpoint.metadata;
-        const bool gguf = source.is_gguf();
         RuntimeTopology t = resolve_granite_topology(source);
 
         ResolvedModel result;
         result.topology = t;
         result.architecture_id = "granite";
+        result.source_format = source.is_gguf() ? "gguf" : "safetensors";
         result.checkpoint_profile_id = "granite";
         result.chat_profile_id = "granite-instruct";
         result.profile = {"granite", "", {}, result.chat_profile_id};
         result.identity = "granite-" + t.fingerprint();
-        result.tensor_naming = naming_policy();
         result.capabilities = {true, true, false, true};
-        const AttentionSpec& attention = t.attention_layouts.front();
-        result.definition.dimensions = {t.hidden, t.intermediate, t.num_hidden_layers,
-            attention.query_heads, attention.key_value_heads, attention.head_dim, t.vocab_size,
-            t.max_position_embeddings};
-        result.definition.rope = {PositionalEncodingKind::Rope, attention.rope_theta, {}};
-        result.definition.numerics = {t.norm_eps, t.embedding_multiplier,
-            t.attention_multiplier, 1.0f, t.residual_multiplier, t.logits_divisor};
-        result.definition.tokens = {t.bos_token_id, t.eos_token_ids, t.pad_token_id};
-        result.definition.architecture = "granite";
-        result.definition.source_format = gguf ? "gguf" : "safetensors";
-        result.definition.validate();
         build_dense_transformer_graph(result);
-        build_dense_weight_plan(result);
+        build_dense_weight_plan(result, *naming_policy());
         return result;
     }
 };
@@ -63,6 +51,10 @@ public:
 
 std::unique_ptr<IArchitecture> make_granite_architecture() {
     return std::make_unique<GraniteArchitecture>();
+}
+
+void register_granite_architecture(ArchitectureCatalog& catalog) {
+    catalog.add(make_granite_architecture());
 }
 
 } // namespace celeg::detail

@@ -2,10 +2,22 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <functional>
+#include <type_traits>
+#include <atomic>
 
 namespace celeg {
 
-CudaExecutionPlan CudaExecutionPlan::compile(CudaModelOptions requested, int max_context) {
+namespace {
+std::atomic<uint64_t> g_compile_count = 0;
+}
+
+uint64_t CudaExecutionPlan::compile_count() {
+    return g_compile_count.load(std::memory_order_relaxed);
+}
+
+CudaExecutionPlan CudaExecutionPlan::compile(
+    CudaModelOptions requested, int max_context, CudaDeviceCapabilities device) {
     if (max_context <= 0) {
         throw std::invalid_argument("max_context must be positive");
     }
@@ -38,7 +50,12 @@ CudaExecutionPlan CudaExecutionPlan::compile(CudaModelOptions requested, int max
 #endif
 
     CudaExecutionPlan plan;
+    g_compile_count.fetch_add(1, std::memory_order_relaxed);
     plan.options_ = requested;
+    device.mmq_tensor_core_enabled =
+        device.mmq_tensor_core_enabled && device.mmq_tensor_core_supported;
+    plan.device_ = device;
+    plan.max_context_ = max_context;
 
     // MoE expert offload resolves residency at decode time using host-roundtrip
     // reads of the router output and cross-stream event synchronization, neither
@@ -73,6 +90,37 @@ CudaExecutionPlan CudaExecutionPlan::compile(CudaModelOptions requested, int max
             (max_context + requested.attention_chunk_tokens - 1) /
             requested.attention_chunk_tokens;
     }
+    // Stable process-local identity for compatibility checks. Every field
+    // that changes dispatch, workspace, numerics, residency, or device policy
+    // participates in this fingerprint.
+    std::size_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](auto value) {
+        hash ^= std::hash<std::decay_t<decltype(value)>>{}(value);
+        hash *= 1099511628211ULL;
+    };
+    mix(plan.max_context_);
+    mix(static_cast<int>(plan.linear_kernel_));
+    mix(static_cast<int>(plan.options_.weight_mode));
+    mix(static_cast<int>(plan.options_.kv_cache_mode));
+    mix(static_cast<int>(plan.options_.gemm_backend));
+    mix(static_cast<int>(plan.options_.attention_mode));
+    mix(plan.options_.attention_chunk_tokens);
+    mix(plan.options_.attention_auto_threshold);
+    mix(plan.options_.fast_attention);
+    mix(plan.options_.fused_projections);
+    mix(plan.options_.fused_residuals);
+    mix(plan.options_.cuda_graph);
+    mix(plan.options_.lt_workspace_bytes);
+    mix(plan.options_.lt_heuristics);
+    mix(plan.options_.lt_autotune);
+    mix(plan.options_.allocate_local_kv_cache);
+    mix(plan.options_.expert_offload.fingerprint());
+    mix(plan.device_.device_ordinal);
+    mix(plan.device_.compute_major);
+    mix(plan.device_.compute_minor);
+    mix(plan.device_.mmq_tensor_core_supported);
+    mix(plan.device_.mmq_tensor_core_enabled);
+    plan.fingerprint_ = static_cast<uint64_t>(hash);
     return plan;
 }
 
@@ -100,6 +148,11 @@ std::string CudaExecutionPlan::description() const {
         case AttentionMode::Segmented: out << "segmented"; break;
         case AttentionMode::Auto: out << "auto"; break;
     }
+    out << ", device=" << device_.device_ordinal << "."
+        << device_.compute_major << device_.compute_minor
+        << ", mmq-tensor-cores="
+        << (device_.mmq_tensor_core_enabled ? "on" : "off")
+        << ", fingerprint=" << fingerprint_;
     return out.str();
 }
 

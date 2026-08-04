@@ -8,6 +8,16 @@
 
 namespace celeg {
 
+struct CudaDeviceCapabilities {
+    int device_ordinal = -1;
+    int compute_major = 0;
+    int compute_minor = 0;
+    bool mmq_tensor_core_supported = false;
+    bool mmq_tensor_core_enabled = false;
+
+    friend bool operator==(const CudaDeviceCapabilities&, const CudaDeviceCapabilities&) = default;
+};
+
 enum class GemmBackend {
     Cublas,
     CublasLt,

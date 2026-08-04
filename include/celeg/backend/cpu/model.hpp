@@ -5,6 +5,7 @@
 #include "celeg/backend/cpu/runtime_types.hpp"
 #include "celeg/backend/cpu/topology.hpp"
 #include "celeg/model/runtime_types.hpp"
+#include "celeg/runtime/context.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -126,7 +127,8 @@ public:
     CpuModel(const std::string& model_path,
              int max_context = 4096,
              CpuModelOptions options = {},
-             GenerationConfig generation = {});
+             GenerationConfig generation = {},
+             std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~CpuModel();
 
     CpuModel(const CpuModel&) = delete;

@@ -2,8 +2,7 @@
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cpu/compiler.hpp"
-#include "celeg/checkpoint/repositories/gguf.hpp"
-#include "celeg/checkpoint/repositories/safetensors.hpp"
+#include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
@@ -22,12 +21,9 @@
 
 namespace celeg {
 namespace {
-std::string tensor_name(const ITensorNamingPolicy* policy, TensorRole role,
+std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role,
                         int layer = -1) {
-    if (policy == nullptr) throw std::logic_error("missing tensor naming policy");
-    const auto names = policy->candidates({role, layer, -1, {}});
-    if (names.empty()) throw std::logic_error("tensor naming policy returned no candidates");
-    return names.front();
+    return resolved_tensor_name(requests, role, layer);
 }
 
 size_t checked_elements(const std::vector<int64_t>& shape) {
@@ -131,8 +127,10 @@ std::filesystem::path default_cache_directory() {
 }
 
 CpuCompiledModel::Shared::Shared(const std::string& path, int context,
-                               CpuModelOptions requested)
-    : model_path(path), max_context(context), options(std::move(requested)),
+                               CpuModelOptions requested,
+                               std::shared_ptr<const RuntimeContext> runtime_context)
+    : model_path(path), runtime(std::move(runtime_context)), max_context(context),
+      options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
       pool(options.threads, options.affinity),
       linear(resolve_isa(options.isa), pool) {
@@ -154,14 +152,16 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     options.isa = linear.isa();
     group_size = options.weight_format == CpuWeightFormat::Q4Group64 ? 64 : 32;
     const detail::ModelBootstrap bootstrap =
-        detail::load_model_bootstrap(std::filesystem::path(model_path));
-    native_checkpoint =
-        dynamic_cast<const GgufRepository*>(bootstrap.checkpoint.repository.get()) != nullptr;
+        detail::load_model_bootstrap(std::filesystem::path(model_path), *runtime);
+    const auto* native_storage = dynamic_cast<const INativeBlockStorageRepository*>(
+        bootstrap.checkpoint.repository.get());
+    native_checkpoint = native_storage != nullptr &&
+                        native_storage->has_native_block_storage();
     shape = bootstrap.model.topology;
-    final_logit_softcap = bootstrap.model.graph.final_logit_softcap;
+    final_logit_softcap = bootstrap.model.topology.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
     model_identity = bootstrap.model.identity;
-    tensor_naming = bootstrap.model.tensor_naming;
+    weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
     prepare_pack_path();
     load_weights();
@@ -253,45 +253,45 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     int layer) {
     CommonWeights common;
     common.operator_norm = load_vector(source, reader, writer,
-        tensor_name(tensor_naming, TensorRole::AttentionInputNorm, layer),
+        tensor_name(weight_requests, TensorRole::AttentionInputNorm, layer),
         {shape.hidden});
     if (shape.has_split_attention_norms) {
         common.post_attention_norm = load_vector(source, reader, writer,
-            tensor_name(tensor_naming, TensorRole::AttentionPostNorm, layer),
+            tensor_name(weight_requests, TensorRole::AttentionPostNorm, layer),
             {shape.hidden});
     }
     common.ffn_norm = load_vector(source, reader, writer,
-        tensor_name(tensor_naming, TensorRole::FfnInputNorm, layer),
+        tensor_name(weight_requests, TensorRole::FfnInputNorm, layer),
         {shape.hidden});
     if (shape.has_split_attention_norms) {
         common.post_feed_forward_norm = load_vector(source, reader, writer,
-            tensor_name(tensor_naming, TensorRole::FfnOutputNorm, layer),
+            tensor_name(weight_requests, TensorRole::FfnOutputNorm, layer),
             {shape.hidden});
     }
     const int intermediate = shape.feed_forward_intermediates.empty()
         ? shape.intermediate : shape.feed_forward_intermediates.at(static_cast<size_t>(layer));
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
-            {tensor_name(tensor_naming, TensorRole::FfnGate, layer),
+            {tensor_name(weight_requests, TensorRole::FfnGate, layer),
              {intermediate, shape.hidden}},
-            {tensor_name(tensor_naming, TensorRole::FfnUp, layer),
+            {tensor_name(weight_requests, TensorRole::FfnUp, layer),
              {intermediate, shape.hidden}},
         });
     common.w2 = load_matrix(source, reader, writer,
-        tensor_name(tensor_naming, TensorRole::FfnDown, layer),
+        tensor_name(weight_requests, TensorRole::FfnDown, layer),
         {shape.hidden, intermediate});
     if (shape.has_per_layer_input) {
         common.per_layer_input_gate = load_matrix(source, reader, writer,
-            tensor_name(tensor_naming, TensorRole::PerLayerInputGate, layer),
+            tensor_name(weight_requests, TensorRole::PerLayerInputGate, layer),
             {shape.per_layer_input_size, shape.hidden});
         common.per_layer_projection = load_matrix(source, reader, writer,
-            tensor_name(tensor_naming, TensorRole::PerLayerProjection, layer),
+            tensor_name(weight_requests, TensorRole::PerLayerProjection, layer),
             {shape.hidden, shape.per_layer_input_size});
         common.per_layer_input_norm = load_vector(source, reader, writer,
-            tensor_name(tensor_naming, TensorRole::PerLayerInputNorm, layer),
+            tensor_name(weight_requests, TensorRole::PerLayerInputNorm, layer),
             {shape.hidden});
         const std::vector<float> scalar = load_vector(source, reader, writer,
-            tensor_name(tensor_naming, TensorRole::LayerScalar, layer), {1});
+            tensor_name(weight_requests, TensorRole::LayerScalar, layer), {1});
         common.layer_scalar = scalar.front();
     }
     return common;
@@ -331,20 +331,20 @@ void CpuCompiledModel::Shared::load_weights() {
 
     IWeightRepository* source = reader ? nullptr : repository.get();
     weight_store.embedding = load_matrix(source, reader.get(), writer.get(),
-        tensor_name(tensor_naming, TensorRole::TokenEmbedding),
+        tensor_name(weight_requests, TensorRole::TokenEmbedding),
         {shape.vocab_size, shape.hidden});
     weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
-        tensor_name(tensor_naming, TensorRole::FinalNorm),
+        tensor_name(weight_requests, TensorRole::FinalNorm),
         {shape.hidden});
     if (shape.has_per_layer_input) {
         weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
-            tensor_name(tensor_naming, TensorRole::PerLayerEmbedding),
+            tensor_name(weight_requests, TensorRole::PerLayerEmbedding),
                             {shape.vocab_size, shape.num_hidden_layers * shape.per_layer_input_size});
         weight_store.per_layer_context_projection = load_matrix(source, reader.get(), writer.get(),
-            tensor_name(tensor_naming, TensorRole::PerLayerContextProjection),
+            tensor_name(weight_requests, TensorRole::PerLayerContextProjection),
             {shape.num_hidden_layers * shape.per_layer_input_size, shape.hidden});
         weight_store.per_layer_projection_norm = load_vector(source, reader.get(), writer.get(),
-            tensor_name(tensor_naming, TensorRole::PerLayerProjectionNorm),
+            tensor_name(weight_requests, TensorRole::PerLayerProjectionNorm),
             {shape.per_layer_input_size});
     }
 
@@ -357,29 +357,29 @@ void CpuCompiledModel::Shared::load_weights() {
             AttentionWeights layer;
             const AttentionSpec& attention = shape.attention_layout(index);
             layer.q = load_matrix(source, reader.get(), writer.get(),
-                tensor_name(tensor_naming, TensorRole::AttentionQuery, index),
+                tensor_name(weight_requests, TensorRole::AttentionQuery, index),
                 {attention.query_width(), shape.hidden});
             if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
                 layer.k = load_matrix(source, reader.get(), writer.get(),
-                    tensor_name(tensor_naming, TensorRole::AttentionKey, index),
+                    tensor_name(weight_requests, TensorRole::AttentionKey, index),
                     {attention.key_value_width(), shape.hidden});
                 layer.v = load_matrix(source, reader.get(), writer.get(),
-                    tensor_name(tensor_naming, TensorRole::AttentionValue, index),
+                    tensor_name(weight_requests, TensorRole::AttentionValue, index),
                     {attention.key_value_width(), shape.hidden});
             }
             layer.out = load_matrix(source, reader.get(), writer.get(),
-                tensor_name(tensor_naming, TensorRole::AttentionOutput, index),
+                tensor_name(weight_requests, TensorRole::AttentionOutput, index),
                 {shape.hidden, attention.query_width()});
             if (!attention.query_key_norm) {
                 layer.q_norm.assign(static_cast<size_t>(attention.head_dim), 1.0f);
                 layer.k_norm.assign(static_cast<size_t>(attention.head_dim), 1.0f);
             } else {
                 layer.q_norm = load_vector(source, reader.get(), writer.get(),
-                    tensor_name(tensor_naming, TensorRole::AttentionQueryNorm, index),
+                    tensor_name(weight_requests, TensorRole::AttentionQueryNorm, index),
                     {attention.head_dim});
                 if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
                     layer.k_norm = load_vector(source, reader.get(), writer.get(),
-                        tensor_name(tensor_naming, TensorRole::AttentionKeyNorm, index),
+                        tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
                         {attention.head_dim});
                 }
             }

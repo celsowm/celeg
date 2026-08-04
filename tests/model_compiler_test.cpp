@@ -8,8 +8,6 @@
 int main() {
     celeg::ResolvedModel model;
     model.identity = "compiler-fixture";
-    model.architecture_id = "fixture";
-    model.definition.source_format = "safetensors";
     model.capabilities.supports_cpu = true;
     model.capabilities.supports_cuda = true;
     celeg::LayerSpec attention_layer;
@@ -27,7 +25,6 @@ int main() {
     const auto cpu = celeg::CpuModelCompiler{}.compile(model);
     const auto cuda = celeg::CudaModelCompiler{}.compile(model);
     CELEG_TEST_CHECK(cpu.layers.size() == 2);
-    CELEG_TEST_CHECK(cpu.source_format == "safetensors");
     CELEG_TEST_CHECK(cpu.layers[0].mixer == celeg::CompiledMixer::Attention);
     CELEG_TEST_CHECK(cpu.layers[1].mixer == celeg::CompiledMixer::ShortConvolution);
     CELEG_TEST_CHECK(cpu.layers[1].feed_forward == celeg::CompiledFeedForward::MixtureOfExperts);

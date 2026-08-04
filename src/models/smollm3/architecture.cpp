@@ -162,9 +162,9 @@ RuntimeTopology resolve_topology(const CheckpointMetadata& metadata) {
     return topology;
 }
 
-const ITensorNamingPolicy* naming_policy() {
-    static const SmolLm3TensorNamingPolicy policy;
-    return &policy;
+std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+    static const auto policy = std::make_shared<const SmolLm3TensorNamingPolicy>();
+    return policy;
 }
 
 class SmolLm3Architecture final : public IArchitecture {
@@ -185,30 +185,14 @@ public:
         ResolvedModel result;
         result.topology = topology;
         result.architecture_id = "smollm3";
+        result.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
         result.checkpoint_profile_id = "smollm3";
         result.chat_profile_id = "smollm3-instruct";
         result.profile = {"smollm3", "", {}, result.chat_profile_id};
         result.identity = "smollm3-" + topology.fingerprint();
-        result.tensor_naming = naming_policy();
         result.capabilities = {true, true, false, true};
-        result.definition.dimensions = {
-            topology.hidden, topology.intermediate, topology.num_hidden_layers,
-            topology.attention_layouts.front().query_heads,
-            topology.attention_layouts.front().key_value_heads,
-            topology.attention_layouts.front().head_dim, topology.vocab_size,
-            topology.max_position_embeddings};
-        result.definition.rope = {PositionalEncodingKind::Rope,
-                                  topology.attention_layouts.front().rope_theta, {}};
-        result.definition.numerics = {topology.norm_eps, topology.embedding_multiplier,
-            topology.attention_multiplier, 1.0f, topology.residual_multiplier,
-            topology.logits_divisor};
-        result.definition.tokens = {topology.bos_token_id, topology.eos_token_ids,
-                                    topology.pad_token_id};
-        result.definition.architecture = "smollm3";
-        result.definition.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
-        result.definition.validate();
         build_dense_transformer_graph(result);
-        build_dense_weight_plan(result);
+        build_dense_weight_plan(result, *naming_policy());
         return result;
     }
 };
@@ -217,6 +201,10 @@ public:
 
 std::unique_ptr<IArchitecture> make_smollm3_architecture() {
     return std::make_unique<SmolLm3Architecture>();
+}
+
+void register_smollm3_architecture(ArchitectureCatalog& catalog) {
+    catalog.add(make_smollm3_architecture());
 }
 
 } // namespace celeg::detail

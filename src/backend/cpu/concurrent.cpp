@@ -66,11 +66,13 @@ struct CpuSchedulerDriver {
     };
 
     CpuSchedulerDriver(const std::string& path, int context, CpuModelOptions model_options,
-         CpuConcurrentEngineOptions requested)
+         CpuConcurrentEngineOptions requested,
+         std::shared_ptr<const RuntimeContext> runtime)
         : max_context(context), engine_options(std::move(requested)),
           numa_mode(model_options.numa_mode),
           numa_topology(detect_cpu_numa_topology()),
-          base_model(path, context, std::move(model_options)) {
+          runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
+          base_model(path, context, std::move(model_options), {}, runtime_) {
         if (engine_options.max_active_requests == 0 ||
             engine_options.max_batched_tokens == 0 ||
             engine_options.max_prefill_batch == 0 ||
@@ -563,6 +565,7 @@ struct CpuSchedulerDriver {
     CpuNumaMode numa_mode = CpuNumaMode::Disabled;
     CpuNumaTopology numa_topology;
     size_t next_numa_node = 0;
+    std::shared_ptr<const RuntimeContext> runtime_;
     CpuModel base_model;
     std::unique_ptr<CpuPrefixCacheManager> prefix_cache;
     detail::BatchPlanner planner;
@@ -581,9 +584,10 @@ struct CpuSchedulerDriver {
 
 CpuConcurrentEngine::CpuConcurrentEngine(
     const std::string& path, int max_context, CpuModelOptions model_options,
-    CpuConcurrentEngineOptions engine_options)
+    CpuConcurrentEngineOptions engine_options,
+    std::shared_ptr<const RuntimeContext> runtime)
     : state_(std::make_unique<CpuSchedulerDriver>(path, max_context, std::move(model_options),
-                                   std::move(engine_options))) {}
+                                   std::move(engine_options), std::move(runtime))) {}
 
 CpuConcurrentEngine::~CpuConcurrentEngine() = default;
 

@@ -2,14 +2,13 @@
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/checkpoint/downloader.hpp"
-#include "celeg/checkpoint/repositories/gguf.hpp"
 #include "celeg/serve/cpu_inference_service.hpp"
 #ifdef CELEG_SERVE_CUDA
 #include "celeg/backend/cuda/cuda_inference_service.hpp"
 #endif
 #include "celeg/serve/generation_dispatcher.hpp"
 #include "celeg/text/tokenizer.hpp"
-#include "celeg/models/gemma4/vision.hpp"
+#include "celeg/runtime/context.hpp"
 #include "routes/chat_completions.hpp"
 #include "routes/docs.hpp"
 #include "routes/health.hpp"
@@ -93,20 +92,21 @@ int main(int argc, char** argv) {
             : (use_gguf
                 ? celeg::resolve_hf_gguf(args.repo, args.quant)
                 : celeg::resolve_hf_model(args.repo, "main", false));
-        const celeg::detail::ModelBootstrap bootstrap = celeg::detail::load_model_bootstrap(model);
+        const auto runtime = celeg::create_builtin_runtime_context();
+        const celeg::detail::ModelBootstrap bootstrap =
+            celeg::detail::load_model_bootstrap(model, *runtime);
         const auto& topology = bootstrap.model.topology;
         if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
-        const auto chat_catalog = celeg::make_chat_profile_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
-        const auto* gguf_repository = dynamic_cast<const celeg::GgufRepository*>(
-            bootstrap.checkpoint.repository.get());
-        const celeg::BpeTokenizer tokenizer = gguf_repository
-            ? celeg::BpeTokenizer(celeg::BpeTokenizer::FromGguf{}, gguf_repository->file())
-            : celeg::BpeTokenizer((std::filesystem::is_directory(model)
-                ? model / "tokenizer.json" : model.parent_path() / "tokenizer.json").string());
+        const auto& chat_template = runtime->chat_profiles().find(
+            bootstrap.model.chat_profile_id);
+        const auto& tokenizer_provider = celeg::select_tokenizer_provider(
+            *runtime, bootstrap.checkpoint, model);
+        const auto tokenizer_storage = tokenizer_provider.create(
+            bootstrap.checkpoint, model);
+        const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
@@ -116,9 +116,12 @@ int main(int argc, char** argv) {
 
         celeg::VisualEmbeddingProvider visual_embeddings;
         const std::filesystem::path projector = model.parent_path() / "mmproj-BF16.gguf";
-        if (bootstrap.model.chat_profile_id == "gemma4-instruct" &&
-            std::filesystem::is_regular_file(projector)) {
-            visual_embeddings = celeg::make_gemma4_visual_embedding_provider(projector);
+        if (std::filesystem::is_regular_file(projector)) {
+            const auto& vision_factory = runtime->vision_providers().select_if(
+                [&](const celeg::IVisionProviderFactory& provider) {
+                    return provider.supports(bootstrap.model.architecture_id, projector);
+                });
+            visual_embeddings = vision_factory.create(projector);
         }
 
         std::unique_ptr<celeg::serve::ServiceBundle> service;
@@ -130,7 +133,7 @@ int main(int argc, char** argv) {
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CpuInferenceService>(
                     model.string(), args.context,
-                    model_options, engine_options, visual_embeddings));
+                    model_options, engine_options, visual_embeddings, runtime));
         } else if (args.backend == "cuda") {
 #ifdef CELEG_SERVE_CUDA
             celeg::ConcurrentEngineOptions engine_options;
@@ -138,7 +141,7 @@ int main(int argc, char** argv) {
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CudaInferenceService>(
                     model.string(), args.context, celeg::CudaModelOptions{}, engine_options,
-                    visual_embeddings));
+                    visual_embeddings, runtime));
 #else
             throw std::runtime_error("CUDA serving is not available in this build");
 #endif
@@ -147,7 +150,7 @@ int main(int argc, char** argv) {
         }
 
         celeg::ChatCapabilities chat_capabilities =
-            chat_catalog.capabilities(bootstrap.model.chat_profile_id);
+            runtime->chat_profiles().capabilities(bootstrap.model.chat_profile_id);
         chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());

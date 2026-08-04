@@ -1,13 +1,17 @@
 #include "celeg/detail/model/compiled_model.hpp"
 
+#include <functional>
+
 namespace celeg {
 
 CudaModel::CudaModel(const std::string& model_path,
                    int max_context,
                    CudaModelOptions options,
-                   GenerationConfig generation)
+                   GenerationConfig generation,
+                   std::shared_ptr<const RuntimeContext> runtime)
     : state_(std::make_unique<CudaCompiledModel>(model_path, max_context,
-                                   std::move(options), std::move(generation))),
+                                   std::move(options), std::move(generation),
+                                   std::move(runtime))),
       session_view_(*this),
       diagnostics_view_(*this),
       persistence_view_(*this) {}
@@ -29,6 +33,11 @@ void CudaCompiledModel::packed_expert_residency_callback(
 PackedSessionContext CudaCompiledModel::packed_session_context() {
     PackedSessionContext context;
     context.owner = this;
+    context.storage_generation_value = storage_generation_;
+    context.execution_plan_fingerprint = resources_.plan_.fingerprint();
+    context.compiled_program_id = static_cast<uint64_t>(
+        std::hash<std::string>{}(resources_.program_.identity));
+    context.device_ordinal = resources_.plan_.device().device_ordinal;
     context.phase_state = &session_.phase_;
     context.position_state = &session_.position_;
     context.max_context_value = max_context_;
@@ -97,6 +106,9 @@ CudaModelDiagnostics::ExpertOffloadStats CudaModelDiagnostics::expert_offload_st
 }
 RuntimeMetrics CudaModelDiagnostics::runtime_metrics() const { return owner_->state_->runtime_metrics(); }
 void CudaModelDiagnostics::clear_runtime_metrics() { owner_->state_->clear_runtime_metrics(); }
+std::string CudaModelDiagnostics::execution_plan_description() const {
+    return owner_->state_->execution_plan_description();
+}
 bool CudaModelDiagnostics::cuda_graph_ready() const { return owner_->state_->cuda_graph_ready(); }
 
 } // namespace celeg

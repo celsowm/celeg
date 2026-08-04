@@ -26,6 +26,11 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/prefill_profile.cpp
     src/backend/cuda/model/weights.cpp
     src/backend/cuda/model/packed_execution.cu
+    src/backend/cuda/model/packed_workspace.cu
+    src/backend/cuda/model/packed_metadata.cu
+    src/backend/cuda/model/packed_layer_program.cpp
+    src/backend/cuda/model/packed_operators.cu
+    src/backend/cuda/model/packed_gemm_runtime.cpp
     src/backend/cuda/model/persistence.cu
     src/backend/cuda/model/facade.cu
     src/backend/cuda/model/weight_layout.cu

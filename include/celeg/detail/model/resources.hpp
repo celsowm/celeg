@@ -26,7 +26,6 @@ struct CudaModelResources {
     ResolvedModel model_;
     CompiledModelProgram program_;
     RuntimeTopology shape_;
-    const ITensorNamingPolicy* tensor_naming_ = nullptr;
     std::string model_identity_;
     std::shared_ptr<SharedModelWeights> weights_;
     std::unique_ptr<WeightLoader> weight_loader_;

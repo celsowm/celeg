@@ -55,7 +55,9 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             __nv_bfloat16* q = workspace_.qkv_output_.data();
             __nv_bfloat16* k = q + layout.query_width();
             __nv_bfloat16* v = k + layout.key_value_width();
-            begin_native_fanout(workspace_.normed_.data(), 1, resources_.shape_.hidden);
+            {
+            auto native_fanout = native_fanout_scope(
+                workspace_.normed_.data(), 1, resources_.shape_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q,
                    1, layout.query_width(), resources_.shape_.hidden);
             if (attention->key && attention->value) {
@@ -64,7 +66,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                 linear(workspace_.normed_.data(), *attention->value, v,
                        1, layout.key_value_width(), resources_.shape_.hidden);
             }
-            end_native_fanout();
+            }
             if (layout.positional_encoding == PositionalEncodingKind::Rope) {
                 launch_dynamic_qk_norm_rope(
                     q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
@@ -185,7 +187,9 @@ void CudaCompiledModel::forward_token_paged_host(
             __nv_bfloat16* q = workspace_.qkv_output_.data();
             __nv_bfloat16* k = q + layout.query_width();
             __nv_bfloat16* v = k + layout.key_value_width();
-            begin_native_fanout(workspace_.normed_.data(), 1, resources_.shape_.hidden);
+            {
+            auto native_fanout = native_fanout_scope(
+                workspace_.normed_.data(), 1, resources_.shape_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q, 1,
                    layout.query_width(), resources_.shape_.hidden);
             if (attention->key && attention->value) {
@@ -194,7 +198,7 @@ void CudaCompiledModel::forward_token_paged_host(
                 linear(workspace_.normed_.data(), *attention->value, v, 1,
                        layout.key_value_width(), resources_.shape_.hidden);
             }
-            end_native_fanout();
+            }
             if (layout.positional_encoding == PositionalEncodingKind::Rope) {
                 launch_dynamic_qk_norm_rope(
                     q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,

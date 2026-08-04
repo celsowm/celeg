@@ -56,6 +56,14 @@ struct ModelInfo {
     std::string name;
     std::string backend;
     int max_context = 0;
+    struct Limits {
+        int max_active_requests = 0;
+        int max_batched_tokens = 0;
+        int prefill_chunk_tokens = 0;
+        bool supports_paged_kv = false;
+        bool supports_packed_decode = false;
+        bool supports_multimodal = false;
+    } limits;
 };
 
 struct ServingMetrics {

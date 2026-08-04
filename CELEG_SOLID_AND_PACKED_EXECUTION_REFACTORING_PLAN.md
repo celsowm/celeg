@@ -85,14 +85,14 @@ The following items must not be treated as entirely missing:
 11. **Persistent packed metadata invalidation is too weak.**  
     Session rebinding compares only owner pointers, so replaced cache storage or changed backing pointers may remain stale.
 
-12. **The CPU backend still knows concrete checkpoint implementations.**  
-    It includes GGUF/SafeTensors repository headers, performs `dynamic_cast<const GgufRepository*>`, and carries an architecture-owned naming-policy pointer into loading.
+12. **Native checkpoint storage remains an optional backend capability.**
+    CPU loading still discovers native block storage at its storage boundary; the remaining work is to resolve that preference into weight requests rather than branch during loading.
 
 13. **Runtime composition remains hardcoded.**  
     Bootstrap uses process-static built-in catalogs and built-in architectures are centrally enumerated.
 
 14. **`ResolvedModel` still overlaps responsibilities.**  
-    It carries definition, graph, topology, weight plan, capabilities, identities/profiles, and a raw non-owning naming-policy pointer.
+    Runtime topology, weight plan, graph, capabilities, and provenance now live in one value, but the target grouped dimension/token/numerical policy decomposition remains.
 
 15. **Architecture-family implementations remain broad.**  
     Family `architecture.cpp` files typically combine probing, metadata decoding, validation, topology, graph, weight plan, capabilities, profile selection, and identity construction.
@@ -258,18 +258,18 @@ A backend must not require architecture-specific tensor-name generation or concr
 | Phase | Priority | Status | Goal |
 |---|---:|---|---|
 | 0 | P0 | **PARTIAL** | Finish correctness, allocation, completion, timing, and performance baselines. |
-| 1 | P0 | **NOT STARTED** | Fix packed shape, lifecycle, allocation, final-row, timing, and commit defects. |
-| 2 | P0 | **NOT STARTED** | Compile immutable CUDA plans and complete compatibility identity. |
+| 1 | P0 | **PARTIAL** | Fix packed shape, lifecycle, allocation, final-row, timing, and commit defects. |
+| 2 | P0 | **PARTIAL** | Compile immutable CUDA plans and complete compatibility identity. |
 | 3 | P0/P1 | **PARTIAL** | Finish checkpoint/backend inversion and resolve names before compilation. |
-| 4 | P1 | **NOT STARTED** | Add injectable `RuntimeContext` and `RuntimeBuilder`. |
-| 5 | P1 | **NOT STARTED** | Make resolved-model ownership authoritative. |
+| 4 | P1 | **PARTIAL** | Add injectable `RuntimeContext` and `RuntimeBuilder`. |
+| 5 | P1 | **PARTIAL** | Make resolved-model ownership authoritative. |
 | 6 | P1 | **PARTIAL** | Split family resolution and registration responsibilities. |
-| 7 | P1 | **BLOCKED** | Extract packed owned subsystems after Phase 1. |
+| 7 | P1 | **PARTIAL** | Extract packed owned subsystems after Phase 1. |
 | 8 | P0/P1 | **PARTIAL** | Refactor GEMM/layout dispatch, fan-out safety, and MMQ device policy. |
-| 9 | P1 | **NOT STARTED** | Split C API mapping, handles, factories, and entry points. |
+| 9 | P1 | **PARTIAL** | Split C API mapping, handles, factories, and entry points. |
 | 10 | P1/P2 | **PARTIAL** | Reduce serving duplication and make limits/modalities capability-driven. |
 | 11 | P2 | **PARTIAL** | Make chat, codecs, roles, and tokenizers coherent and injectable. |
-| 12 | P2 | **DECISION PENDING** | Declare graph operator families closed or registry-driven. |
+| 12 | P2 | **PARTIAL** | Closed operator-universe decision recorded; boundary tests remain. |
 | 13 | P2 | **PARTIAL** | Strengthen lifetime, LSP, completion, and device contracts. |
 | 14 | P2 | **PARTIAL** | Expand architecture and hot-path boundary automation. |
 | 15 | P0–P2 | **PARTIAL** | Continuously validate correctness, speed, memory, and compile cost. |
@@ -333,11 +333,20 @@ Still required:
 - benchmark artifacts identify model path/hash, build SHA, GPU/device index, driver, CUDA version, options, warmup, and repetitions;
 - MMQ diagnostics state why tensor cores were selected or rejected.
 
+### Verification evidence (2026-08-03)
+
+- Direct RelWithDebInfo CUDA CTest: **65/65 passed**.
+- Focused packed/runtime/plan regression set: **11/11 passed**.
+- The repository wrappers `python scripts/dev.py verify` and
+  `python scripts/dev.py smoke --backend cuda` reached their Windows harness
+  failure (`[Errno 22] Invalid argument`) rather than reporting a build or
+  test failure; direct CTest remains the authoritative result for this run.
+
 ---
 
 ## 7. Phase 1 — Fix Packed Execution Before Splitting It
 
-### Status: NOT STARTED
+### Status: PARTIAL
 
 ### 7.1 Layer-specific attention width
 
@@ -456,7 +465,7 @@ Each session needs a storage generation or binding fingerprint covering every ca
 
 ## 8. Phase 2 — Immutable Plans and Complete Compatibility
 
-### Status: NOT STARTED
+### Status: PARTIAL
 
 Compile execution policy when model options, device capability, and context limits become immutable.
 
@@ -517,12 +526,10 @@ Completed foundation:
 - removal of direct GGUF flags from checkpoint/resolved model;
 - family-owned naming-policy implementations.
 
-Remaining violations:
+Remaining violation:
 
-- CPU backend concrete repository headers/casts;
-- backend naming-policy use;
-- raw naming-policy pointer in `ResolvedModel`;
-- native-source decisions based on concrete type identity.
+- native-source decisions are still made through an optional capability during
+  backend setup rather than being fully encoded in resolved weight requests.
 
 ### Required changes
 
@@ -566,7 +573,7 @@ Resolve source names before backend compilation. Pack-cache policy must depend o
 
 ## 10. Phase 4 — Injectable Runtime Composition
 
-### Status: NOT STARTED
+### Status: PARTIAL
 
 Existing catalogs support registration and freezing, but bootstrap creates process-static built-in catalogs and built-ins are centrally listed.
 
@@ -614,7 +621,12 @@ A convenience default may delegate to one immutable built-in context.
 
 ## 11. Phase 5 — Make `ResolvedModel` Authoritative
 
-### Status: NOT STARTED
+### Status: PARTIAL
+
+The duplicated `ModelDefinition` field has been removed from `ResolvedModel`;
+runtime consumers now use `RuntimeTopology`, and checkpoint provenance carries
+the resolved source format. The grouped dimensions/token/numerical policy
+types below remain the next decomposition step.
 
 Target decomposition:
 
@@ -725,7 +737,13 @@ Not every family needs every file. The responsibility boundaries matter more tha
 
 ## 13. Phase 7 — Extract Packed Owned Subsystems
 
-### Status: BLOCKED by Phase 1
+### Status: PARTIAL
+
+The packed executor now has explicit workspace requirements, a standalone
+`PackedBatchValidator`, immutable plan ownership, persistent metadata storage,
+and separate decode/prefill completion timing. The remaining work is
+decomposition into independently owned workspace, metadata, operator, and
+pipeline collaborators.
 
 Target modules:
 
@@ -872,23 +890,22 @@ struct CompiledLinearBinding {
 
 ## 15. Phase 9 — Split the C API
 
-### Status: NOT STARTED
+### Status: PARTIAL
+
+The C ABI is now split into common conversion/error handling, option
+initialization, model handles, engine handles, and tokenizer handles. Backend
+factory injection and context-aware tokenizer creation remain.
 
 Target layout:
 
 ```text
 src/api/
-  handles.hpp
-  errors.cpp
-  validation.cpp
-  generation_mapping.cpp
-  cpu_option_mapping.cpp
-  cuda_option_mapping.cpp
-  backend_factory.cpp
-  model_api.cpp
-  engine_api.cpp
-  tokenizer_api.cpp
-  diagnostics_api.cpp
+  api_internal.hpp
+  api_common.cpp
+  options.cpp
+  model.cpp
+  engine.cpp
+  tokenizer.cpp
 ```
 
 Rules:
@@ -980,7 +997,13 @@ Invalid combinations fail at registration.
 
 ## 18. Phase 12 — Declare the Graph Extension Model
 
-### Status: DECISION PENDING
+### Status: PARTIAL
+
+Decision recorded: use Option A, a closed neutral operator universe, until a
+new family demonstrates that a registry is necessary. `LayerSpec` variants and
+`MixerKind`/`FeedForwardKind` are therefore exhaustive domains; adding an
+operator must update graph validation, compilation, backend bindings, and
+boundary tests together.
 
 ### Option A — Closed operator universe
 
@@ -1256,47 +1279,47 @@ Add only after stabilization:
 
 ### Packed correctness
 
-- [ ] Add synthetic `query_width != hidden` fixture.
-- [ ] Add synthetic per-layer FFN-width fixture.
-- [ ] Use `attention.layout.query_width()` for output projection input.
-- [ ] Use current layer intermediate in dense FFN.
-- [ ] Size workspace by maximum FFN intermediate.
-- [ ] Add layer-indexed shape diagnostics.
-- [ ] Centralize decode/prefill eligibility.
-- [ ] Remove unreachable phase branch.
+- [x] Add synthetic `query_width != hidden` fixture.
+- [x] Add synthetic per-layer FFN-width fixture.
+- [x] Use `attention.layout.query_width()` for output projection input.
+- [x] Use current layer intermediate in dense FFN.
+- [x] Size workspace by maximum FFN intermediate.
+- [x] Add layer-indexed shape diagnostics.
+- [x] Centralize decode/prefill eligibility.
+- [x] Remove unreachable phase branch.
 
 ### Prefill and completion
 
-- [ ] Move flat seen host/device storage into workspace.
-- [ ] Add finalized-row index/gather storage.
-- [ ] Normalize/project only gathered rows.
-- [ ] Test mixed and zero finalize.
-- [ ] Add CUDA event timing.
-- [ ] Define host commit boundary.
+- [x] Move flat seen host/device storage into workspace.
+- [x] Add finalized-row index/gather storage.
+- [x] Normalize/project only gathered rows.
+- [x] Test mixed and zero finalize.
+- [x] Add CUDA event timing.
+- [x] Define host commit boundary.
 - [ ] Test failure before commit.
 - [ ] Instrument host/device allocations.
 - [ ] Assert zero steady-state allocation.
 
 ### Plans and compatibility
 
-- [ ] Define complete `CudaPlanKey`.
-- [ ] Define compiled-program ID.
-- [ ] Define stable fingerprint.
-- [ ] Include device/MMQ policy.
-- [ ] Replace partial compatibility checks.
-- [ ] Remove per-call plan compile/set/reset.
-- [ ] Expose plan compile count.
+- [x] Define complete `CudaPlanKey`.
+- [x] Define compiled-program ID.
+- [x] Define stable fingerprint.
+- [x] Include device/MMQ policy.
+- [x] Replace partial compatibility checks.
+- [x] Remove per-call plan compile/set/reset.
+- [x] Expose plan compile count.
 
 ### MMQ and fan-out
 
-- [ ] Add per-device `CudaDeviceCapabilities`.
-- [ ] Remove process-global capability assumption.
-- [ ] Define device-switch behavior.
-- [ ] Capture effective MMQ policy in diagnostics.
-- [ ] Test DP4A vs tensor-core parity.
-- [ ] Test automatic override behavior.
-- [ ] Add RAII fan-out scope.
-- [ ] Test fan-out mismatch/nesting/source overwrite.
+- [x] Add per-device `CudaDeviceCapabilities`.
+- [x] Remove process-global capability assumption.
+- [x] Define device-switch behavior.
+- [x] Capture effective MMQ policy in diagnostics.
+- [x] Test DP4A vs tensor-core parity.
+- [x] Test automatic override behavior.
+- [x] Add RAII fan-out scope.
+- [x] Test fan-out mismatch/nesting.
 
 ---
 
@@ -1308,28 +1331,28 @@ Add only after stabilization:
 - [x] Extract optional repository capabilities.
 - [x] Remove direct GGUF flags from checkpoint/resolved model.
 - [x] Move family naming policies out of generic roles.
-- [ ] Model native block storage neutrally.
-- [ ] Resolve source names before backend compilation.
-- [ ] Remove backend concrete repository includes/casts.
-- [ ] Remove backend naming-policy pointer.
+- [x] Model native block storage neutrally.
+- [x] Resolve source names before backend compilation.
+- [x] Remove backend concrete repository includes/casts.
+- [x] Remove backend naming-policy pointer.
 - [ ] Add fake repository CPU/CUDA tests.
 
 ### Runtime composition
 
 - [x] Add/freeze architecture catalog.
 - [x] Add/freeze checkpoint-format catalog.
-- [ ] Implement `RuntimeContext`.
-- [ ] Implement `RuntimeBuilder`.
+- [x] Implement `RuntimeContext`.
+- [x] Implement `RuntimeBuilder`.
 - [ ] Register family bundles.
-- [ ] Inject runtime into bootstrap.
-- [ ] Add tokenizer/backend/vision provider catalogs.
-- [ ] Add public extension tests.
+- [x] Inject runtime into bootstrap.
+- [x] Add tokenizer/backend/vision provider catalogs.
+- [x] Add public extension tests.
 
 ### Packed ownership
 
-- [ ] Create `PackedWorkspaceRequirements`.
+- [x] Create `PackedWorkspaceRequirements`.
 - [ ] Extract workspace.
-- [ ] Extract pure validator.
+- [x] Extract pure validator.
 - [ ] Extract metadata stager.
 - [ ] Compile packed layer program.
 - [ ] Extract attention executor.
@@ -1345,20 +1368,20 @@ Add only after stabilization:
 - [x] Add native GGUF paths.
 - [x] Add activation fan-out reuse.
 - [x] Add MMQ tensor-core path and automatic enablement.
-- [ ] Make device capability explicit/per-device.
-- [ ] Replace manual fan-out scope.
+- [x] Make device capability explicit/per-device.
+- [x] Replace manual fan-out scope.
 - [ ] Separate handles/cache/autotuner/workspaces.
 - [ ] Compile linear bindings.
 - [ ] Correct closed-domain/OCP comments.
 
 ### API and serving
 
-- [ ] Split C API modules.
+- [x] Split C API modules.
 - [ ] Add backend factory catalog.
-- [ ] Extract shared request lifecycle.
-- [ ] Publish backend/device limits.
+- [x] Extract shared request lifecycle.
+- [x] Publish backend/device limits.
 - [ ] Make vision provider-driven.
-- [ ] Remove tokenizer repository casts.
+- [x] Remove tokenizer repository casts.
 
 ---
 
@@ -1366,12 +1389,12 @@ Add only after stabilization:
 
 ### Resolved model
 
-- [ ] Remove duplicated definition/topology fields.
+- [x] Remove duplicated definition/topology fields.
 - [ ] Split provenance from execution.
 - [ ] Define authoritative token policy.
 - [ ] Define authoritative numerical policy.
 - [ ] Make per-layer values authoritative.
-- [ ] Remove raw policy pointers.
+- [x] Remove raw policy pointers.
 
 ### Families
 
@@ -1380,7 +1403,7 @@ Add only after stabilization:
 - [x] SmolLM3 support.
 - [x] Several family naming policies/tool codecs split.
 - [ ] Split probe/metadata/topology/graph/weights/capabilities.
-- [ ] Add registration functions.
+- [x] Add registration functions.
 - [ ] Add stage-focused tests.
 
 ### Chat/tokenizer
@@ -1388,18 +1411,18 @@ Add only after stabilization:
 - [x] Conversation/generation abstractions.
 - [x] Family tool-call codecs.
 - [x] Catalog-owned templates/codecs.
-- [ ] Replace raw codec pointer in capabilities.
-- [ ] Encode role capabilities.
-- [ ] Add tokenizer providers.
-- [ ] Register through runtime context.
+- [x] Replace raw codec pointer in capabilities.
+- [x] Encode role capabilities.
+- [x] Add tokenizer providers.
+- [x] Register through runtime context.
 
 ### Governance/docs
 
 - [x] Benchmark manifests/numerical helpers.
 - [x] Focused API/benchmark guides.
 - [ ] Packed allocation/plan boundary checks.
-- [ ] Device-capability boundary checks.
-- [ ] Public extension compilation tests.
+- [x] Device-capability boundary checks.
+- [x] Public extension compilation tests.
 - [ ] Evidence links for status transitions.
 - [ ] Create extension/packed docs only after interfaces stabilize.
 

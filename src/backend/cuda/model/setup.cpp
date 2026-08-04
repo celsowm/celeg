@@ -1,5 +1,6 @@
 #include "celeg/detail/model/compiled_model.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/backend/cuda/kernels/mmq.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -8,8 +9,11 @@ namespace celeg {
 CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
                    int max_context,
                    CudaModelOptions options,
-                   GenerationConfig generation)
-    : resources_(CudaExecutionPlan::compile(options, max_context)),
+                   GenerationConfig generation,
+                   std::shared_ptr<const RuntimeContext> runtime)
+    : resources_(CudaExecutionPlan::compile(
+          options, max_context, discover_cuda_device_capabilities())),
+      runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
       session_(generation),
       stream_(),
       max_context_(max_context) {
@@ -17,8 +21,8 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
     if (max_context_ <= 0) {
         throw std::invalid_argument("max_context must be positive");
     }
-    const detail::ModelBootstrap bootstrap =
-        detail::load_model_bootstrap(std::filesystem::path(model_path));
+    const detail::ModelBootstrap bootstrap = detail::load_model_bootstrap(
+        std::filesystem::path(model_path), *runtime_);
     configure_model(bootstrap);
     allocate_celeg_resources();
     load_checkpoint_weights(model_path, bootstrap);

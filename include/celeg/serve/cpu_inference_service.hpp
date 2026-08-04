@@ -16,7 +16,8 @@ public:
                         int max_context,
                         CpuModelOptions model_options = {},
                         CpuConcurrentEngineOptions engine_options = {},
-                        VisualEmbeddingProvider visual_embeddings = {});
+                        VisualEmbeddingProvider visual_embeddings = {},
+                        std::shared_ptr<const RuntimeContext> runtime = nullptr);
 
     RequestId submit(GenerateRequest request) override;
     GenerateEvent poll(RequestId id, std::size_t max_tokens) override;

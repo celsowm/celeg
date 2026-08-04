@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/checkpoint/tensor.hpp"
+#include "celeg/checkpoint/tokenizer.hpp"
 
 #include <span>
 #include <stdexcept>
@@ -40,6 +41,23 @@ public:
     virtual ~IRandomAccessTensorReader() = default;
     virtual void read(const TensorLocator& locator,
                       std::span<std::byte> destination) const = 0;
+};
+
+// Optional capability for repositories that expose native block storage to a
+// backend. The capability is intentionally format-neutral; consumers must not
+// identify GGUF (or any other concrete format) by RTTI.
+class INativeBlockStorageRepository {
+public:
+    virtual ~INativeBlockStorageRepository() = default;
+    virtual bool has_native_block_storage() const = 0;
+};
+
+// Optional checkpoint capability for repositories that carry tokenizer data.
+// The normalized payload keeps consumers independent of the source format.
+class ITokenizerDataRepository {
+public:
+    virtual ~ITokenizerDataRepository() = default;
+    virtual TokenizerData tokenizer_data() const = 0;
 };
 
 inline const ILocatableTensorRepository&

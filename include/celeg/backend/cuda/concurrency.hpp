@@ -5,6 +5,7 @@
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/concurrency/metrics.hpp"
 #include "celeg/runtime/request_types.hpp"
+#include "celeg/runtime/context.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -44,7 +45,8 @@ public:
     ConcurrentEngine(std::string model_path,
                      int max_context,
                      CudaModelOptions model_options = {},
-                     ConcurrentEngineOptions engine_options = {});
+                     ConcurrentEngineOptions engine_options = {},
+                     std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~ConcurrentEngine();
 
     ConcurrentEngine(const ConcurrentEngine&) = delete;

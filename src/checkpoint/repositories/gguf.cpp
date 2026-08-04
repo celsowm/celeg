@@ -192,6 +192,38 @@ HostTensorView GgufRepository::tensor(std::string_view name) const {
     return view;
 }
 
+TokenizerData GgufRepository::tokenizer_data() const {
+    TokenizerData result;
+    const auto& tokens = gguf_->value("tokenizer.ggml.tokens");
+    if (tokens.kind == GgufValueKind::Array &&
+        tokens.array_kind == GgufValueKind::String) {
+        result.tokens = tokens.array_strings;
+    }
+    const auto& merges = gguf_->value("tokenizer.ggml.merges");
+    if (merges.kind == GgufValueKind::Array &&
+        merges.array_kind == GgufValueKind::String) {
+        result.merges = merges.array_strings;
+    }
+    if (gguf_->has("tokenizer.ggml.token_type")) {
+        const auto& types = gguf_->value("tokenizer.ggml.token_type");
+        result.token_types.reserve(types.array_integers.size());
+        for (const int64_t type : types.array_integers) {
+            result.token_types.push_back(static_cast<int32_t>(type));
+        }
+    }
+    if (gguf_->has("tokenizer.ggml.bos_token_id")) {
+        result.bos_id = static_cast<int32_t>(gguf_->i64("tokenizer.ggml.bos_token_id"));
+    }
+    if (gguf_->has("tokenizer.ggml.eos_token_id")) {
+        result.eos_id = static_cast<int32_t>(gguf_->i64("tokenizer.ggml.eos_token_id"));
+    }
+    if (gguf_->has("tokenizer.ggml.padding_token_id")) {
+        result.pad_id = static_cast<int32_t>(gguf_->i64("tokenizer.ggml.padding_token_id"));
+    }
+    result.pre_tokenizer = gguf_->str_or("tokenizer.ggml.pre", "");
+    return result;
+}
+
 std::vector<std::string> GgufRepository::names() const {
     return gguf_->tensor_names();
 }

@@ -26,6 +26,21 @@ namespace celeg {
 // added by extending the dispatch switch (Open/Closed Principle).
 class GemmDispatcher {
 public:
+    class NativeFanoutScope {
+    public:
+        NativeFanoutScope(GemmDispatcher* dispatcher,
+                          const __nv_bfloat16* x, int m, int k);
+        ~NativeFanoutScope();
+
+        NativeFanoutScope(const NativeFanoutScope&) = delete;
+        NativeFanoutScope& operator=(const NativeFanoutScope&) = delete;
+        NativeFanoutScope(NativeFanoutScope&& other) noexcept;
+        NativeFanoutScope& operator=(NativeFanoutScope&& other) noexcept;
+
+    private:
+        GemmDispatcher* dispatcher_ = nullptr;
+    };
+
     // Constructs a dispatcher bound to a stream + CudaModelOptions. Allocates
     // the cuBLAS / cuBLASLt handles and the cuBLASLt workspace.
     GemmDispatcher(cudaStream_t stream,
@@ -65,10 +80,7 @@ public:
                                   const __nv_bfloat16* weight,
                                   int m, int n, int k);
 
-    // Begins an explicit fan-out scope for native GGUF projections sharing
-    // exactly one input matrix. The activation is quantized once and reused
-    // by subsequent linear() calls in the scope. Call end_native_fanout()
-    // before the source buffer is written again.
+    // Internal scope operations used by NativeFanoutScope.
     void begin_native_fanout(const __nv_bfloat16* x, int m, int k);
     void end_native_fanout();
 
@@ -79,6 +91,7 @@ public:
 
 private:
     cudaStream_t stream_;
+    int device_ordinal_ = -1;
     const CudaModelOptions& options_;
     CublasHandle cublas_;
     CublasLtHandle cublas_lt_;

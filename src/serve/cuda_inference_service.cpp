@@ -27,13 +27,21 @@ CudaInferenceService::CudaInferenceService(std::string model_path,
                                            int max_context,
                                            CudaModelOptions model_options,
                                            ConcurrentEngineOptions engine_options,
-                                           VisualEmbeddingProvider visual_embeddings)
+                                           VisualEmbeddingProvider visual_embeddings,
+                                           std::shared_ptr<const RuntimeContext> runtime)
     : engine_(model_path, max_context, std::move(model_options),
-              std::move(engine_options)),
+              engine_options, std::move(runtime)),
       visual_embeddings_(std::move(visual_embeddings)) {
     model_info_.name = std::filesystem::path(model_path).stem().string();
     model_info_.backend = "cuda";
     model_info_.max_context = max_context;
+    model_info_.limits.max_active_requests = engine_options.max_active_requests;
+    model_info_.limits.max_batched_tokens = engine_options.max_batched_tokens;
+    model_info_.limits.prefill_chunk_tokens = engine_options.prefill_chunk_tokens;
+    model_info_.limits.supports_paged_kv = true;
+    model_info_.limits.supports_packed_decode = engine_options.packed_decode;
+    model_info_.limits.supports_multimodal =
+        static_cast<bool>(visual_embeddings_);
 }
 
 RequestId CudaInferenceService::submit(GenerateRequest request) {

@@ -27,9 +27,12 @@ CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text) {
 }
 
 CpuModel::CpuModel(const std::string& path, int context,
-                   CpuModelOptions options, GenerationConfig generation)
+                   CpuModelOptions options, GenerationConfig generation,
+                   std::shared_ptr<const RuntimeContext> runtime)
     : state_(std::make_unique<CpuCompiledModel>(
-          std::make_shared<CpuCompiledModel::Shared>(path, context, std::move(options)),
+          std::make_shared<CpuCompiledModel::Shared>(
+              path, context, std::move(options),
+              runtime ? std::move(runtime) : create_builtin_runtime_context()),
           generation, -1)),
       session_view_(*this),
       diagnostics_view_(*this),

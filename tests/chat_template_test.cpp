@@ -101,7 +101,7 @@ int main() {
     const auto& minicpm5 = catalog.find("minicpm5-instruct");
     const auto minicpm5_capabilities = catalog.capabilities("minicpm5-instruct");
     CELEG_TEST_CHECK(!minicpm5_capabilities.vision);
-    CELEG_TEST_CHECK(minicpm5_capabilities.developer_messages);
+    CELEG_TEST_CHECK(minicpm5_capabilities.roles.developer);
     CELEG_TEST_CHECK(minicpm5_capabilities.parallel_tool_calls);
     CELEG_TEST_CHECK(minicpm5_capabilities.tool_call_codec != nullptr);
     const std::string minicpm5_prompt = minicpm5.format(

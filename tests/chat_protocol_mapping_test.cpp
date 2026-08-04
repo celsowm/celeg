@@ -106,7 +106,7 @@ int main() {
     CELEG_TEST_CHECK(tool_rejected);
     celeg::ChatCapabilities tool_capabilities;
     tool_capabilities.assistant_tool_calls = true;
-    tool_capabilities.tool_messages = true;
+    tool_capabilities.roles.tool = true;
     protocol::validate_chat_request(tool_request, tool_capabilities);
 
     protocol::ErrorResponseDto error = protocol::error_response("bad \"request\"");

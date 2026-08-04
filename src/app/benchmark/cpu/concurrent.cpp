@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
 
         celeg::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = static_cast<size_t>(max_new);
-        request_options.eos_tokens = bootstrap.model.definition.tokens.eos;
+        request_options.eos_tokens = bootstrap.model.topology.eos_token_ids;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
 

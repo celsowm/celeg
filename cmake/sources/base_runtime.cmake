@@ -50,4 +50,6 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/runtime/concurrency/worker.cpp
     src/runtime/moe/reference.cpp
     src/runtime/moe/offload.cpp
+    src/runtime/context.cpp
+    src/runtime/tokenizer_providers.cpp
 )

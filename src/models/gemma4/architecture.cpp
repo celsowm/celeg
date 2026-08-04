@@ -2,6 +2,7 @@
 
 #include "celeg/model/graph_builder.hpp"
 #include "celeg/model/weights/roles.hpp"
+#include "celeg/model/weight_plan.hpp"
 #include "naming_policy.hpp"
 
 #include <algorithm>
@@ -43,16 +44,12 @@ double optional_number(const CheckpointMetadata& metadata, std::string_view key,
     return metadata.contains(flattened) ? metadata.number(flattened) : fallback;
 }
 
-const ITensorNamingPolicy* naming_policy() {
-    static const Gemma4TensorNamingPolicy policy;
-    return &policy;
+std::shared_ptr<const ITensorNamingPolicy> naming_policy() {
+    static const auto policy = std::make_shared<const Gemma4TensorNamingPolicy>();
+    return policy;
 }
 
 void add_request(ResolvedModel& model, TensorRequest request) {
-    if (model.tensor_naming) {
-        const auto names = model.tensor_naming->candidates(request);
-        if (!names.empty()) request.source_name = names.front();
-    }
     model.weight_plan.requests.push_back(std::move(request));
 }
 
@@ -301,27 +298,13 @@ public:
         ResolvedModel model;
         model.topology = topology;
         model.architecture_id = "gemma4";
-        model.tensor_naming = naming_policy();
+        model.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
         model.chat_profile_id = "gemma4-instruct";
         model.checkpoint_profile_id = checkpoint.metadata.repository_hint.empty()
             ? "gemma4" : checkpoint.metadata.repository_hint;
         model.profile = {"gemma4", "", {}, model.chat_profile_id};
         model.identity = model.checkpoint_profile_id + "-" + topology.fingerprint();
         model.capabilities = {true, true, false, true};
-        const AttentionSpec& attention = topology.attention_layouts.front();
-        model.definition.dimensions = {topology.hidden, topology.intermediate,
-            topology.num_hidden_layers, attention.query_heads,
-            attention.key_value_heads, attention.head_dim, topology.vocab_size,
-            topology.max_position_embeddings};
-        model.definition.rope = {PositionalEncodingKind::Rope, attention.rope_theta, {}};
-        model.definition.numerics = {topology.norm_eps, topology.embedding_multiplier,
-            topology.attention_multiplier, 1.0f, topology.residual_multiplier,
-            topology.logits_divisor};
-        model.definition.tokens = {topology.bos_token_id, topology.eos_token_ids,
-                                   topology.pad_token_id};
-        model.definition.architecture = "gemma4";
-        model.definition.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
-        model.definition.validate();
         model.graph.embedding_multiplier = topology.embedding_multiplier;
         model.graph.logits_divisor = topology.logits_divisor;
         model.graph.final_norm.epsilon = topology.norm_eps;
@@ -363,6 +346,7 @@ public:
         }
         model.topology = topology;
         build_gemma_weight_plan(model);
+        resolve_weight_plan(model, *naming_policy());
         return model;
     }
 };
@@ -371,6 +355,10 @@ public:
 
 std::unique_ptr<IArchitecture> make_gemma4_architecture() {
     return std::make_unique<Gemma4Architecture>();
+}
+
+void register_gemma4_architecture(ArchitectureCatalog& catalog) {
+    catalog.add(make_gemma4_architecture());
 }
 
 } // namespace celeg::detail

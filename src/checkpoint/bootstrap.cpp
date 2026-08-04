@@ -7,13 +7,15 @@
 namespace celeg::detail {
 
 ModelBootstrap load_model_bootstrap(const std::filesystem::path& model_path) {
+    return load_model_bootstrap(model_path, *create_builtin_runtime_context());
+}
+
+ModelBootstrap load_model_bootstrap(const std::filesystem::path& model_path,
+                                   const RuntimeContext& runtime) {
     ModelBootstrap bootstrap;
-    static const std::shared_ptr<const CheckpointFormatCatalog> formats =
-        create_builtin_checkpoint_format_catalog();
-    bootstrap.checkpoint = formats->open(model_path);
-    static const std::shared_ptr<const ArchitectureCatalog> catalog =
-        create_builtin_architecture_catalog();
-    const IArchitecture& architecture = catalog->select(bootstrap.checkpoint.metadata);
+    bootstrap.checkpoint = runtime.checkpoint_formats().open(model_path);
+    const IArchitecture& architecture =
+        runtime.architectures().select(bootstrap.checkpoint.metadata);
     bootstrap.model = architecture.resolve(bootstrap.checkpoint);
     return bootstrap;
 }

@@ -6,6 +6,7 @@
 #include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/packed.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/backend/cuda/kernels/mmq.hpp"
 #include "celeg/runtime/cache/prefix_cache.hpp"
 #include "celeg/detail/runtime/concurrency/request_registry.hpp"
 #include "celeg/detail/runtime/concurrency/batch_planner.hpp"
@@ -27,11 +28,13 @@ namespace celeg {
 CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
                                    int max_context,
                                    CudaModelOptions model_options,
-                                   ConcurrentEngineOptions engine_options)
+                                   ConcurrentEngineOptions engine_options,
+                                   std::shared_ptr<const RuntimeContext> runtime)
     : model_path_(std::move(model_path)),
       max_context_(max_context),
       model_options_(model_options),
-      engine_options_(engine_options) {
+      engine_options_(engine_options),
+      runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()) {
     if (max_context_ <= 0) throw std::invalid_argument("max_context must be positive");
     if (engine_options_.max_active_requests <= 0)
         throw std::invalid_argument("max_active_requests must be positive");
@@ -62,7 +65,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
     // Load the model topology so the physical paged KV arena and the packed
     // executor can size per-attention-layer storage from the resolved topology.
     shape_ = detail::load_model_bootstrap(
-        std::filesystem::path(model_path_)).model.topology;
+        std::filesystem::path(model_path_), *runtime_).model.topology;
     paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
         total_pages, engine_options_.page_tokens, max_context_,
         model_options_.kv_cache_mode, shape_);
@@ -78,10 +81,15 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
     metrics_.logical_pages_total = total_pages;
     metrics_.physical_kv_bytes = paged_kv_->memory_bytes();
     if (engine_options_.packed_decode) {
+        packed_decode_output_.resize(active);
+        CudaModelOptions packed_options = model_options_;
+        packed_options.allocate_local_kv_cache = false;
         packed_executor_ = std::make_unique<PackedDecodeExecutor>(
             static_cast<size_t>(engine_options_.max_active_requests),
             static_cast<size_t>(engine_options_.max_batched_tokens),
-            paged_kv_.get(), shape_);
+            paged_kv_.get(), shape_,
+            CudaExecutionPlan::compile(
+                packed_options, max_context_, discover_cuda_device_capabilities()));
     }
     if (engine_options_.worker_thread) start();
 }

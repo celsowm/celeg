@@ -108,11 +108,17 @@ void validate_chat_request(const ChatCompletionRequest& request,
             throw std::invalid_argument("image content is not supported by this model");
         }
         const ChatRole role = role_from_string(message.role);
-        if (role == ChatRole::Developer && !capabilities.developer_messages) {
-            throw std::invalid_argument("developer messages are not supported by this chat profile");
+        const bool role_supported =
+            (role == ChatRole::System && capabilities.roles.system) ||
+            (role == ChatRole::Developer && capabilities.roles.developer) ||
+            (role == ChatRole::User && capabilities.roles.user) ||
+            (role == ChatRole::Assistant && capabilities.roles.assistant) ||
+            (role == ChatRole::Tool && capabilities.roles.tool);
+        if (!role_supported) {
+            throw std::invalid_argument("chat role is not supported by this chat profile: " +
+                                        message.role);
         }
         if (role == ChatRole::Tool) {
-            if (!capabilities.tool_messages) throw std::invalid_argument("tool messages are not supported by this chat profile");
             if (!message.tool_call_id || message.tool_call_id->empty()) throw std::invalid_argument("tool messages require tool_call_id");
             if (!message.content) throw std::invalid_argument("tool messages require content");
         }

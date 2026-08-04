@@ -22,8 +22,6 @@ struct CompiledLayerProgram {
 
 struct CompiledModelProgram {
     std::string identity;
-    std::string architecture_id;
-    std::string source_format;
     std::size_t weight_request_count = 0;
     std::vector<CompiledLayerProgram> layers;
     std::vector<std::size_t> unlayered_weight_request_indices;

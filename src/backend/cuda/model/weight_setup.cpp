@@ -32,11 +32,9 @@ std::string layer_name(int index, const std::string& suffix) {
     return "model.layers." + std::to_string(index) + "." + suffix;
 }
 
-std::string tensor_name(const ITensorNamingPolicy& policy, TensorRole role,
+std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role,
                         int layer = -1) {
-    const auto names = policy.candidates({role, layer, -1, {}});
-    if (names.empty()) throw std::logic_error("tensor naming policy returned no candidates");
-    return names.front();
+    return resolved_tensor_name(requests, role, layer);
 }
 } // namespace
 
@@ -59,22 +57,22 @@ void CudaCompiledModel::load_checkpoint_weights(
     resources_.weights_->repo = bootstrap.checkpoint.repository;
     const IWeightRepository& repo = *resources_.weights_->repo;
     resources_.embedding_ = resources_.weight_loader_->load_linear_weight(
-        repo, tensor_name(*resources_.tensor_naming_, TensorRole::TokenEmbedding),
+        repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::TokenEmbedding),
         {resources_.shape_.vocab_size, resources_.shape_.hidden});
     resources_.final_norm_ = resources_.weight_loader_->load_weight(
-        repo, tensor_name(*resources_.tensor_naming_, TensorRole::FinalNorm),
+        repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FinalNorm),
         {resources_.shape_.hidden});
     if (resources_.shape_.has_per_layer_input) {
         const int ple = resources_.shape_.per_layer_input_size;
         resources_.per_layer_embedding_ = resources_.weight_loader_->load_linear_weight(
-            repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerEmbedding),
+            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerEmbedding),
             {resources_.shape_.vocab_size,
              resources_.shape_.num_hidden_layers * ple});
         resources_.per_layer_context_projection_ = resources_.weight_loader_->load_linear_weight(
-            repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerContextProjection),
+            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerContextProjection),
             {resources_.shape_.num_hidden_layers * ple, resources_.shape_.hidden});
         resources_.per_layer_projection_norm_ = resources_.weight_loader_->load_weight(
-            repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerProjectionNorm),
+            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerProjectionNorm),
             {ple});
     }
     {
@@ -99,7 +97,7 @@ void CudaCompiledModel::load_checkpoint_weights(
     // tie_word_embeddings unset; in that case the head is effectively tied to
     // the embedding table, so we fall back to it instead of erroring.
     const std::string lm_head_name =
-        tensor_name(*resources_.tensor_naming_, TensorRole::LanguageModelHead);
+        tensor_name(resources_.model_.weight_plan.requests, TensorRole::LanguageModelHead);
     if (!resources_.model_.capabilities.tied_embeddings && repo.contains(lm_head_name)) {
         resources_.lm_head_ = resources_.weight_loader_->load_linear_weight(
             repo, lm_head_name, {resources_.shape_.vocab_size, resources_.shape_.hidden});
@@ -210,31 +208,31 @@ void CudaCompiledModel::load_checkpoint_weights(
     for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
         common_layer.operator_norm = resources_.weight_loader_->load_weight(
-            repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionInputNorm, i),
+            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
             {resources_.shape_.hidden});
         common_layer.ffn_norm = resources_.weight_loader_->load_weight(
-            repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnInputNorm, i),
+            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnInputNorm, i),
             {resources_.shape_.hidden});
         if (resources_.shape_.has_split_attention_norms) {
             common_layer.post_attention_norm = resources_.weight_loader_->load_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionPostNorm, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionPostNorm, i),
                 {resources_.shape_.hidden});
             common_layer.post_feed_forward_norm = resources_.weight_loader_->load_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnOutputNorm, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnOutputNorm, i),
                 {resources_.shape_.hidden});
         }
         if (resources_.shape_.has_per_layer_input) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerInputGate, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerInputGate, i),
                 {resources_.shape_.per_layer_input_size, resources_.shape_.hidden});
             common_layer.per_layer_projection = resources_.weight_loader_->load_linear_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerProjection, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerProjection, i),
                 {resources_.shape_.hidden, resources_.shape_.per_layer_input_size});
             common_layer.per_layer_input_norm = resources_.weight_loader_->load_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::PerLayerInputNorm, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerInputNorm, i),
                 {resources_.shape_.hidden});
             common_layer.layer_scalar = resources_.weight_loader_->load_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::LayerScalar, i), {1});
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
         if (resources_.shape_.layer_uses_moe(i)) {
             // Mixture-of-experts feed-forward for this layer.
@@ -371,13 +369,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             const LinearWeight* w13 = resources_.weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "feed_forward.w13.weight"),
                 {
-                    {tensor_name(*resources_.tensor_naming_, TensorRole::FfnGate, i),
+                    {tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnGate, i),
                      {intermediate, resources_.shape_.hidden}},
-                    {tensor_name(*resources_.tensor_naming_, TensorRole::FfnUp, i),
+                    {tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
                      {intermediate, resources_.shape_.hidden}},
                 });
             const LinearWeight* w2 = resources_.weight_loader_->load_linear_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::FfnDown, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnDown, i),
                 {resources_.shape_.hidden, intermediate});
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
@@ -390,14 +388,14 @@ void CudaCompiledModel::load_checkpoint_weights(
             attention_layer.layout = resources_.shape_.attention_layout(i);
             const AttentionSpec& layout = attention_layer.layout;
             attention_layer.query = resources_.weight_loader_->load_linear_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionQuery, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionQuery, i),
                 {layout.query_width(), resources_.shape_.hidden});
             if (!layout.kv_sharing.shared() || layout.kv_sharing.publishes) {
                 attention_layer.key = resources_.weight_loader_->load_linear_weight(
-                    repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionKey, i),
+                    repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKey, i),
                     {layout.key_value_width(), resources_.shape_.hidden});
                 attention_layer.value = resources_.weight_loader_->load_linear_weight(
-                    repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionValue, i),
+                    repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionValue, i),
                     {layout.key_value_width(), resources_.shape_.hidden});
             } else {
                 if (layout.kv_sharing.group < 0 ||
@@ -409,15 +407,15 @@ void CudaCompiledModel::load_checkpoint_weights(
                     shared_owner[static_cast<size_t>(layout.kv_sharing.group)];
             }
             attention_layer.out = resources_.weight_loader_->load_linear_weight(
-                repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionOutput, i),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionOutput, i),
                 {resources_.shape_.hidden, layout.query_width()});
             if (layout.query_key_norm) {
                 attention_layer.q_norm = resources_.weight_loader_->load_weight(
-                    repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionQueryNorm, i),
+                    repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionQueryNorm, i),
                     {layout.head_dim});
                 if (attention_layer.key) {
                     attention_layer.k_norm = resources_.weight_loader_->load_weight(
-                        repo, tensor_name(*resources_.tensor_naming_, TensorRole::AttentionKeyNorm, i),
+                    repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKeyNorm, i),
                         {layout.head_dim});
                 }
             }

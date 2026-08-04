@@ -6,11 +6,63 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <atomic>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace celeg {
+
+struct CudaAllocationSnapshot {
+    size_t device_allocations = 0;
+    size_t device_bytes = 0;
+    size_t host_allocations = 0;
+    size_t host_bytes = 0;
+};
+
+namespace detail {
+inline std::atomic<size_t> cuda_device_allocations{0};
+inline std::atomic<size_t> cuda_device_bytes{0};
+inline std::atomic<size_t> cuda_host_allocations{0};
+inline std::atomic<size_t> cuda_host_bytes{0};
+}
+
+inline CudaAllocationSnapshot cuda_allocation_snapshot() {
+    return {
+        detail::cuda_device_allocations.load(std::memory_order_relaxed),
+        detail::cuda_device_bytes.load(std::memory_order_relaxed),
+        detail::cuda_host_allocations.load(std::memory_order_relaxed),
+        detail::cuda_host_bytes.load(std::memory_order_relaxed),
+    };
+}
+
+class CudaAllocationScope {
+public:
+    CudaAllocationScope() : begin_(cuda_allocation_snapshot()) {}
+
+    CudaAllocationSnapshot delta() const {
+        const CudaAllocationSnapshot end = cuda_allocation_snapshot();
+        return {
+            end.device_allocations - begin_.device_allocations,
+            end.device_bytes - begin_.device_bytes,
+            end.host_allocations - begin_.host_allocations,
+            end.host_bytes - begin_.host_bytes,
+        };
+    }
+
+private:
+    CudaAllocationSnapshot begin_;
+};
+
+inline void record_cuda_device_allocation(size_t bytes) {
+    detail::cuda_device_allocations.fetch_add(1, std::memory_order_relaxed);
+    detail::cuda_device_bytes.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+inline void record_cuda_host_allocation(size_t bytes) {
+    detail::cuda_host_allocations.fetch_add(1, std::memory_order_relaxed);
+    detail::cuda_host_bytes.fetch_add(bytes, std::memory_order_relaxed);
+}
 
 inline void check_cuda(cudaError_t status, const char* call) {
     if (status != cudaSuccess) {
@@ -194,7 +246,10 @@ public:
         if (ptr_) CELEG_CUDA(cudaFree(ptr_));
         ptr_ = nullptr;
         count_ = count;
-        if (count_) CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+        if (count_) {
+            CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            record_cuda_device_allocation(count_ * sizeof(T));
+        }
     }
 
     void reserve(size_t count) {
@@ -202,7 +257,10 @@ public:
         if (ptr_) CELEG_CUDA(cudaFree(ptr_));
         ptr_ = nullptr;
         count_ = count;
-        if (count_) CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+        if (count_) {
+            CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            record_cuda_device_allocation(count_ * sizeof(T));
+        }
     }
 
     void zero_async(cudaStream_t stream) {
@@ -247,7 +305,10 @@ public:
         if (ptr_) CELEG_CUDA(cudaFreeHost(ptr_));
         ptr_ = nullptr;
         count_ = count;
-        if (count_) CELEG_CUDA(cudaMallocHost(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+        if (count_) {
+            CELEG_CUDA(cudaMallocHost(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            record_cuda_host_allocation(count_ * sizeof(T));
+        }
     }
 
     void reserve(size_t count) {
@@ -255,7 +316,10 @@ public:
         if (ptr_) CELEG_CUDA(cudaFreeHost(ptr_));
         ptr_ = nullptr;
         count_ = count;
-        if (count_) CELEG_CUDA(cudaMallocHost(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+        if (count_) {
+            CELEG_CUDA(cudaMallocHost(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            record_cuda_host_allocation(count_ * sizeof(T));
+        }
     }
 
     T* data() { return ptr_; }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "celeg/checkpoint/metadata.hpp"
 #include "celeg/model/graph.hpp"
 #include "celeg/model/profiles.hpp"
 
@@ -95,15 +94,12 @@ struct RuntimeTopology {
 };
 
 struct ResolvedModel {
-    ModelDefinition definition;
     ModelGraph graph;
     RuntimeTopology topology;
     WeightPlan weight_plan;
     ModelCapabilities capabilities;
-    // Non-owning: the architecture catalog owns the immutable policy for the
-    // lifetime of model resolution and compiled model instances.
-    const ITensorNamingPolicy* tensor_naming = nullptr;
     std::string architecture_id;
+    std::string source_format;
     CheckpointProfile profile;
     std::string checkpoint_profile_id;
     std::string chat_profile_id;

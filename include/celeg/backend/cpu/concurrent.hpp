@@ -74,7 +74,8 @@ public:
     CpuConcurrentEngine(const std::string& model_path,
                         int max_context,
                         CpuModelOptions model_options = {},
-                        CpuConcurrentEngineOptions engine_options = {});
+                        CpuConcurrentEngineOptions engine_options = {},
+                        std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~CpuConcurrentEngine();
 
     CpuConcurrentEngine(const CpuConcurrentEngine&) = delete;

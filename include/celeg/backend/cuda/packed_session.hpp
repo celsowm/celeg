@@ -27,6 +27,13 @@ struct PackedSessionContext {
                                        cudaStream_t, const float*);
 
     void* owner = nullptr;
+    // Monotonic generation for the session-owned cache/state allocations.
+    // Pointer identity alone is insufficient because a reset may replace a
+    // buffer while retaining the same model owner.
+    uint64_t storage_generation_value = 0;
+    uint64_t execution_plan_fingerprint = 0;
+    uint64_t compiled_program_id = 0;
+    int device_ordinal = -1;
     SessionPhase* phase_state = nullptr;
     int* position_state = nullptr;
     int max_context_value = 0;

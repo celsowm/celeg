@@ -28,14 +28,21 @@ std::unique_ptr<IChatToolCallCodec> make_gemma4_tool_call_codec();
 std::unique_ptr<IChatToolCallCodec> make_minicpm5_tool_call_codec();
 std::unique_ptr<IChatToolCallCodec> make_smollm3_tool_call_codec();
 
+struct ChatRoleCapabilities {
+    bool system = true;
+    bool developer = false;
+    bool user = true;
+    bool assistant = true;
+    bool tool = false;
+};
+
 struct ChatCapabilities {
     bool vision = false;
-    bool developer_messages = false;
-    bool tool_messages = false;
     bool assistant_tool_calls = false;
     bool parallel_tool_calls = false;
     bool native_tool_call_codec = false;
-    const IChatToolCallCodec* tool_call_codec = nullptr;
+    std::shared_ptr<const IChatToolCallCodec> tool_call_codec;
+    ChatRoleCapabilities roles;
 };
 
 struct ChatProfile {

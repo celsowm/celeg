@@ -11,10 +11,27 @@ int main() try {
     using celeg::CudaModelOptions;
     using celeg::WeightMode;
 
+    const uint64_t before_compile = CudaExecutionPlan::compile_count();
     CudaModelOptions bf16;
     auto plan = CudaExecutionPlan::compile(bf16, 4096);
+    CELEG_TEST_CHECK(CudaExecutionPlan::compile_count() == before_compile + 1);
     CELEG_TEST_CHECK(plan.linear_kernel() == LinearKernelKind::Bf16Cublas);
     CELEG_TEST_CHECK(!plan.segmented_attention(4096));
+    CELEG_TEST_CHECK(plan.fingerprint() != 0);
+    celeg::CudaDeviceCapabilities device;
+    device.device_ordinal = 2;
+    device.compute_major = 8;
+    device.compute_minor = 6;
+    device.mmq_tensor_core_supported = true;
+    device.mmq_tensor_core_enabled = true;
+    auto device_plan = CudaExecutionPlan::compile(bf16, 4096, device);
+    CELEG_TEST_CHECK(device_plan.device().device_ordinal == 2);
+    CELEG_TEST_CHECK(device_plan.mmq_tensor_cores_enabled());
+    CELEG_TEST_CHECK(device_plan.fingerprint() != plan.fingerprint());
+    device.mmq_tensor_core_supported = false;
+    device.mmq_tensor_core_enabled = true;
+    const auto rejected_mmq_plan = CudaExecutionPlan::compile(bf16, 4096, device);
+    CELEG_TEST_CHECK(!rejected_mmq_plan.mmq_tensor_cores_enabled());
 
     CudaModelOptions int4;
     int4.weight_mode = WeightMode::Int4;

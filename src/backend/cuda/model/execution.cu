@@ -73,7 +73,9 @@ void CudaCompiledModel::enqueue_decode_forward() {
             __nv_bfloat16* k = q + layout.query_width();
             __nv_bfloat16* v = k + layout.key_value_width();
             decode_phase_profile().begin(stream_.get());
-            begin_native_fanout(workspace_.normed_.data(), 1, resources_.shape_.hidden);
+            {
+            auto native_fanout = native_fanout_scope(
+                workspace_.normed_.data(), 1, resources_.shape_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q,
                    1, layout.query_width(), resources_.shape_.hidden);
             if (attention->key && attention->value) {
@@ -82,7 +84,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
                 linear(workspace_.normed_.data(), *attention->value, v,
                        1, layout.key_value_width(), resources_.shape_.hidden);
             }
-            end_native_fanout();
+            }
             decode_phase_profile().end(DecodePhase::Projection, stream_.get());
             decode_phase_profile().begin(stream_.get());
             if (layout.positional_encoding == PositionalEncodingKind::Rope) {
@@ -415,6 +417,7 @@ void CudaCompiledModel::release_local_kv_cache() {
         attention->value_cache_scales.reset(0);
     }
     local_kv_cache_available_ = false;
+    ++storage_generation_;
     decode_graphs_.reset();
 }
 

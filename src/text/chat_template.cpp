@@ -482,8 +482,22 @@ void ChatProfileCatalog::add(std::string profile_id,
     if (profile_id.empty() || !chat_template) {
         throw std::invalid_argument("chat profile requires an id and template");
     }
-    Entry entry{std::move(chat_template), std::move(tool_call_codec), capabilities};
-    entry.capabilities.tool_call_codec = entry.tool_call_codec.get();
+    if (capabilities.native_tool_call_codec && !tool_call_codec) {
+        throw std::invalid_argument(
+            "chat profile declares a native tool codec but provides none");
+    }
+    if (capabilities.parallel_tool_calls &&
+        (!tool_call_codec || !tool_call_codec->supports_parallel_calls())) {
+        throw std::invalid_argument(
+            "chat profile declares parallel tool calls without codec support");
+    }
+    if (tool_call_codec && !capabilities.native_tool_call_codec) {
+        throw std::invalid_argument(
+            "chat profile provides a tool codec without enabling its capability");
+    }
+    std::shared_ptr<const IChatToolCallCodec> shared_codec(std::move(tool_call_codec));
+    Entry entry{std::move(chat_template), std::move(shared_codec), capabilities};
+    entry.capabilities.tool_call_codec = entry.tool_call_codec;
     if (!entries_.emplace(std::move(profile_id), std::move(entry)).second) {
         throw std::invalid_argument("duplicate chat profile");
     }
@@ -509,23 +523,64 @@ ChatCapabilities ChatProfileCatalog::capabilities(std::string_view profile_id) c
 
 ChatProfileCatalog make_chat_profile_catalog() {
     ChatProfileCatalog catalog;
-    catalog.add("lfm2-instruct", std::make_unique<Lfm2InstructChatTemplate>(),
-                make_lfm2_tool_call_codec(),
-                ChatCapabilities{false, true, true, true, true, true});
-    catalog.add("granite-instruct", std::make_unique<GraniteInstructChatTemplate>(),
-                nullptr,
-                ChatCapabilities{false, false, false, false, false, false});
-    catalog.add("gemma4-instruct", std::make_unique<Gemma4InstructChatTemplate>(),
-                make_gemma4_tool_call_codec(),
-                ChatCapabilities{true, true, true, true, true, true});
-    catalog.add("minicpm5-instruct", std::make_unique<MiniCpm5InstructChatTemplate>(),
-                make_minicpm5_tool_call_codec(),
-                ChatCapabilities{false, true, true, true, true, true});
-    catalog.add("smollm3-instruct", std::make_unique<SmolLm3InstructChatTemplate>(),
-                make_smollm3_tool_call_codec(),
-                ChatCapabilities{false, true, true, true, true, true});
+    add_builtin_chat_profiles(catalog);
     catalog.freeze();
     return catalog;
+}
+
+void add_builtin_chat_profiles(ChatProfileCatalog& catalog) {
+    const auto tool_roles = [] {
+        ChatRoleCapabilities roles;
+        roles.developer = true;
+        roles.tool = true;
+        return roles;
+    };
+    const auto basic_roles = [] {
+        return ChatRoleCapabilities{};
+    };
+
+    ChatCapabilities lfm2_capabilities;
+    lfm2_capabilities.assistant_tool_calls = true;
+    lfm2_capabilities.parallel_tool_calls = true;
+    lfm2_capabilities.native_tool_call_codec = true;
+    lfm2_capabilities.roles = tool_roles();
+    catalog.add("lfm2-instruct", std::make_unique<Lfm2InstructChatTemplate>(),
+                make_lfm2_tool_call_codec(),
+                lfm2_capabilities);
+
+    ChatCapabilities granite_capabilities;
+    granite_capabilities.roles = basic_roles();
+    catalog.add("granite-instruct", std::make_unique<GraniteInstructChatTemplate>(),
+                nullptr,
+                granite_capabilities);
+
+    ChatCapabilities gemma_capabilities;
+    gemma_capabilities.vision = true;
+    gemma_capabilities.assistant_tool_calls = true;
+    gemma_capabilities.parallel_tool_calls = true;
+    gemma_capabilities.native_tool_call_codec = true;
+    gemma_capabilities.roles = tool_roles();
+    catalog.add("gemma4-instruct", std::make_unique<Gemma4InstructChatTemplate>(),
+                make_gemma4_tool_call_codec(),
+                gemma_capabilities);
+
+    ChatCapabilities minicpm5_capabilities;
+    minicpm5_capabilities.assistant_tool_calls = true;
+    minicpm5_capabilities.parallel_tool_calls = true;
+    minicpm5_capabilities.native_tool_call_codec = true;
+    minicpm5_capabilities.roles = tool_roles();
+    catalog.add("minicpm5-instruct", std::make_unique<MiniCpm5InstructChatTemplate>(),
+                make_minicpm5_tool_call_codec(),
+                minicpm5_capabilities);
+
+    ChatCapabilities smollm3_capabilities;
+    smollm3_capabilities.assistant_tool_calls = true;
+    smollm3_capabilities.parallel_tool_calls = true;
+    smollm3_capabilities.native_tool_call_codec = true;
+    smollm3_capabilities.roles = tool_roles();
+    catalog.add("smollm3-instruct", std::make_unique<SmolLm3InstructChatTemplate>(),
+                make_smollm3_tool_call_codec(),
+                smollm3_capabilities);
 }
 
 } // namespace celeg

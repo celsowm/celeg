@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -82,5 +83,9 @@ private:
     const IWeightRepository& repository_;
     const ITensorNamingPolicy& naming_policy_;
 };
+
+std::string resolved_tensor_name(std::span<const TensorRequest> requests,
+                                 TensorRole role, int layer = -1,
+                                 int expert = -1);
 
 } // namespace celeg

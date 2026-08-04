@@ -6,6 +6,7 @@
 namespace celeg {
 
 void CudaCompiledModel::reset(bool allocate_local_kv) {
+    ++storage_generation_;
     allocate_local_kv = allocate_local_kv && resources_.options_.allocate_local_kv_cache;
     if (allocate_local_kv && !local_kv_cache_available_) {
         for (Layer& layer : resources_.layers_) {

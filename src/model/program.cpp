@@ -12,8 +12,6 @@ bool CompiledModelProgram::has_moe() const {
 }
 
 void CompiledModelProgram::validate() const {
-    if (architecture_id.empty()) throw std::invalid_argument("compiled program has no architecture");
-    if (source_format.empty()) throw std::invalid_argument("compiled program has no checkpoint format");
     for (const auto& layer : layers) {
         if (layer.weight_request_indices.empty()) {
             throw std::invalid_argument("compiled layer has no weight plan");
@@ -30,8 +28,6 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     if (model.graph.layers.empty()) throw std::invalid_argument("model has no layers");
     CompiledModelProgram program;
     program.identity = model.identity;
-    program.architecture_id = model.architecture_id;
-    program.source_format = model.definition.source_format;
     program.layers.reserve(model.graph.layers.size());
 
     program.weight_request_count = model.weight_plan.requests.size();
