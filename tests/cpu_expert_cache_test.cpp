@@ -1,15 +1,19 @@
 #include "detail/expert_cache.hpp"
 
 #include <atomic>
-#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace {
+
+void check(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(message);
+}
 
 celeg::CpuExpertWeights make_weights(std::size_t bytes) {
     celeg::Q4GroupMatrix w13;
@@ -45,15 +49,15 @@ void frequency_protects_hot_expert() {
 
     cache.acquire(0, 1, load);
     cache.acquire(0, 1, load);
-    assert(cache.protected_resident(0, 1));
+    check(cache.protected_resident(0, 1), "hot expert was not protected");
 
     cache.acquire(0, 2, load);
     cache.acquire(0, 3, load);
 
-    assert(cache.resident(0, 1));
-    assert(!cache.resident(0, 2));
-    assert(cache.resident(0, 3));
-    assert(loads == 3);
+    check(cache.resident(0, 1), "protected expert was evicted");
+    check(!cache.resident(0, 2), "cold probation expert survived eviction");
+    check(cache.resident(0, 3), "new expert was not admitted");
+    check(loads == 3, "unexpected expert loader count");
 }
 
 void concurrent_misses_coalesce() {
@@ -74,17 +78,24 @@ void concurrent_misses_coalesce() {
     }
     for (std::thread& thread : threads) thread.join();
 
-    assert(loads == 1);
-    assert(cache.misses() == 1);
-    assert(cache.coalesced_waits() == 3);
-    for (const auto& lease : leases) assert(lease);
+    check(loads == 1, "concurrent misses performed duplicate loads");
+    check(cache.misses() == 1, "true miss count is incorrect");
+    check(cache.coalesced_waits() == 3, "coalesced waiter count is incorrect");
+    for (const auto& lease : leases) {
+        check(static_cast<bool>(lease), "waiter received an empty expert lease");
+    }
 }
 
 } // namespace
 
 int main() {
-    frequency_protects_hot_expert();
-    concurrent_misses_coalesce();
-    std::cout << "cpu_expert_cache_test: ok\n";
-    return 0;
+    try {
+        frequency_protects_hot_expert();
+        concurrent_misses_coalesce();
+        std::cout << "cpu_expert_cache_test: ok\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "cpu_expert_cache_test: " << error.what() << '\n';
+        return 1;
+    }
 }
