@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 
 namespace celeg {
+
+void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared);
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -16,10 +19,6 @@ double milliseconds_since(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-// Prefill runs the row-wise elementwise passes (RMSNorm, SwiGLU, workspace_.residual add)
-// over a whole chunk. They are independent per row, so they go on the shared
-// pool instead of running single-threaded on the calling thread between the
-// parallel GEMMs.
 template <typename Body>
 void parallel_rows(CpuThreadPool& pool, size_t rows, const Body& body) {
     const size_t grain = std::max<size_t>(1, rows / std::max<size_t>(1, pool.size() * 4));
@@ -27,7 +26,7 @@ void parallel_rows(CpuThreadPool& pool, size_t rows, const Body& body) {
         for (size_t row = begin; row < end; ++row) body(row);
     });
 }
-}
+} // namespace
 
 void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                      const PromptEmbedding* embeddings) {
@@ -128,7 +127,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                           session_.position_value + 1);
             shared->linear.gemv(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
         } else {
-        const auto* convolution = convolution_operator(layer_program);
+            const auto* convolution = convolution_operator(layer_program);
             if (!convolution) throw std::logic_error("CPU layer has no operator");
             ConvolutionState& state = convolution_state(index);
             shared->linear.gemv(convolution->in, workspace_.normed.data(), workspace_.conv_projected.data());
@@ -150,7 +149,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
-            // MoE FFN: router -> top-K expert selection -> per-expert FFN GEMVs.
+            if (shared->options.expert_backing == CpuExpertBacking::DiskCached &&
+                !moe->disk_cached && !shared->native_checkpoint) {
+                configure_cpu_expert_backing(*shared);
+            }
+
             const int E = moe->num_experts;
             const int K = moe->experts_per_token;
             const int moe_inter = shared->shape.moe_intermediate > 0
@@ -164,11 +167,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             workspace_.moe_selected.resize(static_cast<size_t>(K));
             workspace_.moe_weights.resize(static_cast<size_t>(K));
 
-            // Router GEMV: workspace_.normed @ router^T -> workspace_.logits [E]
             shared->linear.gemv_raw(moe->router.data(), workspace_.normed.data(), workspace_.moe_router_logits.data(),
                                     E, shared->shape.hidden);
 
-            // Sigmoid + optional expert bias + top-K selection.
             for (int e = 0; e < E; ++e) {
                 workspace_.moe_router_probs[static_cast<size_t>(e)] =
                     moe_sigmoid(workspace_.moe_router_logits[static_cast<size_t>(e)]);
@@ -185,7 +186,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     return a.second < b.second;
                 });
 
-            // Gather selected experts and routing weights.
             float weight_sum = 0.0f;
             for (int k = 0; k < K; ++k) {
                 workspace_.moe_selected[static_cast<size_t>(k)] =
@@ -205,7 +205,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             if (profile_moe) session_.prefill_profile.moe_router_ms += milliseconds_since(started);
 
-            // Per-expert FFN GEMVs with routing-weighted accumulation.
             started = Clock::now();
             std::fill(workspace_.mlp_output.begin(), workspace_.mlp_output.end(), 0.0f);
             for (int k = 0; k < K; ++k) {
@@ -213,14 +212,21 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 const float rw = workspace_.moe_weights[static_cast<size_t>(k)];
                 if (expert < 0 || expert >= E) continue;
 
-                // workspace_.gate_up = expert_w13[expert] @ workspace_.normed  [2 * moe_inter]
-                shared->linear.gemv(moe->expert_w13[static_cast<size_t>(expert)],
-                                    workspace_.normed.data(), workspace_.gate_up.data());
-                // SwiGLU: workspace_.activated[i] = swiglu(workspace_.gate_up[i], workspace_.gate_up[moe_inter + i])
+                std::shared_ptr<const CpuExpertWeights> cached;
+                const CpuLinearWeight* w13 = nullptr;
+                const CpuLinearWeight* w2 = nullptr;
+                if (moe->disk_cached) {
+                    cached = shared->acquire_expert(moe->layer_index, expert);
+                    w13 = &cached->w13;
+                    w2 = &cached->w2;
+                } else {
+                    w13 = &moe->expert_w13[static_cast<size_t>(expert)];
+                    w2 = &moe->expert_w2[static_cast<size_t>(expert)];
+                }
+
+                shared->linear.gemv(*w13, workspace_.normed.data(), workspace_.gate_up.data());
                 cpu_swiglu(workspace_.gate_up.data(), workspace_.activated.data(), moe_inter);
-                // workspace_.mlp_output += rw * expert_w2[expert] @ workspace_.activated
-                shared->linear.gemv(moe->expert_w2[static_cast<size_t>(expert)],
-                                    workspace_.activated.data(), workspace_.op_output.data());
+                shared->linear.gemv(*w2, workspace_.activated.data(), workspace_.op_output.data());
                 for (int j = 0; j < shared->shape.hidden; ++j) {
                     workspace_.mlp_output[static_cast<size_t>(j)] += rw * workspace_.op_output[static_cast<size_t>(j)];
                 }
@@ -235,7 +241,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
             if (profile_moe) session_.prefill_profile.moe_expert_ms += milliseconds_since(started);
         } else {
-            // Dense FFN path.
             const int intermediate = shared->shape.feed_forward_intermediates.empty()
                 ? shared->shape.intermediate
                 : shared->shape.feed_forward_intermediates.at(index);
@@ -297,7 +302,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
 }
 
 void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
-                                   bool compute_logits) {
+                                     bool compute_logits) {
     if (tokens.empty()) return;
     if (session_.position_value < 0 ||
         tokens.size() > static_cast<size_t>(shared->max_context - session_.position_value)) {
@@ -306,7 +311,6 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     for (size_t row = 0; row < tokens.size(); ++row) {
         forward_token(tokens[row], compute_logits && row + 1 == tokens.size());
     }
-    return;
 }
 
 } // namespace celeg
