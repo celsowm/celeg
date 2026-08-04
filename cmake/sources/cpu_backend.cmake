@@ -7,6 +7,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/sampler.cpp
     src/backend/cpu/packed.cpp
     src/backend/cpu/concurrent.cpp
+    src/backend/cpu/concurrent_metrics.cpp
     src/backend/cpu/kernels/quantized_dot.cpp
     src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
     src/backend/cpu/kernels/gguf.cpp

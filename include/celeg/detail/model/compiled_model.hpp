@@ -161,6 +161,7 @@ struct CudaCompiledModel {
     void initialize_per_layer_input_device(const int32_t* token);
     void initialize_per_layer_input_host(int32_t token);
     void initialize_per_layer_input_batch(const int32_t* tokens, int rows);
+    void validate_per_layer_input() const;
     void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
 

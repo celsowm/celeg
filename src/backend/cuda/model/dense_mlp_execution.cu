@@ -1,0 +1,127 @@
+#include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/moe.hpp"
+
+namespace celeg {
+
+void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int layer) {
+    if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
+        (void)moe;
+        run_mlp_moe_decode(common_layer, layer);
+    } else {
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
+                       1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
+                       stream_.get());
+        const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
+            ? resources_.shape_.intermediate
+            : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer));
+        if (resources_.options_.fused_projections) {
+            linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.gate_up_.data(),
+                   1, 2 * intermediate, resources_.shape_.hidden);
+        } else {
+            const LinearWeight w1 =
+                slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, intermediate);
+            const LinearWeight w3 = slice_rows(
+                *as_dense_ffn(common_layer.feed_forward)->w13, intermediate, intermediate);
+            linear(workspace_.normed_.data(), w1, workspace_.gate_up_.data(),
+                   1, intermediate, resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + intermediate,
+                   1, intermediate, resources_.shape_.hidden);
+        }
+        const bool gelu_tanh = !resources_.shape_.feed_forward_activations.empty() &&
+            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh;
+        if (gelu_tanh) {
+            launch_gated_gelu_tanh(workspace_.gate_up_.data(), workspace_.activated_.data(),
+                                   intermediate, stream_.get());
+        } else {
+            launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
+                                intermediate, stream_.get());
+        }
+        const bool split_output = common_layer.post_feed_forward_norm != nullptr;
+        if (resources_.options_.fused_residuals && !split_output) {
+            linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.hidden_.data(),
+                   1, resources_.shape_.hidden, intermediate, 1.0f);
+        } else {
+            linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.mlp_output_.data(),
+                   1, resources_.shape_.hidden, intermediate);
+            if (split_output) {
+                launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
+                               workspace_.mlp_output_.data(), 1, resources_.shape_.hidden,
+                               resources_.shape_.numerical_policy.norm_eps, stream_.get());
+            }
+            launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.residual_multiplier,
+                         stream_.get());
+            launch_residual_add(workspace_.hidden_.data(), workspace_.mlp_output_.data(),
+                                resources_.shape_.hidden, stream_.get());
+        }
+    }
+    run_per_layer_input_decode(common_layer, layer);
+}
+
+void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int rows,
+                                     int layer) {
+    if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
+        (void)moe;
+        run_mlp_moe_prefill(common_layer, rows, layer);
+    } else {
+        const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
+            ? resources_.shape_.intermediate
+            : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer));
+        const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
+        launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
+                       workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
+                       resources_.shape_.numerical_policy.norm_eps, stream_.get());
+        if (resources_.options_.fused_projections) {
+        linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
+               rows, 2 * intermediate, resources_.shape_.hidden);
+        if (!resources_.shape_.feed_forward_activations.empty() &&
+            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh) {
+            launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(),
+                                   workspace_.prefill_activated_.data(),
+                                   static_cast<int>(matrix_elements), stream_.get());
+        } else {
+            launch_swiglu_interleaved(workspace_.prefill_gate_up_.data(),
+                                      workspace_.prefill_activated_.data(), rows,
+                                      intermediate, stream_.get());
+        }
+        } else {
+        const LinearWeight w1 =
+            slice_rows(*as_dense_ffn(common_layer.feed_forward)->w13, 0, intermediate);
+        const LinearWeight w3 = slice_rows(
+            *as_dense_ffn(common_layer.feed_forward)->w13, intermediate, intermediate);
+        linear(workspace_.prefill_normed_.data(), w1, workspace_.prefill_gate_up_.data(),
+               rows, intermediate, resources_.shape_.hidden);
+        linear(workspace_.prefill_normed_.data(), w3,
+               workspace_.prefill_gate_up_.data() + matrix_elements,
+               rows, intermediate, resources_.shape_.hidden);
+        if (!resources_.shape_.feed_forward_activations.empty() &&
+            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh) {
+            launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
+                                   static_cast<int>(matrix_elements), stream_.get());
+        } else {
+            launch_swiglu_fused(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
+                                static_cast<int>(matrix_elements), stream_.get());
+        }
+        }
+        const bool split_output = common_layer.post_feed_forward_norm != nullptr;
+        if (resources_.options_.fused_residuals && !split_output) {
+        linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_hidden_.data(),
+               rows, resources_.shape_.hidden, intermediate, 1.0f);
+        } else {
+        linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_mlp_output_.data(),
+                rows, resources_.shape_.hidden, intermediate);
+        if (split_output) {
+            launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
+                           workspace_.prefill_mlp_output_.data(), rows, resources_.shape_.hidden,
+                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
+        }
+        launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.shape_.hidden,
+                     resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
+        launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_mlp_output_.data(),
+                            rows * resources_.shape_.hidden, stream_.get());
+        }
+    }
+    run_per_layer_input_prefill(common_layer, rows, layer);
+}
+
+} // namespace celeg

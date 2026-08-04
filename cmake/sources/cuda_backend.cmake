@@ -17,6 +17,9 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/session_resources.cpp
     src/backend/cuda/model/lifecycle.cpp
     src/backend/cuda/model/residency.cu
+    src/backend/cuda/model/input_initialization.cu
+    src/backend/cuda/model/per_layer_execution.cu
+    src/backend/cuda/model/dense_mlp_execution.cu
     src/backend/cuda/model/execution.cu
     src/backend/cuda/model/sampler.cu
     src/backend/cuda/model/decode.cpp
@@ -26,6 +29,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/prefill_profile.cpp
     src/backend/cuda/model/weights.cpp
     src/backend/cuda/model/packed_execution.cu
+    src/backend/cuda/model/packed_validation.cu
     src/backend/cuda/model/packed_workspace.cu
     src/backend/cuda/model/packed_commit.cpp
     src/backend/cuda/model/packed_metadata.cu
