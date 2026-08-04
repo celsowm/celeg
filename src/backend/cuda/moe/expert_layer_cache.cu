@@ -98,6 +98,11 @@ void ExpertLayerCache::set_host_sources(
     }
     gate_up_host_dev_ = gate_up_host_dev;
     down_host_dev_ = down_host_dev;
+    requires_full_residency_ =
+        std::all_of(gate_up_host_dev_.begin(), gate_up_host_dev_.end(),
+                    [](const __nv_bfloat16* pointer) { return pointer == nullptr; }) &&
+        std::all_of(down_host_dev_.begin(), down_host_dev_.end(),
+                    [](const __nv_bfloat16* pointer) { return pointer == nullptr; });
     gate_up_ptrs_host_ = gate_up_host_dev_;
     down_ptrs_host_ = down_host_dev_;
     CELEG_CUDA(cudaMemcpy(gate_up_ptrs_dev_.data(), gate_up_host_dev_.data(),
@@ -157,6 +162,11 @@ int ExpertLayerCache::resolve_on_device(
     CELEG_CUDA(cudaStreamSynchronize(stream));
 
     if (cold_count == 0) return 0;
+    if (!reserve_probation_slots(cold_count) && requires_full_residency_) {
+        throw std::runtime_error(
+            "disk-backed MoE routed more unique cold experts than the GPU cache can hold; "
+            "increase --expert-cache-per-layer or reduce the prefill chunk");
+    }
 
     cold_host.resize(static_cast<size_t>(cold_count));
     CELEG_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
@@ -214,6 +224,25 @@ void ExpertLayerCache::mark_probation(int slot) {
         --protected_count_;
     }
     entry.observed_accesses = entry.expert >= 0 ? 1U : 0U;
+}
+
+int ExpertLayerCache::probation_entries() const {
+    int count = 0;
+    for (const Slot& entry : slots_) {
+        if (!entry.protected_entry) ++count;
+    }
+    return count;
+}
+
+bool ExpertLayerCache::reserve_probation_slots(int required) {
+    if (required <= 0) return true;
+    if (required > capacity_) return false;
+    while (probation_entries() < required) {
+        const int victim = choose_coldest_protected();
+        if (victim < 0) break;
+        mark_probation(victim);
+    }
+    return probation_entries() >= required;
 }
 
 double ExpertLayerCache::priority(int expert) const {
