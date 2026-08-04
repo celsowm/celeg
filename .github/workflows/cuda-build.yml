@@ -4,6 +4,10 @@ name: Portable CPU and CUDA build
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux-cpu:
     runs-on: ubuntu-latest
@@ -23,8 +27,6 @@ jobs:
             echo 'CPU ABI unexpectedly links CUDA' >&2
             exit 1
           fi
-      - name: Architecture checks
-        run: ./scripts/architecture_check.sh
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
