@@ -87,14 +87,16 @@ inference validation of that model must run on a larger GPU.
 
 ## Refactoring policy
 
-The staged multi-model refactor is governed by `docs/ARCHITECTURE_RULES.md`.
-The binding rules for every change landing after the Phase 0 baseline are in
-`docs/ARCHITECTURE_RULES.md` (no LFM types in generic runtime dirs, no CUDA types
-in backend-neutral model headers, no new `.inl` aggregation, no optional
-interface method that throws "not supported" by default, no architecture switch
-in backend operator code, no new quantized format without quality+perf tests).
-Any pull request touching the boundaries these rules protect must obey them or
-document an explicit, time-bounded exception.
+The current architecture guidance is documented in
+`docs/ARCHITECTURE_EVIDENCE.md`, `docs/EXTENDING_ARCHITECTURES.md`, and
+`docs/PACKED_EXECUTION.md`. The former `docs/ARCHITECTURE_RULES.md` contract
+was intentionally removed in commit `37bbee5`; its historical rules remain
+available in git history and are not restored as a stale binding document.
+Changes must preserve the current boundary rules: no LFM types in generic
+runtime directories, no CUDA types in backend-neutral model headers, no new
+`.inl` aggregation, no optional interface method that throws "not supported"
+by default, no architecture switch in backend operator code, and no new
+quantized format without quality and performance tests.
 
 ## Reference fixtures and benchmark configuration
 

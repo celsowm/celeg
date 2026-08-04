@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -114,7 +115,35 @@ int main() {
     generation.top_k = 1;
     {
         celeg::CudaModel model(directory.string(), 32, options, generation);
-        model.session().prefill({1, 3, 4});
+        bool rejected_negative = false;
+        try {
+            model.session().prefill({-1});
+        } catch (const std::invalid_argument&) {
+            rejected_negative = true;
+        }
+        CELEG_TEST_CHECK(rejected_negative);
+        bool rejected_oversized = false;
+        try {
+            model.session().prefill({32});
+        } catch (const std::invalid_argument&) {
+            rejected_oversized = true;
+        }
+        CELEG_TEST_CHECK(rejected_oversized);
+        bool rejected_prompt_negative = false;
+        try {
+            model.session().prefill({-1}, celeg::PromptEmbedding{});
+        } catch (const std::invalid_argument&) {
+            rejected_prompt_negative = true;
+        }
+        CELEG_TEST_CHECK(rejected_prompt_negative);
+        bool rejected_chunk_oversized = false;
+        try {
+            model.session().prefill_chunk({32}, true, false);
+        } catch (const std::invalid_argument&) {
+            rejected_chunk_oversized = true;
+        }
+        CELEG_TEST_CHECK(rejected_chunk_oversized);
+        model.session().prefill({1, 3, 31});
         CELEG_TEST_CHECK(model.session().ready_for_decode());
         CELEG_TEST_CHECK(model.diagnostics().copy_logits().size() == 32);
         (void)model.session().decode();

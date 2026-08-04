@@ -49,31 +49,29 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     if (!raw_embedding && shared->shape.numerical_policy.embedding_multiplier != 1.0f) {
         for (float& value : workspace_.hidden) value *= shared->shape.numerical_policy.embedding_multiplier;
     }
-    if (shared->shape.has_per_layer_input) {
-        const size_t packed = static_cast<size_t>(shared->shape.num_hidden_layers) *
-            static_cast<size_t>(shared->shape.per_layer_input_size);
+    if (shared->program.per_layer_input.enabled) {
+        const PerLayerInputPlan& plan = shared->program.per_layer_input;
+        const size_t packed = plan.packed_width;
         workspace_.per_layer_input.resize(packed);
         workspace_.per_layer_context.resize(packed);
-        workspace_.per_layer_gate.resize(static_cast<size_t>(shared->shape.per_layer_input_size));
+        workspace_.per_layer_gate.resize(static_cast<size_t>(plan.input_size));
         shared->linear.embedding(shared->weight_store.per_layer_embedding,
-                                 raw_embedding ? 0 : token,
+                                 raw_embedding ? shared->shape.token_policy.pad_token_id : token,
                                  workspace_.per_layer_input.data());
-        const float token_scale = std::sqrt(static_cast<float>(shared->shape.per_layer_input_size));
-        for (float& value : workspace_.per_layer_input) value *= token_scale;
+        for (float& value : workspace_.per_layer_input) value *= plan.token_scale;
         shared->linear.gemv(shared->weight_store.per_layer_context_projection,
                             workspace_.hidden.data(), workspace_.per_layer_context.data());
-        const float context_scale = 1.0f / std::sqrt(static_cast<float>(shared->shape.hidden));
-        for (float& value : workspace_.per_layer_context) value *= context_scale;
-        for (int layer = 0; layer < shared->shape.num_hidden_layers; ++layer) {
+        for (float& value : workspace_.per_layer_context) value *= plan.context_scale;
+        for (int layer = 0; layer < plan.layer_count; ++layer) {
             float* context = workspace_.per_layer_context.data() +
-                static_cast<size_t>(layer) * shared->shape.per_layer_input_size;
+                static_cast<size_t>(layer) * static_cast<size_t>(plan.input_size);
             cpu_rmsnorm_inplace(context,
                 shared->weight_store.per_layer_projection_norm.data(),
-                shared->shape.per_layer_input_size, shared->shape.numerical_policy.norm_eps);
+                plan.input_size, plan.norm_epsilon);
             float* token_values = workspace_.per_layer_input.data() +
-                static_cast<size_t>(layer) * shared->shape.per_layer_input_size;
-            for (int d = 0; d < shared->shape.per_layer_input_size; ++d) {
-                context[d] = (context[d] + token_values[d]) * 0.7071067811865475f;
+                static_cast<size_t>(layer) * static_cast<size_t>(plan.input_size);
+            for (int d = 0; d < plan.input_size; ++d) {
+                context[d] = (context[d] + token_values[d]) * plan.residual_scale;
             }
         }
     }
@@ -258,15 +256,16 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
         }
-        if (shared->shape.has_per_layer_input) {
+        if (shared->program.per_layer_input.enabled) {
+            const PerLayerInputPlan& plan = shared->program.per_layer_input;
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
             shared->linear.gemv(common.per_layer_input_gate, workspace_.hidden.data(),
                                 workspace_.per_layer_gate.data());
             cpu_gelu_tanh(workspace_.per_layer_gate.data(),
-                          static_cast<size_t>(shared->shape.per_layer_input_size));
+                          static_cast<size_t>(plan.input_size));
             const float* layer_input = workspace_.per_layer_context.data() +
-                index * static_cast<size_t>(shared->shape.per_layer_input_size);
-            for (int d = 0; d < shared->shape.per_layer_input_size; ++d) {
+                index * static_cast<size_t>(plan.input_size);
+            for (int d = 0; d < plan.input_size; ++d) {
                 workspace_.per_layer_gate[static_cast<size_t>(d)] *= layer_input[d];
             }
             shared->linear.gemv(common.per_layer_projection, workspace_.per_layer_gate.data(),

@@ -24,7 +24,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         CELEG_CUDA(cudaMemcpyAsync(workspace_.hidden_.data(), converted.data(),
                                    converted.size() * sizeof(__nv_bfloat16),
                                    cudaMemcpyHostToDevice, stream_.get()));
-        initialize_per_layer_input_host(0);
+        initialize_per_layer_input_host(resources_.shape_.token_policy.pad_token_id);
     } else {
         resources_.weight_layout_->embed_token(
             token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());

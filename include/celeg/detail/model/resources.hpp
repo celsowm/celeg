@@ -8,11 +8,29 @@
 #include "celeg/model/weights/roles.hpp"
 
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace celeg {
+
+struct CudaPerLayerInputResources {
+    PerLayerInputPlan plan;
+    const LinearWeight* embedding = nullptr;
+    const LinearWeight* context_projection = nullptr;
+    const __nv_bfloat16* projection_norm = nullptr;
+    std::unique_ptr<IWeightLayout> embedding_layout;
+
+    void validate() const {
+        plan.validate();
+        if (plan.enabled && (!embedding || !context_projection || !projection_norm ||
+                             !embedding_layout)) {
+            throw std::invalid_argument("incomplete CUDA per-layer input resources");
+        }
+    }
+};
 
 // CUDA model resource owner for immutable/shared topology decisions. Device
 // weights and backend caches are attached by setup, while request-local
@@ -31,9 +49,7 @@ struct CudaModelResources {
     std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;
     const LinearWeight* embedding_ = nullptr;
-    const LinearWeight* per_layer_embedding_ = nullptr;
-    const LinearWeight* per_layer_context_projection_ = nullptr;
-    const __nv_bfloat16* per_layer_projection_norm_ = nullptr;
+    std::optional<CudaPerLayerInputResources> per_layer_input_;
     const LinearWeight* lm_head_ = nullptr;
     const __nv_bfloat16* final_norm_ = nullptr;
     std::unique_ptr<IWeightLayout> weight_layout_;

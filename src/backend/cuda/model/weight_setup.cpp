@@ -36,6 +36,28 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
                         int layer = -1) {
     return resolved_tensor_name(requests, role, layer);
 }
+
+std::unique_ptr<IWeightLayout> make_embedding_layout(
+    WeightMode mode, const LinearWeight& weight, const char* label) {
+    if (weight.gguf_quantized()) {
+        if (weight.gguf_segments.size() != 1) {
+            throw std::runtime_error(std::string(label) +
+                                     " must use one native GGUF segment");
+        }
+        return make_gguf_weight_layout(weight.gguf_segments.front());
+    }
+    switch (mode) {
+        case WeightMode::Int8:
+            if (!weight.int8) throw std::runtime_error(std::string(label) + " has no INT8 storage");
+            return make_weight_layout(mode, weight.int8, weight.scales);
+        case WeightMode::Int4:
+            if (!weight.int4) throw std::runtime_error(std::string(label) + " has no INT4 storage");
+            return make_weight_layout(mode, weight.int4, weight.scales);
+        default:
+            if (!weight.bf16) throw std::runtime_error(std::string(label) + " has no BF16 storage");
+            return make_weight_layout(mode, weight.bf16, weight.scales);
+    }
+}
 } // namespace
 
 void CudaCompiledModel::load_checkpoint_weights(
@@ -62,36 +84,28 @@ void CudaCompiledModel::load_checkpoint_weights(
     resources_.final_norm_ = resources_.weight_loader_->load_weight(
         repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FinalNorm),
         {resources_.shape_.hidden});
-    if (resources_.shape_.has_per_layer_input) {
-        const int ple = resources_.shape_.per_layer_input_size;
-        resources_.per_layer_embedding_ = resources_.weight_loader_->load_linear_weight(
+    if (resources_.program_.per_layer_input.enabled) {
+        const int ple = resources_.program_.per_layer_input.input_size;
+        CudaPerLayerInputResources per_layer;
+        per_layer.plan = resources_.program_.per_layer_input;
+        per_layer.embedding = resources_.weight_loader_->load_linear_weight(
             repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerEmbedding),
             {resources_.shape_.vocab_size,
-             resources_.shape_.num_hidden_layers * ple});
-        resources_.per_layer_context_projection_ = resources_.weight_loader_->load_linear_weight(
+             static_cast<int>(per_layer.plan.packed_width)});
+        per_layer.context_projection = resources_.weight_loader_->load_linear_weight(
             repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerContextProjection),
-            {resources_.shape_.num_hidden_layers * ple, resources_.shape_.hidden});
-        resources_.per_layer_projection_norm_ = resources_.weight_loader_->load_weight(
+            {static_cast<int>(per_layer.plan.packed_width), resources_.shape_.hidden});
+        per_layer.projection_norm = resources_.weight_loader_->load_weight(
             repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerProjectionNorm),
             {ple});
+        per_layer.embedding_layout = make_embedding_layout(
+            resources_.options_.weight_mode, *per_layer.embedding,
+            "per-layer embedding");
+        per_layer.validate();
+        resources_.per_layer_input_ = std::move(per_layer);
     }
-    {
-        if (resources_.embedding_->gguf_quantized()) {
-            if (resources_.embedding_->gguf_segments.size() != 1) {
-                throw std::runtime_error("GGUF embedding must use one native segment");
-            }
-            resources_.weight_layout_ = make_gguf_weight_layout(resources_.embedding_->gguf_segments.front());
-        } else if (resources_.options_.weight_mode == WeightMode::Int8) {
-            resources_.weight_layout_ = make_weight_layout(
-                resources_.options_.weight_mode, resources_.embedding_->int8, resources_.embedding_->scales);
-        } else if (resources_.options_.weight_mode == WeightMode::Int4) {
-            resources_.weight_layout_ = make_weight_layout(
-                resources_.options_.weight_mode, resources_.embedding_->int4, resources_.embedding_->scales);
-        } else {
-            resources_.weight_layout_ = make_weight_layout(
-                resources_.options_.weight_mode, resources_.embedding_->bf16, resources_.embedding_->scales);
-        }
-    }
+    resources_.weight_layout_ = make_embedding_layout(
+        resources_.options_.weight_mode, *resources_.embedding_, "embedding");
     // Untied LM head: load the separate lm_head weight for the final logits
     // projection. Some checkpoints omit the lm_head tensor yet leave
     // tie_word_embeddings unset; in that case the head is effectively tied to
@@ -221,7 +235,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnOutputNorm, i),
                 {resources_.shape_.hidden});
         }
-        if (resources_.shape_.has_per_layer_input) {
+        if (resources_.program_.per_layer_input.enabled) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerInputGate, i),
                 {resources_.shape_.per_layer_input_size, resources_.shape_.hidden});

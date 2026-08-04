@@ -74,12 +74,14 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     workspace_.prefill_gate_up_.reserve(r * 2 * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_activated_.reserve(r * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_mlp_output_.reserve(r * resources_.shape_.hidden);
-    if (resources_.shape_.has_per_layer_input) {
-        const size_t packed = r * static_cast<size_t>(resources_.shape_.num_hidden_layers) *
-            static_cast<size_t>(resources_.shape_.per_layer_input_size);
+    if (resources_.program_.per_layer_input.enabled) {
+        const size_t packed = resources_.program_.per_layer_input.checked_elements(r);
         workspace_.prefill_per_layer_token_.reserve(packed);
         workspace_.prefill_per_layer_context_.reserve(packed);
-        workspace_.prefill_per_layer_gate_.reserve(r * static_cast<size_t>(resources_.shape_.per_layer_input_size));
+        const size_t gate_elements =
+            static_cast<size_t>(r) * static_cast<size_t>(
+                resources_.program_.per_layer_input.input_size);
+        workspace_.prefill_per_layer_gate_.reserve(gate_elements);
     }
 
     if (rows <= kMaxGemmAttentionRows) {

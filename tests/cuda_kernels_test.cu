@@ -1,6 +1,7 @@
 #include "celeg/backend/cuda/utils.cuh"
 #include "support/assertions.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/model/reference.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/model/resolved.hpp"
@@ -151,6 +152,46 @@ int main() {
             expect_near(to_float(host[i]), 8.0f + i);
             expect_near(to_float(host[4 + i]), static_cast<float>(i));
         }
+    }
+
+    // The embedding strategy is format-independent for every embedding table,
+    // including the per-layer table bound during model construction.
+    {
+        constexpr int hidden = 4;
+        std::vector<__nv_bfloat16> bf16_table = {
+            to_bf16(1.0f), to_bf16(2.0f), to_bf16(3.0f), to_bf16(4.0f),
+            to_bf16(5.0f), to_bf16(6.0f), to_bf16(7.0f), to_bf16(8.0f)};
+        celeg::DeviceBuffer<__nv_bfloat16> dbf16(bf16_table.size()), out(hidden);
+        CELEG_CUDA(cudaMemcpy(dbf16.data(), bf16_table.data(), dbf16.bytes(),
+                              cudaMemcpyHostToDevice));
+        auto bf16_layout = celeg::make_weight_layout(
+            celeg::WeightMode::Bf16, dbf16.data(), nullptr);
+        bf16_layout->embed_token(1, out.data(), hidden, stream.get());
+
+        std::vector<int8_t> int8_table = {1, 2, 3, 4, 5, 6, 7, 8};
+        std::vector<float> int8_scales = {1.0f, 0.5f};
+        celeg::DeviceBuffer<int8_t> dint8(int8_table.size());
+        celeg::DeviceBuffer<float> dint8_scales(int8_scales.size());
+        CELEG_CUDA(cudaMemcpy(dint8.data(), int8_table.data(), dint8.bytes(),
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dint8_scales.data(), int8_scales.data(),
+                              dint8_scales.bytes(), cudaMemcpyHostToDevice));
+        auto int8_layout = celeg::make_weight_layout(
+            celeg::WeightMode::Int8, dint8.data(), dint8_scales.data());
+        int8_layout->embed_token(1, out.data(), hidden, stream.get());
+
+        std::vector<uint8_t> int4_table = {0x21U, 0x43U, 0x65U, 0x87U};
+        std::vector<float> int4_scales = {0.25f, 0.5f};
+        celeg::DeviceBuffer<uint8_t> dint4(int4_table.size());
+        celeg::DeviceBuffer<float> dint4_scales(int4_scales.size());
+        CELEG_CUDA(cudaMemcpy(dint4.data(), int4_table.data(), dint4.bytes(),
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dint4_scales.data(), int4_scales.data(),
+                              dint4_scales.bytes(), cudaMemcpyHostToDevice));
+        auto int4_layout = celeg::make_weight_layout(
+            celeg::WeightMode::Int4, dint4.data(), dint4_scales.data());
+        int4_layout->embed_token(1, out.data(), hidden, stream.get());
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     }
 
 

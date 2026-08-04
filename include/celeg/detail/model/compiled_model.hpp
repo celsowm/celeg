@@ -95,6 +95,7 @@ struct CudaCompiledModel {
                              bool begin, bool finalize,
                              PhysicalPagedKvCache& paged_kv,
                              const std::vector<uint32_t>& page_table);
+    void validate_token_ids(const std::vector<int32_t>& tokens) const;
     int32_t decode();
     void decode_async_begin();
     int32_t decode_async_finish();
@@ -161,7 +162,6 @@ struct CudaCompiledModel {
     void initialize_per_layer_input_device(const int32_t* token);
     void initialize_per_layer_input_host(int32_t token);
     void initialize_per_layer_input_batch(const int32_t* tokens, int rows);
-    void validate_per_layer_input() const;
     void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
 

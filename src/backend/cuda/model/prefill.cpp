@@ -15,6 +15,15 @@
 
 namespace celeg {
 
+void CudaCompiledModel::validate_token_ids(
+    const std::vector<int32_t>& tokens) const {
+    for (const int32_t token : tokens) {
+        if (token < 0 || token >= resources_.shape_.vocab_size) {
+            throw std::invalid_argument("CUDA token id is outside the vocabulary");
+        }
+    }
+}
+
 void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
     if (tokens.empty()) {
         throw std::invalid_argument("prefill needs at least one token");
@@ -22,6 +31,7 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
     if (tokens.size() > static_cast<size_t>(max_context_)) {
         throw std::invalid_argument("prefill exceeds max_context");
     }
+    validate_token_ids(tokens);
     const auto begin = std::chrono::steady_clock::now();
     prefill_batched(tokens);
     const auto end = std::chrono::steady_clock::now();
@@ -44,6 +54,7 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
              static_cast<size_t>(embeddings.width))) {
         throw std::invalid_argument("invalid CUDA prompt embedding layout");
     }
+    validate_token_ids(tokens);
     reset();
     session_.phase_ = SessionPhase::Prefilling;
     session_.metrics_ = {};
@@ -69,6 +80,7 @@ void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
     if (tokens.empty()) {
         throw std::invalid_argument("prefill_chunk needs at least one token");
     }
+    validate_token_ids(tokens);
     if (begin) {
         reset();
         session_.metrics_ = {};

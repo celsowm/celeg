@@ -511,9 +511,14 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             const size_t pages_needed =
                 (end + static_cast<size_t>(paged_kv->page_tokens()) - 1) /
                 static_cast<size_t>(paged_kv->page_tokens());
-            if (page_tables->at(request).size() < pages_needed ||
+        if (page_tables->at(request).size() < pages_needed ||
                 page_tables->at(request).size() > static_cast<size_t>(page_stride)) {
                 throw std::invalid_argument("ragged prefill page table has invalid length");
+            }
+        }
+        for (const int32_t token : explicit_tokens) {
+            if (token < 0 || token >= shape_.vocab_size) {
+                throw std::invalid_argument("CUDA token id is outside the vocabulary");
             }
         }
         ensure_gemm_dispatcher(reference.options());

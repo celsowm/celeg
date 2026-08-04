@@ -2,7 +2,7 @@
 
 // Numerical comparison utilities used by Phase 0 baseline tests and, later, by
 // the Phase 15 testing matrix. Pure host code, header-only, no CUDA dependency.
-// See docs/ARCHITECTURE_RULES.md section 0.3 (tolerance classes) and
+// See docs/ARCHITECTURE_EVIDENCE.md (tolerance classes) and
 // section 15.3 (quantization quality).
 
 #include <algorithm>
@@ -112,7 +112,7 @@ inline ComparisonResult compare(const std::vector<float>& a,
 }
 
 // Tolerance checks with the classes described in section 0.3 of
-// docs/ARCHITECTURE_RULES.md.
+// docs/ARCHITECTURE_EVIDENCE.md.
 inline void require_within(const ComparisonResult& r,
                            double min_cosine,
                            double max_rmse,

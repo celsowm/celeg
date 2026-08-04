@@ -59,7 +59,7 @@ int main() try {
     // Phase 1.4: --weight-mode native must not report plain BF16 cuBLASLt. The
     // actual execution mixes BF16 (norms / conv) and GGUF MMQ (linear blocks);
     // the plan label must be honest about that, or the diagnostics contradict
-    // the real storage / kernels. See docs/ARCHITECTURE_RULES.md
+    // the real storage / kernels. See docs/ARCHITECTURE_EVIDENCE.md
     // section 1.4.
     CudaModelOptions native;
     native.weight_mode = WeightMode::NativeGguf;

@@ -16,6 +16,7 @@
 namespace celeg {
 
 void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
+    validate_token_ids(tokens);
     reset();
     const int rows = static_cast<int>(tokens.size());
     allocate_prefill_workspace(rows);

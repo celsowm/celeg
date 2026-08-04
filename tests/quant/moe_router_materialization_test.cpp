@@ -14,7 +14,7 @@
 //
 // The test runs on host only -- the WeightLoader materializes into a
 // DeviceWeight (CUDA-backed) so it requires a CUDA device; it links against
-// celeg_cuda_backend. See docs/ARCHITECTURE_RULES.md section 1.1.
+// celeg_cuda_backend. See docs/ARCHITECTURE_EVIDENCE.md section 1.1.
 
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/detail/model/types.hpp"

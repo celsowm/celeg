@@ -22,12 +22,12 @@ void CudaCompiledModel::allocate_celeg_resources() {
     // front so that this transition cannot allocate on the execution path.
     workspace_.paged_page_table_.reset(static_cast<size_t>(max_context_));
     workspace_.paged_prefill_tokens_.reset(static_cast<size_t>(max_context_));
-    if (resources_.shape_.has_per_layer_input) {
-        const size_t packed = static_cast<size_t>(resources_.shape_.num_hidden_layers) *
-            static_cast<size_t>(resources_.shape_.per_layer_input_size);
+    if (resources_.program_.per_layer_input.enabled) {
+        const size_t packed = resources_.program_.per_layer_input.packed_width;
         workspace_.per_layer_token_.reset(packed);
         workspace_.per_layer_context_.reset(packed);
-        workspace_.per_layer_gate_.reset(static_cast<size_t>(resources_.shape_.per_layer_input_size));
+        workspace_.per_layer_gate_.reset(
+            static_cast<size_t>(resources_.program_.per_layer_input.input_size));
     }
 
     // MoE scratch (decode path: one token). Sized from the MoE topology when

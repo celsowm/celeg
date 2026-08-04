@@ -1,6 +1,7 @@
 #include "celeg/model/resolved.hpp"
 
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -60,6 +61,17 @@ void RuntimeTopology::validate() const {
         throw std::runtime_error("invalid resolved model topology");
     }
     token_policy.validate();
+    const auto validate_token_id = [this](int token, const char* name) {
+        if (token < 0 || token >= vocab_size) {
+            throw std::runtime_error(std::string("resolved ") + name +
+                                     " token id is outside the vocabulary");
+        }
+    };
+    validate_token_id(token_policy.bos_token_id, "BOS");
+    validate_token_id(token_policy.pad_token_id, "pad");
+    for (int token : token_policy.eos_token_ids) {
+        validate_token_id(token, "EOS");
+    }
     numerical_policy.validate();
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
@@ -87,6 +99,19 @@ void RuntimeTopology::validate() const {
         for (int width : feed_forward_intermediates) {
             if (width <= 0) throw std::runtime_error("invalid per-layer FFN width");
         }
+    }
+    if (has_per_layer_input) {
+        if (per_layer_input_size <= 0) {
+            throw std::runtime_error("per-layer input size must be positive");
+        }
+        const std::size_t layers = static_cast<std::size_t>(num_hidden_layers);
+        const std::size_t input_size = static_cast<std::size_t>(per_layer_input_size);
+        if (layers > std::numeric_limits<std::size_t>::max() / input_size ||
+            layers * input_size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error("per-layer input width exceeds supported range");
+        }
+    } else if (per_layer_input_size != 0) {
+        throw std::runtime_error("per-layer input size set while feature is disabled");
     }
     for (const AttentionSpec& layout : attention_layouts) {
             if (layout.query_heads <= 0 || layout.key_value_heads <= 0 ||

@@ -49,7 +49,7 @@ inline void check_moe_quantization_policy(WeightMode mode, bool is_moe) {
         std::string("unsupported MoE quantization policy: --weight-mode ") +
         mode_name + " has no MoE expert kernel. MoE experts only support "
         "BF16 (safetensors) or native Q4_K/Q6_K blocks (GGUF). Mixed "
-        "policies are Phase 7 work; see docs/ARCHITECTURE_RULES.md "
+        "policies are Phase 7 work; see docs/ARCHITECTURE_EVIDENCE.md "
         "section 7.7.");
 }
 

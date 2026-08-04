@@ -2,7 +2,7 @@
 // Phase 15 quantization-quality and CPU/CUDA parity tests will rely on. The
 // test exercises the comparison functions on synthetic vectors that mimic
 // small logits / weight rows; it does not require a GPU or a real checkpoint.
-// See docs/ARCHITECTURE_RULES.md section 0.3 and 15.3.
+// See docs/ARCHITECTURE_EVIDENCE.md and docs/EXTENDING_ARCHITECTURES.md.
 
 #include "support/numerical_compare.hpp"
 

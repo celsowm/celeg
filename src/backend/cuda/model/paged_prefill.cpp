@@ -22,6 +22,7 @@ void CudaCompiledModel::prefill_chunk_paged(
     if (tokens.empty()) {
         throw std::invalid_argument("prefill_chunk_paged needs at least one token");
     }
+    validate_token_ids(tokens);
     if (paged_kv.mode() != resources_.options_.kv_cache_mode) {
         throw std::invalid_argument("model and physical paged KV modes differ");
     }
