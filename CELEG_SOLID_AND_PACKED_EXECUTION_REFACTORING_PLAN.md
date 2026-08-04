@@ -1,70 +1,114 @@
-# Celeg SOLID and DRY Refactoring Execution Prompt
+# Celeg SOLID, DRY, Packed Execution, and Expert Residency Refactoring Plan
 
 **Repository:** `celsowm/celeg`  
 **Target branch:** current default branch (`master`)  
-**Reviewed baseline:** `7d000d1607d7081547f6dfece82f2682b0535ac6`  
+**Reviewed head:** `79fdba3347cdec14b23a8efd3eb8166e486fbe6f`  
+**Previous plan baseline:** `7d000d1607d7081547f6dfece82f2682b0535ac6`  
 **Review date:** 2026-08-04  
-**Primary goal:** raise Celeg's maintainability from a good but incomplete SOLID/DRY design to a consistently extensible architecture without regressing correctness, CUDA performance, CPU performance, supported model behavior, or binary/API compatibility.
+**Review delta:** 36 commits after the previous baseline  
+**Primary goal:** finish the SOLID and DRY refactoring while preserving Celeg's CPU/CUDA performance model and making the new SSD → RAM → VRAM expert hierarchy correct, bounded, observable, and independently testable.
 
 ---
 
 ## Role
 
-Act as a senior C++/CUDA runtime architect working directly on the Celeg repository.
+Act as a senior C++/CUDA inference-runtime architect working directly on the Celeg repository.
 
-Do not merely produce another architectural report. Inspect the current code, verify that each finding still exists, implement the refactoring in small coherent stages, update tests and architecture checks, and leave the repository buildable after every completed stage.
+This document is an execution plan, not a request for another architecture report. Verify every finding against the current branch, implement the work in coherent stages, add tests before changing behavior for confirmed defects, and leave the repository buildable after every completed stage.
 
-The source may have changed after the reviewed baseline. Treat the findings below as hypotheses that must be verified against the current branch before editing. Do not reintroduce already removed interfaces, compatibility paths, or architecture-specific dispatch inside backend hot paths.
+Do not reintroduce architecture enums, model variants, checkpoint-format branching in backends, concrete service construction in generic APIs, or virtual dispatch inside transformer inner loops.
+
+---
+
+## What changed since the previous plan
+
+The earlier SOLID/DRY findings remain largely valid, but the repository now also contains a substantial expert-storage subsystem:
+
+- CUDA SSD backing with a shared host cache and per-layer VRAM residency;
+- active-FFN pinning and probation-slot reservation;
+- frequency-aware host and device cache policies;
+- an asynchronous expert I/O worker pool;
+- CPU disk-backed experts loaded lazily from `.lfmpack`;
+- concurrent indexed CPU pack reads;
+- shared CPU expert caches across cloned sessions;
+- streaming pack creation that does not retain all expert payloads in RAM;
+- tests proving lazy pack payload access and basic cache behavior;
+- documentation for CPU and CUDA SSD tiers.
+
+These are valuable capabilities, but they introduced new ownership, dependency, lifetime, metrics, synchronization, and DRY concerns that the previous plan did not cover.
+
+The implementation order must therefore change: stabilize and decouple expert storage first, then continue with runtime modules, backend factories, text/model DRY, and packed-execution ownership.
 
 ---
 
 ## Definition of success
 
-The work is complete only when:
+The refactoring is complete only when all of the following are true:
 
-1. a new model family can register its architecture, chat profile, tool-call codec, tokenizer or vision providers through one coherent family-owned registration boundary;
-2. generic runtime composition does not include or name concrete model families;
-3. backend selection creates a backend through a real factory rather than consulting a catalog and then constructing concrete services manually;
-4. packed decode and ragged prefill have distinct owners rather than pass-through pipeline wrappers around a god executor;
-5. compatibility, metadata parsing, JSON escaping, tagged-block parsing, and common batch validation each have one authoritative implementation where their semantics are genuinely shared;
-6. CPU and CUDA remain separate implementations where their mechanisms differ;
-7. no steady-state CUDA allocation or architecture/checkpoint probing is introduced into execution hot paths;
-8. all existing boundary checks and tests pass, with new regression coverage for every extracted semantic rule;
-9. documentation describes the resulting extension path using the actual final code, not a planned design;
-10. SOLID and DRY improve without replacing explicit, understandable code with a generic parameter maze.
+1. a new model family can register architecture, chat, tool, tokenizer, vision, and other family-owned providers through one coherent registration boundary;
+2. generic runtime composition does not include, construct, or name concrete model families;
+3. backend selection returns a fully constructed service bundle through a real backend factory;
+4. the C API translates ABI data but does not construct concrete CPU or CUDA services;
+5. packed decode and ragged prefill have distinct workflow owners rather than pass-through wrappers around a god executor;
+6. SSD expert source access, host caching, GPU residency, transfer scheduling, and usage metrics have explicit owners;
+7. a generic runtime cache does not depend on Safetensors, CUDA, or the LFM-specific `gate_up`/`down` payload layout;
+8. active expert payloads cannot be evicted until their CPU GEMVs or CUDA FFN transfers and execution have completed;
+9. the all-resident CUDA expert path performs no disk I/O, heap allocation, worker-pool submission, or unconditional stream synchronization;
+10. cold expert admission is bounded by configured RAM/VRAM budgets and fails before publishing partial residency state;
+11. CPU `.lfmpack` opening remains metadata-only and payloads remain lazy until a routed expert is acquired;
+12. cache hit, true miss, coalesced wait, eviction, storage-read, host-to-device transfer, and wait-time metrics have documented semantics;
+13. shared semantic rules—packed compatibility, common batch validation, cache keys/scoring where truly identical, JSON escaping, tagged-block handling, and dense topology construction—have one authoritative implementation;
+14. CPU and CUDA mechanisms remain separate where their storage, synchronization, and kernel behavior genuinely differ;
+15. no architecture/checkpoint probing, repeated tensor lookup, plan construction, or dynamic polymorphic graph traversal is introduced into execution hot paths;
+16. tests and architecture checks cover every extracted boundary and every failure transition;
+17. CI output distinguishes compile-only CUDA validation from runtime validation on a real GPU;
+18. documentation describes the final implementation rather than an intended design.
 
 Target assessment after completion:
 
 | Area | Target |
 |---|---:|
-| Single Responsibility | 8.0+ |
-| Open/Closed | 8.3+ |
-| Liskov Substitution | 8.3+ |
-| Interface Segregation | 8.7+ |
-| Dependency Inversion | 8.5+ |
-| DRY | 8.3+ |
-| Overall architecture | 8.4+ |
+| Single Responsibility | 8.3+ |
+| Open/Closed | 8.5+ |
+| Liskov Substitution | 8.5+ |
+| Interface Segregation | 8.8+ |
+| Dependency Inversion | 8.6+ |
+| DRY | 8.4+ |
+| Packed execution | 8.2+ |
+| Expert residency/storage | 8.3+ |
+| Overall architecture | 8.5+ |
 
 ---
 
 ## Preserve these improvements
 
-The following current design decisions are valuable and must not be undone:
+Do not undo the following design and performance gains:
 
 - `IArchitecture`, `ArchitectureCatalog`, architecture probing, and backend-neutral `ResolvedModel` resolution;
 - neutral checkpoint tensor and repository contracts;
-- segregated optional repository capabilities such as location, random access, native block storage, and tokenizer data;
+- segregated repository capabilities for location, random access, native blocks, and tokenizer data;
 - family-owned tensor naming policies;
-- explicit token and numerical policies;
+- explicit token, numerical, execution, and offload policies;
 - immutable compiled model programs and execution plans;
 - CPU and CUDA compiler boundaries;
-- precompiled or prebound hot-path decisions;
+- prebound or precompiled hot-path decisions;
 - `IRequestService`, `ISchedulerDriver`, and `IServiceDiagnostics` as separate serving roles;
 - host commit occurring only after successful CUDA completion;
 - packed steady-state preallocation and zero-allocation expectations;
 - architecture boundary automation;
-- closed-domain switches that are explicitly documented and exhaustively tested;
-- the execution strategy:
+- native GGUF memory mapping and OS page-cache behavior;
+- direct streaming writes during CPU pack construction;
+- compact indexed CPU pack readers that do not load payloads while opening;
+- concurrent indexed pack reads;
+- CPU cache sharing across sessions cloned from the same compiled model;
+- coalescing concurrent loads of the same expert;
+- CUDA active-batch pinning;
+- CUDA probation-slot reservation for the complete unique cold set;
+- device-side cold-set discovery;
+- failure before host-visible state commit;
+- closed-domain switches that are explicitly documented and exhaustively tested.
+
+Preserve the core execution strategy:
 
 ```text
 resolve once
@@ -74,7 +118,15 @@ allocate once
 execute many times
 ```
 
-Do not replace these boundaries with architecture enums, model variants, backend-specific fields in neutral contracts, concrete repository casts, or virtual dispatch inside transformer inner loops.
+For disk-backed experts, extend it with:
+
+```text
+index once
+read on demand
+lease while active
+publish only after transfer
+release after completion
+```
 
 ---
 
@@ -82,95 +134,395 @@ Do not replace these boundaries with architecture enums, model variants, backend
 
 DRY means **one authoritative representation of knowledge**, not zero similar lines.
 
-A duplication is actionable when the same semantic rule appears in multiple places and can silently diverge. Examples include:
+A duplication is actionable when copies encode the same semantic rule and can silently diverge. Current examples include:
 
+- what constitutes a cache key;
+- how access heat decays;
+- how frequency and recency combine into an eviction score;
+- when an entry moves from probation to protected status;
+- what a cache hit or miss counter means;
 - which options make packed sessions compatible;
-- how JSON strings are escaped;
-- how tagged tool-call blocks are detected and removed;
-- how a standard dense decoder topology is initialized;
-- how a model family is registered across architecture, chat, tools, tokenizer, and vision catalogs;
-- how common packed-session batch invariants are validated.
+- common packed-session validation;
+- JSON escaping;
+- tagged tool-call block lifecycle;
+- standard dense-decoder topology construction;
+- model-family registration across catalogs.
 
-Repetition is acceptable when implementations have independent reasons to change. Do not forcibly unify:
+Repetition is acceptable when implementations have independent reasons to change. Do not force one generic cache implementation over:
 
-- CPU and CUDA execution mechanisms;
-- BF16, INT8, INT4, native GGUF, DP4A, tensor-core, or other materially different kernels;
+- CPU quantized expert objects;
+- raw host payload arenas used for CUDA transfers;
+- per-layer VRAM slot and pointer-table management;
+- native GGUF mappings;
+- BF16, INT8, INT4, GGUF, DP4A, tensor-core, or other materially different kernels;
+- CPU mutex/future coordination and CUDA stream/event coordination;
 - model-family probe rules and exceptional metadata semantics;
 - tensor naming policies for different checkpoint conventions;
 - tests whose similarity documents independent contracts;
-- C API enum translation switches for intentionally closed public ABI domains;
-- small local code fragments when a shared abstraction would require many flags, callbacks, nullable fields, or architecture checks.
+- intentionally closed public ABI enum translation.
 
 Before extracting shared code, answer:
 
-1. Is this the same knowledge or only similar syntax?
+1. Is this the same knowledge or merely similar syntax?
 2. Must all copies change together when the rule changes?
-3. Can the extracted contract be named without referring to two unrelated callers?
+3. Can the contract be named without mentioning unrelated callers?
 4. Does the extraction reduce conditionals and parameters rather than move them?
-5. Can the contract be tested directly?
+5. Can it be tested directly without constructing a complete model/backend?
+6. Does it preserve the hot-path allocation and dispatch model?
 
-If any answer is negative, keep the implementations separate unless stronger evidence appears.
+If any answer is negative, keep the mechanisms separate and document the intentional difference.
 
 ---
 
 # Current high-priority findings
 
-## 1. Packed execution still concentrates too many responsibilities
+## 1. CUDA expert residency has become a second god orchestrator
 
-`PackedDecodeExecutorImpl` still coordinates or owns most of the following:
+### Evidence
 
-- shared workspace state;
-- session compatibility;
-- decode and prefill batch validation;
-- metadata staging and cache invalidation;
-- GEMM runtime setup;
-- embedding launch;
-- transformer-layer traversal;
-- attention, convolution, dense FFN, and MoE orchestration;
-- decode orchestration;
-- ragged-prefill orchestration;
-- CUDA completion and synchronization;
-- host commit sequencing;
-- metrics.
+`SharedModelWeights::ensure_moe_experts_resident` currently coordinates:
 
-`PackedDecodePipeline` and `PackedPrefillPipeline` currently act mainly as pass-through wrappers that call methods back on the executor state. Moving declarations without moving ownership does not satisfy SRP.
+- per-layer locking;
+- compute/transfer stream event dependencies;
+- cold-set discovery;
+- active-transfer lease cleanup;
+- cache hit/miss accounting;
+- usage-profile mutation;
+- asynchronous disk-read submission;
+- source selection between sidecar and repository reads;
+- host-cache acquisition;
+- waiting for I/O futures;
+- host-to-device promotion;
+- transfer-event creation;
+- residency-table publication;
+- resident-expert touching;
+- speculative prefetch ranking;
+- prefetch submission;
+- final event publication.
+
+Its signature receives streams, four events, routing buffers, and several reusable host vectors. This is a parameter maze and a clear SRP boundary failure.
 
 ### Required direction
 
-- Make decode orchestration owned by `PackedDecodePipeline`.
-- Make ragged-prefill orchestration owned by `PackedPrefillPipeline`.
-- Keep shared, preallocated execution state in a clearly named shared state/resource object.
-- Give validation, compatibility, metadata staging, completion/commit, and metrics explicit narrow collaborators where useful.
-- Avoid introducing virtual calls or dynamic allocation per layer, row, token, or step.
-- Preserve one-time plan compilation and workspace allocation.
+Introduce a CUDA expert-residency coordinator with typed inputs and explicit collaborators. The exact names may differ, but the responsibilities should resemble:
+
+```cpp
+struct ExpertResidencyRequest {
+    int layer = -1;
+    int rows = 0;
+    int experts_per_token = 0;
+    const int* selected_experts = nullptr;
+    const float* route_scores = nullptr;
+    cudaStream_t compute_stream = nullptr;
+};
+
+struct ExpertResidencyWorkspace;
+class IExpertSource;
+class IHostExpertCache;
+class ExpertLayerResidency;
+class CudaExpertResidencyCoordinator;
+```
+
+- `ExpertLayerResidency` owns VRAM slots, pointer tables, active-slot protection, and device residency metadata.
+- `IExpertSource` owns reading one expert payload from sidecar, SafeTensors random access, pack, or another source.
+- `IHostExpertCache` owns host-tier admission, coalescing, leasing, and eviction.
+- a bounded I/O executor owns worker threads and queue behavior.
+- the coordinator owns one residency transaction: discover, acquire, transfer, publish, prefetch, and complete.
+- metrics receive explicit events rather than being mutated opportunistically throughout the workflow.
+
+Do not replace the current method with one equally broad helper class.
 
 ### Acceptance criteria
 
-- pipeline `run()` methods contain the operation-specific sequence rather than forwarding to executor methods;
-- the shared state does not know the entire decode and prefill algorithms;
-- common mechanics are reused without merging the distinct operation workflows;
+- no residency method takes a long list of events and scratch vectors;
+- source selection is not embedded in the transfer orchestration;
+- VRAM slot code does not read checkpoint formats;
+- host-cache code does not publish CUDA pointer tables;
+- a failed read or transfer leaves the previous residency map valid;
+- all slots used by the active FFN remain protected until the FFN completion event;
+- the coordinator is testable with fake source/cache/residency collaborators;
+- packed and standalone paths use the same coordinator without duplicating the residency algorithm.
+
+---
+
+## 2. `PinnedExpertCache` is in the wrong abstraction layer
+
+### Evidence
+
+`include/celeg/runtime/cache/pinned_expert_cache.hpp` currently:
+
+- includes `celeg/checkpoint/formats/safetensors.hpp` from a supposedly generic runtime cache;
+- hardcodes two payload regions named `gate_up` and `down`;
+- contains cache storage, lease behavior, frequency tracking, coalescing, metrics, and `ExpertIoManager` in one header;
+- is named “Pinned” even though its default allocator is ordinary `malloc` and pinning is injected by a backend.
+
+The cache is therefore neither format-neutral, model-layout-neutral, nor strictly pinned.
+
+### Required direction
+
+Choose one honest boundary:
+
+1. make it a CUDA-backend-owned host staging cache; or
+2. make it a genuinely neutral host blob cache driven by an explicit payload layout and allocator.
+
+A neutral direction may use concepts such as:
+
+```cpp
+struct ExpertKey {
+    int layer = -1;
+    int expert = -1;
+    auto operator<=>(const ExpertKey&) const = default;
+};
+
+struct ExpertPayloadLayout {
+    std::size_t bytes = 0;
+    std::span<const PayloadRegion> regions;
+};
+
+class ExpertLease {
+public:
+    std::span<const std::byte> payload() const;
+};
+```
+
+Keep LFM-specific region interpretation next to the LFM/CUDA binding code. Keep SafeTensors access inside a source adapter. Move the worker pool to an execution/I/O component rather than a cache header.
+
+### Acceptance criteria
+
+- generic runtime headers do not include concrete checkpoint formats;
+- the host cache does not name `gate_up`, `down`, LFM, CUDA, or SafeTensors;
+- alternatively, a CUDA-specific cache is physically located under the CUDA backend and named accordingly;
+- allocator behavior is explicit in the type/configuration;
+- I/O worker lifetime is independent of cache storage lifetime;
+- focused builds can compile the cache without CUDA or checkpoint-format headers.
+
+---
+
+## 3. Cache policy, capacity, and metrics semantics are duplicated and drifting
+
+### Evidence
+
+Three different caches now encode related policy knowledge:
+
+- `CpuExpertCache` uses decayed heat, a recency bonus, a protected budget, and promotion after repeated access;
+- `PinnedExpertCache` keeps a separate heat map and chooses the coldest unleased slot without the same probation/protected model;
+- `ExpertLayerCache` combines recency, route scores or observed accesses, protected/probation slots, and batch pinning.
+
+Some differences are intentional because the tiers have different costs. Others are accidental duplication:
+
+- expert key packing is repeated;
+- heat-decay constants and formulas are repeated;
+- hit/miss definitions differ;
+- coalesced host-cache waiters count as misses in one cache but have a separate counter in another;
+- a host cache silently creates one slot when the configured budget is smaller than one expert, while the CPU cache declines admission;
+- policy names do not fully describe which tier and scoring inputs they control.
+
+### Required direction
+
+Do **not** create a generic `ExpertCache<T, 20 callbacks>`.
+
+Extract only stable policy/value contracts, for example:
+
+- `ExpertKey` and hashing;
+- decay calculation;
+- an explicit frequency/recency score primitive;
+- cache counter definitions;
+- budget/admission result types;
+- policy configuration validation.
+
+Let each tier retain its own storage, locking, transfer, and eviction mechanism. Document intentional differences in admission and protection.
+
+### Acceptance criteria
+
+- one definition exists for every counter and policy name;
+- `true_misses` means a caller became the elected loader;
+- `coalesced_waits` is separate from true misses;
+- budget smaller than one payload has explicit behavior and a test;
+- protected/probation semantics are either shared or explicitly different by tier;
+- scoring tests use deterministic access traces;
+- CPU, host, and GPU caches expose comparable per-tier metrics without pretending their mechanisms are identical.
+
+---
+
+## 4. The CUDA residency path violates or obscures the hot-path contract
+
+### Evidence
+
+The current residency path includes:
+
+- unconditional `cudaStreamSynchronize` inside device cold-set resolution;
+- a full selected-expert D2H copy even though comments describe copying only the compact cold list;
+- a second full selected-expert D2H copy on a miss path;
+- per-miss `std::vector<ExpertHostLease>` and `std::vector<std::future<void>>` construction;
+- synchronous waiting for all submitted disk reads;
+- host-side touching and metrics loops over selected experts;
+- speculative prefetch work in the same orchestration function.
+
+Cold misses may legitimately block the current token, but the all-resident path must stay much cheaper and its synchronization contract must be explicit.
+
+### Required direction
+
+Define separate performance contracts:
+
+**All-resident hit path**
+
+- no heap allocation;
+- no worker-pool submission;
+- no disk read;
+- no full-selection D2H copy;
+- no unconditional stream synchronization;
+- only event dependencies required for correctness.
+
+**Cold admission path**
+
+- bounded, preallocated host metadata;
+- one compact cold list;
+- bounded parallel reads;
+- no global lock held during storage I/O;
+- event-based host-to-device completion;
+- one atomic residency publication after all required transfers are valid.
+
+Move usage statistics and policy touches to device-side compact data or preallocated host buffers where appropriate.
+
+### Acceptance criteria
+
+- tests or instrumentation prove zero host allocations on repeated all-resident decode;
+- the all-resident path does not call `cudaStreamSynchronize`;
+- the implementation transfers only data required by the current policy;
+- miss-path allocations are preallocated or explicitly bounded and measured;
+- prefetch cannot delay or invalidate current-token admission;
+- before/after hit-path and miss-path timings are recorded.
+
+---
+
+## 5. Expert lease, transfer, publication, and shutdown invariants are implicit
+
+### Evidence
+
+Correctness currently depends on interactions among:
+
+- `ExpertHostLease` reference counts;
+- `ResidencyController::inflight_transfers`;
+- transfer events;
+- `batch_pinned` VRAM slots;
+- cache loading flags and generations;
+- worker-pool shutdown;
+- sidecar/repository lifetimes;
+- shared model-weight lifetime.
+
+Some invalid states are hidden rather than rejected. For example, `release_slot` clamps a negative reference count back to zero. Queue depth and very small cache budgets also need explicit validation.
+
+### Required direction
+
+Model the residency transaction and slot lifecycle explicitly. A useful state vocabulary is:
+
+```text
+empty -> loading -> host-resident -> transferring -> device-resident
+                                      -> failed
+
+device-resident -> active -> device-resident
+                -> evicted
+```
+
+Use RAII tickets/leases that hold the exact resources required until a completion event is observed. Make state publication transactional.
+
+### Acceptance criteria
+
+- reference-count underflow is impossible or detected in tests;
+- duplicate release is not silently accepted;
+- queue depth, worker count, cache budget, and payload size are validated;
+- executor shutdown either drains or cancels queued work according to a documented rule;
+- failures propagate to every coalesced waiter;
+- a failed load can be retried cleanly;
+- a failed H2D transfer does not publish a device pointer;
+- active slots and host payloads remain alive until the corresponding completion event;
+- destruction order is explicit and tested.
+
+---
+
+## 6. CPU disk-backed expert ownership is spread across compiled-model internals
+
+### Evidence
+
+CPU expert backing currently spans:
+
+- `configure_cpu_expert_backing`;
+- mutable fields on `CpuCompiledModel::Shared`;
+- `CpuPackReader`;
+- `CpuExpertCache`;
+- mutation and clearing of MoE vectors in `weight_store`;
+- `Shared::acquire_expert`;
+- forward-path knowledge of disk-cached experts.
+
+The mechanism works, but the compiled model remains the owner of source configuration, cache configuration, tensor-name construction, validation, and acquisition.
+
+### Required direction
+
+Introduce a CPU-owned expert backing object with one explicit responsibility: resolve and lease quantized expert weights.
+
+Possible conceptual boundary:
+
+```cpp
+class CpuExpertBackingStore {
+public:
+    std::shared_ptr<const CpuExpertWeights> acquire(ExpertKey key);
+    CpuExpertBackingMetrics metrics() const;
+};
+```
+
+It may own a pack reader, cache, tensor-name resolver, and immutable shape validation. Native GGUF should remain a separate mapped-storage path rather than being forced through this object.
+
+### Acceptance criteria
+
+- model forward code asks for an expert lease without knowing pack-reader details;
+- pack entry naming and dimension validation have one owner;
+- opening an existing pack does not read expert payloads;
+- first-time pack construction releases each expert after writing;
+- cloned sessions share the backing store/cache intentionally;
+- native GGUF continues to use mapped block storage without a redundant Celeg cache;
+- concurrent reads of different experts remain possible.
+
+---
+
+## 7. Packed execution still concentrates too many responsibilities
+
+`PackedDecodeExecutorImpl` still owns or coordinates shared workspace state, compatibility, decode/prefill validation, metadata staging, GEMM setup, embedding, layer traversal, attention, convolution, dense FFN, MoE, completion, host commit, and metrics.
+
+`PackedDecodePipeline` and `PackedPrefillPipeline` remain mostly pass-through wrappers. Moving declarations without moving workflow authority does not satisfy SRP.
+
+### Required direction
+
+- make decode orchestration owned by `PackedDecodePipeline`;
+- make ragged-prefill orchestration owned by `PackedPrefillPipeline`;
+- keep preallocated shared resources in a clearly named shared workspace/resource object;
+- use the same CUDA expert-residency coordinator as standalone execution;
+- give validation, metadata staging, completion/commit, and metrics narrow owners;
+- preserve direct, prebound hot-path calls.
+
+### Acceptance criteria
+
+- pipeline `run()` methods contain operation-specific sequences;
+- shared state does not know both complete algorithms;
+- expert residency is not duplicated between packed and standalone paths;
 - failed CUDA work cannot mutate host-visible session state;
-- packed vs non-packed and ragged vs standard parity tests remain green;
+- packed/non-packed and ragged/standard parity tests remain green;
 - steady-state allocation tests remain green.
 
 ---
 
-## 2. `IBackendFactory` is not yet a factory
+## 8. `IBackendFactory` is still not a real factory
 
-The current abstraction exposes identification/support checks, while C API composition still branches on CPU/CUDA and directly constructs `CpuInferenceService` or `CudaInferenceService`. Consulting the catalog and ignoring the selected object is not dependency inversion.
+The current abstraction identifies/supports backends, while generic composition still constructs concrete CPU/CUDA services.
 
 ### Required direction
 
-Define a backend creation request that contains only neutral creation inputs and a factory result exposing the serving roles required by callers.
-
-A possible shape is:
+Define a neutral backend creation request and a factory result exposing serving roles:
 
 ```cpp
 struct BackendCreationRequest {
     std::filesystem::path model_path;
     std::size_t maximum_context = 0;
     BackendConfiguration configuration;
-    VisualEmbeddingProvider visual_embeddings;
     std::shared_ptr<const RuntimeContext> runtime;
 };
 
@@ -184,34 +536,26 @@ public:
 };
 ```
 
-The exact types may differ, but ownership and dependency direction must be real.
+The exact shape may differ, but the selected factory must own concrete construction.
 
 ### Acceptance criteria
 
-- `celeg_engine_create` does not include or instantiate concrete CPU/CUDA inference services;
-- adding a backend implementation does not require adding another construction branch to the C API;
-- unsupported-build behavior remains explicit and testable;
-- public ABI mappings remain outside backend implementation code;
-- creation errors retain useful diagnostics.
+- `celeg_engine_create` does not include or instantiate concrete inference services;
+- adding a backend does not add another C API construction branch;
+- unsupported builds fail explicitly before partial mutation;
+- public ABI mappings remain outside backend code;
+- backend creation diagnostics remain useful;
+- CPU-only builds do not reference CUDA implementation symbols.
 
 ---
 
-## 3. Generic runtime composition still knows concrete families
+## 9. Generic runtime composition still knows concrete model families
 
-Generic runtime composition currently includes and constructs Gemma4 vision support directly. This is a concrete family dependency inside a supposedly neutral composition layer.
+Generic runtime composition still includes concrete family knowledge, including Gemma4 vision construction.
 
 ### Required direction
 
-Introduce a coherent family registration/module boundary. A family module may register:
-
-- architecture resolver;
-- chat profile and role capabilities;
-- tool-call codec;
-- tokenizer provider, when family-specific;
-- vision provider, when applicable;
-- other cold-path family-owned providers.
-
-Possible direction:
+Introduce a coherent family module boundary:
 
 ```cpp
 class IRuntimeModule {
@@ -222,155 +566,101 @@ public:
 };
 ```
 
-Static built-in registration is acceptable. Dynamic plugin loading is not required. The important rule is that the generic runtime must not include `celeg/models/<family>/...` or name a concrete family.
+A family module may register architecture, chat profile, tool codec, tokenizer provider, vision provider, and other cold-path family-owned services. Static built-in registration is sufficient; dynamic plugins are not required.
 
 ### Acceptance criteria
 
-- each built-in family has one coherent registration entry point;
-- generic `src/runtime/**` contains no model-family includes, strings, types, or constructors;
-- adding a vision-capable family does not require editing generic runtime composition;
-- duplicate registration remains rejected;
-- catalogs are frozen after construction;
-- tests prove custom modules can be injected without built-ins.
+- each family has one registration entry point;
+- generic `src/runtime/**` contains no family includes, strings, types, or constructors;
+- adding a vision-capable family does not edit generic runtime composition;
+- duplicate registrations are rejected;
+- catalogs freeze after construction;
+- custom runtimes can inject modules with or without built-ins.
 
 ---
 
-## 4. Family registration knowledge is duplicated
+## 10. Family registration knowledge remains duplicated
 
-The list of supported families is repeated across architecture registration, chat-profile registration, tool-call codec construction, and vision/provider bootstrap. This duplicates the definition of what belongs to one model family.
+The supported-family list is repeated across architecture registration, chat profiles, tool codecs, tokenizer behavior, vision bootstrap, source lists, and tests.
 
 ### Required direction
 
-Use the family module/bundle to make family composition atomic. Do not create a central mega-structure containing every possible family option as nullable fields. Prefer a narrow registration method on `RuntimeBuilder`.
+Use family modules to make runtime contributions atomic. Do not create a central mega-structure with nullable fields for every optional capability.
 
 ### Acceptance criteria
 
-- adding a family requires one built-in module registration and family-owned code;
-- chat capabilities remain explicit;
-- a family without tools or vision does not implement fake optional methods;
-- family module tests verify all expected contributions;
-- generic catalogs remain usable independently in focused tests.
+- adding a family requires one built-in module registration plus family-owned code;
+- families without tools or vision do not implement fake methods;
+- family module tests verify expected contributions;
+- generic catalogs remain independently testable;
+- build/source registration is generated or guarded against partial family registration where practical.
 
 ---
 
-## 5. Dense decoder topology construction is duplicated
+## 11. Dense decoder topology construction is duplicated
 
-MiniCPM5 and SmolLM3 repeat substantial topology initialization and metadata helpers, including standard dense-attention layer arrays, attention slot mapping, FFN arrays, token-policy handling, and JSON/GGUF paired key access.
-
-This is actionable where the same dense-decoder invariant is repeated. Family-specific probing, dimensions used as fallback identity, EOS exceptions, no-RoPE behavior, and model-specific defaults must remain family-owned.
+MiniCPM5 and SmolLM3 repeat standard dense topology initialization and paired GGUF/JSON metadata access. Probe rules and exceptional defaults remain family-specific, but standard topology invariants are shared knowledge.
 
 ### Required direction
 
-Extract a neutral dense-decoder topology builder driven by explicit metadata mappings and defaults, with small, named override hooks only for real variations.
-
-Possible shape:
-
-```cpp
-struct DenseDecoderMetadataKeys {
-    std::string gguf_namespace;
-    std::string_view hidden;
-    std::string_view intermediate;
-    std::string_view layer_count;
-    std::string_view query_heads;
-    std::string_view key_value_heads;
-    std::string_view context_length;
-};
-
-struct DenseDecoderDefaults {
-    int bos_token_id = -1;
-    int pad_token_id = -1;
-    float norm_epsilon = 0.0f;
-    double rope_theta = 0.0;
-    ActivationKind activation = ActivationKind::SwiGLU;
-};
-```
-
-Do not hardcode MiniCPM5 or SmolLM3 names inside the neutral builder.
+Extract a neutral dense-decoder topology builder driven by explicit metadata mappings and defaults. Avoid family names and boolean switches in the neutral builder.
 
 ### Acceptance criteria
 
 - standard dense topology invariants have one implementation;
-- family files retain probe logic and genuine exceptional policy;
-- the builder does not accumulate boolean switches for every family;
-- existing topology fingerprints and resolved graph behavior remain stable unless a prior bug is demonstrated;
-- focused builder tests cover GGUF and SafeTensors/JSON metadata paths;
+- family files retain probe identity and genuine exceptions;
+- GGUF and SafeTensors/JSON paths have focused builder tests;
+- topology fingerprints remain stable unless fixing a demonstrated bug;
 - MiniCPM5 and SmolLM3 resolution tests remain independent.
 
 ---
 
-## 6. JSON and tagged tool-call parsing have multiple implementations
+## 12. JSON and tagged tool-call parsing have multiple implementations
 
-JSON string escaping, trimming, object-member scanning, matching delimiters, tagged-block removal, call ID generation, and complete/incomplete detection appear in multiple chat-template and tool-codec implementations.
-
-Some implementations differ subtly, creating a risk that escaping or malformed-generation behavior diverges by family for accidental rather than protocol-specific reasons.
+JSON escaping, trimming, object-member scanning, delimiter matching, tagged-block removal, call-ID generation, and incomplete-block handling appear in multiple template/codec implementations.
 
 ### Required direction
 
-Extract small, protocol-neutral text utilities such as:
-
-```cpp
-std::string escape_json_string(std::string_view value);
-
-struct TaggedBlock {
-    std::size_t begin = 0;
-    std::size_t body_begin = 0;
-    std::size_t body_end = 0;
-    std::size_t end = 0;
-};
-
-std::vector<TaggedBlock> find_tagged_blocks(
-    std::string_view text,
-    std::string_view opening,
-    std::string_view closing);
-
-std::string remove_tagged_blocks(
-    std::string_view text,
-    std::string_view opening,
-    std::string_view closing);
-```
-
-Use a real JSON parser already present in the project when parsing arbitrary JSON would otherwise require maintaining another incomplete parser. Do not build a large general JSON framework for a tiny controlled operation.
+Extract small protocol-neutral utilities for JSON string escaping and tagged-block lifecycle. Use the project's real JSON parser for arbitrary JSON rather than maintaining another incomplete parser.
 
 ### Acceptance criteria
 
-- JSON escaping has one authoritative implementation and comprehensive Unicode/control-character tests;
-- shared tagged-block lifecycle behavior has one implementation;
-- protocol-specific syntax remains inside each codec;
-- malformed and incomplete outputs are tested per codec;
-- parallel calls and mixed assistant text are preserved;
-- no codec silently accepts a format another codec owns.
+- JSON escaping has one authoritative implementation;
+- Unicode, control characters, quotes, slashes, and empty strings are covered;
+- shared tagged-block scanning/removal has one implementation;
+- protocol-specific syntax remains in each codec;
+- malformed and incomplete output is tested per family;
+- mixed assistant text and parallel calls are preserved.
 
 ---
 
-## 7. Chat templates and tool codecs overlap in responsibility
+## 13. Chat templates and tool codecs overlap in responsibility
 
-`chat_template.cpp` contains family-specific templates and also constructs tool-definition text that overlaps with family-owned tool-call codecs. This creates two sources of truth for parts of the same protocol and keeps many families in a central translation unit.
+Central chat-template code still contains family-specific formatting and constructs tool-definition syntax that overlaps with family-owned codecs.
 
 ### Required direction
 
-- Move family-specific chat-template implementations under their family modules.
-- Keep the generic chat profile catalog and neutral interfaces under `src/text` / `include/celeg/text`.
-- Define clearly whether tool definition/call/result rendering belongs to the template or codec, then enforce one owner.
-- Prefer the codec as the owner of tool syntax when a native codec exists.
-- Keep the conversation skeleton/template responsible for role sequencing and message placement.
+- move family templates under family modules;
+- keep neutral chat contracts/catalogs under generic text code;
+- give tool syntax one owner, preferably the native codec where one exists;
+- keep the conversation skeleton responsible for role sequencing and message placement.
 
 ### Acceptance criteria
 
-- generic chat code does not contain Granite, Gemma4, LFM2, MiniCPM5, or SmolLM3 formatting rules;
-- each family owns its template and codec registration;
-- tool syntax is not independently reconstructed in two components;
-- rendered prompts remain byte-identical for supported fixtures unless a bug fix is documented;
-- tool parsing and chat rendering tests remain family-specific.
+- generic chat code contains no Granite, Gemma4, LFM2, MiniCPM5, or SmolLM3 rules;
+- tool syntax is not reconstructed independently in template and codec;
+- prompt fixtures remain byte-identical unless a documented bug is fixed;
+- rendering and parsing tests remain family-specific.
 
 ---
 
-## 8. Packed common batch validation is duplicated
+## 14. Packed common batch validation is duplicated
 
-Decode and ragged-prefill validation repeat common invariants such as empty batches, capacity, null owners, duplicate sessions, reference-plan compatibility, device identity, eligibility, and option compatibility.
+Decode and ragged prefill repeat empty-batch, capacity, owner, duplicate-session, plan, device, eligibility, storage, and option checks.
 
 ### Required direction
 
-Extract a common batch validation operation, then layer operation-specific validation on top:
+Extract common validation and layer operation-specific validation on top:
 
 ```cpp
 const PackedSessionContext& validate_common_batch(
@@ -378,26 +668,23 @@ const PackedSessionContext& validate_common_batch(
     PackedOperation operation) const;
 ```
 
-Keep prefill-specific row, token, context, and page-table validation separate.
-
 ### Acceptance criteria
 
 - common invariants have one implementation;
-- error messages retain enough operation context;
+- errors retain operation context;
 - decode does not depend on prefill-only data;
-- operation-specific eligibility remains explicit;
-- duplicate-session detection is efficient and tested;
+- duplicate detection is efficient;
 - malformed input fails before CUDA work or host-state mutation.
 
 ---
 
-## 9. Packed compatibility knowledge is duplicated
+## 15. Packed compatibility knowledge is duplicated
 
-The fields that define whether sessions can share an executor are manually compared in `options_compatible`, while related knowledge also exists in execution-plan compilation and fingerprints. A new option can be added to one place and forgotten in another.
+Compatibility-affecting options are manually compared while related knowledge also exists in execution plans and fingerprints.
 
 ### Required direction
 
-Create an explicit immutable compatibility identity produced during compilation, for example:
+Create an immutable compatibility identity produced during compilation:
 
 ```cpp
 struct PackedCompatibilityKey {
@@ -405,40 +692,38 @@ struct PackedCompatibilityKey {
     KvCacheMode kv_cache_mode;
     GemmBackend gemm_backend;
     AttentionMode attention_mode;
-    // Only fields that semantically affect shared execution.
-
     auto operator<=>(const PackedCompatibilityKey&) const = default;
 };
 ```
 
-The exact fields must be determined from execution semantics, not copied blindly from the current comparison.
+Determine fields from execution semantics, including expert-storage/residency compatibility where shared packed execution depends on it.
 
 ### Acceptance criteria
 
-- one function defines compatibility identity;
+- one function defines the key;
 - the key is part of or derived from the immutable execution plan;
-- session compatibility compares keys plus explicit resource/device ownership identities;
-- every compatibility-affecting option has a focused test;
-- non-affecting observability or scheduling options do not cause false incompatibility;
+- resource/device/source ownership identities are compared explicitly;
+- every compatibility-affecting option has a test;
+- observability-only options do not create false incompatibility;
 - fingerprints and equality cannot drift independently.
 
 ---
 
-## 10. C API CPU/CUDA composition is duplicated
+## 16. C API CPU/CUDA composition remains duplicated
 
-The C API repeats backend selection, option conversion, service creation, and bundle wrapping. The real backend factory work should remove this duplication rather than hide it behind more local helper functions.
+The C API repeats backend selection, option conversion, concrete service creation, and bundle wrapping. Local helpers would hide the duplication rather than fix dependency direction.
 
 ### Required direction
 
-Fix the dependency boundary first. Keep ABI mapping functions focused on translating public C structs into neutral configuration values. Let the selected backend factory own concrete service construction.
+Fix backend factories first. Keep ABI functions focused on public struct-size checks, enum validation, and translation into neutral configuration.
 
 ### Acceptance criteria
 
-- C API entry points remain small and backend-neutral;
-- public struct-size and enum validation remains centralized;
-- CPU-only builds do not reference CUDA implementation symbols;
-- backend factories are independently testable;
-- errors identify invalid ABI input separately from backend creation failure.
+- C API entry points are small and backend-neutral;
+- public validation is centralized;
+- factories are independently testable;
+- invalid ABI input is distinguishable from backend-creation failure;
+- CPU-only linkage remains CUDA-free.
 
 ---
 
@@ -446,140 +731,261 @@ Fix the dependency boundary first. Keep ABI mapping functions focused on transla
 
 ## Single Responsibility Principle
 
-A valid SRP extraction must move at least one of:
+A valid extraction must move at least one of:
 
 - ownership;
 - lifetime;
 - dependency direction;
 - invariant enforcement;
-- state transition authority;
+- state-transition authority;
+- synchronization authority;
 - compilation boundary;
 - testable contract.
 
-Moving methods to another `.cpp` while the original object still controls all state and decisions is not sufficient.
+Moving methods into another `.cpp` while the original object still owns all state and decisions is not sufficient.
 
-Pay special attention to:
+Prioritize:
 
+- CUDA expert-residency orchestration;
+- host expert cache and I/O execution;
+- CPU expert backing;
 - `PackedDecodeExecutorImpl`;
 - generic runtime bootstrap;
-- family architecture resolvers;
-- central chat-template code;
-- C API engine construction;
-- GEMM dispatch ownership and caches.
+- family resolvers/templates;
+- C API engine construction.
 
 ## Open/Closed Principle
 
-Adding a model family should not require edits across generic runtime, text, backend, and serving layers. Adding a backend should not require a new C API construction branch.
+Adding a model family must not require edits across generic runtime, text, backend, and serving layers. Adding a backend must not require another C API branch. Adding an expert source should not require rewriting cache eviction or CUDA slot management.
 
-Closed domains are allowed when explicitly declared and tested. Do not mislabel adding another `switch` case as OCP compliance.
+Closed domains are allowed when explicit and tested. Adding another `switch` case is not automatically OCP compliance.
 
 ## Liskov Substitution Principle
 
 - optional behavior belongs in separate capability interfaces;
-- implementations must not inherit methods that are invalid for their storage/backend model;
-- asynchronous completion contracts must define when state is observable;
-- borrowed pointers and views must have documented owner lifetimes;
-- backend factories that claim support must be able to create a usable service or return a defined unsupported result before partial mutation;
-- family modules must be substitutable in a custom runtime builder without relying on hidden built-in globals.
+- a source claiming random access must honor concurrent-read and lifetime contracts;
+- cache implementations must honor the same lease and failure semantics they advertise;
+- a backend factory claiming support must construct a usable service or fail before partial mutation;
+- asynchronous completion contracts must define when payloads, pointer tables, and host-visible state become observable;
+- borrowed pointers must document their owner and completion lifetime;
+- family modules must work in custom builders without hidden globals.
 
 ## Interface Segregation Principle
 
-Keep interfaces narrow and role-oriented. Do not replace current segregated repository or serving interfaces with composite god interfaces.
+Do not replace narrow repository, serving, source, cache, or residency roles with a new composite god interface.
 
-A family without vision, tools, native storage, or random access must not implement placeholder methods for those capabilities.
+A family without vision/tools, a source without random access, or a cache without asynchronous loading must not implement placeholder methods.
 
 ## Dependency Inversion Principle
 
-Generic layers depend on neutral contracts. Concrete model families, backend services, checkpoint formats, and CUDA types must point inward through registration, compilation, or factory boundaries.
+Generic layers depend on neutral contracts. Concrete families, formats, storage sources, CPU/CUDA mechanisms, and services point inward through registration, compilation, adapters, and factories.
 
-The following dependency directions are forbidden:
+Forbidden directions include:
 
 ```text
-src/runtime/**        -> celeg/models/**
-include/celeg/model/** -> celeg/backend/cuda/**
-src/backend/**        -> architecture identity dispatch
-src/backend/**        -> concrete checkpoint format dispatch
-src/api/**            -> concrete inference service construction
+src/runtime/**                 -> celeg/models/**
+src/runtime/cache/**           -> checkpoint/formats/**
+include/celeg/model/**         -> celeg/backend/cuda/**
+src/backend/**                 -> architecture identity dispatch
+src/backend/**                 -> concrete checkpoint-format dispatch
+VRAM residency                -> SafeTensors/sidecar parsing
+host cache                    -> CUDA pointer-table publication
+src/api/**                    -> concrete inference service construction
 ```
-
-The C API may translate public ABI types, but service creation must be delegated through neutral factories.
 
 ---
 
 # Implementation stages
 
-Complete stages in this order unless current code evidence proves a dependency requires a different order. Keep each stage independently buildable and testable.
+Complete stages in order unless current code evidence proves a dependency requires a different sequence. Keep every stage independently buildable and testable.
 
 ## Stage 0 — Re-baseline and protect behavior
 
-1. Record the current commit and inspect changes since the reviewed baseline.
+1. Record the current head and changes since `79fdba3347cdec14b23a8efd3eb8166e486fbe6f`.
 2. Run architecture boundary checks.
-3. Build the available CPU and CUDA targets.
-4. Run the configured tests.
-5. Capture representative prompt rendering fixtures for all supported families.
-6. Capture packed/non-packed and standard/ragged numerical parity where hardware is available.
-7. Record steady-state allocation and representative performance baselines.
+3. Build CPU and CUDA targets available in the environment.
+4. Run CPU tests and host-only CUDA tests that do not require a device.
+5. Record which CUDA tests were compiled, which ran without a device, and which ran on a real GPU.
+6. Capture prompt fixtures for all families.
+7. Capture packed/non-packed and standard/ragged parity where hardware exists.
+8. Capture CPU expert pack, CPU cache, CUDA cache-hit, CUDA cache-miss, and fully resident performance baselines.
+9. Record host/device allocations and synchronization points for expert decode and prefill.
 
-Do not claim runtime validation for CUDA tests that were only compiled.
+Do not claim CUDA runtime validation for compile-only jobs.
 
-## Stage 1 — Shared low-risk DRY utilities
+## Stage 1 — Lock down expert-storage semantics
+
+Before structural changes, add focused tests for:
+
+- exact cache metric definitions;
+- budget smaller than one expert;
+- zero budget;
+- duplicate release/reference underflow;
+- worker count and queue-depth validation;
+- loader failure and retry;
+- failure propagation to all waiters;
+- active lease preventing eviction;
+- active FFN preventing VRAM eviction;
+- unique cold set equal to and greater than VRAM capacity;
+- transactional pointer-table publication;
+- native GGUF bypass;
+- pack opening without payload reads;
+- cloned CPU sessions sharing one cache;
+- concurrent different-expert reads.
+
+Fix confirmed correctness defects before broad refactoring.
+
+## Stage 2 — Extract neutral policy and metrics values
+
+Extract only stable semantic primitives:
+
+- expert key/hash;
+- decay/scoring math where identical;
+- counter definitions;
+- budget/admission result;
+- policy configuration validation.
+
+Keep CPU, host-staging, and VRAM caches separate.
+
+## Stage 3 — Separate expert source, host cache, and I/O executor
+
+- remove concrete checkpoint-format includes from generic cache code;
+- move LFM payload layout interpretation out of the cache;
+- give sidecar and random-access repository reads source adapters;
+- separate the bounded worker pool from cache storage;
+- make allocator/pinned-memory behavior explicit;
+- add fake-source and deterministic executor tests.
+
+## Stage 4 — Refactor CUDA residency orchestration
+
+- introduce a typed request and preallocated workspace;
+- separate per-layer VRAM slot state from transaction orchestration;
+- centralize transfer lease/event lifetime;
+- make publication transactional;
+- remove redundant full-selection D2H copies;
+- eliminate unconditional synchronization from the all-resident path;
+- keep prefetch subordinate to current-token correctness;
+- use the same coordinator from standalone and packed execution.
+
+## Stage 5 — Encapsulate CPU expert backing
+
+- introduce a CPU-owned backing store/source boundary;
+- centralize pack naming and dimension validation;
+- preserve lazy payload reads and streaming pack creation;
+- keep native GGUF mapped storage separate;
+- preserve shared cache ownership across cloned sessions.
+
+## Stage 6 — Shared low-risk DRY utilities
 
 Implement and test:
 
 - JSON escaping;
 - tagged-block scanning/removal;
-- common metadata access helpers only where semantics are identical;
+- common metadata helpers only where semantics are identical;
 - common packed batch validation;
 - immutable packed compatibility identity.
 
-This stage should be behavior-preserving and should not move family registration yet.
+## Stage 7 — Dense decoder topology builder
 
-## Stage 2 — Dense decoder topology builder
+Extract standard dense topology invariants from MiniCPM5 and SmolLM3 while keeping probe identity and exceptional policy local.
 
-Extract shared dense topology invariants from MiniCPM5 and SmolLM3 while keeping probe rules and exceptional policies local. Add direct builder tests plus independent family-resolution tests.
+Do not force LFM2, Granite, or Gemma4 through the builder unless they fit without family flags.
 
-Do not force LFM2, Granite, or Gemma4 through this builder unless their semantics fit naturally without family flags.
+## Stage 8 — Family-owned chat/template/tool modules
 
-## Stage 3 — Family-owned chat/template/tool modules
+Move family templates and codecs into family directories. Remove duplicate tool-rendering ownership. Preserve exact prompt fixtures.
 
-Move family-specific templates and codecs into family directories. Remove duplicate tool rendering ownership. Preserve exact prompt fixtures.
+## Stage 9 — Runtime family modules
 
-## Stage 4 — Runtime family modules
+Introduce the family registration boundary and remove concrete family knowledge from generic runtime bootstrap.
 
-Introduce the family registration boundary and remove concrete family knowledge from generic runtime bootstrap. Add static built-in modules and custom-runtime tests.
+## Stage 10 — Real backend factories and neutral C API composition
 
-## Stage 5 — Real backend factories
+Make factories create service bundles. Remove concrete CPU/CUDA service construction from the C API and generic composition roots.
 
-Make backend factories create services. Remove concrete backend service construction from the C API and other generic composition roots.
+## Stage 11 — Packed execution ownership
 
-## Stage 6 — Packed execution ownership
+Move operation-specific orchestration into real decode and prefill pipeline owners while retaining explicit preallocated shared resources and the common expert-residency coordinator.
 
-Move operation-specific orchestration into real decode and prefill pipeline owners. Keep shared fixed-capacity state explicit and hot-path-safe. Add failure-injection and lifecycle tests.
+## Stage 12 — Expand architecture, DRY, and hot-path guards
 
-## Stage 7 — Expand automated architecture and DRY guards
+Extend `scripts/check_architecture_boundaries.py` or add focused companion checks for stable rules:
 
-Extend `scripts/check_architecture_boundaries.py` or add focused companion checks to detect:
-
-- any generic runtime include of `celeg/models/`;
+- generic runtime includes of `celeg/models/`;
+- generic runtime cache includes of concrete checkpoint formats;
 - concrete backend service construction from `src/api`;
-- family names/types in generic runtime/text registration layers;
-- duplicated local JSON escaping implementations;
-- direct architecture or checkpoint-format dispatch in backends;
-- plan compilation or direct CUDA allocation in packed hot paths;
-- pass-through packed pipelines that delegate complete workflows back to shared state;
-- obsolete architecture interfaces or compatibility paths.
+- family names/types in generic runtime or generic text registration;
+- direct architecture/checkpoint-format dispatch in backends;
+- plan construction or direct allocation in packed steady-state paths;
+- pass-through packed pipelines;
+- direct storage reads from VRAM residency code;
+- obsolete compatibility paths.
 
-Use static checks only for stable structural rules. Do not create fragile regex checks for ordinary implementation details.
+Do not create fragile regex checks for ordinary local implementation details.
 
-## Stage 8 — Full verification and documentation
+## Stage 13 — Full verification and documentation
 
-Run the required verification matrix, update architecture evidence, and replace stale plan statements with links to final implementation and executable tests.
+Run the complete verification matrix, publish benchmark/allocation evidence, update `docs/EXPERT_STORAGE.md` and `docs/PACKED_EXECUTION.md`, and replace plan statements with links to final contracts and tests.
 
 ---
 
 # Testing requirements
 
-At minimum, preserve or add coverage for:
+## Expert policy and host cache
+
+- deterministic frequency/recency traces;
+- decay across multiple intervals;
+- protected/probation transitions where applicable;
+- true miss versus coalesced wait accounting;
+- zero and undersized budgets;
+- one payload larger than the entire budget;
+- multiple payload sizes if supported;
+- same-key concurrent coalescing;
+- different-key concurrent loading;
+- loader failure and retry;
+- failure propagation to every waiter;
+- lease blocks eviction;
+- duplicate release detection;
+- executor queue saturation;
+- executor shutdown with queued and active work;
+- metric snapshots under concurrency.
+
+## CPU expert backing and pack I/O
+
+- existing pack opens without payload reads;
+- index validation does not materialize matrices;
+- first pack build writes/releases one expert at a time;
+- temporary pack cleanup on failure;
+- concurrent indexed reads use independent read positions safely;
+- malformed/truncated entry rejection;
+- dimension mismatch rejection;
+- cloned sessions share cache/backing ownership;
+- active expert objects survive cache eviction until GEMVs complete;
+- native GGUF performs no redundant pack/cache path;
+- memory stays bounded by cache budget plus documented temporary buffers.
+
+## CUDA expert residency
+
+- fully resident hit path;
+- one cold expert;
+- several unique cold experts;
+- unique cold set equal to capacity;
+- unique cold set greater than capacity;
+- probation reservation;
+- protected hot expert retention;
+- active-batch pinning;
+- prefetch cannot evict current-batch slots;
+- host lease remains alive through H2D completion;
+- transfer failure does not publish pointers;
+- pointer-table and slot-table publication remains consistent;
+- concurrent sessions sharing model weights;
+- per-device isolation/fingerprinting;
+- sidecar and random-access source adapters;
+- all-resident path has zero host allocations;
+- all-resident path has no unconditional stream synchronization;
+- cold-list transfer is compact;
+- decode and prefill use the same residency semantics;
+- packed and standalone execution remain consistent.
 
 ## Architecture and dependency boundaries
 
@@ -587,22 +993,23 @@ At minimum, preserve or add coverage for:
 - custom architecture injection;
 - custom runtime modules with and without built-ins;
 - fake neutral repository compiling through CPU and CUDA compilers;
-- no family-specific dependencies in generic runtime;
-- no architecture/checkpoint-format dispatch in backends.
+- no family dependency in generic runtime;
+- no concrete format dependency in generic cache code;
+- no architecture/checkpoint dispatch in backends;
+- no concrete services in C API composition.
 
 ## Dense topology
 
 - GGUF and SafeTensors/JSON key mapping;
-- token defaults and overrides;
-- multiple EOS tokens;
-- attention slot/layer mappings;
-- per-layer positional encoding exceptions;
+- token defaults/overrides and multiple EOS IDs;
+- attention slot/layer mapping;
+- per-layer positional-encoding exceptions;
 - topology validation and fingerprint stability;
-- MiniCPM5 and SmolLM3 independent resolution.
+- independent MiniCPM5 and SmolLM3 resolution.
 
 ## Chat and tools
 
-- exact prompt fixtures for every supported family;
+- exact prompt fixtures for every family;
 - JSON escaping of quotes, slashes, controls, UTF-8, and empty strings;
 - zero, one, and parallel tool calls;
 - assistant text before, between, and after calls;
@@ -613,89 +1020,123 @@ At minimum, preserve or add coverage for:
 ## Backend factories and C API
 
 - CPU factory creation;
-- CUDA factory creation when available;
+- CUDA factory creation when compiled;
 - unsupported CUDA build behavior;
 - invalid backend and option mapping;
 - factory failure diagnostics;
-- C API smoke tests without concrete-service dependencies.
+- C API smoke tests without concrete-service dependencies;
+- CPU-only shared libraries remain CUDA-free.
 
 ## Packed execution
 
 - empty, oversized, null, duplicate, wrong-device, wrong-plan, wrong-storage, and incompatible-option batches;
-- decode and prefill common validation consistency;
-- packed vs non-packed decode parity;
-- ragged vs standard prefill parity;
+- common decode/prefill validation consistency;
+- packed/non-packed decode parity;
+- ragged/standard prefill parity;
 - mixed finalize and zero-finalize behavior;
 - non-equal query width;
 - variable per-layer FFN width;
-- metadata storage replacement/rebinding;
+- metadata replacement/rebinding;
 - failure before host commit;
 - completion and metrics boundaries;
 - zero steady-state host/device allocations;
-- representative performance regression thresholds.
+- representative performance thresholds.
 
 ---
 
 # Performance constraints
 
+## Fully resident steady state
+
 Do not introduce:
 
-- runtime architecture probing inside decode, prefill, attention, FFN, sampling, or scheduler loops;
-- deep virtual object graphs in hot paths;
-- per-token or per-layer heap allocation;
-- repeated string-based tensor lookup during execution;
-- repeated compatibility-key construction per layer;
-- device capability caches that ignore device identity;
-- synchronization added solely to simplify ownership unless existing correctness requires it and the performance cost is measured.
+- host heap allocation;
+- disk access;
+- worker-pool submission;
+- full router-selection D2H copies;
+- unconditional stream synchronization;
+- architecture/checkpoint probing;
+- string-based tensor lookup;
+- repeated compatibility-key construction;
+- per-token plan creation;
+- virtual dispatch inside layer/token loops.
 
-Prefer:
+## Cold admission
 
-- compile-time or model-load-time registries;
-- immutable plans and compatibility keys;
-- direct calls, compact tagged records, function pointers, or templates after compilation;
-- preallocated buffers;
-- RAII for CUDA resources and scoped fan-out state;
-- explicit event-based completion;
-- measured changes with before/after artifacts.
+Permit only bounded work required by an actual miss:
 
-Any material performance regression must be explained and either fixed or explicitly rejected. File count and line count are not success metrics.
+- a compact unique cold list;
+- capped parallel I/O;
+- preallocated or explicitly bounded metadata;
+- no storage I/O while holding a global cache/residency lock;
+- event-based transfer completion;
+- atomic publication after all mandatory payloads are valid;
+- backpressure rather than unbounded task queues;
+- explicit error if a batch cannot fit the configured cache.
+
+## CPU disk-backed execution
+
+Preserve:
+
+- metadata-only pack opening;
+- lazy payload reads;
+- concurrent independent reads;
+- one-expert-at-a-time pack construction;
+- bounded steady-state RAM;
+- leases that outlive active GEMVs;
+- native GGUF mmap/page-cache behavior.
+
+Any material regression must be measured, explained, and fixed or explicitly rejected. File count and line count are not success metrics.
 
 ---
 
-# Required verification commands
+# CI and verification requirements
 
-Adapt paths to the active build environment, but run the repository's actual supported equivalents:
+The current GitHub workflow has important limits:
+
+- Linux CPU runs full `verify` and VNNI/linkage checks;
+- Windows CPU runs full `verify`;
+- Linux CUDA builds in a CUDA container without a GPU and currently invokes verification with Celeg tests disabled;
+- Windows CUDA is compile-only with tests disabled;
+- neither hosted CUDA job proves runtime expert residency, kernel correctness, or performance on a real device.
+
+Required repository commands, adapted to the environment:
 
 ```text
 python scripts/check_architecture_boundaries.py --root .
-python scripts/dev.py verify
+python scripts/dev.py verify --backend cpu --build-type Release
+python scripts/dev.py verify --backend cuda --arch <arch> --build-type Release
 ctest --test-dir <configured-build-dir> --output-on-failure
+git diff --check
 ```
 
-Also run:
+Verification reporting must separate:
 
-- CPU target build;
-- CUDA target build when a CUDA toolchain is available;
-- CUDA runtime tests only when a usable device is available;
-- representative benchmark manifests before and after hot-path changes;
-- `git diff --check`;
-- any formatter or lint command already established by the repository.
+1. CPU compile and runtime tests;
+2. CUDA compile validation;
+3. host-only CUDA-linked tests;
+4. CUDA runtime tests on a real GPU;
+5. numerical parity;
+6. allocation/synchronization evidence;
+7. performance benchmarks.
 
-If the full wrapper cannot finish, report the exact incomplete command and still run focused builds/tests. Never present compilation as runtime validation.
+Improve CI where practical so CUDA-independent cache/source/policy tests run in CUDA builds even without a device. Real-GPU tests require a self-hosted runner or explicit local evidence; do not pretend a hosted compile job supplies that evidence.
 
 ---
 
 # Commit and working rules
 
-- Work on the current target branch unless explicitly instructed otherwise.
-- Do not create a pull request as part of this task.
-- Use small, coherent commits whose messages describe the architectural outcome.
-- Do not mix unrelated performance tuning with structural refactoring.
-- Add regression tests before changing behavior for confirmed defects.
-- Do not preserve dead compatibility paths without evidence that they are public and required.
-- Do not add speculative abstractions for hypothetical families or backends.
-- Do not stop after updating documentation; implement the code and tests.
-- Do not declare a phase complete merely because code moved into another file.
+- work on the current target branch unless explicitly instructed otherwise;
+- do not open a pull request for this plan;
+- use small coherent commits describing architectural outcomes;
+- keep correctness fixes separate from optional performance tuning where possible;
+- add regression tests before changing behavior for confirmed defects;
+- do not preserve dead compatibility paths without evidence they are public and required;
+- do not add speculative abstractions for hypothetical families, sources, or backends;
+- do not hide synchronization or allocation inside innocent-looking helpers;
+- do not replace explicit code with a generic parameter/callback maze;
+- do not stop after documentation changes;
+- do not declare a phase complete merely because code moved files.
 
 ---
 
@@ -704,12 +1145,15 @@ If the full wrapper cannot finish, report the exact incomplete command and still
 When implementation is complete, provide:
 
 1. the resulting commit range;
-2. a concise mapping of each finding to changed files and tests;
-3. before/after SOLID and DRY assessment with evidence;
+2. a mapping of each finding to changed files and tests;
+3. before/after SOLID, DRY, packed-execution, and expert-residency assessment with evidence;
 4. commands run and exact results;
-5. benchmarks and allocation evidence for hot-path changes;
-6. any remaining debt, separated into correctness, architecture, DRY, performance, and optional enhancement categories;
-7. explicit confirmation that generic runtime no longer knows concrete families, C API no longer constructs concrete backends, and packed pipelines own their workflows;
-8. updated repository documentation pointing to final contracts and tests.
+5. cache-policy and failure-transition test results;
+6. CPU pack laziness and bounded-memory evidence;
+7. CUDA hit/miss allocation, synchronization, and benchmark evidence;
+8. CI status separated into compile-only and real-device validation;
+9. remaining debt separated into correctness, architecture, DRY, performance, and optional enhancement categories;
+10. explicit confirmation that generic runtime no longer knows concrete families or formats, C API no longer constructs concrete backends, packed pipelines own their workflows, and expert storage tiers have explicit ownership/lifetime contracts;
+11. updated documentation pointing to final contracts and executable tests.
 
-Do not claim completion for any item lacking source and test evidence.
+Do not claim completion for any item lacking source, test, and—where performance is involved—measurement evidence.
