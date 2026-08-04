@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <limits>
 #include <algorithm>
+#include <cmath>
 
 namespace celeg {
 
@@ -118,6 +119,39 @@ PinnedExpertCache::~PinnedExpertCache() {
     }
 }
 
+uint64_t PinnedExpertCache::expert_key(int layer, int expert) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(layer)) << 32) |
+           static_cast<uint32_t>(expert);
+}
+
+void PinnedExpertCache::decay_heat_if_needed() {
+    if (tick_ - last_decay_tick_ < kHeatDecayInterval) return;
+
+    const uint64_t intervals = (tick_ - last_decay_tick_) / kHeatDecayInterval;
+    const double factor = std::pow(kHeatDecayFactor, static_cast<double>(intervals));
+    for (auto it = heat_.begin(); it != heat_.end();) {
+        it->second.heat *= factor;
+        if (it->second.heat < 1.0e-6) {
+            it = heat_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    last_decay_tick_ += intervals * kHeatDecayInterval;
+}
+
+void PinnedExpertCache::record_access(int layer, int expert) {
+    decay_heat_if_needed();
+    HeatEntry& entry = heat_[expert_key(layer, expert)];
+    entry.heat += 1.0;
+    entry.last_touch = tick_;
+}
+
+double PinnedExpertCache::current_heat(int layer, int expert) const {
+    const auto it = heat_.find(expert_key(layer, expert));
+    return it == heat_.end() ? 0.0 : it->second.heat;
+}
+
 int PinnedExpertCache::find_slot(int layer, int expert) {
     for (int i = 0; i < capacity_; ++i) {
         if (slots_[i].layer == layer && slots_[i].expert == expert) {
@@ -128,21 +162,31 @@ int PinnedExpertCache::find_slot(int layer, int expert) {
 }
 
 int PinnedExpertCache::choose_victim_slot() {
-    // 1. Prefer empty slots
+    // 1. Prefer empty slots.
     for (int i = 0; i < capacity_; ++i) {
         if (slots_[i].layer == -1 && slots_[i].ref_count == 0 && !slots_[i].loading) {
             return i;
         }
     }
-    // 2. Choose LRU non-referenced, non-loading slot
+
+    // 2. Evict the coldest non-referenced, non-loading slot. Heat is a
+    // periodically decayed access frequency; the recency bonus breaks close
+    // calls in favour of keeping a recently used expert.
     int victim = -1;
+    double lowest_priority = std::numeric_limits<double>::infinity();
     uint64_t oldest = std::numeric_limits<uint64_t>::max();
     for (int i = 0; i < capacity_; ++i) {
-        if (slots_[i].ref_count == 0 && !slots_[i].loading) {
-            if (slots_[i].last_used < oldest) {
-                oldest = slots_[i].last_used;
-                victim = i;
-            }
+        const CacheSlot& slot = slots_[i];
+        if (slot.ref_count != 0 || slot.loading) continue;
+
+        const uint64_t age = tick_ >= slot.last_used ? tick_ - slot.last_used : 0;
+        const double recency_bonus = 1.0 / (1.0 + static_cast<double>(age));
+        const double priority = current_heat(slot.layer, slot.expert) + recency_bonus;
+        if (priority < lowest_priority ||
+            (priority == lowest_priority && slot.last_used < oldest)) {
+            lowest_priority = priority;
+            oldest = slot.last_used;
+            victim = i;
         }
     }
     return victim;
@@ -155,6 +199,7 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
     {
         std::unique_lock<std::mutex> lock(mutex_);
         tick_++;
+        record_access(layer, expert);
         slot_idx = find_slot(layer, expert);
 
         if (slot_idx >= 0) {
