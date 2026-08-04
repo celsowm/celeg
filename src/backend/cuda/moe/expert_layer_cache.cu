@@ -85,6 +85,7 @@ void ExpertLayerCache::set_policy(ExpertCachePolicy policy) {
     protected_count_ = 0;
     for (Slot& slot : slots_) {
         slot.protected_entry = false;
+        slot.batch_pinned = false;
         slot.observed_accesses = slot.expert >= 0 ? 1U : 0U;
     }
 }
@@ -133,6 +134,10 @@ int ExpertLayerCache::resolve_on_device(
     std::vector<float>& cold_scores_host) {
     const int total = rows * K;
     if (total == 0) return 0;
+
+    // The caller waits for the previous FFN and prefetch events before this
+    // method, so slots pinned for the preceding batch are safe to release now.
+    for (Slot& slot : slots_) slot.batch_pinned = false;
 
     const int zero = 0;
     CELEG_CUDA(cudaMemcpyAsync(cold_count_dev_.data(), &zero, sizeof(int),
@@ -257,7 +262,7 @@ int ExpertLayerCache::choose_coldest_protected(int except_slot) const {
     for (int slot = 0; slot < capacity_; ++slot) {
         if (slot == except_slot) continue;
         const Slot& entry = slots_[static_cast<size_t>(slot)];
-        if (entry.expert < 0 || !entry.protected_entry) continue;
+        if (entry.expert < 0 || !entry.protected_entry || entry.batch_pinned) continue;
         if (best < 0 || priority(entry.expert) <
                             priority(slots_[static_cast<size_t>(best)].expert) ||
             (priority(entry.expert) ==
@@ -316,7 +321,8 @@ void ExpertLayerCache::promote(int expert, int slot, cudaStream_t stream,
                               down_bytes_, cudaMemcpyDefault, stream));
     entry.expert = expert;
     entry.protected_entry = false;
-    entry.observed_accesses = 1;
+    entry.batch_pinned = false;
+    entry.observed_accesses = 0;
     entry.last_used = ++lru_tick_;
     expert_slot_[static_cast<size_t>(expert)] = slot;
     last_used_[static_cast<size_t>(expert)] = entry.last_used;
@@ -355,7 +361,8 @@ void ExpertLayerCache::promote(int expert, int slot,
                               down_bytes_, cudaMemcpyDefault, stream));
     entry.expert = expert;
     entry.protected_entry = false;
-    entry.observed_accesses = 1;
+    entry.batch_pinned = false;
+    entry.observed_accesses = 0;
     entry.last_used = ++lru_tick_;
     expert_slot_[static_cast<size_t>(expert)] = slot;
     last_used_[static_cast<size_t>(expert)] = entry.last_used;
@@ -376,6 +383,7 @@ void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
     expert_slot_[static_cast<size_t>(expert)] = -1;
     entry.expert = -1;
     entry.protected_entry = false;
+    entry.batch_pinned = false;
     entry.observed_accesses = 0;
     entry.last_used = 0;
     publish_pointer(expert, gate_up_host_dev_[static_cast<size_t>(expert)],
@@ -385,7 +393,8 @@ void ExpertLayerCache::evict(int slot, cudaStream_t stream) {
 int ExpertLayerCache::choose_victim(bool speculative) const {
     if (capacity_ <= 0) return -1;
     for (int slot = 0; slot < capacity_; ++slot) {
-        if (slots_[static_cast<size_t>(slot)].expert < 0) return slot;
+        const Slot& entry = slots_[static_cast<size_t>(slot)];
+        if (entry.expert < 0 && !entry.batch_pinned) return slot;
     }
 
     auto better = [this](int candidate, int current) {
@@ -407,13 +416,14 @@ int ExpertLayerCache::choose_victim(bool speculative) const {
     if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
         for (int slot = 0; slot < capacity_; ++slot) {
             const Slot& entry = slots_[static_cast<size_t>(slot)];
-            if (entry.protected_entry) continue;
+            if (entry.protected_entry || entry.batch_pinned) continue;
             if (best < 0 || better(slot, best)) best = slot;
         }
         if (best >= 0 || speculative) return best;
     }
 
     for (int slot = 0; slot < capacity_; ++slot) {
+        if (slots_[static_cast<size_t>(slot)].batch_pinned) continue;
         if (best < 0 || better(slot, best)) best = slot;
     }
     return best;
@@ -440,6 +450,7 @@ void ExpertLayerCache::touch(int expert, float score) {
     const int slot = expert_slot_[static_cast<size_t>(expert)];
     if (slot < 0) return;
     Slot& entry = slots_[static_cast<size_t>(slot)];
+    entry.batch_pinned = true;
     entry.last_used = tick;
     last_used_[static_cast<size_t>(expert)] = tick;
     if (entry.observed_accesses < std::numeric_limits<uint32_t>::max()) {
@@ -467,6 +478,7 @@ bool ExpertLayerCache::ensure_resident(int expert, cudaStream_t stream,
     const int slot = choose_victim(false);
     if (slot < 0) return false;
     promote(expert, slot, stream, score);
+    slots_[static_cast<size_t>(slot)].batch_pinned = true;
     return true;
 }
 
@@ -487,6 +499,7 @@ bool ExpertLayerCache::ensure_resident(int expert,
     const int slot = choose_victim(false);
     if (slot < 0) return false;
     promote(expert, slot, gate_up_src, down_src, stream, score);
+    slots_[static_cast<size_t>(slot)].batch_pinned = true;
     return true;
 }
 
