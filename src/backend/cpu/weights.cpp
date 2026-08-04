@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -245,9 +246,13 @@ void CpuCompiledModel::Shared::prepare_pack_path() {
     if (error) throw std::runtime_error("cannot create CPU pack cache: " + error.message());
     const std::string source = source_identity(model_path);
     const size_t id = std::hash<std::string>{}(source);
-    const std::string model_id = model_identity.empty() ? "unknown" : model_identity;
+    // Keep the on-disk name short.  The full topology fingerprint is useful
+    // for diagnostics but can exceed MAX_PATH for large LFM2.5 models whose
+    // vocab/layer schedule is encoded in the identity string.
+    const size_t model_hash = std::hash<std::string>{}(model_identity);
     std::ostringstream filename;
-    filename << model_id << '-' << std::hex << id << "-q4g" << group_size
+    filename << "celeg-" << std::hex << model_hash << '-' << id
+             << "-q4g" << group_size
              << '-' << cpu_isa_name(options.isa) << ".lfmpack";
     pack_file = directory / filename.str();
     source_id = source;

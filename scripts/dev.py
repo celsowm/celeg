@@ -522,6 +522,19 @@ def discover_environment(
 
     msvc_include_prefix = ""
     if system == "windows":
+        # VsDevCmd invokes vswhere.exe by name.  Some Windows installations
+        # have NoDefaultCurrentDirectoryInExePath enabled, so relying on the
+        # installer directory as the current directory is not sufficient.
+        installer_root = env_value(values, "ProgramFiles(x86)")
+        if installer_root:
+            prepend_path(
+                values,
+                [
+                    pathlib.Path(installer_root)
+                    / "Microsoft Visual Studio"
+                    / "Installer"
+                ],
+            )
         vcvars = discover_vcvars(values, runner)
         if vcvars:
             try:

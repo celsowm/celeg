@@ -112,6 +112,34 @@ int main() {
     CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(!model.graph.has_moe());
 
+    // LFM2.5-2.6B (Transformers 5.x config) keeps RoPE under the nested
+    // rope_parameters object and uses a 128k vocabulary/context.
+    auto lfm25_26b = lfm_metadata("LiquidAI/LFM2.5-2.6B");
+    lfm25_26b.values["intermediate_size"] = int64_t(10752);
+    lfm25_26b.values["num_hidden_layers"] = int64_t(30);
+    lfm25_26b.values["vocab_size"] = int64_t(128000);
+    lfm25_26b.values["max_position_embeddings"] = int64_t(128000);
+    lfm25_26b.values["bos_token_id"] = int64_t(124894);
+    lfm25_26b.values["eos_token_id"] = int64_t(124900);
+    lfm25_26b.values["pad_token_id"] = int64_t(124893);
+    lfm25_26b.values.erase("rope_theta");
+    lfm25_26b.values["rope_parameters.rope_theta"] = 10000000.0;
+    lfm25_26b.values["layer_types"] = std::vector<std::string>{
+        "conv", "conv", "full_attention", "conv", "conv", "full_attention",
+        "conv", "conv", "conv", "full_attention", "conv", "conv", "conv",
+        "full_attention", "conv", "conv", "conv", "full_attention", "conv",
+        "conv", "conv", "full_attention", "conv", "conv", "full_attention",
+        "conv", "conv", "full_attention", "conv", "conv"};
+    celeg::CheckpointView lfm25_checkpoint;
+    lfm25_checkpoint.metadata = lfm25_26b;
+    const celeg::ResolvedModel lfm25_model = architecture.resolve(lfm25_checkpoint);
+    CELEG_TEST_CHECK(lfm25_model.topology.vocab_size == 128000);
+    CELEG_TEST_CHECK(lfm25_model.topology.num_hidden_layers == 30);
+    CELEG_TEST_CHECK(lfm25_model.topology.token_policy.bos_token_id == 124894);
+    CELEG_TEST_CHECK(lfm25_model.topology.token_policy.eos_token_ids ==
+                     std::vector<int>{124900});
+    CELEG_TEST_CHECK(lfm25_model.topology.attention_layout(2).rope_theta == 10000000.0);
+
     celeg::CheckpointMetadata minicpm5;
     minicpm5.repository_hint = "openbmb/MiniCPM5-1B";
     minicpm5.values["model_type"] = std::string("llama");

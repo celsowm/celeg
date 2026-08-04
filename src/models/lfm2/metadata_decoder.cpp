@@ -50,6 +50,12 @@ Lfm2Metadata decode_lfm2_metadata(const CheckpointMetadata& metadata) {
     result.max_position_embeddings = integer(metadata, result.gguf, "max_position_embeddings", "context_length");
     result.norm_eps = number_or(metadata, result.gguf, "norm_eps", "attention.layer_norm_rms_epsilon", 1.0e-5f);
     result.rope_theta = number_or(metadata, result.gguf, "rope_theta", "rope.freq_base", 1.0e6f);
+    // Transformers 5.x emits the RoPE setting under the nested
+    // `rope_parameters` object. LFM2.5-2.6B uses this layout and a 10M base.
+    if (!result.gguf && metadata.contains("rope_parameters.rope_theta")) {
+        result.rope_theta = static_cast<float>(
+            metadata.number("rope_parameters.rope_theta"));
+    }
     result.bos_token_id = integer_or(metadata, result.gguf, "bos_token_id", "", 1);
     result.eos_token_id = integer_or(metadata, result.gguf, "eos_token_id", "", 7);
     result.pad_token_id = integer_or(metadata, result.gguf, "pad_token_id", "", 0);
