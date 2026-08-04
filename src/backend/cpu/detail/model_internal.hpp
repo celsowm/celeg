@@ -9,9 +9,11 @@
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/model/weights/roles.hpp"
+#include "expert_cache.hpp"
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <utility>
@@ -20,16 +22,11 @@
 
 namespace celeg {
 
-// Capacity-managed activation storage shared by all CPU execution modes.
-// The executor chooses the row count; buffers are retained between calls.
 struct CpuWorkspace {
     void ensure(size_t rows, const RuntimeTopology& shape) {
         hidden.resize(rows * shape.hidden);
         residual.resize(rows * shape.hidden);
         normed.resize(rows * shape.hidden);
-        // Attention output is still laid out as [query_heads, head_dim] until
-        // the layer's output projection. Full-attention Gemma layers can be
-        // wider than the residual hidden state.
         op_output.resize(rows * static_cast<size_t>(shape.maximum_attention_query_heads()) *
                          static_cast<size_t>(shape.maximum_attention_head_dim()));
         qkv.resize(rows * static_cast<size_t>(shape.maximum_attention_projection_width()));
@@ -88,23 +85,22 @@ struct CpuCompiledModel {
     struct ConvolutionWeights {
         CommonWeights common;
         CpuLinearWeight in;
-        // [tap][channel], so a tap is contiguous for SIMD/vector kernels.
         std::vector<float> weight_tap_major;
         CpuLinearWeight out;
     };
     struct MoeWeights {
         CommonWeights common;
-        // Every MoE layer still has an LFM operator (attention or
-        // short-convolution) before its routed FFN.
         std::variant<AttentionWeights, ConvolutionWeights> operator_layer;
-        std::vector<float> router;            // [num_experts * hidden]
-        std::vector<float> router_bias;       // [num_experts] (empty if unused)
-        std::vector<CpuLinearWeight> expert_w13;  // [num_experts]
-        std::vector<CpuLinearWeight> expert_w2;   // [num_experts]
+        std::vector<float> router;
+        std::vector<float> router_bias;
+        std::vector<CpuLinearWeight> expert_w13;
+        std::vector<CpuLinearWeight> expert_w2;
+        int layer_index = -1;
         int num_experts = 0;
         int experts_per_token = 0;
         bool normalize_topk = false;
         bool use_expert_bias = false;
+        bool disk_cached = false;
         float routed_scaling_factor = 1.0f;
     };
     using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights, MoeWeights>;
@@ -146,6 +142,8 @@ struct CpuCompiledModel {
                                        class CpuPackWriter* writer,
                                        const std::string& name,
                                        const std::vector<int64_t>& expected);
+        std::shared_ptr<const CpuExpertWeights> acquire_expert(int layer,
+                                                               int expert);
         size_t weights_memory_bytes() const;
 
         std::string model_path;
@@ -168,6 +166,9 @@ struct CpuCompiledModel {
         bool tie_word_embeddings = true;
         float final_logit_softcap = 0.0f;
         CpuWeightStore weight_store;
+        std::unique_ptr<CpuPackReader> expert_pack_reader;
+        std::unique_ptr<CpuExpertCache> expert_cache;
+        mutable std::mutex expert_pack_mutex;
         std::vector<std::shared_ptr<CpuKvPagePool>> kv_pools;
         std::vector<int> layer_to_kv_pool;
         std::vector<int> layer_to_kv_owner;
@@ -199,8 +200,8 @@ struct CpuCompiledModel {
     };
 
     CpuCompiledModel(std::shared_ptr<Shared> shared_weights,
-         GenerationConfig generation_config,
-         int preferred_numa_node = -1);
+                     GenerationConfig generation_config,
+                     int preferred_numa_node = -1);
     ~CpuCompiledModel();
 
     void allocate_state();
