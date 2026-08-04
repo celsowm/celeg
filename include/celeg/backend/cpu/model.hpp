@@ -17,6 +17,11 @@
 
 namespace celeg {
 
+enum class CpuExpertBacking {
+    Memory,
+    DiskCached,
+};
+
 struct CpuModelOptions {
     CpuIsa isa = CpuIsa::Auto;
     CpuWeightFormat weight_format = CpuWeightFormat::Q4Group32;
@@ -31,6 +36,8 @@ struct CpuModelOptions {
     size_t attention_parallel_threshold = 256;
     size_t attention_page_tile = 4;
     CpuNumaMode numa_mode = CpuNumaMode::Disabled;
+    CpuExpertBacking expert_backing = CpuExpertBacking::Memory;
+    size_t expert_cache_bytes = 512ULL << 20;
 };
 
 struct CpuModelMemoryStats {
@@ -76,8 +83,6 @@ public:
     void prefill(const std::vector<int32_t>& tokens,
                  const PromptEmbedding& embeddings);
     int32_t decode();
-    // Advances the session with a caller-supplied token without sampling.
-    // Intended for direct-evaluation benchmarks and deterministic replay.
     void eval_token(int32_t token);
     void set_generation_config(GenerationConfig generation);
     int position() const;
@@ -143,15 +148,11 @@ public:
     CpuPersistence& persistence() { return persistence_view_; }
     const CpuPersistence& persistence() const { return persistence_view_; }
 
-    // Creates a new mutable inference session that reuses the same immutable
-    // packed weights and the same persistent CPU thread pool.
     std::unique_ptr<CpuModel> clone_session() const;
     std::unique_ptr<CpuModel> clone_session_on_node(int numa_node) const;
 
     std::vector<std::shared_ptr<CpuKvPagePool>> shared_kv_pools() const;
 
-    // Batch operations are the only packed-execution boundary. They keep
-    // weights and mutable session state opaque to callers.
     static CpuBatchMetrics prefill_batch(std::span<const CpuPrefillItem> items);
     static CpuBatchMetrics prefill_chunk(CpuModel& session,
                                          std::span<const int32_t> tokens,
@@ -185,18 +186,14 @@ private:
     const std::filesystem::path& session_pack_path() const;
     bool session_loaded_from_pack() const;
     uint64_t session_attention_parallel_calls() const;
-    CpuPrefixSnapshot export_session_prefix() const;
-    void restore_session_prefix(CpuPrefixSnapshot snapshot, bool ready_for_decode);
+    CpuPrefixSnapshot export_session_prefix_snapshot() const;
+    void restore_session_prefix_snapshot(CpuPrefixSnapshot snapshot,
+                                         bool ready_for_decode);
 
-    explicit CpuModel(std::unique_ptr<CpuCompiledModel> compiled_model);
-    std::unique_ptr<CpuCompiledModel> state_;
+    std::unique_ptr<CpuCompiledModel> impl_;
     CpuInferenceSession session_view_;
     CpuDiagnostics diagnostics_view_;
     CpuPersistence persistence_view_;
-
 };
-
-const char* cpu_kv_cache_mode_name(CpuKvCacheMode mode);
-CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text);
 
 } // namespace celeg
