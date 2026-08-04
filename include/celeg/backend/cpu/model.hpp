@@ -165,6 +165,8 @@ private:
     friend class CpuDiagnostics;
     friend class CpuPersistence;
 
+    explicit CpuModel(std::unique_ptr<CpuCompiledModel> impl);
+
     void reset_session();
     void prefill_session(const std::vector<int32_t>& tokens);
     void prefill_session(const std::vector<int32_t>& tokens,
@@ -186,11 +188,11 @@ private:
     const std::filesystem::path& session_pack_path() const;
     bool session_loaded_from_pack() const;
     uint64_t session_attention_parallel_calls() const;
-    CpuPrefixSnapshot export_session_prefix_snapshot() const;
-    void restore_session_prefix_snapshot(CpuPrefixSnapshot snapshot,
-                                         bool ready_for_decode);
+    CpuPrefixSnapshot export_session_prefix() const;
+    void restore_session_prefix(CpuPrefixSnapshot snapshot,
+                                bool ready_for_decode);
 
-    std::unique_ptr<CpuCompiledModel> impl_;
+    std::unique_ptr<CpuCompiledModel> state_;
     CpuInferenceSession session_view_;
     CpuDiagnostics diagnostics_view_;
     CpuPersistence persistence_view_;
