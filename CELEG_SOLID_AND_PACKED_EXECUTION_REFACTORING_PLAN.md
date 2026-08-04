@@ -1,12 +1,11 @@
-# Celeg SOLID, DRY, Packed Execution, and Expert Residency Refactoring Plan
+# Celeg SOLID, DRY, Packed Execution, Expert Residency, and Multi-MoE Refactoring Plan
 
 **Repository:** `celsowm/celeg`  
 **Target branch:** current default branch (`master`)  
-**Reviewed head:** `79fdba3347cdec14b23a8efd3eb8166e486fbe6f`  
-**Previous plan baseline:** `7d000d1607d7081547f6dfece82f2682b0535ac6`  
+**Reviewed code head:** `79fdba3347cdec14b23a8efd3eb8166e486fbe6f`  
+**Previous plan commit:** `d1af6567d42031c9ac85736d93d824fccee3b6cd`  
 **Review date:** 2026-08-04  
-**Review delta:** 36 commits after the previous baseline  
-**Primary goal:** finish the SOLID and DRY refactoring while preserving Celeg's CPU/CUDA performance model and making the new SSD → RAM → VRAM expert hierarchy correct, bounded, observable, and independently testable.
+**Primary goal:** finish the SOLID and DRY refactoring while preserving Celeg's CPU/CUDA performance model, making the SSD → RAM → VRAM expert hierarchy correct and bounded, and introducing a model-neutral compiled MoE contract so additional MoE families do not require architecture checks or LFM-specific assumptions inside the backends.
 
 ---
 
@@ -14,15 +13,73 @@
 
 Act as a senior C++/CUDA inference-runtime architect working directly on the Celeg repository.
 
-This document is an execution plan, not a request for another architecture report. Verify every finding against the current branch, implement the work in coherent stages, add tests before changing behavior for confirmed defects, and leave the repository buildable after every completed stage.
+This is an implementation plan, not a request for another architecture report. Verify each finding against the current branch, implement the work in coherent stages, add regression tests before changing confirmed behavior, and leave the repository buildable after every completed stage.
 
 Do not reintroduce architecture enums, model variants, checkpoint-format branching in backends, concrete service construction in generic APIs, or virtual dispatch inside transformer inner loops.
 
 ---
 
-## What changed since the previous plan
+## Architectural destination
 
-The earlier SOLID/DRY findings remain largely valid, but the repository now also contains a substantial expert-storage subsystem:
+The intended dependency and compilation flow is:
+
+```text
+checkpoint formats
+        ↓
+family-owned architecture resolution
+        ↓
+neutral ResolvedModel + semantic layer programs
+        ↓
+CPU/CUDA backend compilation and binding
+        ↓
+backend-specific executable plans
+        ↓
+preallocated execution, residency, and serving
+```
+
+For MoE layers specifically:
+
+```text
+family metadata and tensor naming
+        ↓
+neutral compiled MoE semantics
+        ↓
+backend lowering
+        ↓
+router execution → selected ExpertKey set
+        ↓
+expert source/cache/residency
+        ↓
+expert kernels and output combination
+```
+
+The family owns **what the model means**. The backend owns **how those semantics execute**. The residency subsystem owns **where the required expert payload currently lives**. None of these layers should identify a model family by name.
+
+Preserve the core execution strategy:
+
+```text
+resolve once
+compile once
+bind once
+allocate once
+execute many times
+```
+
+For storage-backed experts, extend it with:
+
+```text
+index once
+read on demand
+lease while active
+publish only after transfer
+release after completion
+```
+
+---
+
+## What changed since the earlier plan
+
+The repository now contains a substantial expert-storage subsystem:
 
 - CUDA SSD backing with a shared host cache and per-layer VRAM residency;
 - active-FFN pinning and probation-slot reservation;
@@ -31,58 +88,64 @@ The earlier SOLID/DRY findings remain largely valid, but the repository now also
 - CPU disk-backed experts loaded lazily from `.lfmpack`;
 - concurrent indexed CPU pack reads;
 - shared CPU expert caches across cloned sessions;
-- streaming pack creation that does not retain all expert payloads in RAM;
+- streaming pack creation that does not retain every expert payload in RAM;
 - tests proving lazy pack payload access and basic cache behavior;
 - documentation for CPU and CUDA SSD tiers.
 
-These are valuable capabilities, but they introduced new ownership, dependency, lifetime, metrics, synchronization, and DRY concerns that the previous plan did not cover.
+These capabilities are valuable, but the current design still assumes parts of the LFM expert representation in supposedly reusable infrastructure. Decoupling cache and residency alone is insufficient: a second MoE family also needs a neutral description of routing, expert tensor layout, optional shared experts, execution, and output combination.
 
-The implementation order must therefore change: stabilize and decouple expert storage first, then continue with runtime modules, backend factories, text/model DRY, and packed-execution ownership.
+The plan therefore adds a first-class **model-neutral compiled MoE program** before completing the source/cache/residency refactoring.
 
 ---
 
 ## Definition of success
 
-The refactoring is complete only when all of the following are true:
+The work is complete only when all of the following are true:
 
-1. a new model family can register architecture, chat, tool, tokenizer, vision, and other family-owned providers through one coherent registration boundary;
+1. a new family registers architecture, chat, tools, tokenizer, vision, and other family-owned providers through one coherent module boundary;
 2. generic runtime composition does not include, construct, or name concrete model families;
-3. backend selection returns a fully constructed service bundle through a real backend factory;
-4. the C API translates ABI data but does not construct concrete CPU or CUDA services;
-5. packed decode and ragged prefill have distinct workflow owners rather than pass-through wrappers around a god executor;
-6. SSD expert source access, host caching, GPU residency, transfer scheduling, and usage metrics have explicit owners;
-7. a generic runtime cache does not depend on Safetensors, CUDA, or the LFM-specific `gate_up`/`down` payload layout;
-8. active expert payloads cannot be evicted until their CPU GEMVs or CUDA FFN transfers and execution have completed;
-9. the all-resident CUDA expert path performs no disk I/O, heap allocation, worker-pool submission, or unconditional stream synchronization;
-10. cold expert admission is bounded by configured RAM/VRAM budgets and fails before publishing partial residency state;
-11. CPU `.lfmpack` opening remains metadata-only and payloads remain lazy until a routed expert is acquired;
-12. cache hit, true miss, coalesced wait, eviction, storage-read, host-to-device transfer, and wait-time metrics have documented semantics;
-13. shared semantic rules—packed compatibility, common batch validation, cache keys/scoring where truly identical, JSON escaping, tagged-block handling, and dense topology construction—have one authoritative implementation;
-14. CPU and CUDA mechanisms remain separate where their storage, synchronization, and kernel behavior genuinely differ;
-15. no architecture/checkpoint probing, repeated tensor lookup, plan construction, or dynamic polymorphic graph traversal is introduced into execution hot paths;
-16. tests and architecture checks cover every extracted boundary and every failure transition;
-17. CI output distinguishes compile-only CUDA validation from runtime validation on a real GPU;
-18. documentation describes the final implementation rather than an intended design.
+3. each MoE layer is represented by an immutable neutral semantic program produced during architecture resolution or compilation;
+4. CPU and CUDA backends consume that neutral MoE program without checking an architecture identity;
+5. LFM-specific `gate_up`/`down`, stacked-tensor, routing, normalization, bias, or scaling assumptions do not leak into neutral cache/residency contracts;
+6. standard routed top-K, optional shared experts, grouped routing, expert bias, routing normalization, routed scaling, and different expert payload layouts can be represented without adding family flags;
+7. an unsupported MoE semantic operation is rejected during backend compilation with a useful diagnostic, not discovered inside decode;
+8. backend selection returns a fully constructed service bundle through a real factory;
+9. the C API translates ABI data but does not construct concrete CPU or CUDA services;
+10. packed decode and ragged prefill have distinct workflow owners rather than pass-through wrappers around a god executor;
+11. SSD source access, host caching, GPU residency, transfer scheduling, and usage metrics have explicit owners;
+12. a generic runtime cache does not depend on SafeTensors, CUDA, or a particular expert payload layout;
+13. active expert payloads cannot be evicted until CPU GEMVs or CUDA transfers and FFN execution have completed;
+14. the all-resident CUDA expert path performs no disk I/O, heap allocation, worker-pool submission, full-selection D2H copy, or unconditional stream synchronization;
+15. cold expert admission is bounded by configured RAM/VRAM budgets and fails before publishing partial residency state;
+16. CPU `.lfmpack` opening remains metadata-only and payloads remain lazy until a routed expert is acquired;
+17. cache hit, true miss, coalesced wait, eviction, storage read, H2D transfer, and wait-time metrics have documented semantics;
+18. shared semantic rules have one authoritative implementation where they genuinely share reasons to change;
+19. CPU and CUDA mechanisms remain separate where their storage, synchronization, quantization, and kernel behavior differ;
+20. no architecture probing, repeated tensor lookup, plan construction, or dynamic polymorphic graph traversal is introduced into hot paths;
+21. tests and architecture checks cover each extracted boundary and failure transition;
+22. CI reporting distinguishes compile-only CUDA validation from runtime validation on a real GPU;
+23. final documentation describes implemented contracts and extension paths rather than intentions.
 
 Target assessment after completion:
 
 | Area | Target |
 |---|---:|
-| Single Responsibility | 8.3+ |
-| Open/Closed | 8.5+ |
+| Single Responsibility | 8.4+ |
+| Open/Closed | 8.7+ |
 | Liskov Substitution | 8.5+ |
 | Interface Segregation | 8.8+ |
-| Dependency Inversion | 8.6+ |
+| Dependency Inversion | 8.8+ |
 | DRY | 8.4+ |
+| Multi-MoE extensibility | 8.6+ |
 | Packed execution | 8.2+ |
 | Expert residency/storage | 8.3+ |
-| Overall architecture | 8.5+ |
+| Overall architecture | 8.6+ |
 
 ---
 
 ## Preserve these improvements
 
-Do not undo the following design and performance gains:
+Do not undo:
 
 - `IArchitecture`, `ArchitectureCatalog`, architecture probing, and backend-neutral `ResolvedModel` resolution;
 - neutral checkpoint tensor and repository contracts;
@@ -100,33 +163,13 @@ Do not undo the following design and performance gains:
 - direct streaming writes during CPU pack construction;
 - compact indexed CPU pack readers that do not load payloads while opening;
 - concurrent indexed pack reads;
-- CPU cache sharing across sessions cloned from the same compiled model;
+- CPU cache sharing across cloned sessions;
 - coalescing concurrent loads of the same expert;
 - CUDA active-batch pinning;
 - CUDA probation-slot reservation for the complete unique cold set;
 - device-side cold-set discovery;
 - failure before host-visible state commit;
-- closed-domain switches that are explicitly documented and exhaustively tested.
-
-Preserve the core execution strategy:
-
-```text
-resolve once
-compile once
-bind once
-allocate once
-execute many times
-```
-
-For disk-backed experts, extend it with:
-
-```text
-index once
-read on demand
-lease while active
-publish only after transfer
-release after completion
-```
+- explicitly closed and exhaustively tested domains.
 
 ---
 
@@ -134,41 +177,39 @@ release after completion
 
 DRY means **one authoritative representation of knowledge**, not zero similar lines.
 
-A duplication is actionable when copies encode the same semantic rule and can silently diverge. Current examples include:
+Actionable shared knowledge currently includes:
 
-- what constitutes a cache key;
-- how access heat decays;
-- how frequency and recency combine into an eviction score;
-- when an entry moves from probation to protected status;
-- what a cache hit or miss counter means;
-- which options make packed sessions compatible;
+- expert key identity;
+- payload-region naming and offsets after a layout is compiled;
+- cache metric definitions;
+- heat decay and frequency/recency scoring only where semantics are identical;
+- packed compatibility identity;
 - common packed-session validation;
 - JSON escaping;
 - tagged tool-call block lifecycle;
 - standard dense-decoder topology construction;
-- model-family registration across catalogs.
+- family registration across runtime catalogs.
 
-Repetition is acceptable when implementations have independent reasons to change. Do not force one generic cache implementation over:
+Do not force one generic implementation over mechanisms with independent reasons to change:
 
 - CPU quantized expert objects;
-- raw host payload arenas used for CUDA transfers;
+- raw host staging payloads for CUDA transfers;
 - per-layer VRAM slot and pointer-table management;
 - native GGUF mappings;
 - BF16, INT8, INT4, GGUF, DP4A, tensor-core, or other materially different kernels;
 - CPU mutex/future coordination and CUDA stream/event coordination;
-- model-family probe rules and exceptional metadata semantics;
+- family probe rules and exceptional metadata semantics;
 - tensor naming policies for different checkpoint conventions;
-- tests whose similarity documents independent contracts;
-- intentionally closed public ABI enum translation.
+- intentionally closed public ABI translation.
 
 Before extracting shared code, answer:
 
 1. Is this the same knowledge or merely similar syntax?
 2. Must all copies change together when the rule changes?
-3. Can the contract be named without mentioning unrelated callers?
-4. Does the extraction reduce conditionals and parameters rather than move them?
-5. Can it be tested directly without constructing a complete model/backend?
-6. Does it preserve the hot-path allocation and dispatch model?
+3. Can the contract be named without mentioning unrelated callers or families?
+4. Does the extraction reduce parameters and conditionals rather than move them?
+5. Can it be tested without constructing a complete model/backend?
+6. Does it preserve hot-path allocation and dispatch behavior?
 
 If any answer is negative, keep the mechanisms separate and document the intentional difference.
 
@@ -176,46 +217,113 @@ If any answer is negative, keep the mechanisms separate and document the intenti
 
 # Current high-priority findings
 
-## 1. CUDA expert residency has become a second god orchestrator
+## 1. MoE semantics are not yet represented by a model-neutral compiled program
 
-### Evidence
+### Problem
 
-`SharedModelWeights::ensure_moe_experts_resident` currently coordinates:
+The current executable representation contains useful neutral topology, but the MoE path still exposes assumptions tied to the presently supported LFM layout and execution shape. Expert payload interpretation, router configuration, routed expert execution, residency pointer tables, and backend descriptors are too close to one concrete arrangement.
 
-- per-layer locking;
-- compute/transfer stream event dependencies;
-- cold-set discovery;
-- active-transfer lease cleanup;
-- cache hit/miss accounting;
-- usage-profile mutation;
-- asynchronous disk-read submission;
-- source selection between sidecar and repository reads;
-- host-cache acquisition;
-- waiting for I/O futures;
-- host-to-device promotion;
-- transfer-event creation;
-- residency-table publication;
-- resident-expert touching;
-- speculative prefetch ranking;
-- prefetch submission;
-- final event publication.
+A new MoE family may differ in one or more of the following:
 
-Its signature receives streams, four events, routing buffers, and several reusable host vectors. This is a parameter maze and a clear SRP boundary failure.
+- router score calculation;
+- top-K selection and normalization;
+- grouped or constrained expert selection;
+- expert bias and correction bias;
+- routed output scaling;
+- shared experts executed beside routed experts;
+- number of experts or experts-per-token by layer;
+- expert activation and MLP structure;
+- fused, stacked, individual, or differently ordered tensors;
+- multiple payload regions per expert;
+- quantization/storage encoding;
+- combination order between routed and shared output.
+
+Without a neutral semantic program, adding such a family risks backend architecture switches or an expanding structure full of LFM defaults and family-specific booleans.
 
 ### Required direction
 
-Introduce a CUDA expert-residency coordinator with typed inputs and explicit collaborators. The exact names may differ, but the responsibilities should resemble:
+Represent every MoE layer as immutable neutral semantics before backend binding. The exact names may differ, but the shape should resemble:
 
 ```cpp
-struct ExpertResidencyRequest {
-    int layer = -1;
-    int rows = 0;
-    int experts_per_token = 0;
-    const int* selected_experts = nullptr;
-    const float* route_scores = nullptr;
-    cudaStream_t compute_stream = nullptr;
+struct ExpertPayloadRegion {
+    TensorRole role;
+    std::size_t offset = 0;
+    std::size_t bytes = 0;
+    TensorDType dtype = TensorDType::Unknown;
 };
 
+struct ExpertPayloadSchema {
+    std::size_t total_bytes = 0;
+    std::vector<ExpertPayloadRegion> regions;
+};
+
+struct RouterProgram {
+    RouterScoreProgram score;
+    ExpertSelectionProgram selection;
+    RoutingNormalizationProgram normalization;
+    std::optional<ExpertBiasProgram> bias;
+};
+
+struct RoutedExpertProgram {
+    ExpertMlpProgram mlp;
+    ExpertPayloadSchema payload;
+};
+
+struct SharedExpertProgram {
+    ExpertMlpProgram mlp;
+    SharedExpertCombineProgram combine;
+};
+
+struct MoeLayerProgram {
+    RouterProgram router;
+    RoutedExpertProgram routed;
+    std::optional<SharedExpertProgram> shared;
+    MoeOutputProgram output;
+    ExpertResidencyRequirements residency;
+};
+```
+
+These are conceptual contracts, not mandatory exact types. Prefer compact value types, tagged semantic operations, and immutable spans owned by the compiled model. Do not create a virtual object graph or a mega-structure with nullable fields for every known family.
+
+The architecture/family resolver must translate checkpoint metadata into this neutral program. CPU and CUDA compilers must lower it into backend-specific executable descriptors and function choices. The hot path consumes only the lowered program.
+
+### Required boundaries
+
+- tensor naming and metadata interpretation remain family-owned;
+- the neutral program contains semantic roles, dimensions, policies, and compiled payload regions—not checkpoint tensor names;
+- residency receives `ExpertKey` plus an immutable payload schema/manifest, not architecture identity;
+- router execution produces selected expert identities independently of where weights reside;
+- source adapters materialize the payload required by the compiled schema;
+- backend lowering selects kernels once and rejects unsupported operations before session creation;
+- packed and standalone paths consume the same lowered MoE program;
+- no `if (family == ...)`, architecture enum, model-name string, or checkpoint-name suffix appears in backend execution.
+
+### Acceptance criteria
+
+- existing LFM MoE resolves into the neutral program and remains numerically equivalent;
+- a synthetic ordinary top-K routed MoE compiles without LFM names;
+- a synthetic MoE with a shared expert compiles and validates output combination order;
+- a synthetic grouped-routing program validates selection constraints;
+- payload tests cover stacked and individually located expert tensors;
+- layer-local expert counts, widths, and experts-per-token are representable or explicitly rejected during compilation;
+- CPU and CUDA compilers report unsupported semantic operations before allocating execution state;
+- backend tests use synthetic neutral programs rather than named architectures;
+- adding a compatible MoE family requires family-owned resolution/naming plus registration, not edits to generic backend orchestration;
+- program fingerprinting includes every execution-relevant MoE semantic and payload-layout field;
+- no architecture identity is required by expert cache, source, residency, router, or FFN execution.
+
+---
+
+## 2. CUDA expert residency has become a second god orchestrator
+
+`SharedModelWeights::ensure_moe_experts_resident` currently coordinates locking, event dependencies, cold discovery, transfer cleanup, metrics, source selection, disk reads, cache acquisition, future waits, H2D promotion, publication, resident touching, and prefetch.
+
+### Required direction
+
+Introduce typed collaborators:
+
+```cpp
+struct ExpertResidencyRequest;
 struct ExpertResidencyWorkspace;
 class IExpertSource;
 class IHostExpertCache;
@@ -223,198 +331,104 @@ class ExpertLayerResidency;
 class CudaExpertResidencyCoordinator;
 ```
 
-- `ExpertLayerResidency` owns VRAM slots, pointer tables, active-slot protection, and device residency metadata.
-- `IExpertSource` owns reading one expert payload from sidecar, SafeTensors random access, pack, or another source.
-- `IHostExpertCache` owns host-tier admission, coalescing, leasing, and eviction.
-- a bounded I/O executor owns worker threads and queue behavior.
-- the coordinator owns one residency transaction: discover, acquire, transfer, publish, prefetch, and complete.
-- metrics receive explicit events rather than being mutated opportunistically throughout the workflow.
-
-Do not replace the current method with one equally broad helper class.
+- `ExpertLayerResidency` owns VRAM slots, pointer tables, protection, and device metadata;
+- `IExpertSource` reads the payload described by the compiled schema;
+- `IHostExpertCache` owns host admission, coalescing, leases, and eviction;
+- a bounded I/O executor owns workers and queue behavior;
+- the coordinator owns one discover/acquire/transfer/publish/complete transaction;
+- metrics receive explicit events rather than scattered mutations.
 
 ### Acceptance criteria
 
-- no residency method takes a long list of events and scratch vectors;
-- source selection is not embedded in the transfer orchestration;
-- VRAM slot code does not read checkpoint formats;
-- host-cache code does not publish CUDA pointer tables;
-- a failed read or transfer leaves the previous residency map valid;
-- all slots used by the active FFN remain protected until the FFN completion event;
-- the coordinator is testable with fake source/cache/residency collaborators;
-- packed and standalone paths use the same coordinator without duplicating the residency algorithm.
+- no residency method takes a parameter maze of events and scratch vectors;
+- source selection is outside transfer orchestration;
+- VRAM code does not read checkpoint formats;
+- host cache does not publish CUDA pointer tables;
+- failed read/transfer leaves the previous residency map valid;
+- active FFN slots remain protected through completion;
+- fake source/cache/residency collaborators can test the coordinator;
+- packed and standalone paths share one residency algorithm.
 
 ---
 
-## 2. `PinnedExpertCache` is in the wrong abstraction layer
+## 3. `PinnedExpertCache` is in the wrong abstraction layer
 
-### Evidence
-
-`include/celeg/runtime/cache/pinned_expert_cache.hpp` currently:
-
-- includes `celeg/checkpoint/formats/safetensors.hpp` from a supposedly generic runtime cache;
-- hardcodes two payload regions named `gate_up` and `down`;
-- contains cache storage, lease behavior, frequency tracking, coalescing, metrics, and `ExpertIoManager` in one header;
-- is named “Pinned” even though its default allocator is ordinary `malloc` and pinning is injected by a backend.
-
-The cache is therefore neither format-neutral, model-layout-neutral, nor strictly pinned.
+The supposedly generic runtime cache includes a concrete checkpoint-format header, hardcodes `gate_up` and `down`, combines storage, lease behavior, frequency tracking, coalescing, metrics, and I/O execution, and is called “Pinned” although pinning is allocator-dependent.
 
 ### Required direction
 
-Choose one honest boundary:
+Either:
 
-1. make it a CUDA-backend-owned host staging cache; or
-2. make it a genuinely neutral host blob cache driven by an explicit payload layout and allocator.
+1. make it an explicitly CUDA-owned host staging cache; or
+2. make it a neutral host blob cache driven by `ExpertKey`, `ExpertPayloadSchema`, and an explicit allocator.
 
-A neutral direction may use concepts such as:
-
-```cpp
-struct ExpertKey {
-    int layer = -1;
-    int expert = -1;
-    auto operator<=>(const ExpertKey&) const = default;
-};
-
-struct ExpertPayloadLayout {
-    std::size_t bytes = 0;
-    std::span<const PayloadRegion> regions;
-};
-
-class ExpertLease {
-public:
-    std::span<const std::byte> payload() const;
-};
-```
-
-Keep LFM-specific region interpretation next to the LFM/CUDA binding code. Keep SafeTensors access inside a source adapter. Move the worker pool to an execution/I/O component rather than a cache header.
+Keep family payload interpretation in family/backend binding, format access in source adapters, and worker lifetime in an I/O component.
 
 ### Acceptance criteria
 
-- generic runtime headers do not include concrete checkpoint formats;
-- the host cache does not name `gate_up`, `down`, LFM, CUDA, or SafeTensors;
-- alternatively, a CUDA-specific cache is physically located under the CUDA backend and named accordingly;
-- allocator behavior is explicit in the type/configuration;
-- I/O worker lifetime is independent of cache storage lifetime;
-- focused builds can compile the cache without CUDA or checkpoint-format headers.
+- generic runtime headers include no concrete checkpoint format;
+- neutral cache code names no LFM tensor region;
+- allocator/pinning behavior is explicit;
+- I/O lifetime is independent of cache storage lifetime;
+- focused cache builds require neither CUDA nor format headers.
 
 ---
 
-## 3. Cache policy, capacity, and metrics semantics are duplicated and drifting
+## 4. Cache policy, capacity, and metric semantics are duplicated and drifting
 
-### Evidence
-
-Three different caches now encode related policy knowledge:
-
-- `CpuExpertCache` uses decayed heat, a recency bonus, a protected budget, and promotion after repeated access;
-- `PinnedExpertCache` keeps a separate heat map and chooses the coldest unleased slot without the same probation/protected model;
-- `ExpertLayerCache` combines recency, route scores or observed accesses, protected/probation slots, and batch pinning.
-
-Some differences are intentional because the tiers have different costs. Others are accidental duplication:
-
-- expert key packing is repeated;
-- heat-decay constants and formulas are repeated;
-- hit/miss definitions differ;
-- coalesced host-cache waiters count as misses in one cache but have a separate counter in another;
-- a host cache silently creates one slot when the configured budget is smaller than one expert, while the CPU cache declines admission;
-- policy names do not fully describe which tier and scoring inputs they control.
+CPU RAM cache, host staging cache, and GPU layer cache encode related but not identical policy knowledge. Key packing, decay constants, scoring, promotion, and hit/miss semantics can diverge accidentally.
 
 ### Required direction
 
-Do **not** create a generic `ExpertCache<T, 20 callbacks>`.
-
-Extract only stable policy/value contracts, for example:
+Do not create `ExpertCache<T, 20 callbacks>`. Extract only stable value/policy contracts:
 
 - `ExpertKey` and hashing;
-- decay calculation;
-- an explicit frequency/recency score primitive;
-- cache counter definitions;
-- budget/admission result types;
-- policy configuration validation.
+- counter definitions;
+- budget/admission results;
+- policy configuration validation;
+- decay/scoring primitives only where semantics are truly the same.
 
-Let each tier retain its own storage, locking, transfer, and eviction mechanism. Document intentional differences in admission and protection.
+Keep storage, locking, transfer, and eviction mechanisms tier-specific.
 
 ### Acceptance criteria
 
-- one definition exists for every counter and policy name;
-- `true_misses` means a caller became the elected loader;
-- `coalesced_waits` is separate from true misses;
-- budget smaller than one payload has explicit behavior and a test;
-- protected/probation semantics are either shared or explicitly different by tier;
-- scoring tests use deterministic access traces;
-- CPU, host, and GPU caches expose comparable per-tier metrics without pretending their mechanisms are identical.
+- `true_misses` means the elected loader;
+- `coalesced_waits` is separate;
+- undersized and zero budgets have explicit tested behavior;
+- protected/probation differences are documented by tier;
+- deterministic traces test scoring;
+- comparable metrics do not pretend mechanisms are identical.
 
 ---
 
-## 4. The CUDA residency path violates or obscures the hot-path contract
+## 5. CUDA residency violates or obscures the hot-path contract
 
-### Evidence
-
-The current residency path includes:
-
-- unconditional `cudaStreamSynchronize` inside device cold-set resolution;
-- a full selected-expert D2H copy even though comments describe copying only the compact cold list;
-- a second full selected-expert D2H copy on a miss path;
-- per-miss `std::vector<ExpertHostLease>` and `std::vector<std::future<void>>` construction;
-- synchronous waiting for all submitted disk reads;
-- host-side touching and metrics loops over selected experts;
-- speculative prefetch work in the same orchestration function.
-
-Cold misses may legitimately block the current token, but the all-resident path must stay much cheaper and its synchronization contract must be explicit.
+The path currently contains unconditional synchronization, full-selection D2H copies, per-miss vector/future construction, synchronous waiting, and host loops over selected experts.
 
 ### Required direction
 
-Define separate performance contracts:
+**All-resident path:** no allocation, worker submission, disk read, full-selection D2H copy, or unconditional synchronization.
 
-**All-resident hit path**
-
-- no heap allocation;
-- no worker-pool submission;
-- no disk read;
-- no full-selection D2H copy;
-- no unconditional stream synchronization;
-- only event dependencies required for correctness.
-
-**Cold admission path**
-
-- bounded, preallocated host metadata;
-- one compact cold list;
-- bounded parallel reads;
-- no global lock held during storage I/O;
-- event-based host-to-device completion;
-- one atomic residency publication after all required transfers are valid.
-
-Move usage statistics and policy touches to device-side compact data or preallocated host buffers where appropriate.
+**Cold path:** one compact unique cold list, bounded preallocated metadata, capped parallel I/O, no global lock during reads, event-based H2D completion, and transactional publication.
 
 ### Acceptance criteria
 
-- tests or instrumentation prove zero host allocations on repeated all-resident decode;
-- the all-resident path does not call `cudaStreamSynchronize`;
-- the implementation transfers only data required by the current policy;
-- miss-path allocations are preallocated or explicitly bounded and measured;
+- repeated all-resident decode performs zero host allocations;
+- no `cudaStreamSynchronize` exists in the all-resident path;
+- only policy-required data crosses D2H;
+- miss work is preallocated or explicitly bounded;
 - prefetch cannot delay or invalidate current-token admission;
-- before/after hit-path and miss-path timings are recorded.
+- hit/miss timing is measured separately.
 
 ---
 
-## 5. Expert lease, transfer, publication, and shutdown invariants are implicit
+## 6. Expert lease, transfer, publication, and shutdown invariants are implicit
 
-### Evidence
-
-Correctness currently depends on interactions among:
-
-- `ExpertHostLease` reference counts;
-- `ResidencyController::inflight_transfers`;
-- transfer events;
-- `batch_pinned` VRAM slots;
-- cache loading flags and generations;
-- worker-pool shutdown;
-- sidecar/repository lifetimes;
-- shared model-weight lifetime.
-
-Some invalid states are hidden rather than rejected. For example, `release_slot` clamps a negative reference count back to zero. Queue depth and very small cache budgets also need explicit validation.
+Correctness spans host leases, inflight transfers, events, batch-pinned slots, loading generations, worker shutdown, source lifetime, and shared model lifetime.
 
 ### Required direction
 
-Model the residency transaction and slot lifecycle explicitly. A useful state vocabulary is:
+Model explicit transitions:
 
 ```text
 empty -> loading -> host-resident -> transferring -> device-resident
@@ -424,43 +438,28 @@ device-resident -> active -> device-resident
                 -> evicted
 ```
 
-Use RAII tickets/leases that hold the exact resources required until a completion event is observed. Make state publication transactional.
+Use RAII tickets holding the required source/cache/slot resources until completion is observed. Publish state transactionally.
 
 ### Acceptance criteria
 
-- reference-count underflow is impossible or detected in tests;
-- duplicate release is not silently accepted;
-- queue depth, worker count, cache budget, and payload size are validated;
-- executor shutdown either drains or cancels queued work according to a documented rule;
-- failures propagate to every coalesced waiter;
-- a failed load can be retried cleanly;
-- a failed H2D transfer does not publish a device pointer;
-- active slots and host payloads remain alive until the corresponding completion event;
-- destruction order is explicit and tested.
+- duplicate release and reference underflow are detected;
+- worker/queue/budget/payload configuration is validated;
+- shutdown drains or cancels according to a documented rule;
+- all coalesced waiters receive failures;
+- retries start from clean state;
+- failed H2D never publishes a device pointer;
+- host payload and device slot live through their completion events;
+- destruction order is tested.
 
 ---
 
-## 6. CPU disk-backed expert ownership is spread across compiled-model internals
+## 7. CPU disk-backed expert ownership is spread across compiled-model internals
 
-### Evidence
-
-CPU expert backing currently spans:
-
-- `configure_cpu_expert_backing`;
-- mutable fields on `CpuCompiledModel::Shared`;
-- `CpuPackReader`;
-- `CpuExpertCache`;
-- mutation and clearing of MoE vectors in `weight_store`;
-- `Shared::acquire_expert`;
-- forward-path knowledge of disk-cached experts.
-
-The mechanism works, but the compiled model remains the owner of source configuration, cache configuration, tensor-name construction, validation, and acquisition.
+Configuration, pack reader, cache, weight-store mutation, naming, validation, and acquisition are distributed through `CpuCompiledModel::Shared` and forward code.
 
 ### Required direction
 
-Introduce a CPU-owned expert backing object with one explicit responsibility: resolve and lease quantized expert weights.
-
-Possible conceptual boundary:
+Introduce a CPU-owned backing boundary:
 
 ```cpp
 class CpuExpertBackingStore {
@@ -470,92 +469,67 @@ public:
 };
 ```
 
-It may own a pack reader, cache, tensor-name resolver, and immutable shape validation. Native GGUF should remain a separate mapped-storage path rather than being forced through this object.
+It may own a pack reader, cache, payload/name resolver, and immutable shape validation. Native GGUF remains a separate mapped path.
 
 ### Acceptance criteria
 
-- model forward code asks for an expert lease without knowing pack-reader details;
-- pack entry naming and dimension validation have one owner;
-- opening an existing pack does not read expert payloads;
-- first-time pack construction releases each expert after writing;
-- cloned sessions share the backing store/cache intentionally;
-- native GGUF continues to use mapped block storage without a redundant Celeg cache;
-- concurrent reads of different experts remain possible.
+- forward code requests an expert lease without pack details;
+- pack naming and dimensions have one owner;
+- opening an existing pack reads no payload;
+- first construction writes and releases one expert at a time;
+- cloned sessions share the backing store intentionally;
+- native GGUF avoids a redundant cache;
+- different experts can be read concurrently.
 
 ---
 
-## 7. Packed execution still concentrates too many responsibilities
+## 8. Packed execution still concentrates too many responsibilities
 
-`PackedDecodeExecutorImpl` still owns or coordinates shared workspace state, compatibility, decode/prefill validation, metadata staging, GEMM setup, embedding, layer traversal, attention, convolution, dense FFN, MoE, completion, host commit, and metrics.
-
-`PackedDecodePipeline` and `PackedPrefillPipeline` remain mostly pass-through wrappers. Moving declarations without moving workflow authority does not satisfy SRP.
+`PackedDecodeExecutorImpl` still owns shared state, compatibility, validation, staging, GEMM setup, embedding, layer traversal, attention, convolution, dense FFN, MoE, completion, commit, and metrics. Decode/prefill pipeline wrappers remain mostly pass-through.
 
 ### Required direction
 
-- make decode orchestration owned by `PackedDecodePipeline`;
-- make ragged-prefill orchestration owned by `PackedPrefillPipeline`;
-- keep preallocated shared resources in a clearly named shared workspace/resource object;
-- use the same CUDA expert-residency coordinator as standalone execution;
-- give validation, metadata staging, completion/commit, and metrics narrow owners;
-- preserve direct, prebound hot-path calls.
+- decode orchestration belongs to `PackedDecodePipeline`;
+- ragged prefill orchestration belongs to `PackedPrefillPipeline`;
+- shared preallocated resources live in an explicit workspace/resource object;
+- both consume the same lowered MoE program and residency coordinator as standalone execution;
+- validation, staging, completion/commit, and metrics have narrow owners.
 
 ### Acceptance criteria
 
-- pipeline `run()` methods contain operation-specific sequences;
+- pipeline `run()` methods own operation sequences;
 - shared state does not know both complete algorithms;
-- expert residency is not duplicated between packed and standalone paths;
-- failed CUDA work cannot mutate host-visible session state;
-- packed/non-packed and ragged/standard parity tests remain green;
-- steady-state allocation tests remain green.
+- MoE lowering/residency is not duplicated;
+- failed CUDA work cannot mutate host-visible state;
+- parity and zero-allocation tests remain green.
 
 ---
 
-## 8. `IBackendFactory` is still not a real factory
+## 9. `IBackendFactory` is not a real factory
 
-The current abstraction identifies/supports backends, while generic composition still constructs concrete CPU/CUDA services.
+The abstraction identifies/supports backends while generic composition still constructs concrete services.
 
 ### Required direction
 
-Define a neutral backend creation request and a factory result exposing serving roles:
-
-```cpp
-struct BackendCreationRequest {
-    std::filesystem::path model_path;
-    std::size_t maximum_context = 0;
-    BackendConfiguration configuration;
-    std::shared_ptr<const RuntimeContext> runtime;
-};
-
-class IBackendFactory {
-public:
-    virtual ~IBackendFactory() = default;
-    virtual std::string_view id() const = 0;
-    virtual bool supports(BackendKind backend) const = 0;
-    virtual std::unique_ptr<serve::ServiceBundle> create(
-        BackendCreationRequest request) const = 0;
-};
-```
-
-The exact shape may differ, but the selected factory must own concrete construction.
+A selected factory must own concrete creation from a neutral request and return serving roles as a bundle.
 
 ### Acceptance criteria
 
-- `celeg_engine_create` does not include or instantiate concrete inference services;
-- adding a backend does not add another C API construction branch;
-- unsupported builds fail explicitly before partial mutation;
-- public ABI mappings remain outside backend code;
-- backend creation diagnostics remain useful;
-- CPU-only builds do not reference CUDA implementation symbols.
+- `celeg_engine_create` constructs no concrete inference service;
+- adding a backend adds no C API branch;
+- unsupported builds fail before partial mutation;
+- ABI mapping remains outside backend implementation;
+- CPU-only linkage references no CUDA implementation.
 
 ---
 
-## 9. Generic runtime composition still knows concrete model families
+## 10. Generic runtime composition still knows concrete families
 
-Generic runtime composition still includes concrete family knowledge, including Gemma4 vision construction.
+Generic runtime bootstrap still contains family knowledge, including concrete vision construction.
 
 ### Required direction
 
-Introduce a coherent family module boundary:
+Introduce a family module boundary:
 
 ```cpp
 class IRuntimeModule {
@@ -566,164 +540,92 @@ public:
 };
 ```
 
-A family module may register architecture, chat profile, tool codec, tokenizer provider, vision provider, and other cold-path family-owned services. Static built-in registration is sufficient; dynamic plugins are not required.
+A module may register architecture resolution, chat profile, tool codec, tokenizer, vision, and other cold-path providers.
 
 ### Acceptance criteria
 
 - each family has one registration entry point;
-- generic `src/runtime/**` contains no family includes, strings, types, or constructors;
-- adding a vision-capable family does not edit generic runtime composition;
-- duplicate registrations are rejected;
+- generic runtime contains no family include/string/type/constructor;
+- duplicate registration is rejected;
 - catalogs freeze after construction;
-- custom runtimes can inject modules with or without built-ins.
+- custom runtimes can include or omit built-ins.
 
 ---
 
-## 10. Family registration knowledge remains duplicated
+## 11. Family registration knowledge remains duplicated
 
-The supported-family list is repeated across architecture registration, chat profiles, tool codecs, tokenizer behavior, vision bootstrap, source lists, and tests.
+Supported-family knowledge is repeated across architecture, chat, tools, tokenizer, vision, source lists, and tests.
 
 ### Required direction
 
-Use family modules to make runtime contributions atomic. Do not create a central mega-structure with nullable fields for every optional capability.
+Make family contributions atomic through modules without a central nullable mega-structure.
 
 ### Acceptance criteria
 
-- adding a family requires one built-in module registration plus family-owned code;
-- families without tools or vision do not implement fake methods;
-- family module tests verify expected contributions;
-- generic catalogs remain independently testable;
-- build/source registration is generated or guarded against partial family registration where practical.
+- adding a family requires one built-in module entry plus family-owned files;
+- families without optional capabilities implement no fake methods;
+- module tests verify all expected contributions;
+- partial source/build registration is guarded where practical.
 
 ---
 
-## 11. Dense decoder topology construction is duplicated
+## 12. Dense decoder topology construction is duplicated
 
-MiniCPM5 and SmolLM3 repeat standard dense topology initialization and paired GGUF/JSON metadata access. Probe rules and exceptional defaults remain family-specific, but standard topology invariants are shared knowledge.
+MiniCPM5 and SmolLM3 repeat standard dense topology and paired GGUF/JSON access.
 
 ### Required direction
 
-Extract a neutral dense-decoder topology builder driven by explicit metadata mappings and defaults. Avoid family names and boolean switches in the neutral builder.
+Extract a neutral dense-decoder topology builder driven by metadata mappings and defaults. Probe identity and real exceptions remain family-owned.
 
 ### Acceptance criteria
 
-- standard dense topology invariants have one implementation;
-- family files retain probe identity and genuine exceptions;
-- GGUF and SafeTensors/JSON paths have focused builder tests;
-- topology fingerprints remain stable unless fixing a demonstrated bug;
-- MiniCPM5 and SmolLM3 resolution tests remain independent.
+- standard invariants have one implementation;
+- no family names/flags enter the builder;
+- GGUF and JSON paths have focused tests;
+- fingerprints remain stable unless fixing a demonstrated bug.
 
 ---
 
-## 12. JSON and tagged tool-call parsing have multiple implementations
+## 13. JSON and tagged tool-call parsing have multiple implementations
 
-JSON escaping, trimming, object-member scanning, delimiter matching, tagged-block removal, call-ID generation, and incomplete-block handling appear in multiple template/codec implementations.
-
-### Required direction
-
-Extract small protocol-neutral utilities for JSON string escaping and tagged-block lifecycle. Use the project's real JSON parser for arbitrary JSON rather than maintaining another incomplete parser.
+Extract small protocol-neutral utilities for JSON escaping and tagged-block lifecycle. Use the existing real JSON parser for arbitrary JSON.
 
 ### Acceptance criteria
 
-- JSON escaping has one authoritative implementation;
-- Unicode, control characters, quotes, slashes, and empty strings are covered;
+- one escaping implementation covers controls, UTF-8, quotes, slashes, and empty strings;
 - shared tagged-block scanning/removal has one implementation;
-- protocol-specific syntax remains in each codec;
-- malformed and incomplete output is tested per family;
-- mixed assistant text and parallel calls are preserved.
+- protocol syntax and malformed-output rules remain family-specific;
+- mixed text and parallel calls are preserved.
 
 ---
 
-## 13. Chat templates and tool codecs overlap in responsibility
+## 14. Chat templates and tool codecs overlap in responsibility
 
-Central chat-template code still contains family-specific formatting and constructs tool-definition syntax that overlaps with family-owned codecs.
-
-### Required direction
-
-- move family templates under family modules;
-- keep neutral chat contracts/catalogs under generic text code;
-- give tool syntax one owner, preferably the native codec where one exists;
-- keep the conversation skeleton responsible for role sequencing and message placement.
+Move family templates/codecs under family modules. Give native tool syntax one owner, preferably the codec, while the conversation template owns role sequencing and placement.
 
 ### Acceptance criteria
 
-- generic chat code contains no Granite, Gemma4, LFM2, MiniCPM5, or SmolLM3 rules;
-- tool syntax is not reconstructed independently in template and codec;
-- prompt fixtures remain byte-identical unless a documented bug is fixed;
-- rendering and parsing tests remain family-specific.
+- generic chat code has no family formatting rules;
+- tool syntax is not independently rebuilt twice;
+- prompt fixtures remain byte-identical unless documenting a bug fix.
 
 ---
 
-## 14. Packed common batch validation is duplicated
+## 15. Packed common validation is duplicated
 
-Decode and ragged prefill repeat empty-batch, capacity, owner, duplicate-session, plan, device, eligibility, storage, and option checks.
-
-### Required direction
-
-Extract common validation and layer operation-specific validation on top:
-
-```cpp
-const PackedSessionContext& validate_common_batch(
-    std::span<const PackedSessionContext> sessions,
-    PackedOperation operation) const;
-```
-
-### Acceptance criteria
-
-- common invariants have one implementation;
-- errors retain operation context;
-- decode does not depend on prefill-only data;
-- duplicate detection is efficient;
-- malformed input fails before CUDA work or host-state mutation.
+Extract common batch invariants and layer decode/prefill-specific validation on top. Invalid input must fail before CUDA work or host mutation.
 
 ---
 
-## 15. Packed compatibility knowledge is duplicated
+## 16. Packed compatibility knowledge is duplicated
 
-Compatibility-affecting options are manually compared while related knowledge also exists in execution plans and fingerprints.
-
-### Required direction
-
-Create an immutable compatibility identity produced during compilation:
-
-```cpp
-struct PackedCompatibilityKey {
-    WeightMode weight_mode;
-    KvCacheMode kv_cache_mode;
-    GemmBackend gemm_backend;
-    AttentionMode attention_mode;
-    auto operator<=>(const PackedCompatibilityKey&) const = default;
-};
-```
-
-Determine fields from execution semantics, including expert-storage/residency compatibility where shared packed execution depends on it.
-
-### Acceptance criteria
-
-- one function defines the key;
-- the key is part of or derived from the immutable execution plan;
-- resource/device/source ownership identities are compared explicitly;
-- every compatibility-affecting option has a test;
-- observability-only options do not create false incompatibility;
-- fingerprints and equality cannot drift independently.
+Produce an immutable compatibility key during compilation. It must include execution-relevant MoE semantics/fingerprint, expert source/residency compatibility, device/resource identity, and ordinary attention/KV/GEMM options without including observability-only settings.
 
 ---
 
-## 16. C API CPU/CUDA composition remains duplicated
+## 17. C API CPU/CUDA composition remains duplicated
 
-The C API repeats backend selection, option conversion, concrete service creation, and bundle wrapping. Local helpers would hide the duplication rather than fix dependency direction.
-
-### Required direction
-
-Fix backend factories first. Keep ABI functions focused on public struct-size checks, enum validation, and translation into neutral configuration.
-
-### Acceptance criteria
-
-- C API entry points are small and backend-neutral;
-- public validation is centralized;
-- factories are independently testable;
-- invalid ABI input is distinguishable from backend-creation failure;
-- CPU-only linkage remains CUDA-free.
+Fix real factories first. C API code should only validate struct sizes/enums and translate public values into neutral configuration.
 
 ---
 
@@ -731,54 +633,38 @@ Fix backend factories first. Keep ABI functions focused on public struct-size ch
 
 ## Single Responsibility Principle
 
-A valid extraction must move at least one of:
-
-- ownership;
-- lifetime;
-- dependency direction;
-- invariant enforcement;
-- state-transition authority;
-- synchronization authority;
-- compilation boundary;
-- testable contract.
-
-Moving methods into another `.cpp` while the original object still owns all state and decisions is not sufficient.
+A valid extraction moves ownership, lifetime, dependency direction, invariant enforcement, state-transition authority, synchronization authority, compilation boundary, or a directly testable contract. Moving methods to another `.cpp` is insufficient.
 
 Prioritize:
 
-- CUDA expert-residency orchestration;
-- host expert cache and I/O execution;
+- neutral MoE semantics and backend lowering;
+- CUDA residency orchestration;
+- host cache and I/O execution;
 - CPU expert backing;
-- `PackedDecodeExecutorImpl`;
+- packed executor ownership;
 - generic runtime bootstrap;
-- family resolvers/templates;
-- C API engine construction.
+- C API composition.
 
 ## Open/Closed Principle
 
-Adding a model family must not require edits across generic runtime, text, backend, and serving layers. Adding a backend must not require another C API branch. Adding an expert source should not require rewriting cache eviction or CUDA slot management.
+Adding a compatible MoE family must not require edits to generic CPU/CUDA execution, cache, residency, packed execution, serving, or C API layers. Adding a new semantic operation may require a new backend lowering implementation, but not a named-family case.
 
-Closed domains are allowed when explicit and tested. Adding another `switch` case is not automatically OCP compliance.
+Adding an expert source must not rewrite cache eviction or VRAM slot management. Adding a backend must not add a C API construction branch.
 
 ## Liskov Substitution Principle
 
-- optional behavior belongs in separate capability interfaces;
-- a source claiming random access must honor concurrent-read and lifetime contracts;
-- cache implementations must honor the same lease and failure semantics they advertise;
-- a backend factory claiming support must construct a usable service or fail before partial mutation;
-- asynchronous completion contracts must define when payloads, pointer tables, and host-visible state become observable;
-- borrowed pointers must document their owner and completion lifetime;
+- neutral MoE programs with supported semantics must lower consistently regardless of family origin;
+- unsupported programs must fail during compilation before partial mutation;
+- source implementations must honor concurrent-read and lifetime contracts;
+- caches must honor advertised lease/failure semantics;
+- asynchronous completion must define when payloads and pointer tables are observable;
 - family modules must work in custom builders without hidden globals.
 
 ## Interface Segregation Principle
 
-Do not replace narrow repository, serving, source, cache, or residency roles with a new composite god interface.
-
-A family without vision/tools, a source without random access, or a cache without asynchronous loading must not implement placeholder methods.
+Do not create one god interface combining router, source, cache, residency, kernels, and metrics. A family without tools/vision/shared experts, a source without random access, or a cache without async loading must not implement placeholders.
 
 ## Dependency Inversion Principle
-
-Generic layers depend on neutral contracts. Concrete families, formats, storage sources, CPU/CUDA mechanisms, and services point inward through registration, compilation, adapters, and factories.
 
 Forbidden directions include:
 
@@ -788,8 +674,9 @@ src/runtime/cache/**           -> checkpoint/formats/**
 include/celeg/model/**         -> celeg/backend/cuda/**
 src/backend/**                 -> architecture identity dispatch
 src/backend/**                 -> concrete checkpoint-format dispatch
-VRAM residency                -> SafeTensors/sidecar parsing
-host cache                    -> CUDA pointer-table publication
+backend MoE execution          -> model-family identity
+VRAM residency                -> router semantics or format parsing
+host cache                    -> CUDA pointer publication
 src/api/**                    -> concrete inference service construction
 ```
 
@@ -797,250 +684,196 @@ src/api/**                    -> concrete inference service construction
 
 # Implementation stages
 
-Complete stages in order unless current code evidence proves a dependency requires a different sequence. Keep every stage independently buildable and testable.
+Keep every stage independently buildable and testable.
 
 ## Stage 0 — Re-baseline and protect behavior
 
-1. Record the current head and changes since `79fdba3347cdec14b23a8efd3eb8166e486fbe6f`.
-2. Run architecture boundary checks.
-3. Build CPU and CUDA targets available in the environment.
-4. Run CPU tests and host-only CUDA tests that do not require a device.
-5. Record which CUDA tests were compiled, which ran without a device, and which ran on a real GPU.
-6. Capture prompt fixtures for all families.
-7. Capture packed/non-packed and standard/ragged parity where hardware exists.
-8. Capture CPU expert pack, CPU cache, CUDA cache-hit, CUDA cache-miss, and fully resident performance baselines.
-9. Record host/device allocations and synchronization points for expert decode and prefill.
+- record current head and changes since the reviewed code head;
+- run architecture checks and available builds/tests;
+- capture prompt fixtures and numerical parity;
+- capture existing LFM MoE resolved topology/program fingerprints;
+- capture CPU pack/cache and CUDA hit/miss/all-resident performance;
+- record allocations, D2H copies, synchronization, and which CUDA tests actually ran on a GPU.
 
-Do not claim CUDA runtime validation for compile-only jobs.
+## Stage 1 — Lock down current expert and MoE semantics
 
-## Stage 1 — Lock down expert-storage semantics
+Add tests for:
 
-Before structural changes, add focused tests for:
+- existing router top-K, normalization, bias, scaling, expert layout, and output combination;
+- cache metric definitions and budget edges;
+- lease and active-FFN eviction protection;
+- failure/retry/publication transitions;
+- native GGUF bypass and pack laziness;
+- packed/standalone MoE parity.
 
-- exact cache metric definitions;
-- budget smaller than one expert;
-- zero budget;
-- duplicate release/reference underflow;
-- worker count and queue-depth validation;
-- loader failure and retry;
-- failure propagation to all waiters;
-- active lease preventing eviction;
-- active FFN preventing VRAM eviction;
-- unique cold set equal to and greater than VRAM capacity;
-- transactional pointer-table publication;
-- native GGUF bypass;
-- pack opening without payload reads;
-- cloned CPU sessions sharing one cache;
-- concurrent different-expert reads.
+Fix confirmed defects before restructuring.
 
-Fix confirmed correctness defects before broad refactoring.
+## Stage 2 — Introduce the neutral compiled MoE program
 
-## Stage 2 — Extract neutral policy and metrics values
+- define neutral semantic value types and per-layer MoE program ownership;
+- compile existing LFM metadata/tensor roles into the new program;
+- fingerprint every execution-relevant field;
+- remove checkpoint tensor names from executable semantics;
+- add synthetic programs for ordinary top-K, shared expert, grouped routing, and alternate payload layouts;
+- add explicit backend capability validation.
 
-Extract only stable semantic primitives:
+Do not change expert residency or kernels until equivalence tests prove the new representation.
 
-- expert key/hash;
-- decay/scoring math where identical;
-- counter definitions;
-- budget/admission result;
-- policy configuration validation.
+## Stage 3 — Lower neutral MoE programs in CPU and CUDA compilers
 
-Keep CPU, host-staging, and VRAM caches separate.
+- bind tensor roles/payload regions once;
+- select router, expert, shared-expert, and combine implementations once;
+- produce compact backend-specific executable descriptors;
+- reject unsupported operations during compilation;
+- remove named-family and suffix-based MoE decisions from backend code.
 
-## Stage 3 — Separate expert source, host cache, and I/O executor
+## Stage 4 — Extract neutral expert policy and metric values
 
-- remove concrete checkpoint-format includes from generic cache code;
-- move LFM payload layout interpretation out of the cache;
-- give sidecar and random-access repository reads source adapters;
-- separate the bounded worker pool from cache storage;
-- make allocator/pinned-memory behavior explicit;
-- add fake-source and deterministic executor tests.
+Extract key/hash, counter definitions, budget/admission values, configuration validation, and only genuinely shared scoring math. Keep tier mechanisms separate.
 
-## Stage 4 — Refactor CUDA residency orchestration
+## Stage 5 — Separate expert source, host cache, and I/O executor
 
-- introduce a typed request and preallocated workspace;
-- separate per-layer VRAM slot state from transaction orchestration;
-- centralize transfer lease/event lifetime;
-- make publication transactional;
-- remove redundant full-selection D2H copies;
-- eliminate unconditional synchronization from the all-resident path;
-- keep prefetch subordinate to current-token correctness;
-- use the same coordinator from standalone and packed execution.
+- remove format includes and LFM regions from neutral cache code;
+- make payload schemas/manifests explicit;
+- add sidecar, pack, and random-access source adapters;
+- separate bounded executor lifetime from cache lifetime;
+- make pinned-memory allocation explicit.
 
-## Stage 5 — Encapsulate CPU expert backing
+## Stage 6 — Refactor CUDA residency orchestration
 
-- introduce a CPU-owned backing store/source boundary;
-- centralize pack naming and dimension validation;
-- preserve lazy payload reads and streaming pack creation;
-- keep native GGUF mapped storage separate;
-- preserve shared cache ownership across cloned sessions.
+- typed request and preallocated workspace;
+- separate VRAM slot state from transaction orchestration;
+- centralize lease/event lifetime;
+- transactional publication;
+- compact cold discovery;
+- no unconditional hit-path synchronization;
+- prefetch subordinate to correctness;
+- shared use by standalone and packed execution.
 
-## Stage 6 — Shared low-risk DRY utilities
+## Stage 7 — Encapsulate CPU expert backing
 
-Implement and test:
+Centralize pack source, naming/manifest resolution, validation, cache ownership, acquisition, and metrics while preserving lazy reads, streaming construction, concurrent indexed access, cloned-session sharing, and native GGUF mapping.
 
-- JSON escaping;
-- tagged-block scanning/removal;
-- common metadata helpers only where semantics are identical;
-- common packed batch validation;
-- immutable packed compatibility identity.
+## Stage 8 — Shared low-risk DRY utilities
 
-## Stage 7 — Dense decoder topology builder
+Implement JSON escaping, tagged-block lifecycle, identical metadata helpers, common packed validation, and immutable packed compatibility.
 
-Extract standard dense topology invariants from MiniCPM5 and SmolLM3 while keeping probe identity and exceptional policy local.
+## Stage 9 — Dense decoder topology builder
 
-Do not force LFM2, Granite, or Gemma4 through the builder unless they fit without family flags.
+Extract only standard dense invariants from naturally compatible families.
 
-## Stage 8 — Family-owned chat/template/tool modules
+## Stage 10 — Family-owned chat/template/tool modules
 
-Move family templates and codecs into family directories. Remove duplicate tool-rendering ownership. Preserve exact prompt fixtures.
+Move family text protocols under their modules and remove duplicate tool syntax ownership.
 
-## Stage 9 — Runtime family modules
+## Stage 11 — Runtime family modules
 
-Introduce the family registration boundary and remove concrete family knowledge from generic runtime bootstrap.
+Remove family knowledge from generic runtime bootstrap and make built-in contributions atomic.
 
-## Stage 10 — Real backend factories and neutral C API composition
+## Stage 12 — Real backend factories and neutral C API
 
-Make factories create service bundles. Remove concrete CPU/CUDA service construction from the C API and generic composition roots.
+Factories create service bundles; C API only translates/validates ABI values.
 
-## Stage 11 — Packed execution ownership
+## Stage 13 — Packed execution ownership
 
-Move operation-specific orchestration into real decode and prefill pipeline owners while retaining explicit preallocated shared resources and the common expert-residency coordinator.
+Move decode and ragged-prefill workflows into real pipeline owners using shared lowered MoE programs and the common residency coordinator.
 
-## Stage 12 — Expand architecture, DRY, and hot-path guards
+## Stage 14 — Expand architecture, DRY, and hot-path guards
 
-Extend `scripts/check_architecture_boundaries.py` or add focused companion checks for stable rules:
+Add stable checks for:
 
-- generic runtime includes of `celeg/models/`;
-- generic runtime cache includes of concrete checkpoint formats;
-- concrete backend service construction from `src/api`;
-- family names/types in generic runtime or generic text registration;
-- direct architecture/checkpoint-format dispatch in backends;
-- plan construction or direct allocation in packed steady-state paths;
+- family dependencies in generic runtime;
+- format dependencies in generic cache;
+- architecture identity dispatch in backends;
+- model-family names in MoE execution/residency;
+- checkpoint tensor-name decisions after backend binding;
+- direct source reads from VRAM residency;
+- concrete backend construction from C API;
 - pass-through packed pipelines;
-- direct storage reads from VRAM residency code;
-- obsolete compatibility paths.
+- allocation/plan construction in steady-state paths.
 
-Do not create fragile regex checks for ordinary local implementation details.
+## Stage 15 — Full verification and documentation
 
-## Stage 13 — Full verification and documentation
-
-Run the complete verification matrix, publish benchmark/allocation evidence, update `docs/EXPERT_STORAGE.md` and `docs/PACKED_EXECUTION.md`, and replace plan statements with links to final contracts and tests.
+Run the full matrix, publish benchmark/allocation evidence, and update `docs/EXPERT_STORAGE.md`, `docs/PACKED_EXECUTION.md`, and a new or existing architecture document describing how to add another MoE family through the neutral program.
 
 ---
 
 # Testing requirements
 
+## Neutral MoE program and backend lowering
+
+- existing LFM resolution equivalence;
+- synthetic ordinary top-K routed layer;
+- normalization enabled/disabled;
+- expert bias enabled/disabled;
+- routed scaling;
+- shared expert before/after routed combination as supported semantics;
+- grouped selection constraints;
+- varying expert counts, top-K, and intermediate widths by layer;
+- stacked, fused, and individually located payload regions;
+- malformed or overlapping payload regions;
+- unsupported router/expert/combine operation rejection during compilation;
+- fingerprint changes for every execution-affecting field;
+- fingerprint stability for observability-only configuration;
+- CPU/CUDA lowering from the same neutral program;
+- no family identity in backend tests;
+- packed and standalone consumption of the same lowered descriptor.
+
 ## Expert policy and host cache
 
-- deterministic frequency/recency traces;
-- decay across multiple intervals;
-- protected/probation transitions where applicable;
-- true miss versus coalesced wait accounting;
-- zero and undersized budgets;
-- one payload larger than the entire budget;
-- multiple payload sizes if supported;
-- same-key concurrent coalescing;
-- different-key concurrent loading;
-- loader failure and retry;
-- failure propagation to every waiter;
-- lease blocks eviction;
-- duplicate release detection;
-- executor queue saturation;
-- executor shutdown with queued and active work;
-- metric snapshots under concurrency.
+- deterministic frequency/recency traces and decay;
+- true miss versus coalesced wait;
+- zero/undersized budgets and payload larger than budget;
+- same-key coalescing and different-key concurrency;
+- loader failure/retry and waiter propagation;
+- lease blocks eviction and duplicate release is detected;
+- queue saturation and shutdown semantics;
+- concurrent metrics snapshots.
 
-## CPU expert backing and pack I/O
+## CPU backing and pack I/O
 
 - existing pack opens without payload reads;
-- index validation does not materialize matrices;
-- first pack build writes/releases one expert at a time;
-- temporary pack cleanup on failure;
-- concurrent indexed reads use independent read positions safely;
-- malformed/truncated entry rejection;
-- dimension mismatch rejection;
-- cloned sessions share cache/backing ownership;
-- active expert objects survive cache eviction until GEMVs complete;
-- native GGUF performs no redundant pack/cache path;
-- memory stays bounded by cache budget plus documented temporary buffers.
+- index validation materializes no matrix;
+- first build writes/releases one expert at a time;
+- malformed/truncated entries and dimension mismatches fail;
+- independent concurrent reads are safe;
+- cloned sessions share backing/cache;
+- active objects survive eviction until GEMVs complete;
+- native GGUF uses no redundant cache;
+- memory is bounded by documented budgets and temporary buffers.
 
 ## CUDA expert residency
 
-- fully resident hit path;
-- one cold expert;
-- several unique cold experts;
-- unique cold set equal to capacity;
-- unique cold set greater than capacity;
-- probation reservation;
-- protected hot expert retention;
+- fully resident path;
+- one and several unique cold experts;
+- cold set equal to and greater than capacity;
+- probation reservation and protected retention;
 - active-batch pinning;
-- prefetch cannot evict current-batch slots;
-- host lease remains alive through H2D completion;
-- transfer failure does not publish pointers;
-- pointer-table and slot-table publication remains consistent;
+- prefetch cannot evict active slots;
+- host lease survives H2D completion;
+- transfer failure publishes nothing;
+- pointer/slot tables remain consistent;
 - concurrent sessions sharing model weights;
-- per-device isolation/fingerprinting;
-- sidecar and random-access source adapters;
-- all-resident path has zero host allocations;
-- all-resident path has no unconditional stream synchronization;
-- cold-list transfer is compact;
-- decode and prefill use the same residency semantics;
-- packed and standalone execution remain consistent.
+- per-device isolation;
+- source adapters driven by compiled payload schema;
+- zero host allocations and no unconditional synchronization on all-resident decode;
+- compact cold transfer;
+- decode/prefill and packed/standalone consistency.
 
 ## Architecture and dependency boundaries
 
-- architecture catalog duplicate detection and freezing;
-- custom architecture injection;
-- custom runtime modules with and without built-ins;
-- fake neutral repository compiling through CPU and CUDA compilers;
+- catalog duplicate detection/freezing and custom injection;
+- custom family modules with/without built-ins;
+- fake neutral repository through CPU/CUDA compilers;
 - no family dependency in generic runtime;
-- no concrete format dependency in generic cache code;
-- no architecture/checkpoint dispatch in backends;
-- no concrete services in C API composition.
+- no format dependency in generic cache;
+- no architecture dispatch in backends;
+- no concrete services in C API;
+- no family identity required to compile or execute synthetic MoE programs.
 
-## Dense topology
+## Dense topology, chat, tools, factories, and packed execution
 
-- GGUF and SafeTensors/JSON key mapping;
-- token defaults/overrides and multiple EOS IDs;
-- attention slot/layer mapping;
-- per-layer positional-encoding exceptions;
-- topology validation and fingerprint stability;
-- independent MiniCPM5 and SmolLM3 resolution.
-
-## Chat and tools
-
-- exact prompt fixtures for every family;
-- JSON escaping of quotes, slashes, controls, UTF-8, and empty strings;
-- zero, one, and parallel tool calls;
-- assistant text before, between, and after calls;
-- complete, incomplete, and malformed tagged blocks;
-- tool results and role capability enforcement;
-- no duplicate tool-definition rendering.
-
-## Backend factories and C API
-
-- CPU factory creation;
-- CUDA factory creation when compiled;
-- unsupported CUDA build behavior;
-- invalid backend and option mapping;
-- factory failure diagnostics;
-- C API smoke tests without concrete-service dependencies;
-- CPU-only shared libraries remain CUDA-free.
-
-## Packed execution
-
-- empty, oversized, null, duplicate, wrong-device, wrong-plan, wrong-storage, and incompatible-option batches;
-- common decode/prefill validation consistency;
-- packed/non-packed decode parity;
-- ragged/standard prefill parity;
-- mixed finalize and zero-finalize behavior;
-- non-equal query width;
-- variable per-layer FFN width;
-- metadata replacement/rebinding;
-- failure before host commit;
-- completion and metrics boundaries;
-- zero steady-state host/device allocations;
-- representative performance thresholds.
+Preserve focused tests for dense topology mapping/fingerprints, exact family prompt fixtures, JSON/tag handling, tool calls/results, backend factory creation/failure, ABI validation, packed input validation, decode/prefill parity, completion boundaries, and zero steady-state allocations.
 
 ---
 
@@ -1051,40 +884,31 @@ Run the complete verification matrix, publish benchmark/allocation evidence, upd
 Do not introduce:
 
 - host heap allocation;
-- disk access;
-- worker-pool submission;
+- disk access or worker submission;
 - full router-selection D2H copies;
 - unconditional stream synchronization;
 - architecture/checkpoint probing;
 - string-based tensor lookup;
-- repeated compatibility-key construction;
-- per-token plan creation;
+- repeated semantic-program or compatibility-key construction;
+- per-token plan selection;
 - virtual dispatch inside layer/token loops.
 
 ## Cold admission
 
-Permit only bounded work required by an actual miss:
+Permit only bounded work required by a real miss:
 
-- a compact unique cold list;
+- compact unique cold list;
 - capped parallel I/O;
 - preallocated or explicitly bounded metadata;
-- no storage I/O while holding a global cache/residency lock;
+- no storage I/O under a global lock;
 - event-based transfer completion;
-- atomic publication after all mandatory payloads are valid;
-- backpressure rather than unbounded task queues;
-- explicit error if a batch cannot fit the configured cache.
+- atomic publication after mandatory payloads are valid;
+- backpressure instead of unbounded queues;
+- explicit failure when the required set cannot fit.
 
-## CPU disk-backed execution
+## Backend lowering
 
-Preserve:
-
-- metadata-only pack opening;
-- lazy payload reads;
-- concurrent independent reads;
-- one-expert-at-a-time pack construction;
-- bounded steady-state RAM;
-- leases that outlive active GEMVs;
-- native GGUF mmap/page-cache behavior.
+All semantic interpretation, capability checks, payload binding, kernel choice, and function selection happen at model compilation/binding time. Decode and prefill consume compact executable records.
 
 Any material regression must be measured, explained, and fixed or explicitly rejected. File count and line count are not success metrics.
 
@@ -1092,15 +916,7 @@ Any material regression must be measured, explained, and fixed or explicitly rej
 
 # CI and verification requirements
 
-The current GitHub workflow has important limits:
-
-- Linux CPU runs full `verify` and VNNI/linkage checks;
-- Windows CPU runs full `verify`;
-- Linux CUDA builds in a CUDA container without a GPU and currently invokes verification with Celeg tests disabled;
-- Windows CUDA is compile-only with tests disabled;
-- neither hosted CUDA job proves runtime expert residency, kernel correctness, or performance on a real device.
-
-Required repository commands, adapted to the environment:
+Required commands, adapted to the environment:
 
 ```text
 python scripts/check_architecture_boundaries.py --root .
@@ -1110,33 +926,34 @@ ctest --test-dir <configured-build-dir> --output-on-failure
 git diff --check
 ```
 
-Verification reporting must separate:
+Report separately:
 
-1. CPU compile and runtime tests;
+1. CPU compile/runtime tests;
 2. CUDA compile validation;
 3. host-only CUDA-linked tests;
 4. CUDA runtime tests on a real GPU;
-5. numerical parity;
-6. allocation/synchronization evidence;
-7. performance benchmarks.
+5. neutral MoE program/lowering tests;
+6. numerical parity;
+7. allocation and synchronization evidence;
+8. hit/miss and packed performance benchmarks.
 
-Improve CI where practical so CUDA-independent cache/source/policy tests run in CUDA builds even without a device. Real-GPU tests require a self-hosted runner or explicit local evidence; do not pretend a hosted compile job supplies that evidence.
+Hosted CUDA compilation without a GPU does not prove runtime residency, kernel correctness, or performance. Run CUDA-independent semantic/source/cache tests in hosted builds where possible; use a real-device runner or explicit local evidence for GPU claims.
 
 ---
 
 # Commit and working rules
 
-- work on the current target branch unless explicitly instructed otherwise;
-- do not open a pull request for this plan;
+- work directly on the current target branch unless instructed otherwise;
+- do not open a pull request;
 - use small coherent commits describing architectural outcomes;
-- keep correctness fixes separate from optional performance tuning where possible;
-- add regression tests before changing behavior for confirmed defects;
-- do not preserve dead compatibility paths without evidence they are public and required;
-- do not add speculative abstractions for hypothetical families, sources, or backends;
-- do not hide synchronization or allocation inside innocent-looking helpers;
-- do not replace explicit code with a generic parameter/callback maze;
+- keep correctness fixes separate from optional tuning where practical;
+- add regression tests before changing confirmed behavior;
+- preserve no dead compatibility path without evidence it is required;
+- add abstractions only for demonstrated semantic variation or a clear stable boundary;
+- do not hide synchronization/allocation inside innocent-looking helpers;
+- do not replace explicit code with a parameter/callback maze;
 - do not stop after documentation changes;
-- do not declare a phase complete merely because code moved files.
+- do not claim completion because code merely moved files.
 
 ---
 
@@ -1144,16 +961,18 @@ Improve CI where practical so CUDA-independent cache/source/policy tests run in 
 
 When implementation is complete, provide:
 
-1. the resulting commit range;
-2. a mapping of each finding to changed files and tests;
-3. before/after SOLID, DRY, packed-execution, and expert-residency assessment with evidence;
-4. commands run and exact results;
-5. cache-policy and failure-transition test results;
-6. CPU pack laziness and bounded-memory evidence;
-7. CUDA hit/miss allocation, synchronization, and benchmark evidence;
-8. CI status separated into compile-only and real-device validation;
-9. remaining debt separated into correctness, architecture, DRY, performance, and optional enhancement categories;
-10. explicit confirmation that generic runtime no longer knows concrete families or formats, C API no longer constructs concrete backends, packed pipelines own their workflows, and expert storage tiers have explicit ownership/lifetime contracts;
-11. updated documentation pointing to final contracts and executable tests.
+1. resulting commit range;
+2. mapping of findings to files and tests;
+3. before/after SOLID, DRY, multi-MoE, packed, and residency assessment;
+4. the final neutral MoE extension path with one synthetic and one real family example;
+5. commands and exact results;
+6. semantic-program and lowering coverage;
+7. cache-policy/failure-transition results;
+8. CPU pack laziness and bounded-memory evidence;
+9. CUDA hit/miss allocation, synchronization, and benchmark evidence;
+10. CI status separated into compile-only and real-device validation;
+11. remaining debt by correctness, architecture, DRY, performance, and optional enhancement;
+12. explicit confirmation that generic runtime knows no concrete family/format, backends use no family identity for MoE, C API constructs no concrete backend, packed pipelines own workflows, and expert tiers have explicit ownership/lifetime contracts;
+13. updated executable documentation for adding another MoE family.
 
-Do not claim completion for any item lacking source, test, and—where performance is involved—measurement evidence.
+Do not claim completion for any item lacking source, tests, and—where performance is involved—measurement evidence.
