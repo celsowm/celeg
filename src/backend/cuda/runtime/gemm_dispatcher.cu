@@ -27,8 +27,7 @@ GemmDispatcher::GemmDispatcher(cudaStream_t stream,
                                const CudaModelOptions& options)
     : stream_(stream),
       options_(options),
-      cublas_(stream),
-      cublas_lt_() {
+      handles_(stream) {
     CELEG_CUDA(cudaGetDevice(&device_ordinal_));
     if (options.gemm_backend == GemmBackend::CublasLt &&
         options.lt_workspace_bytes > 0) {
@@ -67,7 +66,7 @@ void GemmDispatcher::linear_cublas(const __nv_bfloat16* x,
                                    float beta) {
     const float alpha = 1.0f;
     CELEG_CUBLAS(cublasGemmEx(
-        cublas_.get(), CUBLAS_OP_T, CUBLAS_OP_N,
+        handles_.cublas.get(), CUBLAS_OP_T, CUBLAS_OP_N,
         n, m, k, &alpha,
         weight, CUDA_R_16BF, k,
         x, CUDA_R_16BF, k,
@@ -82,7 +81,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
     const __nv_bfloat16* weight,
     int m, int n, int k) {
     const MatmulKey key{m, n, k};
-    if (auto it = lt_plans_.find(key); it != lt_plans_.end()) {
+    if (auto it = lt_cache_.plans.find(key); it != lt_cache_.plans.end()) {
         return *it->second;
     }
 
@@ -123,7 +122,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
             static_cast<size_t>(options_.lt_heuristics));
         int returned = 0;
         CELEG_CUBLAS(cublasLtMatmulAlgoGetHeuristic(
-            cublas_lt_.get(), plan->operation,
+            handles_.cublas_lt.get(), plan->operation,
             plan->a, plan->b, plan->c, plan->d,
             preference, options_.lt_heuristics,
             results.data(), &returned));
@@ -138,19 +137,15 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
         }
 
         if (!valid.empty()) {
-            int selected = valid.front();
-            // Autotune: try each candidate algorithm and pick the fastest.
-            // For decode (m=1) the scratch is just n elements; for prefill
-            // (m>1) we need m*n for the full output.
-            if (options_.lt_autotune && valid.size() > 1) {
-                DeviceBuffer<__nv_bfloat16> scratch(static_cast<size_t>(m) * n);
-                const float alpha = 1.0f;
-                const float beta = 0.0f;
-                float best_ms = std::numeric_limits<float>::infinity();
-                for (const int candidate : valid) {
+            const int selected = lt_autotuner_.choose(
+                options_.lt_autotune, valid, valid.front(),
+                [&](int candidate) {
+                    DeviceBuffer<__nv_bfloat16> scratch(static_cast<size_t>(m) * n);
                     const auto& result = results[static_cast<size_t>(candidate)];
+                    const float alpha = 1.0f;
+                    const float beta = 0.0f;
                     CELEG_CUBLAS(cublasLtMatmul(
-                        cublas_lt_.get(), plan->operation,
+                        handles_.cublas_lt.get(), plan->operation,
                         &alpha, weight, plan->a, x, plan->b,
                         &beta, scratch.data(), plan->c,
                         scratch.data(), plan->d, &result.algo,
@@ -162,7 +157,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
                     constexpr int iterations = 3;
                     for (int iteration = 0; iteration < iterations; ++iteration) {
                         CELEG_CUBLAS(cublasLtMatmul(
-                            cublas_lt_.get(), plan->operation,
+                            handles_.cublas_lt.get(), plan->operation,
                             &alpha, weight, plan->a, x, plan->b,
                             &beta, scratch.data(), plan->c,
                             scratch.data(), plan->d, &result.algo,
@@ -171,13 +166,8 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
                     }
                     end.record(stream_);
                     end.synchronize();
-                    const float elapsed = CudaEvent::elapsed_ms(begin, end);
-                    if (elapsed < best_ms) {
-                        best_ms = elapsed;
-                        selected = candidate;
-                    }
-                }
-            }
+                    return CudaEvent::elapsed_ms(begin, end);
+                });
             const auto& chosen = results[static_cast<size_t>(selected)];
             plan->algorithm = chosen.algo;
             plan->workspace_size = chosen.workspaceSize;
@@ -189,7 +179,7 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
     }
     CELEG_CUBLAS(cublasLtMatmulPreferenceDestroy(preference));
 
-    auto [it, inserted] = lt_plans_.emplace(key, std::move(plan));
+    auto [it, inserted] = lt_cache_.plans.emplace(key, std::move(plan));
     if (!inserted) throw std::runtime_error("duplicate cuBLASLt plan");
     return *it->second;
 }
@@ -206,11 +196,30 @@ void GemmDispatcher::linear_cublaslt(const __nv_bfloat16* x,
     }
     const float alpha = 1.0f;
     CELEG_CUBLAS(cublasLtMatmul(
-        cublas_lt_.get(), plan.operation,
+        handles_.cublas_lt.get(), plan.operation,
         &alpha, weight, plan.a, x, plan.b,
         &beta, y, plan.c, y, plan.d,
         &plan.algorithm, lt_workspace_.data(), plan.workspace_size,
         stream_));
+}
+
+const CompiledLinearBinding& GemmDispatcher::compile_linear_binding(
+    const LinearWeight& weight, const CudaExecutionPlan& plan) {
+    auto it = linear_bindings_.find(&weight);
+    if (it != linear_bindings_.end() &&
+        it->second.plan_fingerprint == plan.fingerprint()) {
+        return it->second;
+    }
+    weight.validate_storage();
+    CompiledLinearBinding binding;
+    binding.weight = &weight;
+    binding.kernel = plan.linear_kernel();
+    binding.rows = weight.rows;
+    binding.cols = weight.cols;
+    binding.plan_fingerprint = plan.fingerprint();
+    auto [inserted, ignored] = linear_bindings_.insert_or_assign(&weight, binding);
+    (void)ignored;
+    return inserted->second;
 }
 
 void GemmDispatcher::linear(const __nv_bfloat16* x,
@@ -224,32 +233,34 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
         throw std::invalid_argument(
             "execution plan device does not match GEMM dispatcher device");
     }
-    if (weight.rows != n || weight.cols != k) {
+    const CompiledLinearBinding& binding = compile_linear_binding(weight, plan);
+    if (binding.rows != n || binding.cols != k) {
         throw std::runtime_error("linear weight shape does not match the requested GEMM: weight=" +
             std::to_string(weight.rows) + "x" + std::to_string(weight.cols) +
             " requested=" + std::to_string(n) + "x" + std::to_string(k));
     }
-    weight.validate_storage();
-    if (weight.gguf_quantized()) {
+    const LinearWeight& bound_weight = *binding.weight;
+    bound_weight.validate_storage();
+    if (bound_weight.gguf_quantized()) {
         if (!has_native_fanout(x, m, k)) {
             ensure_mmq_capacity(m, k);
-            launch_quantize_q8_1(x, mmq_q8_.data(), mmq_scales_.data(),
-                                 mmq_sums_.data(), m, k, stream_);
+            launch_quantize_q8_1(x, mmq_workspace_.q8.data(), mmq_workspace_.scales.data(),
+                                 mmq_workspace_.sums.data(), m, k, stream_);
         }
-        for (const GgufLinearSegment& segment : weight.gguf_segments) {
+        for (const GgufLinearSegment& segment : bound_weight.gguf_segments) {
             if (segment.cols != k) {
                 throw std::runtime_error("GGUF segment width does not match GEMM");
             }
             __nv_bfloat16* seg_y = y + static_cast<size_t>(segment.row_offset);
             if (segment.type == GgmlType::Q4_K) {
-                launch_q4k_mmq_with_policy(mmq_q8_.data(), mmq_scales_.data(),
-                               mmq_sums_.data(), segment.blocks,
+                launch_q4k_mmq_with_policy(mmq_workspace_.q8.data(), mmq_workspace_.scales.data(),
+                               mmq_workspace_.sums.data(), segment.blocks,
                                seg_y, m, segment.rows, k,
                                segment.row_bytes, n, beta,
                                plan.mmq_tensor_cores_enabled(), stream_);
             } else {
-                launch_q6k_mmq_with_policy(mmq_q8_.data(), mmq_scales_.data(),
-                               mmq_sums_.data(), segment.blocks,
+                launch_q6k_mmq_with_policy(mmq_workspace_.q8.data(), mmq_workspace_.scales.data(),
+                               mmq_workspace_.sums.data(), segment.blocks,
                                seg_y, m, segment.rows, k,
                                segment.row_bytes, n, beta,
                                plan.mmq_tensor_cores_enabled(), stream_);
@@ -257,7 +268,7 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
         }
         return;
     }
-    switch (plan.linear_kernel()) {
+    switch (binding.kernel) {
         case LinearKernelKind::W4A16:
             if (!weight.int4_quantized()) {
                 throw std::runtime_error("execution plan requires INT4 weights");
@@ -319,36 +330,36 @@ void GemmDispatcher::begin_native_fanout(const __nv_bfloat16* x, int m, int k) {
     if (x == nullptr || m <= 0 || k <= 0 || k % kMmqQ8_1BlockSize != 0) {
         throw std::invalid_argument("native GGUF fan-out requires a non-empty Q8_1-aligned input");
     }
-    if (native_fanout_input_ != nullptr) {
+    if (mmq_workspace_.fanout_input != nullptr) {
         throw std::logic_error("nested native GGUF fan-out is not supported");
     }
     ensure_mmq_capacity(m, k);
-    launch_quantize_q8_1(x, mmq_q8_.data(), mmq_scales_.data(), mmq_sums_.data(),
+    launch_quantize_q8_1(x, mmq_workspace_.q8.data(), mmq_workspace_.scales.data(), mmq_workspace_.sums.data(),
                          m, k, stream_);
-    native_fanout_input_ = x;
-    native_fanout_m_ = m;
-    native_fanout_k_ = k;
+    mmq_workspace_.fanout_input = x;
+    mmq_workspace_.fanout_m = m;
+    mmq_workspace_.fanout_k = k;
 }
 
 void GemmDispatcher::end_native_fanout() {
-    native_fanout_input_ = nullptr;
-    native_fanout_m_ = 0;
-    native_fanout_k_ = 0;
+    mmq_workspace_.fanout_input = nullptr;
+    mmq_workspace_.fanout_m = 0;
+    mmq_workspace_.fanout_k = 0;
 }
 
 void GemmDispatcher::ensure_mmq_capacity(int m, int k) {
-    if (m <= mmq_capacity_m_ && k <= mmq_capacity_k_) return;
-    mmq_capacity_m_ = std::max(mmq_capacity_m_, m);
-    mmq_capacity_k_ = std::max(mmq_capacity_k_, k);
-    mmq_q8_.reset(static_cast<size_t>(mmq_capacity_m_) * mmq_capacity_k_);
-    const size_t blocks = static_cast<size_t>(mmq_capacity_m_) *
-                          (mmq_capacity_k_ / kMmqQ8_1BlockSize);
-    mmq_scales_.reset(blocks);
-    mmq_sums_.reset(blocks);
+    if (m <= mmq_workspace_.capacity_m && k <= mmq_workspace_.capacity_k) return;
+    mmq_workspace_.capacity_m = std::max(mmq_workspace_.capacity_m, m);
+    mmq_workspace_.capacity_k = std::max(mmq_workspace_.capacity_k, k);
+    mmq_workspace_.q8.reset(static_cast<size_t>(mmq_workspace_.capacity_m) * mmq_workspace_.capacity_k);
+    const size_t blocks = static_cast<size_t>(mmq_workspace_.capacity_m) *
+                          (mmq_workspace_.capacity_k / kMmqQ8_1BlockSize);
+    mmq_workspace_.scales.reset(blocks);
+    mmq_workspace_.sums.reset(blocks);
 }
 
 bool GemmDispatcher::has_native_fanout(const __nv_bfloat16* x, int m, int k) const {
-    return native_fanout_input_ == x && native_fanout_m_ == m && native_fanout_k_ == k;
+    return mmq_workspace_.fanout_input == x && mmq_workspace_.fanout_m == m && mmq_workspace_.fanout_k == k;
 }
 
 } // namespace celeg

@@ -32,7 +32,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         workspace_.prefill_tokens_.data(), rows, workspace_.prefill_hidden_.data(),
         resources_.shape_.hidden, stream_.get());
     launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
-                 resources_.shape_.embedding_multiplier, stream_.get());
+                 resources_.shape_.numerical_policy.embedding_multiplier, stream_.get());
     initialize_per_layer_input_batch(workspace_.prefill_tokens_.data(), rows);
     prof.end(PrefillPhase::Embed, stream_.get());
 
@@ -48,7 +48,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         prof.begin(stream_.get());
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.operator_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
-                       resources_.shape_.norm_eps, stream_.get());
+                       resources_.shape_.numerical_policy.norm_eps, stream_.get());
         prof.end(PrefillPhase::Norm, stream_.get());
 
         if (AttentionLayer* attention = as_attention(layer)) {
@@ -84,7 +84,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     workspace_.prefill_q_.data(), attention->key ? workspace_.prefill_k_.data() : nullptr,
                     attention->q_norm, attention->k_norm, rows, layout.query_heads,
                     layout.key_value_heads, layout.head_dim, static_cast<float>(layout.rope_theta),
-                    static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                    static_cast<float>(layout.rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
                     layout.query_key_norm, stream_.get());
             }
             launch_scale(workspace_.prefill_q_.data(),
@@ -179,7 +179,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                    layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
             launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
-                         resources_.shape_.residual_multiplier, stream_.get());
+                         resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
@@ -201,7 +201,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.post_attention_norm,
                            workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
-                           resources_.shape_.norm_eps, stream_.get());
+                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
             prof.begin(stream_.get());
@@ -219,16 +219,16 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
     const __nv_bfloat16* last_hidden = workspace_.prefill_hidden_.data() +
         static_cast<size_t>(rows - 1) * resources_.shape_.hidden;
     launch_rmsnorm(last_hidden, resources_.final_norm_, workspace_.normed_.data(),
-                   1, resources_.shape_.hidden, resources_.shape_.norm_eps,
+                   1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
                    stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
            1, resources_.shape_.vocab_size, resources_.shape_.hidden);
-    if (resources_.shape_.logits_divisor != 1.0f) {
+    if (resources_.shape_.numerical_policy.logits_divisor != 1.0f) {
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 1.0f / resources_.shape_.logits_divisor, stream_.get());
-    if (resources_.shape_.final_logit_softcap > 0.0f) {
+                 1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
+    if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                            resources_.shape_.final_logit_softcap, stream_.get());
+                            resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());
     }
     }
     prof.end(PrefillPhase::Logits, stream_.get());

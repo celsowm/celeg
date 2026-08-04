@@ -6,6 +6,7 @@
 #include "naming_policy.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 namespace celeg::detail {
 namespace {
@@ -30,19 +31,24 @@ public:
             throw std::runtime_error("Granite architecture cannot resolve checkpoint");
         }
         const auto& source = checkpoint.metadata;
-        RuntimeTopology t = resolve_granite_topology(source);
-
-        ResolvedModel result;
-        result.topology = t;
-        result.architecture_id = "granite";
-        result.source_format = source.is_gguf() ? "gguf" : "safetensors";
-        result.checkpoint_profile_id = "granite";
-        result.chat_profile_id = "granite-instruct";
-        result.profile = {"granite", "", {}, result.chat_profile_id};
-        result.identity = "granite-" + t.fingerprint();
-        result.capabilities = {true, true, false, true};
-        build_dense_transformer_graph(result);
-        build_dense_weight_plan(result, *naming_policy());
+        ArchitectureResolutionStages stages;
+        stages.topology = [](const CheckpointView& view) {
+            return resolve_granite_topology(view.metadata);
+        };
+        stages.graph = [](ResolvedModel& model, const CheckpointView&) {
+            build_dense_transformer_graph(model);
+        };
+        stages.weights = [](ResolvedModel& model, const CheckpointView&) {
+            build_dense_weight_plan(model, *naming_policy());
+        };
+        stages.capabilities = {true, true, false, true};
+        stages.provenance.architecture_id = "granite";
+        stages.provenance.source_format = source.is_gguf() ? "gguf" : "safetensors";
+        stages.provenance.checkpoint_profile_id = "granite";
+        stages.provenance.chat_profile_id = "granite-instruct";
+        stages.provenance.profile = {"granite", "", {}, stages.provenance.chat_profile_id};
+        ResolvedModel result = resolve_architecture_stages(checkpoint, std::move(stages));
+        result.provenance.identity = "granite-" + result.topology.fingerprint();
         return result;
     }
 };

@@ -27,6 +27,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/weights.cpp
     src/backend/cuda/model/packed_execution.cu
     src/backend/cuda/model/packed_workspace.cu
+    src/backend/cuda/model/packed_commit.cpp
     src/backend/cuda/model/packed_metadata.cu
     src/backend/cuda/model/packed_layer_program.cpp
     src/backend/cuda/model/packed_operators.cu

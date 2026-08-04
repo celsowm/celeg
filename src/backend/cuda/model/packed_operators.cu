@@ -72,7 +72,7 @@ void project_attention_qkv(PackedOperatorContext& context,
             w.q.data(), attention.key ? w.k.data() : nullptr, attention.q_norm,
             attention.k_norm, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(layout.rope_theta),
-            static_cast<float>(layout.rotary_fraction), context.shape.norm_eps,
+            static_cast<float>(layout.rotary_fraction), context.shape.numerical_policy.norm_eps,
             layout.query_key_norm, w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
@@ -219,7 +219,7 @@ void PackedAttentionExecutor::run(
                    context.shape.hidden, query_width,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
     launch_scale(w.hidden.data(), rows * context.shape.hidden,
-                 context.shape.residual_multiplier, w.stream.get());
+                 context.shape.numerical_policy.residual_multiplier, w.stream.get());
 }
 
 void PackedDenseFfnExecutor::run(
@@ -230,7 +230,7 @@ void PackedDenseFfnExecutor::run(
     int layer_index) {
     PackedWorkspace& w = context.workspace;
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.shape.hidden, context.shape.norm_eps, w.stream.get());
+                   rows, context.shape.hidden, context.shape.numerical_policy.norm_eps, w.stream.get());
     const auto& widths = context.shape.feed_forward_intermediates;
     const int intermediate = widths.empty()
         ? context.shape.intermediate
@@ -264,7 +264,7 @@ void PackedDenseFfnExecutor::run(
         context.linear(w.activated.data(), *dense->w2, w.mlp_output.data(), rows,
                        context.shape.hidden, intermediate);
         launch_scale(w.mlp_output.data(), rows * context.shape.hidden,
-                     context.shape.residual_multiplier, w.stream.get());
+                     context.shape.numerical_policy.residual_multiplier, w.stream.get());
         launch_residual_add(w.hidden.data(), w.mlp_output.data(),
                             rows * context.shape.hidden, w.stream.get());
     }
@@ -281,7 +281,7 @@ void PackedMoeExecutor::run(
     const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward);
     if (!moe) throw std::logic_error("packed MoE layer has no MoE FFN binding");
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.shape.hidden, context.shape.norm_eps, w.stream.get());
+                   rows, context.shape.hidden, context.shape.numerical_policy.norm_eps, w.stream.get());
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
                               rows * context.shape.hidden, w.stream.get());
 

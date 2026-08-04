@@ -87,26 +87,26 @@ RuntimeTopology decode_topology(const CheckpointMetadata& metadata) {
         : required_int(metadata, "max_position_embeddings");
     topology.conv_cache = 0;
     topology.conv_dim = 0;
-    topology.norm_eps = static_cast<float>(metadata.is_gguf()
+    topology.numerical_policy.norm_eps = static_cast<float>(metadata.is_gguf()
         ? metadata.number_or("gemma4.attention.layer_norm_rms_epsilon", 1.0e-6)
         : optional_number(metadata, "rms_norm_eps", 1.0e-6));
     topology.rope_type = metadata.is_gguf()
         ? "default"
         : metadata.string_or(text_key("rope_parameters.sliding_attention.rope_type"), "default");
-    topology.bos_token_id = metadata.is_gguf()
+    topology.token_policy.bos_token_id = metadata.is_gguf()
         ? static_cast<int>(metadata.integer_or("tokenizer.ggml.bos_token_id", 2))
         : optional_int(metadata, "bos_token_id", 2);
-    topology.eos_token_ids = {metadata.is_gguf()
+    topology.token_policy.eos_token_ids = {metadata.is_gguf()
         ? static_cast<int>(metadata.integer_or("tokenizer.ggml.eos_token_id", 1))
         : optional_int(metadata, "eos_token_id", 1)};
-    topology.pad_token_id = metadata.is_gguf()
+    topology.token_policy.pad_token_id = metadata.is_gguf()
         ? static_cast<int>(metadata.integer_or("tokenizer.ggml.padding_token_id", 0))
         : optional_int(metadata, "pad_token_id", 0);
-    topology.embedding_multiplier = std::sqrt(static_cast<float>(topology.hidden));
-    topology.attention_multiplier = 1.0f;
-    topology.residual_multiplier = 1.0f;
-    topology.logits_divisor = 1.0f;
-    topology.final_logit_softcap = static_cast<float>(metadata.is_gguf()
+    topology.numerical_policy.embedding_multiplier = std::sqrt(static_cast<float>(topology.hidden));
+    topology.numerical_policy.attention_multiplier = 1.0f;
+    topology.numerical_policy.residual_multiplier = 1.0f;
+    topology.numerical_policy.logits_divisor = 1.0f;
+    topology.numerical_policy.final_logit_softcap = static_cast<float>(metadata.is_gguf()
         ? metadata.number_or("gemma4.final_logit_softcapping", 0.0)
         : optional_number(metadata, "final_logit_softcapping", 0.0));
     topology.has_split_attention_norms = true;
@@ -294,59 +294,65 @@ public:
     ResolvedModel resolve(const CheckpointView& checkpoint) const override {
         const ProbeResult result = probe(checkpoint.metadata);
         if (!result.supported) throw std::runtime_error(result.reason);
-        RuntimeTopology topology = decode_topology(checkpoint.metadata);
-        ResolvedModel model;
-        model.topology = topology;
-        model.architecture_id = "gemma4";
-        model.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
-        model.chat_profile_id = "gemma4-instruct";
-        model.checkpoint_profile_id = checkpoint.metadata.repository_hint.empty()
-            ? "gemma4" : checkpoint.metadata.repository_hint;
-        model.profile = {"gemma4", "", {}, model.chat_profile_id};
-        model.identity = model.checkpoint_profile_id + "-" + topology.fingerprint();
-        model.capabilities = {true, true, false, true};
-        model.graph.embedding_multiplier = topology.embedding_multiplier;
-        model.graph.logits_divisor = topology.logits_divisor;
-        model.graph.final_norm.epsilon = topology.norm_eps;
-        model.graph.final_logit_softcap = static_cast<float>(checkpoint.metadata.is_gguf()
-            ? checkpoint.metadata.number_or("gemma4.final_logit_softcapping", 0.0)
-            : optional_number(checkpoint.metadata, "final_logit_softcapping", 0.0));
-        const int per_layer_size = checkpoint.metadata.is_gguf()
-            ? static_cast<int>(checkpoint.metadata.integer_or(
-                "gemma4.embedding_length_per_layer_input", 0))
-            : optional_int(checkpoint.metadata, "hidden_size_per_layer_input", 0);
-        for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-            LayerSpec spec;
-            spec.operator_norm.epsilon = topology.norm_eps;
-            spec.post_attention_norm.epsilon = topology.norm_eps;
-            spec.pre_feed_forward_norm.epsilon = topology.norm_eps;
-            spec.post_feed_forward_norm.epsilon = topology.norm_eps;
-            spec.per_layer_input_norm.epsilon = topology.norm_eps;
-            spec.mixer = topology.attention_layout(layer);
-            const int shared_layers = checkpoint.metadata.is_gguf()
-                ? static_cast<int>(checkpoint.metadata.integer_or(
+        ArchitectureResolutionStages stages;
+        stages.topology = [](const CheckpointView& view) {
+            return decode_topology(view.metadata);
+        };
+        stages.graph = [](ResolvedModel& model, const CheckpointView& view) {
+            const auto& metadata = view.metadata;
+            RuntimeTopology& topology = model.topology;
+            model.graph.embedding_multiplier = topology.numerical_policy.embedding_multiplier;
+            model.graph.logits_divisor = topology.numerical_policy.logits_divisor;
+            model.graph.final_norm.epsilon = topology.numerical_policy.norm_eps;
+            model.graph.final_logit_softcap = static_cast<float>(metadata.is_gguf()
+                ? metadata.number_or("gemma4.final_logit_softcapping", 0.0)
+                : optional_number(metadata, "final_logit_softcapping", 0.0));
+            const int per_layer_size = metadata.is_gguf()
+                ? static_cast<int>(metadata.integer_or(
+                    "gemma4.embedding_length_per_layer_input", 0))
+                : optional_int(metadata, "hidden_size_per_layer_input", 0);
+            const int shared_layers = metadata.is_gguf()
+                ? static_cast<int>(metadata.integer_or(
                     "gemma4.attention.shared_kv_layers", 0))
-                : optional_int(checkpoint.metadata, "num_kv_shared_layers", 0);
-            const bool double_wide = checkpoint.metadata.is_gguf()
-                ? checkpoint.metadata.boolean_or("gemma4.use_double_wide_mlp", false)
-                : checkpoint.metadata.boolean_or(text_key("use_double_wide_mlp"), false);
-            const bool wide = layer >= topology.num_hidden_layers - shared_layers &&
-                double_wide;
-            spec.feed_forward = DenseFeedForwardSpec{
-                topology.intermediate * (wide ? 2 : 1), ActivationKind::GeluTanh};
-            topology.max_feed_forward_intermediate = std::max(
-                topology.max_feed_forward_intermediate,
-                topology.intermediate * (wide ? 2 : 1));
-            topology.feed_forward_intermediates[static_cast<size_t>(layer)] =
-                topology.intermediate * (wide ? 2 : 1);
-            spec.per_layer_input = {per_layer_size, ActivationKind::GeluTanh,
-                                    per_layer_size > 0};
-            spec.layer_scalar = 1.0f;
-            model.graph.layers.push_back(std::move(spec));
-        }
-        model.topology = topology;
-        build_gemma_weight_plan(model);
-        resolve_weight_plan(model, *naming_policy());
+                : optional_int(metadata, "num_kv_shared_layers", 0);
+            const bool double_wide = metadata.is_gguf()
+                ? metadata.boolean_or("gemma4.use_double_wide_mlp", false)
+                : metadata.boolean_or(text_key("use_double_wide_mlp"), false);
+            for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
+                LayerSpec spec;
+                spec.operator_norm.epsilon = topology.numerical_policy.norm_eps;
+                spec.post_attention_norm.epsilon = topology.numerical_policy.norm_eps;
+                spec.pre_feed_forward_norm.epsilon = topology.numerical_policy.norm_eps;
+                spec.post_feed_forward_norm.epsilon = topology.numerical_policy.norm_eps;
+                spec.per_layer_input_norm.epsilon = topology.numerical_policy.norm_eps;
+                spec.mixer = topology.attention_layout(layer);
+                const bool wide = layer >= topology.num_hidden_layers - shared_layers &&
+                    double_wide;
+                const int intermediate = topology.intermediate * (wide ? 2 : 1);
+                spec.feed_forward = DenseFeedForwardSpec{intermediate, ActivationKind::GeluTanh};
+                topology.max_feed_forward_intermediate = std::max(
+                    topology.max_feed_forward_intermediate, intermediate);
+                topology.feed_forward_intermediates[static_cast<size_t>(layer)] = intermediate;
+                spec.per_layer_input = {per_layer_size, ActivationKind::GeluTanh,
+                                        per_layer_size > 0};
+                spec.layer_scalar = 1.0f;
+                model.graph.layers.push_back(std::move(spec));
+            }
+        };
+        stages.weights = [](ResolvedModel& model, const CheckpointView&) {
+            build_gemma_weight_plan(model);
+            resolve_weight_plan(model, *naming_policy());
+        };
+        stages.capabilities = {true, true, false, true};
+        stages.provenance.architecture_id = "gemma4";
+        stages.provenance.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
+        stages.provenance.chat_profile_id = "gemma4-instruct";
+        stages.provenance.checkpoint_profile_id = checkpoint.metadata.repository_hint.empty()
+            ? "gemma4" : checkpoint.metadata.repository_hint;
+        stages.provenance.profile = {"gemma4", "", {}, stages.provenance.chat_profile_id};
+        ResolvedModel model = resolve_architecture_stages(checkpoint, std::move(stages));
+        model.provenance.identity = model.provenance.checkpoint_profile_id + "-" +
+                                    model.topology.fingerprint();
         return model;
     }
 };

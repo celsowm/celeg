@@ -92,13 +92,15 @@ void build_weight_plan(ResolvedModel& model) {
     }
 }
 
-ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
+CheckpointMetadata normalized_lfm2_metadata(const CheckpointView& checkpoint) {
     CheckpointProfile profile{"lfm2", "", {}, "lfm2-instruct"};
-    const CheckpointMetadata metadata = CheckpointProfileResolver::matches(
+    return CheckpointProfileResolver::matches(
         profile, checkpoint.metadata)
         ? CheckpointProfileResolver::apply(profile, checkpoint.metadata)
         : checkpoint.metadata;
-    const auto& m = metadata;
+}
+
+RuntimeTopology decode_lfm2_topology(const CheckpointMetadata& m) {
     const Lfm2Metadata decoded = decode_lfm2_metadata(m);
     const bool gguf = decoded.gguf;
     const bool moe = decoded.moe;
@@ -114,14 +116,14 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
     t.conv_cache = decoded.conv_cache;
     t.conv_dim = decoded.conv_dim;
     t.max_position_embeddings = decoded.max_position_embeddings;
-    t.norm_eps = decoded.norm_eps;
-    t.bos_token_id = decoded.bos_token_id;
-    t.eos_token_ids = {decoded.eos_token_id};
-    t.pad_token_id = decoded.pad_token_id;
-    t.embedding_multiplier = 1.0f;
-    t.attention_multiplier = 0.0f;
-    t.residual_multiplier = 1.0f;
-    t.logits_divisor = 1.0f;
+    t.numerical_policy.norm_eps = decoded.norm_eps;
+    t.token_policy.bos_token_id = decoded.bos_token_id;
+    t.token_policy.eos_token_ids = {decoded.eos_token_id};
+    t.token_policy.pad_token_id = decoded.pad_token_id;
+    t.numerical_policy.embedding_multiplier = 1.0f;
+    t.numerical_policy.attention_multiplier = 0.0f;
+    t.numerical_policy.residual_multiplier = 1.0f;
+    t.numerical_policy.logits_divisor = 1.0f;
 
     const auto decoded_layers = decode_lfm2_layer_types(m, prefix, decoded.num_key_value_heads);
     t.mixer_kinds = decoded_layers.mixer_kinds;
@@ -167,24 +169,20 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
                       false, AttentionMaskKind::Causal, 0,
                       decoded.rope_theta, 1.0, {}});
     t.validate();
+    return t;
+}
 
-    ResolvedModel result;
-    result.topology = t;
-    result.architecture_id = "lfm2";
-    result.source_format = m.is_gguf() ? "gguf" : "safetensors";
-    result.chat_profile_id = "lfm2-instruct";
-    result.checkpoint_profile_id = m.repository_hint.empty() ? "lfm2" : m.repository_hint;
-    result.profile = std::move(profile);
-    result.identity = result.checkpoint_profile_id + "-" + t.fingerprint();
-    result.capabilities = {true, true, moe, true};
-    result.graph.embedding_multiplier = t.embedding_multiplier;
-    result.graph.logits_divisor = t.logits_divisor;
-    result.graph.final_norm.epsilon = t.norm_eps;
+void build_lfm2_graph(ResolvedModel& result,
+                      const CheckpointMetadata& metadata) {
+    const RuntimeTopology& t = result.topology;
+    result.graph.embedding_multiplier = t.numerical_policy.embedding_multiplier;
+    result.graph.logits_divisor = t.numerical_policy.logits_divisor;
+    result.graph.final_norm.epsilon = t.numerical_policy.norm_eps;
     for (int i = 0; i < t.num_hidden_layers; ++i) {
         LayerSpec layer;
-        layer.operator_norm.epsilon = t.norm_eps;
-        layer.feed_forward_norm.epsilon = t.norm_eps;
-        layer.residual.multiplier = t.residual_multiplier;
+        layer.operator_norm.epsilon = t.numerical_policy.norm_eps;
+        layer.feed_forward_norm.epsilon = t.numerical_policy.norm_eps;
+        layer.residual.multiplier = t.numerical_policy.residual_multiplier;
         if (t.mixer_kinds[static_cast<size_t>(i)] == MixerKind::Attention) {
             layer.mixer = t.attention_layout(i);
         } else {
@@ -199,8 +197,34 @@ ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
         }
         result.graph.layers.push_back(std::move(layer));
     }
-    build_weight_plan(result);
-    resolve_weight_plan(result, *naming_policy());
+    (void)metadata;
+}
+
+ResolvedModel resolve_lfm2(const CheckpointView& checkpoint) {
+    const CheckpointMetadata metadata = normalized_lfm2_metadata(checkpoint);
+    const Lfm2Metadata decoded = decode_lfm2_metadata(metadata);
+    CheckpointProfile profile{"lfm2", "", {}, "lfm2-instruct"};
+    ArchitectureResolutionStages stages;
+    stages.topology = [metadata](const CheckpointView&) {
+        return decode_lfm2_topology(metadata);
+    };
+    stages.graph = [metadata](ResolvedModel& model, const CheckpointView&) {
+        build_lfm2_graph(model, metadata);
+    };
+    stages.weights = [](ResolvedModel& model, const CheckpointView&) {
+        build_weight_plan(model);
+        resolve_weight_plan(model, *naming_policy());
+    };
+    stages.capabilities = {true, true, decoded.moe, true};
+    stages.provenance.architecture_id = "lfm2";
+    stages.provenance.source_format = metadata.is_gguf() ? "gguf" : "safetensors";
+    stages.provenance.chat_profile_id = "lfm2-instruct";
+    stages.provenance.checkpoint_profile_id = metadata.repository_hint.empty()
+        ? "lfm2" : metadata.repository_hint;
+    stages.provenance.profile = std::move(profile);
+    ResolvedModel result = resolve_architecture_stages(checkpoint, std::move(stages));
+    result.provenance.identity = result.provenance.checkpoint_profile_id + "-" +
+                                 result.topology.fingerprint();
     return result;
 }
 

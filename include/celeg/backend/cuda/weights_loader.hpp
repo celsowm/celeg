@@ -32,7 +32,8 @@ void dequantize_gguf_to_bf16(const HostTensorView& tensor,
 // only I/O + quantization + caching; the compiled model retains the forward pass,
 // session state, and graph capture. New weight formats are added by
 // extending the quantization branches here without touching the inference
-// path (Open/Closed Principle).
+// path. The supported storage modes are a closed domain and require
+// coordinated loader, plan, and test changes when extended.
 class WeightLoader {
 public:
     // Looks up or creates the SharedModelWeights for the given

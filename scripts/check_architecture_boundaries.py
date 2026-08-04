@@ -146,6 +146,22 @@ def main() -> int:
             if generic_runtime.search(path.read_text(encoding="utf-8")):
                 errors.append(f"architecture-specific type leaked into generic runtime: {path}")
 
+    # Packed execution must consume resources and compiled policy prepared by
+    # its owner. These checks keep accidental hot-path plan compilation and
+    # direct CUDA allocation out of the orchestration translation unit.
+    packed_execution = root / "src/backend/cuda/model/packed_execution.cu"
+    if packed_execution.is_file():
+        packed_text = packed_execution.read_text(encoding="utf-8")
+        forbidden_packed = (
+            (r"CudaExecutionPlan::compile\s*\(", "per-call CUDA plan compilation"),
+            (r"\bcudaMalloc(?:Host)?\s*\(", "direct packed CUDA allocation"),
+            (r"\bDeviceBuffer\s*<[^>]+>\s*\([^)]*\)",
+             "inline packed DeviceBuffer construction"),
+        )
+        for pattern, description in forbidden_packed:
+            if re.search(pattern, packed_text):
+                errors.append(f"{description} remains in {packed_execution}")
+
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

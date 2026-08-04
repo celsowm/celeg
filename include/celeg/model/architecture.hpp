@@ -4,6 +4,7 @@
 #include "celeg/model/resolved.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -17,6 +18,20 @@ struct ProbeResult {
     int specificity = 0;
     std::string reason;
 };
+
+// Family resolution is an ordered composition of neutral stages. Each stage
+// has one responsibility and receives only the checkpoint/model data it
+// needs; a family may still implement the policies in its own directory.
+struct ArchitectureResolutionStages {
+    std::function<RuntimeTopology(const CheckpointView&)> topology;
+    std::function<void(ResolvedModel&, const CheckpointView&)> graph;
+    std::function<void(ResolvedModel&, const CheckpointView&)> weights;
+    ModelCapabilities capabilities;
+    ModelProvenance provenance;
+};
+
+ResolvedModel resolve_architecture_stages(
+    const CheckpointView& checkpoint, ArchitectureResolutionStages stages);
 
 // An architecture owns checkpoint interpretation and produces a fully
 // resolved, backend-neutral model. Backends never inspect architecture IDs.

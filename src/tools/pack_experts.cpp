@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        std::cout << "Packing MoE experts for " << model.identity << "...\n"
+        std::cout << "Packing MoE experts for " << model.provenance.identity << "...\n"
                   << "  MoE layers: " << moe_layers << "\n"
                   << "  Experts/layer: " << shape.num_experts << "\n"
                   << "  Intermediate: " << shape.moe_intermediate << "\n"

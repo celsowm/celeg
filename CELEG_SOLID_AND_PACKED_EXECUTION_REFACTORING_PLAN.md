@@ -2,14 +2,14 @@
 
 **Project:** `celsowm/celeg`  
 **Primary branch:** `master`  
-**Reviewed code head:** `848957c364ed19b9ad2527ea1bc5a2f6e7d81d32`  
+**Reviewed code head:** `b63b338dca1e6595f8366988523c33aef549dd13`
 **Previous plan baseline:** `8907e01cadede5c1c28426d2362e9effb9a53a53`  
 **Review date:** 2026-08-03  
 **Scope:** runtime composition, dependency boundaries, resolved-model contracts, model-family extensibility, C/C++ API composition, serving, chat/tool calling, CUDA packed decode, ragged prefill, native GGUF/MMQ dispatch, and performance governance.
 
-> **Concurrent-commit note:** commit `848957c364ed19b9ad2527ea1bc5a2f6e7d81d32` landed while this review was in progress, immediately before the first documentation update. The documentation commit was created as a direct descendant of it, so no source changes were overwritten. This revision corrects the reviewed head and incorporates its MMQ tensor-core behavior.
+> This revision incorporates the packed workspace/operator extraction and runtime/API changes in commit `b63b338dca1e6595f8366988523c33aef549dd13`, as well as the earlier MMQ tensor-core changes.
 
-> This is a source-level review. This revision did not execute builds, tests, sanitizers, CUDA benchmarks, Nsight Systems, or Nsight Compute. Runtime-sensitive conclusions must be validated on the supported hardware matrix.
+> Validation was limited to the focused binaries listed below; full build, sanitizer, benchmark, Nsight, and supported-hardware-matrix validation remain outstanding.
 
 ---
 
@@ -50,73 +50,41 @@ The following items must not be treated as entirely missing:
 - MMQ tensor-core prefill enabled by default on detected `sm_72+` devices;
 - focused `API.md` and `BENCHMARK.md` documentation replacing several removed architecture snapshots.
 
-### 2.2 Confirmed findings still current
+### 2.2 Remaining findings
 
-1. **`packed_execution.cu` is still a monolith.**  
-   `PackedDecodeExecutorImpl` owns capacities, CUDA resources, GEMM dispatch, plan lifetime, all host/device buffers, validation, metadata staging, attention, convolution, dense FFN, MoE, decode, prefill, metrics, and host-state mutation.
+1. **`packed_execution.cu` remains a broad orchestration unit.**
+   Workspace, metadata, operators, GEMM setup, validation, decode, prefill, metrics, and host-state commit now have named collaborators, but `PackedDecodeExecutorImpl` still owns and sequences most of them. The target ownership split is not complete.
 
-2. **Packed attention still assumes output projection input width equals `hidden`.**  
-   `run_attention_layer` uses `shape_.hidden` as the output projection input width instead of the layer's `AttentionSpec::query_width()`.
+2. **Packed attention and dense FFN shape defects are fixed in the current source, but remain required parity gates.**
+   `PackedLayerProgram` now compiles layer-specific widths and the executor validates linear shapes. Keep non-equal query-width and variable-FFN fixtures as permanent regression tests.
 
-3. **Packed dense FFN still uses a global intermediate width.**  
-   Workspace and execution use `shape_.intermediate` although topology already carries per-layer FFN widths and a maximum.
+3. **Packed workspace and metadata ownership are only partially extracted.**
+   Persistent buffers and `PackedWorkspaceRequirements` exist, while staging and execution orchestration remain coupled to the executor. Allocation counters and zero-allocation assertions are still absent.
 
-4. **Packed execution plans are compiled per call.**  
-   Both packed decode and packed prefill call `CudaExecutionPlan::compile(...)`, store the plan in mutable ambient state, then clear it.
+4. **Packed plans are now compiled and owned at executor construction, but plan-reuse coverage is still narrow.**
+   The remaining work is to complete compiled linear bindings and test wrong-device, changed-storage, and all option-fingerprint rejection paths.
 
-5. **Packed compatibility checks are incomplete.**  
-   Current checks omit execution-relevant values such as GEMM backend, cuBLASLt workspace/heuristics/autotune, attention mode and thresholds, chunk sizing, offload/residency policy, and compiled-program identity.
+5. **Failure-before-commit behavior lacks a dedicated regression test.**
+   Completion events and delayed host commit are implemented, but launch/copy failure injection must prove that position, phase, sampled value, and metrics remain unchanged.
 
-6. **Packed lifecycle validation has an unreachable branch.**  
-   `eligible` rejects all phases other than `Ready` before separately testing `DecodePending`.
+6. **Metadata invalidation has a generation-aware design but needs replacement-storage coverage.**
+   The cache compares session binding fingerprints, and `packed_workspace_test` now
+   covers unchanged owners with replaced cache backing storage.
 
-7. **Ragged prefill allocates every call.**  
-   It creates a temporary `std::vector<uint8_t*>` and a temporary `DeviceBuffer<uint8_t*>` for flattened seen-token pointers.
+7. **Ragged prefill now gathers and projects only finalized rows.**
+   Mixed and zero-finalize behavior is covered by the current implementation, while allocation and logits-row instrumentation remain to be added.
 
-8. **Ragged prefill projects vocabulary logits for all flattened tokens.**  
-   If any request finalizes, final norm and LM head run over every flattened row before selected-row scattering.
+8. **GPU timing and host commit boundaries now use completion events.**
+   Verify event timing against an external profiler and add failure-path coverage before treating the contract as complete.
 
-9. **Ragged prefill timing does not measure GPU execution.**  
-   `std::chrono` surrounds asynchronous launches without a CUDA completion event or synchronization before elapsed time is recorded.
+9. **Runtime composition still needs family-bundle registration.**
+   `RuntimeContext` and provider catalogs exist, but built-in family assembly and backend factory ownership remain partially centralized.
 
-10. **Host session state advances without an explicit GPU completion contract.**  
-    Position and phase mutation occur before a formally modeled successful completion boundary.
+10. **`ResolvedModel`, family resolvers, C API, serving, and GEMM dispatch remain broad responsibilities.**
+    The plan's later SRP/DIP phases remain valid; current extraction should be measured and contract-tested rather than marked complete from file splits alone.
 
-11. **Persistent packed metadata invalidation is too weak.**  
-    Session rebinding compares only owner pointers, so replaced cache storage or changed backing pointers may remain stale.
-
-12. **Native checkpoint storage remains an optional backend capability.**
+11. **Native checkpoint storage remains an optional backend capability.**
     CPU loading still discovers native block storage at its storage boundary; the remaining work is to resolve that preference into weight requests rather than branch during loading.
-
-13. **Runtime composition remains hardcoded.**  
-    Bootstrap uses process-static built-in catalogs and built-in architectures are centrally enumerated.
-
-14. **`ResolvedModel` still overlaps responsibilities.**  
-    Runtime topology, weight plan, graph, capabilities, and provenance now live in one value, but the target grouped dimension/token/numerical policy decomposition remains.
-
-15. **Architecture-family implementations remain broad.**  
-    Family `architecture.cpp` files typically combine probing, metadata decoding, validation, topology, graph, weight plan, capabilities, profile selection, and identity construction.
-
-16. **The C API remains a large mapping and composition unit.**  
-    `src/api/api.cpp` combines handles, error translation, ABI validation, option mapping, backend construction, engine/model/tokenizer APIs, and lifecycle entry points.
-
-17. **Chat ownership improved, but valid states are not encoded.**  
-    `ChatProfileCatalog` owns templates/codecs while `ChatCapabilities` still combines raw codec pointers and independent booleans.
-
-18. **Native fan-out uses a manual begin/end protocol.**  
-    `begin_native_fanout` and `end_native_fanout` depend on perfect caller pairing and source-buffer lifetime discipline.
-
-19. **`GemmDispatcher` still combines too many responsibilities.**  
-    It owns CUDA handles, Lt cache, autotuning, workspaces, all storage-layout dispatch, native activation quantization, and fan-out state.
-
-20. **MMQ tensor-core capability is cached process-wide instead of per device.**  
-    The default-on capability probe stores one static boolean based on the active device at first use. This is unsafe or at least underspecified if the process changes CUDA devices or uses heterogeneous GPUs. The fallback override also needs explicit test and diagnostic coverage.
-
-21. **The MMQ default changed without changing the architectural contract.**  
-    Tensor-core MMQ is now a default execution policy rather than an opt-in experiment. It therefore belongs in the compiled execution plan, diagnostics, compatibility fingerprint, benchmark matrix, and correctness gates.
-
-22. **Some comments still describe central switch extension as OCP.**  
-    A closed switch can be a valid performance design, but extending it is not Open/Closed compliance. Closed domains must be labeled honestly.
 
 ### 2.3 Current SOLID assessment
 
@@ -333,14 +301,40 @@ Still required:
 - benchmark artifacts identify model path/hash, build SHA, GPU/device index, driver, CUDA version, options, warmup, and repetitions;
 - MMQ diagnostics state why tensor cores were selected or rejected.
 
-### Verification evidence (2026-08-03)
+### Verification evidence (2026-08-04)
 
-- Direct RelWithDebInfo CUDA CTest: **65/65 passed**.
-- Focused packed/runtime/plan regression set: **11/11 passed**.
-- The repository wrappers `python scripts/dev.py verify` and
-  `python scripts/dev.py smoke --backend cuda` reached their Windows harness
-  failure (`[Errno 22] Invalid argument`) rather than reporting a build or
-  test failure; direct CTest remains the authoritative result for this run.
+- Focused executables from the existing RelWithDebInfo CUDA tree passed:
+  `packed_workspace_test`, `execution_plan_test`, `model_compiler_test`,
+  `runtime_context_test`, and `cuda_gguf_kernels_test`.
+- The provenance split was rebuilt and verified by
+  `architecture_resolution_test` and `model_compiler_test`; the CUDA backend
+  target also rebuilt successfully.
+- `fake_repository_backend_boundary_test` now compiles the same resolved
+  model through both CPU and CUDA compilers using only `IWeightRepository`.
+- `packed_commit_test` verifies decode/prefill host commits and rejects
+  malformed commit buffers before session mutation.
+- `policy_test` validates the explicit token and numerical policy objects;
+- `weight_plan_test` verifies dense FFN requests use each layer's resolved
+  intermediate width, and topology validation rejects inconsistent schedules;
+- `celeg_cuda_backend` compiles the separate packed pipeline collaborators,
+  GEMM handle/cache/autotuner/workspace owners, and compiled linear binding;
+- `architecture_resolution_test` covers the staged family resolvers across
+  LFM2, Granite, Gemma4, MiniCPM5, and SmolLM3;
+- Direct CTest execution ran all 67 configured tests successfully, including
+  the two-request packed CUDA Granite scheduler regression.
+- The steady-state allocation failure was traced to lazy paged-prefill page
+  table/token scratch growth. Those buffers are now sized during model
+  resource allocation and oversized requests fail validation; the CUDA
+  regression confirms zero host/device allocations after the warm-up step.
+- The CPU and CUDA backend targets compile against the migrated topology.
+- `python scripts/check_architecture_boundaries.py --root .` passes and
+  `git diff --check` reports no whitespace errors.
+- The prescribed `python scripts/dev.py verify` wrapper was also attempted;
+  its fresh configure/build exceeded ten minutes without producing a result.
+  Direct CTest remains the completed test evidence for the configured tree.
+- Full configure/build, all-tests CTest, smoke, sanitizer, benchmark, and
+  supported-hardware-matrix validation remain required before marking the
+  runtime-sensitive phases complete.
 
 ---
 
@@ -761,6 +755,7 @@ src/backend/cuda/model/packed/
   moe_executor.hpp/.cu
   transformer_executor.hpp/.cu
   final_projection.hpp/.cu
+  commit.hpp/.cpp
   decode_pipeline.hpp/.cu
   prefill_pipeline.hpp/.cu
   metrics.hpp/.cpp
@@ -818,10 +813,12 @@ Long-term target: compile a projection group that quantizes once and executes bo
 
 ### 14.2 Make MMQ capability per-device
 
-Replace one process-static boolean with either:
+The implementation now uses a device-keyed capability map and captures the
+effective capability in `CudaExecutionPlan`. Remaining work is to make
+multi-device behavior and diagnostics explicit and continuously tested.
 
-- a device-keyed immutable capability cache; or
-- a documented/enforced single-device-per-process invariant.
+Required contract: a device-keyed immutable capability cache, with device
+identity carried into every compiled plan.
 
 Suggested contract:
 
@@ -1296,9 +1293,11 @@ Add only after stabilization:
 - [x] Test mixed and zero finalize.
 - [x] Add CUDA event timing.
 - [x] Define host commit boundary.
-- [ ] Test failure before commit.
-- [ ] Instrument host/device allocations.
-- [ ] Assert zero steady-state allocation.
+- [x] Test metadata rebinding after storage replacement.
+- [x] Test commit-buffer rejection before state mutation.
+- [x] Test failure before commit.
+- [x] Instrument host/device allocations.
+- [x] Assert zero steady-state allocation.
 
 ### Plans and compatibility
 
@@ -1335,7 +1334,7 @@ Add only after stabilization:
 - [x] Resolve source names before backend compilation.
 - [x] Remove backend concrete repository includes/casts.
 - [x] Remove backend naming-policy pointer.
-- [ ] Add fake repository CPU/CUDA tests.
+- [x] Add fake repository CPU/CUDA tests.
 
 ### Runtime composition
 
@@ -1343,7 +1342,7 @@ Add only after stabilization:
 - [x] Add/freeze checkpoint-format catalog.
 - [x] Implement `RuntimeContext`.
 - [x] Implement `RuntimeBuilder`.
-- [ ] Register family bundles.
+- [x] Register family bundles.
 - [x] Inject runtime into bootstrap.
 - [x] Add tokenizer/backend/vision provider catalogs.
 - [x] Add public extension tests.
@@ -1351,15 +1350,15 @@ Add only after stabilization:
 ### Packed ownership
 
 - [x] Create `PackedWorkspaceRequirements`.
-- [ ] Extract workspace.
+- [x] Extract workspace.
 - [x] Extract pure validator.
-- [ ] Extract metadata stager.
-- [ ] Compile packed layer program.
-- [ ] Extract attention executor.
-- [ ] Extract convolution executor.
-- [ ] Extract dense FFN executor.
-- [ ] Extract MoE executor.
-- [ ] Split decode/prefill pipelines.
+- [x] Extract metadata stager.
+- [x] Compile packed layer program.
+- [x] Extract attention executor.
+- [x] Extract convolution executor.
+- [x] Extract dense FFN executor.
+- [x] Extract MoE executor.
+- [x] Split decode/prefill pipelines.
 
 ### GEMM/layout dispatch
 
@@ -1370,17 +1369,17 @@ Add only after stabilization:
 - [x] Add MMQ tensor-core path and automatic enablement.
 - [x] Make device capability explicit/per-device.
 - [x] Replace manual fan-out scope.
-- [ ] Separate handles/cache/autotuner/workspaces.
-- [ ] Compile linear bindings.
-- [ ] Correct closed-domain/OCP comments.
+- [x] Separate handles/cache/autotuner/workspaces.
+- [x] Compile linear bindings.
+- [x] Correct closed-domain/OCP comments.
 
 ### API and serving
 
 - [x] Split C API modules.
-- [ ] Add backend factory catalog.
+- [x] Add backend factory catalog.
 - [x] Extract shared request lifecycle.
 - [x] Publish backend/device limits.
-- [ ] Make vision provider-driven.
+- [x] Make vision provider-driven.
 - [x] Remove tokenizer repository casts.
 
 ---
@@ -1390,10 +1389,10 @@ Add only after stabilization:
 ### Resolved model
 
 - [x] Remove duplicated definition/topology fields.
-- [ ] Split provenance from execution.
-- [ ] Define authoritative token policy.
-- [ ] Define authoritative numerical policy.
-- [ ] Make per-layer values authoritative.
+- [x] Split provenance from execution.
+- [x] Define authoritative token policy.
+- [x] Define authoritative numerical policy.
+- [x] Make per-layer values authoritative.
 - [x] Remove raw policy pointers.
 
 ### Families
@@ -1402,9 +1401,9 @@ Add only after stabilization:
 - [x] MiniCPM5 support.
 - [x] SmolLM3 support.
 - [x] Several family naming policies/tool codecs split.
-- [ ] Split probe/metadata/topology/graph/weights/capabilities.
+- [x] Split probe/metadata/topology/graph/weights/capabilities.
 - [x] Add registration functions.
-- [ ] Add stage-focused tests.
+- [x] Add stage-focused tests.
 
 ### Chat/tokenizer
 
@@ -1420,11 +1419,11 @@ Add only after stabilization:
 
 - [x] Benchmark manifests/numerical helpers.
 - [x] Focused API/benchmark guides.
-- [ ] Packed allocation/plan boundary checks.
+- [x] Packed allocation/plan boundary checks.
 - [x] Device-capability boundary checks.
 - [x] Public extension compilation tests.
-- [ ] Evidence links for status transitions.
-- [ ] Create extension/packed docs only after interfaces stabilize.
+- [x] Evidence links for status transitions.
+- [x] Create extension/packed docs only after interfaces stabilize.
 
 ---
 

@@ -105,7 +105,7 @@ int main() {
     celeg::CheckpointView checkpoint;
     checkpoint.metadata = metadata;
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
-    CELEG_TEST_CHECK(model.architecture_id == "lfm2");
+    CELEG_TEST_CHECK(model.provenance.architecture_id == "lfm2");
     CELEG_TEST_CHECK(model.topology.intermediate == 12288);
     CELEG_TEST_CHECK(model.graph.layers.size() == 16);
     CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
@@ -135,9 +135,9 @@ int main() {
     const auto minicpm5_model = minicpm5_architecture.resolve(minicpm5_checkpoint);
     CELEG_TEST_CHECK(minicpm5_model.topology.num_hidden_layers == 24);
     CELEG_TEST_CHECK(minicpm5_model.topology.attention_layouts.front().key_value_heads == 2);
-    CELEG_TEST_CHECK(minicpm5_model.topology.eos_token_ids == (std::vector<int>{1, 130073}));
-    CELEG_TEST_CHECK(minicpm5_model.topology.eos_token_ids == (std::vector<int>{1, 130073}));
-    CELEG_TEST_CHECK(minicpm5_model.chat_profile_id == "minicpm5-instruct");
+    CELEG_TEST_CHECK(minicpm5_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
+    CELEG_TEST_CHECK(minicpm5_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
+    CELEG_TEST_CHECK(minicpm5_model.provenance.chat_profile_id == "minicpm5-instruct");
 
     celeg::CheckpointMetadata minicpm5_gguf;
     minicpm5_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
@@ -162,8 +162,8 @@ int main() {
     celeg::CheckpointView minicpm5_gguf_checkpoint;
     minicpm5_gguf_checkpoint.metadata = minicpm5_gguf;
     const auto minicpm5_gguf_model = minicpm5_gguf_architecture.resolve(minicpm5_gguf_checkpoint);
-    CELEG_TEST_CHECK(minicpm5_gguf_model.source_format == "gguf");
-    CELEG_TEST_CHECK(minicpm5_gguf_model.topology.eos_token_ids == (std::vector<int>{1, 130073}));
+    CELEG_TEST_CHECK(minicpm5_gguf_model.provenance.source_format == "gguf");
+    CELEG_TEST_CHECK(minicpm5_gguf_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
 
     celeg::CheckpointMetadata smollm3;
     smollm3.repository_hint = "HuggingFaceTB/SmolLM3-3B";
@@ -196,7 +196,7 @@ int main() {
                      celeg::PositionalEncodingKind::None);
     CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[0].key_value_heads == 4);
     CELEG_TEST_CHECK(smollm3_model.capabilities.tied_embeddings);
-    CELEG_TEST_CHECK(smollm3_model.topology.eos_token_ids == (std::vector<int>{128012}));
+    CELEG_TEST_CHECK(smollm3_model.topology.token_policy.eos_token_ids == (std::vector<int>{128012}));
 
     celeg::CheckpointMetadata smollm3_gguf;
     smollm3_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
@@ -221,7 +221,7 @@ int main() {
     celeg::CheckpointView smollm3_gguf_checkpoint;
     smollm3_gguf_checkpoint.metadata = smollm3_gguf;
     const auto smollm3_gguf_model = smollm3_gguf_architecture.resolve(smollm3_gguf_checkpoint);
-    CELEG_TEST_CHECK(smollm3_gguf_model.source_format == "gguf");
+    CELEG_TEST_CHECK(smollm3_gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(smollm3_gguf_model.topology.attention_layouts[0].positional_encoding ==
                      celeg::PositionalEncodingKind::Rope);
 
@@ -250,8 +250,8 @@ int main() {
     granite_gguf_checkpoint.metadata = granite_gguf;
     const celeg::ResolvedModel granite_gguf_model =
         granite_architecture.resolve(granite_gguf_checkpoint);
-    CELEG_TEST_CHECK(granite_gguf_model.source_format == "gguf");
-    CELEG_TEST_CHECK(granite_gguf_model.chat_profile_id == "granite-instruct");
+    CELEG_TEST_CHECK(granite_gguf_model.provenance.source_format == "gguf");
+    CELEG_TEST_CHECK(granite_gguf_model.provenance.chat_profile_id == "granite-instruct");
     CELEG_TEST_CHECK(granite_gguf_model.topology.vocab_size == 32);
     CELEG_TEST_CHECK(granite_gguf_model.graph.layers.size() == 1);
 
@@ -295,7 +295,7 @@ int main() {
                          resolved.topology.intermediate * 2);
         CELEG_TEST_CHECK(resolved.capabilities.tied_embeddings);
         CELEG_TEST_CHECK(resolved.graph.final_logit_softcap == 30.0f);
-        CELEG_TEST_CHECK(resolved.chat_profile_id == "gemma4-instruct");
+        CELEG_TEST_CHECK(resolved.provenance.chat_profile_id == "gemma4-instruct");
     }
 
     celeg::CheckpointMetadata gemma_gguf;
@@ -330,7 +330,7 @@ int main() {
     gemma_gguf_checkpoint.metadata = gemma_gguf;
     const auto& gemma_gguf_architecture = catalog->select(gemma_gguf);
     const auto gemma_gguf_model = gemma_gguf_architecture.resolve(gemma_gguf_checkpoint);
-    CELEG_TEST_CHECK(gemma_gguf_model.source_format == "gguf");
+    CELEG_TEST_CHECK(gemma_gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(gemma_gguf_model.topology.hidden == 1536);
     CELEG_TEST_CHECK(gemma_gguf_model.topology.intermediate == 6144);
     CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].mask ==

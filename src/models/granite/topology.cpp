@@ -32,29 +32,29 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.conv_cache = 1;
     t.conv_dim = t.hidden;
     t.max_position_embeddings = integer("max_position_embeddings", "context_length");
-    t.bos_token_id = integer_or("bos_token_id", "", 1);
-    t.eos_token_ids = {integer_or("eos_token_id", "", 2)};
-    t.pad_token_id = integer_or("pad_token_id", "", 0);
+    t.token_policy.bos_token_id = integer_or("bos_token_id", "", 1);
+    t.token_policy.eos_token_ids = {integer_or("eos_token_id", "", 2)};
+    t.token_policy.pad_token_id = integer_or("pad_token_id", "", 0);
     if (gguf) {
-        t.bos_token_id = static_cast<int>(source.integer_or(
-            "tokenizer.ggml.bos_token_id", t.bos_token_id));
-        t.eos_token_ids = {static_cast<int>(source.integer_or(
-            "tokenizer.ggml.eos_token_id", t.eos_token_ids.front()))
+        t.token_policy.bos_token_id = static_cast<int>(source.integer_or(
+            "tokenizer.ggml.bos_token_id", t.token_policy.bos_token_id));
+        t.token_policy.eos_token_ids = {static_cast<int>(source.integer_or(
+            "tokenizer.ggml.eos_token_id", t.token_policy.eos_token_ids.front()))
         };
-        t.pad_token_id = static_cast<int>(source.integer_or(
-            "tokenizer.ggml.padding_token_id", t.pad_token_id));
+        t.token_policy.pad_token_id = static_cast<int>(source.integer_or(
+            "tokenizer.ggml.padding_token_id", t.token_policy.pad_token_id));
     }
-    t.norm_eps = static_cast<float>(number_or(
+    t.numerical_policy.norm_eps = static_cast<float>(number_or(
         "rms_norm_eps", "attention.layer_norm_rms_epsilon",
         source.number_or("norm_eps", 1.0e-5)));
     const float rope_theta = static_cast<float>(number_or("rope_theta", "rope.freq_base", 1.0e6));
-    t.embedding_multiplier = static_cast<float>(number_or(
+    t.numerical_policy.embedding_multiplier = static_cast<float>(number_or(
         "embedding_multiplier", "embedding_multiplier", 1.0));
-    t.attention_multiplier = static_cast<float>(number_or(
+    t.numerical_policy.attention_multiplier = static_cast<float>(number_or(
         "attention_multiplier", "attention_multiplier", 1.0));
-    t.residual_multiplier = static_cast<float>(number_or(
+    t.numerical_policy.residual_multiplier = static_cast<float>(number_or(
         "residual_multiplier", "residual_multiplier", 1.0));
-    t.logits_divisor = static_cast<float>(number_or(
+    t.numerical_policy.logits_divisor = static_cast<float>(number_or(
         "logits_scaling", "logits_scaling", 1.0));
     t.mixer_kinds.assign(static_cast<size_t>(t.num_hidden_layers), MixerKind::Attention);
     t.feed_forward_kinds.assign(static_cast<size_t>(t.num_hidden_layers),
@@ -73,7 +73,7 @@ RuntimeTopology resolve_granite_topology(const CheckpointMetadata& source) {
     t.attention_layouts.assign(static_cast<size_t>(t.num_hidden_layers),
         AttentionSpec{query_heads, key_value_heads, head_dim,
                       false, AttentionMaskKind::Causal, 0, rope_theta, 1.0, {}});
-    const float query_scale = t.attention_multiplier /
+    const float query_scale = t.numerical_policy.attention_multiplier /
         (1.0f / std::sqrt(static_cast<float>(head_dim)));
     for (AttentionSpec& layout : t.attention_layouts) {
         layout.query_scale = query_scale;

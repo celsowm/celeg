@@ -15,8 +15,8 @@ namespace celeg {
 // session-file format (header layout, byte order, payload ordering, magic
 // number, version, resolved-model fingerprint) and the prefix-state snapshot
 // representation from the inference path (Single Responsibility Principle).
-// New file-format versions or new prefix-state representations are added
-// here without touching the forward pass (Open/Closed Principle).
+// New file-format versions or new prefix-state representations are handled
+// at this persistence boundary without touching the forward pass.
 //
 // The store exposes only static helpers: it never retains ownership and
 // never holds a reference to the host. The compiled model passes

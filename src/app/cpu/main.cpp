@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--context exceeds model maximum");
         }
         const auto chat_catalog = celeg::make_chat_profile_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
+        const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
         std::string pending;
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t token = engine.session().decode();
-            if (celeg::is_stop_token(topology.eos_token_ids, token)) break;
+            if (celeg::is_stop_token(topology.token_policy.eos_token_ids, token)) break;
             pending += tokenizer.decode({token}, true);
             std::cout << pending << std::flush;
             pending.clear();

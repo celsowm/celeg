@@ -17,6 +17,11 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.activated_.reset(static_cast<size_t>(resources_.shape_.max_feed_forward_intermediate));
     workspace_.mlp_output_.reset(static_cast<size_t>(resources_.shape_.hidden));
     workspace_.logits_.reset(static_cast<size_t>(resources_.shape_.vocab_size));
+    // Paged prefill is allowed to switch between ragged and single-row
+    // execution as requests progress. Reserve the full context capacity up
+    // front so that this transition cannot allocate on the execution path.
+    workspace_.paged_page_table_.reset(static_cast<size_t>(max_context_));
+    workspace_.paged_prefill_tokens_.reset(static_cast<size_t>(max_context_));
     if (resources_.shape_.has_per_layer_input) {
         const size_t packed = static_cast<size_t>(resources_.shape_.num_hidden_layers) *
             static_cast<size_t>(resources_.shape_.per_layer_input_size);

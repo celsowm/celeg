@@ -26,7 +26,7 @@ void CudaCompiledModel::initialize_per_layer_input_device(const int32_t* token) 
                  1.0f / std::sqrt(static_cast<float>(resources_.shape_.hidden)), stream_.get());
     launch_rmsnorm(workspace_.per_layer_context_.data(), resources_.per_layer_projection_norm_,
                    workspace_.per_layer_context_.data(), layers, ple,
-                   resources_.shape_.norm_eps, stream_.get());
+                   resources_.shape_.numerical_policy.norm_eps, stream_.get());
     launch_residual_add(workspace_.per_layer_context_.data(), workspace_.per_layer_token_.data(),
                         width, stream_.get());
     launch_scale(workspace_.per_layer_context_.data(), width,
@@ -52,7 +52,7 @@ void CudaCompiledModel::initialize_per_layer_input_host(int32_t token) {
                  1.0f / std::sqrt(static_cast<float>(resources_.shape_.hidden)), stream_.get());
     launch_rmsnorm(workspace_.per_layer_context_.data(), resources_.per_layer_projection_norm_,
                    workspace_.per_layer_context_.data(), layers, ple,
-                   resources_.shape_.norm_eps, stream_.get());
+                   resources_.shape_.numerical_policy.norm_eps, stream_.get());
     launch_residual_add(workspace_.per_layer_context_.data(), workspace_.per_layer_token_.data(),
                         width, stream_.get());
     launch_scale(workspace_.per_layer_context_.data(), width,
@@ -80,7 +80,7 @@ void CudaCompiledModel::initialize_per_layer_input_batch(const int32_t* tokens, 
                  1.0f / std::sqrt(static_cast<float>(resources_.shape_.hidden)), stream_.get());
     launch_rmsnorm(workspace_.prefill_per_layer_context_.data(), resources_.per_layer_projection_norm_,
                    workspace_.prefill_per_layer_context_.data(), rows * layers, ple,
-                   resources_.shape_.norm_eps, stream_.get());
+                   resources_.shape_.numerical_policy.norm_eps, stream_.get());
     launch_residual_add(workspace_.prefill_per_layer_context_.data(),
                         workspace_.prefill_per_layer_token_.data(), rows * width,
                         stream_.get());
@@ -94,7 +94,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         run_mlp_moe_decode(common_layer, layer);
     } else {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                       1, resources_.shape_.hidden, resources_.shape_.norm_eps,
+                       1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
                        stream_.get());
         const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
             ? resources_.shape_.intermediate
@@ -131,9 +131,9 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             if (split_output) {
                 launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
                                workspace_.mlp_output_.data(), 1, resources_.shape_.hidden,
-                               resources_.shape_.norm_eps, stream_.get());
+                               resources_.shape_.numerical_policy.norm_eps, stream_.get());
             }
-            launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.residual_multiplier,
+            launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.residual_multiplier,
                          stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.mlp_output_.data(),
                                 resources_.shape_.hidden, stream_.get());
@@ -154,7 +154,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
-                       resources_.shape_.norm_eps, stream_.get());
+                       resources_.shape_.numerical_policy.norm_eps, stream_.get());
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
                rows, 2 * intermediate, resources_.shape_.hidden);
@@ -200,10 +200,10 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         if (split_output) {
             launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
                            workspace_.prefill_mlp_output_.data(), rows, resources_.shape_.hidden,
-                           resources_.shape_.norm_eps, stream_.get());
+                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
         }
         launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.shape_.hidden,
-                     resources_.shape_.residual_multiplier, stream_.get());
+                     resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
         launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_mlp_output_.data(),
                             rows * resources_.shape_.hidden, stream_.get());
         }
@@ -227,7 +227,7 @@ void CudaCompiledModel::run_per_layer_input_decode(const LayerCommon& common_lay
            workspace_.hidden_.data(), 1, resources_.shape_.hidden, ple);
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.per_layer_input_norm,
                    workspace_.hidden_.data(), 1, resources_.shape_.hidden,
-                   resources_.shape_.norm_eps, stream_.get());
+                   resources_.shape_.numerical_policy.norm_eps, stream_.get());
     launch_scale_by_scalar(workspace_.hidden_.data(), common_layer.layer_scalar,
                            resources_.shape_.hidden, stream_.get());
     launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
@@ -256,7 +256,7 @@ void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_la
            workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden, ple);
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.per_layer_input_norm,
                    workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
-                   resources_.shape_.norm_eps, stream_.get());
+                   resources_.shape_.numerical_policy.norm_eps, stream_.get());
     launch_scale_by_scalar(workspace_.prefill_hidden_.data(), common_layer.layer_scalar,
                            rows * resources_.shape_.hidden, stream_.get());
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_residual_.data(),
@@ -522,7 +522,7 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                    1, resources_.shape_.hidden, resources_.shape_.norm_eps, stream_.get());
+                    1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps, stream_.get());
     // Router: BF16 normed hidden -> float -> top-K experts.
     launch_cast_bf16_to_float(workspace_.normed_.data(), workspace_.moe_hidden_float_.data(),
                                resources_.shape_.hidden, stream_.get());
@@ -576,7 +576,7 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         static_cast<size_t>(rows) * resources_.shape_.experts_per_token * resources_.shape_.moe_intermediate);
 
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
-                   workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden, resources_.shape_.norm_eps,
+                   workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
                    stream_.get());
     launch_cast_bf16_to_float(workspace_.prefill_normed_.data(), workspace_.moe_pf_hidden_float_.data(),
                               rows * resources_.shape_.hidden, stream_.get());

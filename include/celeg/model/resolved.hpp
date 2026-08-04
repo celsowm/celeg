@@ -12,8 +12,28 @@
 
 namespace celeg {
 
+struct TokenPolicy {
+    int bos_token_id = -1;
+    std::vector<int> eos_token_ids;
+    int pad_token_id = -1;
+
+    void validate() const;
+};
+
+struct NumericalPolicy {
+    float norm_eps = 0.0f;
+    float embedding_multiplier = 1.0f;
+    float attention_multiplier = 0.0f;
+    float residual_multiplier = 1.0f;
+    float logits_divisor = 1.0f;
+    float final_logit_softcap = 0.0f;
+
+    void validate() const;
+};
+
 // Runtime-only derived topology. It is generic execution data; architecture
-// identity and checkpoint matching are deliberately absent.
+// identity and checkpoint matching are deliberately absent. Token and
+// numerical behavior are explicit policies rather than loose topology fields.
 struct RuntimeTopology {
     int hidden = 0;
     int intermediate = 0;
@@ -23,16 +43,9 @@ struct RuntimeTopology {
     int conv_cache = 0;
     int conv_dim = 0;
     int max_position_embeddings = 0;
-    int bos_token_id = -1;
-    std::vector<int> eos_token_ids;
-    int pad_token_id = -1;
-    float norm_eps = 0.0f;
+    TokenPolicy token_policy;
+    NumericalPolicy numerical_policy;
     std::string rope_type = "default";
-    float embedding_multiplier = 1.0f;
-    float attention_multiplier = 0.0f;
-    float residual_multiplier = 1.0f;
-    float logits_divisor = 1.0f;
-    float final_logit_softcap = 0.0f;
     std::vector<MixerKind> mixer_kinds;
     std::vector<FeedForwardKind> feed_forward_kinds;
     std::vector<int> attention_slot_for_layer;
@@ -93,17 +106,21 @@ struct RuntimeTopology {
     }
 };
 
-struct ResolvedModel {
-    ModelGraph graph;
-    RuntimeTopology topology;
-    WeightPlan weight_plan;
-    ModelCapabilities capabilities;
+struct ModelProvenance {
     std::string architecture_id;
     std::string source_format;
     CheckpointProfile profile;
     std::string checkpoint_profile_id;
     std::string chat_profile_id;
     std::string identity;
+};
+
+struct ResolvedModel {
+    ModelGraph graph;
+    RuntimeTopology topology;
+    WeightPlan weight_plan;
+    ModelCapabilities capabilities;
+    ModelProvenance provenance;
 
     const RuntimeTopology& shape() const { return topology; }
 };

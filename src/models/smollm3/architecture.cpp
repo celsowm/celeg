@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -119,26 +120,26 @@ RuntimeTopology resolve_topology(const CheckpointMetadata& metadata) {
         topology.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
     }
     topology.max_position_embeddings = required_int(metadata, "max_position_embeddings", "context_length");
-    topology.bos_token_id = optional_int(metadata, "bos_token_id", "", 128000);
-    topology.eos_token_ids = eos_ids(metadata);
-    topology.pad_token_id = optional_int(metadata, "pad_token_id", "", 128004);
+    topology.token_policy.bos_token_id = optional_int(metadata, "bos_token_id", "", 128000);
+    topology.token_policy.eos_token_ids = eos_ids(metadata);
+    topology.token_policy.pad_token_id = optional_int(metadata, "pad_token_id", "", 128004);
     if (metadata.is_gguf()) {
-        topology.bos_token_id = static_cast<int>(metadata.integer_or(
-            "tokenizer.ggml.bos_token_id", topology.bos_token_id));
-        topology.pad_token_id = static_cast<int>(metadata.integer_or(
-            "tokenizer.ggml.padding_token_id", topology.pad_token_id));
+        topology.token_policy.bos_token_id = static_cast<int>(metadata.integer_or(
+            "tokenizer.ggml.bos_token_id", topology.token_policy.bos_token_id));
+        topology.token_policy.pad_token_id = static_cast<int>(metadata.integer_or(
+            "tokenizer.ggml.padding_token_id", topology.token_policy.pad_token_id));
     }
-    topology.norm_eps = static_cast<float>(optional_number(
+    topology.numerical_policy.norm_eps = static_cast<float>(optional_number(
         metadata, "rms_norm_eps", "attention.layer_norm_rms_epsilon", 1.0e-6));
     const double rope_theta = optional_number(metadata, "rope_theta", "rope.freq_base", 5.0e6);
     const int no_rope_interval = optional_int(
         metadata, "no_rope_layer_interval", "no_rope_layer_interval", 4);
     const float attention_scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    topology.embedding_multiplier = 1.0f;
-    topology.attention_multiplier = attention_scale;
-    topology.residual_multiplier = 1.0f;
-    topology.logits_divisor = 1.0f;
+    topology.numerical_policy.embedding_multiplier = 1.0f;
+    topology.numerical_policy.attention_multiplier = attention_scale;
+    topology.numerical_policy.residual_multiplier = 1.0f;
+    topology.numerical_policy.logits_divisor = 1.0f;
     topology.conv_cache = 0;
     topology.conv_dim = 0;
     topology.mixer_kinds.assign(static_cast<size_t>(topology.num_hidden_layers), MixerKind::Attention);
@@ -181,18 +182,24 @@ public:
         if (!probe(checkpoint.metadata).supported) {
             throw std::runtime_error("SmolLM3 architecture cannot resolve checkpoint");
         }
-        const RuntimeTopology topology = resolve_topology(checkpoint.metadata);
-        ResolvedModel result;
-        result.topology = topology;
-        result.architecture_id = "smollm3";
-        result.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
-        result.checkpoint_profile_id = "smollm3";
-        result.chat_profile_id = "smollm3-instruct";
-        result.profile = {"smollm3", "", {}, result.chat_profile_id};
-        result.identity = "smollm3-" + topology.fingerprint();
-        result.capabilities = {true, true, false, true};
-        build_dense_transformer_graph(result);
-        build_dense_weight_plan(result, *naming_policy());
+        ArchitectureResolutionStages stages;
+        stages.topology = [](const CheckpointView& view) {
+            return resolve_topology(view.metadata);
+        };
+        stages.graph = [](ResolvedModel& model, const CheckpointView&) {
+            build_dense_transformer_graph(model);
+        };
+        stages.weights = [](ResolvedModel& model, const CheckpointView&) {
+            build_dense_weight_plan(model, *naming_policy());
+        };
+        stages.capabilities = {true, true, false, true};
+        stages.provenance.architecture_id = "smollm3";
+        stages.provenance.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
+        stages.provenance.checkpoint_profile_id = "smollm3";
+        stages.provenance.chat_profile_id = "smollm3-instruct";
+        stages.provenance.profile = {"smollm3", "", {}, stages.provenance.chat_profile_id};
+        ResolvedModel result = resolve_architecture_stages(checkpoint, std::move(stages));
+        result.provenance.identity = "smollm3-" + result.topology.fingerprint();
         return result;
     }
 };

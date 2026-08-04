@@ -27,7 +27,7 @@ void CompiledModelProgram::validate() const {
 CompiledModelProgram build_model_program(const ResolvedModel& model) {
     if (model.graph.layers.empty()) throw std::invalid_argument("model has no layers");
     CompiledModelProgram program;
-    program.identity = model.identity;
+    program.identity = model.provenance.identity;
     program.layers.reserve(model.graph.layers.size());
 
     program.weight_request_count = model.weight_plan.requests.size();

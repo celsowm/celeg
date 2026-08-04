@@ -42,7 +42,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
     resources_.weight_layout_->embed_token_device(
         sampling_.sampled_device.data(), workspace_.hidden_.data(), resources_.shape_.hidden,
         stream_.get());
-    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.embedding_multiplier,
+    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.embedding_multiplier,
                  stream_.get());
     initialize_per_layer_input_device(sampling_.sampled_device.data());
     decode_phase_profile().end(DecodePhase::Embed, stream_.get());
@@ -57,7 +57,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         }
         decode_phase_profile().begin(stream_.get());
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
-                       1, resources_.shape_.hidden, resources_.shape_.norm_eps,
+                       1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
                        stream_.get());
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
@@ -92,7 +92,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
                     q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
                     layout.query_heads, layout.key_value_heads, layout.head_dim,
                     position_device_.data(), static_cast<float>(layout.rope_theta),
-                    static_cast<float>(layout.rotary_fraction), resources_.shape_.norm_eps,
+                    static_cast<float>(layout.rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
                     layout.query_key_norm, stream_.get());
             }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
@@ -162,7 +162,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
                    1, resources_.shape_.hidden, layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
-            launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.residual_multiplier,
+            launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.residual_multiplier,
                          stream_.get());
             decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
         } else {
@@ -183,7 +183,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
                            workspace_.hidden_.data(), 1, resources_.shape_.hidden,
-                           resources_.shape_.norm_eps, stream_.get());
+                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
             decode_phase_profile().begin(stream_.get());
@@ -198,15 +198,15 @@ void CudaCompiledModel::enqueue_decode_forward() {
     }
     decode_phase_profile().begin(stream_.get());
     launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
-                    1, resources_.shape_.hidden, resources_.shape_.norm_eps,
+                    1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
                     stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
             1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 1.0f / resources_.shape_.logits_divisor, stream_.get());
-    if (resources_.shape_.final_logit_softcap > 0.0f) {
+                 1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
+        if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                            resources_.shape_.final_logit_softcap, stream_.get());
+                            resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());
     }
     decode_phase_profile().end(DecodePhase::Logits, stream_.get());
 }

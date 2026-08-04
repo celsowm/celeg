@@ -1,5 +1,7 @@
 #include "celeg/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/packed_metadata_cache.hpp"
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 
@@ -65,6 +67,23 @@ int main() {
         if (validator.validate_session(session, celeg::PackedOperation::Decode,
                                        celeg::PackedExecutorCapabilities{true}).accepted) {
             throw std::runtime_error("pending decode was accepted");
+        }
+
+        celeg::PackedMetadataCache metadata_cache(2);
+        session.owner = reinterpret_cast<void*>(0x1);
+        session.storage_generation_value = 7;
+        const std::array<celeg::PackedSessionContext, 1> bound = {session};
+        if (!metadata_cache.changed(bound)) {
+            throw std::runtime_error("new metadata binding was not detected");
+        }
+        metadata_cache.update(bound);
+        if (metadata_cache.changed(bound)) {
+            throw std::runtime_error("unchanged metadata binding was rejected");
+        }
+        session.storage_generation_value = 8;
+        const std::array<celeg::PackedSessionContext, 1> replaced = {session};
+        if (!metadata_cache.changed(replaced)) {
+            throw std::runtime_error("replaced backing storage was not detected");
         }
         std::cout << "packed_workspace_test: ok\n";
         return 0;

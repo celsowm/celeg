@@ -7,7 +7,7 @@
 
 int main() {
     celeg::ResolvedModel model;
-    model.identity = "compiler-fixture";
+    model.provenance.identity = "compiler-fixture";
     model.capabilities.supports_cpu = true;
     model.capabilities.supports_cuda = true;
     celeg::LayerSpec attention_layer;

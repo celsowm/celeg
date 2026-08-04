@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
             celeg::detail::load_model_bootstrap(model_dir);
         const auto& topology = bootstrap.model.topology;
         const auto chat_catalog = celeg::make_chat_profile_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
+        const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
         celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
         const std::vector<int32_t> tokens = tokenizer.encode(
             celeg::render_chat(
@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
 
         celeg::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = static_cast<size_t>(max_new);
-        request_options.eos_tokens = bootstrap.model.topology.eos_token_ids;
+        request_options.eos_tokens = bootstrap.model.topology.token_policy.eos_token_ids;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
 

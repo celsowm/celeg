@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
         }
 
         const auto& chat_template = runtime->chat_profiles().find(
-            bootstrap.model.chat_profile_id);
+            bootstrap.model.provenance.chat_profile_id);
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
@@ -109,17 +109,17 @@ int main(int argc, char** argv) {
         const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
 
         const std::string model_name =
-            args.served_model_name.empty() ? bootstrap.model.identity : args.served_model_name;
+            args.served_model_name.empty() ? bootstrap.model.provenance.identity : args.served_model_name;
         const std::vector<std::int32_t> eos_token_ids(
-            bootstrap.model.topology.eos_token_ids.begin(),
-            bootstrap.model.topology.eos_token_ids.end());
+            bootstrap.model.topology.token_policy.eos_token_ids.begin(),
+            bootstrap.model.topology.token_policy.eos_token_ids.end());
 
         celeg::VisualEmbeddingProvider visual_embeddings;
         const std::filesystem::path projector = model.parent_path() / "mmproj-BF16.gguf";
         if (std::filesystem::is_regular_file(projector)) {
             const auto& vision_factory = runtime->vision_providers().select_if(
                 [&](const celeg::IVisionProviderFactory& provider) {
-                    return provider.supports(bootstrap.model.architecture_id, projector);
+                    return provider.supports(bootstrap.model.provenance.architecture_id, projector);
                 });
             visual_embeddings = vision_factory.create(projector);
         }
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
         }
 
         celeg::ChatCapabilities chat_capabilities =
-            runtime->chat_profiles().capabilities(bootstrap.model.chat_profile_id);
+            runtime->chat_profiles().capabilities(bootstrap.model.provenance.chat_profile_id);
         chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());

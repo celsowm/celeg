@@ -15,9 +15,9 @@ namespace celeg {
 // time and binds it to the live embedding table + scales; the forward pass
 // then calls embed_token / embed_batch / embed_token_device through the
 // interface without branching on int4/int8/bf16 at every call site
-// (Open/Closed Principle). New weight formats (e.g. INT4 groupwise, FP8)
-// are added by registering a new IWeightLayout subclass rather than by
-// editing model.cu's hot path.
+// The layout family is an extension boundary. New weight formats (e.g. INT4
+// groupwise, FP8) are added by registering a new IWeightLayout subclass rather
+// than by editing model.cu's hot path.
 class IWeightLayout {
 public:
     virtual ~IWeightLayout() = default;
@@ -54,7 +54,8 @@ public:
 //   WeightMode::Bf16 -> Bf16WeightLayout (table is __nv_bfloat16*)
 //   WeightMode::Int8 -> Int8WeightLayout (table is int8_t*)
 //   WeightMode::Int4 -> Int4WeightLayout (table is uint8_t*)
-// New weight modes are added by extending this factory (OCP).
+// CELEG_CLOSED_DOMAIN: WeightMode. New modes require coordinated factory,
+// loader, plan, and test changes.
 std::unique_ptr<IWeightLayout> make_weight_layout(
     WeightMode weight_mode,
     const void* table,

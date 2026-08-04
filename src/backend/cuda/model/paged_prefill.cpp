@@ -45,14 +45,14 @@ void CudaCompiledModel::prefill_chunk_paged(
         page_table.size() > static_cast<size_t>(paged_kv.max_pages_per_request())) {
         throw std::invalid_argument("paged prefill page table has invalid length");
     }
-    if (workspace_.paged_page_table_.size() < page_table.size()) {
-        workspace_.paged_page_table_.reset(page_table.size());
+    if (page_table.size() > workspace_.paged_page_table_.size()) {
+        throw std::invalid_argument("paged prefill page table exceeds model context capacity");
     }
     CELEG_CUDA(cudaMemcpyAsync(workspace_.paged_page_table_.data(), page_table.data(),
                              page_table.size() * sizeof(uint32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
-    if (workspace_.paged_prefill_tokens_.size() < tokens.size()) {
-        workspace_.paged_prefill_tokens_.reset(tokens.size());
+    if (tokens.size() > workspace_.paged_prefill_tokens_.size()) {
+        throw std::invalid_argument("paged prefill token chunk exceeds model context capacity");
     }
     CELEG_CUDA(cudaMemcpyAsync(workspace_.paged_prefill_tokens_.data(), tokens.data(),
                              tokens.size() * sizeof(int32_t),

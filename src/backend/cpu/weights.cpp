@@ -158,9 +158,9 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     native_checkpoint = native_storage != nullptr &&
                         native_storage->has_native_block_storage();
     shape = bootstrap.model.topology;
-    final_logit_softcap = bootstrap.model.topology.final_logit_softcap;
+    final_logit_softcap = bootstrap.model.topology.numerical_policy.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
-    model_identity = bootstrap.model.identity;
+    model_identity = bootstrap.model.provenance.identity;
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
     prepare_pack_path();

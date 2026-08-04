@@ -46,8 +46,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     } else {
         shared->linear.embedding(shared->weight_store.embedding, token, workspace_.hidden.data());
     }
-    if (!raw_embedding && shared->shape.embedding_multiplier != 1.0f) {
-        for (float& value : workspace_.hidden) value *= shared->shape.embedding_multiplier;
+    if (!raw_embedding && shared->shape.numerical_policy.embedding_multiplier != 1.0f) {
+        for (float& value : workspace_.hidden) value *= shared->shape.numerical_policy.embedding_multiplier;
     }
     if (shared->shape.has_per_layer_input) {
         const size_t packed = static_cast<size_t>(shared->shape.num_hidden_layers) *
@@ -69,7 +69,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 static_cast<size_t>(layer) * shared->shape.per_layer_input_size;
             cpu_rmsnorm_inplace(context,
                 shared->weight_store.per_layer_projection_norm.data(),
-                shared->shape.per_layer_input_size, shared->shape.norm_eps);
+                shared->shape.per_layer_input_size, shared->shape.numerical_policy.norm_eps);
             float* token_values = workspace_.per_layer_input.data() +
                 static_cast<size_t>(layer) * shared->shape.per_layer_input_size;
             for (int d = 0; d < shared->shape.per_layer_input_size; ++d) {
@@ -82,7 +82,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         const CommonWeights& common = common_weights(index);
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, shared->shape.norm_eps);
+                    shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
         if (const auto* attention = attention_operator(layer_program)) {
             const AttentionSpec& layout = shared->shape.attention_layout(static_cast<int>(index));
             const int q_width = layout.query_width();
@@ -96,17 +96,17 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 shared->linear.gemv(attention->v, workspace_.normed.data(), v);
             }
             if (layout.positional_encoding == PositionalEncodingKind::None) {
-                const float ratio = shared->shape.attention_multiplier /
+                const float ratio = shared->shape.numerical_policy.attention_multiplier /
                     (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
                 for (int i = 0; i < q_width; ++i) q[i] *= ratio;
             } else if (layout.query_key_norm) {
                 cpu_qk_norm_rope(q, attention->q_norm.data(), layout.query_heads,
                     layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
-                    shared->shape.norm_eps, static_cast<float>(layout.rotary_fraction));
+                    shared->shape.numerical_policy.norm_eps, static_cast<float>(layout.rotary_fraction));
                 if (!attention->k.segments.empty()) {
                     cpu_qk_norm_rope(k, attention->k_norm.data(), layout.key_value_heads,
                         layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
-                        shared->shape.norm_eps, static_cast<float>(layout.rotary_fraction));
+                        shared->shape.numerical_policy.norm_eps, static_cast<float>(layout.rotary_fraction));
                 }
             } else {
                 cpu_rope(q, layout.query_heads, layout.head_dim,
@@ -117,7 +117,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                              session_.position_value, static_cast<float>(layout.rope_theta),
                              static_cast<float>(layout.rotary_fraction));
                 }
-                const float ratio = shared->shape.attention_multiplier /
+                const float ratio = shared->shape.numerical_policy.attention_multiplier /
                     (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
                 for (int i = 0; i < q_width; ++i) q[i] *= ratio;
             }
@@ -139,17 +139,17 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 shared->shape.conv_cache, session_.position_value);
             shared->linear.gemv(convolution->out, workspace_.op_output.data(), workspace_.hidden.data());
         }
-        if (shared->shape.residual_multiplier != 1.0f) {
-            for (float& value : workspace_.hidden) value *= shared->shape.residual_multiplier;
+        if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
+            for (float& value : workspace_.hidden) value *= shared->shape.numerical_policy.residual_multiplier;
         }
         if (shared->shape.has_split_attention_norms) {
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
-                                shared->shape.hidden, shared->shape.norm_eps);
+                                shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
 
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, shared->shape.norm_eps);
+                    shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
             // MoE FFN: router -> top-K expert selection -> per-expert FFN GEMVs.
@@ -227,12 +227,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     workspace_.mlp_output[static_cast<size_t>(j)] += rw * workspace_.op_output[static_cast<size_t>(j)];
                 }
             }
-            if (shared->shape.residual_multiplier != 1.0f) {
-                for (float& value : workspace_.mlp_output) value *= shared->shape.residual_multiplier;
+            if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
+                for (float& value : workspace_.mlp_output) value *= shared->shape.numerical_policy.residual_multiplier;
             }
             if (shared->shape.has_split_attention_norms) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->shape.hidden, shared->shape.norm_eps);
+                                    shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
             if (profile_moe) session_.prefill_profile.moe_expert_ms += milliseconds_since(started);
@@ -249,12 +249,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 cpu_swiglu(workspace_.gate_up.data(), workspace_.activated.data(), intermediate);
             }
             shared->linear.gemv(common.w2, workspace_.activated.data(), workspace_.mlp_output.data());
-            if (shared->shape.residual_multiplier != 1.0f) {
-                for (float& value : workspace_.mlp_output) value *= shared->shape.residual_multiplier;
+            if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
+                for (float& value : workspace_.mlp_output) value *= shared->shape.numerical_policy.residual_multiplier;
             }
             if (shared->shape.has_split_attention_norms) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->shape.hidden, shared->shape.norm_eps);
+                                    shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
         }
@@ -272,7 +272,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             shared->linear.gemv(common.per_layer_projection, workspace_.per_layer_gate.data(),
                                 workspace_.hidden.data());
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
-                                shared->shape.hidden, shared->shape.norm_eps);
+                                shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
             if (common.layer_scalar != 1.0f) {
                 for (float& value : workspace_.hidden) value *= common.layer_scalar;
             }
@@ -281,11 +281,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     }
     if (compute_logits) {
         cpu_rmsnorm(workspace_.hidden.data(), shared->weight_store.final_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, shared->shape.norm_eps);
+                    shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
-        if (shared->shape.logits_divisor != 1.0f) {
-            for (float& value : workspace_.logits) value /= shared->shape.logits_divisor;
+        if (shared->shape.numerical_policy.logits_divisor != 1.0f) {
+            for (float& value : workspace_.logits) value /= shared->shape.numerical_policy.logits_divisor;
         }
         if (shared->final_logit_softcap > 0.0f) {
             for (float& value : workspace_.logits) {

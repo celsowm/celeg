@@ -33,10 +33,10 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.conv_cache = 3;
             shape.conv_dim = 1024;
             shape.max_position_embeddings = 128000;
-            shape.bos_token_id = 1;
-            shape.eos_token_ids = {7};
-            shape.pad_token_id = 0;
-            shape.norm_eps = 1e-5f;
+            shape.token_policy.bos_token_id = 1;
+            shape.token_policy.eos_token_ids = {7};
+            shape.token_policy.pad_token_id = 0;
+            shape.numerical_policy.norm_eps = 1e-5f;
             shape.rope_type = "default";
             shape.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
@@ -56,10 +56,10 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.conv_cache = 3;
             shape.conv_dim = 2048;
             shape.max_position_embeddings = 128000;
-            shape.bos_token_id = 1;
-            shape.eos_token_ids = {7};
-            shape.pad_token_id = 0;
-            shape.norm_eps = 1e-5f;
+            shape.token_policy.bos_token_id = 1;
+            shape.token_policy.eos_token_ids = {7};
+            shape.token_policy.pad_token_id = 0;
+            shape.numerical_policy.norm_eps = 1e-5f;
             shape.rope_type = "default";
             shape.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,

@@ -13,7 +13,7 @@ namespace celeg {
 // PhysicalPagedKvCache. Extracting the offset/stride math into a standalone
 // struct lets future execution profiles supply a different layout (e.g. per-layer page
 // tokens, or a different quantization group) at construction time without
-// subclassing the cache itself (Open/Closed Principle). It also makes the
+// subclassing the cache itself. It also makes the
 // layout testable in isolation from the CUDA resources (Single
 // Responsibility Principle: the struct does math, the cache owns memory).
 struct PageLayout {

@@ -22,6 +22,9 @@ void build_dense_weight_plan(ResolvedModel& model,
     add_request(model, {TensorRole::LanguageModelHead, -1, -1,
                         {t.vocab_size, t.hidden}});
     for (int layer = 0; layer < t.num_hidden_layers; ++layer) {
+        const int intermediate = t.feed_forward_intermediates.empty()
+                                     ? t.intermediate
+                                     : t.feed_forward_intermediates.at(layer);
         add_request(model, {TensorRole::AttentionInputNorm, layer, -1,
                             {t.hidden}});
         const AttentionSpec& attention = t.attention_layout(layer);
@@ -38,11 +41,11 @@ void build_dense_weight_plan(ResolvedModel& model,
         add_request(model, {TensorRole::FfnInputNorm, layer, -1,
                             {t.hidden}});
         add_request(model, {TensorRole::FfnGate, layer, -1,
-                            {t.intermediate, t.hidden}});
+                            {intermediate, t.hidden}});
         add_request(model, {TensorRole::FfnUp, layer, -1,
-                            {t.intermediate, t.hidden}});
+                            {intermediate, t.hidden}});
         add_request(model, {TensorRole::FfnDown, layer, -1,
-                            {t.hidden, t.intermediate}});
+                            {t.hidden, intermediate}});
     }
     resolve_weight_plan(model, naming_policy);
 }

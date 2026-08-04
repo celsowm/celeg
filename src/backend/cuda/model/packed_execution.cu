@@ -1,10 +1,12 @@
 #include "celeg/backend/cuda/packed.hpp"
 #include "celeg/backend/cuda/packed_workspace.hpp"
 #include "celeg/backend/cuda/packed_metadata.hpp"
+#include "celeg/backend/cuda/packed_commit.hpp"
 #include "celeg/backend/cuda/packed_layer_program.hpp"
 #include "celeg/backend/cuda/packed_gemm_runtime.hpp"
 #include "celeg/backend/cuda/packed_metadata_cache.hpp"
 #include "celeg/backend/cuda/packed_operators.hpp"
+#include "celeg/backend/cuda/packed_pipelines.hpp"
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/moe.hpp"
@@ -98,7 +100,15 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                           paged_kv_value, shape),
           layer_program_(PackedLayerProgram::compile(shape)),
           plan_(std::move(plan_value)),
-          metadata_cache_(maximum_batch) {}
+          metadata_cache_(maximum_batch) {
+        // Segmented attention workspace is part of the executor's fixed
+        // capacity contract. Allocate it before request execution so the
+        // scheduler never grows device storage on the hot path.
+        ensure_segmented_workspace(
+            static_cast<int>(maximum_batch), plan_.attention_chunks());
+        decode_pipeline_ = std::make_unique<PackedDecodePipeline>(*this);
+        prefill_pipeline_ = std::make_unique<PackedPrefillPipeline>(*this);
+    }
 
     PackedLayerProgram layer_program_;
     CudaExecutionPlan plan_;
@@ -106,6 +116,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
     PackedDecodeMetrics metric;
     PackedGemmRuntime gemm_;
     PackedMetadataCache metadata_cache_;
+    std::unique_ptr<PackedDecodePipeline> decode_pipeline_;
+    std::unique_ptr<PackedPrefillPipeline> prefill_pipeline_;
 
     void ensure_gemm_dispatcher(const CudaModelOptions& options) {
         gemm_.ensure(stream.get(), options);
@@ -366,7 +378,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                 hidden.data(), shape_.hidden, stream.get());
         }
         launch_scale(hidden.data(), rows * shape_.hidden,
-                     shape_.embedding_multiplier, stream.get());
+                shape_.numerical_policy.embedding_multiplier, stream.get());
     }
 
     void run_attention_layer(const PackedSessionContext& reference,
@@ -424,7 +436,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             }
             launch_rmsnorm(hidden.data(), common_layer.operator_norm,
                            normed.data(), rows, shape_.hidden,
-                           shape_.norm_eps, stream.get());
+                           shape_.numerical_policy.norm_eps, stream.get());
             if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
                 const auto* attention = as_attention(layer);
                 if (!attention) {
@@ -479,15 +491,15 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         run_transformer_layers(reference, rows, attention.segmented,
                                attention.chunks, &models);
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
-                       rows, shape_.hidden, shape_.norm_eps,
+                               rows, shape_.hidden, shape_.numerical_policy.norm_eps,
                        stream.get());
         linear(normed.data(), *reference.logits_weight(), logits.data(), rows,
                shape_.vocab_size, shape_.hidden);
         launch_scale(logits.data(), rows * shape_.vocab_size,
-                     1.0f / shape_.logits_divisor, stream.get());
-        if (shape_.final_logit_softcap > 0.0f) {
+                     1.0f / shape_.numerical_policy.logits_divisor, stream.get());
+        if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
             launch_tanh_softcap(logits.data(), rows * shape_.vocab_size,
-                                shape_.final_logit_softcap, stream.get());
+                                shape_.numerical_policy.final_logit_softcap, stream.get());
         }
         launch_scatter_bf16_rows(
             logits.data(), d_logits.data(), rows, shape_.vocab_size,
@@ -505,14 +517,9 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         const auto gpu_done = std::chrono::steady_clock::now();
         const auto commit_started = gpu_done;
         const double gpu_elapsed_ms = CudaEvent::elapsed_ms(gpu_begin, gpu_end);
-        for (int row = 0; row < rows; ++row) {
-            const PackedSessionContext& model = models[static_cast<size_t>(row)];
-            output[static_cast<size_t>(row)] = sampled_host.data()[row];
-            model.set_sampled_host_value(sampled_host.data()[row]);
-            model.set_position(model.position() + 1);
-            model.metrics().cumulative_decode_ms += gpu_elapsed_ms;
-            model.metrics().decoded_tokens += 1;
-        }
+        commit_packed_decode(models,
+                             std::span<const int32_t>(sampled_host.data(), rows),
+                             gpu_elapsed_ms, output);
         const auto commit_done = std::chrono::steady_clock::now();
         const auto ended = commit_done;
         metric.last_decode_timing.host_prepare_ms =
@@ -633,14 +640,14 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             launch_gather_bf16_rows(hidden.data(), d_selected_final_rows.data(),
                                     normed.data(), finalized, shape_.hidden, stream.get());
             launch_rmsnorm(normed.data(), reference.final_norm(), normed.data(),
-                           finalized, shape_.hidden, shape_.norm_eps, stream.get());
+                           finalized, shape_.hidden, shape_.numerical_policy.norm_eps, stream.get());
             linear(normed.data(), *reference.logits_weight(), logits.data(), finalized,
                    shape_.vocab_size, shape_.hidden);
             launch_scale(logits.data(), finalized * shape_.vocab_size,
-                         1.0f / shape_.logits_divisor, stream.get());
-            if (shape_.final_logit_softcap > 0.0f) {
+                   1.0f / shape_.numerical_policy.logits_divisor, stream.get());
+            if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
                 launch_tanh_softcap(logits.data(), finalized * shape_.vocab_size,
-                                    shape_.final_logit_softcap, stream.get());
+                                    shape_.numerical_policy.final_logit_softcap, stream.get());
             }
             launch_scatter_bf16_selected_rows(logits.data(), d_selected_final_rows.data(),
                                                d_selected_logits.data(), finalized,
@@ -662,17 +669,10 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         // Host-visible session state is committed only after the completion
         // event succeeds. A launch failure therefore cannot leave a lane
         // advanced while its device state is incomplete.
-        for (int request = 0; request < requests; ++request) {
-            const PackedSessionContext& model = models[static_cast<size_t>(request)];
-            const PackedPrefillRow& descriptor = row_descriptors[static_cast<size_t>(request)];
-            model.set_sampled_host_value(explicit_tokens[static_cast<size_t>(h_final_rows.data()[request])]);
-            model.set_position(model.position() + static_cast<int>(descriptor.token_count));
-            model.metrics().prefill_tokens += descriptor.token_count;
-            model.set_phase(descriptor.finalize != 0 ? SessionPhase::Ready : SessionPhase::Prefilling);
-            if (model.phase() == SessionPhase::Ready) {
-                model.set_active_segmented_attention(model.use_segmented_attention(model.position()));
-            }
-        }
+        commit_packed_prefill(models,
+                              explicit_tokens,
+                              std::span<const int32_t>(h_final_rows.data(), requests),
+                              row_descriptors);
         const auto commit_done = std::chrono::steady_clock::now();
 
         const auto ended = std::chrono::steady_clock::now();
@@ -696,6 +696,27 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             std::chrono::duration<double, std::milli>(ended - started).count();
     }
 };
+
+PackedDecodePipeline::PackedDecodePipeline(PackedDecodeExecutorImpl& state)
+    : state_(&state) {}
+
+void PackedDecodePipeline::run(
+    const std::vector<PackedSessionContext>& sessions,
+    const std::vector<std::vector<uint32_t>>* page_tables,
+    std::span<int32_t> output) {
+    state_->decode_into(sessions, page_tables, output);
+}
+
+PackedPrefillPipeline::PackedPrefillPipeline(PackedDecodeExecutorImpl& state)
+    : state_(&state) {}
+
+void PackedPrefillPipeline::run(
+    const std::vector<PackedSessionContext>& sessions,
+    const std::vector<std::vector<uint32_t>>* page_tables,
+    const std::vector<int32_t>& tokens,
+    const std::vector<PackedPrefillRow>& rows) {
+    state_->prefill(sessions, page_tables, tokens, rows);
+}
 
 PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,
                                            size_t maximum_prefill_tokens,
@@ -726,14 +747,14 @@ std::vector<int32_t> PackedDecodeExecutor::decode(
 void PackedDecodeExecutor::decode_into(
     const std::vector<PackedSessionContext>& models,
     std::span<int32_t> output) {
-    state_->decode_into(models, nullptr, output);
+    state_->decode_pipeline_->run(models, nullptr, output);
 }
 
 void PackedDecodeExecutor::decode_into(
     const std::vector<PackedSessionContext>& models,
     const std::vector<std::vector<uint32_t>>& page_tables,
     std::span<int32_t> output) {
-    state_->decode_into(models, &page_tables, output);
+    state_->decode_pipeline_->run(models, &page_tables, output);
 }
 
 void PackedDecodeExecutor::prefill(
@@ -741,7 +762,7 @@ void PackedDecodeExecutor::prefill(
     const std::vector<std::vector<uint32_t>>& page_tables,
     const std::vector<int32_t>& tokens,
     const std::vector<PackedPrefillRow>& rows) {
-    state_->prefill(models, &page_tables, tokens, rows);
+    state_->prefill_pipeline_->run(models, &page_tables, tokens, rows);
 }
 
 size_t PackedDecodeExecutor::maximum_batch() const {

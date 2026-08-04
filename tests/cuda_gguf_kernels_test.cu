@@ -214,6 +214,13 @@ int main() {
     };
     const celeg::CudaExecutionPlan dispatcher_plan =
         celeg::CudaExecutionPlan::compile(dispatcher_options, 1024);
+    const auto& binding = dispatcher.compile_linear_binding(segmented,
+                                                              dispatcher_plan);
+    if (binding.weight != &segmented || binding.rows != 2 ||
+        binding.cols != k || binding.plan_fingerprint != dispatcher_plan.fingerprint() ||
+        &dispatcher.compile_linear_binding(segmented, dispatcher_plan) != &binding) {
+        return 14;
+    }
     std::vector<__nv_bfloat16> segmented_y(2, __float2bfloat16(9.0f));
     check(cudaMemcpy(d_y, segmented_y.data(), 2 * sizeof(*d_y),
                      cudaMemcpyHostToDevice), "copy segmented y");
@@ -597,11 +604,11 @@ int main() {
         real_path != nullptr && *real_path != '\0') {
         const auto bootstrap = celeg::detail::load_model_bootstrap(std::filesystem::path(real_path));
         celeg::CudaModel model(real_path, 1024);
-        model.session().prefill({bootstrap.model.topology.bos_token_id});
+        model.session().prefill({bootstrap.model.topology.token_policy.bos_token_id});
         const std::vector<float> first = model.diagnostics().copy_logits();
         for (float value : first) if (!std::isfinite(value)) return 6;
         model.session().reset();
-        model.session().prefill({bootstrap.model.topology.bos_token_id});
+        model.session().prefill({bootstrap.model.topology.token_policy.bos_token_id});
         const std::vector<float> second = model.diagnostics().copy_logits();
         if (first.size() != second.size()) return 7;
         for (size_t i = 0; i < std::min<size_t>(first.size(), 64); ++i) {

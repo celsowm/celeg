@@ -346,17 +346,17 @@ int main(int argc, char** argv) {
         }
 
         const auto chat_catalog = celeg::make_chat_profile_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.chat_profile_id);
+        const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, is_gguf ? gguf_path : model);
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, is_gguf ? gguf_path : model);
         const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
-        if (tokenizer.bos_id() != topology.bos_token_id ||
-            !celeg::is_stop_token(topology.eos_token_ids, tokenizer.eos_id())) {
+        if (tokenizer.bos_id() != topology.token_policy.bos_token_id ||
+            !celeg::is_stop_token(topology.token_policy.eos_token_ids, tokenizer.eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +
                 std::to_string(tokenizer.bos_id()) + "/" +
-                std::to_string(topology.bos_token_id) + " eos=" +
+                std::to_string(topology.token_policy.bos_token_id) + " eos=" +
                 std::to_string(tokenizer.eos_id()));
         }
 
@@ -576,7 +576,7 @@ int main(int argc, char** argv) {
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t next = engine.session().decode();
-            if (celeg::is_stop_token(topology.eos_token_ids, next)) break;
+            if (celeg::is_stop_token(topology.token_policy.eos_token_ids, next)) break;
             generated.push_back(next);
             std::cout << tokenizer.decode({next}, true) << std::flush;
         }

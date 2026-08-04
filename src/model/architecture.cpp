@@ -4,8 +4,25 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 namespace celeg {
+
+ResolvedModel resolve_architecture_stages(
+    const CheckpointView& checkpoint, ArchitectureResolutionStages stages) {
+    if (!stages.topology || !stages.graph || !stages.weights) {
+        throw std::invalid_argument("architecture resolution stages are incomplete");
+    }
+    ResolvedModel model;
+    model.provenance = std::move(stages.provenance);
+    model.capabilities = stages.capabilities;
+    model.topology = stages.topology(checkpoint);
+    model.topology.validate();
+    stages.graph(model, checkpoint);
+    stages.weights(model, checkpoint);
+    model.topology.validate();
+    return model;
+}
 
 void ArchitectureCatalog::add(std::unique_ptr<IArchitecture> architecture) {
     if (frozen_) throw std::logic_error("architecture catalog is frozen");
