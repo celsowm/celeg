@@ -1,6 +1,5 @@
 #include "celeg/runtime/context.hpp"
-#include "celeg/model/visual_embeddings.hpp"
-#include "celeg/models/gemma4/vision.hpp"
+#include "celeg/model/runtime_modules.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <stdexcept>
@@ -22,22 +21,6 @@ private:
     BackendKind backend_;
 };
 
-class Gemma4VisionProviderFactory final : public IVisionProviderFactory {
-public:
-    std::string_view id() const override { return "gemma4"; }
-
-    bool supports(std::string_view architecture_id,
-                  const std::filesystem::path& projector_path) const override {
-        return architecture_id == "gemma4" &&
-               std::filesystem::is_regular_file(projector_path);
-    }
-
-    std::shared_ptr<const IVisualEmbeddingProvider> create(
-        const std::filesystem::path& projector_path) const override {
-        return make_gemma4_visual_embedding_provider(projector_path);
-    }
-};
-
 } // namespace
 
 RuntimeBuilder::RuntimeBuilder()
@@ -49,13 +32,26 @@ RuntimeBuilder::RuntimeBuilder()
       vision_providers_(std::make_shared<VisionProviderCatalog>()) {}
 
 RuntimeBuilder& RuntimeBuilder::add_builtins() {
-    add_builtin_architectures(*architectures_);
     add_builtin_checkpoint_formats(*checkpoint_formats_);
-    add_builtin_chat_profiles(*chat_profiles_);
     tokenizer_providers_->add(make_builtin_tokenizer_provider());
     backends_->add(std::make_unique<BuiltinBackendFactory>("cpu", BackendKind::Cpu));
     backends_->add(std::make_unique<BuiltinBackendFactory>("cuda", BackendKind::Cuda));
-    vision_providers_->add(std::make_unique<Gemma4VisionProviderFactory>());
+    for (auto& module : make_builtin_runtime_modules()) add_module(std::move(module));
+    return *this;
+}
+
+RuntimeBuilder& RuntimeBuilder::add_module(std::unique_ptr<IRuntimeModule> module) {
+    if (!module || module->id().empty()) {
+        throw std::invalid_argument("runtime module must have a non-empty id");
+    }
+    for (const auto& existing : modules_) {
+        if (existing->id() == module->id()) {
+            throw std::invalid_argument("duplicate runtime module id: " +
+                                        std::string(module->id()));
+        }
+    }
+    module->register_into(*this);
+    modules_.push_back(std::move(module));
     return *this;
 }
 

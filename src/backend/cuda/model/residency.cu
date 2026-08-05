@@ -28,14 +28,24 @@ __global__ void mask_expert_selection_kernel(const int* src_sel,
 
 } // namespace
 
-void SharedModelWeights::ensure_moe_experts_resident(
-    int layer, const int* sel_dev, int rows, int K, int num_experts,
-    cudaStream_t compute_stream, const float* route_scores_dev,
-    CudaEvent& router_done_event, CudaEvent& ffn_done_event,
-    CudaEvent& promote_done_event, CudaEvent& prefetch_done_event,
-    std::vector<int>& cold_expert_host, std::vector<float>& cold_scores_host,
-    std::vector<int>& prefetch_idx, std::vector<int>& prefetch_ranked,
-    std::vector<float>& prefetch_scores) {
+void SharedModelWeights::ensure_moe_experts_resident(ExpertResidencyRequest request) {
+    request.validate();
+    const int layer = request.layer;
+    const int* sel_dev = request.selected_device;
+    const int rows = request.rows;
+    const int K = request.experts_per_token;
+    const int num_experts = request.expert_count;
+    cudaStream_t compute_stream = request.compute_stream;
+    const float* route_scores_dev = request.route_scores_device;
+    CudaEvent& router_done_event = *request.router_done;
+    CudaEvent& ffn_done_event = *request.ffn_done;
+    CudaEvent& promote_done_event = *request.promote_done;
+    CudaEvent& prefetch_done_event = *request.prefetch_done;
+    std::vector<int>& cold_expert_host = *request.cold_experts_host;
+    std::vector<float>& cold_scores_host = *request.cold_scores_host;
+    std::vector<int>& prefetch_idx = *request.prefetch_indices;
+    std::vector<int>& prefetch_ranked = *request.prefetch_ranked;
+    std::vector<float>& prefetch_scores = *request.prefetch_scores;
     if (!expert_offload_plan.enabled) return;
     if (layer < 0 || static_cast<size_t>(layer) >= expert_controllers.size()) return;
     ResidencyController* controller = expert_controllers[static_cast<size_t>(layer)].get();
@@ -71,23 +81,8 @@ void SharedModelWeights::ensure_moe_experts_resident(
 
     // Touch resident experts and promote cold ones.
     if (cold_count == 0) {
-        // All selected experts are GPU-resident; touch them for LRU scoring.
-        const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(K);
-        for (size_t i = 0; i < total; ++i) {
-            const int e = cold_expert_host[i];
-            const float score = route_scores_dev != nullptr
-                ? cold_scores_host[static_cast<size_t>(e)]
-                : ExpertLayerCache::kUnseen;
-            cache->record_hit();
-            cache->touch(e, score);
-
-            // Record usage stats
-            if (!usage_profile_path.empty() && layer >= 0 && static_cast<size_t>(layer) < usage_stats.layers.size()) {
-                auto& entry = usage_stats.layers[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                entry.selection_count++;
-                entry.gpu_cache_hits++;
-            }
-        }
+        // The device resolver proved that every selected pointer is resident.
+        // Do not copy the full selection back to the host on this hot path.
     } else {
         // Promote cold experts. The cold list has unique expert indices.
         const float default_score = ExpertLayerCache::kUnseen;
@@ -178,32 +173,6 @@ void SharedModelWeights::ensure_moe_experts_resident(
         // Publish all pointer and slot changes once after the promotion batch.
         cache->sync_residency_tables(transfer);
 
-        // Also touch resident experts from the full selection that weren't cold.
-        if (rows >= 1) {
-            const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(K);
-            std::vector<int> sel_host(total);
-            CELEG_CUDA(cudaMemcpyAsync(sel_host.data(), sel_dev,
-                                     total * sizeof(int),
-                                     cudaMemcpyDeviceToHost, transfer));
-            CELEG_CUDA(cudaStreamSynchronize(transfer));
-            for (size_t i = 0; i < total; ++i) {
-                const int e = sel_host[i];
-                if (cache->resident(e)) {
-                    const float score = route_scores_dev != nullptr
-                        ? cold_scores_host[static_cast<size_t>(e)]
-                        : ExpertLayerCache::kUnseen;
-                    cache->record_hit();
-                    cache->touch(e, score);
-
-                    // Record usage stats
-                    if (!usage_profile_path.empty() && layer >= 0 && static_cast<size_t>(layer) < usage_stats.layers.size()) {
-                        auto& entry = usage_stats.layers[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                        entry.selection_count++;
-                        entry.gpu_cache_hits++;
-                    }
-                }
-            }
-        }
     }
 
     // Compute stream must wait for the on-demand promotions to land before the
@@ -245,14 +214,14 @@ void CudaCompiledModel::ensure_moe_experts_resident(int layer, const int* sel_de
                                                    cudaStream_t compute_stream,
                                                    const float* route_scores_dev) {
     if (!resources_.weights_) return;
-    resources_.weights_->ensure_moe_experts_resident(
-        layer, sel_dev, rows, resources_.shape_.experts_per_token, resources_.shape_.num_experts,
-        compute_stream, route_scores_dev,
-        workspace_.router_done_event_, workspace_.ffn_done_event_,
-        workspace_.promote_done_event_, workspace_.prefetch_done_event_,
-        workspace_.cold_expert_host_, workspace_.cold_scores_host_,
-        workspace_.prefetch_idx_, workspace_.prefetch_ranked_,
-        workspace_.prefetch_scores_);
+    resources_.weights_->ensure_moe_experts_resident(ExpertResidencyRequest{
+        layer, sel_dev, rows, resources_.shape_.experts_per_token,
+        resources_.shape_.num_experts, compute_stream, route_scores_dev,
+        &workspace_.router_done_event_, &workspace_.ffn_done_event_,
+        &workspace_.promote_done_event_, &workspace_.prefetch_done_event_,
+        &workspace_.cold_expert_host_, &workspace_.cold_scores_host_,
+        &workspace_.prefetch_idx_, &workspace_.prefetch_ranked_,
+        &workspace_.prefetch_scores_});
 }
 
 void CudaCompiledModel::ensure_moe_experts_resident_packed(

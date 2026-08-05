@@ -12,11 +12,7 @@ CpuExpertCache::CpuExpertCache(std::size_t budget_bytes)
       protected_budget_bytes_(budget_bytes * 3 / 4) {}
 
 std::uint64_t CpuExpertCache::key(int layer, int expert) {
-    if (layer < 0 || expert < 0) {
-        throw std::invalid_argument("CPU expert cache key must be non-negative");
-    }
-    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(layer)) << 32) |
-           static_cast<std::uint32_t>(expert);
+    return ExpertKey{layer, expert}.packed();
 }
 
 void CpuExpertCache::decay_if_needed() {

@@ -149,15 +149,15 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
+            const MoeLayerProgram& semantics = shared->program.layers[index].moe.value();
             if (shared->options.expert_backing == CpuExpertBacking::DiskCached &&
                 !moe->disk_cached && !shared->native_checkpoint) {
                 configure_cpu_expert_backing(*shared);
             }
 
-            const int E = moe->num_experts;
-            const int K = moe->experts_per_token;
-            const int moe_inter = shared->shape.moe_intermediate > 0
-                ? shared->shape.moe_intermediate : shared->shape.intermediate;
+            const int E = semantics.router.expert_count;
+            const int K = semantics.router.experts_per_token;
+            const int moe_inter = semantics.routed.mlp.intermediate_size;
 
             const bool profile_moe = session_.phase == SessionPhase::Prefilling;
             auto started = Clock::now();
@@ -174,7 +174,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 workspace_.moe_router_probs[static_cast<size_t>(e)] =
                     moe_sigmoid(workspace_.moe_router_logits[static_cast<size_t>(e)]);
                 float score = workspace_.moe_router_probs[static_cast<size_t>(e)];
-                if (moe->use_expert_bias && e < static_cast<int>(moe->router_bias.size())) {
+                if (semantics.router.has_expert_bias && e < static_cast<int>(moe->router_bias.size())) {
                     score += moe->router_bias[static_cast<size_t>(e)];
                 }
                 workspace_.moe_router_scored[static_cast<size_t>(e)] = {score, e};
@@ -194,14 +194,14 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     workspace_.moe_router_probs[static_cast<size_t>(workspace_.moe_selected[static_cast<size_t>(k)])];
                 weight_sum += workspace_.moe_weights[static_cast<size_t>(k)];
             }
-            if (moe->normalize_topk) {
+            if (semantics.router.normalization == MoeNormalizationKind::SumSelected) {
                 const float inv = 1.0f / (weight_sum + 1e-6f);
                 for (int k = 0; k < K; ++k) {
                     workspace_.moe_weights[static_cast<size_t>(k)] *= inv;
                 }
             }
             for (int k = 0; k < K; ++k) {
-                workspace_.moe_weights[static_cast<size_t>(k)] *= moe->routed_scaling_factor;
+                workspace_.moe_weights[static_cast<size_t>(k)] *= semantics.router.routed_scaling;
             }
             if (profile_moe) session_.prefill_profile.moe_router_ms += milliseconds_since(started);
 

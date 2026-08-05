@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace celeg {
 
@@ -68,6 +69,14 @@ public:
     RuntimeBuilder& add_tokenizer_provider(std::unique_ptr<ITokenizerProvider> provider);
     RuntimeBuilder& add_backend_factory(std::unique_ptr<IBackendFactory> factory);
     RuntimeBuilder& add_vision_provider(std::unique_ptr<IVisionProviderFactory> provider);
+    RuntimeBuilder& add_module(std::unique_ptr<IRuntimeModule> module);
+
+    // Registration-only catalog views used by RuntimeModule implementations.
+    // They are invalid after build() and are deliberately not exposed by
+    // RuntimeContext.
+    ArchitectureCatalog& architecture_catalog_for_registration() { return *architectures_; }
+    ChatProfileCatalog& chat_profile_catalog_for_registration() { return *chat_profiles_; }
+    VisionProviderCatalog& vision_catalog_for_registration() { return *vision_providers_; }
     RuntimeContext build();
 
 private:
@@ -77,6 +86,7 @@ private:
     std::shared_ptr<TokenizerProviderCatalog> tokenizer_providers_;
     std::shared_ptr<BackendFactoryCatalog> backends_;
     std::shared_ptr<VisionProviderCatalog> vision_providers_;
+    std::vector<std::unique_ptr<IRuntimeModule>> modules_;
 };
 
 std::shared_ptr<const RuntimeContext> create_builtin_runtime_context();

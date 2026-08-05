@@ -120,8 +120,7 @@ PinnedExpertCache::~PinnedExpertCache() {
 }
 
 uint64_t PinnedExpertCache::expert_key(int layer, int expert) {
-    return (static_cast<uint64_t>(static_cast<uint32_t>(layer)) << 32) |
-           static_cast<uint32_t>(expert);
+    return ExpertKey{layer, expert}.packed();
 }
 
 void PinnedExpertCache::decay_heat_if_needed() {
@@ -207,7 +206,7 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
             slots_[slot_idx].last_used = tick_;
             if (slots_[slot_idx].loading) {
                 // Someone else is loading it. Coalesce and wait.
-                misses_++; // Still a miss from storage perspective but coalesced
+                coalesced_waits_++;
                 std::shared_future<void> fut = slots_[slot_idx].shared_fut;
                 uint64_t expected_gen = slots_[slot_idx].generation;
 

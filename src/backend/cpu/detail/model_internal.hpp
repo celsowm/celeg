@@ -10,6 +10,7 @@
 #include "celeg/model/program.hpp"
 #include "celeg/model/weights/roles.hpp"
 #include "expert_cache.hpp"
+#include "expert_backing.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -166,8 +167,7 @@ struct CpuCompiledModel {
         bool tie_word_embeddings = true;
         float final_logit_softcap = 0.0f;
         CpuWeightStore weight_store;
-        std::unique_ptr<CpuPackReader> expert_pack_reader;
-        std::unique_ptr<CpuExpertCache> expert_cache;
+        std::unique_ptr<CpuExpertBackingStore> expert_backing_store;
         mutable std::mutex expert_pack_mutex;
         std::vector<std::shared_ptr<CpuKvPagePool>> kv_pools;
         std::vector<int> layer_to_kv_pool;

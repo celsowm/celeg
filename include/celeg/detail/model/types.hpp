@@ -241,6 +241,37 @@ struct ResidencyController {
     std::vector<InflightTransfer> inflight_transfers;
 };
 
+// One bounded residency transaction. The vectors are workspace owned by the
+// calling compiled model; the coordinator never grows them or retains them.
+struct ExpertResidencyRequest {
+    int layer = -1;
+    const int* selected_device = nullptr;
+    int rows = 0;
+    int experts_per_token = 0;
+    int expert_count = 0;
+    cudaStream_t compute_stream = nullptr;
+    const float* route_scores_device = nullptr;
+    CudaEvent* router_done = nullptr;
+    CudaEvent* ffn_done = nullptr;
+    CudaEvent* promote_done = nullptr;
+    CudaEvent* prefetch_done = nullptr;
+    std::vector<int>* cold_experts_host = nullptr;
+    std::vector<float>* cold_scores_host = nullptr;
+    std::vector<int>* prefetch_indices = nullptr;
+    std::vector<int>* prefetch_ranked = nullptr;
+    std::vector<float>* prefetch_scores = nullptr;
+
+    void validate() const {
+        if (layer < 0 || !selected_device || rows <= 0 ||
+            experts_per_token <= 0 || expert_count <= 0 || !compute_stream ||
+            !router_done || !ffn_done || !promote_done || !prefetch_done ||
+            !cold_experts_host || !cold_scores_host || !prefetch_indices ||
+            !prefetch_ranked || !prefetch_scores) {
+            throw std::invalid_argument("invalid expert residency request");
+        }
+    }
+};
+
 // Process-wide shared weight arena. Multiple CudaModel sessions on the same
 // device + checkpoint + weight_mode share one instance to avoid duplicate
 // GPU allocations.
@@ -261,14 +292,7 @@ struct SharedModelWeights {
     ModelUsageStats usage_stats;
     std::string usage_profile_path;
 
-    void ensure_moe_experts_resident(
-        int layer, const int* sel_dev, int rows, int K, int num_experts,
-        cudaStream_t compute_stream, const float* route_scores_dev,
-        CudaEvent& router_done_event, CudaEvent& ffn_done_event,
-        CudaEvent& promote_done_event, CudaEvent& prefetch_done_event,
-        std::vector<int>& cold_expert_host, std::vector<float>& cold_scores_host,
-        std::vector<int>& prefetch_idx, std::vector<int>& prefetch_ranked,
-        std::vector<float>& prefetch_scores);
+    void ensure_moe_experts_resident(ExpertResidencyRequest request);
 
     size_t memory_bytes() const;
 };

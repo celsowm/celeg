@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/checkpoint/formats/safetensors.hpp"
+#include "celeg/runtime/cache/expert_policy.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -65,6 +65,9 @@ private:
     int max_queue_depth_ = 0;
 };
 
+// Backend-neutral host staging storage. The allocator is injected so CUDA
+// can provide pinned/mapped memory, while ordinary tests and CPU-linked
+// builds use malloc. Payload interpretation stays in the source adapter.
 class PinnedExpertCache {
 public:
     using HostAllocateFn = void* (*)(std::size_t);
@@ -94,6 +97,10 @@ public:
     std::size_t misses() const {
         std::lock_guard lock(mutex_);
         return misses_;
+    }
+    std::size_t coalesced_waits() const {
+        std::lock_guard lock(mutex_);
+        return coalesced_waits_;
     }
     std::size_t evictions() const {
         std::lock_guard lock(mutex_);
@@ -145,6 +152,7 @@ private:
 
     std::size_t hits_ = 0;
     std::size_t misses_ = 0;
+    std::size_t coalesced_waits_ = 0;
     std::size_t evictions_ = 0;
     std::size_t bytes_read_ = 0;
     double total_wait_time_ms_ = 0.0;

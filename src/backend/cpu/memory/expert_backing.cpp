@@ -8,6 +8,45 @@
 
 namespace celeg {
 
+CpuExpertBackingStore::CpuExpertBackingStore(
+    const std::filesystem::path& pack_path, std::size_t budget_bytes,
+    int hidden_size, int intermediate_size)
+    : reader_(std::make_unique<CpuPackReader>(pack_path)),
+      cache_(std::make_unique<CpuExpertCache>(budget_bytes)),
+      hidden_size_(hidden_size), intermediate_size_(intermediate_size) {
+    if (hidden_size_ <= 0 || intermediate_size_ <= 0) {
+        throw std::invalid_argument("CPU expert backing has invalid dimensions");
+    }
+}
+
+std::shared_ptr<const CpuExpertWeights>
+CpuExpertBackingStore::acquire(ExpertKey key) {
+    key.validate();
+    return cache_->acquire(key.layer, key.expert, [this, key]() {
+        const std::string prefix =
+            "feed_forward.experts." + std::to_string(key.expert);
+        const std::string w13_name =
+            layer_name(key.layer, prefix + ".w13.weight");
+        const std::string w2_name =
+            layer_name(key.layer, prefix + ".w2.weight");
+        CpuExpertWeights weights;
+        weights.w13 = CpuLinearWeight::from_q4(reader_->read_q4_matrix(w13_name));
+        weights.w2 = CpuLinearWeight::from_q4(reader_->read_q4_matrix(w2_name));
+        if (weights.w13.rows != static_cast<uint32_t>(2 * intermediate_size_) ||
+            weights.w13.cols != static_cast<uint32_t>(hidden_size_) ||
+            weights.w2.rows != static_cast<uint32_t>(hidden_size_) ||
+            weights.w2.cols != static_cast<uint32_t>(intermediate_size_)) {
+            throw std::runtime_error("CPU expert pack entry has unexpected dimensions");
+        }
+        return weights;
+    });
+}
+
+CpuExpertBackingMetrics CpuExpertBackingStore::metrics() const {
+    return {cache_->resident_bytes(), cache_->hits(), cache_->misses(),
+            cache_->coalesced_waits(), cache_->evictions()};
+}
+
 void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
     if (shared.options.expert_backing != CpuExpertBacking::DiskCached ||
         shared.shape.num_experts <= 0) {
@@ -15,7 +54,7 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
     }
 
     std::lock_guard lock(shared.expert_pack_mutex);
-    if (shared.expert_cache) return;
+    if (shared.expert_backing_store) return;
 
     // Native GGUF matrices already point into the memory-mapped checkpoint and
     // let the OS page cache provide SSD-backed demand paging without copying
@@ -31,10 +70,11 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
             shared.pack_file.string());
     }
 
-    shared.expert_pack_reader =
-        std::make_unique<CpuPackReader>(shared.pack_file);
-    shared.expert_cache =
-        std::make_unique<CpuExpertCache>(shared.options.expert_cache_bytes);
+    const int intermediate = shared.shape.moe_intermediate > 0
+        ? shared.shape.moe_intermediate : shared.shape.intermediate;
+    shared.expert_backing_store = std::make_unique<CpuExpertBackingStore>(
+        shared.pack_file, shared.options.expert_cache_bytes,
+        shared.shape.hidden, intermediate);
 
     for (std::size_t index = 0; index < shared.weight_store.layers.size(); ++index) {
         auto* moe = std::get_if<CpuCompiledModel::MoeWeights>(
@@ -51,7 +91,7 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
 
 std::shared_ptr<const CpuExpertWeights>
 CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
-    if (!expert_cache || !expert_pack_reader) {
+    if (!expert_backing_store) {
         throw std::logic_error("CPU disk-backed expert cache is not configured");
     }
     if (layer < 0 || layer >= shape.num_hidden_layers ||
@@ -60,33 +100,7 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
         throw std::out_of_range("CPU expert cache request is out of range");
     }
 
-    return expert_cache->acquire(layer, expert, [this, layer, expert]() {
-        const std::string prefix =
-            "feed_forward.experts." + std::to_string(expert);
-        const std::string w13_name =
-            layer_name(layer, prefix + ".w13.weight");
-        const std::string w2_name =
-            layer_name(layer, prefix + ".w2.weight");
-
-        CpuExpertWeights weights;
-        weights.w13 = CpuLinearWeight::from_q4(
-            expert_pack_reader->read_q4_matrix(w13_name));
-        weights.w2 = CpuLinearWeight::from_q4(
-            expert_pack_reader->read_q4_matrix(w2_name));
-
-        const int intermediate = shape.moe_intermediate > 0
-            ? shape.moe_intermediate : shape.intermediate;
-        if (weights.w13.rows != static_cast<uint32_t>(2 * intermediate) ||
-            weights.w13.cols != static_cast<uint32_t>(shape.hidden) ||
-            weights.w2.rows != static_cast<uint32_t>(shape.hidden) ||
-            weights.w2.cols != static_cast<uint32_t>(intermediate)) {
-            throw std::runtime_error(
-                "CPU expert pack entry has unexpected dimensions for layer " +
-                std::to_string(layer) + ", expert " +
-                std::to_string(expert));
-        }
-        return weights;
-    });
+    return expert_backing_store->acquire(ExpertKey{layer, expert});
 }
 
 } // namespace celeg

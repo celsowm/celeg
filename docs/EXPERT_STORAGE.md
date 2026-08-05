@@ -1,5 +1,11 @@
 # MoE expert storage tiers
 
+Compiled MoE semantics are resolved before storage selection. Sources receive
+an `ExpertKey` and immutable payload requirements; they never receive an
+architecture name. CPU pack backing owns its indexed reader and cache through
+`CpuExpertBackingStore`, while CUDA residency receives a validated
+`ExpertResidencyRequest` and publishes device pointers transactionally.
+
 Celeg can keep the complete MoE expert set on storage while retaining only the
 working set in RAM and/or VRAM.
 

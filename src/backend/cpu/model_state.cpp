@@ -276,8 +276,8 @@ void CpuCompiledModel::set_generation(GenerationConfig config) {
 CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
     CpuModelMemoryStats stats;
     stats.weights = shared->weights_memory_bytes();
-    if (shared->expert_cache) {
-        stats.weights += shared->expert_cache->resident_bytes();
+    if (shared->expert_backing_store) {
+        stats.weights += shared->expert_backing_store->metrics().resident_bytes;
     }
     for (const LayerState& state : session_.states) {
         std::visit([&](const auto& value) {

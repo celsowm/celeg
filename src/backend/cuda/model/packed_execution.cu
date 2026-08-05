@@ -131,13 +131,9 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
 
     const PackedSessionContext& validate_decode_batch(
         const std::vector<PackedSessionContext>& models) const {
-        if (models.empty()) throw std::invalid_argument("packed batch is empty");
-        if (models.size() > maximum_batch) {
-            throw std::invalid_argument("packed batch exceeds executor capacity");
-        }
-        if (models.front().owner == nullptr) {
-            throw std::invalid_argument("null packed session");
-        }
+        const PackedEligibility common = validate_packed_batch_common(
+            models, maximum_batch, PackedOperation::Decode);
+        if (!common) throw std::invalid_argument(common.reason);
         const PackedSessionContext& reference = models.front();
         if (reference.execution_plan_fingerprint != plan_.fingerprint() ||
             reference.device_ordinal != plan_.device().device_ordinal) {
@@ -148,9 +144,6 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             validate_session(reference, PackedOperation::Decode);
         if (!eligibility) throw std::invalid_argument(eligibility.reason);
         for (size_t row = 1; row < models.size(); ++row) {
-            if (models[row].owner == nullptr) {
-                throw std::invalid_argument("null packed session");
-            }
             for (size_t previous = 0; previous < row; ++previous) {
                 if (models[previous].owner == models[row].owner) {
                     throw std::invalid_argument("duplicate session in packed batch");
@@ -165,16 +158,15 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         return reference;
     }
 
-    const PackedSessionContext& validate_prefill_batch(
+        const PackedSessionContext& validate_prefill_batch(
         const std::vector<PackedSessionContext>& models,
         const std::vector<int32_t>& explicit_tokens,
         const std::vector<PackedPrefillRow>& rows) const {
-        if (models.empty()) throw std::invalid_argument("packed batch is empty");
+        const PackedEligibility common = validate_packed_batch_common(
+            models, maximum_batch, PackedOperation::Prefill);
+        if (!common) throw std::invalid_argument(common.reason);
         if (rows.size() != models.size()) {
             throw std::invalid_argument("ragged prefill needs one row descriptor per row");
-        }
-        if (models.size() > maximum_batch) {
-            throw std::invalid_argument("packed batch exceeds executor capacity");
         }
         size_t consumed = 0;
         for (const PackedPrefillRow& row : rows) {

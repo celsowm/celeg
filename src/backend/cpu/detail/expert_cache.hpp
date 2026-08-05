@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/backend/cpu/gguf.hpp"
+#include "celeg/runtime/cache/expert_policy.hpp"
 
 #include <cstddef>
 #include <cstdint>

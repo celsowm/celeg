@@ -1,4 +1,5 @@
 #include "celeg/text/chat_profile.hpp"
+#include "celeg/text/protocol_utils.hpp"
 
 #include <cctype>
 #include <string>
@@ -8,16 +9,7 @@ namespace celeg {
 namespace {
 
 std::string json_string(std::string_view value) {
-    std::string out = "\"";
-    for (const char ch : value) {
-        if (ch == '\\' || ch == '"') out.push_back('\\');
-        if (ch == '\n') { out += "\\n"; continue; }
-        if (ch == '\r') { out += "\\r"; continue; }
-        if (ch == '\t') { out += "\\t"; continue; }
-        out.push_back(ch);
-    }
-    out.push_back('"');
-    return out;
+    return json_quote(value);
 }
 
 std::size_t matching_brace(std::string_view text, std::size_t open,
@@ -114,15 +106,9 @@ public:
 
 private:
     static std::string remove_calls(std::string_view text) {
-        std::string out(text);
         constexpr std::string_view start = "<tool_call>";
         constexpr std::string_view end = "</tool_call>";
-        for (std::size_t pos = 0; (pos = out.find(start, pos)) != std::string::npos;) {
-            const std::size_t finish = out.find(end, pos + start.size());
-            if (finish == std::string::npos) { out.erase(pos); break; }
-            out.erase(pos, finish + end.size() - pos);
-        }
-        return out;
+        return remove_tagged_blocks(text, start, end);
     }
 };
 

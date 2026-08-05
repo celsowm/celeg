@@ -1,4 +1,5 @@
 #include "celeg/text/chat_profile.hpp"
+#include "celeg/text/protocol_utils.hpp"
 
 #include <cctype>
 #include <string>
@@ -89,18 +90,9 @@ private:
     }
 
     std::string remove_calls_impl(std::string_view text) const {
-        std::string result(text);
         constexpr std::string_view start = "<|tool_call_start|>";
         constexpr std::string_view end = "<|tool_call_end|>";
-        for (std::size_t pos = 0; (pos = result.find(start, pos)) != std::string::npos;) {
-            const auto finish = result.find(end, pos + start.size());
-            if (finish == std::string::npos) {
-                result.erase(pos);
-                break;
-            }
-            result.erase(pos, finish + end.size() - pos);
-        }
-        return result;
+        return remove_tagged_blocks(text, start, end);
     }
 
     static std::string normalize_arguments(std::string_view args) {

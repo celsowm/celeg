@@ -152,18 +152,8 @@ int ExpertLayerCache::resolve_on_device(
         cold_list_dev_.data(), cold_count_dev_.data(), total);
 
     int cold_count = 0;
-    cold_host.resize(static_cast<size_t>(total));
-    CELEG_CUDA(cudaMemcpyAsync(cold_host.data(), sel_dev,
-                              static_cast<size_t>(total) * sizeof(int),
-                              cudaMemcpyDeviceToHost, stream));
     CELEG_CUDA(cudaMemcpyAsync(&cold_count, cold_count_dev_.data(), sizeof(int),
                               cudaMemcpyDeviceToHost, stream));
-    if (route_scores_dev != nullptr) {
-        cold_scores_host.resize(static_cast<size_t>(num_experts_));
-        CELEG_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
-                                  static_cast<size_t>(num_experts_) * sizeof(float),
-                                  cudaMemcpyDeviceToHost, stream));
-    }
     CELEG_CUDA(cudaStreamSynchronize(stream));
 
     if (cold_count == 0) return 0;
@@ -177,6 +167,12 @@ int ExpertLayerCache::resolve_on_device(
     CELEG_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
                               static_cast<size_t>(cold_count) * sizeof(int),
                               cudaMemcpyDeviceToHost, stream));
+    if (route_scores_dev != nullptr) {
+        cold_scores_host.resize(static_cast<size_t>(num_experts_));
+        CELEG_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
+                                  static_cast<size_t>(num_experts_) * sizeof(float),
+                                  cudaMemcpyDeviceToHost, stream));
+    }
     CELEG_CUDA(cudaStreamSynchronize(stream));
     return cold_count;
 }

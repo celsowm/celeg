@@ -8,7 +8,9 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
     if (!model.capabilities.supports_cuda) {
         throw std::invalid_argument("resolved model does not support CUDA");
     }
-    return build_model_program(model);
+    CompiledModelProgram program = build_model_program(model);
+    validate_moe_backend_capabilities(program, "CUDA", {});
+    return program;
 }
 
 } // namespace celeg

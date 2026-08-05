@@ -11,6 +11,8 @@
 
 namespace celeg {
 
+class RuntimeBuilder;
+
 class BpeTokenizer;
 class IVisualEmbeddingProvider;
 
@@ -25,6 +27,16 @@ public:
     virtual std::unique_ptr<BpeTokenizer> create(
         const CheckpointView& checkpoint,
         const std::filesystem::path& model_path) const = 0;
+};
+
+// A family module is the only unit allowed to contribute a coherent set of
+// family-owned providers. RuntimeBuilder owns the catalogs and freezes them
+// after all modules have registered.
+class IRuntimeModule {
+public:
+    virtual ~IRuntimeModule() = default;
+    virtual std::string_view id() const = 0;
+    virtual void register_into(RuntimeBuilder& builder) const = 0;
 };
 
 class IBackendFactory {

@@ -49,6 +49,13 @@ struct PackedExecutorCapabilities {
     bool physical_paged_kv = false;
 };
 
+// Operation-independent batch invariants. Decode and prefill add their own
+// row/page rules after this check, so invalid input is rejected before CUDA
+// work or host-visible session mutation.
+PackedEligibility validate_packed_batch_common(
+    const std::vector<PackedSessionContext>& sessions,
+    size_t maximum_batch, PackedOperation operation);
+
 class PackedBatchValidator {
 public:
     PackedEligibility validate_session(

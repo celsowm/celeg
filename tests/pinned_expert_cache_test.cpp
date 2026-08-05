@@ -141,7 +141,8 @@ void test_coalescing_and_concurrency() {
     CELEG_TEST_CHECK(errors == 0);
     CELEG_TEST_CHECK(load_starts == 1);
     CELEG_TEST_CHECK(load_completes == 1);
-    CELEG_TEST_CHECK(cache.misses() == 4); // 1 true miss, 3 coalesced misses
+    CELEG_TEST_CHECK(cache.misses() == 1);
+    CELEG_TEST_CHECK(cache.coalesced_waits() == 3);
 
     for (int i = 0; i < 4; ++i) {
         CELEG_TEST_CHECK(leases[i].valid());

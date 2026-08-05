@@ -16,3 +16,8 @@ The packed executor is compiled for fixed topology maxima. It does not compile
 plans or allocate steady-state buffers during a decode/prefill step. Use
 `PackedWorkspaceRequirements::derive` and `PackedMetadataCache` when adding a
 new packed operator or metadata field.
+## Workflow ownership
+
+Decode and ragged prefill use separate pipeline entry points and share the
+same compiled model semantics and residency transaction. Batch compatibility
+must be established before device work or host-visible state mutation.

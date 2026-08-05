@@ -6,6 +6,29 @@
 
 namespace celeg {
 
+PackedEligibility validate_packed_batch_common(
+    const std::vector<PackedSessionContext>& sessions,
+    size_t maximum_batch, PackedOperation operation) {
+    (void)operation;
+    PackedEligibility result;
+    if (sessions.empty()) {
+        result.reason = "packed batch is empty";
+        return result;
+    }
+    if (sessions.size() > maximum_batch) {
+        result.reason = "packed batch exceeds executor capacity";
+        return result;
+    }
+    for (const PackedSessionContext& session : sessions) {
+        if (session.owner == nullptr) {
+            result.reason = "null packed session";
+            return result;
+        }
+    }
+    result.accepted = true;
+    return result;
+}
+
 PackedEligibility PackedBatchValidator::validate_session(
     const PackedSessionContext& model,
     PackedOperation operation,

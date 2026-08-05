@@ -1,7 +1,6 @@
 #include "api_internal.hpp"
 
 #include <algorithm>
-#include <vector>
 
 extern "C" {
 
@@ -15,43 +14,9 @@ celeg_engine* celeg_engine_create(const char* path,
         celeg::api::require_size(options->struct_size, sizeof(*options), "engine options");
         celeg::api::require_size(options->model.struct_size,
                                  sizeof(options->model), "model options");
-        if (options->backend != options->model.backend) {
-            celeg::api::global_error = "engine backend must match model backend";
-            return nullptr;
-        }
         const auto runtime = celeg::create_builtin_runtime_context();
         auto result = std::make_unique<celeg_engine>();
-        if (options->backend == CELEG_BACKEND_CPU) {
-            (void)runtime->backends().select_if(
-                [](const celeg::IBackendFactory& factory) {
-                    return factory.supports(celeg::BackendKind::Cpu);
-                });
-            result->service = std::make_unique<celeg::serve::ServiceBundle>(
-                std::make_unique<celeg::serve::CpuInferenceService>(
-                    path, options->model.max_context,
-                    celeg::api::cpu_options(options->model),
-                    celeg::api::cpu_engine_options(*options),
-                    celeg::VisualEmbeddingProvider{}, runtime));
-        } else if (options->backend == CELEG_BACKEND_CUDA) {
-#ifdef CELEG_API_WITH_CUDA
-            (void)runtime->backends().select_if(
-                [](const celeg::IBackendFactory& factory) {
-                    return factory.supports(celeg::BackendKind::Cuda);
-                });
-            result->service = std::make_unique<celeg::serve::ServiceBundle>(
-                std::make_unique<celeg::serve::CudaInferenceService>(
-                    path, options->model.max_context,
-                    celeg::api::cuda_options(options->model),
-                    celeg::api::cuda_engine_options(*options),
-                    celeg::VisualEmbeddingProvider{}, runtime));
-#else
-            celeg::api::global_error = "CUDA backend is unavailable in this build";
-            return nullptr;
-#endif
-        } else {
-            celeg::api::global_error = "unknown backend";
-            return nullptr;
-        }
+        result->service = celeg::api::create_service_bundle(path, *options, runtime);
         return result.release();
     } catch (const std::exception& error) {
         celeg::api::global_error = error.what();

@@ -15,6 +15,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/program.cpp
     src/model/weight_plan.cpp
     src/model/graph_builder.cpp
+    src/model/runtime_modules.cpp
     src/models/lfm2/architecture.cpp
     src/models/lfm2/layer_decoder.cpp
     src/models/lfm2/metadata_decoder.cpp
@@ -27,6 +28,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/gemma4/naming_policy.cpp
     src/models/gemma4/tool_call_codec.cpp
     src/models/gemma4/vision.cpp
+    src/models/gemma4/runtime_module.cpp
     src/models/minicpm5/architecture.cpp
     src/models/minicpm5/naming_policy.cpp
     src/models/minicpm5/tool_call_codec.cpp

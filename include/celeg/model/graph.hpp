@@ -87,6 +87,14 @@ struct MixtureOfExpertsSpec {
     bool normalize_topk = false;
     bool use_expert_bias = false;
     float routed_scaling_factor = 1.0f;
+    // These fields describe semantics, not a checkpoint layout.  Families
+    // with ordinary top-K routing leave the grouped/shared fields at their
+    // defaults; the compiled program still records those defaults explicitly.
+    int routing_group_count = 0;
+    int routing_experts_per_group = 0;
+    bool has_shared_expert = false;
+    int shared_intermediate_size = 0;
+    bool shared_before_routed = false;
 };
 
 struct ResidualSpec {
