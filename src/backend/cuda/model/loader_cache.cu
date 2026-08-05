@@ -1,4 +1,5 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
+#include "celeg/backend/cuda/moe/expert_source.hpp"
 
 #include <filesystem>
 #include <mutex>
@@ -31,6 +32,7 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
         weights->residency_fingerprint = residency_fingerprint;
         weights->residency_coordinator =
             std::make_shared<CudaExpertResidencyCoordinator>(*weights);
+        weights->expert_source = std::make_shared<CudaExpertSource>(*weights);
         cache[key] = weights;
     }
     return weights;

@@ -70,8 +70,6 @@ struct CudaWorkspace {
 
     DeviceBuffer<float> moe_pf_hidden_float_;
     DeviceBuffer<int> moe_pf_sel_;
-    DeviceBuffer<int> moe_pf_sel_masked_;
-    DeviceBuffer<std::uint8_t> expert_active_dev_;
     DeviceBuffer<float> moe_pf_routing_w_;
     DeviceBuffer<float> moe_pf_router_scratch_;
     DeviceBuffer<float> moe_pf_output_accum_;
@@ -98,6 +96,9 @@ struct CudaWorkspace {
     std::vector<float> prefetch_scores_;
     std::vector<int> cold_expert_host_;
     std::vector<float> cold_scores_host_;
+    std::vector<int> active_expert_host_;
+    std::vector<ExpertHostLease> loaded_leases_;
+    std::vector<std::future<void>> io_futures_;
     ExpertResidencyWorkspace residency_workspace_;
 };
 

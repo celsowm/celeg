@@ -8,6 +8,7 @@
 #include "celeg/runtime/weights_topology.hpp"
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/moe.hpp"
+#include "celeg/backend/cuda/moe/expert_source.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -312,17 +313,10 @@ void CudaCompiledModel::load_checkpoint_weights(
                         for (int s = 0; s < workspace_.expert_offload_plan_.experts_per_layer; ++s) {
                             const ExpertLocation& loc = catalog[static_cast<size_t>(s)];
                             ExpertHostLease lease = resources_.weights_->host_expert_cache->acquire(i, s, [&](std::span<std::byte> payload) {
-                                const size_t gu_bytes = 2 * resources_.shape_.moe_intermediate * resources_.shape_.hidden * sizeof(__nv_bfloat16);
-                                if (resources_.weights_->expert_sidecar) {
-                                    resources_.weights_->expert_sidecar->read_expert(
-                                        i, s, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
-                                } else {
-                                    const auto& reader =
-                                        require_random_access_tensor_reader(repo);
-                                    reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
-                                    reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
-                                    reader.read(loc.w2, payload.subspan(gu_bytes));
+                                if (!resources_.weights_->expert_source) {
+                                    throw std::runtime_error("CUDA expert source is not initialized");
                                 }
+                                resources_.weights_->expert_source->read(i, s, payload);
                             });
                             controller->cache->promote(
                                            s, s,

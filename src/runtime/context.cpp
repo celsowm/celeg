@@ -1,6 +1,5 @@
 #include "celeg/runtime/context.hpp"
 #include "celeg/model/runtime_modules.hpp"
-#include "celeg/text/tokenizer.hpp"
 
 #include <stdexcept>
 
@@ -16,7 +15,6 @@ RuntimeBuilder::RuntimeBuilder()
 
 RuntimeBuilder& RuntimeBuilder::add_builtins() {
     add_builtin_checkpoint_formats(*checkpoint_formats_);
-    tokenizer_providers_->add(make_builtin_tokenizer_provider());
     for (auto& module : make_builtin_runtime_modules()) add_module(std::move(module));
     return *this;
 }

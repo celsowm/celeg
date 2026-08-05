@@ -4,6 +4,7 @@
 #include "celeg/models/gemma4/vision.hpp"
 #include "celeg/runtime/context.hpp"
 #include "celeg/text/chat_template.hpp"
+#include "celeg/text/tokenizer.hpp"
 
 namespace celeg {
 namespace {
@@ -15,6 +16,7 @@ public:
     void register_into(RuntimeBuilder& builder) const override {
         add_builtin_architectures(builder.architecture_catalog_for_registration());
         add_builtin_chat_profiles(builder.chat_profile_catalog_for_registration());
+        builder.add_tokenizer_provider(make_builtin_tokenizer_provider());
         builder.vision_catalog_for_registration().add(
             make_gemma4_vision_provider_factory());
     }

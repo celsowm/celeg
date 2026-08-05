@@ -67,12 +67,20 @@ private:
     const char* id_;
 };
 
+class ExtensionModule final : public celeg::IRuntimeModule {
+public:
+    std::string_view id() const override { return "test-module"; }
+    void register_into(celeg::RuntimeBuilder& builder) const override {
+        builder.add_architecture(std::make_unique<ExtensionArchitecture>());
+    }
+};
+
 } // namespace
 
 int main() {
     celeg::RuntimeContext runtime = celeg::RuntimeBuilder{}
         .add_builtins()
-        .add_architecture(std::make_unique<ExtensionArchitecture>())
+        .add_module(std::make_unique<ExtensionModule>())
         .add_checkpoint_format(std::make_unique<ExtensionFormat>())
         .add_tokenizer_provider(
             std::make_unique<ExtensionTokenizerProvider>())
@@ -109,5 +117,15 @@ int main() {
         rejected = true;
     }
     CELEG_TEST_CHECK(rejected);
+
+    bool duplicate_module_rejected = false;
+    try {
+        celeg::RuntimeBuilder duplicate_builder;
+        duplicate_builder.add_module(std::make_unique<ExtensionModule>());
+        duplicate_builder.add_module(std::make_unique<ExtensionModule>());
+    } catch (const std::invalid_argument&) {
+        duplicate_module_rejected = true;
+    }
+    CELEG_TEST_CHECK(duplicate_module_rejected);
     return 0;
 }

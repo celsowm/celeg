@@ -241,6 +241,8 @@ struct ResidencyController {
     std::vector<InflightTransfer> inflight_transfers;
 };
 
+class CudaExpertSource;
+
 // Process-wide shared weight arena. Multiple CudaModel sessions on the same
 // device + checkpoint + weight_mode share one instance to avoid duplicate
 // GPU allocations.
@@ -256,6 +258,7 @@ struct SharedModelWeights {
     std::vector<std::unique_ptr<ResidencyController>> expert_controllers;
     std::vector<std::vector<ExpertLocation>> expert_catalog;
     std::unique_ptr<HostExpertCache> host_expert_cache;
+    std::shared_ptr<CudaExpertSource> expert_source;
     std::unique_ptr<ExpertSidecar> expert_sidecar;
     std::unique_ptr<ExpertIoManager> expert_io_manager;
     ModelUsageStats usage_stats;

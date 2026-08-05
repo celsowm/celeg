@@ -1,26 +1,13 @@
 #include "celeg/detail/model/compiled_model.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/moe.hpp"
+#include "celeg/backend/cuda/moe/expert_source.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
 
 namespace celeg {
 namespace {
-
-__global__ void mask_expert_selection_kernel(const int* src_sel,
-                                             int* dest_sel,
-                                             const std::uint8_t* expert_active,
-                                             int total) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total) return;
-    const int e = src_sel[idx];
-    if (e >= 0 && !expert_active[e]) {
-        dest_sel[idx] = -1;
-    } else {
-        dest_sel[idx] = e;
-    }
-}
 
 // MoE router config / FFN device descriptors are provided inline by
 // celeg/detail/model/types.hpp (moe_router_config / moe_ffn_device) so the
@@ -37,8 +24,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     auto& host_expert_cache = weights.host_expert_cache;
     auto& expert_io_manager = weights.expert_io_manager;
     auto& expert_catalog = weights.expert_catalog;
-    auto& expert_sidecar = weights.expert_sidecar;
-    auto& repo = weights.repo;
     auto& usage_stats = weights.usage_stats;
     auto& usage_profile_path = weights.usage_profile_path;
     const int layer = request.layer;
@@ -54,6 +39,9 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     CudaEvent& prefetch_done_event = *workspace.prefetch_done;
     std::vector<int>& cold_expert_host = *workspace.cold_experts_host;
     std::vector<float>& cold_scores_host = *workspace.cold_scores_host;
+    std::vector<int>& active_expert_host = *workspace.active_experts_host;
+    std::vector<ExpertHostLease>& loaded_leases = *workspace.loaded_leases;
+    std::vector<std::future<void>>& futures = *workspace.io_futures;
     std::vector<int>& prefetch_idx = *workspace.prefetch_indices;
     std::vector<int>& prefetch_ranked = *workspace.prefetch_ranked;
     std::vector<float>& prefetch_scores = *workspace.prefetch_scores;
@@ -76,7 +64,11 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     // is transferred back.
     const int cold_count = cache->resolve_on_device(
         sel_dev, route_scores_dev, rows, K, transfer,
-        cold_expert_host, cold_scores_host);
+        cold_expert_host, cold_scores_host, active_expert_host);
+
+    for (const int expert : active_expert_host) {
+        cache->pin_active(expert);
+    }
 
     // Release any leases for completed transfers
     for (auto it = controller->inflight_transfers.begin(); it != controller->inflight_transfers.end(); ) {
@@ -97,8 +89,9 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     } else {
         // Promote cold experts. The cold list has unique expert indices.
         const float default_score = ExpertLayerCache::kUnseen;
-        std::vector<ExpertHostLease> loaded_leases(static_cast<size_t>(cold_count));
-        std::vector<std::future<void>> futures;
+        loaded_leases.clear();
+        loaded_leases.resize(static_cast<size_t>(cold_count));
+        futures.clear();
         for (int i = 0; i < cold_count; ++i) {
             const int e = cold_expert_host[static_cast<size_t>(i)];
             cache->record_miss();
@@ -114,20 +107,12 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
                 // Async parallel load using ExpertIoManager!
                 futures.push_back(expert_io_manager->submit([this, layer, e, &lease_dest = loaded_leases[static_cast<size_t>(i)]]() {
                     SharedModelWeights& weights = *weights_;
-                    const ExpertLocation& loc = weights.expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                    ExpertHostLease lease = weights.host_expert_cache->acquire(layer, e, [this, layer, e, loc](std::span<std::byte> payload) {
+                    ExpertHostLease lease = weights.host_expert_cache->acquire(layer, e, [this, layer, e](std::span<std::byte> payload) {
                         SharedModelWeights& weights = *weights_;
-                        const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
-                        if (weights.expert_sidecar) {
-                            weights.expert_sidecar->read_expert(
-                                layer, e, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
-                        } else {
-                            const auto& reader =
-                                require_random_access_tensor_reader(*weights.repo);
-                            reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
-                            reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
-                            reader.read(loc.w2, payload.subspan(gu_bytes));
+                        if (!weights.expert_source) {
+                            throw std::runtime_error("CUDA expert source is not initialized");
                         }
+                        weights.expert_source->read(layer, e, payload);
                     });
                     lease_dest = std::move(lease);
                 }));
@@ -163,21 +148,15 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
                 }
             } else if (host_expert_cache) {
                 // Sync fallback (if no io_manager is present)
-                const ExpertLocation& loc = expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                ExpertHostLease lease = host_expert_cache->acquire(layer, e, [&](std::span<std::byte> payload) {
-                    const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
-                    if (expert_sidecar) {
-                        expert_sidecar->read_expert(
-                            layer, e, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
-                    } else {
-                        const auto& reader =
-                            require_random_access_tensor_reader(*repo);
-                        reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
-                        reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
-                        reader.read(loc.w2, payload.subspan(gu_bytes));
+                ExpertHostLease lease = host_expert_cache->acquire(layer, e, [this, layer, e](std::span<std::byte> payload) {
+                    SharedModelWeights& weights = *weights_;
+                    if (!weights.expert_source) {
+                        throw std::runtime_error("CUDA expert source is not initialized");
                     }
+                    weights.expert_source->read(layer, e, payload);
                 });
 
+                const ExpertLocation& loc = expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
                 const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
                 cache->ensure_resident(e, reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
                                        reinterpret_cast<const __nv_bfloat16*>(lease.payload() + gu_bytes),
@@ -196,6 +175,11 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
         // Publish all pointer and slot changes once after the promotion batch.
         cache->sync_residency_tables(transfer);
 
+    }
+    // Admission can change slots, so apply the active-batch protection after
+    // cold experts have been published as well as on the all-resident path.
+    for (const int expert : active_expert_host) {
+        cache->pin_active(expert);
     }
 
     // Compute stream must wait for the on-demand promotions to land before the
@@ -295,8 +279,6 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     // Size the prefill scratch to the requested row count.
     workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
     workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * resources_.shape_.experts_per_token);
-    workspace_.moe_pf_sel_masked_.reserve(static_cast<size_t>(rows) * resources_.shape_.experts_per_token);
-    workspace_.expert_active_dev_.reserve(static_cast<size_t>(resources_.shape_.num_experts));
     workspace_.moe_pf_routing_w_.reserve(static_cast<size_t>(rows) * resources_.shape_.experts_per_token);
     workspace_.moe_pf_router_scratch_.reserve(static_cast<size_t>(rows) * resources_.shape_.num_experts);
     workspace_.moe_pf_output_accum_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
@@ -323,156 +305,23 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     launch_moe_router(rdev, cfg, workspace_.moe_pf_router_scratch_.data(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
-    const bool is_disk_backed = workspace_.expert_offload_plan_.enabled && (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached);
+    // Standalone and packed prefill use the same residency transaction. The
+    // coordinator owns source reads, bounded admission, publication, and
+    // completion ordering; the FFN sees one stable pointer table.
+    ensure_moe_experts_resident(layer, workspace_.moe_pf_sel_.data(), rows, stream_.get());
 
-    if (is_disk_backed) {
-        // Disk-backed expert-major streamed prefill path!
-        ExpertLayerCache* cache = workspace_.expert_caches_[static_cast<size_t>(layer)];
-        const int capacity = cache->capacity();
+    workspace_.moe_pf_output_accum_.zero_async(stream_.get());
+    const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, resources_.shape_);
+    launch_moe_ffn(fdev, workspace_.moe_pf_sel_.data(), workspace_.moe_pf_routing_w_.data(),
+                    workspace_.prefill_normed_.data(), workspace_.moe_pf_output_accum_.data(), rows,
+                    resources_.shape_.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
+                    workspace_.moe_pf_act_scratch_.data(), stream_.get());
+    launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
+                                rows * resources_.shape_.hidden, stream_.get());
+    CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
-        // 1. Resolve residency on device to get the cold list
-        std::vector<int> cold_experts;
-        std::vector<float> cold_scores;
-        cache->resolve_on_device(workspace_.moe_pf_sel_.data(), nullptr, rows, resources_.shape_.experts_per_token,
-                                 stream_.get(), cold_experts, cold_scores);
-
-        workspace_.moe_pf_output_accum_.zero_async(stream_.get());
-
-        // 2. Read back the selection table to know all used experts in this prefill chunk
-        const size_t total_selections = static_cast<size_t>(rows) * resources_.shape_.experts_per_token;
-        std::vector<int> sel_host(total_selections);
-        CELEG_CUDA(cudaMemcpyAsync(sel_host.data(), workspace_.moe_pf_sel_.data(),
-                                 total_selections * sizeof(int),
-                                 cudaMemcpyDeviceToHost, stream_.get()));
-        CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
-
-        std::vector<int> used_experts;
-        std::vector<bool> seen(static_cast<size_t>(resources_.shape_.num_experts), false);
-        for (int e : sel_host) {
-            if (e >= 0 && e < resources_.shape_.num_experts && !seen[static_cast<size_t>(e)]) {
-                seen[static_cast<size_t>(e)] = true;
-                used_experts.push_back(e);
-            }
-        }
-
-        // 3. Process all used experts in batches of size up to capacity
-        for (size_t offset = 0; offset < used_experts.size(); offset += capacity) {
-            size_t batch_size = std::min<size_t>(capacity, used_experts.size() - offset);
-            std::vector<int> batch(used_experts.begin() + offset, used_experts.begin() + offset + batch_size);
-
-            // Promote all experts in this batch to GPU
-            for (int e : batch) {
-                if (!cache->resident(e)) {
-                    const ExpertLocation& loc = workspace_.expert_catalog_[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                    ExpertHostLease lease = resources_.weights_->host_expert_cache->acquire(layer, e, [&](std::span<std::byte> payload) {
-                        const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
-                        if (resources_.weights_->expert_sidecar) {
-                            resources_.weights_->expert_sidecar->read_expert(
-                                layer, e, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
-                        } else {
-                            const auto& reader =
-                                require_random_access_tensor_reader(*resources_.weights_->repo);
-                            reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
-                            reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
-                            reader.read(loc.w2, payload.subspan(gu_bytes));
-                        }
-                    });
-                    if (cache->ensure_resident(e,
-                                               reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
-                                               reinterpret_cast<const __nv_bfloat16*>(lease.payload() + loc.w1.bytes + loc.w3.bytes),
-                                               stream_.get())) {
-                        auto ev = std::make_unique<CudaEvent>();
-                        ev->record(stream_.get());
-                        std::lock_guard<std::mutex> ctrl_lock(resources_.weights_->expert_controllers[static_cast<size_t>(layer)]->mutex);
-                        resources_.weights_->expert_controllers[static_cast<size_t>(layer)]->inflight_transfers.push_back({std::move(lease), std::move(ev)});
-                    }
-                } else {
-                    cache->touch(e);
-                }
-            }
-
-            // Sync stream to ensure promotions are ordered
-            CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
-
-            // Construct a temporary device pointer table where ONLY the experts in the current batch are non-null
-            std::vector<const __nv_bfloat16*> temp_gu(static_cast<size_t>(resources_.shape_.num_experts), nullptr);
-            std::vector<const __nv_bfloat16*> temp_dn(static_cast<size_t>(resources_.shape_.num_experts), nullptr);
-            std::vector<std::uint8_t> active_flags(static_cast<size_t>(resources_.shape_.num_experts), 0);
-
-            for (int e : batch) {
-                temp_gu[static_cast<size_t>(e)] = cache->expert_gate_up_dev(e);
-                temp_dn[static_cast<size_t>(e)] = cache->expert_down_dev(e);
-                active_flags[static_cast<size_t>(e)] = 1;
-            }
-
-            CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->gate_up_ptrs()), temp_gu.data(),
-                                     static_cast<size_t>(resources_.shape_.num_experts) * sizeof(const __nv_bfloat16*),
-                                     cudaMemcpyHostToDevice, stream_.get()));
-            CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->down_ptrs()), temp_dn.data(),
-                                     static_cast<size_t>(resources_.shape_.num_experts) * sizeof(const __nv_bfloat16*),
-                                     cudaMemcpyHostToDevice, stream_.get()));
-
-            // Populate active flags on device
-            CELEG_CUDA(cudaMemcpyAsync(workspace_.expert_active_dev_.data(), active_flags.data(),
-                                     static_cast<size_t>(resources_.shape_.num_experts) * sizeof(std::uint8_t),
-                                     cudaMemcpyHostToDevice, stream_.get()));
-
-            // Launch mask kernel to safely replace deactivated experts with -1
-            const int block = 256;
-            const int total_elems = rows * resources_.shape_.experts_per_token;
-            const int grid = (total_elems + block - 1) / block;
-            mask_expert_selection_kernel<<<grid, block, 0, stream_.get()>>>(
-                workspace_.moe_pf_sel_.data(), workspace_.moe_pf_sel_masked_.data(), workspace_.expert_active_dev_.data(), total_elems);
-
-            // Launch FFN for the chunk using the safely masked selection matrix
-            celeg::MoeFfnDevice fdev = moe_ffn_device(moe, resources_.shape_);
-            fdev.gate_up_ptrs = cache->gate_up_ptrs();
-            fdev.down_ptrs = cache->down_ptrs();
-
-            launch_moe_ffn(fdev, workspace_.moe_pf_sel_masked_.data(), workspace_.moe_pf_routing_w_.data(),
-                            workspace_.prefill_normed_.data(), workspace_.moe_pf_output_accum_.data(), rows,
-                            resources_.shape_.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
-                            workspace_.moe_pf_act_scratch_.data(), stream_.get());
-        }
-
-        // Restore the full pointer table of the cache (pointing to all currently resident experts)
-        std::vector<const __nv_bfloat16*> full_gu(static_cast<size_t>(resources_.shape_.num_experts), nullptr);
-        std::vector<const __nv_bfloat16*> full_dn(static_cast<size_t>(resources_.shape_.num_experts), nullptr);
-        for (int e = 0; e < resources_.shape_.num_experts; ++e) {
-            full_gu[static_cast<size_t>(e)] = cache->expert_gate_up_dev(e);
-            full_dn[static_cast<size_t>(e)] = cache->expert_down_dev(e);
-        }
-        CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->gate_up_ptrs()), full_gu.data(),
-                                 static_cast<size_t>(resources_.shape_.num_experts) * sizeof(const __nv_bfloat16*),
-                                 cudaMemcpyHostToDevice, stream_.get()));
-        CELEG_CUDA(cudaMemcpyAsync(const_cast<const __nv_bfloat16**>(cache->down_ptrs()), full_dn.data(),
-                                 static_cast<size_t>(resources_.shape_.num_experts) * sizeof(const __nv_bfloat16*),
-                                 cudaMemcpyHostToDevice, stream_.get()));
-
-        // Finalize outputs
-        launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
-                                    rows * resources_.shape_.hidden, stream_.get());
-        CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
-
-        launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),
-                            rows * resources_.shape_.hidden, stream_.get());
-    } else {
-        // Promote any cold experts selected by the router before the FFN reads them.
-        ensure_moe_experts_resident(layer, workspace_.moe_pf_sel_.data(), rows, stream_.get());
-
-        workspace_.moe_pf_output_accum_.zero_async(stream_.get());
-        const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, resources_.shape_);
-        launch_moe_ffn(fdev, workspace_.moe_pf_sel_.data(), workspace_.moe_pf_routing_w_.data(),
-                        workspace_.prefill_normed_.data(), workspace_.moe_pf_output_accum_.data(), rows,
-                        resources_.shape_.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
-                        workspace_.moe_pf_act_scratch_.data(), stream_.get());
-        launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
-                                    rows * resources_.shape_.hidden, stream_.get());
-        CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
-
-        launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),
-                            rows * resources_.shape_.hidden, stream_.get());
-    }
+    launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),
+                        rows * resources_.shape_.hidden, stream_.get());
 }
 
 } // namespace celeg

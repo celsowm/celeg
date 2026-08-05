@@ -29,8 +29,20 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
         &workspace_.router_done_event_, &workspace_.ffn_done_event_,
         &workspace_.promote_done_event_, &workspace_.prefetch_done_event_,
         &workspace_.cold_expert_host_, &workspace_.cold_scores_host_,
+        &workspace_.active_expert_host_,
+        &workspace_.loaded_leases_, &workspace_.io_futures_,
         &workspace_.prefetch_idx_, &workspace_.prefetch_ranked_,
         &workspace_.prefetch_scores_};
+    workspace_.cold_expert_host_.reserve(
+        static_cast<size_t>(resources_.shape_.num_experts));
+    workspace_.cold_scores_host_.reserve(
+        static_cast<size_t>(resources_.shape_.num_experts));
+    workspace_.active_expert_host_.reserve(
+        static_cast<size_t>(resources_.shape_.num_experts));
+    workspace_.loaded_leases_.reserve(
+        static_cast<size_t>(resources_.shape_.num_experts));
+    workspace_.io_futures_.reserve(
+        static_cast<size_t>(resources_.shape_.num_experts));
     load_checkpoint_weights(model_path, bootstrap);
     if (resources_.options_.cuda_graph ||
         resources_.options_.gemm_backend == GemmBackend::CublasLt) {

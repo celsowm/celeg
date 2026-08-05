@@ -2,9 +2,11 @@
 
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/backend/cuda/moe/offload.hpp"
+#include "celeg/runtime/cache/pinned_expert_cache.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <stdexcept>
 #include <vector>
 
@@ -22,6 +24,9 @@ struct ExpertResidencyWorkspace {
     CudaEvent* prefetch_done = nullptr;
     std::vector<int>* cold_experts_host = nullptr;
     std::vector<float>* cold_scores_host = nullptr;
+    std::vector<int>* active_experts_host = nullptr;
+    std::vector<ExpertHostLease>* loaded_leases = nullptr;
+    std::vector<std::future<void>>* io_futures = nullptr;
     std::vector<int>* prefetch_indices = nullptr;
     std::vector<int>* prefetch_ranked = nullptr;
     std::vector<float>* prefetch_scores = nullptr;
@@ -29,7 +34,8 @@ struct ExpertResidencyWorkspace {
     void validate() const {
         if (!router_done || !ffn_done || !promote_done || !prefetch_done ||
             !cold_experts_host || !cold_scores_host || !prefetch_indices ||
-            !prefetch_ranked || !prefetch_scores) {
+            !prefetch_ranked || !prefetch_scores || !active_experts_host ||
+            !loaded_leases || !io_futures) {
             throw std::invalid_argument("invalid expert residency workspace");
         }
     }
@@ -160,7 +166,8 @@ public:
     int resolve_on_device(const int* sel_dev, const float* route_scores_dev,
                           int rows, int K, cudaStream_t stream,
                           std::vector<int>& cold_host,
-                          std::vector<float>& cold_scores_host);
+                          std::vector<float>& cold_scores_host,
+                          std::vector<int>& active_host);
 
     void sync_residency_tables(cudaStream_t stream = nullptr);
 
@@ -241,6 +248,10 @@ private:
     DeviceBuffer<int> cold_flags_dev_;
     DeviceBuffer<int> cold_list_dev_;
     DeviceBuffer<int> cold_count_dev_;
+    DeviceBuffer<int> active_flags_dev_;
+    DeviceBuffer<int> active_list_dev_;
+    DeviceBuffer<int> active_count_dev_;
+    CudaEvent discovery_done_event_;
 
     void sync_expert_slot_to_device(cudaStream_t stream = nullptr);
 };

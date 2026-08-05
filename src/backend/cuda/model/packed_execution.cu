@@ -362,9 +362,11 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
     void decode_into(
         const std::vector<PackedSessionContext>& models,
         const std::vector<std::vector<uint32_t>>* page_tables,
-        std::span<int32_t> output) {
+        std::span<int32_t> output,
+        const PackedSessionContext* validated_reference = nullptr) {
         if (models.empty()) return;
-        const PackedSessionContext& reference = validate_decode_batch(models);
+        const PackedSessionContext& reference = validated_reference
+            ? *validated_reference : validate_decode_batch(models);
         const int rows = static_cast<int>(models.size());
         if (output.size() < models.size()) {
             throw std::invalid_argument("packed decode output buffer is too small");
@@ -450,10 +452,12 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
     void prefill(const std::vector<PackedSessionContext>& models,
                  const std::vector<std::vector<uint32_t>>* page_tables,
                  const std::vector<int32_t>& explicit_tokens,
-                 const std::vector<PackedPrefillRow>& row_descriptors) {
+                 const std::vector<PackedPrefillRow>& row_descriptors,
+                 const PackedSessionContext* validated_reference = nullptr) {
         if (models.empty()) return;
-        const PackedSessionContext& reference =
-            validate_prefill_batch(models, explicit_tokens, row_descriptors);
+        const PackedSessionContext& reference = validated_reference
+            ? *validated_reference
+            : validate_prefill_batch(models, explicit_tokens, row_descriptors);
         if (!page_tables || page_tables->size() != models.size()) {
             throw std::invalid_argument("ragged packed prefill needs one page table per request");
         }
@@ -608,7 +612,12 @@ void PackedDecodePipeline::run(
     const std::vector<PackedSessionContext>& sessions,
     const std::vector<std::vector<uint32_t>>* page_tables,
     std::span<int32_t> output) {
-    state_->decode_into(sessions, page_tables, output);
+    if (sessions.empty()) return;
+    const PackedSessionContext& reference = state_->validate_decode_batch(sessions);
+    if (output.size() < sessions.size()) {
+        throw std::invalid_argument("packed decode output buffer is too small");
+    }
+    state_->decode_into(sessions, page_tables, output, &reference);
 }
 
 PackedPrefillPipeline::PackedPrefillPipeline(PackedDecodeExecutorImpl& state)
@@ -619,7 +628,11 @@ void PackedPrefillPipeline::run(
     const std::vector<std::vector<uint32_t>>* page_tables,
     const std::vector<int32_t>& tokens,
     const std::vector<PackedPrefillRow>& rows) {
-    state_->prefill(sessions, page_tables, tokens, rows);
+    if (sessions.empty()) return;
+    const PackedSessionContext& reference =
+        state_->validate_prefill_batch(sessions, tokens, rows);
+    (void)reference;
+    state_->prefill(sessions, page_tables, tokens, rows, &reference);
 }
 
 PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,

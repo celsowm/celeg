@@ -22,10 +22,18 @@ __global__ void resolve_residency_kernel(const int* sel_dev,
                                          int* cold_flags_dev,
                                          int* cold_list_dev,
                                          int* cold_count_dev,
+                                         int* active_flags_dev,
+                                         int* active_list_dev,
+                                         int* active_count_dev,
                                          int total) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= total) return;
     const int e = sel_dev[idx];
+    if (e < 0) return;
+    if (atomicCAS(&active_flags_dev[e], 0, 1) == 0) {
+        const int active_pos = atomicAdd(active_count_dev, 1);
+        active_list_dev[active_pos] = e;
+    }
     if (expert_slot_dev[e] < 0) {
         if (atomicCAS(&cold_flags_dev[e], 0, 1) == 0) {
             const int pos = atomicAdd(cold_count_dev, 1);
@@ -77,6 +85,9 @@ ExpertLayerCache::ExpertLayerCache(int num_experts, int capacity,
     cold_flags_dev_.reset(static_cast<size_t>(num_experts));
     cold_list_dev_.reset(static_cast<size_t>(num_experts));
     cold_count_dev_.reset(1);
+    active_flags_dev_.reset(static_cast<size_t>(num_experts));
+    active_list_dev_.reset(static_cast<size_t>(num_experts));
+    active_count_dev_.reset(1);
 }
 
 void ExpertLayerCache::set_policy(ExpertCachePolicy policy) {
@@ -131,7 +142,8 @@ int ExpertLayerCache::resolve_on_device(
     const int* sel_dev, const float* route_scores_dev,
     int rows, int K, cudaStream_t stream,
     std::vector<int>& cold_host,
-    std::vector<float>& cold_scores_host) {
+    std::vector<float>& cold_scores_host,
+    std::vector<int>& active_host) {
     const int total = rows * K;
     if (total == 0) return 0;
 
@@ -144,17 +156,38 @@ int ExpertLayerCache::resolve_on_device(
                               cudaMemcpyHostToDevice, stream));
     CELEG_CUDA(cudaMemsetAsync(cold_flags_dev_.data(), 0,
                               static_cast<size_t>(num_experts_) * sizeof(int), stream));
+    CELEG_CUDA(cudaMemsetAsync(active_flags_dev_.data(), 0,
+                              static_cast<size_t>(num_experts_) * sizeof(int), stream));
+    CELEG_CUDA(cudaMemsetAsync(active_count_dev_.data(), 0, sizeof(int), stream));
 
     const int block = 256;
     const int grid = (total + block - 1) / block;
     resolve_residency_kernel<<<grid, block, 0, stream>>>(
         sel_dev, expert_slot_dev_.data(), cold_flags_dev_.data(),
-        cold_list_dev_.data(), cold_count_dev_.data(), total);
+        cold_list_dev_.data(), cold_count_dev_.data(), active_flags_dev_.data(),
+        active_list_dev_.data(), active_count_dev_.data(), total);
 
-    int cold_count = 0;
-    CELEG_CUDA(cudaMemcpyAsync(&cold_count, cold_count_dev_.data(), sizeof(int),
+    int counts[2] = {0, 0};
+    CELEG_CUDA(cudaMemcpyAsync(&counts[0], cold_count_dev_.data(), sizeof(int),
                               cudaMemcpyDeviceToHost, stream));
-    CELEG_CUDA(cudaStreamSynchronize(stream));
+    CELEG_CUDA(cudaMemcpyAsync(&counts[1], active_count_dev_.data(), sizeof(int),
+                              cudaMemcpyDeviceToHost, stream));
+    CELEG_CUDA(cudaEventRecord(discovery_done_event_.get(), stream));
+    cudaError_t discovery_status = cudaEventQuery(discovery_done_event_.get());
+    if (discovery_status == cudaErrorNotReady) {
+        CELEG_CUDA(cudaEventSynchronize(discovery_done_event_.get()));
+    } else {
+        CELEG_CUDA(discovery_status);
+    }
+    const int cold_count = counts[0];
+    const int active_count = counts[1];
+
+    active_host.resize(static_cast<size_t>(active_count));
+    if (active_count > 0) {
+        CELEG_CUDA(cudaMemcpy(active_host.data(), active_list_dev_.data(),
+                              static_cast<size_t>(active_count) * sizeof(int),
+                              cudaMemcpyDeviceToHost));
+    }
 
     if (cold_count == 0) return 0;
     if (!reserve_probation_slots(cold_count) && requires_full_residency_) {
@@ -164,16 +197,15 @@ int ExpertLayerCache::resolve_on_device(
     }
 
     cold_host.resize(static_cast<size_t>(cold_count));
-    CELEG_CUDA(cudaMemcpyAsync(cold_host.data(), cold_list_dev_.data(),
+    CELEG_CUDA(cudaMemcpy(cold_host.data(), cold_list_dev_.data(),
                               static_cast<size_t>(cold_count) * sizeof(int),
-                              cudaMemcpyDeviceToHost, stream));
+                              cudaMemcpyDeviceToHost));
     if (route_scores_dev != nullptr) {
         cold_scores_host.resize(static_cast<size_t>(num_experts_));
-        CELEG_CUDA(cudaMemcpyAsync(cold_scores_host.data(), route_scores_dev,
+        CELEG_CUDA(cudaMemcpy(cold_scores_host.data(), route_scores_dev,
                                   static_cast<size_t>(num_experts_) * sizeof(float),
-                                  cudaMemcpyDeviceToHost, stream));
+                                  cudaMemcpyDeviceToHost));
     }
-    CELEG_CUDA(cudaStreamSynchronize(stream));
     return cold_count;
 }
 

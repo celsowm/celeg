@@ -313,10 +313,16 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             semantic.router.experts_per_group = moe->routing_experts_per_group;
             semantic.routed.mlp.hidden_size = model.topology.hidden;
             semantic.routed.mlp.intermediate_size = moe->intermediate_size;
+            const std::size_t expert_matrix_bytes =
+                static_cast<std::size_t>(model.topology.hidden) *
+                static_cast<std::size_t>(moe->intermediate_size) * sizeof(uint16_t);
             semantic.routed.payload.regions = {
-                {TensorRole::MoeExpertGate, 0, 0, MoePayloadDType::Unknown},
-                {TensorRole::MoeExpertUp, 0, 0, MoePayloadDType::Unknown},
-                {TensorRole::MoeExpertDown, 0, 0, MoePayloadDType::Unknown}};
+                {TensorRole::MoeExpertGate, 0, expert_matrix_bytes, MoePayloadDType::BF16},
+                {TensorRole::MoeExpertUp, expert_matrix_bytes, expert_matrix_bytes,
+                 MoePayloadDType::BF16},
+                {TensorRole::MoeExpertDown, 2 * expert_matrix_bytes,
+                 expert_matrix_bytes, MoePayloadDType::BF16}};
+            semantic.routed.payload.total_bytes = 3 * expert_matrix_bytes;
             semantic.output.has_shared_expert = moe->has_shared_expert;
             semantic.output.combine_order = moe->shared_before_routed
                 ? MoeCombineOrder::SharedThenRouted : MoeCombineOrder::RoutedThenShared;
@@ -328,6 +334,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                                          : moe->intermediate_size}};
             }
             semantic.residency.expert_count = moe->num_experts;
+            semantic.residency.payload_bytes = semantic.routed.payload.total_bytes;
             compiled.moe = std::move(semantic);
         }
         program.layers.push_back(std::move(compiled));

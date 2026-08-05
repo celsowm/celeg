@@ -4,7 +4,10 @@ Compiled MoE semantics are resolved before storage selection. Sources receive
 an `ExpertKey` and immutable payload requirements; they never receive an
 architecture name. CPU pack backing owns its indexed reader and cache through
 `CpuExpertBackingStore`, while CUDA residency receives a validated
-`ExpertResidencyRequest` and publishes device pointers transactionally.
+`ExpertResidencyRequest` plus its preallocated `ExpertResidencyWorkspace` and
+publishes device pointers transactionally. CUDA source selection is owned by
+`CudaExpertSource`; the neutral `HostExpertCache` stores only byte payloads and
+leases.
 
 Celeg can keep the complete MoE expert set on storage while retaining only the
 working set in RAM and/or VRAM.
@@ -25,15 +28,23 @@ celeg-run \
 The tiers are:
 
 1. Safetensors or an expert sidecar on SSD: authoritative copy of every expert.
-2. Frequency-aware pinned-RAM cache: warm experts shared by all layers.
+2. Frequency-aware host staging cache: warm payloads shared by all layers;
+   allocator choice (ordinary, pinned, or mapped) is injected by CUDA.
 3. Per-layer VRAM cache: protected hot experts plus probationary/transient
    slots for new routing decisions.
 
-Slots used by the active FFN batch are pinned until that FFN completes. Before a
-promotion batch, the cache reserves enough transient slots for all unique cold
-experts. Disk backing rejects a batch whose unique cold set is larger than the
-entire per-layer GPU cache; increase `--expert-cache-per-layer` or reduce the
-prefill chunk in that case.
+The coordinator discovers a compact unique active set on the device, admits
+cold payloads through the source/cache/I/O owners, and pins active slots only
+after admission. Before a promotion batch, the cache reserves enough
+transient slots for all unique cold experts. Disk backing rejects a batch whose
+unique cold set is larger than the entire per-layer GPU cache; increase
+`--expert-cache-per-layer` or reduce the prefill chunk in that case.
+
+The fully resident discovery path uses a preallocated cache workspace and a
+compact active-list transfer. It does not read storage, submit I/O work, copy
+the full router selection, or call `cudaStreamSynchronize`. A not-yet-complete
+device discovery is waited through its completion event; cold admission then
+uses the bounded host lease/future workspace.
 
 ## CPU with SSD backing
 
