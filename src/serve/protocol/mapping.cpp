@@ -2,6 +2,8 @@
 
 #include "celeg/checkpoint/formats/json.hpp"
 
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -64,6 +66,18 @@ std::string role_to_string(ChatRole role) {
 void validate_chat_request(const ChatCompletionRequest& request,
                            const ChatCapabilities& capabilities) {
     if (request.messages.empty()) throw std::invalid_argument("messages must not be empty");
+    if (request.temperature && (!std::isfinite(*request.temperature) || *request.temperature < 0.0)) {
+        throw std::invalid_argument("temperature must be finite and non-negative");
+    }
+    if (request.top_p && (!std::isfinite(*request.top_p) || *request.top_p <= 0.0 || *request.top_p > 1.0)) {
+        throw std::invalid_argument("top_p must be in (0, 1]");
+    }
+    if (request.top_k && (*request.top_k <= 0 || *request.top_k > celeg::kMaxTopK)) {
+        throw std::invalid_argument("top_k must be between 1 and 128");
+    }
+    if (request.max_tokens && *request.max_tokens <= 0) {
+        throw std::invalid_argument("max_tokens must be positive");
+    }
     std::unordered_set<std::string> tool_names;
     if (request.tools) {
         for (const ToolDto& tool : *request.tools) {
@@ -98,8 +112,9 @@ void validate_chat_request(const ChatCompletionRequest& request,
         throw std::invalid_argument("tools are not supported by this chat profile");
     }
     if (request.tool_choice && std::holds_alternative<ToolChoiceDto>(*request.tool_choice) &&
-        !tool_names.contains(std::get<ToolChoiceDto>(*request.tool_choice).function.name)) {
-        throw std::invalid_argument("tool_choice references an undeclared function");
+        (std::get<ToolChoiceDto>(*request.tool_choice).type != "function" ||
+         !tool_names.contains(std::get<ToolChoiceDto>(*request.tool_choice).function.name))) {
+        throw std::invalid_argument("tool_choice references an undeclared function or has an unsupported type");
     }
     std::unordered_set<std::string> pending_tool_calls;
     for (const ChatMessageDto& message : request.messages) {
@@ -108,6 +123,12 @@ void validate_chat_request(const ChatCompletionRequest& request,
             throw std::invalid_argument("image content is not supported by this model");
         }
         const ChatRole role = role_from_string(message.role);
+        if (role != ChatRole::Assistant && message.tool_calls) {
+            throw std::invalid_argument("tool_calls are only valid on assistant messages");
+        }
+        if (role != ChatRole::Tool && message.tool_call_id) {
+            throw std::invalid_argument("tool_call_id is only valid on tool messages");
+        }
         const bool role_supported =
             (role == ChatRole::System && capabilities.roles.system) ||
             (role == ChatRole::Developer && capabilities.roles.developer) ||
@@ -131,7 +152,9 @@ void validate_chat_request(const ChatCompletionRequest& request,
                 if (call.function.name.empty()) throw std::invalid_argument("tool call function name must not be empty");
                 try { (void)Json::parse(call.function.arguments); }
                 catch (const std::exception&) { throw std::invalid_argument("tool call arguments must be valid JSON"); }
-                pending_tool_calls.insert(call.id);
+                if (!pending_tool_calls.insert(call.id).second) {
+                    throw std::invalid_argument("tool call IDs must be unique across the conversation");
+                }
             }
         }
         if (role == ChatRole::Assistant && (!message.content &&
@@ -162,7 +185,8 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
                                     std::span<const std::int32_t> eos_token_ids,
-                                    const celeg::ChatTemplateOptions& template_options) {
+                                    const celeg::ChatTemplateOptions& template_options,
+                                    std::size_t max_context_tokens) {
     validate_chat_request(request, capabilities);
 
     std::vector<celeg::ChatMessage> messages;
@@ -179,9 +203,12 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         }
     }
     std::vector<celeg::serve::MultimodalImage> images;
+    std::vector<std::vector<celeg::serve::MultimodalImage>> message_images;
+    message_images.reserve(request.messages.size());
     for (const ChatMessageDto& message : request.messages) {
         const NormalizedContent normalized = normalize_content(message.content);
         images.insert(images.end(), normalized.images.begin(), normalized.images.end());
+        message_images.push_back(normalized.images);
         celeg::ChatMessage mapped{role_from_string(message.role), normalized.text,
                                   {}, message.tool_call_id, std::nullopt};
         if (message.tool_calls) {
@@ -198,12 +225,100 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         effective_template_options.enable_thinking =
             request.chat_template_kwargs->enable_thinking;
     }
-    const std::string prompt_text = celeg::render_chat(
-        messages, tools, chat_template, /*add_generation_prompt=*/true,
-        effective_template_options);
+
+    const std::size_t max_output_tokens =
+        request.max_tokens ? static_cast<std::size_t>(*request.max_tokens) : 128;
+    std::vector<celeg::ChatMessage> selected_messages = messages;
+    std::vector<std::int32_t> prompt_tokens;
+    std::string prompt_text;
+    bool context_window_trimmed = false;
+
+    auto render_and_encode = [&](const std::vector<celeg::ChatMessage>& candidate,
+                                 std::string& rendered,
+                                 std::vector<std::int32_t>& encoded) {
+        rendered = celeg::render_chat(
+            candidate, tools, chat_template, /*add_generation_prompt=*/true,
+            effective_template_options);
+        encoded = tokenizer.encode(rendered, /*add_bos=*/false);
+    };
+
+    render_and_encode(selected_messages, prompt_text, prompt_tokens);
+    if (max_context_tokens != 0) {
+        if (max_output_tokens >= max_context_tokens) {
+            throw std::invalid_argument("max_tokens leaves no room for the chat prompt");
+        }
+        const std::size_t prompt_budget = max_context_tokens - max_output_tokens;
+        if (prompt_tokens.size() > prompt_budget) {
+            // Keep leading system/developer instructions and slide the
+            // conversational suffix forward until prompt + output fits. A
+            // candidate is validated because dropping the assistant side of a
+            // tool call would otherwise create an invalid conversation.
+            std::size_t persistent_prefix = 0;
+            while (persistent_prefix < messages.size() &&
+                   (messages[persistent_prefix].role == celeg::ChatRole::System ||
+                    messages[persistent_prefix].role == celeg::ChatRole::Developer)) {
+                ++persistent_prefix;
+            }
+
+            bool found = false;
+            for (std::size_t start = persistent_prefix; start < messages.size(); ++start) {
+                std::vector<celeg::ChatMessage> candidate;
+                candidate.reserve(persistent_prefix + messages.size() - start);
+                candidate.insert(candidate.end(), messages.begin(),
+                                 messages.begin() + static_cast<std::ptrdiff_t>(persistent_prefix));
+                candidate.insert(candidate.end(),
+                                 messages.begin() + static_cast<std::ptrdiff_t>(start),
+                                 messages.end());
+                try {
+                    celeg::validate_conversation(candidate);
+                } catch (const std::invalid_argument&) {
+                    continue;
+                }
+
+                std::string candidate_prompt;
+                std::vector<std::int32_t> candidate_tokens;
+                render_and_encode(candidate, candidate_prompt, candidate_tokens);
+                if (candidate_tokens.size() <= prompt_budget) {
+                    selected_messages = std::move(candidate);
+                    prompt_text = std::move(candidate_prompt);
+                    prompt_tokens = std::move(candidate_tokens);
+                    context_window_trimmed = true;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                throw std::invalid_argument(
+                    "chat prompt exceeds the context window even after sliding-window trimming");
+            }
+        }
+    }
 
     GenerateRequest generate_request;
     generate_request.rendered_prompt = prompt_text;
+    generate_request.prompt_tokens = std::move(prompt_tokens);
+    generate_request.context_window_trimmed = context_window_trimmed;
+    if (context_window_trimmed) {
+        images.clear();
+        const auto append_images = [&images, &message_images](std::size_t index) {
+            images.insert(images.end(), message_images[index].begin(), message_images[index].end());
+        };
+        const std::size_t persistent_prefix = [&messages] {
+            std::size_t count = 0;
+            while (count < messages.size() &&
+                   (messages[count].role == celeg::ChatRole::System ||
+                    messages[count].role == celeg::ChatRole::Developer)) {
+                ++count;
+            }
+            return count;
+        }();
+        for (std::size_t index = 0; index < persistent_prefix; ++index) append_images(index);
+        const std::size_t first_selected_suffix = messages.size() -
+            (selected_messages.size() - persistent_prefix);
+        for (std::size_t index = first_selected_suffix; index < messages.size(); ++index) {
+            append_images(index);
+        }
+    }
     generate_request.images = std::move(images);
     if (!generate_request.images.empty()) {
         const auto image_token = tokenizer.token_id("<|image|>");
@@ -212,17 +327,13 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         }
         generate_request.image_token_id = *image_token;
     }
-    generate_request.prompt_tokens = tokenizer.encode(prompt_text, /*add_bos=*/false);
     generate_request.eos_token_ids.assign(eos_token_ids.begin(), eos_token_ids.end());
-    if (request.max_tokens && *request.max_tokens <= 0) {
-        throw std::invalid_argument("max_tokens must be positive");
-    }
-    generate_request.max_output_tokens =
-        request.max_tokens ? static_cast<std::size_t>(*request.max_tokens) : 128;
+    generate_request.max_output_tokens = max_output_tokens;
     if (request.temperature) generate_request.generation.temperature = static_cast<float>(*request.temperature);
     if (request.top_p) generate_request.generation.top_p = static_cast<float>(*request.top_p);
     if (request.top_k) generate_request.generation.top_k = *request.top_k;
     if (request.seed) generate_request.generation.seed = *request.seed;
+    generate_request.generation.validate();
     return generate_request;
 }
 
@@ -338,6 +449,7 @@ ChatCompletionChunk to_chat_completion_chunk(
     ChatCompletionChunk chunk;
     chunk.id = id;
     chunk.model = model;
+    chunk.created = created;
     ChatCompletionChunkChoice choice;
     choice.index = 0;
     if (include_role) choice.delta.role = "assistant";
@@ -374,7 +486,11 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
                                 normalize_content(message.content).text});
         }
         const std::string prompt_text = celeg::render_chat(
-            messages, chat_template, /*add_generation_prompt=*/true);
+            messages, {}, chat_template, /*add_generation_prompt=*/true,
+            celeg::ChatTemplateOptions{
+                request.chat_template_kwargs
+                    ? std::optional<bool>{request.chat_template_kwargs->enable_thinking}
+                    : std::nullopt});
         // The chat template already embeds the model's special tokens, so BOS
         // is never added again here regardless of add_special_tokens (which
         // only applies to the raw-prompt path above).

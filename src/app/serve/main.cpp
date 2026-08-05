@@ -10,11 +10,13 @@
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/runtime/context.hpp"
 #include "routes/chat_completions.hpp"
+#include "routes/chat_ui.hpp"
 #include "routes/docs.hpp"
 #include "routes/health.hpp"
 #include "routes/models.hpp"
 #include "routes/tokenize.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -22,6 +24,11 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -31,6 +38,7 @@ struct Args {
     std::string model_dir;
     std::string served_model_name;
     int port = 8080;
+    std::string host = "127.0.0.1";
     int context = 4096;
     int threads = 0;
     std::string backend = "cpu";
@@ -50,6 +58,7 @@ Args parse_args(int argc, char** argv) {
         if (key == "--model") args.model_dir = value();
         else if (key == "--served-model-name") args.served_model_name = value();
         else if (key == "--port") args.port = std::stoi(value());
+        else if (key == "--host") args.host = value();
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--threads") args.threads = std::stoi(value());
         else if (key == "--backend") args.backend = value();
@@ -57,7 +66,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--quant") args.quant = value();
         else if (key == "--format") args.format = value();
         else if (key == "--help") {
-            std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--port 8080] [--context 4096] "
+            std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--host 127.0.0.1] [--port 8080] [--context 4096] "
                          "[--threads N] [--backend cpu|cuda] "
                          "[--format auto|safetensors|gguf] [--quant TAG] "
                          "[--served-model-name NAME]\n";
@@ -78,6 +87,21 @@ Args parse_args(int argc, char** argv) {
 bool looks_like_gguf_repo(const std::string& repo) {
     return repo.size() >= 5 &&
         repo.compare(repo.size() - 5, 5, "-GGUF") == 0;
+}
+
+std::filesystem::path executable_directory(const char* argv0) {
+#ifdef _WIN32
+    std::array<wchar_t, 32768> path{};
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length > 0 && length < path.size()) {
+        return std::filesystem::path(std::wstring_view(path.data(), length)).parent_path();
+    }
+#else
+    std::error_code error;
+    const auto executable = std::filesystem::canonical("/proc/self/exe", error);
+    if (!error) return executable.parent_path();
+#endif
+    return std::filesystem::absolute(argv0).parent_path();
 }
 
 } // namespace
@@ -157,21 +181,25 @@ int main(int argc, char** argv) {
         dispatcher.start();
 
         uWS::Loop* loop = uWS::Loop::get();
+        const std::filesystem::path asset_root =
+            executable_directory(argv[0]) / "celeg-serve-assets";
 
         uWS::App app;
         celeg::app::serve::register_health_routes(app);
-        celeg::app::serve::register_docs_routes(app, model_name);
-        celeg::app::serve::register_models_route(app, model_name);
+        celeg::app::serve::register_chat_ui_routes(app, asset_root / "chat");
+        celeg::app::serve::register_docs_routes(app, model_name, asset_root / "docs");
+        celeg::app::serve::register_models_route(
+            app, model_name, static_cast<std::size_t>(args.context), chat_capabilities);
         celeg::app::serve::register_tokenize_route(
             app, tokenizer, chat_template, static_cast<std::size_t>(args.context));
         celeg::app::serve::register_chat_completions_route(
             app, dispatcher, service->requests(), tokenizer, chat_template,
             chat_capabilities,
-            model_name, eos_token_ids, loop);
+            model_name, eos_token_ids, static_cast<std::size_t>(args.context), loop);
 
-        app.listen(args.port, [&](auto* listen_socket) {
+        app.listen(args.host, args.port, [&](auto* listen_socket) {
               if (listen_socket) {
-                  std::cout << "celeg-serve listening on http://127.0.0.1:" << args.port
+                  std::cout << "celeg-serve listening on http://" << args.host << ':' << args.port
                             << " (model=" << model_name << ")" << std::endl;
               } else {
                   std::cerr << "failed to listen on port " << args.port << std::endl;

@@ -40,6 +40,12 @@ public:
     // Drops the watch without releasing the request.
     void unwatch(RequestId id);
 
+    // Stops delivering events for a disconnected client, cancels the request,
+    // and keeps a short-lived internal watch when cancellation still needs to
+    // reach a terminal state. This operation is safe when the request has
+    // already completed and been released.
+    void cancel(RequestId id);
+
 private:
     void run();
     void dispatch_once();

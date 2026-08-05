@@ -142,6 +142,7 @@
           "top_k": {"type": "integer"},
           "max_tokens": {"type": "integer"},
           "stream": {"type": "boolean"},
+          "stream_options": {"$ref": "#/components/schemas/StreamOptions"},
           "seed": {"type": "integer"},
           "tools": {"type": "array", "items": {"$ref": "#/components/schemas/Tool"}},
           "tool_choice": {"oneOf": [{"type": "string"}, {"$ref": "#/components/schemas/ToolChoice"}]},
@@ -175,6 +176,10 @@
           "completion_tokens": {"type": "integer"},
           "total_tokens": {"type": "integer"}
         }
+      },
+      "StreamOptions": {
+        "type": "object",
+        "properties": {"include_usage": {"type": "boolean", "default": false}}
       },
       "ChatCompletionResponse": {
         "type": "object",
@@ -210,7 +215,8 @@
           "object": {"type": "string", "example": "chat.completion.chunk"},
           "created": {"type": "integer"},
           "model": {"type": "string"},
-          "choices": {"type": "array", "items": {"$ref": "#/components/schemas/ChatCompletionChunkChoice"}}
+          "choices": {"type": "array", "items": {"$ref": "#/components/schemas/ChatCompletionChunkChoice"}},
+          "usage": {"$ref": "#/components/schemas/Usage"}
         }
       },
       "ChatContentPart": {
@@ -268,7 +274,22 @@
               "type": "object",
               "properties": {
                 "id": {"type": "string"},
-                "object": {"type": "string", "example": "model"}
+                "object": {"type": "string", "example": "model"},
+                "celeg": {
+                  "type": "object",
+                  "properties": {
+                    "context_window": {"type": "integer"},
+                    "capabilities": {
+                      "type": "object",
+                      "properties": {
+                        "vision": {"type": "boolean"},
+                        "tool_calls": {"type": "boolean"},
+                        "parallel_tool_calls": {"type": "boolean"},
+                        "thinking": {"type": "boolean"}
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -279,7 +300,11 @@
         "properties": {
           "prompt": {"type": "string"},
           "messages": {"type": "array", "items": {"$ref": "#/components/schemas/ChatMessage"}},
-          "add_special_tokens": {"type": "boolean"}
+          "add_special_tokens": {"type": "boolean"},
+          "chat_template_kwargs": {
+            "type": "object",
+            "properties": {"enable_thinking": {"type": "boolean"}}
+          }
         }
       },
       "TokenizeResponse": {

@@ -153,8 +153,9 @@ f4bc7fffa0db4b3ef66b03bf6c94ca948de42b122402a60b3c3cbed8683be85f  ./src/app/serv
 500590d86db0fb6ef709e87c6510ac16d8309cb05b9638b2eeffddaac348fde4  ./src/app/serve/routes/tokenize.hpp
 c6648b26e19ff8df629b04a117a54be832097485f039635d777d3f49b0ca2112  ./src/app/serve/static_assets.cpp
 a6cacf15ff2e98c0e4851da471459a61a342974f67fae24bb1a03d0f210e68e9  ./src/app/serve/static_assets.hpp
+be771e8a4c29b9b4dcdd73532d40b13ebb84d3cf02a5487f3aa93095cfd27da6  ./src/app/serve/routes/chat_ui.cpp
+df14211ead92ad8b30594b65744ebc2296f8f6c773c75655b16f1e22e3c94699  ./src/app/serve/routes/chat_ui.hpp
 2e6b5079cdb925265635d670cb0495050418675d03d4143c0e6590a99ea89c26  ./src/app/serve/static/docs.html
-94ffe226ce3113f4d53572a2e8dd98e8e71e5786417ccbacfa1744958c4d0deb  ./src/app/serve/static/index.html
 d5e49814b01e07514966335134f38ac4ba1ae7ca0c6fa16fff6fb8295358f7a4  ./src/backend/cpu/concurrent.cpp
 40a8d9bb42a49ec3060a748449ed19d900b8b7690cd2f44451db22543fe82d96  ./src/backend/cpu/detail/model_internal.hpp
 836b7b74d0a1805a317d1531086666aab7405ecbfa2b558c17b27575abb218ae  ./src/backend/cpu/kernels/attention.cpp

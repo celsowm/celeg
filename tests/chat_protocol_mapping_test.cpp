@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
+
 namespace {
 
 // Builds a tokenizer whose vocabulary covers exactly the characters used by
@@ -78,6 +79,7 @@ int main() {
     request.top_k = 40;
     request.seed = 42;
     request.chat_template_kwargs = protocol::ChatTemplateKwargsDto{false};
+    request.stream_options = protocol::StreamOptionsDto{true};
 
     const std::string request_json = protocol::to_json(request);
     CELEG_TEST_CHECK(request_json.find("\"stream\"") == std::string::npos);
@@ -92,6 +94,7 @@ int main() {
     CELEG_TEST_CHECK(parsed.seed && *parsed.seed == 42);
     CELEG_TEST_CHECK(parsed.chat_template_kwargs.has_value());
     CELEG_TEST_CHECK(!parsed.chat_template_kwargs->enable_thinking);
+    CELEG_TEST_CHECK(parsed.stream_options && parsed.stream_options->include_usage);
     CELEG_TEST_CHECK(!parsed.stream.has_value());
 
     // Tool requests are validated before reaching the backend and use the
@@ -127,6 +130,16 @@ int main() {
     CELEG_TEST_CHECK(generate_request.generation.top_p == 0.9f);
     CELEG_TEST_CHECK(generate_request.generation.top_k == 40);
     CELEG_TEST_CHECK(generate_request.generation.seed == 42);
+
+    // A small context leaves room for only the newest user turn. The mapper
+    // must trim the older turn while preserving prompt + max_tokens <= ctx.
+    protocol::ChatCompletionRequest sliding_request = request;
+    sliding_request.messages.push_back({"user", std::string("hi")});
+    sliding_request.max_tokens = 1;
+    const serve::GenerateRequest sliding_generate = protocol::to_generate_request(
+        sliding_request, tokenizer, chat_template, {}, eos_token_ids, {}, 23);
+    CELEG_TEST_CHECK(sliding_generate.context_window_trimmed);
+    CELEG_TEST_CHECK(sliding_generate.prompt_tokens.size() + sliding_generate.max_output_tokens <= 23);
 
     // "<|startoftext|><|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n"
     const std::vector<std::int32_t> expected_prompt_tokens = {
@@ -179,6 +192,19 @@ int main() {
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.role.has_value());
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.content.has_value());
     CELEG_TEST_CHECK(final_chunk.choices[0].finish_reason && *final_chunk.choices[0].finish_reason == "stop");
+
+    celeg::serve::ChatGenerationDelta semantic_delta;
+    semantic_delta.text = "hi";
+    const protocol::ChatCompletionChunk semantic_chunk = protocol::to_chat_completion_chunk(
+        "req-2", "lfm2.5-test", 1001, semantic_delta, /*include_role=*/true,
+        /*finish=*/std::nullopt);
+    CELEG_TEST_CHECK(semantic_chunk.created == 1001);
+
+    protocol::ChatCompletionChunk usage_chunk;
+    usage_chunk.usage = protocol::Usage{10, 2, 12};
+    const auto usage_json = protocol::to_json(usage_chunk);
+    CELEG_TEST_CHECK(usage_json.find("\"choices\":[]") != std::string::npos);
+    CELEG_TEST_CHECK(usage_json.find("\"total_tokens\":12") != std::string::npos);
 
     protocol::ChatCompletionRequest image_request;
     image_request.model = "gemma4-test";

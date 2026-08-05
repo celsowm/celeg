@@ -80,6 +80,10 @@ struct ChatTemplateKwargsDto {
     bool enable_thinking = true;
 };
 
+struct StreamOptionsDto {
+    bool include_usage = false;
+};
+
 struct ChatCompletionRequest {
     std::string model;
     std::vector<ChatMessageDto> messages;
@@ -93,6 +97,7 @@ struct ChatCompletionRequest {
     std::optional<std::variant<std::string, ToolChoiceDto>> tool_choice;
     std::optional<bool> parallel_tool_calls;
     std::optional<ChatTemplateKwargsDto> chat_template_kwargs;
+    std::optional<StreamOptionsDto> stream_options;
 };
 
 struct ChatCompletionResponseMessage {
@@ -141,6 +146,30 @@ struct ChatCompletionChunk {
     std::int64_t created = 0;
     std::string model;
     std::vector<ChatCompletionChunkChoice> choices;
+    std::optional<Usage> usage;
+};
+
+struct ModelCapabilitiesDto {
+    bool vision = false;
+    bool tool_calls = false;
+    bool parallel_tool_calls = false;
+    bool thinking = false;
+};
+
+struct ModelCelegMetadataDto {
+    std::size_t context_window = 0;
+    ModelCapabilitiesDto capabilities;
+};
+
+struct ModelDto {
+    std::string id;
+    std::string object = "model";
+    ModelCelegMetadataDto celeg;
+};
+
+struct ModelListDto {
+    std::string object = "list";
+    std::vector<ModelDto> data;
 };
 
 // /tokenize DTOs, modeled after vLLM/SGLang's endpoint of the same name:
@@ -150,6 +179,7 @@ struct TokenizeRequest {
     std::optional<std::string> prompt;
     std::optional<std::vector<ChatMessageDto>> messages;
     std::optional<bool> add_special_tokens;
+    std::optional<ChatTemplateKwargsDto> chat_template_kwargs;
 };
 
 struct TokenizeResponse {

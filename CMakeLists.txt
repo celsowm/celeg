@@ -225,14 +225,29 @@ if(CELEG_ENABLE_SERVE)
         src/app/serve/static_assets.cpp
         src/app/serve/routes/health.cpp
         src/app/serve/routes/models.cpp
+        src/app/serve/routes/chat_ui.cpp
         src/app/serve/routes/docs.cpp
         src/app/serve/routes/tokenize.cpp
         src/app/serve/routes/chat_completions.cpp)
     target_link_libraries(celeg-serve PRIVATE
         celeg_cpu_backend celeg_serve_cpu celeg_serve_core celeg_serve_protocol uwebsockets)
-    target_compile_definitions(celeg-serve PRIVATE
-        CELEG_SWAGGER_UI_DIR="${swaggerui_SOURCE_DIR}/dist"
-        CELEG_SERVE_STATIC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/app/serve/static")
+    add_custom_command(TARGET celeg-serve POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/chat"
+            "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/docs"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/web/chat/dist"
+            "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/chat"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/app/serve/static/docs.html"
+            "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/docs/index.html"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${swaggerui_SOURCE_DIR}/dist/swagger-ui-bundle.js"
+            "${swaggerui_SOURCE_DIR}/dist/swagger-ui-standalone-preset.js"
+            "${swaggerui_SOURCE_DIR}/dist/swagger-ui.css"
+            "$<TARGET_FILE_DIR:celeg-serve>/celeg-serve-assets/docs"
+        COMMENT "Staging celeg-serve web assets")
 endif()
 
 include(CheckLanguage)
@@ -362,6 +377,18 @@ install(TARGETS ${CELEG_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(CELEG_ENABLE_SERVE)
+    install(DIRECTORY web/chat/dist/
+        DESTINATION ${CMAKE_INSTALL_BINDIR}/celeg-serve-assets/chat)
+    install(FILES src/app/serve/static/docs.html
+        DESTINATION ${CMAKE_INSTALL_BINDIR}/celeg-serve-assets/docs
+        RENAME index.html)
+    install(FILES
+        "${swaggerui_SOURCE_DIR}/dist/swagger-ui-bundle.js"
+        "${swaggerui_SOURCE_DIR}/dist/swagger-ui-standalone-preset.js"
+        "${swaggerui_SOURCE_DIR}/dist/swagger-ui.css"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}/celeg-serve-assets/docs)
+endif()
 # Keep the installed surface explicit.  The repository contains implementation
 # headers under celeg/detail, CUDA device helpers under celeg/backend/cuda, and
 # model-loading internals under celeg/model/weights; none of those are consumer

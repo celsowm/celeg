@@ -34,6 +34,7 @@ enum class FinishReason : std::uint8_t {
 struct GenerateRequest {
     std::vector<std::int32_t> prompt_tokens;
     std::string rendered_prompt;
+    bool context_window_trimmed = false;
     std::vector<MultimodalImage> images;
     std::int32_t image_token_id = -1;
     PromptEmbedding prompt_embedding;

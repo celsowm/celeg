@@ -34,6 +34,26 @@ void GenerationDispatcher::unwatch(RequestId id) {
     watchers_.erase(id);
 }
 
+void GenerationDispatcher::cancel(RequestId id) {
+    std::lock_guard<std::mutex> lock(watchers_mutex_);
+
+    // Removing the watcher while holding the same mutex used by
+    // dispatch_once() guarantees that no callback for this request can still
+    // be running when the HTTP response is gone.
+    watchers_.erase(id);
+    if (requests_.cancel(id)) {
+        // Cancellation can be asynchronous for an active request. Keep the
+        // request owned by the dispatcher until its terminal event arrives;
+        // the no-op watcher prevents any access to the disconnected response.
+        watchers_[id] = [](const GenerateEvent&) {};
+    } else {
+        // The request may already be terminal, or may have been released by
+        // dispatch_once() just before the client disconnected. release() is
+        // intentionally harmless in both cases.
+        requests_.release(id);
+    }
+}
+
 void GenerationDispatcher::run() {
     while (running_.load(std::memory_order_relaxed)) {
         dispatch_once();
