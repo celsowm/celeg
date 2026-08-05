@@ -36,7 +36,7 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
     context.storage_generation_value = storage_generation_;
     const uint64_t execution_plan_fingerprint = resources_.plan_.fingerprint();
     const uint64_t compiled_program_id = static_cast<uint64_t>(
-        std::hash<std::string>{}(resources_.program_.identity));
+        std::hash<std::string>{}(resources_.program_.semantic_fingerprint));
     const int device_ordinal = resources_.plan_.device().device_ordinal;
     const CudaModelOptions& options = resources_.options_;
     context.compatibility_key = PackedCompatibilityKey{
