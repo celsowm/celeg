@@ -85,6 +85,18 @@ int main() {
         if (!metadata_cache.changed(replaced)) {
             throw std::runtime_error("replaced backing storage was not detected");
         }
+
+        celeg::PackedCompatibilityKey compatibility;
+        compatibility.execution_plan_fingerprint = 11;
+        compatibility.expert_residency_fingerprint = 17;
+        const auto same_compatibility = compatibility;
+        if (!(compatibility == same_compatibility)) {
+            throw std::runtime_error("packed compatibility key is not value comparable");
+        }
+        compatibility.expert_residency_fingerprint++;
+        if (compatibility == same_compatibility) {
+            throw std::runtime_error("packed compatibility key ignored residency identity");
+        }
         std::cout << "packed_workspace_test: ok\n";
         return 0;
     } catch (const std::exception& error) {

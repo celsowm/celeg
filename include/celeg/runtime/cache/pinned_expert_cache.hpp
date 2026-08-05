@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/runtime/cache/expert_policy.hpp"
+#include "celeg/runtime/cache/expert_source.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -67,7 +68,7 @@ private:
 // Backend-neutral host staging storage. The allocator is injected so CUDA
 // can provide pinned/mapped memory, while ordinary tests and CPU-linked
 // builds use malloc. Payload interpretation stays in the source adapter.
-class HostExpertCache {
+class HostExpertCache final : public IHostExpertCache {
 public:
     using HostAllocateFn = void* (*)(std::size_t);
     using HostDeallocateFn = void (*)(void*);
@@ -111,6 +112,21 @@ public:
     double total_wait_time_ms() const {
         std::lock_guard lock(mutex_);
         return total_wait_time_ms_;
+    }
+
+    std::size_t resident_bytes() const override {
+        std::lock_guard lock(mutex_);
+        std::size_t resident = 0;
+        for (const CacheSlot& slot : slots_) {
+            if (slot.layer >= 0 && !slot.loading) resident += bytes_per_expert_;
+        }
+        return resident;
+    }
+
+    ExpertCacheMetrics metrics() const override {
+        std::lock_guard lock(mutex_);
+        return {hits_, misses_, coalesced_waits_, evictions_, bytes_read_,
+                total_wait_time_ms_};
     }
 
 private:
