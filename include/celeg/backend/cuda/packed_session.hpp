@@ -123,12 +123,6 @@ struct PackedSessionContext {
     bool use_segmented_attention(int host_position) const {
         return segmented_attention(owner, host_position);
     }
-    void ensure_moe_experts_resident_packed(
-        int layer, const int* sel_dev, int rows, cudaStream_t stream,
-        const float* route_scores_dev) const {
-        ensure_expert_residency(owner, layer, sel_dev, rows, stream,
-                                route_scores_dev);
-    }
     IWeightLayout& weight_layout() const { return *weight_layout_state; }
     const LinearWeight* embedding() const { return embedding_weight; }
     const LinearWeight* logits_weight() const { return logits_weight_value; }

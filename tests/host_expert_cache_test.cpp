@@ -1,4 +1,4 @@
-#include "celeg/runtime/cache/pinned_expert_cache.hpp"
+#include "celeg/runtime/cache/host_expert_cache.hpp"
 #include "support/assertions.hpp"
 
 #include <iostream>
@@ -284,10 +284,10 @@ int main(int argc, char** argv) {
         if (selected == "failure" || selected == "all") test_loader_failure();
         if (selected == "propagation" || selected == "all") test_failure_propagation_to_waiters();
         if (selected == "generation" || selected == "all") test_slot_protection_and_generation();
-        std::cout << "pinned_expert_cache_test: ok\n";
+        std::cout << "host_expert_cache_test: ok\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "pinned_expert_cache_test: " << error.what() << '\n';
+        std::cerr << "host_expert_cache_test: " << error.what() << '\n';
         return 1;
     }
 }

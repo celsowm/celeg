@@ -410,7 +410,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/runtime/cache/kv_page_allocator.hpp
     include/celeg/runtime/cache/page_layout.hpp
     include/celeg/runtime/cache/page_lease.hpp
-    include/celeg/runtime/cache/pinned_expert_cache.hpp
+    include/celeg/runtime/cache/host_expert_cache.hpp
     include/celeg/runtime/cache/prefix_cache_index.hpp
     include/celeg/runtime/cache/prefix_cache.hpp
     include/celeg/runtime/cache/prefix_radix.hpp
@@ -632,10 +632,10 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     target_include_directories(expert_offload_test PRIVATE include)
     add_test(NAME expert_offload_test COMMAND expert_offload_test)
 
-    add_executable(pinned_expert_cache_test tests/pinned_expert_cache_test.cpp)
-    target_link_libraries(pinned_expert_cache_test PRIVATE celeg_runtime)
-    target_include_directories(pinned_expert_cache_test PRIVATE include)
-    add_test(NAME pinned_expert_cache_test COMMAND pinned_expert_cache_test)
+    add_executable(host_expert_cache_test tests/host_expert_cache_test.cpp)
+    target_link_libraries(host_expert_cache_test PRIVATE celeg_runtime)
+    target_include_directories(host_expert_cache_test PRIVATE include)
+    add_test(NAME host_expert_cache_test COMMAND host_expert_cache_test)
     add_executable(expert_policy_test tests/expert_policy_test.cpp)
     target_include_directories(expert_policy_test PRIVATE include tests)
     add_test(NAME expert_policy_test COMMAND expert_policy_test)

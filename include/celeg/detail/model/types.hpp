@@ -15,7 +15,7 @@
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
-#include "celeg/runtime/cache/pinned_expert_cache.hpp"
+#include "celeg/runtime/cache/host_expert_cache.hpp"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>

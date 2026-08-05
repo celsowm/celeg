@@ -81,7 +81,7 @@ a574d5d65125e8d7dbef6ceba4e85d39119d41fcee3c1ed13b1a33e382715523  ./include/cele
 1a32c869cec67b0968983ed34e4c76afe6e9be582fa4846a6672dc3634a7e268  ./include/celeg/runtime/cache/kv_page_allocator.hpp
 64d48caed291cc6f4c1b3bd3ad22761e8dcf38a4eedba8e86be634333c32a3e3  ./include/celeg/runtime/cache/page_layout.hpp
 ff933844391d3ba531d2d6d9389767ee11bad5763c3b0318fee4ecbcef32b4c4  ./include/celeg/runtime/cache/page_lease.hpp
-9942d65836bffee23d37f7977e3f7029ca9e8305800ba8339c3ce54134c58ba4  ./include/celeg/runtime/cache/pinned_expert_cache.hpp
+ca52b99f9871a5896083792ded3e4d35c9a867781e2212ea8e83b4a5f5c4ba94  ./include/celeg/runtime/cache/host_expert_cache.hpp
 1ec4be71b895259aad68e358cb08b3227141acea59b36f6651f16a59a6c96c81  ./include/celeg/runtime/cache/prefix_cache_index.hpp
 2b707378f0ba825b49db0e19d9ac8d8891b6ba0614d2ca883187261a19e8be3b  ./include/celeg/runtime/cache/prefix_cache.hpp
 6e6eed754981488af2cebe5c8a6a1404061347c86f94a4459bd6ddf02e885266  ./include/celeg/runtime/cache/prefix_radix.hpp
@@ -258,7 +258,7 @@ c07df7ff90731d3e5d260126b231b3afe66c0e02360429d5e0c0ede0a122e570  ./src/checkpoi
 89f69c9e917be65b4e41cf5cab1dc270a9fab3d30bcaa627cbfed15e0e23b871  ./src/model/reference.cpp
 d498bb18e88087ee99bdb368d81112fcde6f0b3647246878f703af3135774afb  ./src/model/weights/quantization.cpp
 985b4ad278699e57de703d41b639d90b61ddb706c10e03b5d7e247d3606c9830  ./src/model/weights/roles.cpp
-30606f8175bfbbe00512acab2648e8ef5b2e9b5b02dfa69992f345b79f5b5d5b  ./src/runtime/cache/pinned_expert_cache.cpp
+7f88d31a6e4618ff2eb455227d42cb96bb856b79c525b02772fb0a4913b88c09  ./src/runtime/cache/host_expert_cache.cpp
 9fb7e5e33b58af8d59320e328964f2e23af5a11ed5947cdd18fdc0af9b8a7db9  ./src/runtime/cache/prefix_cache_index.cpp
 4a234158e5895d7c3f66de9153a11f0cea5d1d54eac32c2805cfc24a0a821ba3  ./src/runtime/cache/prefix_cache.cpp
 b19915e6c37b5c7cb35b074c1b655118f0fdb06afc3d6d7e3dd69fe90700b316  ./src/runtime/cache/prefix_radix.cpp
@@ -320,7 +320,7 @@ ecfd31c9a464281a007c39f0cc4df931bda12992bb2eb7afa6f4d3186d63e060  ./tests/json_t
 f64958b9c47cd03ab518e9113c40c8bd436dc438c2901dc26f468cb054f1e907  ./tests/moe_router_test.cpp
 24fc3f4dfc195166af71009ee09663dd63ca747c94d747006bb93df9a1eb9068  ./tests/numerical_compare_test.cpp
 8e460ae1320b7045579e0c5ab6d5c73c62439d07df17c1f46d9b01f8d2bf049c  ./tests/page_lease_test.cpp
-026055163ab2b216662d3abe31511368afc5b5618da3508235fed2fac10a3d21  ./tests/pinned_expert_cache_test.cpp
+38b2460de5a729ba8058b92609c1183bc686ec222a83bb028a55e3fd37cd882d  ./tests/host_expert_cache_test.cpp
 9d94b678a13aa51216ef18b77ebf64a13b487ca0691658ae3d6cc95be711aee3  ./tests/policy_test.cpp
 b36cbead13538b36abbbafce100aaca8c01cc1d5dccf9042391784c36010b19b  ./tests/prefix_cache_test.cpp
 9cb1fedcaafdecd51fdfc2b6107304cb54ed4ce10cf15d45ecaf1d6cffa11ed8  ./tests/prefix_radix_test.cpp

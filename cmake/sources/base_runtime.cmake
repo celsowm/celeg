@@ -41,7 +41,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/reference.cpp
     src/text/tokenizer.cpp
     src/text/chat_template.cpp
-    src/runtime/cache/pinned_expert_cache.cpp
+    src/runtime/cache/host_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp
     src/runtime/cache/prefix_cache_index.cpp
     src/runtime/cache/prefix_cache.cpp

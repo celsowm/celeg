@@ -2,7 +2,7 @@
 
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/backend/cuda/moe/offload.hpp"
-#include "celeg/runtime/cache/pinned_expert_cache.hpp"
+#include "celeg/runtime/cache/host_expert_cache.hpp"
 
 #include <cstddef>
 #include <cstdint>
