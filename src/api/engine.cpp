@@ -14,9 +14,8 @@ celeg_engine* celeg_engine_create(const char* path,
         celeg::api::require_size(options->struct_size, sizeof(*options), "engine options");
         celeg::api::require_size(options->model.struct_size,
                                  sizeof(options->model), "model options");
-        const auto runtime = celeg::create_builtin_runtime_context();
         auto result = std::make_unique<celeg_engine>();
-        result->service = celeg::api::create_service_bundle(path, *options, runtime);
+        result->service = celeg::api::create_service_bundle(path, *options);
         return result.release();
     } catch (const std::exception& error) {
         celeg::api::global_error = error.what();

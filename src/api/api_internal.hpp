@@ -73,8 +73,7 @@ celeg::CpuModelOptions cpu_options(const celeg_engine_model_options& source);
 celeg::CpuConcurrentEngineOptions cpu_engine_options(
     const celeg_engine_options& source);
 std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
-    const char* path, const celeg_engine_options& options,
-    std::shared_ptr<const celeg::RuntimeContext> runtime);
+    const char* path, const celeg_engine_options& options);
 celeg_request_status status(celeg::serve::RequestStatus source);
 
 #ifdef CELEG_API_WITH_CUDA

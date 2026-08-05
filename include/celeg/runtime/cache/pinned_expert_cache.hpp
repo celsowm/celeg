@@ -20,12 +20,12 @@
 
 namespace celeg {
 
-class PinnedExpertCache;
+class HostExpertCache;
 
 class ExpertHostLease {
 public:
     ExpertHostLease() = default;
-    ExpertHostLease(PinnedExpertCache* cache, int slot_idx);
+    ExpertHostLease(HostExpertCache* cache, int slot_idx);
     ~ExpertHostLease();
 
     ExpertHostLease(const ExpertHostLease&) = delete;
@@ -33,8 +33,7 @@ public:
     ExpertHostLease(ExpertHostLease&& other) noexcept;
     ExpertHostLease& operator=(ExpertHostLease&& other) noexcept;
 
-    const std::byte* gate_up() const;
-    const std::byte* down() const;
+    const std::byte* payload() const;
     int slot_index() const { return slot_idx_; }
     int layer() const { return layer_; }
     int expert() const { return expert_; }
@@ -42,7 +41,7 @@ public:
     void release();
 
 private:
-    PinnedExpertCache* cache_ = nullptr;
+    HostExpertCache* cache_ = nullptr;
     int slot_idx_ = -1;
     int layer_ = -1;
     int expert_ = -1;
@@ -68,21 +67,20 @@ private:
 // Backend-neutral host staging storage. The allocator is injected so CUDA
 // can provide pinned/mapped memory, while ordinary tests and CPU-linked
 // builds use malloc. Payload interpretation stays in the source adapter.
-class PinnedExpertCache {
+class HostExpertCache {
 public:
     using HostAllocateFn = void* (*)(std::size_t);
     using HostDeallocateFn = void (*)(void*);
 
-    PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
-                      std::size_t gate_up_bytes, std::size_t down_bytes,
+    HostExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
                       HostAllocateFn allocate = nullptr,
                       HostDeallocateFn deallocate = nullptr);
-    ~PinnedExpertCache();
+    ~HostExpertCache();
 
-    PinnedExpertCache(const PinnedExpertCache&) = delete;
-    PinnedExpertCache& operator=(const PinnedExpertCache&) = delete;
+    HostExpertCache(const HostExpertCache&) = delete;
+    HostExpertCache& operator=(const HostExpertCache&) = delete;
 
-    using LoaderFn = std::function<void(std::span<std::byte> gate_up_dest, std::span<std::byte> down_dest)>;
+    using LoaderFn = std::function<void(std::span<std::byte> payload)>;
 
     // Acquires a lease. If the expert is missing, invokes loader_fn while other
     // concurrent waiters coalesce and wait on the same load.
@@ -120,8 +118,6 @@ private:
 
     mutable std::mutex mutex_;
     std::size_t bytes_per_expert_ = 0;
-    std::size_t gate_up_bytes_ = 0;
-    std::size_t down_bytes_ = 0;
     int capacity_ = 0;
 
     void* arena_ = nullptr;
@@ -130,8 +126,7 @@ private:
     struct CacheSlot {
         int layer = -1;
         int expert = -1;
-        std::byte* gate_up_ptr = nullptr;
-        std::byte* down_ptr = nullptr;
+        std::byte* payload_ptr = nullptr;
         int ref_count = 0;
         uint64_t last_used = 0;
         bool loading = false;

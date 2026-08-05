@@ -98,6 +98,7 @@ struct CudaWorkspace {
     std::vector<float> prefetch_scores_;
     std::vector<int> cold_expert_host_;
     std::vector<float> cold_scores_host_;
+    ExpertResidencyWorkspace residency_workspace_;
 };
 
 } // namespace celeg

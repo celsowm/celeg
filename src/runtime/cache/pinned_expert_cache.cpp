@@ -13,7 +13,7 @@ void* default_host_allocate(std::size_t bytes) { return std::malloc(bytes); }
 void default_host_deallocate(void* pointer) { std::free(pointer); }
 } // namespace
 
-ExpertHostLease::ExpertHostLease(PinnedExpertCache* cache, int slot_idx)
+ExpertHostLease::ExpertHostLease(HostExpertCache* cache, int slot_idx)
     : cache_(cache), slot_idx_(slot_idx) {
     if (cache_ && slot_idx_ >= 0) {
         layer_ = cache_->slots_[slot_idx_].layer;
@@ -51,14 +51,9 @@ ExpertHostLease& ExpertHostLease::operator=(ExpertHostLease&& other) noexcept {
     return *this;
 }
 
-const std::byte* ExpertHostLease::gate_up() const {
+const std::byte* ExpertHostLease::payload() const {
     if (!cache_ || slot_idx_ < 0) return nullptr;
-    return cache_->slots_[slot_idx_].gate_up_ptr;
-}
-
-const std::byte* ExpertHostLease::down() const {
-    if (!cache_ || slot_idx_ < 0) return nullptr;
-    return cache_->slots_[slot_idx_].down_ptr;
+    return cache_->slots_[slot_idx_].payload_ptr;
 }
 
 void ExpertHostLease::release() {
@@ -71,14 +66,11 @@ void ExpertHostLease::release() {
     }
 }
 
-// PinnedExpertCache implementation
+// HostExpertCache implementation
 
-PinnedExpertCache::PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
-                                     std::size_t gate_up_bytes, std::size_t down_bytes,
-                                     HostAllocateFn allocate, HostDeallocateFn deallocate)
+HostExpertCache::HostExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
+                                 HostAllocateFn allocate, HostDeallocateFn deallocate)
     : bytes_per_expert_(bytes_per_expert),
-      gate_up_bytes_(gate_up_bytes),
-      down_bytes_(down_bytes),
       deallocate_(deallocate ? deallocate : default_host_deallocate) {
     if (bytes_per_expert == 0 || budget_bytes < bytes_per_expert) {
         // Fallback to at least 1 expert slot capacity
@@ -95,15 +87,14 @@ PinnedExpertCache::PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes
     arena_ = (allocate ? allocate : default_host_allocate)(arena_bytes);
 
     if (!arena_) {
-        throw std::runtime_error("PinnedExpertCache: failed to allocate arena of size " +
+        throw std::runtime_error("HostExpertCache: failed to allocate arena of size " +
                                  std::to_string(arena_bytes));
     }
 
     std::byte* base = static_cast<std::byte*>(arena_);
     slots_.resize(capacity_);
     for (int i = 0; i < capacity_; ++i) {
-        slots_[i].gate_up_ptr = base + i * bytes_per_expert_;
-        slots_[i].down_ptr = slots_[i].gate_up_ptr + gate_up_bytes_;
+        slots_[i].payload_ptr = base + i * bytes_per_expert_;
         slots_[i].layer = -1;
         slots_[i].expert = -1;
         slots_[i].ref_count = 0;
@@ -112,18 +103,18 @@ PinnedExpertCache::PinnedExpertCache(std::size_t budget_bytes, std::size_t bytes
     }
 }
 
-PinnedExpertCache::~PinnedExpertCache() {
+HostExpertCache::~HostExpertCache() {
     if (arena_) {
         deallocate_(arena_);
         arena_ = nullptr;
     }
 }
 
-uint64_t PinnedExpertCache::expert_key(int layer, int expert) {
+uint64_t HostExpertCache::expert_key(int layer, int expert) {
     return ExpertKey{layer, expert}.packed();
 }
 
-void PinnedExpertCache::decay_heat_if_needed() {
+void HostExpertCache::decay_heat_if_needed() {
     if (tick_ - last_decay_tick_ < kHeatDecayInterval) return;
 
     const uint64_t intervals = (tick_ - last_decay_tick_) / kHeatDecayInterval;
@@ -139,19 +130,19 @@ void PinnedExpertCache::decay_heat_if_needed() {
     last_decay_tick_ += intervals * kHeatDecayInterval;
 }
 
-void PinnedExpertCache::record_access(int layer, int expert) {
+void HostExpertCache::record_access(int layer, int expert) {
     decay_heat_if_needed();
     HeatEntry& entry = heat_[expert_key(layer, expert)];
     entry.heat += 1.0;
     entry.last_touch = tick_;
 }
 
-double PinnedExpertCache::current_heat(int layer, int expert) const {
+double HostExpertCache::current_heat(int layer, int expert) const {
     const auto it = heat_.find(expert_key(layer, expert));
     return it == heat_.end() ? 0.0 : it->second.heat;
 }
 
-int PinnedExpertCache::find_slot(int layer, int expert) {
+int HostExpertCache::find_slot(int layer, int expert) {
     for (int i = 0; i < capacity_; ++i) {
         if (slots_[i].layer == layer && slots_[i].expert == expert) {
             return i;
@@ -160,7 +151,7 @@ int PinnedExpertCache::find_slot(int layer, int expert) {
     return -1;
 }
 
-int PinnedExpertCache::choose_victim_slot() {
+int HostExpertCache::choose_victim_slot() {
     // 1. Prefer empty slots.
     for (int i = 0; i < capacity_; ++i) {
         if (slots_[i].layer == -1 && slots_[i].ref_count == 0 && !slots_[i].loading) {
@@ -191,7 +182,7 @@ int PinnedExpertCache::choose_victim_slot() {
     return victim;
 }
 
-ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn& loader_fn) {
+ExpertHostLease HostExpertCache::acquire(int layer, int expert, const LoaderFn& loader_fn) {
     auto start_time = std::chrono::high_resolution_clock::now();
     int slot_idx = -1;
 
@@ -236,7 +227,7 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
                     if (slots_[slot_idx].ref_count > 0) {
                         slots_[slot_idx].ref_count--;
                     }
-                    throw std::runtime_error("PinnedExpertCache: race condition detected, slot content changed during wait");
+                    throw std::runtime_error("HostExpertCache: race condition detected, slot content changed during wait");
                 }
 
                 return ExpertHostLease(this, slot_idx);
@@ -251,7 +242,7 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
         misses_++;
         slot_idx = choose_victim_slot();
         if (slot_idx < 0) {
-            throw std::runtime_error("PinnedExpertCache: out of free slots (all leased/loading)");
+            throw std::runtime_error("HostExpertCache: out of free slots (all leased/loading)");
         }
 
         // Evict
@@ -274,13 +265,12 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
 
     // Perform disk load outside the global lock!
     try {
-        std::span<std::byte> gate_up_dest(slots_[slot_idx].gate_up_ptr, gate_up_bytes_);
-        std::span<std::byte> down_dest(slots_[slot_idx].down_ptr, down_bytes_);
+        std::span<std::byte> payload_dest(slots_[slot_idx].payload_ptr, bytes_per_expert_);
 
-        loader_fn(gate_up_dest, down_dest);
+        loader_fn(payload_dest);
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            bytes_read_ += gate_up_bytes_ + down_bytes_;
+            bytes_read_ += bytes_per_expert_;
         }
     } catch (...) {
         // Rollback state under lock
@@ -319,7 +309,7 @@ ExpertHostLease PinnedExpertCache::acquire(int layer, int expert, const LoaderFn
     return ExpertHostLease(this, slot_idx);
 }
 
-void PinnedExpertCache::release_slot(int slot_idx) {
+void HostExpertCache::release_slot(int slot_idx) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (slot_idx >= 0 && slot_idx < capacity_) {
         slots_[slot_idx].ref_count--;

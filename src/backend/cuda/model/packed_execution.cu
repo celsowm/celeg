@@ -60,35 +60,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
     static bool options_compatible(const PackedSessionContext& left,
                                    const PackedSessionContext& right,
                                    std::string* reason) {
-            const CudaModelOptions& a = left.options();
-            const CudaModelOptions& b = right.options();
-        if (left.weights().get() != right.weights().get()) {
-            if (reason) *reason = "sessions do not share the same device weights";
-            return false;
-        }
-        if (left.execution_plan_fingerprint != right.execution_plan_fingerprint ||
-            left.compiled_program_id != right.compiled_program_id ||
-            left.device_ordinal != right.device_ordinal) {
-            if (reason) *reason = "sessions use incompatible compiled programs or devices";
-            return false;
-        }
-        if (left.max_context() != right.max_context() ||
-            a.weight_mode != b.weight_mode ||
-            a.kv_cache_mode != b.kv_cache_mode ||
-            a.fast_attention != b.fast_attention ||
-            a.fused_projections != b.fused_projections ||
-            a.fused_residuals != b.fused_residuals ||
-            a.cuda_graph != b.cuda_graph ||
-            a.gemm_backend != b.gemm_backend ||
-            a.lt_workspace_bytes != b.lt_workspace_bytes ||
-            a.lt_heuristics != b.lt_heuristics ||
-            a.lt_autotune != b.lt_autotune ||
-            a.attention_mode != b.attention_mode ||
-            a.attention_chunk_tokens != b.attention_chunk_tokens ||
-            a.attention_auto_threshold != b.attention_auto_threshold ||
-            a.allocate_local_kv_cache != b.allocate_local_kv_cache ||
-            a.expert_offload.enabled() != b.expert_offload.enabled()) {
-            if (reason) *reason = "sessions use incompatible model options";
+        if (!(left.compatibility_key == right.compatibility_key)) {
+            if (reason) *reason = "sessions use incompatible packed execution keys";
             return false;
         }
         return true;
@@ -135,8 +108,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             models, maximum_batch, PackedOperation::Decode);
         if (!common) throw std::invalid_argument(common.reason);
         const PackedSessionContext& reference = models.front();
-        if (reference.execution_plan_fingerprint != plan_.fingerprint() ||
-            reference.device_ordinal != plan_.device().device_ordinal) {
+        if (reference.compatibility_key.execution_plan_fingerprint != plan_.fingerprint() ||
+            reference.compatibility_key.device_ordinal != plan_.device().device_ordinal) {
             throw std::invalid_argument(
                 "packed session plan does not match executor device policy");
         }
@@ -182,8 +155,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             throw std::invalid_argument("null packed session");
         }
         const PackedSessionContext& reference = models.front();
-        if (reference.execution_plan_fingerprint != plan_.fingerprint() ||
-            reference.device_ordinal != plan_.device().device_ordinal) {
+        if (reference.compatibility_key.execution_plan_fingerprint != plan_.fingerprint() ||
+            reference.compatibility_key.device_ordinal != plan_.device().device_ordinal) {
             throw std::invalid_argument(
                 "packed session plan does not match executor device policy");
         }

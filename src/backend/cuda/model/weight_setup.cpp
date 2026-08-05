@@ -164,13 +164,11 @@ void CudaCompiledModel::load_checkpoint_weights(
         workspace_.expert_transfer_stream_ = std::make_unique<CudaStream>();
 
         resources_.weights_->expert_offload_plan = workspace_.expert_offload_plan_;
-        if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->pinned_expert_cache) {
+        if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->host_expert_cache) {
             size_t bpe = bytes_per_expert_bf16(resources_.shape_);
-            size_t gu_bytes = 2 * resources_.shape_.moe_intermediate * resources_.shape_.hidden * sizeof(__nv_bfloat16);
-            size_t dn_bytes = resources_.shape_.hidden * resources_.shape_.moe_intermediate * sizeof(__nv_bfloat16);
-            resources_.weights_->pinned_expert_cache = std::make_unique<PinnedExpertCache>(
+            resources_.weights_->host_expert_cache = std::make_unique<HostExpertCache>(
                 resources_.options_.expert_offload.host_expert_cache_bytes,
-                bpe, gu_bytes, dn_bytes,
+                bpe,
                 allocate_pinned_host, deallocate_pinned_host);
         }
         if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->expert_io_manager) {
@@ -313,19 +311,23 @@ void CudaCompiledModel::load_checkpoint_weights(
                     if (workspace_.expert_offload_plan_.experts_per_layer > 0) {
                         for (int s = 0; s < workspace_.expert_offload_plan_.experts_per_layer; ++s) {
                             const ExpertLocation& loc = catalog[static_cast<size_t>(s)];
-                            ExpertHostLease lease = resources_.weights_->pinned_expert_cache->acquire(i, s, [&](std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) {
+                            ExpertHostLease lease = resources_.weights_->host_expert_cache->acquire(i, s, [&](std::span<std::byte> payload) {
+                                const size_t gu_bytes = 2 * resources_.shape_.moe_intermediate * resources_.shape_.hidden * sizeof(__nv_bfloat16);
                                 if (resources_.weights_->expert_sidecar) {
-                                    resources_.weights_->expert_sidecar->read_expert(i, s, gu_dest, dn_dest);
+                                    resources_.weights_->expert_sidecar->read_expert(
+                                        i, s, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
                                 } else {
                                     const auto& reader =
                                         require_random_access_tensor_reader(repo);
-                                    reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                                    reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                                    reader.read(loc.w2, dn_dest);
+                                    reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
+                                    reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
+                                    reader.read(loc.w2, payload.subspan(gu_bytes));
                                 }
                             });
-                            controller->cache->promote(s, s, reinterpret_cast<const __nv_bfloat16*>(lease.gate_up()),
-                                           reinterpret_cast<const __nv_bfloat16*>(lease.down()),
+                            controller->cache->promote(
+                                           s, s,
+                                           reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
+                                           reinterpret_cast<const __nv_bfloat16*>(lease.payload() + loc.w1.bytes + loc.w3.bytes),
                                            controller->transfer_stream->get());
                             auto ev = std::make_unique<CudaEvent>();
                             ev->record(controller->transfer_stream->get());

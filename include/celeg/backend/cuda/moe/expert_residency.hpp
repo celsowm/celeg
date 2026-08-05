@@ -5,9 +5,66 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace celeg {
+
+struct SharedModelWeights;
+
+// Scratch and completion objects are owned by one compiled-model workspace.
+// Keeping them together makes the residency transaction a typed operation
+// instead of a parameter list that can silently get out of sync.
+struct ExpertResidencyWorkspace {
+    CudaEvent* router_done = nullptr;
+    CudaEvent* ffn_done = nullptr;
+    CudaEvent* promote_done = nullptr;
+    CudaEvent* prefetch_done = nullptr;
+    std::vector<int>* cold_experts_host = nullptr;
+    std::vector<float>* cold_scores_host = nullptr;
+    std::vector<int>* prefetch_indices = nullptr;
+    std::vector<int>* prefetch_ranked = nullptr;
+    std::vector<float>* prefetch_scores = nullptr;
+
+    void validate() const {
+        if (!router_done || !ffn_done || !promote_done || !prefetch_done ||
+            !cold_experts_host || !cold_scores_host || !prefetch_indices ||
+            !prefetch_ranked || !prefetch_scores) {
+            throw std::invalid_argument("invalid expert residency workspace");
+        }
+    }
+};
+
+struct ExpertResidencyRequest {
+    int layer = -1;
+    const int* selected_device = nullptr;
+    int rows = 0;
+    int experts_per_token = 0;
+    int expert_count = 0;
+    cudaStream_t compute_stream = nullptr;
+    const float* route_scores_device = nullptr;
+    ExpertResidencyWorkspace* workspace = nullptr;
+
+    void validate() const {
+        if (layer < 0 || !selected_device || rows <= 0 ||
+            experts_per_token <= 0 || expert_count <= 0 || !compute_stream ||
+            !workspace) {
+            throw std::invalid_argument("invalid expert residency request");
+        }
+        workspace->validate();
+    }
+};
+
+class CudaExpertResidencyCoordinator {
+public:
+    explicit CudaExpertResidencyCoordinator(SharedModelWeights& weights)
+        : weights_(&weights) {}
+
+    void ensure(ExpertResidencyRequest request);
+
+private:
+    SharedModelWeights* weights_ = nullptr;
+};
 
 class HostExpertStore {
 public:
@@ -69,6 +126,11 @@ public:
 
     void touch(int expert);
     void touch(int expert, float score);
+
+    // Admission and active-batch protection are separate operations. The
+    // residency coordinator calls this only after the router's active set is
+    // known; direct cache users can admit an entry without pinning it forever.
+    void pin_active(int expert, float score = -1.0e30f);
 
     void record_hit() { ++hits_; }
     void record_miss() { ++misses_; }

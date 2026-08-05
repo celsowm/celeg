@@ -70,6 +70,7 @@ public:
     RuntimeBuilder& add_backend_factory(std::unique_ptr<IBackendFactory> factory);
     RuntimeBuilder& add_vision_provider(std::unique_ptr<IVisionProviderFactory> provider);
     RuntimeBuilder& add_module(std::unique_ptr<IRuntimeModule> module);
+    std::shared_ptr<const RuntimeContext> build_shared();
 
     // Registration-only catalog views used by RuntimeModule implementations.
     // They are invalid after build() and are deliberately not exposed by

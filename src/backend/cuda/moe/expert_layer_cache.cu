@@ -459,22 +459,21 @@ void ExpertLayerCache::touch(int expert, float score) {
     }
 }
 
+void ExpertLayerCache::pin_active(int expert, float score) {
+    touch(expert, score);
+}
+
 bool ExpertLayerCache::ensure_resident(int expert, cudaStream_t stream,
                                        float score) {
     if (expert < 0 || expert >= num_experts_) {
         throw std::invalid_argument("ensure_resident: expert out of range");
     }
     if (resident(expert)) {
-        touch(expert, score);
         return false;
-    }
-    if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
-        touch(expert, score);
     }
     const int slot = choose_victim(false);
     if (slot < 0) return false;
     promote(expert, slot, stream, score);
-    slots_[static_cast<size_t>(slot)].batch_pinned = true;
     return true;
 }
 
@@ -486,16 +485,11 @@ bool ExpertLayerCache::ensure_resident(int expert,
         throw std::invalid_argument("ensure_resident: expert out of range");
     }
     if (resident(expert)) {
-        touch(expert, score);
         return false;
-    }
-    if (policy_ == ExpertCachePolicy::LayerLocalLfuLru) {
-        touch(expert, score);
     }
     const int slot = choose_victim(false);
     if (slot < 0) return false;
     promote(expert, slot, gate_up_src, down_src, stream, score);
-    slots_[static_cast<size_t>(slot)].batch_pinned = true;
     return true;
 }
 

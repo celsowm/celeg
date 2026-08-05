@@ -10,19 +10,17 @@
 #include <cstring>
 
 using celeg::ExpertHostLease;
-using celeg::PinnedExpertCache;
+using celeg::HostExpertCache;
 
 void test_basic_hits_misses() {
     // 3 slots (each 10 bytes)
-    PinnedExpertCache cache(30, 10, 5, 5);
+    HostExpertCache cache(30, 10);
 
     int load_count = 0;
-    auto loader = [&](std::span<std::byte> gu, std::span<std::byte> dn) {
+    auto loader = [&](std::span<std::byte> payload) {
         load_count++;
-        CELEG_TEST_CHECK(gu.size() == 5);
-        CELEG_TEST_CHECK(dn.size() == 5);
-        std::memset(gu.data(), 1, 5);
-        std::memset(dn.data(), 2, 5);
+        CELEG_TEST_CHECK(payload.size() == 10);
+        std::memset(payload.data(), 1, payload.size());
     };
 
     // Miss 1
@@ -49,9 +47,9 @@ void test_basic_hits_misses() {
 
 void test_eviction_and_lease_protection() {
     // 2 slots
-    PinnedExpertCache cache(20, 10, 5, 5);
+    HostExpertCache cache(20, 10);
 
-    auto loader = [](std::span<std::byte>, std::span<std::byte>) {};
+    auto loader = [](std::span<std::byte>) {};
 
     ExpertHostLease lease1 = cache.acquire(0, 1, loader);
     ExpertHostLease lease2 = cache.acquire(0, 2, loader);
@@ -77,9 +75,9 @@ void test_eviction_and_lease_protection() {
 void test_frequency_aware_eviction() {
     // Two slots: expert 1 becomes hot, expert 2 is only touched once. Even
     // though expert 2 is more recent, admitting expert 3 must evict expert 2.
-    PinnedExpertCache cache(20, 10, 5, 5);
+    HostExpertCache cache(20, 10);
     int load_count = 0;
-    auto loader = [&](std::span<std::byte>, std::span<std::byte>) {
+    auto loader = [&](std::span<std::byte>) {
         load_count++;
     };
 
@@ -106,11 +104,11 @@ void test_frequency_aware_eviction() {
 }
 
 void test_coalescing_and_concurrency() {
-    PinnedExpertCache cache(20, 10, 5, 5);
+    HostExpertCache cache(20, 10);
     std::atomic<int> load_starts{0};
     std::atomic<int> load_completes{0};
 
-    auto slow_loader = [&](std::span<std::byte>, std::span<std::byte>) {
+    auto slow_loader = [&](std::span<std::byte>) {
         load_starts++;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         load_completes++;
@@ -150,8 +148,8 @@ void test_coalescing_and_concurrency() {
 }
 
 void test_loader_failure() {
-    PinnedExpertCache cache(10, 10, 5, 5);
-    auto failing_loader = [](std::span<std::byte>, std::span<std::byte>) {
+    HostExpertCache cache(10, 10);
+    auto failing_loader = [](std::span<std::byte>) {
         throw std::runtime_error("Disk read failed");
     };
 
@@ -167,7 +165,7 @@ void test_loader_failure() {
 
     // Slot should be clean and reusable
     int load_count = 0;
-    auto loader = [&](std::span<std::byte>, std::span<std::byte>) {
+    auto loader = [&](std::span<std::byte>) {
         load_count++;
     };
     ExpertHostLease lease = cache.acquire(0, 1, loader);
@@ -176,10 +174,10 @@ void test_loader_failure() {
 }
 
 void test_failure_propagation_to_waiters() {
-    PinnedExpertCache cache(10, 10, 5, 5);
+    HostExpertCache cache(10, 10);
     std::atomic<int> waiter_exceptions{0};
 
-    auto failing_loader = [](std::span<std::byte>, std::span<std::byte>) {
+    auto failing_loader = [](std::span<std::byte>) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         throw std::runtime_error("Loader crash");
     };
@@ -207,14 +205,14 @@ void test_failure_propagation_to_waiters() {
 
 void test_slot_protection_and_generation() {
     // 1 slot capacity
-    PinnedExpertCache cache(10, 10, 5, 5);
+    HostExpertCache cache(10, 10);
 
     std::atomic<bool> loader_started{false};
     std::atomic<bool> loader_running{true};
     std::atomic<bool> waiter_running{false};
     std::atomic<int> waiter_errors{0};
 
-    auto slow_loader = [&](std::span<std::byte>, std::span<std::byte>) {
+    auto slow_loader = [&](std::span<std::byte>) {
         loader_started.store(true, std::memory_order_release);
         while (loader_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -242,7 +240,7 @@ void test_slot_protection_and_generation() {
     std::thread t2([&]() {
         try {
             waiter_running = true;
-            auto lease = cache.acquire(0, 1, [](std::span<std::byte>, std::span<std::byte>){});
+            auto lease = cache.acquire(0, 1, [](std::span<std::byte>){});
             CELEG_TEST_CHECK(lease.valid());
             CELEG_TEST_CHECK(lease.expert() == 1);
         } catch (const std::exception& error) {
@@ -263,7 +261,7 @@ void test_slot_protection_and_generation() {
     // Since waiter has reserved ref_count, this eviction must throw because no slot is free or evictable!
     bool threw = false;
     try {
-        cache.acquire(0, 2, [](std::span<std::byte>, std::span<std::byte>){});
+        cache.acquire(0, 2, [](std::span<std::byte>){});
     } catch (const std::runtime_error&) {
         threw = true;
     }

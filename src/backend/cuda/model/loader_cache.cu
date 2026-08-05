@@ -29,6 +29,8 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
     if (!weights) {
         weights = std::make_shared<SharedModelWeights>();
         weights->residency_fingerprint = residency_fingerprint;
+        weights->residency_coordinator =
+            std::make_shared<CudaExpertResidencyCoordinator>(*weights);
         cache[key] = weights;
     }
     return weights;

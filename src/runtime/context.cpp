@@ -6,23 +6,6 @@
 
 namespace celeg {
 
-namespace {
-
-class BuiltinBackendFactory final : public IBackendFactory {
-public:
-    BuiltinBackendFactory(std::string_view id, BackendKind backend)
-        : id_(id), backend_(backend) {}
-
-    std::string_view id() const override { return id_; }
-    bool supports(BackendKind backend) const override { return backend == backend_; }
-
-private:
-    std::string_view id_;
-    BackendKind backend_;
-};
-
-} // namespace
-
 RuntimeBuilder::RuntimeBuilder()
     : architectures_(std::make_shared<ArchitectureCatalog>()),
       checkpoint_formats_(std::make_shared<CheckpointFormatCatalog>()),
@@ -34,8 +17,6 @@ RuntimeBuilder::RuntimeBuilder()
 RuntimeBuilder& RuntimeBuilder::add_builtins() {
     add_builtin_checkpoint_formats(*checkpoint_formats_);
     tokenizer_providers_->add(make_builtin_tokenizer_provider());
-    backends_->add(std::make_unique<BuiltinBackendFactory>("cpu", BackendKind::Cpu));
-    backends_->add(std::make_unique<BuiltinBackendFactory>("cuda", BackendKind::Cuda));
     for (auto& module : make_builtin_runtime_modules()) add_module(std::move(module));
     return *this;
 }
@@ -115,6 +96,10 @@ RuntimeContext RuntimeBuilder::build() {
     return RuntimeContext{std::move(architectures_), std::move(checkpoint_formats_),
                           std::move(chat_profiles_), std::move(tokenizer_providers_),
                           std::move(backends_), std::move(vision_providers_)};
+}
+
+std::shared_ptr<const RuntimeContext> RuntimeBuilder::build_shared() {
+    return std::make_shared<const RuntimeContext>(build());
 }
 
 std::shared_ptr<const RuntimeContext> create_builtin_runtime_context() {

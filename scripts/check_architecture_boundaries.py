@@ -146,6 +146,26 @@ def main() -> int:
             if generic_runtime.search(path.read_text(encoding="utf-8")):
                 errors.append(f"architecture-specific type leaked into generic runtime: {path}")
 
+    # The host expert cache is a byte store. Format readers and semantic
+    # region names belong to source/binding adapters, never to the generic
+    # runtime cache contract.
+    generic_cache_tokens = re.compile(
+        r"(?:SafeTensor|safetensors|cuda(?:Malloc|Free|Host)|"
+        r"\b(?:gate_up|down)_bytes?\b|\b(?:gate_up|down)\s*\()")
+    for path in files(root / "include/celeg/runtime/cache", "**/*"):
+        if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".inl"}:
+            continue
+        if generic_cache_tokens.search(path.read_text(encoding="utf-8")):
+            errors.append(f"format/backend/payload-specific knowledge leaked into generic cache: {path}")
+
+    # The public ABI adapter validates and translates. Concrete service
+    # construction is owned by backend factories.
+    api_engine = root / "src/api/engine.cpp"
+    if api_engine.is_file() and re.search(
+            r"(?:CpuInferenceService|CudaInferenceService|make_unique<[^>]*(?:Cpu|Cuda))",
+            api_engine.read_text(encoding="utf-8")):
+        errors.append(f"concrete backend service construction remains in C API adapter: {api_engine}")
+
     # Packed execution must consume resources and compiled policy prepared by
     # its owner. These checks keep accidental hot-path plan compilation and
     # direct CUDA allocation out of the orchestration translation unit.

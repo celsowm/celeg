@@ -28,8 +28,19 @@ __global__ void mask_expert_selection_kernel(const int* src_sel,
 
 } // namespace
 
-void SharedModelWeights::ensure_moe_experts_resident(ExpertResidencyRequest request) {
+void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     request.validate();
+    SharedModelWeights& weights = *weights_;
+    ExpertResidencyWorkspace& workspace = *request.workspace;
+    auto& expert_offload_plan = weights.expert_offload_plan;
+    auto& expert_controllers = weights.expert_controllers;
+    auto& host_expert_cache = weights.host_expert_cache;
+    auto& expert_io_manager = weights.expert_io_manager;
+    auto& expert_catalog = weights.expert_catalog;
+    auto& expert_sidecar = weights.expert_sidecar;
+    auto& repo = weights.repo;
+    auto& usage_stats = weights.usage_stats;
+    auto& usage_profile_path = weights.usage_profile_path;
     const int layer = request.layer;
     const int* sel_dev = request.selected_device;
     const int rows = request.rows;
@@ -37,15 +48,15 @@ void SharedModelWeights::ensure_moe_experts_resident(ExpertResidencyRequest requ
     const int num_experts = request.expert_count;
     cudaStream_t compute_stream = request.compute_stream;
     const float* route_scores_dev = request.route_scores_device;
-    CudaEvent& router_done_event = *request.router_done;
-    CudaEvent& ffn_done_event = *request.ffn_done;
-    CudaEvent& promote_done_event = *request.promote_done;
-    CudaEvent& prefetch_done_event = *request.prefetch_done;
-    std::vector<int>& cold_expert_host = *request.cold_experts_host;
-    std::vector<float>& cold_scores_host = *request.cold_scores_host;
-    std::vector<int>& prefetch_idx = *request.prefetch_indices;
-    std::vector<int>& prefetch_ranked = *request.prefetch_ranked;
-    std::vector<float>& prefetch_scores = *request.prefetch_scores;
+    CudaEvent& router_done_event = *workspace.router_done;
+    CudaEvent& ffn_done_event = *workspace.ffn_done;
+    CudaEvent& promote_done_event = *workspace.promote_done;
+    CudaEvent& prefetch_done_event = *workspace.prefetch_done;
+    std::vector<int>& cold_expert_host = *workspace.cold_experts_host;
+    std::vector<float>& cold_scores_host = *workspace.cold_scores_host;
+    std::vector<int>& prefetch_idx = *workspace.prefetch_indices;
+    std::vector<int>& prefetch_ranked = *workspace.prefetch_ranked;
+    std::vector<float>& prefetch_scores = *workspace.prefetch_scores;
     if (!expert_offload_plan.enabled) return;
     if (layer < 0 || static_cast<size_t>(layer) >= expert_controllers.size()) return;
     ResidencyController* controller = expert_controllers[static_cast<size_t>(layer)].get();
@@ -99,19 +110,23 @@ void SharedModelWeights::ensure_moe_experts_resident(ExpertResidencyRequest requ
                 entry.ssd_misses++;
             }
 
-            if (pinned_expert_cache && expert_io_manager) {
+            if (host_expert_cache && expert_io_manager) {
                 // Async parallel load using ExpertIoManager!
                 futures.push_back(expert_io_manager->submit([this, layer, e, &lease_dest = loaded_leases[static_cast<size_t>(i)]]() {
-                    const ExpertLocation& loc = expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                    ExpertHostLease lease = pinned_expert_cache->acquire(layer, e, [&](std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) {
-                        if (expert_sidecar) {
-                            expert_sidecar->read_expert(layer, e, gu_dest, dn_dest);
+                    SharedModelWeights& weights = *weights_;
+                    const ExpertLocation& loc = weights.expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
+                    ExpertHostLease lease = weights.host_expert_cache->acquire(layer, e, [this, layer, e, loc](std::span<std::byte> payload) {
+                        SharedModelWeights& weights = *weights_;
+                        const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
+                        if (weights.expert_sidecar) {
+                            weights.expert_sidecar->read_expert(
+                                layer, e, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
                         } else {
                             const auto& reader =
-                                require_random_access_tensor_reader(*repo);
-                            reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                            reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                            reader.read(loc.w2, dn_dest);
+                                require_random_access_tensor_reader(*weights.repo);
+                            reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
+                            reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
+                            reader.read(loc.w2, payload.subspan(gu_bytes));
                         }
                     });
                     lease_dest = std::move(lease);
@@ -132,35 +147,42 @@ void SharedModelWeights::ensure_moe_experts_resident(ExpertResidencyRequest requ
                 score = cold_scores_host[static_cast<size_t>(e)];
             }
 
-            if (pinned_expert_cache && expert_io_manager) {
+            if (host_expert_cache && expert_io_manager) {
                 ExpertHostLease& lease = loaded_leases[static_cast<size_t>(i)];
                 if (lease.valid()) {
-                    cache->ensure_resident(e, reinterpret_cast<const __nv_bfloat16*>(lease.gate_up()),
-                                           reinterpret_cast<const __nv_bfloat16*>(lease.down()),
+                    const ExpertLocation& loc = expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
+                    const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
+                    cache->ensure_resident(e, reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
+                                           reinterpret_cast<const __nv_bfloat16*>(lease.payload() + gu_bytes),
                                            transfer, score);
+                    cache->pin_active(e, score);
 
                     auto ev = std::make_unique<CudaEvent>();
                     ev->record(transfer);
                     controller->inflight_transfers.push_back({std::move(lease), std::move(ev)});
                 }
-            } else if (pinned_expert_cache) {
+            } else if (host_expert_cache) {
                 // Sync fallback (if no io_manager is present)
                 const ExpertLocation& loc = expert_catalog[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                ExpertHostLease lease = pinned_expert_cache->acquire(layer, e, [&](std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) {
+                ExpertHostLease lease = host_expert_cache->acquire(layer, e, [&](std::span<std::byte> payload) {
+                    const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
                     if (expert_sidecar) {
-                        expert_sidecar->read_expert(layer, e, gu_dest, dn_dest);
+                        expert_sidecar->read_expert(
+                            layer, e, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
                     } else {
                         const auto& reader =
                             require_random_access_tensor_reader(*repo);
-                        reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                        reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                        reader.read(loc.w2, dn_dest);
+                        reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
+                        reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
+                        reader.read(loc.w2, payload.subspan(gu_bytes));
                     }
                 });
 
-                cache->ensure_resident(e, reinterpret_cast<const __nv_bfloat16*>(lease.gate_up()),
-                                       reinterpret_cast<const __nv_bfloat16*>(lease.down()),
+                const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
+                cache->ensure_resident(e, reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
+                                       reinterpret_cast<const __nv_bfloat16*>(lease.payload() + gu_bytes),
                                        transfer, score);
+                cache->pin_active(e, score);
 
                 auto ev = std::make_unique<CudaEvent>();
                 ev->record(transfer);
@@ -168,6 +190,7 @@ void SharedModelWeights::ensure_moe_experts_resident(ExpertResidencyRequest requ
             } else {
                 // Host-resident mode
                 cache->ensure_resident(e, transfer, score);
+                cache->pin_active(e, score);
             }
         }
         // Publish all pointer and slot changes once after the promotion batch.
@@ -214,14 +237,10 @@ void CudaCompiledModel::ensure_moe_experts_resident(int layer, const int* sel_de
                                                    cudaStream_t compute_stream,
                                                    const float* route_scores_dev) {
     if (!resources_.weights_) return;
-    resources_.weights_->ensure_moe_experts_resident(ExpertResidencyRequest{
+    resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
         layer, sel_dev, rows, resources_.shape_.experts_per_token,
         resources_.shape_.num_experts, compute_stream, route_scores_dev,
-        &workspace_.router_done_event_, &workspace_.ffn_done_event_,
-        &workspace_.promote_done_event_, &workspace_.prefetch_done_event_,
-        &workspace_.cold_expert_host_, &workspace_.cold_scores_host_,
-        &workspace_.prefetch_idx_, &workspace_.prefetch_ranked_,
-        &workspace_.prefetch_scores_});
+        &workspace_.residency_workspace_});
 }
 
 void CudaCompiledModel::ensure_moe_experts_resident_packed(
@@ -345,20 +364,22 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
             for (int e : batch) {
                 if (!cache->resident(e)) {
                     const ExpertLocation& loc = workspace_.expert_catalog_[static_cast<size_t>(layer)][static_cast<size_t>(e)];
-                    ExpertHostLease lease = resources_.weights_->pinned_expert_cache->acquire(layer, e, [&](std::span<std::byte> gu_dest, std::span<std::byte> dn_dest) {
+                    ExpertHostLease lease = resources_.weights_->host_expert_cache->acquire(layer, e, [&](std::span<std::byte> payload) {
+                        const size_t gu_bytes = loc.w1.bytes + loc.w3.bytes;
                         if (resources_.weights_->expert_sidecar) {
-                            resources_.weights_->expert_sidecar->read_expert(layer, e, gu_dest, dn_dest);
+                            resources_.weights_->expert_sidecar->read_expert(
+                                layer, e, payload.subspan(0, gu_bytes), payload.subspan(gu_bytes));
                         } else {
                             const auto& reader =
                                 require_random_access_tensor_reader(*resources_.weights_->repo);
-                            reader.read(loc.w1, gu_dest.subspan(0, loc.w1.bytes));
-                            reader.read(loc.w3, gu_dest.subspan(loc.w1.bytes, loc.w3.bytes));
-                            reader.read(loc.w2, dn_dest);
+                            reader.read(loc.w1, payload.subspan(0, loc.w1.bytes));
+                            reader.read(loc.w3, payload.subspan(loc.w1.bytes, loc.w3.bytes));
+                            reader.read(loc.w2, payload.subspan(gu_bytes));
                         }
                     });
                     if (cache->ensure_resident(e,
-                                               reinterpret_cast<const __nv_bfloat16*>(lease.gate_up()),
-                                               reinterpret_cast<const __nv_bfloat16*>(lease.down()),
+                                               reinterpret_cast<const __nv_bfloat16*>(lease.payload()),
+                                               reinterpret_cast<const __nv_bfloat16*>(lease.payload() + loc.w1.bytes + loc.w3.bytes),
                                                stream_.get())) {
                         auto ev = std::make_unique<CudaEvent>();
                         ev->record(stream_.get());

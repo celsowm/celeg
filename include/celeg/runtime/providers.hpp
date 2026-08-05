@@ -12,11 +12,29 @@
 namespace celeg {
 
 class RuntimeBuilder;
+class RuntimeContext;
+
+namespace serve {
+class ServiceBundle;
+}
 
 class BpeTokenizer;
 class IVisualEmbeddingProvider;
 
 enum class BackendKind { Cpu, Cuda };
+
+class IBackendOptions {
+public:
+    virtual ~IBackendOptions() = default;
+    virtual BackendKind backend() const noexcept = 0;
+};
+
+struct BackendCreateRequest {
+    std::string model_path;
+    int max_context = 0;
+    std::shared_ptr<const RuntimeContext> runtime;
+    std::shared_ptr<const IBackendOptions> options;
+};
 
 class ITokenizerProvider {
 public:
@@ -44,6 +62,8 @@ public:
     virtual ~IBackendFactory() = default;
     virtual std::string_view id() const = 0;
     virtual bool supports(BackendKind backend) const = 0;
+    virtual std::unique_ptr<serve::ServiceBundle> create(
+        const BackendCreateRequest& request) const = 0;
 };
 
 class IVisionProviderFactory {

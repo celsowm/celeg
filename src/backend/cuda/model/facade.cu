@@ -34,10 +34,33 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
     PackedSessionContext context;
     context.owner = this;
     context.storage_generation_value = storage_generation_;
-    context.execution_plan_fingerprint = resources_.plan_.fingerprint();
-    context.compiled_program_id = static_cast<uint64_t>(
+    const uint64_t execution_plan_fingerprint = resources_.plan_.fingerprint();
+    const uint64_t compiled_program_id = static_cast<uint64_t>(
         std::hash<std::string>{}(resources_.program_.identity));
-    context.device_ordinal = resources_.plan_.device().device_ordinal;
+    const int device_ordinal = resources_.plan_.device().device_ordinal;
+    const CudaModelOptions& options = resources_.options_;
+    context.compatibility_key = PackedCompatibilityKey{
+        resources_.weights_.get(),
+        execution_plan_fingerprint,
+        compiled_program_id,
+        static_cast<uint64_t>(std::hash<std::string>{}(
+            options.expert_offload.fingerprint())),
+        device_ordinal,
+        max_context_,
+        static_cast<uint8_t>(options.weight_mode),
+        static_cast<uint8_t>(options.kv_cache_mode),
+        static_cast<uint8_t>(options.gemm_backend),
+        static_cast<uint8_t>(options.attention_mode),
+        options.fast_attention,
+        options.fused_projections,
+        options.fused_residuals,
+        options.cuda_graph,
+        options.lt_autotune,
+        options.allocate_local_kv_cache,
+        options.lt_workspace_bytes,
+        options.lt_heuristics,
+        options.attention_chunk_tokens,
+        options.attention_auto_threshold};
     context.phase_state = &session_.phase_;
     context.position_state = &session_.position_;
     context.max_context_value = max_context_;

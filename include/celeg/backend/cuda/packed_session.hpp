@@ -12,6 +12,36 @@
 
 namespace celeg {
 
+// Immutable identity of every execution-relevant choice shared by a packed
+// batch. This is produced when a compiled model binds its resources; packed
+// validation only compares values and never reconstructs compatibility from
+// mutable option objects.
+struct PackedCompatibilityKey {
+    const void* weights_identity = nullptr;
+    uint64_t execution_plan_fingerprint = 0;
+    uint64_t compiled_program_id = 0;
+    uint64_t expert_residency_fingerprint = 0;
+    int device_ordinal = -1;
+    int max_context = 0;
+    uint8_t weight_mode = 0;
+    uint8_t kv_cache_mode = 0;
+    uint8_t gemm_backend = 0;
+    uint8_t attention_mode = 0;
+    bool fast_attention = false;
+    bool fused_projections = false;
+    bool fused_residuals = false;
+    bool cuda_graph = false;
+    bool lt_autotune = false;
+    bool allocate_local_kv_cache = false;
+    size_t lt_workspace_bytes = 0;
+    int lt_heuristics = 0;
+    int attention_chunk_tokens = 0;
+    int attention_auto_threshold = 0;
+
+    friend bool operator==(const PackedCompatibilityKey&,
+                           const PackedCompatibilityKey&) = default;
+};
+
 // Operation-specific, non-owning context for one lane in a packed decode or
 // ragged-prefill batch.  It contains only the resources that the packed
 // executor is allowed to touch; model loading, graph capture, and unrelated
@@ -31,9 +61,7 @@ struct PackedSessionContext {
     // Pointer identity alone is insufficient because a reset may replace a
     // buffer while retaining the same model owner.
     uint64_t storage_generation_value = 0;
-    uint64_t execution_plan_fingerprint = 0;
-    uint64_t compiled_program_id = 0;
-    int device_ordinal = -1;
+    PackedCompatibilityKey compatibility_key;
     SessionPhase* phase_state = nullptr;
     int* position_state = nullptr;
     int max_context_value = 0;
