@@ -216,23 +216,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     CELEG_CUDA(cudaEventRecord(prefetch_done_event.get(), transfer));
 }
 
-void CudaCompiledModel::ensure_moe_experts_resident(int layer, const int* sel_dev,
-                                                   int rows,
-                                                   cudaStream_t compute_stream,
-                                                   const float* route_scores_dev) {
-    if (!resources_.weights_) return;
-    resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
-        layer, sel_dev, rows, resources_.shape_.experts_per_token,
-        resources_.shape_.num_experts, compute_stream, route_scores_dev,
-        &workspace_.residency_workspace_});
-}
-
-void CudaCompiledModel::ensure_moe_experts_resident_packed(
-    int layer, const int* sel_dev, int rows, cudaStream_t stream,
-    const float* route_scores_dev) {
-    ensure_moe_experts_resident(layer, sel_dev, rows, stream, route_scores_dev);
-}
-
 void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
@@ -254,8 +237,10 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
     // Promote any cold experts selected by the router before the FFN reads them.
-    ensure_moe_experts_resident(layer, workspace_.moe_sel_.data(), 1, stream_.get(),
-                                workspace_.moe_router_scratch_.data());
+    resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
+        layer, workspace_.moe_sel_.data(), 1, resources_.shape_.experts_per_token,
+        resources_.shape_.num_experts, stream_.get(),
+        workspace_.moe_router_scratch_.data(), &workspace_.residency_workspace_});
 
     // Expert FFN: accumulate the routing-weighted expert outputs into the
     // FP32 output accumulator and then cast into the BF16 workspace_.moe_output_.
@@ -308,7 +293,10 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     // Standalone and packed prefill use the same residency transaction. The
     // coordinator owns source reads, bounded admission, publication, and
     // completion ordering; the FFN sees one stable pointer table.
-    ensure_moe_experts_resident(layer, workspace_.moe_pf_sel_.data(), rows, stream_.get());
+    resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
+        layer, workspace_.moe_pf_sel_.data(), rows, resources_.shape_.experts_per_token,
+        resources_.shape_.num_experts, stream_.get(), nullptr,
+        &workspace_.residency_workspace_});
 
     workspace_.moe_pf_output_accum_.zero_async(stream_.get());
     const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, resources_.shape_);

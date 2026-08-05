@@ -26,8 +26,12 @@ bool CudaCompiledModel::packed_segmented_attention_callback(
 void CudaCompiledModel::packed_expert_residency_callback(
     void* owner, int layer, const int* sel_dev, int rows,
     cudaStream_t stream, const float* route_scores_dev) {
-    static_cast<CudaCompiledModel*>(owner)->ensure_moe_experts_resident_packed(
-        layer, sel_dev, rows, stream, route_scores_dev);
+    CudaCompiledModel& model = *static_cast<CudaCompiledModel*>(owner);
+    if (!model.resources_.weights_) return;
+    model.resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
+        layer, sel_dev, rows, model.resources_.shape_.experts_per_token,
+        model.resources_.shape_.num_experts, stream, route_scores_dev,
+        &model.workspace_.residency_workspace_});
 }
 
 PackedSessionContext CudaCompiledModel::packed_session_context() {

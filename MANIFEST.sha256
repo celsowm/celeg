@@ -66,7 +66,7 @@ cc526705072351716837b2164bf366b531913d80f608191edc8180b00bdb3373  ./include/cele
 496bd0d5c1d33a953c6594728e964b54bbaeb8e51294fdfb3009a748346cf42d  ./include/celeg/checkpoint/weight_repository.hpp
 93da45bf88b95a5ba86de3096b2f785add4dab4508ebc6a19ba4203af2f87417  ./include/celeg/detail/binary_codec.hpp
 a0498f31d2a4247f29a942020e10cd8e538a91d75d8241d949b57c0b32e68a6c  ./include/celeg/detail/checkpoint/bootstrap.hpp
-190553d03356901272d15a80b6979ae73fd33da0512ed93149a51cd7eb9390b6  ./include/celeg/detail/model/compiled_model.hpp
+2a68237bbd6c6bd82293317c769e49bed6c164fdba9a0699996b03c6d9e67dcf  ./include/celeg/detail/model/compiled_model.hpp
 0377f30992130fa3eabe434522e4e5995e1fbef4964f644fd6ca6fdd6cb4da9e  ./include/celeg/detail/model/resources.hpp
 57cd82e44c4ce313cae4d2c90bd80f04eef5717e09f79d861e3c1676e55e6c69  ./include/celeg/detail/model/types.hpp
 c8f0ef048676990ed8ca64d2910d1ac21a9c29ba3f4e92257e87b4e6209de2f2  ./include/celeg/detail/runtime/concurrency/batch_planner.hpp
@@ -211,7 +211,7 @@ a5e253eeab7778ba07c63879322439b5939f2430275761ccb3c14fb16803830d  ./src/backend/
 561822ac834923e0d83bf07c9b0b4a276d1b62a1c6af4cb59f3ef52811fc3b9f  ./src/backend/cuda/model/execution.cu
 31e9eca769ec63265fb8f3ac48c4e8846f87e2e246cd25e5b6ed50df7ee21250  ./src/backend/cuda/model/expert_loader.cpp
 f614f3bd99918426abbd4479d2d51756f33d8770086ff3a97422af6417451180  ./src/backend/cuda/model/experts.cu
-94dadfa0aefc1ff7cd51890581fd8279a6d66a4049f9e1814dde4d9dc9b1e4ef  ./src/backend/cuda/model/facade.cu
+a8c00bb31c7776dd0c293c992de1f816285d3983aa12a3a9b37ced925397beca  ./src/backend/cuda/model/facade.cu
 9eca1173c705bd9f55034787d79f98ebbbe18997e5f378aa7dbaea9fc108aafc  ./src/backend/cuda/model/gguf_dequant.cpp
 80ed5fb6990111f3270e2ab36187cac3e45e68d4564fc98bd0cdba334cf65ad0  ./src/backend/cuda/model/lifecycle.cpp
 c2c0d63b0b7ad3da846ec85f3cd9324ec1a31e95ff90a6b535c5e735ca42b699  ./src/backend/cuda/model/linear_loader.cpp
@@ -223,7 +223,7 @@ c70cddc79eb01973c98152503b39b82aa275a054b425b14558c37c00327cd50d  ./src/backend/
 5b0b52206604e796cadde54f7ae82e09f8cc33038d13e2390371621f170d0563  ./src/backend/cuda/model/prefill_batched.cpp
 2053aaf99997ee588a09e8781dc41535173c80ad1cfc56288945f246e0f64865  ./src/backend/cuda/model/prefill_profile.cpp
 e604427623a80f88af99b44f1f59f1ab5cb245b070023a9ce311d1fd13fcc5e7  ./src/backend/cuda/model/prefill.cpp
-c2d4f067a2ea5f87e555652d235eea2780d3194e4f8a3e1306d287bc76648de2  ./src/backend/cuda/model/residency.cu
+129bfab6cc07383bcaf0e85f2eb5012d2d52e106ab9ef95f2b6f91f7d61cd01d  ./src/backend/cuda/model/residency.cu
 75c657d99a5449c04000d0ff117f9219127bf758bfe574e3a324408e1b718d3c  ./src/backend/cuda/model/resources.cpp
 088981d8ff10c5aed60b3aaf4c8172a537bce0db765f4f4254195573cbba743b  ./src/backend/cuda/model/session_resources.cpp
 b3fd23e2bf7be6f207f5ef8d8a89e7a528aa90545d254e13819b0fa9fc9bc0e7  ./src/backend/cuda/model/setup.cpp

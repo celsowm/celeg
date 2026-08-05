@@ -165,16 +165,6 @@ struct CudaCompiledModel {
     void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
 
-    // When offload is enabled, ensures every expert selected for `layer` (read
-    // from `sel_dev`, `rows*K` ints) is GPU-resident before the FFN kernel runs,
-    // promoting cold experts from host on workspace_.expert_transfer_stream_ and ordering
-    // the streams via the two events. No-op when the layer has no cache.
-    void ensure_moe_experts_resident(int layer, const int* sel_dev, int rows,
-                                     cudaStream_t compute_stream,
-                                     const float* route_scores_dev = nullptr);
-    void ensure_moe_experts_resident_packed(
-        int layer, const int* sel_dev, int rows, cudaStream_t stream,
-        const float* route_scores_dev);
     void forward_token_host(int32_t token, bool compute_logits,
                             const float* raw_embedding = nullptr);
     void forward_token_paged_host(int32_t token, bool compute_logits,

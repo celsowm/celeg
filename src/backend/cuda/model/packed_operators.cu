@@ -297,9 +297,12 @@ void PackedMoeExecutor::run(
     launch_moe_router(router, cfg, w.moe_router_scratch.data(), w.stream.get());
 
     if (batch_models && !batch_models->empty() && layer_index >= 0) {
-        batch_models->front().ensure_moe_experts_resident_packed(
-            layer_index, w.moe_sel.data(), rows, w.stream.get(),
-            moe->offloaded() ? w.moe_router_scratch.data() : nullptr);
+        const PackedSessionContext& session = batch_models->front();
+        if (session.ensure_expert_residency) {
+            session.ensure_expert_residency(
+                session.owner, layer_index, w.moe_sel.data(), rows, w.stream.get(),
+                moe->offloaded() ? w.moe_router_scratch.data() : nullptr);
+        }
     }
 
     w.moe_output_accum.zero_async(w.stream.get());
