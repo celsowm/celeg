@@ -136,6 +136,7 @@ struct MoeBackendCapabilities {
     bool grouped_selection = false;
     bool shared_experts = false;
     bool stacked_payload = false;
+    bool fused_payload = false;
 };
 
 // Backend compilers call this after generic semantic compilation and before

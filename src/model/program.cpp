@@ -264,6 +264,11 @@ void validate_moe_backend_capabilities(const CompiledModelProgram& program,
             throw std::invalid_argument(std::string(backend) +
                 " backend does not support stacked MoE payloads");
         }
+        if (moe.routed.payload.layout == MoePayloadLayout::Fused &&
+            !capabilities.fused_payload) {
+            throw std::invalid_argument(std::string(backend) +
+                " backend does not support fused MoE payloads");
+        }
     }
 }
 

@@ -69,6 +69,16 @@ int main() {
     catch (const std::invalid_argument&) { backend_rejected = true; }
     CELEG_TEST_CHECK(backend_rejected);
 
+    celeg::CompiledModelProgram fused = cpu;
+    fused.layers[1].moe->routed.payload.layout = celeg::MoePayloadLayout::Fused;
+    bool fused_rejected = false;
+    try {
+        celeg::validate_moe_backend_capabilities(fused, "cpu", {});
+    } catch (const std::invalid_argument&) {
+        fused_rejected = true;
+    }
+    CELEG_TEST_CHECK(fused_rejected);
+
     model.capabilities.supports_cpu = false;
     bool rejected = false;
     try { (void)celeg::CpuModelCompiler{}.compile(model); }
