@@ -32,6 +32,10 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
         throw std::invalid_argument("prefill exceeds max_context");
     }
     validate_token_ids(tokens);
+    if (resources_.shape_.mamba2_layer_count > 0) {
+        prefill_chunk(tokens, true, true);
+        return;
+    }
     const auto begin = std::chrono::steady_clock::now();
     prefill_batched(tokens);
     const auto end = std::chrono::steady_clock::now();

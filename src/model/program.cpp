@@ -290,8 +290,11 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     for (std::size_t layer_index = 0; layer_index < model.graph.layers.size(); ++layer_index) {
         const LayerSpec& layer = model.graph.layers[layer_index];
         CompiledLayerProgram compiled{
-            layer.mixer_kind() == MixerKind::Attention
-                ? CompiledMixer::Attention : CompiledMixer::ShortConvolution,
+            layer.mixer_kind() == MixerKind::Attention ? CompiledMixer::Attention :
+            layer.mixer_kind() == MixerKind::ShortConvolution ? CompiledMixer::ShortConvolution :
+            layer.mixer_kind() == MixerKind::GatedDeltaNet ? CompiledMixer::GatedDeltaNet :
+            layer.mixer_kind() == MixerKind::Mamba2 ? CompiledMixer::Mamba2 :
+            CompiledMixer::MlpOnly,
             layer.feed_forward_kind() == FeedForwardKind::Dense
                 ? CompiledFeedForward::Dense : CompiledFeedForward::MixtureOfExperts,
             {}, std::nullopt};

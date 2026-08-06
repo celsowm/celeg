@@ -41,6 +41,15 @@ void CpuCompiledModel::allocate_state() {
             AttentionState state;
             state.pool_index = static_cast<size_t>(pool);
             session_.states.emplace_back(std::move(state));
+        } else if (const auto* mamba = mamba2_operator(layer)) {
+            Mamba2State state;
+            const auto& spec = shared->shape.mamba2_layouts.at(index);
+            state.conv.resize(static_cast<size_t>(spec.intermediate_size +
+                              2 * spec.group_count * spec.state_size) *
+                              static_cast<size_t>(spec.conv_kernel));
+            state.ssm.resize(static_cast<size_t>(spec.intermediate_size) *
+                             static_cast<size_t>(spec.state_size));
+            session_.states.emplace_back(std::move(state));
         } else {
             ConvolutionState state;
             state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
@@ -85,6 +94,13 @@ const CpuCompiledModel::ConvolutionWeights* CpuCompiledModel::convolution_operat
     return nullptr;
 }
 
+const CpuCompiledModel::Mamba2Weights* CpuCompiledModel::mamba2_operator(
+    const WeightLayer& layer) {
+    if (const auto* mamba = std::get_if<Mamba2Weights>(&layer)) return mamba;
+    if (const auto* moe = std::get_if<MoeWeights>(&layer)) return nullptr;
+    return nullptr;
+}
+
 CpuCompiledModel::AttentionState& CpuCompiledModel::attention_state(size_t layer) {
     return std::get<AttentionState>(session_.states.at(layer));
 }
@@ -102,6 +118,14 @@ CpuCompiledModel::ConvolutionState& CpuCompiledModel::convolution_state(
 const CpuCompiledModel::ConvolutionState& CpuCompiledModel::convolution_state(
     size_t layer) const {
     return std::get<ConvolutionState>(session_.states.at(layer));
+}
+
+CpuCompiledModel::Mamba2State& CpuCompiledModel::mamba2_state(size_t layer) {
+    return std::get<Mamba2State>(session_.states.at(layer));
+}
+
+const CpuCompiledModel::Mamba2State& CpuCompiledModel::mamba2_state(size_t layer) const {
+    return std::get<Mamba2State>(session_.states.at(layer));
 }
 
 void CpuCompiledModel::release_attention_pages(AttentionState& state) noexcept {
@@ -176,8 +200,14 @@ CpuPrefixSnapshot CpuCompiledModel::export_prefix_snapshot() const {
             snapshot.attention_pages.push_back(attention->pages);
             snapshot.attention_token_counts.push_back(attention->token_count);
         } else {
-            snapshot.convolution_states.push_back(
-                std::get<ConvolutionState>(layer).state);
+            if (const auto* convolution = std::get_if<ConvolutionState>(&layer)) {
+                snapshot.convolution_states.push_back(convolution->state);
+            } else {
+                const auto& mamba = std::get<Mamba2State>(layer);
+                auto state = mamba.conv;
+                state.insert(state.end(), mamba.ssm.begin(), mamba.ssm.end());
+                snapshot.mamba_states.push_back(std::move(state));
+            }
         }
     }
     return snapshot;
@@ -187,13 +217,16 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
                                                bool ready_for_decode) {
     size_t expected_attention = 0;
     size_t expected_convolution = 0;
+    size_t expected_mamba = 0;
     for (const LayerState& layer : session_.states) {
         if (std::holds_alternative<AttentionState>(layer)) ++expected_attention;
-        else ++expected_convolution;
+        else if (std::holds_alternative<ConvolutionState>(layer)) ++expected_convolution;
+        else ++expected_mamba;
     }
     if (snapshot.attention_pages.size() != expected_attention ||
         snapshot.attention_token_counts.size() != expected_attention ||
         snapshot.convolution_states.size() != expected_convolution ||
+        snapshot.mamba_states.size() != expected_mamba ||
         snapshot.logits.size() != workspace_.logits.size() ||
         snapshot.seen_tokens.size() != session_.seen.size() ||
         snapshot.position > static_cast<size_t>(shared->max_context)) {
@@ -212,16 +245,24 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
     reset();
     size_t attention_index = 0;
     size_t convolution_index = 0;
+    size_t mamba_index = 0;
     try {
         for (LayerState& layer : session_.states) {
             if (auto* attention = std::get_if<AttentionState>(&layer)) {
                 attention->pages = std::move(snapshot.attention_pages[attention_index]);
                 attention->token_count = snapshot.attention_token_counts[attention_index];
                 ++attention_index;
+            } else if (auto* convolution = std::get_if<ConvolutionState>(&layer)) {
+                convolution->state = std::move(snapshot.convolution_states[convolution_index++]);
             } else {
-                std::get<ConvolutionState>(layer).state =
-                    std::move(snapshot.convolution_states[convolution_index]);
-                ++convolution_index;
+                auto& mamba = std::get<Mamba2State>(layer);
+                const auto& packed = snapshot.mamba_states[mamba_index++];
+                if (packed.size() != mamba.conv.size() + mamba.ssm.size()) {
+                    throw std::invalid_argument("CPU Mamba snapshot state shape is invalid");
+                }
+                std::copy_n(packed.begin(), mamba.conv.size(), mamba.conv.begin());
+                std::copy(packed.begin() + static_cast<std::ptrdiff_t>(mamba.conv.size()),
+                          packed.end(), mamba.ssm.begin());
             }
         }
         workspace_.logits = std::move(snapshot.logits);
@@ -260,9 +301,12 @@ void CpuCompiledModel::reset() {
     for (LayerState& state : session_.states) {
         if (auto* attention = std::get_if<AttentionState>(&state)) {
             release_attention_pages(*attention);
+        } else if (auto* convolution = std::get_if<ConvolutionState>(&state)) {
+            std::fill(convolution->state.begin(), convolution->state.end(), 0.0f);
         } else {
-            auto& convolution = std::get<ConvolutionState>(state);
-            std::fill(convolution.state.begin(), convolution.state.end(), 0.0f);
+            auto& mamba = std::get<Mamba2State>(state);
+            std::fill(mamba.conv.begin(), mamba.conv.end(), 0.0f);
+            std::fill(mamba.ssm.begin(), mamba.ssm.end(), 0.0f);
         }
     }
 }
@@ -287,8 +331,10 @@ CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
                 stats.kv_cache += value.pages.size() * pool.page_bytes();
                 stats.kv_pages_used += value.pages.size();
                 stats.kv_pages_total += pool.stats().total_pages;
-            } else {
+            } else if constexpr (std::is_same_v<T, ConvolutionState>) {
                 stats.conv_state += value.state.size() * sizeof(float);
+            } else {
+                stats.conv_state += (value.conv.size() + value.ssm.size()) * sizeof(float);
             }
         }, state);
     }

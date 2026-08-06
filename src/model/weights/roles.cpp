@@ -17,6 +17,8 @@ std::string_view tensor_role_name(TensorRole role) {
         "gated_delta_net_qkv", "gated_delta_net_z", "gated_delta_net_alpha",
         "gated_delta_net_beta", "gated_delta_net_dt_bias", "gated_delta_net_a_log",
         "gated_delta_net_conv", "gated_delta_net_norm", "gated_delta_net_output",
+        "mamba2_input", "mamba2_conv", "mamba2_conv_bias", "mamba2_dt_bias",
+        "mamba2_a_log", "mamba2_d", "mamba2_norm", "mamba2_output",
         "per_layer_embedding", "per_layer_context_projection", "per_layer_projection",
         "per_layer_projection_norm", "per_layer_input_gate", "per_layer_input_norm",
         "layer_scalar", "moe_router", "moe_expert_gate", "moe_expert_up", "moe_expert_down"

@@ -336,6 +336,11 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             launch_rmsnorm(hidden.data(), common_layer.operator_norm,
                            normed.data(), rows, shape_.hidden,
                            shape_.numerical_policy.norm_eps, stream.get());
+            if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2 ||
+                layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
+                throw std::runtime_error(
+                    "packed CUDA execution for Nemotron-H requires tokenwise scheduling");
+            }
             if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
                 const auto* attention = as_attention(layer);
                 if (!attention) {

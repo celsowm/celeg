@@ -112,10 +112,11 @@ void build_graph(ResolvedModel& model, const CheckpointMetadata& metadata) {
         spec.post_attention_norm.epsilon = topology.numerical_policy.norm_eps;
         spec.feed_forward_norm.epsilon = topology.numerical_policy.norm_eps;
         spec.residual.multiplier = 1.0f;
-        spec.mixer = topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention
-            ? std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec>(topology.attention_layout(layer))
-            : std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec>(
-                GatedDeltaNetSpec{conv_kernel, key_dim, value_dim, key_heads, value_heads});
+        if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
+            spec.mixer = topology.attention_layout(layer);
+        } else {
+            spec.mixer = GatedDeltaNetSpec{conv_kernel, key_dim, value_dim, key_heads, value_heads};
+        }
         spec.feed_forward = DenseFeedForwardSpec{topology.intermediate, ActivationKind::SwiGLU};
         model.graph.layers.push_back(std::move(spec));
     }

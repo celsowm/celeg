@@ -71,6 +71,7 @@ struct PrefixState {
     std::vector<uint8_t> seen_tokens;
     std::vector<uint16_t> logits_bf16;
     std::vector<uint16_t> conv_state_bf16;
+    std::vector<uint16_t> mamba_state_bf16;
 };
 
 struct GenerationConfig {

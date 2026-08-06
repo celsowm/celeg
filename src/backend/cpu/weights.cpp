@@ -42,6 +42,11 @@ size_t checked_elements(const std::vector<int64_t>& shape) {
 bool tensor_shape_matches(const std::vector<int64_t>& actual,
                           const std::vector<int64_t>& expected) {
     if (actual == expected) return true;
+    if (expected.size() == 1) {
+        size_t elements = 1;
+        for (const int64_t dim : actual) elements *= static_cast<size_t>(dim);
+        return elements == static_cast<size_t>(expected[0]);
+    }
     return actual.size() == 2 && expected.size() == 3 &&
            expected[1] == 1 && actual[0] == expected[0] &&
            actual[1] == expected[2];
@@ -159,6 +164,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     native_checkpoint = native_storage != nullptr &&
                         native_storage->has_native_block_storage();
     shape = bootstrap.model.topology;
+    tie_word_embeddings = bootstrap.model.capabilities.tied_embeddings;
     final_logit_softcap = bootstrap.model.topology.numerical_policy.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
     model_identity = bootstrap.model.provenance.identity;
@@ -265,6 +271,19 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     common.operator_norm = load_vector(source, reader, writer,
         tensor_name(weight_requests, TensorRole::AttentionInputNorm, layer),
         {shape.hidden});
+    if (shape.mamba2_layer_count > 0) {
+        common.ffn_norm = common.operator_norm;
+        if (shape.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::MlpOnly) {
+            const int intermediate = shape.mlp_only_layouts.at(static_cast<size_t>(layer)).intermediate_size;
+            common.mlp_up = load_matrix(source, reader, writer,
+                tensor_name(weight_requests, TensorRole::FfnUp, layer),
+                {intermediate, shape.hidden});
+            common.w2 = load_matrix(source, reader, writer,
+                tensor_name(weight_requests, TensorRole::FfnDown, layer),
+                {shape.hidden, intermediate});
+        }
+        return common;
+    }
     if (shape.has_split_attention_norms) {
         common.post_attention_norm = load_vector(source, reader, writer,
             tensor_name(weight_requests, TensorRole::AttentionPostNorm, layer),
@@ -362,7 +381,7 @@ void CpuCompiledModel::Shared::load_weights() {
     }
 
     const auto load_operator = [&](int index, MixerKind layer_type)
-        -> std::variant<AttentionWeights, ConvolutionWeights> {
+        -> std::variant<AttentionWeights, ConvolutionWeights, Mamba2Weights, MlpOnlyWeights> {
         if (layer_type == MixerKind::Attention) {
             AttentionWeights layer;
             const AttentionSpec& attention = shape.attention_layout(index);
@@ -395,6 +414,34 @@ void CpuCompiledModel::Shared::load_weights() {
             }
             return layer;
         }
+
+        if (layer_type == MixerKind::Mamba2) {
+            Mamba2Weights layer;
+            const auto& spec = shape.mamba2_layouts.at(static_cast<size_t>(index));
+            const int conv_dim = spec.intermediate_size + 2 * spec.group_count * spec.state_size;
+            layer.in = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2Input, index),
+                {2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
+                 spec.num_heads, shape.hidden});
+            layer.conv_weight = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2Conv, index),
+                {conv_dim, 1, spec.conv_kernel});
+            layer.conv_bias = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2ConvBias, index), {conv_dim});
+            layer.dt_bias = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2DtBias, index), {spec.num_heads});
+            layer.a_log = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2ALog, index), {spec.num_heads});
+            layer.d = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2D, index), {spec.num_heads});
+            layer.norm = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2Norm, index), {spec.intermediate_size});
+            layer.out = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::Mamba2Output, index),
+                {shape.hidden, spec.intermediate_size});
+            return layer;
+        }
+        if (layer_type == MixerKind::MlpOnly) return MlpOnlyWeights{};
 
         ConvolutionWeights layer;
         layer.in = load_matrix(source, reader.get(), writer.get(),
@@ -670,6 +717,13 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
             } else if constexpr (std::is_same_v<T, ConvolutionWeights>) {
                 bytes += value.in.memory_bytes() + value.out.memory_bytes() +
                          value.weight_tap_major.size() * sizeof(float);
+            } else if constexpr (std::is_same_v<T, Mamba2Weights>) {
+                bytes += value.in.memory_bytes() + value.out.memory_bytes() +
+                         (value.conv_weight.size() + value.conv_bias.size() +
+                          value.dt_bias.size() + value.a_log.size() + value.d.size() +
+                          value.norm.size()) * sizeof(float);
+            } else if constexpr (std::is_same_v<T, MlpOnlyWeights>) {
+                bytes += value.common.mlp_up.memory_bytes();
             } else {
                 bytes += (value.router.size() + value.router_bias.size()) * sizeof(float);
                 std::visit([&](const auto& operator_weights) {
@@ -681,10 +735,13 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                                  operator_weights.out.memory_bytes() +
                                  (operator_weights.q_norm.size() +
                                   operator_weights.k_norm.size()) * sizeof(float);
-                    } else {
+                    } else if constexpr (std::is_same_v<Operator, ConvolutionWeights>) {
                         bytes += operator_weights.in.memory_bytes() +
                                  operator_weights.out.memory_bytes() +
                                  operator_weights.weight_tap_major.size() * sizeof(float);
+                    } else if constexpr (std::is_same_v<Operator, Mamba2Weights>) {
+                        bytes += operator_weights.in.memory_bytes() +
+                                 operator_weights.out.memory_bytes();
                     }
                 }, value.operator_layer);
                 for (const CpuLinearWeight& weight : value.expert_w13) {

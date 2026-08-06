@@ -119,11 +119,38 @@ celeg::CheckpointMetadata qwen35_metadata() {
     return metadata;
 }
 
+celeg::CheckpointMetadata nemotron_h_metadata() {
+    celeg::CheckpointMetadata metadata;
+    metadata.repository_hint = "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16";
+    metadata.values["model_type"] = std::string("nemotron_h");
+    metadata.values["hidden_size"] = int64_t(3136);
+    metadata.values["intermediate_size"] = int64_t(12544);
+    metadata.values["num_hidden_layers"] = int64_t(42);
+    metadata.values["num_attention_heads"] = int64_t(40);
+    metadata.values["num_key_value_heads"] = int64_t(8);
+    metadata.values["head_dim"] = int64_t(128);
+    metadata.values["vocab_size"] = int64_t(131072);
+    metadata.values["max_position_embeddings"] = int64_t(262144);
+    metadata.values["bos_token_id"] = int64_t(1);
+    metadata.values["eos_token_id"] = int64_t(2);
+    metadata.values["pad_token_id"] = int64_t(0);
+    metadata.values["rms_norm_eps"] = 1.0e-5;
+    metadata.values["mamba_num_heads"] = int64_t(96);
+    metadata.values["mamba_head_dim"] = int64_t(80);
+    metadata.values["ssm_state_size"] = int64_t(128);
+    metadata.values["n_groups"] = int64_t(8);
+    metadata.values["conv_kernel"] = int64_t(4);
+    metadata.values["chunk_size"] = int64_t(256);
+    metadata.values["hybrid_override_pattern"] =
+        std::string("M-M-M-MM-M-M*-M-M*-M-M-M*-M-M-MM*-MMM-M-M-");
+    return metadata;
+}
+
 } // namespace
 
 int main() {
     const auto catalog = celeg::create_builtin_architecture_catalog();
-    CELEG_TEST_CHECK(catalog->ids().size() == 6);
+    CELEG_TEST_CHECK(catalog->ids().size() == 7);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog->select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -150,6 +177,31 @@ int main() {
     CELEG_TEST_CHECK(qwen.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(!qwen.capabilities.supports_cpu && !qwen.capabilities.supports_cuda);
     CELEG_TEST_CHECK(qwen.weight_plan.requests.size() > 40);
+
+    const auto nemotron_metadata = nemotron_h_metadata();
+    const auto& nemotron_architecture = catalog->select(nemotron_metadata);
+    CELEG_TEST_CHECK(nemotron_architecture.id() == "nemotron_h");
+    celeg::CheckpointView nemotron_checkpoint;
+    nemotron_checkpoint.metadata = nemotron_metadata;
+    const auto nemotron = nemotron_architecture.resolve(nemotron_checkpoint);
+    CELEG_TEST_CHECK(nemotron.topology.hidden == 3136);
+    CELEG_TEST_CHECK(nemotron.topology.vocab_size == 131072);
+    CELEG_TEST_CHECK(nemotron.topology.num_hidden_layers == 42);
+    CELEG_TEST_CHECK(nemotron.topology.mamba2_layer_count == 21);
+    CELEG_TEST_CHECK(nemotron.topology.mlp_only_layer_count == 17);
+    CELEG_TEST_CHECK(nemotron.topology.attention_layer_count == 4);
+    CELEG_TEST_CHECK(nemotron.topology.mamba2_intermediate == 7680);
+    CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).query_heads == 40);
+    CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).key_value_heads == 8);
+    CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).positional_encoding ==
+                     celeg::PositionalEncodingKind::None);
+    CELEG_TEST_CHECK(nemotron.graph.layers[0].mixer_kind() == celeg::MixerKind::Mamba2);
+    CELEG_TEST_CHECK(nemotron.graph.layers[1].mixer_kind() == celeg::MixerKind::MlpOnly);
+    CELEG_TEST_CHECK(nemotron.graph.layers[12].mixer_kind() == celeg::MixerKind::Attention);
+    const auto& mamba_spec = std::get<celeg::Mamba2Spec>(nemotron.graph.layers[0].mixer);
+    CELEG_TEST_CHECK(mamba_spec.num_heads == 96 && mamba_spec.head_dim == 80);
+    CELEG_TEST_CHECK(mamba_spec.state_size == 128 && mamba_spec.group_count == 8);
+    CELEG_TEST_CHECK(nemotron.capabilities.supports_cpu);
 
     // LFM2.5-2.6B (Transformers 5.x config) keeps RoPE under the nested
     // rope_parameters object and uses a 128k vocabulary/context.

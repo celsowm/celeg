@@ -311,7 +311,29 @@ struct ConvolutionLayer {
     DeviceBuffer<__nv_bfloat16> conv_state;
 };
 
-using Layer = std::variant<AttentionLayer, ConvolutionLayer>;
+struct Mamba2Layer {
+    LayerCommon common;
+    Mamba2Spec spec;
+    const LinearWeight* in = nullptr;
+    const __nv_bfloat16* conv_weight = nullptr;
+    const __nv_bfloat16* conv_bias = nullptr;
+    const __nv_bfloat16* dt_bias = nullptr;
+    const __nv_bfloat16* a_log = nullptr;
+    const __nv_bfloat16* d = nullptr;
+    const __nv_bfloat16* norm = nullptr;
+    const LinearWeight* out = nullptr;
+    DeviceBuffer<__nv_bfloat16> conv_state;
+    DeviceBuffer<__nv_bfloat16> ssm_state;
+};
+
+struct MlpOnlyLayer {
+    LayerCommon common;
+    MlpBlockSpec spec;
+    const LinearWeight* up = nullptr;
+    const LinearWeight* down = nullptr;
+};
+
+using Layer = std::variant<AttentionLayer, ConvolutionLayer, Mamba2Layer, MlpOnlyLayer>;
 
 // Free-function visitors replace the old common / as_attention /
 // as_convolution statics). Putting them at namespace scope means callers
@@ -333,6 +355,18 @@ inline ConvolutionLayer* as_convolution(Layer& layer) {
 }
 inline const ConvolutionLayer* as_convolution(const Layer& layer) {
     return std::get_if<ConvolutionLayer>(&layer);
+}
+inline Mamba2Layer* as_mamba2(Layer& layer) {
+    return std::get_if<Mamba2Layer>(&layer);
+}
+inline const Mamba2Layer* as_mamba2(const Layer& layer) {
+    return std::get_if<Mamba2Layer>(&layer);
+}
+inline MlpOnlyLayer* as_mlp_only(Layer& layer) {
+    return std::get_if<MlpOnlyLayer>(&layer);
+}
+inline const MlpOnlyLayer* as_mlp_only(const Layer& layer) {
+    return std::get_if<MlpOnlyLayer>(&layer);
 }
 
 // Feed-forward visitors. These decouple call sites from whether a layer uses

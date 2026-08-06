@@ -28,9 +28,25 @@ struct CpuWorkspace {
         hidden.resize(rows * shape.hidden);
         residual.resize(rows * shape.hidden);
         normed.resize(rows * shape.hidden);
-        op_output.resize(rows * static_cast<size_t>(shape.maximum_attention_query_heads()) *
-                         static_cast<size_t>(shape.maximum_attention_head_dim()));
+        const size_t attention_width = static_cast<size_t>(shape.maximum_attention_query_heads()) *
+            static_cast<size_t>(shape.maximum_attention_head_dim());
+        op_output.resize(rows * std::max(attention_width,
+                         static_cast<size_t>(shape.mamba2_intermediate)));
         qkv.resize(rows * static_cast<size_t>(shape.maximum_attention_projection_width()));
+        size_t mamba_projection_width = 0;
+        size_t mamba_conv_width = 0;
+        for (const Mamba2Spec& spec : shape.mamba2_layouts) {
+            mamba_projection_width = std::max(mamba_projection_width,
+                2ULL * static_cast<size_t>(spec.intermediate_size) +
+                2ULL * static_cast<size_t>(spec.group_count) * static_cast<size_t>(spec.state_size) +
+                static_cast<size_t>(spec.num_heads));
+            mamba_conv_width = std::max(mamba_conv_width,
+                static_cast<size_t>(spec.intermediate_size) +
+                2ULL * static_cast<size_t>(spec.group_count) * static_cast<size_t>(spec.state_size));
+        }
+        mamba_projected.resize(rows * mamba_projection_width);
+        mamba_bcx.resize(rows * mamba_conv_width);
+        mamba_inner.resize(rows * static_cast<size_t>(shape.mamba2_intermediate));
         conv_projected.resize(rows * 3ULL * shape.hidden);
         gate_up.resize(rows * 2ULL * shape.max_feed_forward_intermediate);
         activated.resize(rows * shape.max_feed_forward_intermediate);
@@ -57,6 +73,7 @@ struct CpuWorkspace {
     std::vector<float> hidden, residual, normed, op_output, qkv;
     std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
     std::vector<float> conv_projected, gate_up, activated, mlp_output;
+    std::vector<float> mamba_projected, mamba_bcx, mamba_inner;
     std::vector<float> logits;
     std::vector<float> chunk_hidden, chunk_residual, chunk_normed, chunk_op;
     std::vector<float> chunk_qkv, chunk_conv, chunk_gate_up;
@@ -89,6 +106,7 @@ struct CpuCompiledModel {
         std::vector<float> ffn_norm;
         CpuLinearWeight w13;
         CpuLinearWeight w2;
+        CpuLinearWeight mlp_up;
         CpuLinearWeight per_layer_input_gate;
         CpuLinearWeight per_layer_projection;
         float layer_scalar = 1.0f;
@@ -108,9 +126,23 @@ struct CpuCompiledModel {
         std::vector<float> weight_tap_major;
         CpuLinearWeight out;
     };
+    struct Mamba2Weights {
+        CommonWeights common;
+        CpuLinearWeight in;
+        std::vector<float> conv_weight;
+        std::vector<float> conv_bias;
+        std::vector<float> dt_bias;
+        std::vector<float> a_log;
+        std::vector<float> d;
+        std::vector<float> norm;
+        CpuLinearWeight out;
+    };
+    struct MlpOnlyWeights {
+        CommonWeights common;
+    };
     struct MoeWeights {
         CommonWeights common;
-        std::variant<AttentionWeights, ConvolutionWeights> operator_layer;
+        std::variant<AttentionWeights, ConvolutionWeights, Mamba2Weights, MlpOnlyWeights> operator_layer;
         std::vector<float> router;
         std::vector<float> router_bias;
         std::vector<CpuLinearWeight> expert_w13;
@@ -123,7 +155,8 @@ struct CpuCompiledModel {
         bool disk_cached = false;
         float routed_scaling_factor = 1.0f;
     };
-    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights, MoeWeights>;
+    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights, Mamba2Weights,
+                                     MlpOnlyWeights, MoeWeights>;
 
     struct CpuWeightStore {
         CpuLinearWeight embedding;
@@ -201,7 +234,11 @@ struct CpuCompiledModel {
     struct ConvolutionState {
         std::vector<float> state;
     };
-    using LayerState = std::variant<AttentionState, ConvolutionState>;
+    struct Mamba2State {
+        std::vector<float> conv;
+        std::vector<float> ssm;
+    };
+    using LayerState = std::variant<AttentionState, ConvolutionState, Mamba2State>;
 
     struct CpuSessionState {
         explicit CpuSessionState(GenerationConfig config)
@@ -239,10 +276,13 @@ struct CpuCompiledModel {
     const CommonWeights& common_weights(size_t layer) const;
     static const AttentionWeights* attention_operator(const WeightLayer& layer);
     static const ConvolutionWeights* convolution_operator(const WeightLayer& layer);
+    static const Mamba2Weights* mamba2_operator(const WeightLayer& layer);
     AttentionState& attention_state(size_t layer);
     const AttentionState& attention_state(size_t layer) const;
     ConvolutionState& convolution_state(size_t layer);
     const ConvolutionState& convolution_state(size_t layer) const;
+    Mamba2State& mamba2_state(size_t layer);
+    const Mamba2State& mamba2_state(size_t layer) const;
 
     void store_kv(AttentionState& state, int position,
                   const float* key, const float* value);

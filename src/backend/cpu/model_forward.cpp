@@ -80,6 +80,69 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
                     shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
+        const bool nemotron = shared->shape.mamba2_layer_count > 0;
+        if (nemotron && shared->shape.mixer_kinds[index] == MixerKind::MlpOnly) {
+            const auto& mlp = std::get<CpuCompiledModel::MlpOnlyWeights>(layer_program);
+            const int intermediate = shared->shape.mlp_only_layouts[index].intermediate_size;
+            shared->linear.gemv(mlp.common.mlp_up, workspace_.normed.data(),
+                                workspace_.activated.data());
+            cpu_relu2(workspace_.activated.data(), workspace_.activated.data(), intermediate);
+            shared->linear.gemv(mlp.common.w2, workspace_.activated.data(),
+                                workspace_.hidden.data());
+            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
+            continue;
+        }
+        if (const auto* mamba = mamba2_operator(layer_program)) {
+            const auto& spec = shared->shape.mamba2_layouts[index];
+            const int inner = spec.intermediate_size;
+            const int conv_dim = inner + 2 * spec.group_count * spec.state_size;
+            shared->linear.gemv(mamba->in, workspace_.normed.data(),
+                                workspace_.mamba_projected.data());
+            const float* z = workspace_.mamba_projected.data();
+            const float* xbc = z + inner;
+            const float* dt_raw = xbc + conv_dim;
+            auto& state = mamba2_state(index);
+            for (int channel = 0; channel < conv_dim; ++channel) {
+                float* history = state.conv.data() + static_cast<size_t>(channel) * spec.conv_kernel;
+                for (int tap = 0; tap + 1 < spec.conv_kernel; ++tap) history[tap] = history[tap + 1];
+                history[spec.conv_kernel - 1] = xbc[channel];
+                float value = mamba->conv_bias[channel];
+                for (int tap = 0; tap < spec.conv_kernel; ++tap) {
+                    value += history[tap] * mamba->conv_weight[
+                        static_cast<size_t>(channel) * spec.conv_kernel + tap];
+                }
+                workspace_.mamba_bcx[channel] = value / (1.0f + std::exp(-value));
+            }
+            const int group_size = spec.num_heads / spec.group_count;
+            for (int head = 0; head < spec.num_heads; ++head) {
+                const float dt = std::log1p(std::exp(dt_raw[head] + mamba->dt_bias[head]));
+                const float decay = std::exp(dt * -std::exp(mamba->a_log[head]));
+                const int group = head / group_size;
+                for (int d = 0; d < spec.head_dim; ++d) {
+                    const int channel = head * spec.head_dim + d;
+                    const float x = workspace_.mamba_bcx[channel];
+                    const float* b = workspace_.mamba_bcx.data() + inner + group * spec.state_size;
+                    const float* c = b + spec.group_count * spec.state_size;
+                    float* s = state.ssm.data() + static_cast<size_t>(channel) * spec.state_size;
+                    float output = 0.0f;
+                    for (int n = 0; n < spec.state_size; ++n) {
+                        s[n] = decay * s[n] + dt * b[n] * x;
+                        output += s[n] * c[n];
+                    }
+                    workspace_.mamba_inner[channel] = output + mamba->d[head] * x;
+                }
+            }
+            cpu_rmsnorm(workspace_.mamba_inner.data(), mamba->norm.data(),
+                        workspace_.op_output.data(), inner,
+                        shared->shape.numerical_policy.norm_eps);
+            for (int i = 0; i < inner; ++i) {
+                const float gate = z[i];
+                workspace_.op_output[i] *= gate / (1.0f + std::exp(-gate));
+            }
+            shared->linear.gemv(mamba->out, workspace_.op_output.data(), workspace_.hidden.data());
+            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
+            continue;
+        }
         if (const auto* attention = attention_operator(layer_program)) {
             const AttentionSpec& layout = shared->shape.attention_layout(static_cast<int>(index));
             const int q_width = layout.query_width();
@@ -144,6 +207,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                 shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
+
+        // Nemotron-H attention blocks are mixer-only: they do not have the
+        // generic post-attention normalization and dense FFN.
+        if (nemotron) continue;
 
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
                     shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
@@ -311,6 +378,12 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     }
     if (embeddings && embeddings->width != shared->shape.hidden) {
         throw std::invalid_argument("raw embedding width does not match model hidden size");
+    }
+    if (shared->shape.mamba2_layer_count > 0) {
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            forward_token(tokens[i], compute_logits && i + 1 == tokens.size(), embeddings);
+        }
+        return;
     }
 
     const size_t rows = tokens.size();

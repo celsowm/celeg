@@ -18,6 +18,7 @@ struct CpuPrefixSnapshot {
     std::vector<std::vector<CpuKvPageId>> attention_pages;
     std::vector<size_t> attention_token_counts;
     std::vector<std::vector<float>> convolution_states;
+    std::vector<std::vector<float>> mamba_states;
     std::vector<float> logits;
     std::vector<uint8_t> seen_tokens;
 

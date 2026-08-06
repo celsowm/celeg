@@ -5,6 +5,7 @@
 #include "celeg/models/lfm2/chat_template.hpp"
 #include "celeg/models/minicpm5/chat_template.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
+#include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/smollm3/chat_template.hpp"
 
 #include <stdexcept>
@@ -93,6 +94,7 @@ void add_builtin_chat_profiles(ChatProfileCatalog& catalog) {
     add_minicpm5_chat_profile(catalog);
     add_smollm3_chat_profile(catalog);
     add_qwen35_chat_profile(catalog);
+    add_nemotron_h_chat_profile(catalog);
 }
 
 } // namespace celeg

@@ -42,6 +42,11 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
             expected[1] == 1) {
             shape_ok = true;
         }
+        if (!shape_ok && expected.size() == 1) {
+            size_t elements = 1;
+            for (const int64_t dimension : tensor.shape) elements *= static_cast<size_t>(dimension);
+            shape_ok = elements == static_cast<size_t>(expected.front());
+        }
         if (!shape_ok) {
             throw std::runtime_error("unexpected shape for " + name);
         }
@@ -49,7 +54,7 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
     const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
 
     DeviceWeight weight;
-    weight.shape = tensor.shape;
+    weight.shape = expected.empty() ? tensor.shape : expected;
     weight.bf16_storage.reset(count);
 
     if (tensor.dtype == TensorDType::BF16) {

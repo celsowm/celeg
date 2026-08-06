@@ -53,6 +53,11 @@ struct RuntimeTopology {
     int attention_layer_count = 0;
     int conv_layer_count = 0;
     int gated_delta_net_layer_count = 0;
+    int mamba2_layer_count = 0;
+    int mlp_only_layer_count = 0;
+    int mamba2_intermediate = 0;
+    std::vector<Mamba2Spec> mamba2_layouts;
+    std::vector<MlpBlockSpec> mlp_only_layouts;
     int dense_intermediate = 0;
     int moe_intermediate = 0;
     int num_dense_layers = 0;

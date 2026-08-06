@@ -128,6 +128,14 @@ void cpu_gated_gelu_tanh(const float* gate_up, float* output, size_t count) {
     }
 }
 
+void cpu_relu2(const float* input, float* output, size_t count) {
+    if (!input || !output) throw std::invalid_argument("invalid ReLU2 arguments");
+    for (size_t i = 0; i < count; ++i) {
+        const float value = std::max(input[i], 0.0f);
+        output[i] = value * value;
+    }
+}
+
 void cpu_gelu_tanh(float* data, size_t count) {
     constexpr float k = 0.7978845608028654f;
     constexpr float c = 0.044715f;

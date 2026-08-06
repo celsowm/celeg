@@ -434,6 +434,16 @@ struct CpuCompiledModel::BatchScratch {
 void CpuCompiledModel::forward_batch(std::span<CpuCompiledModel* const> sessions,
                                    std::span<const int32_t> tokens,
                                    std::span<const uint8_t> compute_logits) {
+    if (!sessions.empty() && sessions.front()->shared->shape.mamba2_layer_count > 0) {
+        if (tokens.size() != sessions.size()) {
+            throw std::invalid_argument("Nemotron-H batch requires one token per session");
+        }
+        for (size_t row = 0; row < sessions.size(); ++row) {
+            sessions[row]->forward_token(tokens[row],
+                compute_logits.empty() ? false : compute_logits[row]);
+        }
+        return;
+    }
     thread_local BatchScratch scratch;
     scratch.forward(sessions, tokens, compute_logits);
 }

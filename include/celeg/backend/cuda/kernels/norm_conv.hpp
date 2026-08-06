@@ -17,6 +17,8 @@ void launch_tanh_softcap(__nv_bfloat16* x, int count, float cap,
                          cudaStream_t stream);
 void launch_swiglu_fused(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
                         int count, cudaStream_t stream);
+void launch_relu2(const __nv_bfloat16* input, __nv_bfloat16* out,
+                  int count, cudaStream_t stream);
 void launch_gelu_tanh(const __nv_bfloat16* input, __nv_bfloat16* out,
                       int count, cudaStream_t stream);
 void launch_gated_gelu_tanh(const __nv_bfloat16* gate_up, __nv_bfloat16* out,

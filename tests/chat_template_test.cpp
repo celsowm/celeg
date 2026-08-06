@@ -3,6 +3,7 @@
 #include "celeg/models/granite/chat_template.hpp"
 #include "celeg/models/lfm2/chat_template.hpp"
 #include "celeg/models/minicpm5/chat_template.hpp"
+#include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
 #include "celeg/models/smollm3/chat_template.hpp"
 #include "support/assertions.hpp"
@@ -123,6 +124,18 @@ int main() {
     CELEG_TEST_CHECK(qwen35_prompt ==
         "<|im_start|>user\nDescribe <|vision_start|><|image_pad|><|vision_end|>.<|im_end|>\n"
         "<|im_start|>assistant\n");
+
+    const auto& nemotron = catalog.find("nemotron-h-instruct");
+    CELEG_TEST_CHECK(!catalog.capabilities("nemotron-h-instruct").native_tool_call_codec);
+    const std::string nemotron_think = nemotron.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);
+    CELEG_TEST_CHECK(nemotron_think.ends_with(
+        "<|im_start|>assistant\n<think>\n"));
+    const std::string nemotron_no_think = nemotron.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}},
+        {}, true, celeg::ChatTemplateOptions{false});
+    CELEG_TEST_CHECK(nemotron_no_think.ends_with(
+        "<|im_start|>assistant\n<think></think>"));
 
     const auto& minicpm5 = catalog.find("minicpm5-instruct");
     const auto minicpm5_capabilities = catalog.capabilities("minicpm5-instruct");

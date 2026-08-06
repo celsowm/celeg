@@ -499,6 +499,7 @@ if(CELEG_BUILD_TESTS)
         src/models/minicpm5/architecture.cpp src/models/minicpm5/naming_policy.cpp
         src/models/smollm3/architecture.cpp src/models/smollm3/naming_policy.cpp
         src/models/qwen35/architecture.cpp src/models/qwen35/naming_policy.cpp
+        src/models/nemotron_h/architecture.cpp src/models/nemotron_h/naming_policy.cpp
         src/model/weights/roles.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
@@ -514,7 +515,8 @@ if(CELEG_BUILD_TESTS)
         src/models/gemma4/chat_template.cpp src/models/gemma4/tool_call_codec.cpp
         src/models/minicpm5/chat_template.cpp src/models/minicpm5/tool_call_codec.cpp
         src/models/smollm3/chat_template.cpp src/models/smollm3/tool_call_codec.cpp
-        src/models/qwen35/chat_template.cpp)
+        src/models/qwen35/chat_template.cpp
+        src/models/nemotron_h/chat_template.cpp)
     add_executable(chat_template_test tests/chat_template_test.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         )

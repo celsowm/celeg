@@ -220,13 +220,16 @@ void CudaCompiledModel::load_checkpoint_weights(
     std::vector<int> shared_owner(2, -1);
     for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
+        const bool nemotron = resources_.shape_.mamba2_layer_count > 0;
         common_layer.operator_norm = resources_.weight_loader_->load_weight(
             repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
             {resources_.shape_.hidden});
-        common_layer.ffn_norm = resources_.weight_loader_->load_weight(
-            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnInputNorm, i),
-            {resources_.shape_.hidden});
-        if (resources_.shape_.has_split_attention_norms) {
+        if (!nemotron) {
+            common_layer.ffn_norm = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnInputNorm, i),
+                {resources_.shape_.hidden});
+        }
+        if (!nemotron && resources_.shape_.has_split_attention_norms) {
             common_layer.post_attention_norm = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionPostNorm, i),
                 {resources_.shape_.hidden});
@@ -247,7 +250,11 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.layer_scalar = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
-        if (resources_.shape_.layer_uses_moe(i)) {
+        if (nemotron) {
+            // Nemotron-H owns its block-specific projections in the layer
+            // variant below; there is no generic post-mixer FFN descriptor.
+            common_layer.feed_forward = DenseFfnWeights{};
+        } else if (resources_.shape_.layer_uses_moe(i)) {
             // Mixture-of-experts feed-forward for this layer.
             const int E = resources_.shape_.num_experts;
             const int inter = resources_.shape_.moe_intermediate;
@@ -452,6 +459,52 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
             if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
             resources_.layers_.emplace_back(std::move(attention_layer));
+        } else if (layer_type == MixerKind::Mamba2) {
+            Mamba2Layer mamba_layer;
+            mamba_layer.common = common_layer;
+            mamba_layer.spec = resources_.shape_.mamba2_layouts.at(static_cast<size_t>(i));
+            const Mamba2Spec& spec = mamba_layer.spec;
+            const int conv_dim = spec.intermediate_size +
+                2 * spec.group_count * spec.state_size;
+            mamba_layer.in = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Input, i),
+                {2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
+                 spec.num_heads, resources_.shape_.hidden});
+            mamba_layer.conv_weight = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Conv, i),
+                {conv_dim, 1, spec.conv_kernel});
+            mamba_layer.conv_bias = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2ConvBias, i),
+                {conv_dim});
+            mamba_layer.dt_bias = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2DtBias, i),
+                {spec.num_heads});
+            mamba_layer.a_log = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2ALog, i),
+                {spec.num_heads});
+            mamba_layer.d = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2D, i),
+                {spec.num_heads});
+            mamba_layer.norm = resources_.weight_loader_->load_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Norm, i),
+                {spec.intermediate_size});
+            mamba_layer.out = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Output, i),
+                {resources_.shape_.hidden, spec.intermediate_size});
+            mamba_layer.conv_state.reset(static_cast<size_t>(conv_dim) * spec.conv_kernel);
+            mamba_layer.ssm_state.reset(static_cast<size_t>(spec.intermediate_size) * spec.state_size);
+            resources_.layers_.emplace_back(std::move(mamba_layer));
+        } else if (layer_type == MixerKind::MlpOnly) {
+            MlpOnlyLayer mlp_layer;
+            mlp_layer.common = common_layer;
+            mlp_layer.spec = resources_.shape_.mlp_only_layouts.at(static_cast<size_t>(i));
+            mlp_layer.up = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
+                {mlp_layer.spec.intermediate_size, resources_.shape_.hidden});
+            mlp_layer.down = resources_.weight_loader_->load_linear_weight(
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnDown, i),
+                {resources_.shape_.hidden, mlp_layer.spec.intermediate_size});
+            resources_.layers_.emplace_back(std::move(mlp_layer));
         } else {
             ConvolutionLayer convolution_layer;
             convolution_layer.common = common_layer;

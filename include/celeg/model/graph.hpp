@@ -15,12 +15,15 @@ enum class MixerKind : uint8_t {
     Attention,
     ShortConvolution,
     GatedDeltaNet,
+    Mamba2,
+    MlpOnly,
 };
 enum class FeedForwardKind : uint8_t { Dense, MixtureOfExperts };
 
 enum class ActivationKind : uint8_t {
     SwiGLU,
     GeluTanh,
+    Relu2,
 };
 
 enum class AttentionMaskKind : uint8_t {
@@ -80,6 +83,24 @@ struct GatedDeltaNetSpec {
     int value_heads = 0;
 };
 
+struct Mamba2Spec {
+    int conv_kernel = 0;
+    int intermediate_size = 0;
+    int state_size = 0;
+    int time_step_rank = 0;
+    int num_heads = 0;
+    int head_dim = 0;
+    int group_count = 0;
+    int chunk_size = 0;
+    bool conv_bias = false;
+    bool projection_bias = false;
+};
+
+struct MlpBlockSpec {
+    int intermediate_size = 0;
+    ActivationKind activation = ActivationKind::Relu2;
+};
+
 struct DenseFeedForwardSpec {
     int intermediate_size = 0;
     ActivationKind activation = ActivationKind::SwiGLU;
@@ -118,7 +139,8 @@ struct LayerSpec {
     NormSpec pre_feed_forward_norm;
     NormSpec post_feed_forward_norm;
     NormSpec per_layer_input_norm;
-    std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec> mixer;
+    std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec,
+                 Mamba2Spec, MlpBlockSpec> mixer;
     NormSpec feed_forward_norm;
     std::variant<DenseFeedForwardSpec, MixtureOfExpertsSpec> feed_forward;
     ResidualSpec residual;
@@ -128,7 +150,9 @@ struct LayerSpec {
     MixerKind mixer_kind() const {
         if (std::holds_alternative<AttentionSpec>(mixer)) return MixerKind::Attention;
         if (std::holds_alternative<ShortConvolutionSpec>(mixer)) return MixerKind::ShortConvolution;
-        return MixerKind::GatedDeltaNet;
+        if (std::holds_alternative<GatedDeltaNetSpec>(mixer)) return MixerKind::GatedDeltaNet;
+        if (std::holds_alternative<Mamba2Spec>(mixer)) return MixerKind::Mamba2;
+        return MixerKind::MlpOnly;
     }
     FeedForwardKind feed_forward_kind() const {
         return std::holds_alternative<DenseFeedForwardSpec>(feed_forward)

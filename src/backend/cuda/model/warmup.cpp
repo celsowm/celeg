@@ -37,7 +37,8 @@ void CudaCompiledModel::warmup_decode_gemms() {
                workspace_.qkv_output_.data() + layout.query_width() + layout.key_value_width(),
                1, layout.key_value_width(), resources_.shape_.hidden);
     }
-    if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward)) {
+    if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward);
+        dense && dense->w13 && dense->w2) {
         const int intermediate = dense->w2->cols;
         linear(workspace_.normed_.data(), *dense->w13, workspace_.gate_up_.data(),
                1, 2 * intermediate, resources_.shape_.hidden);
@@ -50,7 +51,8 @@ void CudaCompiledModel::warmup_decode_gemms() {
         linear(workspace_.normed_.data(), *convolution_layer->conv_in, workspace_.conv_projected_.data(),
                1, 3 * resources_.shape_.hidden, resources_.shape_.hidden);
     }
-    if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward)) {
+    if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward);
+        dense && dense->w2) {
         linear(workspace_.activated_.data(), *dense->w2, workspace_.hidden_.data(),
                1, resources_.shape_.hidden, dense->w2->cols,
                resources_.options_.fused_residuals ? 1.0f : 0.0f);

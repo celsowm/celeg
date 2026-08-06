@@ -74,6 +74,21 @@ void launch_scale(__nv_bfloat16* x, int count, float scale, cudaStream_t stream)
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__global__ void relu2_kernel(const __nv_bfloat16* input, __nv_bfloat16* out,
+                             int count) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < count) {
+        const float x = fmaxf(0.0f, bf16_float(input[i]));
+        out[i] = __float2bfloat16(x * x);
+    }
+}
+
+void launch_relu2(const __nv_bfloat16* input, __nv_bfloat16* out,
+                  int count, cudaStream_t stream) {
+    relu2_kernel<<<(count + 255) / 256, 256, 0, stream>>>(input, out, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
 __global__ void tanh_softcap_kernel(__nv_bfloat16* x, int count, float cap) {
     const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (index >= count) return;

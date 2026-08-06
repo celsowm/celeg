@@ -31,11 +31,14 @@ std::string RuntimeTopology::fingerprint() const {
         << "-int" << intermediate << "-cc" << conv_cache
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
+    out << "-m2i" << mamba2_intermediate;
     for (MixerKind kind : mixer_kinds) {
         switch (kind) {
         case MixerKind::Attention: out << "-a"; break;
         case MixerKind::ShortConvolution: out << "-c"; break;
         case MixerKind::GatedDeltaNet: out << "-d"; break;
+        case MixerKind::Mamba2: out << "-m2"; break;
+        case MixerKind::MlpOnly: out << "-mlp"; break;
         }
     }
     out << "-ff";
@@ -87,7 +90,8 @@ void RuntimeTopology::validate() const {
     if (static_cast<int>(feed_forward_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved feed-forward schedule length mismatch");
     }
-    if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count != num_hidden_layers) {
+    if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count +
+        mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {
         throw std::runtime_error("resolved layer counts are inconsistent");
     }
     if (num_experts > 0 && (moe_intermediate <= 0 || experts_per_token <= 0 ||

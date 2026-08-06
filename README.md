@@ -1,7 +1,7 @@
 # Celeg
 
 Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, MiniCPM5,
-and SmolLM3 language models. It provides independent CPU and NVIDIA CUDA
+SmolLM3, and Nemotron 3 Nano language models. It provides independent CPU and NVIDIA CUDA
 backends, direct checkpoint loading, quantized execution, an OpenAI-compatible
 server, and a public C API.
 
@@ -17,6 +17,7 @@ Safetensors checkpoint directory, or a local GGUF file.
 | Granite dense | Yes | No | Yes | Yes |
 | MiniCPM5-1B | Yes | Yes | Yes | Yes |
 | SmolLM3-3B | Yes | Yes | Yes | Yes |
+| Nemotron 3 Nano 4B | Yes | Q4_K_M | Yes | Yes |
 
 MiniCPM5-1B uses the standard Llama tensor layout with GQA (16 query heads,
 2 KV heads), 131072-token context metadata, and both EOS markers from the
@@ -68,6 +69,23 @@ celeg-run --repo ggml-org/SmolLM3-3B-GGUF:Q4_K_M --prompt "Explain gravity" --ma
 The `smollm3-instruct` profile supports the official `<|im_start|>` format,
 NoPE-aware execution, XML tool calls, `/system_override`, and `/think` /
 `/no_think` system flags.
+
+## Nemotron 3 Nano checkpoints
+
+Nemotron 3 Nano 4B is a 42-block hybrid model with 21 Mamba-2 blocks, 17
+ReLU² MLP-only blocks, and four GQA attention blocks. The supported BF16
+checkpoint is `nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16`; the official GGUF
+repository supports its `Q4_K_M` file (about 2.84 GB):
+
+```text
+celeg-cpu-run --repo nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16 --context 4096 --prompt "Hello"
+celeg-run --repo nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M --context 4096 --prompt "Hello"
+```
+
+The `nemotron-h-instruct` profile supports `system`, `user`, and `assistant`
+messages and the official thinking markers. Pass `enable_thinking=false` in
+chat-template options to emit an empty `<think></think>` section. Native
+XML tool-calling is intentionally not advertised for this profile.
 
 ## Requirements
 
@@ -193,9 +211,9 @@ celeg-run --model path/to/model.gguf \
   --max-new-tokens 32
 ```
 
-Celeg reads GGUF model metadata and tokenizer data directly. The file must
-describe an LFM2 or LFM2-MoE checkpoint using the supported GGUF metadata
-namespaces; Granite GGUF is not supported at this time.
+Celeg reads GGUF model metadata and tokenizer data directly. Supported GGUF
+architectures include LFM2/LFM2-MoE, MiniCPM5, SmolLM3, and Nemotron-H Q4_K_M;
+Granite GGUF is not supported at this time.
 
 ## Runner options
 

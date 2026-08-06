@@ -47,7 +47,12 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
             (void)attention;
             continue;
         }
-        as_convolution(layer)->conv_state.zero_async(stream_.get());
+        if (ConvolutionLayer* convolution = as_convolution(layer)) {
+            convolution->conv_state.zero_async(stream_.get());
+        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+            mamba->conv_state.zero_async(stream_.get());
+            mamba->ssm_state.zero_async(stream_.get());
+        }
     }
     // Prime the FFN-done, router-done and prefetch-done events so the offload
     // transfer stream can start promoting experts on the first layer of the

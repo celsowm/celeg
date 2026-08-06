@@ -111,6 +111,13 @@ int main() {
     for (float v : norm_out) mean_square += v * v;
     CELEG_TEST_CHECK(std::abs(mean_square / 8.0f - 1.0f) < 1e-4f);
 
+    const float relu2_input[4] = {-2.0f, -0.5f, 2.0f, 3.0f};
+    float relu2_output[4]{};
+    celeg::cpu_relu2(relu2_input, relu2_output, 4);
+    CELEG_TEST_CHECK(relu2_output[0] == 0.0f && relu2_output[1] == 0.0f);
+    CELEG_TEST_CHECK(std::abs(relu2_output[2] - 4.0f) < 1e-6f);
+    CELEG_TEST_CHECK(std::abs(relu2_output[3] - 9.0f) < 1e-6f);
+
     const int hidden = 4, cache = 3;
     const float bcx[12] = {1,1,1,1, 2,2,2,2, 3,3,3,3};
     // Tap-major: [tap][channel].

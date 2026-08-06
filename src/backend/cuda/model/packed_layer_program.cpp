@@ -19,6 +19,12 @@ PackedLayerProgram PackedLayerProgram::compile(const RuntimeTopology& shape) {
         case MixerKind::ShortConvolution:
             layers.push_back({PackedLayerKind::ShortConvolution});
             break;
+        case MixerKind::Mamba2:
+            layers.push_back({PackedLayerKind::Mamba2});
+            break;
+        case MixerKind::MlpOnly:
+            layers.push_back({PackedLayerKind::MlpOnly});
+            break;
         default:
             throw std::invalid_argument("packed layer program has unsupported mixer kind");
         }

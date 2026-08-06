@@ -11,7 +11,9 @@
 
 namespace celeg {
 
-enum class CompiledMixer : unsigned char { Attention, ShortConvolution };
+enum class CompiledMixer : unsigned char {
+    Attention, ShortConvolution, GatedDeltaNet, Mamba2, MlpOnly
+};
 enum class CompiledFeedForward : unsigned char { Dense, MixtureOfExperts };
 
 // Neutral, immutable MoE semantics.  These values are intentionally free of

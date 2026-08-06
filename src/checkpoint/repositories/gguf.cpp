@@ -18,8 +18,11 @@ namespace {
 // Extracts the "{i}" from "model.layers.{i}." and the trailing suffix.
 // Returns false if `name` is not a per-layer tensor.
 bool split_layer(std::string_view name, int& layer, std::string& suffix) {
-    constexpr std::string_view prefix = "model.layers.";
-    if (name.substr(0, prefix.size()) != prefix) return false;
+    std::string_view prefix;
+    if (name.starts_with("model.layers.")) prefix = "model.layers.";
+    else if (name.starts_with("backbone.layers.")) prefix = "backbone.layers.";
+    else if (name.starts_with("model.backbone.layers.")) prefix = "model.backbone.layers.";
+    else return false;
     size_t pos = prefix.size();
     size_t start = pos;
     while (pos < name.size() && name[pos] >= '0' && name[pos] <= '9') ++pos;
@@ -94,10 +97,14 @@ std::string GgufRepository::translate(std::string_view hf_name) const {
         normalized = "model." + std::string(hf_name.substr(language_model_prefix.size()));
         hf_name = normalized;
     }
-    if (hf_name == "model.embed_tokens.weight") return "token_embd.weight";
+    if (hf_name == "backbone.embeddings.weight" ||
+        hf_name == "model.backbone.embeddings.weight" ||
+        hf_name == "model.embed_tokens.weight") return "token_embd.weight";
     if (hf_name == "model.embedding_norm.weight") return "token_embd_norm.weight";
-    if (hf_name == "model.norm.weight") return "output_norm.weight";
-    if (hf_name == "model.lm_head.weight") return "output.weight";
+    if (hf_name == "backbone.norm_f.weight" || hf_name == "backbone.norm.weight" ||
+        hf_name == "model.backbone.norm_f.weight" || hf_name == "model.backbone.norm.weight" ||
+        hf_name == "model.norm.weight") return "output_norm.weight";
+    if (hf_name == "lm_head.weight" || hf_name == "model.lm_head.weight") return "output.weight";
 
     int layer = 0;
     std::string s;
@@ -107,6 +114,23 @@ std::string GgufRepository::translate(std::string_view hf_name) const {
     if (s == "input_layernorm.weight") return blk(layer, "attn_norm.weight");
     if (s == "ffn_norm.weight") return blk(layer, "ffn_norm.weight");
     if (s == "post_attention_layernorm.weight") return blk(layer, "ffn_norm.weight");
+
+    // Nemotron-H uses one pre-norm for each mutually exclusive block.
+    if (s == "norm.weight") return blk(layer, "attn_norm.weight");
+    if (s == "mixer.in_proj.weight") return blk(layer, "ssm_in.weight");
+    if (s == "mixer.conv1d.weight") return blk(layer, "ssm_conv1d.weight");
+    if (s == "mixer.conv1d.bias") return blk(layer, "ssm_conv1d.bias");
+    if (s == "mixer.dt_bias") return blk(layer, "ssm_dt.bias");
+    if (s == "mixer.A_log") return blk(layer, "ssm_a");
+    if (s == "mixer.D") return blk(layer, "ssm_d");
+    if (s == "mixer.norm.weight") return blk(layer, "ssm_norm.weight");
+    if (s == "mixer.out_proj.weight") return blk(layer, "ssm_out.weight");
+    if (s == "mixer.q_proj.weight") return blk(layer, "attn_q.weight");
+    if (s == "mixer.k_proj.weight") return blk(layer, "attn_k.weight");
+    if (s == "mixer.v_proj.weight") return blk(layer, "attn_v.weight");
+    if (s == "mixer.o_proj.weight") return blk(layer, "attn_output.weight");
+    if (s == "mixer.up_proj.weight") return blk(layer, "ffn_up.weight");
+    if (s == "mixer.down_proj.weight") return blk(layer, "ffn_down.weight");
 
     // Dense feed-forward.
     if (s == "feed_forward.w1.weight") return blk(layer, "ffn_gate.weight");

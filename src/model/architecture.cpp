@@ -93,6 +93,7 @@ void register_builtin_family_bundles(ArchitectureCatalog& catalog) {
     register_minicpm5_architecture(catalog);
     register_smollm3_architecture(catalog);
     register_qwen35_architecture(catalog);
+    register_nemotron_h_architecture(catalog);
 }
 
 } // namespace detail
