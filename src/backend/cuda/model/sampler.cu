@@ -16,7 +16,15 @@ void CudaSampler::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
                           DeviceBuffer<std::uint64_t>& rng_state,
                           DeviceBuffer<std::int32_t>& sampled_device,
                           cudaStream_t stream) {
-    const int effective_top_k = generation.greedy() ? 1 : generation.top_k;
+    if (generation.greedy()) {
+        launch_argmax_bf16(logits.data(), seen_tokens.data(), shape.vocab_size,
+                           generation.repetition_penalty, sampled_device.data(),
+                           stream);
+        launch_mark_seen(sampled_device.data(), seen_tokens.data(),
+                         shape.vocab_size, stream);
+        return;
+    }
+    const int effective_top_k = generation.top_k;
     const float effective_temperature = generation.temperature > 0.0f
         ? generation.temperature : 1.0f;
     launch_fused_sample_topk(

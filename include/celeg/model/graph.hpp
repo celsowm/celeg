@@ -14,6 +14,7 @@ namespace celeg {
 enum class MixerKind : uint8_t {
     Attention,
     ShortConvolution,
+    GatedDeltaNet,
 };
 enum class FeedForwardKind : uint8_t { Dense, MixtureOfExperts };
 
@@ -69,6 +70,16 @@ struct ShortConvolutionSpec {
     bool bias = false;
 };
 
+// Recurrent linear attention used by hybrid decoder families.  The fields are
+// execution semantics; tensor spelling remains in the architecture module.
+struct GatedDeltaNetSpec {
+    int conv_kernel = 0;
+    int key_head_dim = 0;
+    int value_head_dim = 0;
+    int key_heads = 0;
+    int value_heads = 0;
+};
+
 struct DenseFeedForwardSpec {
     int intermediate_size = 0;
     ActivationKind activation = ActivationKind::SwiGLU;
@@ -107,7 +118,7 @@ struct LayerSpec {
     NormSpec pre_feed_forward_norm;
     NormSpec post_feed_forward_norm;
     NormSpec per_layer_input_norm;
-    std::variant<AttentionSpec, ShortConvolutionSpec> mixer;
+    std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec> mixer;
     NormSpec feed_forward_norm;
     std::variant<DenseFeedForwardSpec, MixtureOfExpertsSpec> feed_forward;
     ResidualSpec residual;
@@ -115,8 +126,9 @@ struct LayerSpec {
     float layer_scalar = 1.0f;
 
     MixerKind mixer_kind() const {
-        return std::holds_alternative<AttentionSpec>(mixer)
-            ? MixerKind::Attention : MixerKind::ShortConvolution;
+        if (std::holds_alternative<AttentionSpec>(mixer)) return MixerKind::Attention;
+        if (std::holds_alternative<ShortConvolutionSpec>(mixer)) return MixerKind::ShortConvolution;
+        return MixerKind::GatedDeltaNet;
     }
     FeedForwardKind feed_forward_kind() const {
         return std::holds_alternative<DenseFeedForwardSpec>(feed_forward)

@@ -24,33 +24,22 @@ class IChatTemplate {
 public:
     virtual ~IChatTemplate() = default;
 
-    // Formats a full multi-turn conversation.
+    // Formats a full multi-turn conversation. Options are part of the
+    // contract so a renderer cannot silently discard a caller's request.
     std::string format(std::span<const ChatMessage> messages,
                        bool add_generation_prompt) const {
         return format(messages, std::span<const ChatToolDefinition>{},
-                      add_generation_prompt);
+                      add_generation_prompt, {});
     }
-    virtual std::string format(std::span<const ChatMessage> messages,
-                               std::span<const ChatToolDefinition> tools,
-                               bool add_generation_prompt) const = 0;
+    std::string format(std::span<const ChatMessage> messages,
+                       std::span<const ChatToolDefinition> tools,
+                       bool add_generation_prompt) const {
+        return format(messages, tools, add_generation_prompt, {});
+    }
     virtual std::string format(std::span<const ChatMessage> messages,
                                std::span<const ChatToolDefinition> tools,
                                bool add_generation_prompt,
-                               const ChatTemplateOptions&) const {
-        return format(messages, tools, add_generation_prompt);
-    }
-};
-
-// Instruct chat template:
-//   <|startoftext|>(<|im_start|>{role}\n{content}<|im_end|>\n)*
-//   [<|im_start|>assistant\n]
-// System and Developer messages both render under the "system" role tag;
-// This profile has no separate developer-turn syntax.
-class Lfm2InstructChatTemplate final : public IChatTemplate {
-public:
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt) const override;
+                               const ChatTemplateOptions& options) const = 0;
 };
 
 std::string render_chat(std::span<const ChatMessage> messages,
@@ -74,6 +63,7 @@ public:
     void freeze();
     const IChatTemplate& find(std::string_view profile_id) const;
     ChatCapabilities capabilities(std::string_view profile_id) const;
+    const IChatToolCallCodec* tool_codec(std::string_view profile_id) const;
 
 private:
     struct Entry {
@@ -87,53 +77,5 @@ private:
 
 ChatProfileCatalog make_chat_profile_catalog();
 void add_builtin_chat_profiles(ChatProfileCatalog& catalog);
-
-// Granite instruct chat template:
-//   (<|start_of_role|>{role}<|end_of_role|>{content}<|end_of_text|>\n)*
-//   [<|start_of_role|>assistant<|end_of_role|>]
-// When no system message is supplied, Granite's standard assistant system
-// message is inserted before the conversation.
-class GraniteInstructChatTemplate final : public IChatTemplate {
-public:
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt) const override;
-};
-
-class Gemma4InstructChatTemplate final : public IChatTemplate {
-public:
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt) const override;
-};
-
-class MiniCpm5InstructChatTemplate final : public IChatTemplate {
-public:
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt) const override;
-};
-
-class SmolLm3InstructChatTemplate final : public IChatTemplate {
-public:
-    explicit SmolLm3InstructChatTemplate(bool enable_thinking = true)
-        : enable_thinking_(enable_thinking) {}
-
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt) const override;
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt,
-                       const ChatTemplateOptions& options) const override;
-
-private:
-    std::string format_with_thinking(std::span<const ChatMessage> messages,
-                                     std::span<const ChatToolDefinition> tools,
-                                     bool add_generation_prompt,
-                                     bool enable_thinking) const;
-    bool enable_thinking_;
-};
-
 
 } // namespace celeg

@@ -38,10 +38,12 @@ struct ChatRoleCapabilities {
 
 struct ChatCapabilities {
     bool vision = false;
+    // Token text whose single occurrence is replaced by visual embeddings.
+    // It belongs to the profile, not to protocol mapping or a backend.
+    std::string image_marker = "<|image|>";
     bool assistant_tool_calls = false;
     bool parallel_tool_calls = false;
     bool native_tool_call_codec = false;
-    std::shared_ptr<const IChatToolCallCodec> tool_call_codec;
     ChatRoleCapabilities roles;
 };
 

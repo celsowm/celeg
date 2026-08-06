@@ -53,13 +53,15 @@ void register_chat_completions_route(uWS::App& app,
                                      const celeg::BpeTokenizer& tokenizer,
                                      const celeg::IChatTemplate& chat_template,
                                      const celeg::ChatCapabilities& capabilities,
+                                     const celeg::IChatToolCallCodec* tool_codec,
                                      const std::string& model_name,
                                      std::span<const std::int32_t> eos_token_ids,
                                      std::size_t max_context_tokens,
                                      uWS::Loop* loop) {
     const std::vector<std::int32_t> stop_tokens(eos_token_ids.begin(), eos_token_ids.end());
-    app.post("/v1/chat/completions", [&dispatcher, &service, &tokenizer, &chat_template, &capabilities, &model_name,
-                                      stop_tokens, max_context_tokens, loop](auto* res, auto* /*req*/) {
+    app.post("/v1/chat/completions", [&dispatcher, &service, &tokenizer, &chat_template, &capabilities, tool_codec, &model_name,
+                                       stop_tokens, max_context_tokens, loop](auto* res, auto* /*req*/) {
+        const celeg::IChatToolCallCodec* request_tool_codec = tool_codec;
         struct State {
             std::string body;
             std::atomic<bool> aborted{false};
@@ -73,7 +75,8 @@ void register_chat_completions_route(uWS::App& app,
             if (state->id) forget_after_abort(dispatcher, *state->id);
         });
 
-        res->onData([res, state, &dispatcher, &service, &tokenizer, &chat_template, &capabilities, &model_name,
+        res->onData([res, state, &dispatcher, &service, &tokenizer, &chat_template, &capabilities,
+                     request_tool_codec, &model_name,
                      stop_tokens, max_context_tokens, loop](std::string_view chunk, bool last) {
             if (state->rejected) return;
             if (chunk.size() > kMaxRequestBodyBytes - state->body.size()) {
@@ -127,12 +130,12 @@ void register_chat_completions_route(uWS::App& app,
             if (!stream) {
                 auto completion = std::make_shared<std::vector<std::int32_t>>();
                 dispatcher.watch(id, [res, state, completion, id_str, created, prompt_tokens,
-                                      &tokenizer, &capabilities, &model_name,
+                                      &tokenizer, &capabilities, request_tool_codec, &model_name,
                                       context_window_trimmed, loop](const GenerateEvent& event) {
                     completion->insert(completion->end(), event.tokens.begin(), event.tokens.end());
                     if (!event.finished) return;
                     loop->defer([res, state, completion, id_str, created, prompt_tokens,
-                                 &tokenizer, &capabilities, &model_name, context_window_trimmed,
+                                 &tokenizer, &capabilities, request_tool_codec, &model_name, context_window_trimmed,
                                  reason = event.finish_reason, error = event.error] {
                         if (state->aborted.load()) return;
                         if (reason == FinishReason::Error && !error.empty()) {
@@ -142,7 +145,7 @@ void register_chat_completions_route(uWS::App& app,
                             return;
                         }
                         const auto response = protocol::to_chat_completion_response(
-                            id_str, model_name, created, prompt_tokens, *completion, reason, tokenizer, capabilities);
+                            id_str, model_name, created, prompt_tokens, *completion, reason, tokenizer, request_tool_codec);
                         if (context_window_trimmed) {
                             res->writeHeader("X-Celeg-Context-Trimmed", "true");
                         }
@@ -157,7 +160,7 @@ void register_chat_completions_route(uWS::App& app,
                     res->writeHeader("X-Celeg-Context-Trimmed", "true");
                 }
                 auto first = std::make_shared<bool>(true);
-                auto interpreter = std::make_shared<celeg::serve::ChatGenerationInterpreter>(tokenizer, capabilities);
+                auto interpreter = std::make_shared<celeg::serve::ChatGenerationInterpreter>(tokenizer, request_tool_codec);
                 auto completion_tokens = std::make_shared<std::size_t>(0);
                 const bool include_usage = request.stream_options && request.stream_options->include_usage;
                 dispatcher.watch(id, [res, state, first, id_str, created, &model_name,

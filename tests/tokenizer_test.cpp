@@ -1,4 +1,5 @@
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/models/gemma4/chat_template.hpp"
 #include "support/assertions.hpp"
 #include <filesystem>
 #include <fstream>

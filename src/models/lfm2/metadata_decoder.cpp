@@ -8,20 +8,20 @@ namespace {
 int integer(const CheckpointMetadata& metadata, bool gguf,
             std::string_view json_key, std::string_view gguf_key) {
     return static_cast<int>(metadata.integer(
-        gguf ? std::string(gguf_key) : std::string(json_key)));
+        gguf ? metadata.architecture_type() + "." + std::string(gguf_key) : std::string(json_key)));
 }
 
 int integer_or(const CheckpointMetadata& metadata, bool gguf,
                std::string_view json_key, std::string_view gguf_key,
                int fallback) {
-    const std::string key = gguf ? std::string(gguf_key) : std::string(json_key);
+    const std::string key = gguf ? metadata.architecture_type() + "." + std::string(gguf_key) : std::string(json_key);
     return metadata.contains(key) ? static_cast<int>(metadata.integer(key)) : fallback;
 }
 
 float number_or(const CheckpointMetadata& metadata, bool gguf,
                 std::string_view json_key, std::string_view gguf_key,
                 float fallback) {
-    const std::string key = gguf ? std::string(gguf_key) : std::string(json_key);
+    const std::string key = gguf ? metadata.architecture_type() + "." + std::string(gguf_key) : std::string(json_key);
     return static_cast<float>(metadata.number_or(key, fallback));
 }
 

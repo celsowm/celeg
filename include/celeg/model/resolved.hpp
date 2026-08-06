@@ -52,6 +52,7 @@ struct RuntimeTopology {
     std::vector<int> layer_for_attention_slot;
     int attention_layer_count = 0;
     int conv_layer_count = 0;
+    int gated_delta_net_layer_count = 0;
     int dense_intermediate = 0;
     int moe_intermediate = 0;
     int num_dense_layers = 0;

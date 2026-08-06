@@ -48,7 +48,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
                                                    const celeg::BpeTokenizer& tokenizer,
-                                                   const celeg::ChatCapabilities& capabilities);
+                                                   const celeg::IChatToolCallCodec* tool_codec);
 
 // Builds one SSE chunk for a batch of newly generated tokens. include_role
 // should be true only for the first chunk of a stream. finish_reason is
@@ -60,7 +60,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
                                              const celeg::BpeTokenizer& tokenizer,
-                                             const celeg::ChatCapabilities& capabilities,
+                                             const celeg::IChatToolCallCodec* tool_codec,
                                              std::string_view accumulated_text = {});
 
 ChatCompletionChunk to_chat_completion_chunk(const std::string& id,

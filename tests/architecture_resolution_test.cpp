@@ -93,11 +93,37 @@ celeg::CheckpointMetadata gemma_metadata(int hidden, int intermediate, int layer
     return metadata;
 }
 
+celeg::CheckpointMetadata qwen35_metadata() {
+    celeg::CheckpointMetadata metadata;
+    metadata.values["model_type"] = std::string("qwen3_5");
+    metadata.values["text_config.model_type"] = std::string("qwen3_5_text");
+    metadata.values["text_config.hidden_size"] = int64_t(1024);
+    metadata.values["text_config.intermediate_size"] = int64_t(3584);
+    metadata.values["text_config.num_hidden_layers"] = int64_t(4);
+    metadata.values["text_config.num_attention_heads"] = int64_t(8);
+    metadata.values["text_config.num_key_value_heads"] = int64_t(2);
+    metadata.values["text_config.head_dim"] = int64_t(256);
+    metadata.values["text_config.vocab_size"] = int64_t(248320);
+    metadata.values["text_config.max_position_embeddings"] = int64_t(262144);
+    metadata.values["text_config.eos_token_id"] = int64_t(248044);
+    metadata.values["text_config.rms_norm_eps"] = 1.0e-6;
+    metadata.values["text_config.rope_parameters.rope_theta"] = 1.0e7;
+    metadata.values["text_config.linear_conv_kernel_dim"] = int64_t(4);
+    metadata.values["text_config.linear_key_head_dim"] = int64_t(128);
+    metadata.values["text_config.linear_value_head_dim"] = int64_t(128);
+    metadata.values["text_config.linear_num_key_heads"] = int64_t(16);
+    metadata.values["text_config.linear_num_value_heads"] = int64_t(16);
+    metadata.values["text_config.layer_types"] = std::vector<std::string>{
+        "linear_attention", "linear_attention", "linear_attention", "full_attention"};
+    metadata.repository_hint = "Qwen/Qwen3.5-0.8B";
+    return metadata;
+}
+
 } // namespace
 
 int main() {
     const auto catalog = celeg::create_builtin_architecture_catalog();
-    CELEG_TEST_CHECK(catalog->ids().size() == 5);
+    CELEG_TEST_CHECK(catalog->ids().size() == 6);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog->select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -111,6 +137,19 @@ int main() {
     CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
     CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(!model.graph.has_moe());
+
+    const auto qwen_metadata = qwen35_metadata();
+    const auto& qwen_architecture = catalog->select(qwen_metadata);
+    CELEG_TEST_CHECK(qwen_architecture.id() == "qwen35");
+    celeg::CheckpointView qwen_checkpoint;
+    qwen_checkpoint.metadata = qwen_metadata;
+    const auto qwen = qwen_architecture.resolve(qwen_checkpoint);
+    CELEG_TEST_CHECK(qwen.topology.gated_delta_net_layer_count == 3);
+    CELEG_TEST_CHECK(qwen.topology.attention_layer_count == 1);
+    CELEG_TEST_CHECK(qwen.graph.layers[0].mixer_kind() == celeg::MixerKind::GatedDeltaNet);
+    CELEG_TEST_CHECK(qwen.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(!qwen.capabilities.supports_cpu && !qwen.capabilities.supports_cuda);
+    CELEG_TEST_CHECK(qwen.weight_plan.requests.size() > 40);
 
     // LFM2.5-2.6B (Transformers 5.x config) keeps RoPE under the nested
     // rope_parameters object and uses a 128k vocabulary/context.

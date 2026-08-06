@@ -3,14 +3,19 @@
 namespace celeg {
 
 __global__ void argmax_bf16_kernel(const __nv_bfloat16* values,
-                                   int count,
+                                   const std::uint8_t* seen,
+                                   int count, float repetition_penalty,
                                    int32_t* result) {
     __shared__ float best_values[256];
     __shared__ int best_indices[256];
     float best = -FLT_MAX;
     int index = -1;
     for (int i = threadIdx.x; i < count; i += blockDim.x) {
-        const float value = bf16_float(values[i]);
+        float value = bf16_float(values[i]);
+        if (seen[i]) {
+            value = value < 0.0f ? value * repetition_penalty
+                                 : value / repetition_penalty;
+        }
         if (value > best || (value == best && (index < 0 || i < index))) {
             best = value;
             index = i;
@@ -432,9 +437,11 @@ __global__ void packed_sample_topk_kernel(
     }
 }
 
-void launch_argmax_bf16(const __nv_bfloat16* logits, int count,
-                        int32_t* result, cudaStream_t stream) {
-    argmax_bf16_kernel<<<1, 256, 0, stream>>>(logits, count, result);
+void launch_argmax_bf16(const __nv_bfloat16* logits, const std::uint8_t* seen,
+                        int count, float repetition_penalty, int32_t* result,
+                        cudaStream_t stream) {
+    argmax_bf16_kernel<<<1, 256, 0, stream>>>(
+        logits, seen, count, repetition_penalty, result);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

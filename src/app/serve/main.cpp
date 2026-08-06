@@ -175,6 +175,8 @@ int main(int argc, char** argv) {
 
         celeg::ChatCapabilities chat_capabilities =
             runtime->chat_profiles().capabilities(bootstrap.model.provenance.chat_profile_id);
+        const celeg::IChatToolCallCodec* chat_tool_codec =
+            runtime->chat_profiles().tool_codec(bootstrap.model.provenance.chat_profile_id);
         chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());
@@ -194,7 +196,7 @@ int main(int argc, char** argv) {
             app, tokenizer, chat_template, static_cast<std::size_t>(args.context));
         celeg::app::serve::register_chat_completions_route(
             app, dispatcher, service->requests(), tokenizer, chat_template,
-            chat_capabilities,
+            chat_capabilities, chat_tool_codec,
             model_name, eos_token_ids, static_cast<std::size_t>(args.context), loop);
 
         app.listen(args.host, args.port, [&](auto* listen_socket) {

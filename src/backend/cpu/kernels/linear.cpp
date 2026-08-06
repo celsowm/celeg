@@ -243,17 +243,39 @@ void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
         return;
     }
 
-    const size_t blocks_per_row = weight.cols / 256;
     std::vector<CpuQ8KBlock> activation;
-    quantize_gguf_rows(*pool_, isa_, input, rows, weight.cols, activation);
+    prepare_gguf_activation(input, rows, weight.cols, activation);
+    gemm_gguf(activation, weight, output, rows, beta);
+}
+
+void CpuLinearEngine::prepare_gguf_activation(
+    const float* input, size_t rows, size_t cols,
+    std::vector<CpuQ8KBlock>& activation) const {
+    if ((!input && rows != 0) || cols == 0 || (cols % 256) != 0) {
+        throw std::invalid_argument("invalid GGUF activation shape");
+    }
+    quantize_gguf_rows(*pool_, isa_, input, rows, cols, activation);
+}
+
+void CpuLinearEngine::gemm_gguf(std::span<const CpuQ8KBlock> activation,
+                                const CpuLinearWeight& weight, float* output,
+                                size_t rows, float beta) const {
+    weight.validate();
+    if (!weight.gguf_native()) {
+        throw std::invalid_argument("prequantized GEMM requires native GGUF weights");
+    }
+    if ((!output && rows != 0) || rows > 0 &&
+        activation.size() < rows * (weight.cols / 256)) {
+        throw std::invalid_argument("invalid prequantized GGUF activation");
+    }
+    const size_t blocks_per_row = weight.cols / 256;
 
     size_t output_offset = 0;
     for (const CpuLinearMatrix& segment : weight.segments) {
-        if (!std::holds_alternative<CpuGgufMatrix>(segment)) {
-            throw std::logic_error("mixed internal-Q4/GGUF weight is unsupported");
-        }
         const CpuGgufMatrix& matrix = std::get<CpuGgufMatrix>(segment);
-        constexpr size_t output_tile = 8;
+        // Q4_K/Q6_K rows are small enough that a 16-row tile stays resident
+        // in L1 while amortizing thread-pool scheduling across prefill rows.
+        constexpr size_t output_tile = 16;
         const size_t tiles =
             (static_cast<size_t>(matrix.rows) + output_tile - 1) / output_tile;
         const size_t grain = std::max<size_t>(

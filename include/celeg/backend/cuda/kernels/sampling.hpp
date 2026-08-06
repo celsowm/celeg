@@ -6,8 +6,9 @@
 
 namespace celeg {
 
-void launch_argmax_bf16(const __nv_bfloat16* logits, int count,
-                        int32_t* result, cudaStream_t stream);
+void launch_argmax_bf16(const __nv_bfloat16* logits, const std::uint8_t* seen,
+                        int count, float repetition_penalty, int32_t* result,
+                        cudaStream_t stream);
 void launch_mark_seen_batch(const int32_t* tokens, int count,
                             uint8_t* seen, int vocab, cudaStream_t stream);
 void launch_mark_seen_batch_ptrs(const int32_t* tokens,

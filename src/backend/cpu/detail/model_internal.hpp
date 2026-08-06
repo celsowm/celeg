@@ -35,6 +35,23 @@ struct CpuWorkspace {
         gate_up.resize(rows * 2ULL * shape.max_feed_forward_intermediate);
         activated.resize(rows * shape.max_feed_forward_intermediate);
         mlp_output.resize(rows * shape.hidden);
+        chunk_q8.resize(rows * (static_cast<size_t>(shape.hidden) / 256));
+    }
+
+    void ensure_chunk(size_t rows, const RuntimeTopology& shape) {
+        chunk_hidden.resize(rows * static_cast<size_t>(shape.hidden));
+        chunk_residual.resize(rows * static_cast<size_t>(shape.hidden));
+        chunk_normed.resize(rows * static_cast<size_t>(shape.hidden));
+        chunk_op.resize(rows * static_cast<size_t>(shape.maximum_attention_query_heads()) *
+                        static_cast<size_t>(shape.maximum_attention_head_dim()));
+        chunk_qkv.resize(rows * static_cast<size_t>(shape.maximum_attention_projection_width()));
+        chunk_conv.resize(rows * 3ULL * static_cast<size_t>(shape.hidden));
+        chunk_gate_up.resize(rows * 2ULL * static_cast<size_t>(shape.max_feed_forward_intermediate));
+        chunk_activated.resize(rows * static_cast<size_t>(shape.max_feed_forward_intermediate));
+        chunk_mlp.resize(rows * static_cast<size_t>(shape.hidden));
+        chunk_q8.resize(rows * (static_cast<size_t>(shape.hidden) / 256));
+        final_normed.resize(static_cast<size_t>(shape.hidden));
+        terminal_rows.clear();
     }
 
     std::vector<float> hidden, residual, normed, op_output, qkv;
@@ -44,6 +61,7 @@ struct CpuWorkspace {
     std::vector<float> chunk_hidden, chunk_residual, chunk_normed, chunk_op;
     std::vector<float> chunk_qkv, chunk_conv, chunk_gate_up;
     std::vector<float> chunk_activated, chunk_mlp;
+    std::vector<CpuQ8KBlock> chunk_q8;
     std::vector<float> final_normed, final_logits;
     std::vector<size_t> terminal_rows;
     std::vector<float> moe_router_logits, moe_router_probs;
@@ -57,6 +75,7 @@ struct CpuWorkspace {
     std::vector<float> moe_gathered_normed, moe_gathered_gate_up;
     std::vector<float> moe_gathered_activated, moe_gathered_output;
     std::vector<CpuGroupedGemmJob> moe_gemm_jobs;
+    std::vector<std::shared_ptr<const CpuExpertWeights>> moe_cached_experts;
 };
 
 struct CpuCompiledModel {
@@ -209,7 +228,8 @@ struct CpuCompiledModel {
     void reset();
     void forward_token(int32_t token, bool compute_logits,
                        const PromptEmbedding* embeddings = nullptr);
-    void forward_chunk(std::span<const int32_t> tokens, bool compute_logits);
+    void forward_chunk(std::span<const int32_t> tokens, bool compute_logits,
+                       const PromptEmbedding* embeddings = nullptr);
     static void forward_batch(std::span<CpuCompiledModel* const> sessions,
                               std::span<const int32_t> tokens,
                               std::span<const uint8_t> compute_logits);

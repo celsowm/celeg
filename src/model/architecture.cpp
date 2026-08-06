@@ -92,6 +92,7 @@ void register_builtin_family_bundles(ArchitectureCatalog& catalog) {
     register_gemma4_architecture(catalog);
     register_minicpm5_architecture(catalog);
     register_smollm3_architecture(catalog);
+    register_qwen35_architecture(catalog);
 }
 
 } // namespace detail

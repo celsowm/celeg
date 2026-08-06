@@ -33,18 +33,18 @@ std::size_t complete_utf8_prefix(std::string_view text) {
 namespace celeg::serve {
 
 ChatGenerationInterpreter::ChatGenerationInterpreter(
-    const BpeTokenizer& tokenizer, const ChatCapabilities& capabilities)
-    : tokenizer_(tokenizer), capabilities_(capabilities) {}
+    const BpeTokenizer& tokenizer, const IChatToolCallCodec* tool_codec)
+    : tokenizer_(tokenizer), tool_codec_(tool_codec) {}
 
 ChatGenerationDelta ChatGenerationInterpreter::consume(
     std::span<const std::int32_t> tokens, bool finished) {
     for (const std::int32_t token : tokens) generated_text_ += tokenizer_.decode_token(token, false);
     const std::string& generated = generated_text_;
-    const auto parsed = capabilities_.tool_call_codec
-        ? capabilities_.tool_call_codec->parse_generation(generated)
+    const auto parsed = tool_codec_
+        ? tool_codec_->parse_generation(generated)
         : ToolParseResult{};
     const auto& calls = parsed.calls;
-    const std::string visible = !capabilities_.tool_call_codec ||
+    const std::string visible = !tool_codec_ ||
         parsed.status == ToolParseStatus::NotToolCall ? generated : parsed.assistant_text;
     const std::size_t safe_size = finished ? visible.size() : complete_utf8_prefix(visible);
     const std::string_view safe_visible(visible.data(), safe_size);

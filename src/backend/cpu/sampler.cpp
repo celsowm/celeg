@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <queue>
 #include <vector>
 
 namespace celeg {
@@ -58,16 +57,19 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
     const auto better = [](const Candidate& a, const Candidate& b) {
         return a.score == b.score ? a.token < b.token : a.score > b.score;
     };
-    std::priority_queue<Candidate, std::vector<Candidate>, decltype(better)> heap(better);
-    for (std::int32_t token = 0; token < shape.vocab_size; ++token) {
-        heap.push({token, penalized(token) / temperature});
-        if (static_cast<int>(heap.size()) > top_k) heap.pop();
-    }
+    // Select the K best candidates in linear expected time. The previous
+    // priority_queue performed O(V log K) heap updates for every token; this
+    // path is hot for CPU generation and the final K-way sort is sufficient
+    // for deterministic ordering and top-p truncation.
     std::vector<Candidate> candidates;
-    candidates.reserve(heap.size());
-    while (!heap.empty()) {
-        candidates.push_back(heap.top());
-        heap.pop();
+    candidates.reserve(static_cast<size_t>(shape.vocab_size));
+    for (std::int32_t token = 0; token < shape.vocab_size; ++token) {
+        candidates.push_back({token, penalized(token) / temperature});
+    }
+    if (static_cast<int>(candidates.size()) > top_k) {
+        std::nth_element(candidates.begin(), candidates.begin() + top_k,
+                         candidates.end(), better);
+        candidates.resize(static_cast<size_t>(top_k));
     }
     std::sort(candidates.begin(), candidates.end(), better);
     const float maximum = candidates.front().score;

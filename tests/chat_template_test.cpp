@@ -1,4 +1,10 @@
 #include "celeg/text/chat_template.hpp"
+#include "celeg/models/gemma4/chat_template.hpp"
+#include "celeg/models/granite/chat_template.hpp"
+#include "celeg/models/lfm2/chat_template.hpp"
+#include "celeg/models/minicpm5/chat_template.hpp"
+#include "celeg/models/qwen35/chat_template.hpp"
+#include "celeg/models/smollm3/chat_template.hpp"
 #include "support/assertions.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -46,22 +52,31 @@ int main() {
     const std::string tool_turn = tmpl.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::Tool, "result"}}, true);
     CELEG_TEST_CHECK(tool_turn.find("<|tool_response_start|>result<|tool_response_end|>") != std::string::npos);
+    bool unsupported_option_rejected = false;
+    try {
+        tmpl.format(std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}},
+                    {}, true, celeg::ChatTemplateOptions{false});
+    } catch (const std::invalid_argument&) {
+        unsupported_option_rejected = true;
+    }
+    CELEG_TEST_CHECK(unsupported_option_rejected);
     const auto lfm2_capabilities = catalog.capabilities("lfm2-instruct");
     CELEG_TEST_CHECK(lfm2_capabilities.native_tool_call_codec);
-    CELEG_TEST_CHECK(lfm2_capabilities.tool_call_codec != nullptr);
-    const auto lfm2_parse = lfm2_capabilities.tool_call_codec->parse_generation(
+    const auto* lfm2_codec = catalog.tool_codec("lfm2-instruct");
+    CELEG_TEST_CHECK(lfm2_codec != nullptr);
+    const auto lfm2_parse = lfm2_codec->parse_generation(
         "<|tool_call_start|>[weather(city='Paris', unit='C')]<|tool_call_end|>");
     CELEG_TEST_CHECK(lfm2_parse.status == celeg::ToolParseStatus::Complete);
     CELEG_TEST_CHECK(lfm2_parse.calls.size() == 1);
     CELEG_TEST_CHECK(lfm2_parse.calls[0].name == "weather");
     CELEG_TEST_CHECK(lfm2_parse.calls[0].arguments == "{\"city\":\"Paris\",\"unit\":\"C\"}");
-    const auto lfm2_incomplete = lfm2_capabilities.tool_call_codec->parse_generation(
+    const auto lfm2_incomplete = lfm2_codec->parse_generation(
         "<|tool_call_start|>[weather(city=\"Paris\")");
     CELEG_TEST_CHECK(lfm2_incomplete.status == celeg::ToolParseStatus::Incomplete);
     const celeg::ToolDefinition tool_definition{
         "function", {"weather", "Weather lookup", {{"{\"type\":\"object\"}"}}, false}};
     const celeg::ToolChoice tool_choice{celeg::ToolChoiceMode::Auto, {}};
-    CELEG_TEST_CHECK(lfm2_capabilities.tool_call_codec->render_tool_definitions(
+    CELEG_TEST_CHECK(lfm2_codec->render_tool_definitions(
         std::span<const celeg::ToolDefinition>(&tool_definition, 1), tool_choice).find("weather") != std::string::npos);
 
     const auto& granite = catalog.find("granite-instruct");
@@ -90,26 +105,38 @@ int main() {
     const auto& gemma = catalog.find("gemma4-instruct");
     const auto gemma_capabilities = catalog.capabilities("gemma4-instruct");
     CELEG_TEST_CHECK(gemma_capabilities.vision);
-    CELEG_TEST_CHECK(gemma_capabilities.tool_call_codec != nullptr);
-    const auto gemma_parse = gemma_capabilities.tool_call_codec->parse_generation(
+    const auto* gemma_codec = catalog.tool_codec("gemma4-instruct");
+    CELEG_TEST_CHECK(gemma_codec != nullptr);
+    const auto gemma_parse = gemma_codec->parse_generation(
         "<|tool_call>call:weather{\"city\":\"Paris\"}<tool_call|>");
     CELEG_TEST_CHECK(gemma_parse.status == celeg::ToolParseStatus::Complete);
     CELEG_TEST_CHECK(gemma_parse.calls.size() == 1);
     CELEG_TEST_CHECK(gemma_parse.calls[0].name == "weather");
     CELEG_TEST_CHECK(gemma_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
 
+    const auto& qwen35 = catalog.find("qwen35-instruct");
+    const auto qwen35_capabilities = catalog.capabilities("qwen35-instruct");
+    CELEG_TEST_CHECK(qwen35_capabilities.vision);
+    CELEG_TEST_CHECK(qwen35_capabilities.image_marker == "<|image_pad|>");
+    const std::string qwen35_prompt = qwen35.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Describe <|image|>."}}, true);
+    CELEG_TEST_CHECK(qwen35_prompt ==
+        "<|im_start|>user\nDescribe <|vision_start|><|image_pad|><|vision_end|>.<|im_end|>\n"
+        "<|im_start|>assistant\n");
+
     const auto& minicpm5 = catalog.find("minicpm5-instruct");
     const auto minicpm5_capabilities = catalog.capabilities("minicpm5-instruct");
     CELEG_TEST_CHECK(!minicpm5_capabilities.vision);
     CELEG_TEST_CHECK(minicpm5_capabilities.roles.developer);
     CELEG_TEST_CHECK(minicpm5_capabilities.parallel_tool_calls);
-    CELEG_TEST_CHECK(minicpm5_capabilities.tool_call_codec != nullptr);
+    const auto* minicpm5_codec = catalog.tool_codec("minicpm5-instruct");
+    CELEG_TEST_CHECK(minicpm5_codec != nullptr);
     const std::string minicpm5_prompt = minicpm5.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "What is the weather?"}}, true);
     CELEG_TEST_CHECK(minicpm5_prompt.find("<bos><|im_start|>user\nWhat is the weather?") == 0);
     CELEG_TEST_CHECK(minicpm5_prompt.find("<|im_start|>assistant\n<think>\n\n</think>\n\n") != std::string::npos);
 
-    const auto minicpm5_tool_parse = minicpm5_capabilities.tool_call_codec->parse_generation(
+    const auto minicpm5_tool_parse = minicpm5_codec->parse_generation(
         "I will check. <function name=\"weather\"><param name=\"city\">\"Paris\"</param>"
         "<param name=\"unit\">\"C\"</param></function>");
     CELEG_TEST_CHECK(minicpm5_tool_parse.status == celeg::ToolParseStatus::Complete);
@@ -125,7 +152,8 @@ int main() {
 
     const auto& smollm3 = catalog.find("smollm3-instruct");
     const auto smollm3_capabilities = catalog.capabilities("smollm3-instruct");
-    CELEG_TEST_CHECK(smollm3_capabilities.tool_call_codec != nullptr);
+    const auto* smollm3_codec = catalog.tool_codec("smollm3-instruct");
+    CELEG_TEST_CHECK(smollm3_codec != nullptr);
     const std::string smollm3_think = smollm3.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);
     CELEG_TEST_CHECK(smollm3_think.find("Reasoning Mode: /think") != std::string::npos);
@@ -143,7 +171,7 @@ int main() {
         {}, true, no_think_options);
     CELEG_TEST_CHECK(smollm3_option_no_think.find("Reasoning Mode: /no_think") !=
                      std::string::npos);
-    const auto smollm3_parse = smollm3_capabilities.tool_call_codec->parse_generation(
+    const auto smollm3_parse = smollm3_codec->parse_generation(
         "<tool_call>{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}</tool_call>");
     CELEG_TEST_CHECK(smollm3_parse.status == celeg::ToolParseStatus::Complete);
     CELEG_TEST_CHECK(smollm3_parse.calls.size() == 1);

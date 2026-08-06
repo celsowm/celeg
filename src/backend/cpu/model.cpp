@@ -101,15 +101,11 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
     state_->session_.phase = SessionPhase::Prefilling;
     state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    if (!embeddings.empty()) {
+    if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
             state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
-            state_->forward_token(tokens[i], i + 1 == tokens.size(), &embeddings);
-        }
-    } else if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
-        for (size_t i = 0; i < tokens.size(); ++i) {
-            state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
-            state_->forward_token(tokens[i], i + 1 == tokens.size());
+            state_->forward_token(tokens[i], i + 1 == tokens.size(),
+                                  embeddings.empty() ? nullptr : &embeddings);
         }
     } else {
         const size_t chunk = state_->shared->options.prefill_chunk_tokens;
@@ -120,12 +116,14 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
             }
             state_->forward_chunk(
                 std::span<const int32_t>(tokens.data() + begin, end - begin),
-                end == tokens.size());
+                end == tokens.size(), embeddings.empty() ? nullptr : &embeddings);
         }
     }
     const auto ended = std::chrono::steady_clock::now();
     state_->session_.metrics.last_prefill_ms =
         std::chrono::duration<double, std::milli>(ended - started).count();
+    state_->session_.prefill_profile.total_ms =
+        state_->session_.metrics.last_prefill_ms;
     state_->session_.metrics.prefill_tokens = tokens.size();
     state_->session_.phase = SessionPhase::Ready;
 }

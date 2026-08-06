@@ -550,15 +550,41 @@ int main() {
         std::vector<__nv_bfloat16> logits = {
             to_bf16(-1.0f), to_bf16(8.0f), to_bf16(8.0f), to_bf16(2.0f)};
         celeg::DeviceBuffer<__nv_bfloat16> device_logits(logits.size());
+        std::vector<uint8_t> seen(logits.size(), 0);
+        celeg::DeviceBuffer<uint8_t> device_seen(seen.size());
         celeg::DeviceBuffer<int32_t> result(1);
         CELEG_CUDA(cudaMemcpy(device_logits.data(), logits.data(),
                             device_logits.bytes(), cudaMemcpyHostToDevice));
-        celeg::launch_argmax_bf16(device_logits.data(),
-                                static_cast<int>(logits.size()),
-                                result.data(), stream.get());
+        CELEG_CUDA(cudaMemcpy(device_seen.data(), seen.data(), device_seen.bytes(),
+                              cudaMemcpyHostToDevice));
+        celeg::launch_argmax_bf16(device_logits.data(), device_seen.data(),
+                                  static_cast<int>(logits.size()), 1.0f,
+                                  result.data(), stream.get());
         int32_t index = -1;
         CELEG_CUDA(cudaMemcpyAsync(&index, result.data(), sizeof(index),
                                  cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        CELEG_TEST_CHECK(index == 1);
+    }
+
+    // Greedy argmax applies repetition penalty without the top-k path.
+    {
+        std::vector<__nv_bfloat16> logits = {
+            to_bf16(5.0f), to_bf16(4.0f), to_bf16(3.0f), to_bf16(2.0f)};
+        std::vector<uint8_t> seen = {1, 0, 0, 0};
+        celeg::DeviceBuffer<__nv_bfloat16> device_logits(logits.size());
+        celeg::DeviceBuffer<uint8_t> device_seen(seen.size());
+        celeg::DeviceBuffer<int32_t> result(1);
+        CELEG_CUDA(cudaMemcpy(device_logits.data(), logits.data(), device_logits.bytes(),
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(device_seen.data(), seen.data(), device_seen.bytes(),
+                              cudaMemcpyHostToDevice));
+        celeg::launch_argmax_bf16(device_logits.data(), device_seen.data(),
+                                  static_cast<int>(logits.size()), 2.0f,
+                                  result.data(), stream.get());
+        int32_t index = -1;
+        CELEG_CUDA(cudaMemcpyAsync(&index, result.data(), sizeof(index),
+                                   cudaMemcpyDeviceToHost, stream.get()));
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         CELEG_TEST_CHECK(index == 1);
     }

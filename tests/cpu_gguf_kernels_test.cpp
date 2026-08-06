@@ -105,10 +105,24 @@ int main() {
         CELEG_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
         if (const auto dot4 = celeg::select_cpu_gguf_dot4_kernel(isa)) {
             std::array<celeg::CpuQ8KBlock, 4> batch{};
-            for (size_t lane = 0; lane < batch.size(); ++lane) batch[lane] = activation[0];
+            std::array<float, 4> expected{};
+            for (size_t lane = 0; lane < batch.size(); ++lane) {
+                std::vector<float> lane_input(input.size());
+                for (size_t col = 0; col < input.size(); ++col) {
+                    lane_input[col] = input[col] * static_cast<float>(lane + 1) +
+                        std::cos(static_cast<float>(col) * 0.13f + static_cast<float>(lane));
+                }
+                const auto lane_activation = celeg::cpu_quantize_q8k(
+                    lane_input.data(), lane_input.size(), isa);
+                batch[lane] = lane_activation[0];
+                expected[lane] = selected(matrix->data, matrix->type,
+                    lane_activation.data(), matrix->cols);
+            }
             std::array<float, 4> values{};
             dot4(matrix->data, matrix->type, batch.data(), matrix->cols, values.data());
-            for (float value : values) CELEG_TEST_CHECK(std::abs(value - scalar) < 1e-4f);
+            for (size_t lane = 0; lane < values.size(); ++lane) {
+                CELEG_TEST_CHECK(std::abs(values[lane] - expected[lane]) < 1e-4f);
+            }
         }
     }
 

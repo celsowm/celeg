@@ -68,6 +68,11 @@ public:
               float beta = 0.0f) const;
     void gemm(const CpuLinearWeight& weight, const float* input, float* output,
               size_t rows, float beta = 0.0f) const;
+    void prepare_gguf_activation(const float* input, size_t rows, size_t cols,
+                                 std::vector<CpuQ8KBlock>& activation) const;
+    void gemm_gguf(std::span<const CpuQ8KBlock> activation,
+                   const CpuLinearWeight& weight, float* output,
+                   size_t rows, float beta = 0.0f) const;
     void gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
                       const float* input, float* output) const;
     void embedding(const CpuLinearWeight& table, int32_t token,

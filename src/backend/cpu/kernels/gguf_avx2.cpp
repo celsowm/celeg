@@ -122,19 +122,6 @@ CELEG_GGUF_AVX2_TARGET int dot_i8_u4(const int8_t* activation,
     return horizontal_sum(sum);
 }
 
-int q6_value(const BlockQ6K& block, int col) {
-    const int half = col >> 7;
-    const int index = col & 127;
-    const int lane = index & 31;
-    const int group = index >> 5;
-    const uint8_t* ql = block.ql + half * 64;
-    const uint8_t* qh = block.qh + half * 32;
-    if (group == 0) return (ql[lane] & 15) | ((qh[lane] & 3) << 4);
-    if (group == 1) return (ql[lane + 32] & 15) | (((qh[lane] >> 2) & 3) << 4);
-    if (group == 2) return (ql[lane] >> 4) | (((qh[lane] >> 4) & 3) << 4);
-    return (ql[lane + 32] >> 4) | (((qh[lane] >> 6) & 3) << 4);
-}
-
 void scale_min(const BlockQ4K& block, int sub, uint8_t& scale,
                uint8_t& minimum) {
     if (sub < 4) {
@@ -171,16 +158,19 @@ void cpu_quantize_q8k_avx2(const float* input, size_t cols,
         block.d = max_value == 0.0f ? 0.0f : max_value / 127.0f;
         const __m256 inverse = _mm256_set1_ps(
             block.d == 0.0f ? 0.0f : 1.0f / block.d);
-        alignas(32) int32_t converted[8];
         for (int i = 0; i < 256; i += 8) {
             const __m256 values = _mm256_mul_ps(
                 _mm256_loadu_ps(source + i), inverse);
             const __m256i integers = _mm256_cvtps_epi32(values);
-            _mm256_store_si256(reinterpret_cast<__m256i*>(converted), integers);
-            for (int lane = 0; lane < 8; ++lane) {
-                block.qs[i + lane] = static_cast<int8_t>(
-                    std::clamp(converted[lane], -127, 127));
-            }
+            const __m128i min_value = _mm_set1_epi32(-127);
+            const __m128i max_value = _mm_set1_epi32(127);
+            __m128i low = _mm256_castsi256_si128(integers);
+            __m128i high = _mm256_extracti128_si256(integers, 1);
+            low = _mm_max_epi32(min_value, _mm_min_epi32(max_value, low));
+            high = _mm_max_epi32(min_value, _mm_min_epi32(max_value, high));
+            const __m128i packed16 = _mm_packs_epi32(low, high);
+            const __m128i packed8 = _mm_packs_epi16(packed16, packed16);
+            _mm_storel_epi64(reinterpret_cast<__m128i*>(block.qs.data() + i), packed8);
         }
         for (int group = 0; group < 16; ++group) {
             int sum = 0;
@@ -198,25 +188,46 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
         const auto* weights = reinterpret_cast<const BlockQ6K*>(packed_row);
         float totals[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         const size_t blocks = cols / 256;
+        const __m256i m3 = _mm256_set1_epi8(3);
+        const __m256i m12 = _mm256_set1_epi8(12);
+        const __m256i m48 = _mm256_set1_epi8(48);
+        const __m256i mhi = _mm256_set1_epi8(static_cast<char>(0xc0));
+        const __m256i m15 = _mm256_set1_epi8(15);
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ6K& weight = weights[b];
-            alignas(32) int8_t decoded[256];
-            for (int col = 0; col < 256; ++col) {
-                decoded[col] = static_cast<int8_t>(q6_value(weight, col) - 32);
-            }
             int block_totals[4] = {0, 0, 0, 0};
-            for (int sub = 0; sub < 16; ++sub) {
-                const __m128i w8 = _mm_loadu_si128(
-                    reinterpret_cast<const __m128i*>(decoded + sub * 16));
-                const __m256i w16 = _mm256_cvtepi8_epi16(w8);
-                for (int lane = 0; lane < 4; ++lane) {
-                    const CpuQ8KBlock& x = activation[lane * blocks + b];
-                    const __m128i x8 = _mm_loadu_si128(
-                        reinterpret_cast<const __m128i*>(x.qs.data() + sub * 16));
-                    const __m256i x16 = _mm256_cvtepi8_epi16(x8);
-                    const __m256i product = _mm256_mullo_epi16(w16, x16);
-                    block_totals[lane] += horizontal_sum(_mm256_madd_epi16(
-                        product, _mm256_set1_epi16(1)));
+            for (int half = 0; half < 2; ++half) {
+                const uint8_t* ql = weight.ql + half * 64;
+                const uint8_t* qh = weight.qh + half * 32;
+                const __m256i low = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(ql));
+                const __m256i high = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(ql + 32));
+                const __m256i bits = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(qh));
+                alignas(32) uint8_t decoded[4][32];
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[0]),
+                    _mm256_or_si256(_mm256_and_si256(low, m15),
+                        _mm256_slli_epi16(_mm256_and_si256(bits, m3), 4)));
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[1]),
+                    _mm256_or_si256(_mm256_and_si256(high, m15),
+                        _mm256_slli_epi16(_mm256_and_si256(bits, m12), 2)));
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[2]),
+                    _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(low, 4), m15),
+                        _mm256_and_si256(bits, m48)));
+                _mm256_store_si256(reinterpret_cast<__m256i*>(decoded[3]),
+                    _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(high, 4), m15),
+                        _mm256_srli_epi16(_mm256_and_si256(bits, mhi), 2)));
+                for (int group = 0; group < 8; ++group) {
+                    const int sub = half * 8 + group;
+                    const int decoded_lane = group >> 1;
+                    const uint8_t* values = decoded[decoded_lane] + (group & 1) * 16;
+                    for (int lane = 0; lane < 4; ++lane) {
+                        const CpuQ8KBlock& x = activation[lane * blocks + b];
+                        const int dot = dot_u8_i8_16(values, x.qs.data() + sub * 16) -
+                            32 * x.bsums[sub];
+                        block_totals[lane] += static_cast<int>(weight.scales[sub]) * dot;
+                    }
                 }
             }
             const float d = fp16_to_float(weight.d);
@@ -239,11 +250,15 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
     float totals[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const size_t blocks = cols / 256;
     const __m256i mask = _mm256_set1_epi8(15);
+    const __m256i one16 = _mm256_set1_epi16(1);
     for (size_t b = 0; b < blocks; ++b) {
         const BlockQ4K& weight = weights[b];
         const float d = fp16_to_float(weight.d);
         const float dmin = fp16_to_float(weight.dmin);
-        float block_totals[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        __m256i scaled[4] = {
+            _mm256_setzero_si256(), _mm256_setzero_si256(),
+            _mm256_setzero_si256(), _mm256_setzero_si256()};
+        int minimum_totals[4] = {0, 0, 0, 0};
         for (int sub = 0; sub < 8; ++sub) {
             uint8_t scale = 0, minimum = 0;
             scale_min(weight, sub, scale, minimum);
@@ -258,15 +273,17 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
                 const __m256i values = _mm256_loadu_si256(
                     reinterpret_cast<const __m256i*>(x.qs.data() + sub * 32));
                 const __m256i pair = _mm256_maddubs_epi16(unpacked, values);
-                const int dot = horizontal_sum(_mm256_madd_epi16(
-                    pair, _mm256_set1_epi16(1)));
+                const __m256i dot = _mm256_madd_epi16(pair, one16);
+                scaled[lane] = _mm256_add_epi32(scaled[lane],
+                    _mm256_mullo_epi32(dot, _mm256_set1_epi32(scale)));
                 const int sum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
-                block_totals[lane] += d * static_cast<float>(scale * dot) -
-                    dmin * static_cast<float>(minimum * sum);
+                minimum_totals[lane] += static_cast<int>(minimum) * sum;
             }
         }
         for (int lane = 0; lane < 4; ++lane) {
-            totals[lane] += activation[lane * blocks + b].d * block_totals[lane];
+            const float block_total = d * static_cast<float>(horizontal_sum(scaled[lane])) -
+                dmin * static_cast<float>(minimum_totals[lane]);
+            totals[lane] += activation[lane * blocks + b].d * block_total;
         }
     }
     for (int lane = 0; lane < 4; ++lane) output4[lane] = totals[lane];

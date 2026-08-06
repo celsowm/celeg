@@ -19,27 +19,36 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/lfm2/architecture.cpp
     src/models/lfm2/layer_decoder.cpp
     src/models/lfm2/metadata_decoder.cpp
+    src/models/lfm2/chat_template.cpp
     src/models/lfm2/naming_policy.cpp
     src/models/lfm2/tool_call_codec.cpp
     src/models/granite/architecture.cpp
     src/models/granite/topology.cpp
+    src/models/granite/chat_template.cpp
     src/models/granite/naming_policy.cpp
     src/models/gemma4/architecture.cpp
     src/models/gemma4/naming_policy.cpp
+    src/models/gemma4/chat_template.cpp
     src/models/gemma4/tool_call_codec.cpp
     src/models/gemma4/vision.cpp
     src/models/gemma4/runtime_module.cpp
     src/models/minicpm5/architecture.cpp
     src/models/minicpm5/naming_policy.cpp
+    src/models/minicpm5/chat_template.cpp
     src/models/minicpm5/tool_call_codec.cpp
     src/models/smollm3/architecture.cpp
     src/models/smollm3/naming_policy.cpp
+    src/models/smollm3/chat_template.cpp
     src/models/smollm3/tool_call_codec.cpp
+    src/models/qwen35/architecture.cpp
+    src/models/qwen35/naming_policy.cpp
+    src/models/qwen35/chat_template.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp
     src/model/reference.cpp
     src/text/tokenizer.cpp
+    src/text/chat_template_support.cpp
     src/text/chat_template.cpp
     src/runtime/cache/host_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp

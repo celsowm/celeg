@@ -1,6 +1,7 @@
 #include "celeg/serve/protocol/json.hpp"
 #include "celeg/serve/protocol/mapping.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/models/lfm2/chat_template.hpp"
 #include "support/assertions.hpp"
 
 #include <filesystem>
@@ -96,6 +97,11 @@ int main() {
     CELEG_TEST_CHECK(!parsed.chat_template_kwargs->enable_thinking);
     CELEG_TEST_CHECK(parsed.stream_options && parsed.stream_options->include_usage);
     CELEG_TEST_CHECK(!parsed.stream.has_value());
+
+    // enable_thinking is profile-specific; LFM2 must reject it instead of
+    // silently discarding the request. The serialization contract above is
+    // still covered by `parsed`.
+    request.chat_template_kwargs.reset();
 
     // Tool requests are validated before reaching the backend and use the
     // profile capability contract rather than exception-based discovery.

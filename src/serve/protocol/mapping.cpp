@@ -321,9 +321,9 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
     }
     generate_request.images = std::move(images);
     if (!generate_request.images.empty()) {
-        const auto image_token = tokenizer.token_id("<|image|>");
+        const auto image_token = tokenizer.token_id(capabilities.image_marker);
         if (!image_token) {
-            throw std::invalid_argument("Gemma image marker is absent from the tokenizer vocabulary");
+            throw std::invalid_argument("configured image marker is absent from the tokenizer vocabulary");
         }
         generate_request.image_token_id = *image_token;
     }
@@ -356,7 +356,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
                                                    const celeg::BpeTokenizer& tokenizer,
-                                                   const celeg::ChatCapabilities& capabilities) {
+                                                   const celeg::IChatToolCallCodec* tool_codec) {
     ChatCompletionResponse response;
     response.id = id;
     response.model = model;
@@ -365,8 +365,8 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
     ChatCompletionChoice choice;
     choice.index = 0;
     const std::string text = tokenizer.decode(completion_tokens);
-    if (capabilities.tool_call_codec) {
-        const auto parsed = capabilities.tool_call_codec->parse_generation(text);
+    if (tool_codec) {
+        const auto parsed = tool_codec->parse_generation(text);
         if (!parsed.calls.empty()) {
             choice.message.content = parsed.assistant_text;
             choice.message.tool_calls = std::vector<ToolCallDto>{};
@@ -401,7 +401,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
                                              const celeg::BpeTokenizer& tokenizer,
-                                             const celeg::ChatCapabilities& capabilities,
+                                             const celeg::IChatToolCallCodec* tool_codec,
                                              std::string_view accumulated_text) {
     ChatCompletionChunk chunk;
     chunk.id = id;
@@ -413,8 +413,8 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
     if (include_role) choice.delta.role = "assistant";
     if (!new_tokens.empty()) {
         const std::string text = tokenizer.decode(new_tokens);
-        if (capabilities.tool_call_codec) {
-            const auto parsed = capabilities.tool_call_codec->parse_generation(text);
+        if (tool_codec) {
+            const auto parsed = tool_codec->parse_generation(text);
             if (!parsed.calls.empty()) {
                 choice.delta.tool_calls = std::vector<ToolCallDto>{};
                 for (const auto& call : parsed.calls) {
@@ -427,8 +427,8 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
             choice.delta.content = text;
         }
     }
-    if (new_tokens.empty() && finish && capabilities.tool_call_codec && !accumulated_text.empty()) {
-        const auto parsed = capabilities.tool_call_codec->parse_generation(accumulated_text);
+    if (new_tokens.empty() && finish && tool_codec && !accumulated_text.empty()) {
+        const auto parsed = tool_codec->parse_generation(accumulated_text);
         if (!parsed.calls.empty()) {
             choice.delta.content.reset();
             choice.delta.tool_calls = std::vector<ToolCallDto>{};

@@ -31,7 +31,13 @@ std::string RuntimeTopology::fingerprint() const {
         << "-int" << intermediate << "-cc" << conv_cache
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
-    for (MixerKind kind : mixer_kinds) out << (kind == MixerKind::Attention ? "-a" : "-c");
+    for (MixerKind kind : mixer_kinds) {
+        switch (kind) {
+        case MixerKind::Attention: out << "-a"; break;
+        case MixerKind::ShortConvolution: out << "-c"; break;
+        case MixerKind::GatedDeltaNet: out << "-d"; break;
+        }
+    }
     out << "-ff";
     for (int width : feed_forward_intermediates) out << '-' << width;
     out << "-tok" << token_policy.bos_token_id << '-' << token_policy.pad_token_id;
@@ -81,7 +87,7 @@ void RuntimeTopology::validate() const {
     if (static_cast<int>(feed_forward_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved feed-forward schedule length mismatch");
     }
-    if (attention_layer_count + conv_layer_count != num_hidden_layers) {
+    if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count != num_hidden_layers) {
         throw std::runtime_error("resolved layer counts are inconsistent");
     }
     if (num_experts > 0 && (moe_intermediate <= 0 || experts_per_token <= 0 ||
@@ -113,7 +119,9 @@ void RuntimeTopology::validate() const {
     } else if (per_layer_input_size != 0) {
         throw std::runtime_error("per-layer input size set while feature is disabled");
     }
-    for (const AttentionSpec& layout : attention_layouts) {
+    for (int layer = 0; layer < num_hidden_layers; ++layer) {
+        if (mixer_kinds[static_cast<size_t>(layer)] != MixerKind::Attention) continue;
+        const AttentionSpec& layout = attention_layouts[static_cast<size_t>(layer)];
             if (layout.query_heads <= 0 || layout.key_value_heads <= 0 ||
                 layout.query_heads % layout.key_value_heads != 0 ||
                 layout.head_dim <= 0 || (layout.head_dim % 2) != 0 ||
