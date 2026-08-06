@@ -91,49 +91,10 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
             "CPU disk-backed experts require the CPU pack cache");
     }
     load_weights();
-    layer_to_kv_pool.assign(weight_store.layers.size(), -1);
-    layer_to_kv_owner.assign(weight_store.layers.size(), -1);
-    int shared_group_count = 0;
-    for (const AttentionSpec& attention : shape.attention_layouts) {
-        if (attention.kv_sharing.shared()) {
-            shared_group_count = std::max(shared_group_count, attention.kv_sharing.group + 1);
-        }
-    }
-    std::vector<int> shared_owner(static_cast<size_t>(shared_group_count), -1);
-    for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
-        if (!CpuCompiledModel::attention_operator(weight_store.layers[layer])) continue;
-        const AttentionSpec& attention = shape.attention_layout(static_cast<int>(layer));
-        if (attention.kv_sharing.publishes) {
-            shared_owner[static_cast<size_t>(attention.kv_sharing.group)] =
-                static_cast<int>(layer);
-        }
-    }
-    std::vector<int> shared_pool(static_cast<size_t>(shared_group_count), -1);
-    for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
-        if (CpuCompiledModel::attention_operator(weight_store.layers[layer])) {
-            const AttentionSpec& attention = shape.attention_layout(static_cast<int>(layer));
-            if (attention.kv_sharing.shared() && !attention.kv_sharing.publishes) {
-                const int group = attention.kv_sharing.group;
-                if (group < 0 || group >= static_cast<int>(shared_pool.size()) ||
-                    shared_pool[static_cast<size_t>(group)] < 0) {
-                    throw std::runtime_error("shared KV consumer has no owner pool");
-                }
-                layer_to_kv_pool[layer] = shared_pool[static_cast<size_t>(group)];
-                layer_to_kv_owner[layer] = shared_owner[static_cast<size_t>(group)];
-                continue;
-            }
-            layer_to_kv_pool[layer] = static_cast<int>(kv_pools.size());
-            kv_pools.push_back(std::make_shared<CpuKvPagePool>(
-                options.kv_cache_mode, options.kv_page_tokens,
-                static_cast<size_t>(attention.key_value_width())));
-            if (attention.kv_sharing.shared()) {
-                shared_pool[static_cast<size_t>(attention.kv_sharing.group)] =
-                    layer_to_kv_pool[layer];
-                layer_to_kv_owner[layer] = static_cast<int>(layer);
-            }
-            if (!attention.kv_sharing.shared()) layer_to_kv_owner[layer] = static_cast<int>(layer);
-        }
-    }
+    CpuKvTopology kv_topology = build_cpu_kv_topology(shape, options);
+    kv_pools = std::move(kv_topology.pools);
+    layer_to_kv_pool = std::move(kv_topology.layer_to_pool);
+    layer_to_kv_owner = std::move(kv_topology.layer_to_owner);
 }
 
 CpuIsa CpuCompiledModel::Shared::resolve_isa(CpuIsa requested) {

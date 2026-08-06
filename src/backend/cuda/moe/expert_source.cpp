@@ -10,9 +10,6 @@ namespace celeg {
 void CudaExpertSource::read(const ExpertPayloadRequest& request,
                             std::span<std::byte> destination) const {
     request.validate();
-    if (destination.size() < request.schema->total_bytes) {
-        throw std::invalid_argument("expert source destination is too small");
-    }
     read(request.key.layer, request.key.expert, destination);
 }
 

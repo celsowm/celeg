@@ -20,7 +20,7 @@ ResolvedModel resolve_architecture_stages(
     model.topology.validate();
     stages.graph(model, checkpoint);
     stages.weights(model, checkpoint);
-    model.topology.validate();
+    model.validate();
     return model;
 }
 
@@ -81,21 +81,13 @@ std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog()
 }
 
 void add_builtin_architectures(ArchitectureCatalog& catalog) {
-    detail::register_builtin_family_bundles(catalog);
+    detail::register_lfm2_architecture(catalog);
+    detail::register_granite_architecture(catalog);
+    detail::register_gemma4_architecture(catalog);
+    detail::register_minicpm5_architecture(catalog);
+    detail::register_smollm3_architecture(catalog);
+    detail::register_qwen35_architecture(catalog);
+    detail::register_nemotron_h_architecture(catalog);
 }
-
-namespace detail {
-
-void register_builtin_family_bundles(ArchitectureCatalog& catalog) {
-    register_lfm2_architecture(catalog);
-    register_granite_architecture(catalog);
-    register_gemma4_architecture(catalog);
-    register_minicpm5_architecture(catalog);
-    register_smollm3_architecture(catalog);
-    register_qwen35_architecture(catalog);
-    register_nemotron_h_architecture(catalog);
-}
-
-} // namespace detail
 
 } // namespace celeg

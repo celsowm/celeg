@@ -28,4 +28,5 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/runtime/numa.cpp
     src/backend/cpu/runtime/thread_pool.cpp
     src/backend/cpu/runtime/topology.cpp
+    src/backend/cpu/runtime/kv_topology.cpp
 )

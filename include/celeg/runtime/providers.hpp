@@ -21,17 +21,34 @@ class ServiceBundle;
 class BpeTokenizer;
 class IVisualEmbeddingProvider;
 
-enum class BackendKind { Cpu, Cuda };
+using BackendId = std::string_view;
 
 class IBackendOptions {
 public:
     virtual ~IBackendOptions() = default;
-    virtual BackendKind backend() const noexcept = 0;
+    virtual BackendId backend_id() const noexcept = 0;
+
+    template <typename T>
+    const T* as() const noexcept {
+        return type_tag() == type_tag_for<T>()
+            ? static_cast<const T*>(data()) : nullptr;
+    }
+
+protected:
+    template <typename T>
+    static const void* type_tag_for() noexcept {
+        static const int tag = 0;
+        return &tag;
+    }
+
+    virtual const void* type_tag() const noexcept = 0;
+    virtual const void* data() const noexcept = 0;
 };
 
 struct BackendCreateRequest {
     std::string model_path;
     int max_context = 0;
+    BackendId backend_id;
     std::shared_ptr<const RuntimeContext> runtime;
     std::shared_ptr<const IBackendOptions> options;
 };
@@ -61,7 +78,8 @@ class IBackendFactory {
 public:
     virtual ~IBackendFactory() = default;
     virtual std::string_view id() const = 0;
-    virtual bool supports(BackendKind backend) const = 0;
+    virtual int priority() const noexcept { return 0; }
+    virtual bool supports(BackendId backend) const = 0;
     virtual std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const = 0;
 };
@@ -115,6 +133,27 @@ public:
             if (predicate(*provider)) return *provider;
         }
         throw std::invalid_argument("no provider supports the requested input");
+    }
+
+    template <typename Predicate>
+    const Provider& select_best_if(Predicate&& predicate) const {
+        const Provider* selected = nullptr;
+        int selected_priority = 0;
+        for (const auto& provider : providers_) {
+            if (!predicate(*provider)) continue;
+            const int priority = provider->priority();
+            if (selected == nullptr || priority > selected_priority) {
+                selected = provider.get();
+                selected_priority = priority;
+            } else if (priority == selected_priority) {
+                throw std::invalid_argument(
+                    "multiple providers support the requested input at the same priority");
+            }
+        }
+        if (selected == nullptr) {
+            throw std::invalid_argument("no provider supports the requested input");
+        }
+        return *selected;
     }
 
 private:

@@ -19,7 +19,13 @@ public:
                       CpuConcurrentEngineOptions engine_value)
         : model(std::move(model_value)), engine(std::move(engine_value)) {}
 
-    BackendKind backend() const noexcept override { return BackendKind::Cpu; }
+    BackendId backend_id() const noexcept override { return "cpu"; }
+
+    const void* type_tag() const noexcept override {
+        return type_tag_for<CpuBackendOptions>();
+    }
+
+    const void* data() const noexcept override { return this; }
 
     CpuModelOptions model;
     CpuConcurrentEngineOptions engine;
@@ -28,18 +34,18 @@ public:
 class CpuBackendFactory final : public IBackendFactory {
 public:
     std::string_view id() const override { return "cpu"; }
-    bool supports(BackendKind backend) const override {
-        return backend == BackendKind::Cpu;
+    bool supports(BackendId backend) const override {
+        return backend == "cpu";
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const override {
         if (!request.runtime || !request.options ||
-            request.options->backend() != BackendKind::Cpu) {
+            request.backend_id != id() ||
+            request.options->backend_id() != id()) {
             throw std::invalid_argument("CPU backend request has invalid options");
         }
-        const auto* options = dynamic_cast<const CpuBackendOptions*>(
-            request.options.get());
+        const auto* options = request.options->as<CpuBackendOptions>();
         if (!options) throw std::invalid_argument("CPU backend options type mismatch");
         auto service = std::make_unique<serve::CpuInferenceService>(
             request.model_path, request.max_context, options->model, options->engine,
@@ -55,7 +61,13 @@ public:
                        ConcurrentEngineOptions engine_value)
         : model(std::move(model_value)), engine(std::move(engine_value)) {}
 
-    BackendKind backend() const noexcept override { return BackendKind::Cuda; }
+    BackendId backend_id() const noexcept override { return "cuda"; }
+
+    const void* type_tag() const noexcept override {
+        return type_tag_for<CudaBackendOptions>();
+    }
+
+    const void* data() const noexcept override { return this; }
 
     CudaModelOptions model;
     ConcurrentEngineOptions engine;
@@ -64,18 +76,18 @@ public:
 class CudaBackendFactory final : public IBackendFactory {
 public:
     std::string_view id() const override { return "cuda"; }
-    bool supports(BackendKind backend) const override {
-        return backend == BackendKind::Cuda;
+    bool supports(BackendId backend) const override {
+        return backend == "cuda";
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const override {
         if (!request.runtime || !request.options ||
-            request.options->backend() != BackendKind::Cuda) {
+            request.backend_id != id() ||
+            request.options->backend_id() != id()) {
             throw std::invalid_argument("CUDA backend request has invalid options");
         }
-        const auto* options = dynamic_cast<const CudaBackendOptions*>(
-            request.options.get());
+        const auto* options = request.options->as<CudaBackendOptions>();
         if (!options) throw std::invalid_argument("CUDA backend options type mismatch");
         auto service = std::make_unique<serve::CudaInferenceService>(
             request.model_path, request.max_context, options->model, options->engine,
@@ -113,6 +125,7 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     BackendCreateRequest request;
     request.model_path = path;
     request.max_context = options.model.max_context;
+    request.backend_id = options.backend == CELEG_BACKEND_CPU ? "cpu" : "cuda";
     request.runtime = runtime;
     if (options.backend == CELEG_BACKEND_CPU) {
         request.options = std::make_shared<CpuBackendOptions>(
@@ -127,11 +140,9 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     else {
         throw std::invalid_argument("unknown backend");
     }
-    const BackendKind backend = options.backend == CELEG_BACKEND_CPU
-        ? BackendKind::Cpu : BackendKind::Cuda;
-    const IBackendFactory& factory = runtime->backends().select_if(
-        [backend](const IBackendFactory& candidate) {
-            return candidate.supports(backend);
+    const IBackendFactory& factory = runtime->backends().select_best_if(
+        [backend_id = request.backend_id](const IBackendFactory& candidate) {
+            return candidate.supports(backend_id);
         });
     return factory.create(request);
 }

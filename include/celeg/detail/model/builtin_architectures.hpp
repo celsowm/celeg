@@ -22,9 +22,4 @@ void register_smollm3_architecture(ArchitectureCatalog& catalog);
 void register_qwen35_architecture(ArchitectureCatalog& catalog);
 void register_nemotron_h_architecture(ArchitectureCatalog& catalog);
 
-// Single composition boundary for the built-in family bundles. Individual
-// families own their registration details; the runtime only installs the
-// bundle as one catalog extension.
-void register_builtin_family_bundles(ArchitectureCatalog& catalog);
-
 } // namespace celeg::detail

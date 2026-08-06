@@ -129,6 +129,7 @@ struct ResolvedModel {
     ModelProvenance provenance;
 
     const RuntimeTopology& shape() const { return topology; }
+    void validate() const;
 };
 
 } // namespace celeg

@@ -50,6 +50,7 @@ def main() -> int:
 
     neutral_roots = (
         root / "include/celeg/model",
+        root / "src/model",
         root / "include/celeg/runtime",
         root / "include/celeg/checkpoint",
         root / "include/celeg/text",
@@ -66,7 +67,7 @@ def main() -> int:
             text = path.read_text(encoding="utf-8")
             if cuda_tokens.search(text):
                 errors.append(f"CUDA dependency in backend-neutral file: {path}")
-            if "celeg/detail" in text:
+            if "include" in directory.parts and "celeg" in directory.parts and "celeg/detail" in text:
                 errors.append(f"backend/internal include in public-neutral header: {path}")
 
     legacy = re.compile(

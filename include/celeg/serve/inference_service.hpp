@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 namespace celeg::serve {
@@ -58,6 +59,10 @@ public:
     template <typename Service>
     explicit ServiceBundle(std::unique_ptr<Service> service)
         : requests_(std::move(service)) {
+        static_assert(std::is_base_of_v<IRequestService, Service> &&
+                      std::is_base_of_v<ISchedulerDriver, Service> &&
+                      std::is_base_of_v<IServiceDiagnostics, Service>,
+                      "ServiceBundle requires one concrete service implementing all roles");
         auto* concrete = static_cast<Service*>(requests_.get());
         scheduler_ = concrete;
         diagnostics_ = concrete;

@@ -44,22 +44,9 @@ std::string fingerprint_text(const std::string& text) {
 } // namespace
 
 void ExpertPayloadSchema::validate() const {
-    if (total_bytes != 0) {
-        for (const ExpertPayloadRegion& region : regions) {
-            if (region.offset > total_bytes || region.bytes > total_bytes - region.offset) {
-                throw std::invalid_argument("MoE payload region exceeds its schema");
-            }
-        }
-    }
-    for (size_t i = 0; i < regions.size(); ++i) {
-        for (size_t j = i + 1; j < regions.size(); ++j) {
-            const auto& left = regions[i];
-            const auto& right = regions[j];
-            if (left.bytes == 0 || right.bytes == 0) continue;
-            if (left.offset < right.offset + right.bytes &&
-                right.offset < left.offset + left.bytes) {
-                throw std::invalid_argument("MoE payload regions overlap");
-            }
+    for (const ExpertPayloadRegion& region : regions) {
+        if (region.elements == 0) {
+            throw std::invalid_argument("MoE payload region has no elements");
         }
     }
 }
@@ -67,12 +54,9 @@ void ExpertPayloadSchema::validate() const {
 std::string ExpertPayloadSchema::fingerprint() const {
     std::ostringstream out;
     append_field(out, layout);
-    append_field(out, total_bytes);
     for (const auto& region : regions) {
         append_field(out, region.role);
-        append_field(out, region.offset);
-        append_field(out, region.bytes);
-        append_field(out, region.dtype);
+        append_field(out, region.elements);
     }
     return fingerprint_text(out.str());
 }
@@ -147,7 +131,7 @@ std::string MoeLayerProgram::fingerprint() const {
     append_field(out, output.has_shared_expert);
     append_field(out, output.combine_order);
     append_field(out, residency.expert_count);
-    append_field(out, residency.payload_bytes);
+    append_field(out, residency.payload_elements);
     return fingerprint_text(out.str());
 }
 
@@ -169,7 +153,8 @@ PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
         static_cast<std::size_t>(result.input_size),
         "per-layer input width overflows size_t");
     if (result.packed_width > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        throw std::invalid_argument("per-layer input width exceeds CUDA integer range");
+        throw std::invalid_argument(
+            "per-layer input width exceeds the compiled execution index range");
     }
     result.token_scale = std::sqrt(static_cast<float>(result.input_size));
     result.context_scale = 1.0f / std::sqrt(static_cast<float>(topology.hidden));
@@ -196,9 +181,6 @@ std::size_t PerLayerInputPlan::checked_elements(std::size_t rows) const {
     if (!enabled) return 0;
     const std::size_t elements = checked_product(
         rows, packed_width, "per-layer input row product overflows size_t");
-    if (elements > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        throw std::invalid_argument("per-layer input row product exceeds CUDA integer range");
-    }
     return elements;
 }
 
@@ -321,16 +303,13 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             semantic.router.experts_per_group = moe->routing_experts_per_group;
             semantic.routed.mlp.hidden_size = model.topology.hidden;
             semantic.routed.mlp.intermediate_size = moe->intermediate_size;
-            const std::size_t expert_matrix_bytes =
+            const std::size_t expert_matrix_elements =
                 static_cast<std::size_t>(model.topology.hidden) *
-                static_cast<std::size_t>(moe->intermediate_size) * sizeof(uint16_t);
+                static_cast<std::size_t>(moe->intermediate_size);
             semantic.routed.payload.regions = {
-                {TensorRole::MoeExpertGate, 0, expert_matrix_bytes, MoePayloadDType::BF16},
-                {TensorRole::MoeExpertUp, expert_matrix_bytes, expert_matrix_bytes,
-                 MoePayloadDType::BF16},
-                {TensorRole::MoeExpertDown, 2 * expert_matrix_bytes,
-                 expert_matrix_bytes, MoePayloadDType::BF16}};
-            semantic.routed.payload.total_bytes = 3 * expert_matrix_bytes;
+                {TensorRole::MoeExpertGate, expert_matrix_elements},
+                {TensorRole::MoeExpertUp, expert_matrix_elements},
+                {TensorRole::MoeExpertDown, expert_matrix_elements}};
             semantic.output.has_shared_expert = moe->has_shared_expert;
             semantic.output.combine_order = moe->shared_before_routed
                 ? MoeCombineOrder::SharedThenRouted : MoeCombineOrder::RoutedThenShared;
@@ -342,7 +321,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                                          : moe->intermediate_size}};
             }
             semantic.residency.expert_count = moe->num_experts;
-            semantic.residency.payload_bytes = semantic.routed.payload.total_bytes;
+            semantic.residency.payload_elements = 3 * expert_matrix_elements;
             compiled.moe = std::move(semantic);
         }
         program.layers.push_back(std::move(compiled));

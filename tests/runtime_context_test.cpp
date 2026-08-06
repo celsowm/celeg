@@ -44,7 +44,7 @@ class ExtensionBackendProvider final : public celeg::IBackendFactory {
 public:
     explicit ExtensionBackendProvider(const char* id) : id_(id) {}
     std::string_view id() const override { return id_; }
-    bool supports(celeg::BackendKind) const override { return false; }
+    bool supports(celeg::BackendId) const override { return false; }
     std::unique_ptr<celeg::serve::ServiceBundle> create(
         const celeg::BackendCreateRequest&) const override {
         throw std::logic_error("test backend cannot create services");

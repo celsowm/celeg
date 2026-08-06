@@ -167,6 +167,8 @@ struct ModelGraph {
     float logits_divisor = 1.0f;
     float final_logit_softcap = 0.0f;
 
+    void validate() const;
+
     bool has_moe() const {
         for (const LayerSpec& layer : layers) {
             if (layer.feed_forward_kind() == FeedForwardKind::MixtureOfExperts) return true;

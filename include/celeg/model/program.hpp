@@ -22,20 +22,16 @@ enum class MoeRouterScoreKind : unsigned char { SigmoidProbabilities, SoftmaxLog
 enum class MoeSelectionKind : unsigned char { TopK, GroupedTopK };
 enum class MoeNormalizationKind : unsigned char { None, SumSelected };
 enum class MoePayloadLayout : unsigned char { Individual, Stacked, Fused };
-enum class MoePayloadDType : unsigned char { Unknown, BF16, F16, F32, I8, Quantized };
 enum class MoeActivation : unsigned char { SwiGLU, GeluTanh };
 enum class MoeCombineOrder : unsigned char { RoutedThenShared, SharedThenRouted };
 
 struct ExpertPayloadRegion {
     TensorRole role = TensorRole::MoeExpertGate;
-    std::size_t offset = 0;
-    std::size_t bytes = 0;
-    MoePayloadDType dtype = MoePayloadDType::Unknown;
+    std::size_t elements = 0;
 };
 
 struct ExpertPayloadSchema {
     MoePayloadLayout layout = MoePayloadLayout::Individual;
-    std::size_t total_bytes = 0;
     std::vector<ExpertPayloadRegion> regions;
 
     void validate() const;
@@ -82,7 +78,7 @@ struct MoeOutputProgram {
 
 struct ExpertResidencyRequirements {
     int expert_count = 0;
-    std::size_t payload_bytes = 0;
+    std::size_t payload_elements = 0;
 };
 
 struct MoeLayerProgram {

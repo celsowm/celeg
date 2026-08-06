@@ -42,22 +42,19 @@ int main() {
                       celeg::MoeSelectionKind::GroupedTopK,
                       celeg::MoeNormalizationKind::None, 8, 2, 2, 4, false, 1.0f};
     grouped.routed.mlp = {celeg::MoeActivation::SwiGLU, 8, 16};
-    grouped.routed.payload.regions = {{celeg::TensorRole::MoeExpertGate, 0, 32,
-                                       celeg::MoePayloadDType::BF16},
-                                      {celeg::TensorRole::MoeExpertUp, 32, 32,
-                                       celeg::MoePayloadDType::BF16}};
-    grouped.routed.payload.total_bytes = 64;
+    grouped.routed.payload.regions = {{celeg::TensorRole::MoeExpertGate, 32},
+                                      {celeg::TensorRole::MoeExpertUp, 32}};
     grouped.residency.expert_count = 8;
     grouped.validate();
     const std::string grouped_fingerprint = grouped.fingerprint();
     grouped.router.experts_per_token = 3;
     CELEG_TEST_CHECK(grouped.fingerprint() != grouped_fingerprint);
-    bool overlap_rejected = false;
+    bool empty_region_rejected = false;
     grouped.router.experts_per_token = 2;
-    grouped.routed.payload.regions[1].offset = 16;
+    grouped.routed.payload.regions[1].elements = 0;
     try { grouped.validate(); }
-    catch (const std::invalid_argument&) { overlap_rejected = true; }
-    CELEG_TEST_CHECK(overlap_rejected);
+    catch (const std::invalid_argument&) { empty_region_rejected = true; }
+    CELEG_TEST_CHECK(empty_region_rejected);
 
     celeg::ResolvedModel unsupported = model;
     auto& unsupported_moe = std::get<celeg::MixtureOfExpertsSpec>(

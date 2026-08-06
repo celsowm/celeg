@@ -7,6 +7,25 @@
 
 namespace celeg {
 
+void ModelGraph::validate() const {
+    if (layers.empty()) {
+        throw std::runtime_error("resolved model graph has no layers");
+    }
+    if (!(final_norm.epsilon > 0.0f) || !std::isfinite(final_norm.epsilon) ||
+        !std::isfinite(embedding_multiplier) ||
+        !std::isfinite(logits_divisor) || logits_divisor <= 0.0f ||
+        !std::isfinite(final_logit_softcap) || final_logit_softcap < 0.0f) {
+        throw std::runtime_error("resolved model graph has invalid policies");
+    }
+    for (const LayerSpec& layer : layers) {
+        if (!(layer.operator_norm.epsilon > 0.0f) ||
+            !std::isfinite(layer.residual.multiplier) ||
+            !std::isfinite(layer.layer_scalar)) {
+            throw std::runtime_error("resolved model graph has invalid layer policy");
+        }
+    }
+}
+
 void TokenPolicy::validate() const {
     if (bos_token_id < 0 || eos_token_ids.empty() || pad_token_id < 0) {
         throw std::runtime_error("invalid resolved model token policy");
@@ -141,6 +160,25 @@ void RuntimeTopology::validate() const {
                 layout.sliding_window <= 0) {
                 throw std::runtime_error("sliding attention requires a window");
             }
+    }
+}
+
+void ResolvedModel::validate() const {
+    topology.validate();
+    graph.validate();
+    if (graph.layers.size() != static_cast<size_t>(topology.num_hidden_layers)) {
+        throw std::runtime_error("resolved graph/topology layer count mismatch");
+    }
+    if (graph.embedding_multiplier != topology.numerical_policy.embedding_multiplier ||
+        graph.logits_divisor != topology.numerical_policy.logits_divisor ||
+        graph.final_norm.epsilon != topology.numerical_policy.norm_eps) {
+        throw std::runtime_error("resolved graph/topology numerical policy mismatch");
+    }
+    for (size_t layer = 0; layer < graph.layers.size(); ++layer) {
+        if (graph.layers[layer].mixer_kind() != topology.mixer_kinds[layer] ||
+            graph.layers[layer].feed_forward_kind() != topology.feed_forward_kinds[layer]) {
+            throw std::runtime_error("resolved graph/topology operator schedule mismatch");
+        }
     }
 }
 

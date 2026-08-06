@@ -8,6 +8,7 @@
 #include "celeg/runtime/weights_topology.hpp"
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/weight_setup_support.hpp"
+#include "celeg/backend/cuda/weight_setup.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/moe/expert_source.hpp"
 
@@ -29,70 +30,13 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
     return cuda_tensor_name(requests, role, layer);
 }
 
-std::unique_ptr<IWeightLayout> make_embedding_layout(
-    WeightMode mode, const LinearWeight& weight, const char* label) {
-    return make_cuda_embedding_layout(mode, weight, label);
-}
-
 } // namespace
 
 void CudaCompiledModel::load_checkpoint_weights(
     const std::string& model_path,
     const detail::ModelBootstrap& bootstrap) {
-    // Immutable device weights are shared across all request lanes that use
-    // the same checkpoint, device and quantization mode. The WeightLoader
-    // owns the process-wide cache and the SafeTensor I/O + quantization;
-    // the compiled model only retains the resulting shared_ptr + the layer views.
-    resources_.weights_ = WeightLoader::acquire(
-        model_path, resources_.options_.weight_mode,
-        resources_.options_.expert_offload.fingerprint());
-    resources_.weight_loader_ = std::make_unique<WeightLoader>(
-        resources_.weights_, resources_.options_.weight_mode);
-
-    // Only one constructor populates a shared checkpoint at a time. Other
-    // sessions wait, then reuse the immutable device buffers.
-    std::unique_lock<std::mutex> shared_weights_lock(resources_.weights_->mutex);
-    resources_.weights_->repo = bootstrap.checkpoint.repository;
-    const IWeightRepository& repo = *resources_.weights_->repo;
-    resources_.embedding_ = resources_.weight_loader_->load_linear_weight(
-        repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::TokenEmbedding),
-        {resources_.shape_.vocab_size, resources_.shape_.hidden});
-    resources_.final_norm_ = resources_.weight_loader_->load_weight(
-        repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FinalNorm),
-        {resources_.shape_.hidden});
-    if (resources_.program_.per_layer_input.enabled) {
-        const int ple = resources_.program_.per_layer_input.input_size;
-        CudaPerLayerInputResources per_layer;
-        per_layer.plan = resources_.program_.per_layer_input;
-        per_layer.embedding = resources_.weight_loader_->load_linear_weight(
-            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerEmbedding),
-            {resources_.shape_.vocab_size,
-             static_cast<int>(per_layer.plan.packed_width)});
-        per_layer.context_projection = resources_.weight_loader_->load_linear_weight(
-            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerContextProjection),
-            {static_cast<int>(per_layer.plan.packed_width), resources_.shape_.hidden});
-        per_layer.projection_norm = resources_.weight_loader_->load_weight(
-            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerProjectionNorm),
-            {ple});
-        per_layer.embedding_layout = make_embedding_layout(
-            resources_.options_.weight_mode, *per_layer.embedding,
-            "per-layer embedding");
-        per_layer.validate();
-        resources_.per_layer_input_ = std::move(per_layer);
-    }
-    resources_.weight_layout_ = make_embedding_layout(
-        resources_.options_.weight_mode, *resources_.embedding_, "embedding");
-    // Untied LM head: load the separate lm_head weight for the final logits
-    // projection. Some checkpoints omit the lm_head tensor yet leave
-    // tie_word_embeddings unset; in that case the head is effectively tied to
-    // the embedding table, so we fall back to it instead of erroring.
-    const std::string lm_head_name =
-        tensor_name(resources_.model_.weight_plan.requests, TensorRole::LanguageModelHead);
-    if (!resources_.model_.capabilities.tied_embeddings && repo.contains(lm_head_name)) {
-        resources_.lm_head_ = resources_.weight_loader_->load_linear_weight(
-            repo, lm_head_name, {resources_.shape_.vocab_size, resources_.shape_.hidden});
-    }
-
+    CudaWeightSetup::load(*this, model_path, bootstrap,
+        [this](const IWeightRepository& repo) {
     // Resolve the MoE expert-offload plan before loading experts. Snapshot the
     // free VRAM now (embeddings/final norm already uploaded; attention/conv and
     // experts are loaded below) and estimate the always-resident non-expert
@@ -414,7 +358,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             resources_.layers_.emplace_back(std::move(convolution_layer));
         }
     }
-
+        });
 }
 
 } // namespace celeg
