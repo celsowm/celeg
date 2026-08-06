@@ -45,7 +45,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
     }
 
     linear(workspace_.op_output_.data(), *attention_layer->out, workspace_.hidden_.data(),
-           1, resources_.shape_.hidden, resources_.shape_.hidden,
+           1, resources_.shape_.hidden, layout.query_width(),
            resources_.options_.fused_residuals ? 1.0f : 0.0f);
     if (convolution_layer) {
         linear(workspace_.normed_.data(), *convolution_layer->conv_in, workspace_.conv_projected_.data(),

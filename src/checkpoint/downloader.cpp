@@ -604,7 +604,7 @@ std::filesystem::path resolve_hf_gguf(
     }
     throw std::runtime_error(
         "GGUF checkpoint not found in HF cache: " + repo_id
-        + ". Run: hf download " + repo_id);
+        + ". Run: celeg-download " + repo_id);
 }
 
 #else // !_WIN32
@@ -690,7 +690,7 @@ std::filesystem::path resolve_hf_gguf(
     }
     throw std::runtime_error(
         "GGUF checkpoint not found in HF cache: " + repo_id
-        + ". Run: hf download " + repo_id);
+        + ". Run: celeg-download " + repo_id);
 }
 
 #endif

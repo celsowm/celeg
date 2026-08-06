@@ -104,8 +104,9 @@ const LinearWeight* WeightLoader::load_linear_weight(
     // decode token at the cost of scalar dequant inside the kernel.
     if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q6_K) {
-            throw std::runtime_error("unsupported GGUF linear quantization (CUDA supports Q4_K/Q6_K only): " + name);
+        if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
+            ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
+            throw std::runtime_error("unsupported GGUF linear quantization: " + name);
         }
         const GgmlTypeTrait trait = ggml_type_trait(ggml_type);
         if (cols % trait.block_size != 0) {
@@ -120,6 +121,52 @@ const LinearWeight* WeightLoader::load_linear_weight(
         }
         const size_t row_bytes =
             static_cast<size_t>(cols) / trait.block_size * trait.type_size;
+
+        if (ggml_type == GgmlType::Q5_0 || ggml_type == GgmlType::Q8_0) {
+            std::vector<__nv_bfloat16> host_bf16;
+            dequantize_gguf_to_bf16(tensor, host_bf16);
+            weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
+            CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host_bf16.data(),
+                                  host_bf16.size() * sizeof(__nv_bfloat16),
+                                  cudaMemcpyHostToDevice));
+            const std::byte* dense_data =
+                reinterpret_cast<const std::byte*>(host_bf16.data());
+            if (weight_mode_ == WeightMode::Int8) {
+                Int8RowwisePack pack = quantize_bf16_rows(
+                    dense_data, static_cast<size_t>(rows), static_cast<size_t>(cols));
+                weight.int8_storage.reset(pack.values.size());
+                weight.scales_storage.reset(pack.scales.size());
+                CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(), pack.values.data(),
+                                      pack.values.size() * sizeof(int8_t), cudaMemcpyHostToDevice));
+                CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), pack.scales.data(),
+                                      pack.scales.size() * sizeof(float), cudaMemcpyHostToDevice));
+                weight.linear.kind = LinearStorageKind::Int8;
+                weight.linear.int8 = weight.int8_storage.data();
+                weight.linear.scales = weight.scales_storage.data();
+                weight.linear.bf16 = weight.bf16_storage.data();
+            } else if (weight_mode_ == WeightMode::Int4) {
+                Int4RowwisePack pack = quantize_bf16_rows_int4(
+                    dense_data, static_cast<size_t>(rows), static_cast<size_t>(cols));
+                weight.int4_storage.reset(pack.values.size());
+                weight.scales_storage.reset(pack.scales.size());
+                CELEG_CUDA(cudaMemcpy(weight.int4_storage.data(), pack.values.data(),
+                                      pack.values.size() * sizeof(uint8_t), cudaMemcpyHostToDevice));
+                CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), pack.scales.data(),
+                                      pack.scales.size() * sizeof(float), cudaMemcpyHostToDevice));
+                weight.linear.kind = LinearStorageKind::Int4;
+                weight.linear.int4 = weight.int4_storage.data();
+                weight.linear.scales = weight.scales_storage.data();
+            } else {
+                weight.linear.kind = LinearStorageKind::Bf16;
+                weight.linear.bf16 = weight.bf16_storage.data();
+            }
+            weight.linear.rows = rows;
+            weight.linear.cols = cols;
+            weight.linear.validate_storage();
+            auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+            return &it->second.linear;
+        }
 
         if (weight_mode_ == WeightMode::NativeGguf) {
             std::vector<uint8_t> host_blocks;

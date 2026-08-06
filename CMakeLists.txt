@@ -407,6 +407,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cpu/quantization.hpp
     include/celeg/backend/cpu/runtime_types.hpp
     include/celeg/backend/cpu/thread_pool.hpp
+    include/celeg/backend/cpu/weight_codec.hpp
     include/celeg/backend/cpu/topology.hpp
     include/celeg/checkpoint/downloader.hpp
     include/celeg/checkpoint/formats/gguf.hpp
@@ -426,6 +427,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cuda/execution_plan.hpp
     include/celeg/backend/cuda/runtime_types.hpp
     include/celeg/backend/cuda/weight_layout.hpp
+    include/celeg/backend/cuda/weight_setup_support.hpp
     include/celeg/backend/cuda/weight_policy.hpp
     include/celeg/backend/cuda/weights_loader.hpp
     include/celeg/model/runtime_types.hpp

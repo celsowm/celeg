@@ -23,6 +23,15 @@ int integer_or(const CheckpointMetadata& m, std::string_view json,
     return static_cast<int>(m.integer_for_or(json, gguf, fallback));
 }
 
+int first_nonzero(const CheckpointMetadata& m, std::string_view key,
+                  int fallback) {
+    if (!m.contains(key)) return fallback;
+    for (const int64_t value : m.integers(key)) {
+        if (value != 0) return static_cast<int>(value);
+    }
+    return fallback;
+}
+
 double number_or(const CheckpointMetadata& m, std::string_view json,
                  std::string_view gguf, double fallback) {
     return m.number_for_or(json, gguf, fallback);
@@ -70,11 +79,13 @@ RuntimeTopology decode_topology(const CheckpointView& checkpoint) {
     const auto& m = checkpoint.metadata;
     RuntimeTopology t;
     t.hidden = integer(m, "hidden_size", "nemotron_h.embedding_length");
-    t.intermediate = integer(m, "intermediate_size", "nemotron_h.feed_forward_length");
+    t.intermediate = m.is_gguf()
+        ? first_nonzero(m, "nemotron_h.feed_forward_length", 12544)
+        : integer(m, "intermediate_size", "nemotron_h.feed_forward_length");
     t.dense_intermediate = t.intermediate;
     t.max_feed_forward_intermediate = t.intermediate;
     t.num_hidden_layers = integer(m, "num_hidden_layers", "nemotron_h.block_count");
-    t.vocab_size = integer(m, "vocab_size", "tokenizer.ggml.vocab_size");
+    t.vocab_size = integer(m, "vocab_size", "nemotron_h.vocab_size");
     t.max_position_embeddings = integer_or(m, "max_position_embeddings",
                                            "nemotron_h.context_length", 262144);
     t.token_policy.bos_token_id = integer_or(m, "bos_token_id", "tokenizer.ggml.bos_token_id", 1);
@@ -93,18 +104,20 @@ RuntimeTopology decode_topology(const CheckpointView& checkpoint) {
     t.mlp_only_layouts.resize(static_cast<size_t>(t.num_hidden_layers));
 
     const std::string pattern = layer_pattern(checkpoint, t.num_hidden_layers);
-    const int query_heads = integer(m, "num_attention_heads", "attention.head_count");
-    const int kv_heads = integer(m, "num_key_value_heads", "attention.head_count_kv");
-    const int attention_dim = integer_or(m, "head_dim", "attention.key_length", 128);
-    const int mamba_heads = integer(m, "mamba_num_heads", "ssm.time_step_rank");
-    const int mamba_inner = integer_or(m, "mamba_num_heads", "ssm.inner_size", 0);
+    const int query_heads = integer(m, "num_attention_heads", "nemotron_h.attention.head_count");
+    const int kv_heads = m.is_gguf()
+        ? first_nonzero(m, "nemotron_h.attention.head_count_kv", 8)
+        : integer(m, "num_key_value_heads", "attention.head_count_kv");
+    const int attention_dim = integer_or(m, "head_dim", "nemotron_h.attention.key_length", 128);
+    const int mamba_heads = integer(m, "mamba_num_heads", "nemotron_h.ssm.time_step_rank");
+    const int mamba_inner = integer_or(m, "mamba_num_heads", "nemotron_h.ssm.inner_size", 0);
     const int mamba_dim = m.is_gguf()
         ? (mamba_inner / mamba_heads)
-        : integer(m, "mamba_head_dim", "ssm.embedding_length");
-    const int state_size = integer(m, "ssm_state_size", "ssm.state_size");
-    const int groups = integer(m, "n_groups", "ssm.group_count");
-    const int kernel = integer(m, "conv_kernel", "ssm.conv_kernel");
-    const int chunk = integer_or(m, "chunk_size", "ssm.chunk_size", 256);
+        : integer(m, "mamba_head_dim", "nemotron_h.ssm.embedding_length");
+    const int state_size = integer(m, "ssm_state_size", "nemotron_h.ssm.state_size");
+    const int groups = integer(m, "n_groups", "nemotron_h.ssm.group_count");
+    const int kernel = integer(m, "conv_kernel", "nemotron_h.ssm.conv_kernel");
+    const int chunk = integer_or(m, "chunk_size", "nemotron_h.ssm.chunk_size", 256);
     t.mamba2_intermediate = mamba_heads * mamba_dim;
     for (int layer = 0; layer < t.num_hidden_layers; ++layer) {
         switch (pattern[static_cast<size_t>(layer)]) {

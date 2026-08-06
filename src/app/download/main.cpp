@@ -30,6 +30,8 @@ int main(int argc, char** argv) {
                     << "  Common checkpoints:\n"
                     << "    LiquidAI/LFM2.5-230M            (230M base)\n"
                     << "    LiquidAI/LFM2.5-1.2B-Instruct   (1.2B Instruct)\n"
+                    << "    nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16\n"
+                    << "    nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF\n"
                     << "  --revision REV    (default: main)\n"
                     << "  --cache-dir DIR   (default: " << celeg::default_hf_cache_dir().string() << ")\n"
                     << "  --file FILE       (repeatable; default: all files)\n"

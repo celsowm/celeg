@@ -15,6 +15,23 @@ namespace {
 // packed. The block decode mirrors the device kernel in gguf_kernels.cu.
 struct Q4KHost { __half d; __half dmin; uint8_t scales[12]; uint8_t qs[128]; };
 struct Q6KHost { uint8_t ql[128]; uint8_t qh[64]; int8_t scales[16]; __half d; };
+struct Q5_0Host { __half d; uint8_t qh[4]; uint8_t qs[16]; };
+struct Q8_0Host { __half d; int8_t qs[32]; };
+
+void q5_0_decode(const Q5_0Host* blk, int col, float& out) {
+    const uint8_t packed = blk->qs[col >> 1];
+    const int low = (col & 1) ? (packed >> 4) : (packed & 0x0f);
+    const uint32_t high_bits = static_cast<uint32_t>(blk->qh[0]) |
+        (static_cast<uint32_t>(blk->qh[1]) << 8) |
+        (static_cast<uint32_t>(blk->qh[2]) << 16) |
+        (static_cast<uint32_t>(blk->qh[3]) << 24);
+    const int q = low | (((high_bits >> col) & 1u) << 4);
+    out = __half2float(blk->d) * static_cast<float>(q - 16);
+}
+
+void q8_0_decode(const Q8_0Host* blk, int col, float& out) {
+    out = __half2float(blk->d) * static_cast<float>(blk->qs[col]);
+}
 
 void q4k_decode(const Q4KHost* blk, int col, float& out) {
     const float d = __half2float(blk->d);
@@ -44,7 +61,8 @@ void q6k_decode(const Q6KHost* blk, int col, float& out) {
 void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
                                   std::vector<__nv_bfloat16>& out) {
     const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-    if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q6_K) {
+    if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
+        ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
         throw std::runtime_error("unsupported GGUF quantization for CUDA dequantization");
     }
     const int rows = static_cast<int>(tensor.shape[0]);
@@ -62,8 +80,12 @@ void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
             float v = 0.0f;
             if (ggml_type == GgmlType::Q4_K) {
                 q4k_decode(reinterpret_cast<const Q4KHost*>(row_blocks) + b, within, v);
-            } else {
+            } else if (ggml_type == GgmlType::Q5_0) {
+                q5_0_decode(reinterpret_cast<const Q5_0Host*>(row_blocks) + b, within, v);
+            } else if (ggml_type == GgmlType::Q6_K) {
                 q6k_decode(reinterpret_cast<const Q6KHost*>(row_blocks) + b, within, v);
+            } else {
+                q8_0_decode(reinterpret_cast<const Q8_0Host*>(row_blocks) + b, within, v);
             }
             out[static_cast<size_t>(r) * cols + c] = __float2bfloat16(v);
         }

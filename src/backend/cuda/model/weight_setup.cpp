@@ -7,10 +7,10 @@
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/runtime/weights_topology.hpp"
 #include "celeg/backend/cuda/weights_loader.hpp"
+#include "celeg/backend/cuda/weight_setup_support.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/moe/expert_source.hpp"
 
-#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -20,45 +20,20 @@
 namespace celeg {
 
 namespace {
-void* allocate_pinned_host(std::size_t bytes) {
-    void* pointer = nullptr;
-    return cudaMallocHost(&pointer, bytes) == cudaSuccess ? pointer : nullptr;
-}
-
-void deallocate_pinned_host(void* pointer) {
-    if (pointer) cudaFreeHost(pointer);
-}
-
 std::string layer_name(int index, const std::string& suffix) {
-    return "model.layers." + std::to_string(index) + "." + suffix;
+    return cuda_layer_name(index, suffix);
 }
 
 std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role,
                         int layer = -1) {
-    return resolved_tensor_name(requests, role, layer);
+    return cuda_tensor_name(requests, role, layer);
 }
 
 std::unique_ptr<IWeightLayout> make_embedding_layout(
     WeightMode mode, const LinearWeight& weight, const char* label) {
-    if (weight.gguf_quantized()) {
-        if (weight.gguf_segments.size() != 1) {
-            throw std::runtime_error(std::string(label) +
-                                     " must use one native GGUF segment");
-        }
-        return make_gguf_weight_layout(weight.gguf_segments.front());
-    }
-    switch (mode) {
-        case WeightMode::Int8:
-            if (!weight.int8) throw std::runtime_error(std::string(label) + " has no INT8 storage");
-            return make_weight_layout(mode, weight.int8, weight.scales);
-        case WeightMode::Int4:
-            if (!weight.int4) throw std::runtime_error(std::string(label) + " has no INT4 storage");
-            return make_weight_layout(mode, weight.int4, weight.scales);
-        default:
-            if (!weight.bf16) throw std::runtime_error(std::string(label) + " has no BF16 storage");
-            return make_weight_layout(mode, weight.bf16, weight.scales);
-    }
+    return make_cuda_embedding_layout(mode, weight, label);
 }
+
 } // namespace
 
 void CudaCompiledModel::load_checkpoint_weights(
@@ -123,90 +98,7 @@ void CudaCompiledModel::load_checkpoint_weights(
     // experts are loaded below) and estimate the always-resident non-expert
     // weight footprint analytically from the topology so the planner can decide
     // how many experts fit in the GPU cache per layer.
-    if (resources_.options_.expert_offload.enabled() &&
-        resources_.shape_.num_experts > 0) {
-        size_t free_bytes = 0, total_bytes = 0;
-        CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
-        const int moe_layers = moe_layer_count(resources_.shape_);
-        const size_t bpe = bytes_per_expert_bf16(resources_.shape_);
-        // All experts are BF16; non-expert weights = everything else already or
-        // about to be resident on the GPU.
-        const size_t all_expert_bytes =
-            static_cast<size_t>(resources_.shape_.num_experts) *
-            static_cast<size_t>(moe_layers) * bpe;
-        // Conservative non-expert estimate: total checkpoint minus experts.
-        // embed + lm-head + attention + conv + dense FFN + router + norms.
-        const size_t embed_bytes =
-            static_cast<size_t>(resources_.shape_.vocab_size) * resources_.shape_.hidden *
-            sizeof(__nv_bfloat16);
-        const size_t per_attn = static_cast<size_t>(resources_.shape_.maximum_attention_projection_width()) *
-            resources_.shape_.hidden;
-        const size_t attn_bytes = per_attn *
-            static_cast<size_t>(resources_.shape_.attention_layer_count) * sizeof(__nv_bfloat16);
-        const size_t dense_ffn_bytes =
-            static_cast<size_t>(resources_.shape_.num_dense_layers) *
-            (3ull * resources_.shape_.dense_intermediate * resources_.shape_.hidden) * sizeof(__nv_bfloat16);
-        const size_t router_bytes =
-            static_cast<size_t>(moe_layers) * resources_.shape_.num_experts * resources_.shape_.hidden *
-            (sizeof(__nv_bfloat16) + sizeof(float));
-        const size_t non_expert_bytes =
-            embed_bytes + attn_bytes + dense_ffn_bytes + router_bytes +
-            (64ull << 20);  // norms/conv/bias slack
-        (void)all_expert_bytes;
-
-        ExpertOffloadPlanInputs pin;
-        pin.shape = resources_.shape_;
-        pin.options = resources_.options_.expert_offload;
-        pin.gpu_free_bytes = free_bytes;
-        pin.non_expert_weight_bytes = non_expert_bytes;
-        pin.workspace_bytes = resources_.options_.lt_workspace_bytes + (256ull << 20);
-        pin.context_tokens = max_context_;
-        workspace_.expert_offload_plan_ = plan_expert_offload(pin);
-        workspace_.expert_transfer_stream_ = std::make_unique<CudaStream>();
-
-        resources_.weights_->expert_offload_plan = workspace_.expert_offload_plan_;
-        if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->host_expert_cache) {
-            size_t bpe = bytes_per_expert_bf16(resources_.shape_);
-            resources_.weights_->host_expert_cache = std::make_unique<HostExpertCache>(
-                resources_.options_.expert_offload.host_expert_cache_bytes,
-                bpe,
-                allocate_pinned_host, deallocate_pinned_host);
-        }
-        if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached && !resources_.weights_->expert_io_manager) {
-            resources_.weights_->expert_io_manager = std::make_unique<ExpertIoManager>(
-                resources_.options_.expert_offload.io_workers,
-                resources_.options_.expert_offload.io_queue_depth);
-        }
-        if (!resources_.options_.expert_offload.expert_sidecar_path.empty() && !resources_.weights_->expert_sidecar) {
-            auto sidecar = std::make_unique<ExpertSidecar>();
-            int moe_layers = moe_layer_count(resources_.shape_);
-            if (sidecar->load(resources_.options_.expert_offload.expert_sidecar_path,
-                             moe_layers, resources_.shape_.num_experts,
-                             resources_.shape_.moe_intermediate, resources_.shape_.hidden)) {
-                resources_.weights_->expert_sidecar = std::move(sidecar);
-                std::fprintf(stderr, "Loaded compatible expert sidecar from %s\n",
-                             resources_.options_.expert_offload.expert_sidecar_path.c_str());
-            } else {
-                std::fprintf(stderr, "WARNING: Sidecar %s is incompatible or could not be loaded; falling back to safetensors.\n",
-                             resources_.options_.expert_offload.expert_sidecar_path.c_str());
-            }
-        }
-        if (!resources_.options_.expert_offload.usage_profile_path.empty()) {
-            resources_.weights_->usage_profile_path = resources_.options_.expert_offload.usage_profile_path;
-            if (resources_.weights_->usage_stats.layers.empty()) {
-                int moe_layers = moe_layer_count(resources_.shape_);
-                if (resources_.weights_->usage_stats.load(resources_.weights_->usage_profile_path, moe_layers, resources_.shape_.num_experts)) {
-                    std::fprintf(stderr, "Loaded persistent expert usage statistics from %s\n",
-                                 resources_.weights_->usage_profile_path.c_str());
-                } else {
-                    resources_.weights_->usage_stats.layers.assign(
-                        static_cast<size_t>(moe_layers),
-                        std::vector<ExpertUsageEntry>(static_cast<size_t>(resources_.shape_.num_experts)));
-                }
-            }
-        }
-        std::fprintf(stderr, "%s", workspace_.expert_offload_plan_.report().c_str());
-    }
+    configure_cuda_expert_resources(*this);
     workspace_.expert_caches_.resize(static_cast<size_t>(resources_.shape_.num_hidden_layers));
     if (resources_.weights_->expert_controllers.empty()) {
         resources_.weights_->expert_controllers.resize(static_cast<size_t>(resources_.shape_.num_hidden_layers));
