@@ -19,7 +19,8 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/program.cpp
     src/model/weight_plan.cpp
     src/model/graph_builder.cpp
-    src/model/runtime_modules.cpp
+    src/composition/builtin_runtime.cpp
+    src/composition/builtin_chat_profiles.cpp
     src/models/lfm2/architecture.cpp
     src/models/lfm2/layer_decoder.cpp
     src/models/lfm2/metadata_decoder.cpp

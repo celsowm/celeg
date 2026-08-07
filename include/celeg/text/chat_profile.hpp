@@ -23,11 +23,6 @@ public:
     virtual ToolParseResult parse_generation(std::string_view generated_text) const = 0;
 };
 
-std::unique_ptr<IChatToolCallCodec> make_lfm2_tool_call_codec();
-std::unique_ptr<IChatToolCallCodec> make_gemma4_tool_call_codec();
-std::unique_ptr<IChatToolCallCodec> make_minicpm5_tool_call_codec();
-std::unique_ptr<IChatToolCallCodec> make_smollm3_tool_call_codec();
-
 struct ChatRoleCapabilities {
     bool system = true;
     bool developer = false;

@@ -1,4 +1,4 @@
-#include "celeg/detail/model/builtin_architectures.hpp"
+#include "celeg/models/granite/architecture.hpp"
 #include "celeg/detail/models/granite_topology.hpp"
 #include "celeg/model/weight_plan.hpp"
 #include "celeg/model/graph_builder.hpp"

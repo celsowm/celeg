@@ -1,4 +1,4 @@
-#include "celeg/detail/model/builtin_architectures.hpp"
+#include "celeg/models/lfm2/architecture.hpp"
 #include "celeg/detail/models/lfm2_layer_decoder.hpp"
 #include "celeg/detail/models/lfm2_metadata_decoder.hpp"
 #include "naming_policy.hpp"

@@ -1,4 +1,4 @@
-#include "celeg/detail/model/builtin_architectures.hpp"
+#include "celeg/models/smollm3/architecture.hpp"
 
 #include "celeg/model/graph_builder.hpp"
 #include "celeg/model/weight_plan.hpp"

@@ -76,7 +76,7 @@ private:
 // ---------------------------------------------------------------------------
 // MoE expert offload configuration and memory planning.
 //
-// The LFM2.5-8B-A1B checkpoint stores >90% of its weights in sparse MoE
+    // Large sparse MoE checkpoints can store most of their weights in experts.
 // experts (704 experts for the reference topology). The natural offload unit
 // is therefore a single expert, not a whole transformer layer: non-expert
 // weights (attention, convolution, dense FFNs, router, norms, embeddings) run
@@ -122,7 +122,7 @@ enum class ExpertCachePolicy : uint8_t {
     // Router-likelihood-driven: evict the resident with the lowest last-known
     // routing score (sentinel -1e30 for seeded/unseen experts). The resident set
     // converges to the highest-likelihood experts -- but only beats LRU when
-    // router scores have strong cross-token correlation, which LFM2-8B-A1B on
+    // router scores have strong cross-token correlation on representative
     // RTX 3060 does NOT (measured 3.67 tok/s vs LRU 5.10 tok/s).
     Score,
 };
@@ -173,7 +173,7 @@ struct ExpertOffloadOptions {
     // (ranked by router likelihood) so they are GPU-resident before the next
     // token's FFN. Hides PCIe promotion latency behind the current token's
     // compute. Default 0: prefetch is gated by score-aware eviction, and
-    // experiments on LFM2-8B-A1B (RTX 3060 12GB) show on-demand promotion is
+    // experiments on a constrained GPU show on-demand promotion is
     // already fast enough that any speculative promotion displaces a
     // genuinely-useful resident, regressing decode tok/s; raise only if working
     // set has clear predictive locality beyond the routed top-K.

@@ -33,15 +33,7 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
         result.pad_id = static_cast<int32_t>(file.i64("tokenizer.ggml.padding_token_id"));
     }
 
-    const std::string pre_tokenizer = file.str_or("tokenizer.ggml.pre", "");
-    if (pre_tokenizer == "lfm2" || pre_tokenizer == "smaug-bpe") {
-        result.pre_tokenizer = TokenizerData::PreTokenizerKind::NumericTriplets;
-    } else if (pre_tokenizer == "gemma4") {
-        result.pre_tokenizer = TokenizerData::PreTokenizerKind::RawUtf8;
-    } else if (pre_tokenizer == "gpt2" ||
-               pre_tokenizer.find("granite") != std::string::npos) {
-        result.pre_tokenizer = TokenizerData::PreTokenizerKind::NumericRuns;
-    }
+    result.pre_tokenizer = file.str_or("tokenizer.ggml.pre", "");
     return result;
 }
 

@@ -119,7 +119,9 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
     return definition;
 }
 
-TokenizerDefinition resolve_tokenizer_definition(const TokenizerData& data) {
+TokenizerDefinition resolve_tokenizer_definition(
+    const TokenizerData& data,
+    const std::vector<TokenizerPreTokenizerRule>& rules) {
     if (data.tokens.empty()) {
         throw std::runtime_error("checkpoint tokenizer data is incomplete");
     }
@@ -129,25 +131,21 @@ TokenizerDefinition resolve_tokenizer_definition(const TokenizerData& data) {
     definition.bos_id = data.bos_id;
     definition.eos_id = data.eos_id;
     definition.pad_id = data.pad_id;
-    switch (data.pre_tokenizer) {
-    case TokenizerData::PreTokenizerKind::NumericTriplets:
-        definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericTriplets;
-        break;
-    case TokenizerData::PreTokenizerKind::NumericRuns:
-        definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericRuns;
-        break;
-    case TokenizerData::PreTokenizerKind::RawUtf8:
-        definition.pre_tokenizer = TokenizerPreTokenizerKind::RawUtf8;
-        break;
-    case TokenizerData::PreTokenizerKind::Default:
-        break;
+    for (const TokenizerPreTokenizerRule& rule : rules) {
+        const bool matches = rule.contains
+            ? data.pre_tokenizer.find(rule.identifier) != std::string::npos
+            : data.pre_tokenizer == rule.identifier;
+        if (matches) {
+            definition.pre_tokenizer = rule.behavior;
+            break;
+        }
     }
     for (size_t id = 0; id < data.token_types.size() && id < data.tokens.size(); ++id) {
         if (data.token_types[id] == 3) {
             definition.special_tokens.push_back({data.tokens[id], static_cast<int32_t>(id)});
         }
     }
-    if (data.pre_tokenizer == TokenizerData::PreTokenizerKind::NumericTriplets) {
+    if (definition.pre_tokenizer == TokenizerPreTokenizerKind::NumericTriplets) {
         add_reasoning_delimiters(definition);
     }
     return definition;

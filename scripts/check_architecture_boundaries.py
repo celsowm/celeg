@@ -139,8 +139,19 @@ def main() -> int:
                 errors.append(
                     f"backend-specific source in CELEG_BASE_RUNTIME_SOURCES: {line.strip()}")
 
-    generic_runtime = re.compile(r"\b(?:Lfm2|LFM2|Granite|GraniteModel)\b")
-    for relative in ("include/celeg/runtime", "src/runtime"):
+    generic_runtime = re.compile(
+        r"\b(?:Lfm2|LFM2|LFM2\.5|Granite|GraniteModel|Gemma4|"
+        r"MiniCPM5|SmolLM3|Qwen35|Qwen3\.5|Nemotron(?:-H|_H)?)\b",
+        re.IGNORECASE,
+    )
+    generic_model_dirs = (
+        "include/celeg/model", "src/model",
+        "include/celeg/runtime", "src/runtime",
+        "include/celeg/text", "src/text",
+        "include/celeg/checkpoint", "src/checkpoint",
+        "include/celeg/backend", "src/backend",
+    )
+    for relative in generic_model_dirs:
         for path in files(root / relative, "**/*"):
             if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".inl"}:
                 continue

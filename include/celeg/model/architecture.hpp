@@ -56,7 +56,4 @@ private:
     std::vector<std::unique_ptr<IArchitecture>> architectures_;
 };
 
-std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog();
-void add_builtin_architectures(ArchitectureCatalog& catalog);
-
 } // namespace celeg

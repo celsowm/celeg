@@ -137,8 +137,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
 
-        // Nemotron-H attention blocks are mixer-only: they do not have the
-        // generic post-attention normalization and dense FFN.
+        // Mixer-only layers do not have the generic post-attention
+        // normalization and dense FFN.
         if (!semantics.execute_feed_forward) continue;
 
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),

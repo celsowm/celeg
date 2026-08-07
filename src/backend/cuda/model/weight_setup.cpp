@@ -279,16 +279,16 @@ void CudaCompiledModel::load_checkpoint_weights(
     std::vector<int> shared_owner(2, -1);
     for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
-        const bool nemotron = resources_.shape_.mamba2_layer_count > 0;
+        const bool sequential_mixer_model = resources_.shape_.mamba2_layer_count > 0;
         common_layer.operator_norm = resources_.weight_loader_->load_rms_norm_weight(
             repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
             {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
-        if (!nemotron) {
+        if (!sequential_mixer_model) {
             common_layer.ffn_norm = resources_.weight_loader_->load_rms_norm_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnInputNorm, i),
                 {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
         }
-        if (!nemotron && resources_.shape_.has_split_attention_norms) {
+        if (!sequential_mixer_model && resources_.shape_.has_split_attention_norms) {
             common_layer.post_attention_norm = resources_.weight_loader_->load_rms_norm_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionPostNorm, i),
                 {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
@@ -309,8 +309,8 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.layer_scalar = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
-        if (nemotron) {
-            // Nemotron-H owns its block-specific projections in the layer
+        if (sequential_mixer_model) {
+            // Sequential mixer models own their block-specific projections in the layer
             // variant below; there is no generic post-mixer FFN descriptor.
             common_layer.feed_forward = DenseFfnWeights{};
         } else if (resources_.shape_.layer_uses_moe(i)) {
@@ -319,8 +319,8 @@ void CudaCompiledModel::load_checkpoint_weights(
             const int inter = resources_.shape_.moe_intermediate;
             const float* expert_bias = nullptr;
             if (resources_.shape_.use_expert_bias) {
-                // Checkpoint naming varies: LFM2.5 ships
-                // "feed_forward.expert_bias.weight"; the earlier LFM2 MoE
+                // Checkpoint naming varies: some formats use
+                // "feed_forward.expert_bias.weight"; others use
                 // release ships "feed_forward.expert_bias" (no .weight suffix).
                 const std::string bias_name = repo.contains(
                     layer_name(i, "feed_forward.expert_bias.weight"))
@@ -369,8 +369,8 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
 
             if (workspace_.expert_offload_plan_.enabled) {
-                const bool qwen_moe = resources_.shape_.shared_expert_intermediate > 0;
-                const std::string probe_name = qwen_moe
+                const bool packed_expert_model = resources_.shape_.shared_expert_intermediate > 0;
+                const std::string probe_name = packed_expert_model
                     ? "model.language_model.layers." + std::to_string(i) +
                       ".mlp.experts.gate_up_proj"
                     : layer_name(i, "feed_forward.experts.0.w1.weight");

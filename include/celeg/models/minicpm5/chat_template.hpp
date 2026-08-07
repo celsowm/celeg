@@ -4,6 +4,8 @@
 
 namespace celeg {
 
+std::unique_ptr<IChatToolCallCodec> make_minicpm5_tool_call_codec();
+
 class MiniCpm5InstructChatTemplate final : public IChatTemplate {
 public:
     using IChatTemplate::format;

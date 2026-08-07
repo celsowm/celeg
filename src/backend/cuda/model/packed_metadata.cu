@@ -28,7 +28,7 @@ void stage_packed_persistent_metadata(
             Layer& layer = model.layers()[layer_index];
             if (as_mamba2(layer) || as_mlp_only(layer)) {
                 throw std::runtime_error(
-                    "packed CUDA metadata does not support Nemotron-H recurrent layers");
+                    "packed CUDA metadata does not support recurrent mixer layers");
             }
             if (auto* attention = as_attention(layer)) {
                 workspace.h_key_bf16.data()[index] = attention->key_cache.data();

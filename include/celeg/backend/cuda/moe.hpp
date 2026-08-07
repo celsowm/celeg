@@ -42,7 +42,7 @@ inline float moe_sigmoid(float x) {
 #endif
 }
 
-// Router configuration for the LFM2 MoE feed-forward block.
+// Router configuration for a routed MoE feed-forward block.
 struct MoeRouterConfig {
     int num_experts = 0;
     int experts_per_token = 0;
@@ -79,9 +79,9 @@ void launch_moe_router(const MoeRouterDevice& device,
                        float* scratch_logits,  // [rows * E]
                        cudaStream_t stream);
 
-// Reference (host) implementation of the LFM2 MoE router.
+// Reference (host) implementation of the routed MoE router.
 //
-// Semantics (matching the official Transformers Lfm2Moe implementation):
+// Semantics are supplied by the resolved model's router configuration:
 //   1. router_logits = hidden @ router_weight^T   (router_weight: [E, H])
 //   2. routing_probabilities = sigmoid(router_logits)   (NOT softmax)
 //   3. when use_expert_bias: selection_scores = routing_probabilities + bias,
@@ -144,7 +144,7 @@ struct MoeFfnDevice {
     const __nv_bfloat16* const* down_ptrs = nullptr;      // [E]
 };
 
-// CUDA device implementation of the LFM2 MoE feed-forward block. For every
+// CUDA device implementation of the routed MoE feed-forward block. For every
 // token, routes to the K selected experts (selection provided by the caller,
 // e.g. via launch_moe_router) and for each selected expert computes
 //   activated = silu(hidden @ gate_up[e]^T) * (hidden @ up[e]^T)
@@ -176,7 +176,7 @@ void launch_finalize_moe_output(const float* accum,
                                 int count,
                                 cudaStream_t stream);
 
-// Reference (host) implementation of the LFM2 MoE feed-forward block. Operates
+// Reference (host) implementation of the routed MoE feed-forward block. Operates
 // in float for an exact-parity baseline against the BF16 CUDA kernel (tolerance
 // applied at the comparison site). `gate_up` and `down` are row-major expert
 // tensors laid out exactly as MoeFfnDevice (expert-major, [2*inter, hidden] and

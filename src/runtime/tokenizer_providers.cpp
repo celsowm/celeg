@@ -18,6 +18,9 @@ std::filesystem::path tokenizer_json_path(const std::filesystem::path& model_pat
 
 class BpeTokenizerProvider final : public ITokenizerProvider {
 public:
+    explicit BpeTokenizerProvider(std::vector<TokenizerPreTokenizerRule> rules)
+        : rules_(std::move(rules)) {}
+
     std::string_view id() const override { return "bpe"; }
 
     bool supports(const CheckpointView& checkpoint,
@@ -31,7 +34,7 @@ public:
         const std::filesystem::path& model_path) const override {
         if (checkpoint.tokenizer) {
             return std::make_unique<BpeTokenizer>(
-                resolve_tokenizer_definition(*checkpoint.tokenizer));
+                resolve_tokenizer_definition(*checkpoint.tokenizer, rules_));
         }
         const auto path = tokenizer_json_path(model_path);
         if (!std::filesystem::is_regular_file(path)) {
@@ -40,12 +43,15 @@ public:
         }
         return std::make_unique<BpeTokenizer>(load_tokenizer_definition_json(path.string()));
     }
+private:
+    std::vector<TokenizerPreTokenizerRule> rules_;
 };
 
 } // namespace
 
-std::unique_ptr<ITokenizerProvider> make_builtin_tokenizer_provider() {
-    return std::make_unique<BpeTokenizerProvider>();
+std::unique_ptr<ITokenizerProvider> make_builtin_tokenizer_provider(
+    std::vector<TokenizerPreTokenizerRule> rules) {
+    return std::make_unique<BpeTokenizerProvider>(std::move(rules));
 }
 
 } // namespace celeg

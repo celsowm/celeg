@@ -341,7 +341,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2 ||
                 layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
                 throw std::runtime_error(
-                    "packed CUDA execution for Nemotron-H requires tokenwise scheduling");
+                    "packed CUDA execution requires tokenwise scheduling for sequential mixers");
             }
             if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
                 const auto* attention = as_attention(layer);

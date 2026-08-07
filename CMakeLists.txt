@@ -498,6 +498,7 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(lfm2_layer_decoder_test PRIVATE include)
     add_test(NAME lfm2_layer_decoder_test COMMAND lfm2_layer_decoder_test)
     set(CELEG_CHAT_TEMPLATE_SOURCES
+        src/composition/builtin_chat_profiles.cpp
         src/text/chat_template.cpp src/text/chat_template_support.cpp
         src/models/lfm2/chat_template.cpp src/models/lfm2/tool_call_codec.cpp
         src/models/granite/chat_template.cpp

@@ -89,8 +89,7 @@ public:
     virtual std::vector<std::string> candidates(const TensorRequest& request) const = 0;
 };
 
-// Concrete naming policies (CelegTensorNamingPolicy, GraniteTensorNamingPolicy,
-// Gemma4TensorNamingPolicy, ...) live in their owning src/models/<arch>/
+// Concrete naming policies live in their owning src/models/<arch>/ directory.
 // module. This generic header depends on ITensorNamingPolicy only, so adding
 // an architecture never requires touching a central tensor-name switch.
 

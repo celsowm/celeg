@@ -190,7 +190,7 @@ __device__ __forceinline__ bool sampling_candidate_better(float va, int ia,
 // Block-parallel ordered top-k selection over scores[0, vocab).
 //
 // This replaced a single-threaded (`threadIdx.x == 0`) insertion sort over the
-// whole vocabulary. Measured on LFM2.5-230M (vocab 65536) that one loop was
+// whole vocabulary. Benchmark measurements show that one loop was
 // 5.47 ms of an 8.34 ms decode step -- 66% of decode, more than every GEMM in
 // the model combined -- because one lane walked 65536 dependent global loads
 // with no parallelism to hide the latency.

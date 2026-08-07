@@ -4,6 +4,8 @@
 
 namespace celeg {
 
+std::unique_ptr<IChatToolCallCodec> make_gemma4_tool_call_codec();
+
 class Gemma4InstructChatTemplate final : public IChatTemplate {
 public:
     using IChatTemplate::format;

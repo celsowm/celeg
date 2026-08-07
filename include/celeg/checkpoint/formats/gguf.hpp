@@ -12,7 +12,7 @@
 namespace celeg {
 
 // GGML tensor element types (subset of llama.cpp's ggml_type). Only the types
-// that appear in LFM2.5 GGUF checkpoints are enumerated; everything else is
+// that appear in supported GGUF checkpoints are enumerated; everything else is
 // rejected at parse time. Values match the upstream ggml enum ordinals so the
 // on-disk type ids map directly.
 enum class GgmlType : int32_t {

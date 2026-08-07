@@ -76,6 +76,5 @@ private:
 };
 
 ChatProfileCatalog make_chat_profile_catalog();
-void add_builtin_chat_profiles(ChatProfileCatalog& catalog);
 
 } // namespace celeg

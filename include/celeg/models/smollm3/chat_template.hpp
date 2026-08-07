@@ -4,6 +4,8 @@
 
 namespace celeg {
 
+std::unique_ptr<IChatToolCallCodec> make_smollm3_tool_call_codec();
+
 class SmolLm3InstructChatTemplate final : public IChatTemplate {
 public:
     using IChatTemplate::format;

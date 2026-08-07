@@ -1,5 +1,6 @@
 #include "celeg/checkpoint/metadata.hpp"
 #include "celeg/model/architecture.hpp"
+#include "celeg/runtime/context.hpp"
 #include "support/assertions.hpp"
 
 #include <iostream>
@@ -157,10 +158,11 @@ celeg::CheckpointMetadata nemotron_h_metadata() {
 } // namespace
 
 int main() {
-    const auto catalog = celeg::create_builtin_architecture_catalog();
-    CELEG_TEST_CHECK(catalog->ids().size() == 7);
+    const auto runtime = celeg::create_builtin_runtime_context();
+    const auto& catalog = runtime->architectures();
+    CELEG_TEST_CHECK(catalog.ids().size() == 7);
     const auto metadata = lfm_metadata();
-    const auto& architecture = catalog->select(metadata);
+    const auto& architecture = catalog.select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
 
     celeg::CheckpointView checkpoint;
@@ -174,7 +176,7 @@ int main() {
     CELEG_TEST_CHECK(!model.graph.has_moe());
 
     const auto qwen_metadata = qwen35_metadata();
-    const auto& qwen_architecture = catalog->select(qwen_metadata);
+    const auto& qwen_architecture = catalog.select(qwen_metadata);
     CELEG_TEST_CHECK(qwen_architecture.id() == "qwen35");
     celeg::CheckpointView qwen_checkpoint;
     qwen_checkpoint.metadata = qwen_metadata;
@@ -188,7 +190,7 @@ int main() {
     CELEG_TEST_CHECK(qwen.weight_plan.requests.size() > 40);
 
     const auto qwen_moe_metadata = qwen35_metadata(true);
-    const auto& qwen_moe_architecture = catalog->select(qwen_moe_metadata);
+    const auto& qwen_moe_architecture = catalog.select(qwen_moe_metadata);
     celeg::CheckpointView qwen_moe_checkpoint;
     qwen_moe_checkpoint.metadata = qwen_moe_metadata;
     const auto qwen_moe = qwen_moe_architecture.resolve(qwen_moe_checkpoint);
@@ -204,7 +206,7 @@ int main() {
     CELEG_TEST_CHECK(qwen_moe_spec.shared_intermediate_size == 512);
 
     const auto nemotron_metadata = nemotron_h_metadata();
-    const auto& nemotron_architecture = catalog->select(nemotron_metadata);
+    const auto& nemotron_architecture = catalog.select(nemotron_metadata);
     CELEG_TEST_CHECK(nemotron_architecture.id() == "nemotron_h");
     celeg::CheckpointView nemotron_checkpoint;
     nemotron_checkpoint.metadata = nemotron_metadata;
@@ -272,7 +274,7 @@ int main() {
     minicpm5.values["pad_token_id"] = int64_t(1);
     minicpm5.values["rms_norm_eps"] = 1.0e-6;
     minicpm5.values["rope_theta"] = 5.0e6;
-    const auto& minicpm5_architecture = catalog->select(minicpm5);
+    const auto& minicpm5_architecture = catalog.select(minicpm5);
     CELEG_TEST_CHECK(minicpm5_architecture.id() == "minicpm5");
     celeg::CheckpointView minicpm5_checkpoint;
     minicpm5_checkpoint.metadata = minicpm5;
@@ -301,7 +303,7 @@ int main() {
     minicpm5_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(1);
     minicpm5_gguf.values["tokenizer.ggml.eot_token_id"] = int64_t(130073);
     minicpm5_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(1);
-    const auto& minicpm5_gguf_architecture = catalog->select(minicpm5_gguf);
+    const auto& minicpm5_gguf_architecture = catalog.select(minicpm5_gguf);
     CELEG_TEST_CHECK(minicpm5_gguf_architecture.id() == "minicpm5");
     celeg::CheckpointView minicpm5_gguf_checkpoint;
     minicpm5_gguf_checkpoint.metadata = minicpm5_gguf;
@@ -328,7 +330,7 @@ int main() {
     std::vector<int64_t> no_rope_layers(36, 1);
     for (int layer = 3; layer < 36; layer += 4) no_rope_layers[static_cast<size_t>(layer)] = 0;
     smollm3.values["no_rope_layers"] = no_rope_layers;
-    const auto& smollm3_architecture = catalog->select(smollm3);
+    const auto& smollm3_architecture = catalog.select(smollm3);
     CELEG_TEST_CHECK(smollm3_architecture.id() == "smollm3");
     celeg::CheckpointView smollm3_checkpoint;
     smollm3_checkpoint.metadata = smollm3;
@@ -360,7 +362,7 @@ int main() {
     smollm3_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(128000);
     smollm3_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(128012);
     smollm3_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(128004);
-    const auto& smollm3_gguf_architecture = catalog->select(smollm3_gguf);
+    const auto& smollm3_gguf_architecture = catalog.select(smollm3_gguf);
     CELEG_TEST_CHECK(smollm3_gguf_architecture.id() == "smollm3");
     celeg::CheckpointView smollm3_gguf_checkpoint;
     smollm3_gguf_checkpoint.metadata = smollm3_gguf;
@@ -371,7 +373,7 @@ int main() {
 
     auto granite = metadata;
     granite.values["model_type"] = std::string("granite");
-    const auto& granite_architecture = catalog->select(granite);
+    const auto& granite_architecture = catalog.select(granite);
     CELEG_TEST_CHECK(granite_architecture.id() == "granite");
 
     celeg::CheckpointMetadata granite_gguf;
@@ -402,7 +404,7 @@ int main() {
     for (const auto& gemma : {
         gemma_metadata(1536, 6144, 35, 1, 20, "google/gemma-4-E2B-it"),
         gemma_metadata(2560, 10240, 42, 2, 18, "google/gemma-4-E4B-it")}) {
-        const auto& gemma_architecture = catalog->select(gemma);
+        const auto& gemma_architecture = catalog.select(gemma);
         CELEG_TEST_CHECK(gemma_architecture.id() == "gemma4");
         celeg::CheckpointView gemma_checkpoint;
         gemma_checkpoint.metadata = gemma;
@@ -472,7 +474,7 @@ int main() {
     gemma_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
     celeg::CheckpointView gemma_gguf_checkpoint;
     gemma_gguf_checkpoint.metadata = gemma_gguf;
-    const auto& gemma_gguf_architecture = catalog->select(gemma_gguf);
+    const auto& gemma_gguf_architecture = catalog.select(gemma_gguf);
     const auto gemma_gguf_model = gemma_gguf_architecture.resolve(gemma_gguf_checkpoint);
     CELEG_TEST_CHECK(gemma_gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(gemma_gguf_model.topology.hidden == 1536);
@@ -486,7 +488,7 @@ int main() {
     auto malformed_gemma = gemma_metadata(1536, 6144, 35, 1, 20, "bad");
     malformed_gemma.values["text_config.model_type"] = std::string("gemma4_vision");
     bool malformed_rejected = false;
-    try { (void)catalog->select(malformed_gemma); }
+    try { (void)catalog.select(malformed_gemma); }
     catch (const std::runtime_error&) { malformed_rejected = true; }
     CELEG_TEST_CHECK(malformed_rejected);
 
@@ -495,7 +497,7 @@ int main() {
         std::vector<std::string>{"sliding_attention"};
     malformed_rejected = false;
     try {
-        const auto& architecture = catalog->select(malformed_schedule);
+        const auto& architecture = catalog.select(malformed_schedule);
         celeg::CheckpointView checkpoint;
         checkpoint.metadata = malformed_schedule;
         (void)architecture.resolve(checkpoint);
@@ -507,7 +509,7 @@ int main() {
     malformed_sharing.values["text_config.num_kv_shared_layers"] = int64_t(36);
     malformed_rejected = false;
     try {
-        const auto& architecture = catalog->select(malformed_sharing);
+        const auto& architecture = catalog.select(malformed_sharing);
         celeg::CheckpointView checkpoint;
         checkpoint.metadata = malformed_sharing;
         (void)architecture.resolve(checkpoint);

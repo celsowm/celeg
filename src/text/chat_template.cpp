@@ -1,13 +1,5 @@
 #include "celeg/text/chat_template.hpp"
 
-#include "celeg/models/gemma4/chat_template.hpp"
-#include "celeg/models/granite/chat_template.hpp"
-#include "celeg/models/lfm2/chat_template.hpp"
-#include "celeg/models/minicpm5/chat_template.hpp"
-#include "celeg/models/qwen35/chat_template.hpp"
-#include "celeg/models/nemotron_h/chat_template.hpp"
-#include "celeg/models/smollm3/chat_template.hpp"
-
 #include <stdexcept>
 
 namespace celeg {
@@ -78,23 +70,6 @@ const IChatToolCallCodec* ChatProfileCatalog::tool_codec(
     if (it == entries_.end()) throw std::invalid_argument(
         "unknown chat profile: " + std::string(profile_id));
     return it->second.tool_call_codec.get();
-}
-
-ChatProfileCatalog make_chat_profile_catalog() {
-    ChatProfileCatalog catalog;
-    add_builtin_chat_profiles(catalog);
-    catalog.freeze();
-    return catalog;
-}
-
-void add_builtin_chat_profiles(ChatProfileCatalog& catalog) {
-    add_lfm2_chat_profile(catalog);
-    add_granite_chat_profile(catalog);
-    add_gemma4_chat_profile(catalog);
-    add_minicpm5_chat_profile(catalog);
-    add_smollm3_chat_profile(catalog);
-    add_qwen35_chat_profile(catalog);
-    add_nemotron_h_chat_profile(catalog);
 }
 
 } // namespace celeg

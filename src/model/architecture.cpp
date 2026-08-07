@@ -1,7 +1,5 @@
 #include "celeg/model/architecture.hpp"
 
-#include "celeg/model/runtime_modules.hpp"
-
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -71,13 +69,6 @@ std::vector<std::string_view> ArchitectureCatalog::ids() const {
     result.reserve(architectures_.size());
     for (const auto& architecture : architectures_) result.push_back(architecture->id());
     return result;
-}
-
-std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog() {
-    auto catalog = std::make_shared<ArchitectureCatalog>();
-    add_builtin_architectures(*catalog);
-    catalog->freeze();
-    return catalog;
 }
 
 } // namespace celeg

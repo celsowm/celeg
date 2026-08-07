@@ -29,6 +29,12 @@ enum class TokenizerPreTokenizerKind : uint8_t {
     RawUtf8,
 };
 
+struct TokenizerPreTokenizerRule {
+    std::string identifier;
+    TokenizerPreTokenizerKind behavior = TokenizerPreTokenizerKind::Default;
+    bool contains = false;
+};
+
 struct TokenizerDefinition {
     std::vector<std::string> tokens;
     std::vector<std::string> merges;
@@ -42,6 +48,8 @@ struct TokenizerDefinition {
 };
 
 TokenizerDefinition load_tokenizer_definition_json(const std::string& path);
-TokenizerDefinition resolve_tokenizer_definition(const TokenizerData& data);
+TokenizerDefinition resolve_tokenizer_definition(
+    const TokenizerData& data,
+    const std::vector<TokenizerPreTokenizerRule>& rules = {});
 
 } // namespace celeg

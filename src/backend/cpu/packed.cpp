@@ -465,7 +465,8 @@ void CpuCompiledModel::forward_batch(std::span<CpuCompiledModel* const> sessions
         });
     if (has_sequential_only_layer) {
         if (tokens.size() != sessions.size()) {
-            throw std::invalid_argument("Nemotron-H batch requires one token per session");
+        throw std::invalid_argument(
+            "sequential-only mixer batch requires one token per session");
         }
         for (size_t row = 0; row < sessions.size(); ++row) {
             sessions[row]->forward_token(tokens[row],

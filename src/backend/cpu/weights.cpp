@@ -128,7 +128,7 @@ void CpuCompiledModel::Shared::prepare_pack_path() {
     const std::string source = source_identity(model_path);
     const size_t id = std::hash<std::string>{}(source);
     // Keep the on-disk name short.  The full topology fingerprint is useful
-    // for diagnostics but can exceed MAX_PATH for large LFM2.5 models whose
+    // for diagnostics but can exceed MAX_PATH for large model checkpoints whose
     // vocab/layer schedule is encoded in the identity string.
     const size_t model_hash = std::hash<std::string>{}(model_identity);
     std::ostringstream filename;
@@ -416,16 +416,16 @@ void CpuCompiledModel::Shared::load_weights() {
             }
 
             MoeWeights layer;
-            const bool qwen_moe = shape.numerical_policy.rms_norm_add_one;
+            const bool packed_expert_model = shape.shared_expert_intermediate > 0;
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
-                qwen_moe
+                packed_expert_model
                     ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
                     : layer_name(index, "operator_norm.weight"), {shape.hidden});
             layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
-                qwen_moe
+                packed_expert_model
                     ? tensor_name(weight_requests, TensorRole::FfnInputNorm, index)
                     : layer_name(index, "ffn_norm.weight"), {shape.hidden});
-            if (qwen_moe) {
+            if (packed_expert_model) {
                 for (float& value : layer.common.operator_norm) value += 1.0f;
                 for (float& value : layer.common.ffn_norm) value += 1.0f;
             }
@@ -436,12 +436,12 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.use_expert_bias = shape.use_expert_bias;
             layer.routed_scaling_factor = shape.routed_scaling_factor;
             layer.router = load_vector(source, reader.get(), writer.get(),
-                qwen_moe
+                packed_expert_model
                     ? tensor_name(weight_requests, TensorRole::MoeRouter, index)
                     : layer_name(index, "feed_forward.gate.weight"),
                 {shape.num_experts, shape.hidden});
 
-            if (qwen_moe) {
+            if (packed_expert_model) {
                 const int shared_intermediate = shape.shared_expert_intermediate;
                 layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
                     layer_name(index, "shared_expert.w13.weight"), {
@@ -481,7 +481,7 @@ void CpuCompiledModel::Shared::load_weights() {
             for (int expert = 0; expert < shape.num_experts; ++expert) {
                 const int moe_inter = shape.moe_intermediate > 0
                     ? shape.moe_intermediate : shape.intermediate;
-                if (qwen_moe) {
+                if (packed_expert_model) {
                     continue;
                 }
                 const std::string prefix =

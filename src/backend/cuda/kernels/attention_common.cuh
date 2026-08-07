@@ -37,7 +37,7 @@ __device__ float attention_dot(const __nv_bfloat16* query,
 }
 
 // Maximum head_dim this file's warp-only decode-attention kernels support
-// (32 lanes * kMaxHeadDimPerLane each); LFM2/LFM2.5 head dims (64-128) are
+// (32 lanes * kMaxHeadDimPerLane each); supported head dimensions (64-128) are
 // well within this.
 constexpr int kMaxHeadDimPerLane = 8;
 

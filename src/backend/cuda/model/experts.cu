@@ -63,45 +63,45 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     std::vector<__nv_bfloat16> gate_up_stage(gate_up_elems);
     std::vector<__nv_bfloat16> down_stage(down_elems);
     std::vector<__nv_bfloat16> decoded_stage;
-    const std::string qwen_gate_up_name = "model.language_model.layers." +
+    const std::string packed_gate_up_name = "model.language_model.layers." +
         std::to_string(layer) + ".mlp.experts.gate_up_proj";
-    const std::string qwen_down_name = "model.language_model.layers." +
+    const std::string packed_down_name = "model.language_model.layers." +
         std::to_string(layer) + ".mlp.experts.down_proj";
-    const bool qwen_packed = repo.contains(qwen_gate_up_name) &&
-        repo.contains(qwen_down_name);
-    HostTensorView qwen_gate_up;
-    HostTensorView qwen_down;
-    if (qwen_packed) {
-        qwen_gate_up = repo.tensor(qwen_gate_up_name);
-        qwen_down = repo.tensor(qwen_down_name);
-        const bool gu_shape = qwen_gate_up.shape == std::vector<int64_t>{
+    const bool packed_experts = repo.contains(packed_gate_up_name) &&
+        repo.contains(packed_down_name);
+    HostTensorView packed_gate_up;
+    HostTensorView packed_down;
+    if (packed_experts) {
+        packed_gate_up = repo.tensor(packed_gate_up_name);
+        packed_down = repo.tensor(packed_down_name);
+        const bool gu_shape = packed_gate_up.shape == std::vector<int64_t>{
             num_experts, 2 * moe_intermediate, hidden};
-        const bool gu_flat_shape = qwen_gate_up.shape == std::vector<int64_t>{
+        const bool gu_flat_shape = packed_gate_up.shape == std::vector<int64_t>{
             num_experts * 2 * moe_intermediate, hidden};
-        const bool down_shape = qwen_down.shape == std::vector<int64_t>{
+        const bool down_shape = packed_down.shape == std::vector<int64_t>{
             num_experts, hidden, moe_intermediate};
-        const bool down_flat_shape = qwen_down.shape == std::vector<int64_t>{
+        const bool down_flat_shape = packed_down.shape == std::vector<int64_t>{
             num_experts * hidden, moe_intermediate};
         if (!gu_shape && !gu_flat_shape || !down_shape && !down_flat_shape ||
-            qwen_gate_up.dtype != TensorDType::BF16 ||
-            qwen_down.dtype != TensorDType::BF16 ||
-            qwen_gate_up.bytes != gate_up_elems * static_cast<size_t>(num_experts) *
+            packed_gate_up.dtype != TensorDType::BF16 ||
+            packed_down.dtype != TensorDType::BF16 ||
+            packed_gate_up.bytes != gate_up_elems * static_cast<size_t>(num_experts) *
                 sizeof(__nv_bfloat16) ||
-            qwen_down.bytes != down_elems * static_cast<size_t>(num_experts) *
+            packed_down.bytes != down_elems * static_cast<size_t>(num_experts) *
                 sizeof(__nv_bfloat16)) {
-            throw std::runtime_error("Qwen3.5 packed experts must be BF16 [E, rows, cols]");
+            throw std::runtime_error("packed experts must be BF16 [E, rows, cols]");
         }
     }
 
     for (int e = 0; e < num_experts; ++e) {
-        if (qwen_packed) {
+        if (packed_experts) {
             const size_t gu_offset = static_cast<size_t>(e) * gate_up_elems;
             const size_t down_offset = static_cast<size_t>(e) * down_elems;
             std::memcpy(gate_up_stage.data(),
-                        reinterpret_cast<const __nv_bfloat16*>(qwen_gate_up.data) + gu_offset,
+                        reinterpret_cast<const __nv_bfloat16*>(packed_gate_up.data) + gu_offset,
                         gate_up_bytes);
             std::memcpy(down_stage.data(),
-                        reinterpret_cast<const __nv_bfloat16*>(qwen_down.data) + down_offset,
+                        reinterpret_cast<const __nv_bfloat16*>(packed_down.data) + down_offset,
                         down_bytes);
         } else {
         const std::string w1_name = layer_name(
@@ -259,15 +259,15 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
     }
     std::vector<ExpertLocation> catalog(static_cast<size_t>(num_experts));
     const auto& locator = require_locatable_tensor_repository(repo);
-    const std::string qwen_gate_up_name = "model.language_model.layers." +
+    const std::string packed_gate_up_name = "model.language_model.layers." +
         std::to_string(layer) + ".mlp.experts.gate_up_proj";
-    const std::string qwen_down_name = "model.language_model.layers." +
+    const std::string packed_down_name = "model.language_model.layers." +
         std::to_string(layer) + ".mlp.experts.down_proj";
-    const bool qwen_packed = repo.contains(qwen_gate_up_name) &&
-        repo.contains(qwen_down_name);
-    if (qwen_packed) {
-        const TensorLocator gate_up = locator.locate(qwen_gate_up_name);
-        const TensorLocator down = locator.locate(qwen_down_name);
+    const bool packed_experts = repo.contains(packed_gate_up_name) &&
+        repo.contains(packed_down_name);
+    if (packed_experts) {
+        const TensorLocator gate_up = locator.locate(packed_gate_up_name);
+        const TensorLocator down = locator.locate(packed_down_name);
         const std::vector<int64_t> gate_up_shape{
             num_experts, 2 * moe_intermediate, hidden};
         const std::vector<int64_t> gate_up_flat_shape{
@@ -280,7 +280,7 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog(
             (down.shape != down_shape && down.shape != down_flat_shape) ||
             gate_up.dtype != TensorDType::BF16 || down.dtype != TensorDType::BF16) {
             throw std::invalid_argument(
-                "Qwen3.5 packed experts must be BF16 [E, rows, cols]");
+                "packed experts must be BF16 [E, rows, cols]");
         }
         const size_t gate_up_expert_bytes = static_cast<size_t>(2 * moe_intermediate) *
             static_cast<size_t>(hidden) * sizeof(__nv_bfloat16);

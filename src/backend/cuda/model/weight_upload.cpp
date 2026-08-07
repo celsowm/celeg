@@ -191,9 +191,9 @@ const LinearWeight* WeightLoader::load_router_weight(
     // BF16-only load_weight path.
     std::string name = layer_name(layer, "feed_forward.gate.weight");
     if (!repo.contains(name)) {
-        const std::string qwen_name = "model.language_model.layers." +
+        const std::string alternate_name = "model.language_model.layers." +
             std::to_string(layer) + ".mlp.gate.weight";
-        if (repo.contains(qwen_name)) name = qwen_name;
+        if (repo.contains(alternate_name)) name = alternate_name;
     }
     return load_router_weight_named(repo, name, num_experts, hidden);
 }

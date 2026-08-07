@@ -44,7 +44,9 @@ int main() {
     checkpoint_data.eos_id = 12;
     checkpoint_data.pad_id = 13;
     celeg::BpeTokenizer checkpoint_tokenizer(
-        celeg::resolve_tokenizer_definition(checkpoint_data));
+        celeg::resolve_tokenizer_definition(checkpoint_data, {
+            {"lfm2", celeg::TokenizerPreTokenizerKind::NumericTriplets},
+        }));
     const auto checkpoint_ids = checkpoint_tokenizer.encode("hi", false);
     CELEG_TEST_CHECK(checkpoint_ids.size() == 1 && checkpoint_ids[0] == 2);
     CELEG_TEST_CHECK(checkpoint_tokenizer.bos_id() == 11 &&

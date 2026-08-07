@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/checkpoint/view.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <filesystem>
 #include <cstddef>
@@ -178,6 +179,7 @@ using TokenizerProviderCatalog = ProviderCatalog<ITokenizerProvider>;
 using BackendFactoryCatalog = ProviderCatalog<IBackendFactory>;
 using VisionProviderCatalog = ProviderCatalog<IVisionProviderFactory>;
 
-std::unique_ptr<ITokenizerProvider> make_builtin_tokenizer_provider();
+std::unique_ptr<ITokenizerProvider> make_builtin_tokenizer_provider(
+    std::vector<TokenizerPreTokenizerRule> rules = {});
 
 } // namespace celeg

@@ -1,4 +1,4 @@
-#include "celeg/detail/model/builtin_architectures.hpp"
+#include "celeg/models/qwen35/architecture.hpp"
 
 #include "celeg/model/weight_plan.hpp"
 #include "naming_policy.hpp"

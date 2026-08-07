@@ -4,6 +4,8 @@
 
 namespace celeg {
 
+std::unique_ptr<IChatToolCallCodec> make_lfm2_tool_call_codec();
+
 class Lfm2InstructChatTemplate final : public IChatTemplate {
 public:
     using IChatTemplate::format;
