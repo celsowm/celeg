@@ -11,11 +11,16 @@ int main() {
     model.capabilities.supports_cpu = true;
     model.capabilities.supports_cuda = true;
     celeg::LayerSpec attention_layer;
-    attention_layer.mixer = celeg::AttentionSpec{};
-    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{};
+    celeg::AttentionSpec attention;
+    attention.query_heads = 1;
+    attention.key_value_heads = 1;
+    attention.head_dim = 8;
+    attention.rope_theta = 10000.0;
+    attention_layer.mixer = attention;
+    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(attention_layer);
     celeg::LayerSpec convolution_layer;
-    convolution_layer.mixer = celeg::ShortConvolutionSpec{};
+    convolution_layer.mixer = celeg::ShortConvolutionSpec{3, 8, false};
     convolution_layer.feed_forward = celeg::MixtureOfExpertsSpec{
         16, 4, 2, true, true, 1.5f};
     model.graph.layers.push_back(convolution_layer);

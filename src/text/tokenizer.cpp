@@ -1,5 +1,4 @@
 #include "celeg/text/tokenizer.hpp"
-#include "celeg/checkpoint/formats/json.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -62,22 +61,6 @@ std::pair<uint32_t, size_t> next_cp(std::string_view text, size_t offset) {
             ? std::pair<uint32_t, size_t>{cp, 4} : std::pair<uint32_t, size_t>{0xFFFD, 1};
     }
     return {0xFFFD, 1};
-}
-
-const Json* find_regex_node(const Json& value) {
-    if (value.is_object()) {
-        if (value.contains("Regex") && value["Regex"].is_string()) {
-            return &value["Regex"];
-        }
-        for (const auto& [_, child] : value.as_object()) {
-            if (const Json* found = find_regex_node(child)) return found;
-        }
-    } else if (value.is_array()) {
-        for (const Json& child : value.as_array()) {
-            if (const Json* found = find_regex_node(child)) return found;
-        }
-    }
-    return nullptr;
 }
 
 bool in_range(uint32_t cp, uint32_t first, uint32_t last) {
@@ -169,13 +152,8 @@ std::string pair_key(const std::string& a, const std::string& b) {
 
 } // namespace
 
-BpeTokenizer::BpeTokenizer(const std::string& tokenizer_json_path)
-{
-    load(tokenizer_json_path);
-}
-
-BpeTokenizer::BpeTokenizer(const TokenizerData& data) {
-    load_data(data);
+BpeTokenizer::BpeTokenizer(const TokenizerDefinition& definition) {
+    load_definition(definition);
 }
 
 void BpeTokenizer::init_byte_encoder() {
@@ -199,160 +177,51 @@ void BpeTokenizer::init_byte_encoder() {
     }
 }
 
-void BpeTokenizer::load_data(const TokenizerData& data) {
-    if (data.tokens.empty() || data.merges.empty()) {
-        throw std::runtime_error("checkpoint tokenizer data is incomplete");
+void BpeTokenizer::load_definition(const TokenizerDefinition& definition) {
+    if (definition.tokens.empty()) {
+        throw std::runtime_error("tokenizer definition is incomplete");
     }
-    const std::vector<std::string>& toks = data.tokens;
+    const std::vector<std::string>& toks = definition.tokens;
     id_to_token_.resize(toks.size());
     for (size_t id = 0; id < toks.size(); ++id) {
-        vocab_[toks[id]] = static_cast<int32_t>(id);
+        if (!toks[id].empty()) vocab_[toks[id]] = static_cast<int32_t>(id);
         id_to_token_[id] = toks[id];
     }
 
     int32_t rank = 0;
-    for (const std::string& line : data.merges) {
+    for (const std::string& line : definition.merges) {
         const size_t sep = line.find(' ');
         if (sep == std::string::npos) continue;
         merge_rank_[pair_key(line.substr(0, sep), line.substr(sep + 1))] = rank++;
     }
 
     // Special (CONTROL, type == 3) tokens drive verbatim matching in encode().
-    for (size_t id = 0; id < data.token_types.size() && id < toks.size(); ++id) {
-        if (data.token_types[id] == 3) {  // GGUF_TOKEN_TYPE_CONTROL
-            SpecialToken token{toks[id], static_cast<int32_t>(id)};
-            specials_.push_back(token);
-            special_ids_[token.id] = true;
-        }
+    for (const TokenizerSpecialToken& definition_token : definition.special_tokens) {
+        SpecialToken token{definition_token.text, definition_token.id};
+        specials_.push_back(token);
+        if (definition_token.skip_on_decode) special_ids_[token.id] = true;
     }
     std::sort(specials_.begin(), specials_.end(),
               [](const auto& a, const auto& b) {
                   return a.text.size() > b.text.size();
               });
 
-    bos_id_ = data.bos_id;
-    eos_id_ = data.eos_id;
-    pad_id_ = data.pad_id;
+    bos_id_ = definition.bos_id;
+    eos_id_ = definition.eos_id;
+    pad_id_ = definition.pad_id;
 
-    const std::string& tokenizer_pre = data.pre_tokenizer;
-    if (tokenizer_pre == "lfm2" || tokenizer_pre == "smaug-bpe") {
-        policy_.lfm2_rules = true;
-    }
-    if (tokenizer_pre == "smaug-bpe") {
-        for (const std::string_view text : {"<think>", "</think>"}) {
-            const auto it = vocab_.find(std::string(text));
-            if (it != vocab_.end() && !special_ids_.contains(it->second)) {
-                specials_.push_back({std::string(text), it->second});
-                special_ids_[it->second] = true;
-            }
-        }
-        std::sort(specials_.begin(), specials_.end(),
-                  [](const auto& a, const auto& b) {
-                      return a.text.size() > b.text.size();
-                  });
-    }
-    else if (tokenizer_pre == "gemma4") policy_.raw_utf8 = true;
-    else if (tokenizer_pre == "gpt2" ||
-             tokenizer_pre.find("granite") != std::string::npos) {
-        policy_.granite_rules = true;
-    }
-
-    init_byte_encoder();
-}
-
-void BpeTokenizer::load(const std::string& tokenizer_json_path) {
-    const Json root = Json::parse_file(tokenizer_json_path);
-    const Json& model = root["model"];
-    if (model["type"].as_string() != "BPE") throw std::runtime_error("tokenizer model is not BPE");
-
-    int32_t max_id = -1;
-    for (const auto& [token, value] : model["vocab"].as_object()) {
-        max_id = std::max(max_id, static_cast<int32_t>(value.as_i64()));
-    }
-    id_to_token_.resize(static_cast<size_t>(max_id + 1));
-    for (const auto& [token, value] : model["vocab"].as_object()) {
-        const int32_t id = static_cast<int32_t>(value.as_i64());
-        vocab_[token] = id;
-        id_to_token_[static_cast<size_t>(id)] = token;
-    }
-
-    int32_t rank = 0;
-    for (const Json& merge : model["merges"].as_array()) {
-        std::string left;
-        std::string right;
-        if (merge.is_string()) {
-            const std::string& line = merge.as_string();
-            const size_t sep = line.find(' ');
-            if (sep == std::string::npos) continue;
-            left = line.substr(0, sep);
-            right = line.substr(sep + 1);
-        } else {
-            const auto& pair = merge.as_array();
-            if (pair.size() != 2) continue;
-            left = pair[0].as_string();
-            right = pair[1].as_string();
-        }
-        merge_rank_[pair_key(left, right)] = rank++;
-    }
-
-    if (root.contains("added_tokens")) {
-        for (const Json& item : root["added_tokens"].as_array()) {
-            SpecialToken token{item["content"].as_string(), static_cast<int32_t>(item["id"].as_i64())};
-            if (token.id < 0) throw std::runtime_error("tokenizer added token has a negative id");
-            vocab_[token.text] = token.id;
-            if (static_cast<size_t>(token.id) >= id_to_token_.size()) {
-                id_to_token_.resize(static_cast<size_t>(token.id) + 1);
-            }
-            id_to_token_[static_cast<size_t>(token.id)] = token.text;
-            // Added vocabulary entries are matched verbatim even when the
-            // tokenizer marks them non-special. SmolLM3 uses this for its
-            // reasoning delimiters (<think> and </think>).
-            if (!item.contains("special") || !item["special"].as_bool()) {
-                if (token.text == "<think>" || token.text == "</think>") {
-                    specials_.push_back(std::move(token));
-                }
-                continue;
-            }
-            specials_.push_back(token);
-            special_ids_[token.id] = true;
-            if (token.text == "<|startoftext|>" || token.text == "<|start_of_text|>" ||
-                token.text == "<|begin_of_text|>" || token.text == "<bos>" ||
-                (token.text == "<|end_of_text|>" && bos_id_ == 1)) {
-                bos_id_ = token.id;
-            }
-            if (token.text == "<|im_end|>" || token.text == "<eos>" ||
-                token.text == "<|end_of_text|>") {
-                eos_id_ = token.id;
-            }
-            if (token.text == "<pad>" || token.text == "<|pad|>") pad_id_ = token.id;
-        }
-        std::sort(specials_.begin(), specials_.end(), [](const auto& a, const auto& b) {
-            return a.text.size() > b.text.size();
-        });
-    }
-
-    byte_fallback_ = model.contains("byte_fallback") && model["byte_fallback"].as_bool();
-    // The Gemma tokenizer combines a SentencePiece-style `▁` vocabulary with
-    // byte fallback. GPT-2/BPE tokenizers such as LFM2 may still carry a
-    // JSON `normalizer: null`; that must remain on the byte-encoder path.
-    gemma_normalization_ = byte_fallback_ && vocab_.contains("▁");
-    if (gemma_normalization_) policy_.raw_utf8 = true;
-    if (root.contains("pre_tokenizer")) {
-        if (const Json* regex = find_regex_node(root["pre_tokenizer"])) {
-            // LFM2's tokenizer.json uses the GPT-2 split with 1–3 digit
-            // numeric pieces and direct vocabulary lookup before merges.
-            if (regex->as_string().find("\\p{N}{1,3}") != std::string::npos) {
-                policy_.lfm2_rules = true;
-            } else if (!policy_.raw_utf8) {
-                policy_.granite_rules = true;
-            }
-        }
-    }
+    pre_tokenizer_ = definition.pre_tokenizer;
+    normalization_ = definition.normalization;
+    byte_fallback_ = definition.byte_fallback;
     init_byte_encoder();
 }
 
 std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const {
     std::vector<std::string> pieces;
+    if (pre_tokenizer_ == TokenizerPreTokenizerKind::RawUtf8) {
+        if (!text.empty()) pieces.emplace_back(text);
+        return pieces;
+    }
     size_t i = 0;
     while (i < text.size()) {
         // GPT-2 contractions.
@@ -360,7 +229,8 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
             static constexpr std::string_view suffixes[] = {"'s", "'t", "'re", "'ve", "'m", "'ll", "'d"};
             bool matched = false;
             for (auto suffix : suffixes) {
-                const bool case_insensitive = !policy_.granite_rules;
+                const bool case_insensitive =
+                    pre_tokenizer_ != TokenizerPreTokenizerKind::NumericRuns;
                 const bool suffix_match = case_insensitive
                     ? ascii_case_equal(text, i, suffix)
                     : text.substr(i, suffix.size()) == suffix;
@@ -387,10 +257,10 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
                             const auto [cur, cur_len] = next_cp(text, end);
                             if (category(cur) != cat) break;
                             end += cur_len;
-                            if (cat == 2 && policy_.lfm2_rules &&
+                            if (cat == 2 && pre_tokenizer_ == TokenizerPreTokenizerKind::NumericTriplets &&
                                 ++category_count >= 3) break;
                         }
-                        if (cat == 3 && policy_.lfm2_rules) {
+                        if (cat == 3 && pre_tokenizer_ == TokenizerPreTokenizerKind::NumericTriplets) {
                             while (end < text.size()) {
                                 const auto [cur, cur_len] = next_cp(text, end);
                                 if (cur != '\r' && cur != '\n') break;
@@ -414,7 +284,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
         }
 
         const int cat = category(cp);
-        if (policy_.lfm2_rules && cat == 3 &&
+        if (pre_tokenizer_ == TokenizerPreTokenizerKind::NumericTriplets && cat == 3 &&
             i + len < text.size()) {
             const auto [next, next_len] = next_cp(text, i + len);
             if (category(next) == 1) {
@@ -429,7 +299,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
                 continue;
             }
         }
-        if (policy_.lfm2_rules && cat == 3) {
+        if (pre_tokenizer_ == TokenizerPreTokenizerKind::NumericTriplets && cat == 3) {
             size_t end = i + len;
             while (end < text.size()) {
                 const auto [cur, cur_len] = next_cp(text, end);
@@ -445,7 +315,7 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
             i = end;
             continue;
         }
-        if (cat == 2 && policy_.lfm2_rules) {
+        if (cat == 2 && pre_tokenizer_ == TokenizerPreTokenizerKind::NumericTriplets) {
             size_t end = i;
             while (end < text.size()) {
                 const auto [cur, cur_len] = next_cp(text, end);
@@ -573,7 +443,7 @@ std::vector<std::string> BpeTokenizer::bpe_symbols(std::vector<std::string> symb
 
 std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const {
     std::vector<int32_t> ids;
-    if (gemma_normalization_) {
+    if (normalization_ == TokenizerNormalizationKind::SentencePieceSpace) {
         std::string normalized;
         for (size_t offset = 0; offset < text.size();) {
             const auto [cp, len] = next_cp(text, offset);
@@ -622,7 +492,7 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
     }
     for (const std::string& piece : pretokenize(text)) {
         const std::string encoded = byte_encode(piece);
-        if (policy_.lfm2_rules) {
+        if (pre_tokenizer_ == TokenizerPreTokenizerKind::NumericTriplets) {
             const auto direct = vocab_.find(encoded);
             if (direct != vocab_.end()) {
                 ids.push_back(direct->second);
@@ -668,7 +538,7 @@ std::vector<int32_t> BpeTokenizer::encode(std::string_view text, bool add_bos) c
 }
 
 std::string BpeTokenizer::decode(const std::vector<int32_t>& ids, bool skip_special) const {
-    if (gemma_normalization_) {
+    if (normalization_ == TokenizerNormalizationKind::SentencePieceSpace) {
         std::string decoded;
         for (int32_t id : ids) {
             if (id < 0 || static_cast<size_t>(id) >= id_to_token_.size()) continue;
@@ -701,7 +571,7 @@ std::string BpeTokenizer::decode_token(int32_t id, bool skip_special) const {
     if (id < 0 || static_cast<size_t>(id) >= id_to_token_.size()) return {};
     if (skip_special && special_ids_.contains(id)) return {};
     const std::string& token = id_to_token_[static_cast<size_t>(id)];
-    if (gemma_normalization_) {
+    if (normalization_ == TokenizerNormalizationKind::SentencePieceSpace) {
         std::string decoded;
         if (token.size() == 6 && token.rfind("<0x", 0) == 0 && token.back() == '>') {
             const unsigned value = std::stoul(token.substr(3, 2), nullptr, 16);

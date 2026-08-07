@@ -55,8 +55,13 @@ int main() {
     model.capabilities.supports_cpu = true;
     model.capabilities.supports_cuda = true;
     celeg::LayerSpec layer;
-    layer.mixer = celeg::AttentionSpec{};
-    layer.feed_forward = celeg::DenseFeedForwardSpec{};
+    celeg::AttentionSpec attention;
+    attention.query_heads = 1;
+    attention.key_value_heads = 1;
+    attention.head_dim = 4;
+    attention.rope_theta = 10000.0;
+    layer.mixer = attention;
+    layer.feed_forward = celeg::DenseFeedForwardSpec{8, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);
     model.weight_plan.requests.push_back({
         celeg::TensorRole::AttentionInputNorm, 0, -1, {4}});

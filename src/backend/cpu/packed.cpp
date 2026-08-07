@@ -1,4 +1,6 @@
 #include "detail/model_internal.hpp"
+#include "operators/attention.hpp"
+#include "operators/moe.hpp"
 #include "celeg/backend/cpu/sampler.hpp"
 #include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/backend/cpu/model.hpp"
@@ -188,35 +190,10 @@ struct CpuCompiledModel::BatchScratch {
                     float* q = workspace_.qkv.data() + row * q_projection_width;
                     float* k = workspace_.op_output.data() + row * kv_width;
                     const int position = sessions[row]->session_.position_value;
-                    if (layout.positional_encoding == PositionalEncodingKind::None) {
-                        const float ratio = shape.numerical_policy.attention_multiplier /
-                            (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
-                        for (size_t d = 0; d < q_width; ++d) q[d] *= ratio;
-                    } else if (layout.query_key_norm) {
-                        cpu_qk_norm_rope(q, attention->q_norm.data(), layout.query_heads,
-                                         layout.head_dim, position, static_cast<float>(layout.rope_theta),
-                                         shape.numerical_policy.norm_eps,
-                                         static_cast<float>(layout.rotary_fraction));
-                        if (!attention->k.segments.empty()) {
-                            cpu_qk_norm_rope(k, attention->k_norm.data(), layout.key_value_heads,
-                                             layout.head_dim, position, static_cast<float>(layout.rope_theta),
-                                             shape.numerical_policy.norm_eps,
-                                             static_cast<float>(layout.rotary_fraction));
-                        }
-                        for (size_t d = 0; d < q_width; ++d) q[d] *= layout.query_scale;
-                    } else {
-                        cpu_rope(q, layout.query_heads, layout.head_dim, position,
-                                 static_cast<float>(layout.rope_theta),
-                                 static_cast<float>(layout.rotary_fraction));
-                        if (!attention->k.segments.empty()) {
-                            cpu_rope(k, layout.key_value_heads, layout.head_dim, position,
-                                     static_cast<float>(layout.rope_theta),
-                                     static_cast<float>(layout.rotary_fraction));
-                        }
-                        const float ratio = shape.numerical_policy.attention_multiplier /
-                            (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
-                        for (size_t d = 0; d < q_width; ++d) q[d] *= ratio;
-                    }
+                    const std::array<int32_t, 3> rope_position = {
+                        position, position, position};
+                    apply_cpu_attention_qk(shape, layout, *attention, q, k,
+                                           position, rope_position);
                 });
                 for (size_t row = 0; row < rows; ++row) {
                     const int owner = shared.layer_to_kv_owner.at(index);
@@ -233,9 +210,7 @@ struct CpuCompiledModel::BatchScratch {
                     if (query_gate) {
                         const float* gate = workspace_.qkv.data() + row * q_projection_width + q_width;
                         float* output = workspace_.op_output.data() + row * q_width;
-                        for (size_t d = 0; d < q_width; ++d) {
-                            output[d] *= 1.0f / (1.0f + std::exp(-gate[d]));
-                        }
+                        apply_cpu_query_gate(output, gate, q_width);
                     }
                 }
                 layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
@@ -275,7 +250,6 @@ struct CpuCompiledModel::BatchScratch {
                           workspace_.mlp_output.begin() + rows * hidden, 0.0f);
                 workspace_.moe_router_logits.resize(rows * static_cast<size_t>(experts));
                 workspace_.moe_router_probs.resize(rows * static_cast<size_t>(experts));
-                workspace_.moe_router_scored.resize(rows * static_cast<size_t>(experts));
                 workspace_.moe_selected.resize(routes);
                 workspace_.moe_weights.resize(routes);
                 workspace_.moe_route_rows.resize(routes);
@@ -287,46 +261,27 @@ struct CpuCompiledModel::BatchScratch {
                 shared.linear.gemm_raw(moe->router.data(), workspace_.normed.data(),
                                        workspace_.moe_router_logits.data(), rows, experts, shape.hidden);
                 for (size_t row = 0; row < rows; ++row) {
-                    float* probabilities = workspace_.moe_router_probs.data() +
-                        row * static_cast<size_t>(experts);
-                    std::pair<float, int>* scored = workspace_.moe_router_scored.data() +
-                        row * static_cast<size_t>(experts);
                     const float* logits = workspace_.moe_router_logits.data() +
                         row * static_cast<size_t>(experts);
+                    const CpuMoeRoute resolved_route = route_cpu_moe(
+                        semantics.router, {logits, static_cast<size_t>(experts)},
+                        moe->router_bias);
                     for (int expert = 0; expert < experts; ++expert) {
-                        const float probability = 1.0f / (1.0f + std::exp(-logits[expert]));
-                        probabilities[expert] = probability;
-                        scored[expert] = {probability +
-                            (semantics.router.has_expert_bias &&
-                             expert < static_cast<int>(moe->router_bias.size())
-                                ? moe->router_bias[expert] : 0.0f), expert};
+                        workspace_.moe_router_probs[row * static_cast<size_t>(experts) +
+                                                    static_cast<size_t>(expert)] = 0.0f;
                     }
-                    std::partial_sort(scored, scored + selected, scored + experts,
-                                      [](const std::pair<float, int>& a,
-                                         const std::pair<float, int>& b) {
-                                          return a.first == b.first ? a.second < b.second : a.first > b.first;
-                                      });
-                    float sum = 0.0f;
                     for (int route = 0; route < selected; ++route) {
                         const size_t route_index = row * static_cast<size_t>(selected) + route;
-                        const int expert = scored[route].second;
+                        const int expert = resolved_route.experts[static_cast<size_t>(route)];
                         workspace_.moe_selected[route_index] = expert;
-                        workspace_.moe_weights[route_index] = probabilities[expert];
-                        sum += workspace_.moe_weights[route_index];
-                    }
-                    if (semantics.router.normalization == MoeNormalizationKind::SumSelected) {
-                        for (int route = 0; route < selected; ++route) {
-                            workspace_.moe_weights[row * static_cast<size_t>(selected) + route] /= sum + 1e-6f;
-                        }
-                    }
-                    for (int route = 0; route < selected; ++route) {
-                        const size_t route_index = row * static_cast<size_t>(selected) + route;
-                        const int expert = workspace_.moe_selected[route_index];
+                        workspace_.moe_weights[route_index] =
+                            resolved_route.weights[static_cast<size_t>(route)] /
+                            semantics.router.routed_scaling;
                         ++workspace_.moe_group_offsets[static_cast<size_t>(expert) + 1];
                         workspace_.moe_route_rows[route_index] = static_cast<int>(row);
                         workspace_.moe_route_experts[route_index] = expert;
                         workspace_.moe_route_weights[route_index] =
-                            workspace_.moe_weights[route_index] * semantics.router.routed_scaling;
+                            resolved_route.weights[static_cast<size_t>(route)];
                     }
                 }
                 for (int expert = 0; expert < experts; ++expert) {
@@ -395,6 +350,31 @@ struct CpuCompiledModel::BatchScratch {
                     const float* source = workspace_.moe_gathered_output.data() + packed_route * hidden;
                     const float weight = workspace_.moe_route_weights[route];
                     for (size_t d = 0; d < hidden; ++d) destination[d] += weight * source[d];
+                }
+                if (semantics.shared) {
+                    const int shared_intermediate = semantics.shared->mlp.intermediate_size;
+                    layer_gemm(moe->shared_w13, workspace_.normed.data(),
+                               workspace_.gate_up.data());
+                    rows_for([&](size_t row) {
+                        cpu_swiglu(workspace_.gate_up.data() +
+                                       row * 2ULL * static_cast<size_t>(shared_intermediate),
+                                   workspace_.activated.data() +
+                                       row * static_cast<size_t>(shared_intermediate),
+                                   shared_intermediate);
+                    });
+                    layer_gemm(moe->shared_w2, workspace_.activated.data(),
+                               workspace_.shared_output.data());
+                    shared.linear.gemm(moe->shared_gate, workspace_.normed.data(),
+                                       workspace_.shared_gate.data(), rows);
+                    rows_for([&](size_t row) {
+                        const float gate = 1.0f / (1.0f + std::exp(
+                            -workspace_.shared_gate[row]));
+                        float* destination = workspace_.mlp_output.data() + row * hidden;
+                        const float* source = workspace_.shared_output.data() + row * hidden;
+                        for (size_t d = 0; d < hidden; ++d) {
+                            destination[d] += gate * source[d];
+                        }
+                    });
                 }
             } else {
                 const int intermediate = shape.feed_forward_intermediates.empty()
@@ -476,7 +456,14 @@ struct CpuCompiledModel::BatchScratch {
 void CpuCompiledModel::forward_batch(std::span<CpuCompiledModel* const> sessions,
                                    std::span<const int32_t> tokens,
                                    std::span<const uint8_t> compute_logits) {
-    if (!sessions.empty() && sessions.front()->shared->shape.mamba2_layer_count > 0) {
+    const bool has_sequential_only_layer = !sessions.empty() && std::any_of(
+        sessions.front()->shared->program.layers.begin(),
+        sessions.front()->shared->program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return layer.mixer == CompiledMixer::Mamba2 ||
+                   layer.mixer == CompiledMixer::MlpOnly;
+        });
+    if (has_sequential_only_layer) {
         if (tokens.size() != sessions.size()) {
             throw std::invalid_argument("Nemotron-H batch requires one token per session");
         }

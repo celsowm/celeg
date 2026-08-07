@@ -1,6 +1,7 @@
 #include "celeg/serve/protocol/json.hpp"
 #include "celeg/serve/protocol/mapping.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 #include "celeg/models/lfm2/chat_template.hpp"
 #include "support/assertions.hpp"
 
@@ -38,7 +39,7 @@ celeg::BpeTokenizer make_test_tokenizer(const std::filesystem::path& path) {
       ]
     })";
     out.close();
-    return celeg::BpeTokenizer(path.string());
+    return celeg::BpeTokenizer(celeg::load_tokenizer_definition_json(path.string()));
 }
 
 } // namespace

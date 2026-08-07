@@ -1,45 +1,41 @@
 #pragma once
 
 #include "celeg/checkpoint/formats/gguf.hpp"
-#include "celeg/checkpoint/formats/safetensors.hpp"
-#include "celeg/checkpoint/tokenizer.hpp"
+#include "celeg/checkpoint/weight_repository.hpp"
 
 #include <memory>
-#include <string>
 #include <string_view>
+#include <vector>
 
 namespace celeg {
 
-// Weight repository backed by a single GGUF checkpoint file. Translates the
-// canonical HuggingFace tensor names requested by the model builder
-// (`model.embed_tokens.weight`, `model.layers.{i}.self_attn.q_proj.weight`, ...)
-// into the llama.cpp/GGUF naming (`token_embd.weight`, `blk.{i}.attn_q.weight`,
-// ...) so the model builder and weight loader remain format-agnostic.
+class GgufTensorResolver;
+
+// Weight repository backed by a single GGUF checkpoint file. Tensor-name
+// resolution, packed-expert slicing, and native-view adaptation are delegated
+// to internal GGUF components so this facade only exposes repository
+// capabilities to the format-agnostic runtime.
 //
 // Returned HostTensorView values point directly into the memory-mapped GGUF
 // file and stay valid for the lifetime of this repository. Quantized tensors
 // (Q4_K/Q6_K/...) are reported with dtype == Quantized and the matching
 // GgmlType; F32/F16 tensors map to the plain TensorDType values.
-class GgufRepository : public IWeightRepository,
-                       public INativeBlockStorageRepository,
-                       public ITokenizerDataRepository {
+class GgufRepository final : public IWeightRepository,
+                             public INativeBlockStorageRepository {
 public:
     explicit GgufRepository(std::shared_ptr<GgufFile> gguf);
+    ~GgufRepository();
+
+    GgufRepository(const GgufRepository&) = delete;
+    GgufRepository& operator=(const GgufRepository&) = delete;
 
     bool contains(std::string_view name) const override;
     HostTensorView tensor(std::string_view name) const override;
     std::vector<std::string> names() const override;
     bool has_native_block_storage() const override { return true; }
-    TokenizerData tokenizer_data() const override;
-
-    const GgufFile& file() const { return *gguf_; }
 
 private:
-    // Maps a canonical HF tensor name to the GGUF tensor name. Returns empty
-    // string when the name has no GGUF counterpart.
-    std::string translate(std::string_view hf_name) const;
-
-    std::shared_ptr<GgufFile> gguf_;
+    std::unique_ptr<GgufTensorResolver> tensors_;
 };
 
 } // namespace celeg

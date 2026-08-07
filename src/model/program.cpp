@@ -5,6 +5,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 
 namespace celeg {
 
@@ -215,6 +216,31 @@ void CompiledModelProgram::validate() const {
                 throw std::invalid_argument("compiled layer has invalid weight index");
             }
         }
+        const bool has_mixer_spec =
+            layer.attention.has_value() || layer.short_convolution.has_value() ||
+            layer.gated_delta_net.has_value() || layer.mamba2.has_value();
+        if (layer.mixer == CompiledMixer::MlpOnly) {
+            if (has_mixer_spec) {
+                throw std::invalid_argument("MLP-only layer has mixer semantics");
+            }
+        } else if (!has_mixer_spec) {
+            throw std::invalid_argument("compiled mixer has no semantic specification");
+        }
+        if (layer.mixer == CompiledMixer::Attention && !layer.attention) {
+            throw std::invalid_argument("compiled attention layer has no attention semantics");
+        }
+        if (layer.mixer == CompiledMixer::ShortConvolution && !layer.short_convolution) {
+            throw std::invalid_argument("compiled convolution layer has no convolution semantics");
+        }
+        if (layer.mixer == CompiledMixer::GatedDeltaNet && !layer.gated_delta_net) {
+            throw std::invalid_argument("compiled GatedDeltaNet layer has no semantics");
+        }
+        if (layer.mixer == CompiledMixer::Mamba2 && !layer.mamba2) {
+            throw std::invalid_argument("compiled Mamba2 layer has no semantics");
+        }
+        if (layer.feed_forward_intermediate <= 0) {
+            throw std::invalid_argument("compiled layer has no FFN width");
+        }
         if (layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
             if (!layer.moe) {
                 throw std::invalid_argument("compiled MoE layer has no semantics");
@@ -279,7 +305,34 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             CompiledMixer::MlpOnly,
             layer.feed_forward_kind() == FeedForwardKind::Dense
                 ? CompiledFeedForward::Dense : CompiledFeedForward::MixtureOfExperts,
+            layer.execute_feed_forward,
+            {}, {}, {}, {},
+            0, ActivationKind::SwiGLU,
             {}, std::nullopt};
+        std::visit([&](const auto& mixer) {
+            using Mixer = std::decay_t<decltype(mixer)>;
+            if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
+                compiled.attention = mixer;
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+                compiled.short_convolution = mixer;
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                compiled.gated_delta_net = mixer;
+            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                compiled.mamba2 = mixer;
+            }
+        }, layer.mixer);
+        std::visit([&](const auto& feed_forward) {
+            using FeedForward = std::decay_t<decltype(feed_forward)>;
+            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+                compiled.feed_forward_intermediate = feed_forward.intermediate_size;
+                compiled.feed_forward_activation = feed_forward.activation;
+            } else if constexpr (std::is_same_v<FeedForward, MlpBlockSpec>) {
+                compiled.feed_forward_intermediate = feed_forward.intermediate_size;
+                compiled.feed_forward_activation = feed_forward.activation;
+            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+                compiled.feed_forward_intermediate = feed_forward.intermediate_size;
+            }
+        }, layer.feed_forward);
         for (std::size_t request_index = 0;
              request_index < model.weight_plan.requests.size(); ++request_index) {
             if (model.weight_plan.requests[request_index].layer == static_cast<int>(layer_index)) {

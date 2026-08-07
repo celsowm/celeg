@@ -71,6 +71,8 @@ struct CpuWorkspace {
         gate_up.resize(rows * 2ULL * shape.max_feed_forward_intermediate);
         activated.resize(rows * shape.max_feed_forward_intermediate);
         mlp_output.resize(rows * shape.hidden);
+        shared_output.resize(rows * static_cast<size_t>(shape.hidden));
+        shared_gate.resize(rows);
         chunk_q8.resize(rows * (static_cast<size_t>(shape.hidden) / 256));
     }
 
@@ -92,6 +94,8 @@ struct CpuWorkspace {
         chunk_gate_up.resize(rows * 2ULL * static_cast<size_t>(shape.max_feed_forward_intermediate));
         chunk_activated.resize(rows * static_cast<size_t>(shape.max_feed_forward_intermediate));
         chunk_mlp.resize(rows * static_cast<size_t>(shape.hidden));
+        shared_output.resize(rows * static_cast<size_t>(shape.hidden));
+        shared_gate.resize(rows);
         chunk_q8.resize(rows * (static_cast<size_t>(shape.hidden) / 256));
         final_normed.resize(static_cast<size_t>(shape.hidden));
         terminal_rows.clear();
@@ -100,6 +104,7 @@ struct CpuWorkspace {
     std::vector<float> hidden, residual, normed, op_output, qkv;
     std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
     std::vector<float> conv_projected, gate_up, activated, mlp_output;
+    std::vector<float> shared_output, shared_gate;
     std::vector<float> mamba_projected, mamba_bcx, mamba_inner;
     std::vector<float> gated_delta_qkv, gated_delta_z, gated_delta_b, gated_delta_a;
     std::vector<float> gated_delta_output;

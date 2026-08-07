@@ -5,6 +5,10 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/weight_codec.cpp
     src/backend/cpu/model_state.cpp
     src/backend/cpu/model_forward.cpp
+    src/backend/cpu/operators/attention.cpp
+    src/backend/cpu/operators/feed_forward.cpp
+    src/backend/cpu/operators/moe.cpp
+    src/backend/cpu/operators/recurrent.cpp
     src/backend/cpu/sampler.cpp
     src/backend/cpu/packed.cpp
     src/backend/cpu/concurrent.cpp

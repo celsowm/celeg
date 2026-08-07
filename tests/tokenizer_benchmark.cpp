@@ -1,4 +1,5 @@
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -32,7 +33,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     const size_t bytes = argc == 3 ? std::stoull(argv[2]) : 4096;
-    celeg::BpeTokenizer tokenizer(std::filesystem::path(argv[1]).string());
+    celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(
+        std::filesystem::path(argv[1]).string()));
     const std::string prompt = make_prompt(bytes);
 
     constexpr int warmup = 3;

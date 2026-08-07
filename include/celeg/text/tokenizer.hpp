@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/checkpoint/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 #include "celeg/text/chat_template.hpp"
 
 #include <array>
@@ -16,10 +16,7 @@ namespace celeg {
 
 class BpeTokenizer {
 public:
-    explicit BpeTokenizer(const std::string& tokenizer_json_path);
-
-    // Builds the tokenizer from format-neutral checkpoint metadata.
-    explicit BpeTokenizer(const TokenizerData& data);
+    explicit BpeTokenizer(const TokenizerDefinition& definition);
 
     std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const;
     std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const;
@@ -30,19 +27,12 @@ public:
     std::optional<int32_t> token_id(std::string_view text) const;
 
 private:
-    struct TokenizerPolicy {
-        bool lfm2_rules = false;
-        bool granite_rules = false;
-        bool raw_utf8 = false;
-    };
-
     struct SpecialToken {
         std::string text;
         int32_t id;
     };
 
-    void load(const std::string& tokenizer_json_path);
-    void load_data(const TokenizerData& data);
+    void load_definition(const TokenizerDefinition& definition);
     // Initializes the GPT-2 byte<->unicode encoder tables shared by both the
     // JSON and GGUF load paths.
     void init_byte_encoder();
@@ -61,8 +51,8 @@ private:
     std::unordered_map<int32_t, bool> special_ids_;
     std::array<std::string, 256> byte_encoder_{};
     std::unordered_map<uint32_t, uint8_t> byte_decoder_;
-    TokenizerPolicy policy_;
-    bool gemma_normalization_ = false;
+    TokenizerPreTokenizerKind pre_tokenizer_ = TokenizerPreTokenizerKind::Default;
+    TokenizerNormalizationKind normalization_ = TokenizerNormalizationKind::None;
     bool byte_fallback_ = false;
     int32_t bos_id_ = 1;
     int32_t eos_id_ = 7;

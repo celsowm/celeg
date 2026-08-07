@@ -114,6 +114,13 @@ struct PerLayerInputPlan {
 struct CompiledLayerProgram {
     CompiledMixer mixer;
     CompiledFeedForward feed_forward;
+    bool execute_feed_forward = true;
+    std::optional<AttentionSpec> attention;
+    std::optional<ShortConvolutionSpec> short_convolution;
+    std::optional<GatedDeltaNetSpec> gated_delta_net;
+    std::optional<Mamba2Spec> mamba2;
+    int feed_forward_intermediate = 0;
+    ActivationKind feed_forward_activation = ActivationKind::SwiGLU;
     std::vector<std::size_t> weight_request_indices;
     std::optional<MoeLayerProgram> moe;
 };

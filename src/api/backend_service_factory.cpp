@@ -31,11 +31,32 @@ public:
     CpuConcurrentEngineOptions engine;
 };
 
-class CpuBackendFactory final : public IBackendFactory {
+class CpuBackendFactory final : public IBackendFactory,
+                                public IBackendOptionsDecoder {
 public:
     std::string_view id() const override { return "cpu"; }
     bool supports(BackendId backend) const override {
         return backend == "cpu";
+    }
+
+    std::shared_ptr<const IBackendOptions> decode_options(
+        std::span<const std::byte> bytes) const override {
+        if (bytes.size() < sizeof(celeg_cpu_backend_v2_options)) {
+            throw std::invalid_argument("CPU v2 options are truncated");
+        }
+        const auto* source = reinterpret_cast<const celeg_cpu_backend_v2_options*>(bytes.data());
+        if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
+            throw std::invalid_argument("CPU v2 options have an invalid struct size");
+        }
+        celeg_engine_model_options model{};
+        model.backend = CELEG_BACKEND_CPU;
+        model.backend_options.cpu = source->model;
+        celeg_engine_options engine{};
+        engine.backend = CELEG_BACKEND_CPU;
+        engine.model = model;
+        engine.backend_options.cpu = source->engine;
+        return std::make_shared<CpuBackendOptions>(
+            cpu_options(model), cpu_engine_options(engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
@@ -73,11 +94,32 @@ public:
     ConcurrentEngineOptions engine;
 };
 
-class CudaBackendFactory final : public IBackendFactory {
+class CudaBackendFactory final : public IBackendFactory,
+                                 public IBackendOptionsDecoder {
 public:
     std::string_view id() const override { return "cuda"; }
     bool supports(BackendId backend) const override {
         return backend == "cuda";
+    }
+
+    std::shared_ptr<const IBackendOptions> decode_options(
+        std::span<const std::byte> bytes) const override {
+        if (bytes.size() < sizeof(celeg_cuda_backend_v2_options)) {
+            throw std::invalid_argument("CUDA v2 options are truncated");
+        }
+        const auto* source = reinterpret_cast<const celeg_cuda_backend_v2_options*>(bytes.data());
+        if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
+            throw std::invalid_argument("CUDA v2 options have an invalid struct size");
+        }
+        celeg_engine_model_options model{};
+        model.backend = CELEG_BACKEND_CUDA;
+        model.backend_options.cuda = source->model;
+        celeg_engine_options engine{};
+        engine.backend = CELEG_BACKEND_CUDA;
+        engine.model = model;
+        engine.backend_options.cuda = source->engine;
+        return std::make_shared<CudaBackendOptions>(
+            cuda_options(model), cuda_engine_options(engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
@@ -144,6 +186,47 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
         [backend_id = request.backend_id](const IBackendFactory& candidate) {
             return candidate.supports(backend_id);
         });
+    return factory.create(request);
+}
+
+std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle_v2(
+    const char* path, const celeg_engine_v2_options& options) {
+    if (!path || !*path || !options.backend_id || !*options.backend_id) {
+        throw std::invalid_argument("v2 engine path and backend id are required");
+    }
+    if (!options.backend_options || options.backend_options_size == 0) {
+        throw std::invalid_argument("v2 backend options are required");
+    }
+    RuntimeBuilder builder;
+    builder.add_builtins();
+    builder.add_backend_factory(std::make_unique<CpuBackendFactory>());
+#ifdef CELEG_API_WITH_CUDA
+    builder.add_backend_factory(std::make_unique<CudaBackendFactory>());
+#endif
+    const std::shared_ptr<const RuntimeContext> runtime = builder.build_shared();
+    const IBackendFactory* selected = nullptr;
+    try {
+        selected = &runtime->backends().select_best_if(
+            [&options](const IBackendFactory& candidate) {
+                return candidate.supports(options.backend_id);
+            });
+    } catch (const std::invalid_argument&) {
+        throw std::invalid_argument("unknown backend: " +
+                                    std::string(options.backend_id));
+    }
+    const IBackendFactory& factory = *selected;
+    const auto* decoder = dynamic_cast<const IBackendOptionsDecoder*>(&factory);
+    if (!decoder) {
+        throw std::invalid_argument("selected backend does not expose v2 options");
+    }
+    const auto* raw = static_cast<const std::byte*>(options.backend_options);
+    BackendCreateRequest request;
+    request.model_path = path;
+    request.max_context = options.max_context;
+    request.backend_id = options.backend_id;
+    request.runtime = runtime;
+    request.options = decoder->decode_options(
+        std::span<const std::byte>(raw, options.backend_options_size));
     return factory.create(request);
 }
 

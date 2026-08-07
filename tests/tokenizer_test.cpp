@@ -1,4 +1,6 @@
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
+#include "celeg/checkpoint/tokenizer.hpp"
 #include "celeg/models/gemma4/chat_template.hpp"
 #include "support/assertions.hpp"
 #include <filesystem>
@@ -7,6 +9,7 @@
 #include <stdexcept>
 
 int main() {
+    try {
     const auto path = std::filesystem::temp_directory_path() / "celeg_tokenizer_test.json";
     std::ofstream out(path);
     out << R"({
@@ -17,16 +20,19 @@ int main() {
       },
       "added_tokens": [
         {"id":0,"content":"<|startoftext|>","special":true},
-        {"id":99,"content":"<|image_pad|>","special":true}
+        {"id":99,"content":"<|image_pad|>","special":true},
+        {"id":100,"content":"<think>","special":false}
       ]
     })";
     out.close();
 
-    celeg::BpeTokenizer tokenizer(path.string());
+    celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(path.string()));
     const auto ids = tokenizer.encode("hi", false);
     CELEG_TEST_CHECK(ids.size() == 1 && ids[0] == 3);
     CELEG_TEST_CHECK(tokenizer.decode(ids, false) == "hi");
     CELEG_TEST_CHECK(tokenizer.token_id("<|image_pad|>") == 99);
+    CELEG_TEST_CHECK(tokenizer.encode("<think>", false) == std::vector<int32_t>{100});
+    CELEG_TEST_CHECK(tokenizer.decode({100}, true) == "<think>");
     const auto contraction = tokenizer.encode("'S", false);
     CELEG_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
     std::filesystem::remove(path);
@@ -37,7 +43,8 @@ int main() {
     checkpoint_data.bos_id = 11;
     checkpoint_data.eos_id = 12;
     checkpoint_data.pad_id = 13;
-    celeg::BpeTokenizer checkpoint_tokenizer(checkpoint_data);
+    celeg::BpeTokenizer checkpoint_tokenizer(
+        celeg::resolve_tokenizer_definition(checkpoint_data));
     const auto checkpoint_ids = checkpoint_tokenizer.encode("hi", false);
     CELEG_TEST_CHECK(checkpoint_ids.size() == 1 && checkpoint_ids[0] == 2);
     CELEG_TEST_CHECK(checkpoint_tokenizer.bos_id() == 11 &&
@@ -61,7 +68,8 @@ int main() {
       }}
     })";
     lfm.close();
-    celeg::BpeTokenizer lfm_tokenizer(lfm_path.string());
+    celeg::BpeTokenizer lfm_tokenizer(
+        celeg::load_tokenizer_definition_json(lfm_path.string()));
     const auto lfm_ids = lfm_tokenizer.encode("hello world 1234567890", false);
     CELEG_TEST_CHECK(lfm_ids.size() == 6 && lfm_ids[0] == 10 &&
                      lfm_ids[1] == 11 && lfm_ids[2] == 12 &&
@@ -83,7 +91,8 @@ int main() {
       }}
     })";
     granite.close();
-    celeg::BpeTokenizer granite_tokenizer(granite_path.string());
+    celeg::BpeTokenizer granite_tokenizer(
+        celeg::load_tokenizer_definition_json(granite_path.string()));
     const auto granite_numbers = granite_tokenizer.encode("123", false);
     CELEG_TEST_CHECK(granite_numbers.size() == 1 && granite_numbers[0] == 23);
     const auto granite_contraction = granite_tokenizer.encode("'S", false);
@@ -121,7 +130,8 @@ int main() {
     })";
     gemma.close();
 
-    celeg::BpeTokenizer gemma_tokenizer(gemma_path.string());
+    celeg::BpeTokenizer gemma_tokenizer(
+        celeg::load_tokenizer_definition_json(gemma_path.string()));
     const celeg::Gemma4InstructChatTemplate gemma_template;
     CELEG_TEST_CHECK(gemma_tokenizer.bos_id() == 2);
     CELEG_TEST_CHECK(gemma_tokenizer.eos_id() == 1);
@@ -151,4 +161,8 @@ int main() {
     CELEG_TEST_CHECK(gemma_developer.find("<|turn>system\nno") != std::string::npos);
     std::filesystem::remove(gemma_path);
     std::cout << "tokenizer_test: ok\n";
+    } catch (const std::exception& error) {
+        std::cerr << "tokenizer_test: " << error.what() << "\n";
+        return 1;
+    }
 }

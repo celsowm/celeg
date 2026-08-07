@@ -3,6 +3,7 @@
 #include "celeg/checkpoint/formats/json.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/repositories/gguf.hpp"
+#include "formats/detail/gguf_tokenizer_metadata.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 
 #include <algorithm>
@@ -33,7 +34,8 @@ public:
         result.path = path;
         result.metadata = CheckpointMetadata::from_gguf(*file);
         auto repository = std::make_shared<GgufRepository>(file);
-        result.tokenizer = std::make_shared<TokenizerData>(repository->tokenizer_data());
+        result.tokenizer = std::make_shared<TokenizerData>(
+            read_gguf_tokenizer_data(*file));
         result.repository = std::move(repository);
         return result;
     }

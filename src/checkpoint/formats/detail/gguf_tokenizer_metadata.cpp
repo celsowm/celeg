@@ -1,0 +1,48 @@
+#include "gguf_tokenizer_metadata.hpp"
+
+namespace celeg {
+
+TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
+    TokenizerData result;
+    const auto& tokens = file.value("tokenizer.ggml.tokens");
+    if (tokens.kind == GgufValueKind::Array &&
+        tokens.array_kind == GgufValueKind::String) {
+        result.tokens = tokens.array_strings;
+    }
+
+    const auto& merges = file.value("tokenizer.ggml.merges");
+    if (merges.kind == GgufValueKind::Array &&
+        merges.array_kind == GgufValueKind::String) {
+        result.merges = merges.array_strings;
+    }
+
+    if (file.has("tokenizer.ggml.token_type")) {
+        const auto& types = file.value("tokenizer.ggml.token_type");
+        result.token_types.reserve(types.array_integers.size());
+        for (const int64_t type : types.array_integers) {
+            result.token_types.push_back(static_cast<int32_t>(type));
+        }
+    }
+    if (file.has("tokenizer.ggml.bos_token_id")) {
+        result.bos_id = static_cast<int32_t>(file.i64("tokenizer.ggml.bos_token_id"));
+    }
+    if (file.has("tokenizer.ggml.eos_token_id")) {
+        result.eos_id = static_cast<int32_t>(file.i64("tokenizer.ggml.eos_token_id"));
+    }
+    if (file.has("tokenizer.ggml.padding_token_id")) {
+        result.pad_id = static_cast<int32_t>(file.i64("tokenizer.ggml.padding_token_id"));
+    }
+
+    const std::string pre_tokenizer = file.str_or("tokenizer.ggml.pre", "");
+    if (pre_tokenizer == "lfm2" || pre_tokenizer == "smaug-bpe") {
+        result.pre_tokenizer = TokenizerData::PreTokenizerKind::NumericTriplets;
+    } else if (pre_tokenizer == "gemma4") {
+        result.pre_tokenizer = TokenizerData::PreTokenizerKind::RawUtf8;
+    } else if (pre_tokenizer == "gpt2" ||
+               pre_tokenizer.find("granite") != std::string::npos) {
+        result.pre_tokenizer = TokenizerData::PreTokenizerKind::NumericRuns;
+    }
+    return result;
+}
+
+} // namespace celeg

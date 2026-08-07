@@ -1,6 +1,6 @@
 #include "celeg/model/architecture.hpp"
 
-#include "celeg/detail/model/builtin_architectures.hpp"
+#include "celeg/model/runtime_modules.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -78,16 +78,6 @@ std::shared_ptr<const ArchitectureCatalog> create_builtin_architecture_catalog()
     add_builtin_architectures(*catalog);
     catalog->freeze();
     return catalog;
-}
-
-void add_builtin_architectures(ArchitectureCatalog& catalog) {
-    detail::register_lfm2_architecture(catalog);
-    detail::register_granite_architecture(catalog);
-    detail::register_gemma4_architecture(catalog);
-    detail::register_minicpm5_architecture(catalog);
-    detail::register_smollm3_architecture(catalog);
-    detail::register_qwen35_architecture(catalog);
-    detail::register_nemotron_h_architecture(catalog);
 }
 
 } // namespace celeg

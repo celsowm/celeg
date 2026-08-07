@@ -1,12 +1,35 @@
 #include "celeg/models/qwen35/vision.hpp"
+#include "celeg/checkpoint/weight_repository.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+class EmptyVisionRepository final : public celeg::IWeightRepository {
+public:
+    bool contains(std::string_view) const override { return false; }
+    celeg::HostTensorView tensor(std::string_view) const override { return {}; }
+    std::vector<std::string> names() const override { return {}; }
+};
+
+} // namespace
 
 int main() {
+    bool rejected_empty_repository = false;
+    try {
+        (void)celeg::make_qwen35_visual_embedding_provider(
+            std::make_shared<EmptyVisionRepository>());
+    } catch (const std::invalid_argument&) {
+        rejected_empty_repository = true;
+    }
+    CELEG_TEST_CHECK(rejected_empty_repository);
+
     const char* path = std::getenv("CELEG_QWEN35_MODEL");
     if (!path || !std::filesystem::is_directory(path)) {
         std::cout << "qwen35_vision_test: skipped (CELEG_QWEN35_MODEL is not set)\n";

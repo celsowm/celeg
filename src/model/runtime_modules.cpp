@@ -12,6 +12,21 @@ namespace {
 
 using ArchitectureRegistrar = void (*)(ArchitectureCatalog&);
 
+struct BuiltinFamilyRegistration {
+    std::string_view module_id;
+    ArchitectureRegistrar register_architecture;
+};
+
+constexpr BuiltinFamilyRegistration kBuiltinFamilies[] = {
+    {"lfm2", &detail::register_lfm2_architecture},
+    {"granite", &detail::register_granite_architecture},
+    {"gemma4", &detail::register_gemma4_architecture},
+    {"minicpm5", &detail::register_minicpm5_architecture},
+    {"smollm3", &detail::register_smollm3_architecture},
+    {"qwen35", &detail::register_qwen35_architecture},
+    {"nemotron-h", &detail::register_nemotron_h_architecture},
+};
+
 class ArchitectureFamilyModule final : public IRuntimeModule {
 public:
     ArchitectureFamilyModule(std::string_view module_id,
@@ -61,23 +76,18 @@ public:
 
 } // namespace
 
+void add_builtin_architectures(ArchitectureCatalog& catalog) {
+    for (const BuiltinFamilyRegistration& family : kBuiltinFamilies) {
+        family.register_architecture(catalog);
+    }
+}
+
 std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
-    using namespace detail;
     std::vector<std::unique_ptr<IRuntimeModule>> modules;
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "lfm2", &register_lfm2_architecture));
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "granite", &register_granite_architecture));
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "gemma4", &register_gemma4_architecture));
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "minicpm5", &register_minicpm5_architecture));
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "smollm3", &register_smollm3_architecture));
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "qwen35", &register_qwen35_architecture));
-    modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-        "nemotron-h", &register_nemotron_h_architecture));
+    for (const BuiltinFamilyRegistration& family : kBuiltinFamilies) {
+        modules.push_back(std::make_unique<ArchitectureFamilyModule>(
+            family.module_id, family.register_architecture));
+    }
     modules.push_back(std::make_unique<BuiltinTextModule>());
     modules.push_back(std::make_unique<Gemma4VisionModule>());
     modules.push_back(std::make_unique<Qwen35VisionModule>());

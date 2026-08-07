@@ -76,6 +76,45 @@ void celeg_engine_options_init(celeg_engine_options* options, celeg_backend back
     }
 }
 
+void celeg_cpu_backend_v2_options_init(celeg_cpu_backend_v2_options* options) {
+    if (!options) return;
+    celeg_engine_options source;
+    celeg_engine_options_init(&source, CELEG_BACKEND_CPU);
+    *options = {};
+    options->struct_size = sizeof(*options);
+    options->model = source.model.backend_options.cpu;
+    options->engine = source.backend_options.cpu;
+}
+
+void celeg_cuda_backend_v2_options_init(celeg_cuda_backend_v2_options* options) {
+    if (!options) return;
+    celeg_engine_options source;
+    celeg_engine_options_init(&source, CELEG_BACKEND_CUDA);
+    *options = {};
+    options->struct_size = sizeof(*options);
+    options->model = source.model.backend_options.cuda;
+    options->engine = source.backend_options.cuda;
+}
+
+void celeg_engine_v2_options_init(celeg_engine_v2_options* options,
+                                  const char* backend_id,
+                                  const void* backend_options,
+                                  uint32_t backend_options_size) {
+    if (!options) return;
+    *options = {};
+    options->struct_size = sizeof(*options);
+    options->backend_id = backend_id;
+    options->max_context = 4096;
+    options->backend_options = backend_options;
+    options->backend_options_size = backend_options_size;
+    options->generation.struct_size = sizeof(options->generation);
+    options->generation.temperature = 0.1f;
+    options->generation.top_k = 50;
+    options->generation.top_p = 1.0f;
+    options->generation.repetition_penalty = 1.05f;
+    options->generation.seed = 1;
+}
+
 void celeg_request_options_init(celeg_request_options* options) {
     if (!options) return;
     *options = {};

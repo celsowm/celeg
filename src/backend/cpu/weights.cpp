@@ -149,9 +149,11 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     if (shape.numerical_policy.rms_norm_add_one) {
         for (float& value : common.operator_norm) value += 1.0f;
     }
-    if (shape.mamba2_layer_count > 0) {
+    const CompiledLayerProgram& layer_program = program.layers.at(
+        static_cast<size_t>(layer));
+    if (!layer_program.execute_feed_forward) {
         common.ffn_norm = common.operator_norm;
-        if (shape.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::MlpOnly) {
+        if (layer_program.mixer == CompiledMixer::MlpOnly) {
             const int intermediate = shape.mlp_only_layouts.at(static_cast<size_t>(layer)).intermediate_size;
             common.mlp_up = load_matrix(source, reader, writer,
                 tensor_name(weight_requests, TensorRole::FfnUp, layer),

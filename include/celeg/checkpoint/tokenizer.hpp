@@ -16,7 +16,14 @@ struct TokenizerData {
     int32_t bos_id = 1;
     int32_t eos_id = 7;
     int32_t pad_id = 0;
-    std::string pre_tokenizer;
+    // Normalized behavior selected by the checkpoint-format resolver.  The
+    // BPE engine never interprets source-format or family names.
+    enum class PreTokenizerKind : uint8_t {
+        Default,
+        NumericTriplets,
+        NumericRuns,
+        RawUtf8,
+    } pre_tokenizer = PreTokenizerKind::Default;
 };
 
 } // namespace celeg

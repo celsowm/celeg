@@ -488,22 +488,9 @@ if(CELEG_BUILD_TESTS)
     add_executable(json_test tests/json_test.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(json_test PRIVATE include)
     add_test(NAME json_test COMMAND json_test)
-    add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp
-        src/checkpoint/formats/json.cpp src/checkpoint/metadata.cpp
-        src/model/definition.cpp src/model/resolved.cpp src/model/architecture.cpp
-        src/model/weight_plan.cpp
-        src/model/graph_builder.cpp
-        src/models/lfm2/architecture.cpp src/models/lfm2/layer_decoder.cpp
-        src/models/lfm2/metadata_decoder.cpp src/models/lfm2/naming_policy.cpp
-        src/models/granite/architecture.cpp src/models/granite/topology.cpp
-        src/models/granite/naming_policy.cpp
-        src/models/gemma4/architecture.cpp src/models/gemma4/naming_policy.cpp
-        src/models/minicpm5/architecture.cpp src/models/minicpm5/naming_policy.cpp
-        src/models/smollm3/architecture.cpp src/models/smollm3/naming_policy.cpp
-        src/models/qwen35/architecture.cpp src/models/qwen35/naming_policy.cpp
-        src/models/nemotron_h/architecture.cpp src/models/nemotron_h/naming_policy.cpp
-        src/model/weights/roles.cpp)
+    add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
+    target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
     add_executable(lfm2_layer_decoder_test tests/lfm2_layer_decoder_test.cpp
         src/checkpoint/metadata.cpp src/checkpoint/formats/json.cpp
@@ -549,15 +536,18 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     target_include_directories(quantization_test PRIVATE include)
     add_test(NAME quantization_test COMMAND quantization_test)
     add_executable(tokenizer_test tests/tokenizer_test.cpp src/text/tokenizer.cpp
+        src/text/tokenizer_json_loader.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
     add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp src/text/tokenizer.cpp
+        src/text/tokenizer_json_loader.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_benchmark PRIVATE include)
     add_executable(tokenizer_probe tests/tokenizer_probe.cpp src/text/tokenizer.cpp
+        src/text/tokenizer_json_loader.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(tokenizer_probe PRIVATE include)
@@ -570,6 +560,11 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     add_executable(gguf_parse_test tests/gguf_parse_test.cpp src/checkpoint/formats/gguf.cpp)
     target_include_directories(gguf_parse_test PRIVATE include)
     add_test(NAME gguf_parse_test COMMAND gguf_parse_test)
+    add_executable(gguf_repository_test tests/gguf_repository_test.cpp)
+    target_link_libraries(gguf_repository_test PRIVATE celeg_base)
+    target_include_directories(gguf_repository_test PRIVATE include
+        src/checkpoint/repositories/detail)
+    add_test(NAME gguf_repository_test COMMAND gguf_repository_test)
     add_executable(moe_router_test tests/moe_router_test.cpp)
     target_link_libraries(moe_router_test PRIVATE celeg_runtime)
     target_include_directories(moe_router_test PRIVATE include)
@@ -723,16 +718,31 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     add_executable(cpu_model_options_test tests/cpu_model_options_test.cpp)
     target_link_libraries(cpu_model_options_test PRIVATE celeg_cpu_backend)
     add_test(NAME cpu_model_options_test COMMAND cpu_model_options_test)
+    add_executable(cpu_moe_route_test tests/cpu_moe_route_test.cpp)
+    target_include_directories(cpu_moe_route_test PRIVATE include src/backend/cpu tests)
+    target_link_libraries(cpu_moe_route_test PRIVATE celeg_cpu_backend)
+    add_test(NAME cpu_moe_route_test COMMAND cpu_moe_route_test)
     add_executable(cpu_sampler_test tests/cpu_sampler_test.cpp)
     target_link_libraries(cpu_sampler_test PRIVATE celeg_cpu_backend)
     add_test(NAME cpu_sampler_test COMMAND cpu_sampler_test)
     add_executable(cpu_granite_test tests/cpu_granite_test.cpp)
     target_link_libraries(cpu_granite_test PRIVATE celeg_cpu_backend)
     add_test(NAME cpu_granite_test COMMAND cpu_granite_test)
+    add_executable(cpu_mrope_test tests/cpu_mrope_test.cpp)
+    target_link_libraries(cpu_mrope_test PRIVATE celeg_cpu_backend)
+    add_test(NAME cpu_mrope_test COMMAND cpu_mrope_test)
     add_executable(cpu_c_api_smoke_test tests/api_smoke_test.c)
     target_link_libraries(cpu_c_api_smoke_test PRIVATE celeg)
     target_include_directories(cpu_c_api_smoke_test PRIVATE include)
     add_test(NAME cpu_c_api_smoke_test COMMAND cpu_c_api_smoke_test)
+    add_executable(runtime_backend_extension_test tests/runtime_backend_extension_test.cpp)
+    target_link_libraries(runtime_backend_extension_test PRIVATE celeg_base)
+    target_include_directories(runtime_backend_extension_test PRIVATE include tests)
+    add_test(NAME runtime_backend_extension_test COMMAND runtime_backend_extension_test)
+    add_executable(image_codec_test tests/image_codec_test.cpp)
+    target_link_libraries(image_codec_test PRIVATE celeg_base)
+    target_include_directories(image_codec_test PRIVATE include tests)
+    add_test(NAME image_codec_test COMMAND image_codec_test)
 
     if(CELEG_CUDA_AVAILABLE)
         add_executable(cuda_kernels_test tests/cuda_kernels_test.cu)

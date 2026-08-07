@@ -3,7 +3,9 @@
 #include "celeg/checkpoint/view.hpp"
 
 #include <filesystem>
+#include <cstddef>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -82,6 +84,17 @@ public:
     virtual bool supports(BackendId backend) const = 0;
     virtual std::unique_ptr<serve::ServiceBundle> create(
         const BackendCreateRequest& request) const = 0;
+};
+
+// Optional capability for ABI-facing backend configuration. Keeping this as a
+// separate interface lets ordinary runtime factories remain focused on
+// already-typed options while extensible API entry points delegate decoding
+// to the backend that owns the byte representation.
+class IBackendOptionsDecoder {
+public:
+    virtual ~IBackendOptionsDecoder() = default;
+    virtual std::shared_ptr<const IBackendOptions> decode_options(
+        std::span<const std::byte> bytes) const = 0;
 };
 
 class IVisionProviderFactory {

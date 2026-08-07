@@ -1,6 +1,7 @@
 #include "celeg/backend/cpu/concurrent.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -24,7 +25,8 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_dir);
         const auto& topology = bootstrap.model.topology;
-        celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
+        celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(
+            (model_dir / "tokenizer.json").string()));
         const auto chat_catalog = celeg::make_chat_profile_catalog();
         const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
         const auto base = tokenizer.encode(

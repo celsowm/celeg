@@ -18,6 +18,16 @@ int main(void) {
     if (celeg_model_create("", &model) != 0) return 1;
 
     {
+        celeg_cpu_backend_v2_options v2_backend;
+        celeg_cpu_backend_v2_options_init(&v2_backend);
+        celeg_engine_v2_options unknown;
+        celeg_engine_v2_options_init(&unknown, "test-only-unknown",
+                                     &v2_backend, (uint32_t)sizeof(v2_backend));
+        if (celeg_engine_create_v2("missing-model", &unknown) != NULL) return 1;
+        if (strstr(celeg_engine_last_error(NULL), "unknown") == NULL) return 1;
+    }
+
+    {
         const char* gguf = getenv("CELEG_GGUF_TEST_FILE");
         if (gguf && *gguf) {
             int32_t token = 1;
@@ -37,6 +47,18 @@ int main(void) {
             celeg_engine* service = celeg_engine_create(gguf, &engine);
             if (!service) return 1;
             celeg_engine_destroy(service);
+
+            celeg_cpu_backend_v2_options v2_backend;
+            celeg_cpu_backend_v2_options_init(&v2_backend);
+            v2_backend.model.prefill_chunk_threshold = 1;
+            v2_backend.engine.max_active_requests = 1;
+            celeg_engine_v2_options v2;
+            celeg_engine_v2_options_init(&v2, "cpu", &v2_backend,
+                                         (uint32_t)sizeof(v2_backend));
+            v2.max_context = 16;
+            celeg_engine* v2_service = celeg_engine_create_v2(gguf, &v2);
+            if (!v2_service) return 1;
+            celeg_engine_destroy(v2_service);
         }
     }
     return 0;

@@ -1,0 +1,156 @@
+#include "celeg/text/tokenizer_definition.hpp"
+
+#include "celeg/checkpoint/tokenizer.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
+
+#include <algorithm>
+#include <stdexcept>
+
+namespace celeg {
+namespace {
+
+const Json* find_regex_node(const Json& value) {
+    if (value.is_object()) {
+        if (value.contains("Regex") && value["Regex"].is_string()) {
+            return &value["Regex"];
+        }
+        for (const auto& [_, child] : value.as_object()) {
+            if (const Json* found = find_regex_node(child)) return found;
+        }
+    } else if (value.is_array()) {
+        for (const Json& child : value.as_array()) {
+            if (const Json* found = find_regex_node(child)) return found;
+        }
+    }
+    return nullptr;
+}
+
+void add_reasoning_delimiters(TokenizerDefinition& definition) {
+    for (const std::string_view text : {"<think>", "</think>"}) {
+        const auto it = std::find(definition.tokens.begin(), definition.tokens.end(),
+                                  std::string(text));
+        if (it == definition.tokens.end()) continue;
+        const int32_t id = static_cast<int32_t>(std::distance(definition.tokens.begin(), it));
+        const auto existing = std::find_if(definition.special_tokens.begin(),
+                                           definition.special_tokens.end(),
+            [text](const TokenizerSpecialToken& token) { return token.text == text; });
+        if (existing == definition.special_tokens.end()) {
+            definition.special_tokens.push_back({std::string(text), id});
+        }
+    }
+}
+
+} // namespace
+
+TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
+    const Json root = Json::parse_file(path);
+    const Json& model = root["model"];
+    if (model["type"].as_string() != "BPE") {
+        throw std::runtime_error("tokenizer model is not BPE");
+    }
+
+    TokenizerDefinition definition;
+    int32_t max_id = -1;
+    for (const auto& [_, value] : model["vocab"].as_object()) {
+        max_id = std::max(max_id, static_cast<int32_t>(value.as_i64()));
+    }
+    definition.tokens.resize(static_cast<size_t>(max_id + 1));
+    for (const auto& [token, value] : model["vocab"].as_object()) {
+        definition.tokens[static_cast<size_t>(value.as_i64())] = token;
+    }
+    for (const Json& merge : model["merges"].as_array()) {
+        if (merge.is_string()) {
+            definition.merges.push_back(merge.as_string());
+        } else {
+            const auto& pair = merge.as_array();
+            if (pair.size() == 2) {
+                definition.merges.push_back(pair[0].as_string() + " " + pair[1].as_string());
+            }
+        }
+    }
+
+    if (root.contains("added_tokens")) {
+        for (const Json& item : root["added_tokens"].as_array()) {
+            TokenizerSpecialToken token{item["content"].as_string(),
+                                        static_cast<int32_t>(item["id"].as_i64())};
+            if (token.id < 0) throw std::runtime_error("tokenizer added token has a negative id");
+            if (static_cast<size_t>(token.id) >= definition.tokens.size()) {
+                definition.tokens.resize(static_cast<size_t>(token.id) + 1);
+            }
+            definition.tokens[static_cast<size_t>(token.id)] = token.text;
+            const bool is_special = item.contains("special") && item["special"].as_bool();
+            if (is_special || token.text == "<think>" || token.text == "</think>") {
+                token.skip_on_decode = is_special;
+                definition.special_tokens.push_back(std::move(token));
+            }
+        }
+    }
+
+    definition.byte_fallback = model.contains("byte_fallback") && model["byte_fallback"].as_bool();
+    definition.normalization = definition.byte_fallback &&
+        std::find(definition.tokens.begin(), definition.tokens.end(), "▁") != definition.tokens.end()
+        ? TokenizerNormalizationKind::SentencePieceSpace
+        : TokenizerNormalizationKind::None;
+    if (definition.normalization == TokenizerNormalizationKind::SentencePieceSpace) {
+        definition.pre_tokenizer = TokenizerPreTokenizerKind::RawUtf8;
+    }
+    if (root.contains("pre_tokenizer")) {
+        if (const Json* regex = find_regex_node(root["pre_tokenizer"])) {
+            const std::string pattern = regex->as_string();
+            if (pattern.find("\\p{N}{1,3}") != std::string::npos) {
+                definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericTriplets;
+            } else if (definition.pre_tokenizer != TokenizerPreTokenizerKind::RawUtf8) {
+                definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericRuns;
+            }
+        }
+    }
+
+    add_reasoning_delimiters(definition);
+    for (const auto& token : definition.special_tokens) {
+        if (token.text == "<|startoftext|>" || token.text == "<|start_of_text|>" ||
+            token.text == "<|begin_of_text|>" || token.text == "<bos>" ||
+            token.text == "<|end_of_text|>") {
+            definition.bos_id = token.id;
+        }
+        if (token.text == "<|im_end|>" || token.text == "<eos>" ||
+            token.text == "<|end_of_text|>") definition.eos_id = token.id;
+        if (token.text == "<pad>" || token.text == "<|pad|>") definition.pad_id = token.id;
+    }
+    return definition;
+}
+
+TokenizerDefinition resolve_tokenizer_definition(const TokenizerData& data) {
+    if (data.tokens.empty()) {
+        throw std::runtime_error("checkpoint tokenizer data is incomplete");
+    }
+    TokenizerDefinition definition;
+    definition.tokens = data.tokens;
+    definition.merges = data.merges;
+    definition.bos_id = data.bos_id;
+    definition.eos_id = data.eos_id;
+    definition.pad_id = data.pad_id;
+    switch (data.pre_tokenizer) {
+    case TokenizerData::PreTokenizerKind::NumericTriplets:
+        definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericTriplets;
+        break;
+    case TokenizerData::PreTokenizerKind::NumericRuns:
+        definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericRuns;
+        break;
+    case TokenizerData::PreTokenizerKind::RawUtf8:
+        definition.pre_tokenizer = TokenizerPreTokenizerKind::RawUtf8;
+        break;
+    case TokenizerData::PreTokenizerKind::Default:
+        break;
+    }
+    for (size_t id = 0; id < data.token_types.size() && id < data.tokens.size(); ++id) {
+        if (data.token_types[id] == 3) {
+            definition.special_tokens.push_back({data.tokens[id], static_cast<int32_t>(id)});
+        }
+    }
+    if (data.pre_tokenizer == TokenizerData::PreTokenizerKind::NumericTriplets) {
+        add_reasoning_delimiters(definition);
+    }
+    return definition;
+}
+
+} // namespace celeg

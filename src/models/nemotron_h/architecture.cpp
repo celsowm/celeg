@@ -159,6 +159,7 @@ void build_graph(ResolvedModel& model) {
         spec.operator_norm.epsilon = t.numerical_policy.norm_eps;
         spec.feed_forward_norm.epsilon = t.numerical_policy.norm_eps;
         spec.feed_forward = DenseFeedForwardSpec{t.intermediate, ActivationKind::Relu2};
+        spec.execute_feed_forward = false;
         switch (t.mixer_kinds[static_cast<size_t>(layer)]) {
         case MixerKind::Mamba2: spec.mixer = t.mamba2_layouts[static_cast<size_t>(layer)]; break;
         case MixerKind::Attention: spec.mixer = t.attention_layout(layer); break;

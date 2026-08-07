@@ -106,7 +106,7 @@ void write_moe_checkpoint(const std::filesystem::path& directory) {
       "num_hidden_layers":1, "num_attention_heads":2, "num_key_value_heads":1,
       "vocab_size":32, "conv_L_cache":3, "max_position_embeddings":64,
       "norm_eps":1e-5, "rope_theta":10000.0, "bos_token_id":1,
-      "eos_token_id":2, "pad_token_id":0, "layer_types":["full_attention"],
+      "eos_token_id":2, "pad_token_id":0, "layer_types":["conv"],
       "num_dense_layers":0, "num_experts":3, "num_experts_per_tok":2,
       "norm_topk_prob":true, "use_expert_bias":true,
       "routed_scaling_factor":0.75
@@ -117,10 +117,9 @@ void write_moe_checkpoint(const std::filesystem::path& directory) {
     add_tensor(tensors, "model.embedding_norm.weight", {8}, 1.0f);
     add_tensor(tensors, "model.layers.0.operator_norm.weight", {8}, 1.0f);
     add_tensor(tensors, "model.layers.0.ffn_norm.weight", {8}, 1.0f);
-    add_tensor(tensors, "model.layers.0.self_attn.q_proj.weight", {8, 8}, 0.02f);
-    add_tensor(tensors, "model.layers.0.self_attn.k_proj.weight", {4, 8}, 0.02f);
-    add_tensor(tensors, "model.layers.0.self_attn.v_proj.weight", {4, 8}, 0.02f);
-    add_tensor(tensors, "model.layers.0.self_attn.out_proj.weight", {8, 8}, 0.02f);
+    add_tensor(tensors, "model.layers.0.conv.in_proj.weight", {24, 8}, 0.02f);
+    add_tensor(tensors, "model.layers.0.conv.conv.weight", {8, 1, 3}, 0.02f);
+    add_tensor(tensors, "model.layers.0.conv.out_proj.weight", {8, 8}, 0.02f);
     add_tensor(tensors, "model.layers.0.feed_forward.gate.weight", {3, 8}, 0.03f);
     add_tensor(tensors, "model.layers.0.feed_forward.expert_bias.weight", {3}, 0.04f);
     for (int expert = 0; expert < 3; ++expert) {
@@ -198,6 +197,19 @@ int main() {
     CELEG_TEST_CHECK(batched_snapshot.attention_token_counts ==
                      scalar_snapshot.attention_token_counts);
     CELEG_TEST_CHECK(batched_snapshot.seen_tokens == scalar_snapshot.seen_tokens);
+
+    options.prefill_chunk_tokens = 2;
+    celeg::CpuModel boundary_two(directory.string(), 32, options, generation);
+    boundary_two.session().prefill(prompt);
+    const auto boundary_two_logits = boundary_two.diagnostics().copy_logits();
+    for (size_t i = 0; i < scalar_logits.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(boundary_two_logits[i] - scalar_logits[i]) < 1e-5f);
+    }
+    CELEG_TEST_CHECK(boundary_two.persistence().export_prefix_snapshot().position ==
+                     scalar_snapshot.position);
+    CELEG_TEST_CHECK(boundary_two.persistence().export_prefix_snapshot().seen_tokens ==
+                     scalar_snapshot.seen_tokens);
+
     const int32_t scalar_next = scalar.session().decode();
     const int32_t batched_next = batched.session().decode();
     CELEG_TEST_CHECK(batched_next == scalar_next);
@@ -251,6 +263,16 @@ int main() {
     CELEG_TEST_CHECK(batched_snapshot.position == scalar_snapshot.position);
     CELEG_TEST_CHECK(batched_snapshot.attention_token_counts ==
                      scalar_snapshot.attention_token_counts);
+
+    options.prefill_chunk_tokens = 2;
+    celeg::CpuModel boundary_two(moe_directory.string(), 32, options, generation);
+    boundary_two.session().prefill(prompt);
+    const auto boundary_two_logits = boundary_two.diagnostics().copy_logits();
+    for (size_t i = 0; i < scalar_logits.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(boundary_two_logits[i] - scalar_logits[i]) < 1e-5f);
+    }
+    CELEG_TEST_CHECK(boundary_two.persistence().export_prefix_snapshot().position ==
+                     scalar_snapshot.position);
     CELEG_TEST_CHECK(batched.session().decode() == scalar.session().decode());
 
     options.prefill_chunk_threshold = 64;

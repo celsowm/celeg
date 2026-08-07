@@ -117,6 +117,30 @@ typedef struct celeg_engine_options {
     celeg_engine_model_options model;
 } celeg_engine_options;
 
+// Versioned, backend-neutral engine creation. The payload is owned and
+// validated by the selected backend factory; the core API does not interpret
+// backend-specific bytes.
+typedef struct celeg_cpu_backend_v2_options {
+    uint32_t struct_size;
+    celeg_cpu_model_config model;
+    celeg_cpu_engine_options engine;
+} celeg_cpu_backend_v2_options;
+
+typedef struct celeg_cuda_backend_v2_options {
+    uint32_t struct_size;
+    celeg_cuda_model_options model;
+    celeg_cuda_engine_options engine;
+} celeg_cuda_backend_v2_options;
+
+typedef struct celeg_engine_v2_options {
+    uint32_t struct_size;
+    const char* backend_id;
+    int32_t max_context;
+    const void* backend_options;
+    uint32_t backend_options_size;
+    celeg_generation_options generation;
+} celeg_engine_v2_options;
+
 typedef struct celeg_request_options {
     uint32_t struct_size;
     uint32_t max_new_tokens;
@@ -135,6 +159,12 @@ typedef struct celeg_metrics {
 
 CELEG_API void celeg_cpu_model_options_init(celeg_cpu_model_options* options);
 CELEG_API void celeg_engine_options_init(celeg_engine_options* options, celeg_backend backend);
+CELEG_API void celeg_cpu_backend_v2_options_init(celeg_cpu_backend_v2_options* options);
+CELEG_API void celeg_cuda_backend_v2_options_init(celeg_cuda_backend_v2_options* options);
+CELEG_API void celeg_engine_v2_options_init(celeg_engine_v2_options* options,
+                                             const char* backend_id,
+                                             const void* backend_options,
+                                             uint32_t backend_options_size);
 CELEG_API void celeg_request_options_init(celeg_request_options* options);
 CELEG_API const char* celeg_backend_capabilities(celeg_backend backend);
 
@@ -147,6 +177,7 @@ CELEG_API celeg_status celeg_model_get_metrics(celeg_model* model, celeg_metrics
 CELEG_API const char* celeg_model_last_error(const celeg_model* model);
 
 CELEG_API celeg_engine* celeg_engine_create(const char* path, const celeg_engine_options* options);
+CELEG_API celeg_engine* celeg_engine_create_v2(const char* path, const celeg_engine_v2_options* options);
 CELEG_API void celeg_engine_destroy(celeg_engine* engine);
 CELEG_API celeg_status celeg_engine_submit(celeg_engine* engine, const int32_t* tokens, size_t count, const celeg_request_options* options, celeg_request_id* request_id);
 CELEG_API celeg_status celeg_engine_poll(celeg_engine* engine, celeg_request_id request_id, int32_t* output, size_t capacity, size_t* count, int* finished);

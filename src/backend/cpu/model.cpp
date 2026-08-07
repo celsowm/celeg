@@ -104,8 +104,7 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
     state_->session_.phase = SessionPhase::Prefilling;
     state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    const bool has_per_token_rope = embeddings.has_rope_positions;
-    if (has_per_token_rope || tokens.size() < state_->shared->options.prefill_chunk_threshold) {
+    if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
             state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
             state_->forward_token(tokens[i], i + 1 == tokens.size(),

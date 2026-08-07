@@ -1,5 +1,6 @@
 #include "celeg/backend/cuda/concurrency.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -40,7 +41,7 @@ int main(int argc, char** argv) {
     try {
         const int repeats = argc > 4 ? parse_positive(argv[4], "repeats") : 4;
         const int max_new = argc > 5 ? parse_positive(argv[5], "max_new") : 1;
-        celeg::BpeTokenizer tokenizer(argv[2]);
+    celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(argv[2]));
         std::vector<int32_t> prompt = tokenizer.encode(argv[3], true);
         std::vector<int32_t> extended_prompt = prompt;
         if (argc > 6 && argv[6][0] != '\0') {

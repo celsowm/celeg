@@ -23,6 +23,27 @@ celeg_engine* celeg_engine_create(const char* path,
     }
 }
 
+celeg_engine* celeg_engine_create_v2(const char* path,
+                                     const celeg_engine_v2_options* options) {
+    if (!path || !*path || !options) {
+        celeg::api::global_error = "v2 engine path and options are required";
+        return nullptr;
+    }
+    try {
+        celeg::api::require_size(options->struct_size, sizeof(*options),
+                                 "v2 engine options");
+        celeg::api::require_size(options->generation.struct_size,
+                                 sizeof(options->generation),
+                                 "v2 generation options");
+        auto result = std::make_unique<celeg_engine>();
+        result->service = celeg::api::create_service_bundle_v2(path, *options);
+        return result.release();
+    } catch (const std::exception& error) {
+        celeg::api::global_error = error.what();
+        return nullptr;
+    }
+}
+
 void celeg_engine_destroy(celeg_engine* engine) { delete engine; }
 
 celeg_status celeg_engine_submit(celeg_engine* engine, const int32_t* tokens,

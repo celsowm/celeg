@@ -52,14 +52,6 @@ public:
     virtual bool has_native_block_storage() const = 0;
 };
 
-// Optional checkpoint capability for repositories that carry tokenizer data.
-// The normalized payload keeps consumers independent of the source format.
-class ITokenizerDataRepository {
-public:
-    virtual ~ITokenizerDataRepository() = default;
-    virtual TokenizerData tokenizer_data() const = 0;
-};
-
 inline const ILocatableTensorRepository&
 require_locatable_tensor_repository(const IWeightRepository& repository) {
     const auto* locator = dynamic_cast<const ILocatableTensorRepository*>(&repository);
@@ -82,5 +74,13 @@ require_random_access_tensor_reader(const IWeightRepository& repository) {
     }
     return *reader;
 }
+
+// Optional checkpoint capability for repositories that carry tokenizer data.
+// The normalized payload keeps consumers independent of the source format.
+class ITokenizerDataRepository {
+public:
+    virtual ~ITokenizerDataRepository() = default;
+    virtual TokenizerData tokenizer_data() const = 0;
+};
 
 } // namespace celeg

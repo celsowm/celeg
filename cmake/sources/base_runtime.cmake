@@ -7,6 +7,10 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/metadata.cpp
     src/checkpoint/repositories/safetensors.cpp
     src/checkpoint/repositories/gguf.cpp
+    src/checkpoint/repositories/detail/gguf_tensor_mapper.cpp
+    src/checkpoint/repositories/detail/gguf_tensor_adapter.cpp
+    src/checkpoint/repositories/detail/gguf_tensor_resolver.cpp
+    src/checkpoint/formats/detail/gguf_tokenizer_metadata.cpp
     src/checkpoint/downloader.cpp
     src/checkpoint/bootstrap.cpp
     src/model/definition.cpp
@@ -52,6 +56,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/weights/roles.cpp
     src/model/reference.cpp
     src/text/tokenizer.cpp
+    src/text/tokenizer_json_loader.cpp
     src/text/chat_template_support.cpp
     src/text/chat_template.cpp
     src/runtime/cache/host_expert_cache.cpp
@@ -67,4 +72,5 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/runtime/moe/offload.cpp
     src/runtime/context.cpp
     src/runtime/tokenizer_providers.cpp
+    src/runtime/vision/image.cpp
 )

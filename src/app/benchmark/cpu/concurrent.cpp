@@ -2,6 +2,7 @@
 #include "celeg/backend/cpu/concurrent.hpp"
 #include "celeg/text/chat_template.hpp"
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -36,7 +37,8 @@ int main(int argc, char** argv) {
         const auto& topology = bootstrap.model.topology;
         const auto chat_catalog = celeg::make_chat_profile_catalog();
         const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
-        celeg::BpeTokenizer tokenizer((model_dir / "tokenizer.json").string());
+        celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(
+            (model_dir / "tokenizer.json").string()));
         const std::vector<int32_t> tokens = tokenizer.encode(
             celeg::render_chat(
                 std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}},

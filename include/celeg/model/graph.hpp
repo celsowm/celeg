@@ -149,6 +149,10 @@ struct LayerSpec {
     ResidualSpec residual;
     PerLayerInputSpec per_layer_input;
     float layer_scalar = 1.0f;
+    // Some hybrid schedules use a mixer-only layer.  This is an explicit
+    // semantic property resolved by the architecture, never inferred from
+    // the presence of a particular mixer type elsewhere in the model.
+    bool execute_feed_forward = true;
 
     MixerKind mixer_kind() const {
         if (std::holds_alternative<AttentionSpec>(mixer)) return MixerKind::Attention;

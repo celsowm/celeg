@@ -1,7 +1,9 @@
 #include "celeg/models/qwen35/vision.hpp"
 
+#include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "celeg/runtime/providers.hpp"
+#include "celeg/vision/image.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -10,21 +12,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <objbase.h>
-#include <shlwapi.h>
-#include <wincodec.h>
-#endif
 
 namespace celeg {
 namespace {
@@ -65,144 +57,7 @@ struct Tensor {
     }
 };
 
-struct Image {
-    int width = 0;
-    int height = 0;
-    std::vector<float> rgb;
-};
-
-std::vector<uint8_t> decode_base64(std::string_view encoded) {
-    static constexpr char alphabet[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::vector<uint8_t> result;
-    int value = 0;
-    int bits = -8;
-    for (char byte : encoded) {
-        if (byte == '=') break;
-        const char* found = std::find(std::begin(alphabet), std::end(alphabet) - 1, byte);
-        if (found == std::end(alphabet) - 1) continue;
-        value = (value << 6) + static_cast<int>(found - alphabet);
-        bits += 6;
-        if (bits >= 0) {
-            result.push_back(static_cast<uint8_t>((value >> bits) & 0xff));
-            bits -= 8;
-        }
-    }
-    if (result.empty()) throw std::invalid_argument("image data URL has no payload");
-    return result;
-}
-
-Image decode_ppm(std::vector<uint8_t> bytes) {
-    size_t cursor = 0;
-    auto next = [&]() {
-        while (cursor < bytes.size() && bytes[cursor] <= ' ') ++cursor;
-        const size_t begin = cursor;
-        while (cursor < bytes.size() && bytes[cursor] > ' ') ++cursor;
-        if (begin == cursor) throw std::invalid_argument("invalid PPM header");
-        return std::string(reinterpret_cast<const char*>(bytes.data() + begin), cursor - begin);
-    };
-    if (next() != "P6") throw std::invalid_argument("Qwen vision currently accepts P6 PPM input");
-    const int width = std::stoi(next());
-    const int height = std::stoi(next());
-    if (std::stoi(next()) != 255 || width <= 0 || height <= 0) {
-        throw std::invalid_argument("invalid PPM dimensions or range");
-    }
-    while (cursor < bytes.size() && bytes[cursor] <= ' ') ++cursor;
-    const size_t count = static_cast<size_t>(width) * height * 3;
-    if (cursor + count > bytes.size()) throw std::invalid_argument("truncated PPM pixels");
-    Image image{width, height, std::vector<float>(count)};
-    for (size_t i = 0; i < count; ++i) image.rgb[i] = bytes[cursor + i] / 255.0f;
-    return image;
-}
-
-Image resize_grid(const Image& source, int width, int height) {
-    Image result{width, height, std::vector<float>(static_cast<size_t>(width) * height * 3)};
-    for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-        const float source_x = (x + 0.5f) * source.width / width - 0.5f;
-        const float source_y = (y + 0.5f) * source.height / height - 0.5f;
-        const int x0 = std::clamp(static_cast<int>(std::floor(source_x)), 0, source.width - 1);
-        const int y0 = std::clamp(static_cast<int>(std::floor(source_y)), 0, source.height - 1);
-        const int x1 = std::min(x0 + 1, source.width - 1);
-        const int y1 = std::min(y0 + 1, source.height - 1);
-        const float fx = std::clamp(source_x - std::floor(source_x), 0.0f, 1.0f);
-        const float fy = std::clamp(source_y - std::floor(source_y), 0.0f, 1.0f);
-        for (int c = 0; c < 3; ++c) {
-            const float top = (1.0f - fx) * source.rgb[(static_cast<size_t>(y0) * source.width + x0) * 3 + c] +
-                              fx * source.rgb[(static_cast<size_t>(y0) * source.width + x1) * 3 + c];
-            const float bottom = (1.0f - fx) * source.rgb[(static_cast<size_t>(y1) * source.width + x0) * 3 + c] +
-                                 fx * source.rgb[(static_cast<size_t>(y1) * source.width + x1) * 3 + c];
-            result.rgb[(static_cast<size_t>(y) * width + x) * 3 + c] =
-                (1.0f - fy) * top + fy * bottom;
-        }
-    }
-    return result;
-}
-
-#if defined(_WIN32)
-Image decode_wic(const std::vector<uint8_t>& bytes) {
-    if (bytes.size() > static_cast<size_t>(std::numeric_limits<ULONG>::max())) {
-        throw std::invalid_argument("image payload is too large");
-    }
-    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool uninitialize = SUCCEEDED(initialized);
-    IWICImagingFactory* factory = nullptr;
-    IWICBitmapDecoder* decoder = nullptr;
-    IWICBitmapFrameDecode* frame = nullptr;
-    IWICFormatConverter* converter = nullptr;
-    IStream* stream = SHCreateMemStream(bytes.data(), static_cast<UINT>(bytes.size()));
-    auto cleanup = [&]() {
-        if (converter) converter->Release();
-        if (frame) frame->Release();
-        if (decoder) decoder->Release();
-        if (factory) factory->Release();
-        if (stream) stream->Release();
-        if (uninitialize) CoUninitialize();
-    };
-    if (!stream || FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                                            CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->CreateDecoderFromStream(stream, nullptr,
-                                                 WICDecodeMetadataCacheOnLoad, &decoder)) ||
-        FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter)) ||
-        FAILED(converter->Initialize(frame, GUID_WICPixelFormat24bppRGB,
-                                     WICBitmapDitherTypeNone, nullptr, 0.0,
-                                     WICBitmapPaletteTypeCustom))) {
-        cleanup();
-        throw std::invalid_argument("Windows image decoder rejected the image");
-    }
-    UINT width = 0, height = 0;
-    if (FAILED(converter->GetSize(&width, &height)) || width == 0 || height == 0) {
-        cleanup();
-        throw std::invalid_argument("decoded image has invalid dimensions");
-    }
-    Image image{static_cast<int>(width), static_cast<int>(height),
-                std::vector<float>(static_cast<size_t>(width) * height * 3)};
-    std::vector<uint8_t> pixels(image.rgb.size());
-    if (FAILED(converter->CopyPixels(nullptr, width * 3, static_cast<UINT>(pixels.size()), pixels.data()))) {
-        cleanup();
-        throw std::invalid_argument("Windows image decoder failed to read pixels");
-    }
-    for (size_t i = 0; i < image.rgb.size(); ++i) image.rgb[i] = pixels[i] / 255.0f;
-    cleanup();
-    return image;
-}
-#endif
-
-Image decode_image(std::string_view data_url) {
-    const size_t comma = data_url.find(',');
-    if (!data_url.starts_with("data:") || comma == std::string_view::npos ||
-        data_url.substr(0, comma).find(";base64") == std::string_view::npos) {
-        throw std::invalid_argument("Qwen vision input must be a base64 data URL");
-    }
-    const std::vector<uint8_t> bytes = decode_base64(data_url.substr(comma + 1));
-    if (bytes.size() >= 2 && bytes[0] == 'P' && bytes[1] == '6') return decode_ppm(bytes);
-#if defined(_WIN32)
-    return decode_wic(bytes);
-#else
-    throw std::invalid_argument("PNG and JPEG decoding requires the Windows image codec backend");
-#endif
-}
-
-std::pair<int, int> choose_grid(const Image& image) {
+std::pair<int, int> choose_grid(const ImageRgbF32& image) {
     const float aspect = static_cast<float>(image.width) / image.height;
     int wide = std::clamp(static_cast<int>(std::lround(std::sqrt(4.0f * std::max(aspect, 1.0f)))), 2, 8);
     int tall = std::clamp(static_cast<int>(std::lround(wide / std::max(aspect, 1.0f))), 2, 8);
@@ -243,8 +98,8 @@ std::vector<float> linear(const Tensor& weight, const Tensor& bias,
 
 class Qwen35VisionProvider final : public IVisualEmbeddingProvider {
 public:
-    explicit Qwen35VisionProvider(const std::filesystem::path& path)
-        : repository_(std::make_shared<SafeTensorRepository>(path)),
+    explicit Qwen35VisionProvider(std::shared_ptr<const IWeightRepository> repository)
+        : repository_(std::move(repository)),
           patch_(tensor("model.visual.patch_embed.proj.weight")),
           patch_bias_(tensor("model.visual.patch_embed.proj.bias")),
           position_(tensor("model.visual.pos_embed.weight")),
@@ -269,9 +124,9 @@ public:
     }
 
     VisualEmbedding encode(std::string_view data_url) const override {
-        const Image source = decode_image(data_url);
+        const ImageRgbF32 source = decode_image_data_url(data_url);
         const auto [grid_h, grid_w] = choose_grid(source);
-        const Image image = resize_grid(source, grid_w * 16, grid_h * 16);
+        const ImageRgbF32 image = resize_image_bilinear(source, grid_w * 16, grid_h * 16);
         const int rows = grid_h * grid_w;
         std::vector<float> tokens(static_cast<size_t>(rows) * hidden_);
         const size_t patch_size = 3 * 2 * 16 * 16;
@@ -393,7 +248,7 @@ private:
         for (size_t i = 0; i < tokens.size(); ++i) tokens[i] = residual[i] + feed_forward[i];
     }
 
-    std::shared_ptr<SafeTensorRepository> repository_;
+    std::shared_ptr<const IWeightRepository> repository_;
     Tensor patch_, patch_bias_, position_, merger_norm_, merger_bias_, merger_fc1_, merger_fc1_bias_, merger_fc2_, merger_fc2_bias_;
     std::vector<int> blocks_;
     int hidden_ = 0;
@@ -414,7 +269,14 @@ public:
 } // namespace
 
 VisualEmbeddingProvider make_qwen35_visual_embedding_provider(const std::filesystem::path& model_path) {
-    return std::make_shared<Qwen35VisionProvider>(model_path);
+    auto repository = std::make_shared<SafeTensorRepository>(model_path);
+    return make_qwen35_visual_embedding_provider(std::move(repository));
+}
+
+VisualEmbeddingProvider make_qwen35_visual_embedding_provider(
+    std::shared_ptr<const IWeightRepository> repository) {
+    if (!repository) throw std::invalid_argument("Qwen vision repository is null");
+    return std::make_shared<Qwen35VisionProvider>(std::move(repository));
 }
 
 std::unique_ptr<IVisionProviderFactory> make_qwen35_vision_provider_factory() {

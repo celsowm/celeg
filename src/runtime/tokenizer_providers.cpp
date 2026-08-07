@@ -1,6 +1,7 @@
 #include "celeg/runtime/providers.hpp"
 
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -29,14 +30,15 @@ public:
         const CheckpointView& checkpoint,
         const std::filesystem::path& model_path) const override {
         if (checkpoint.tokenizer) {
-            return std::make_unique<BpeTokenizer>(*checkpoint.tokenizer);
+            return std::make_unique<BpeTokenizer>(
+                resolve_tokenizer_definition(*checkpoint.tokenizer));
         }
         const auto path = tokenizer_json_path(model_path);
         if (!std::filesystem::is_regular_file(path)) {
             throw std::runtime_error("tokenizer provider found no tokenizer data: " +
                                      path.string());
         }
-        return std::make_unique<BpeTokenizer>(path.string());
+        return std::make_unique<BpeTokenizer>(load_tokenizer_definition_json(path.string()));
     }
 };
 

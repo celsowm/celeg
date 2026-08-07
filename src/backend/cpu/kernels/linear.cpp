@@ -3,6 +3,7 @@
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
+#include <type_traits>
 #include <stdexcept>
 #include <vector>
 
@@ -199,10 +200,16 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
                            float* output, float beta) const {
     weight.validate();
     if (!input || !output) throw std::invalid_argument("null CPU GEMV buffer");
-    if (weight.segments.size() == 1 &&
-        std::holds_alternative<Q4GroupMatrix>(weight.segments.front())) {
-        gemv(std::get<Q4GroupMatrix>(weight.segments.front()), input, output, beta);
-        return;
+    if (weight.segments.size() == 1) {
+        bool dispatched_q4 = false;
+        std::visit([&](const auto& matrix) {
+            using Matrix = std::remove_cvref_t<decltype(matrix)>;
+            if constexpr (std::is_same_v<Matrix, Q4GroupMatrix>) {
+                gemv(matrix, input, output, beta);
+                dispatched_q4 = true;
+            }
+        }, weight.segments.front());
+        if (dispatched_q4) return;
     }
 
     const std::vector<CpuQ8KBlock> activation =

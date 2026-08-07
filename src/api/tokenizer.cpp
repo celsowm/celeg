@@ -1,4 +1,5 @@
 #include "api_internal.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -11,7 +12,8 @@ celeg_tokenizer* celeg_tokenizer_create(const char* path) {
     if (!path || !*path) return nullptr;
     try {
         auto result = std::make_unique<celeg_tokenizer>();
-        result->value = std::make_unique<celeg::BpeTokenizer>(path);
+        result->value = std::make_unique<celeg::BpeTokenizer>(
+            celeg::load_tokenizer_definition_json(path));
         return result.release();
     } catch (const std::exception& error) {
         celeg::api::global_error = error.what();

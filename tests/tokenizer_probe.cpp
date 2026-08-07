@@ -1,4 +1,5 @@
 #include "celeg/text/tokenizer.hpp"
+#include "celeg/text/tokenizer_definition.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -10,7 +11,7 @@ int main(int argc, char** argv) {
         std::cerr << "usage: tokenizer_probe <tokenizer.json> <text>\n";
         return 2;
     }
-    celeg::BpeTokenizer tokenizer(argv[1]);
+    celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(argv[1]));
     std::string text = argv[2];
     if (text.size() > 1 && text[0] == '@') {
         std::ifstream input(text.substr(1), std::ios::binary);
