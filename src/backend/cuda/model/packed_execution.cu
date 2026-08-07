@@ -321,7 +321,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                 bool segmented_attention,
                                 int segmented_chunks,
                                 const std::vector<PackedSessionContext>* batch_models = nullptr,
-                                int ragged_requests = 0) {
+                                int ragged_requests = 0,
+                                const std::vector<PackedPrefillRow>* row_descriptors = nullptr) {
         for (size_t layer_index = 0; layer_index < layer_program_.size();
              ++layer_index) {
             const auto& layer = reference.layers()[layer_index];
@@ -336,6 +337,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             launch_rmsnorm(hidden.data(), common_layer.operator_norm,
                            normed.data(), rows, shape_.hidden,
                            shape_.numerical_policy.norm_eps, stream.get());
+            PackedOperatorContext context{*this, gemm_.dispatcher(), plan_, shape_};
             if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2 ||
                 layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
                 throw std::runtime_error(
@@ -348,6 +350,15 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                 }
                 run_attention_layer(reference, *attention, rows, layer_index,
                                     segmented_attention, segmented_chunks);
+            } else if (layer_program_.kind(layer_index) == PackedLayerKind::GatedDeltaNet) {
+                const auto* gated_delta = as_gated_delta_net(layer);
+                if (!gated_delta) {
+                    throw std::logic_error("packed layer program disagrees with GatedDeltaNet binding");
+                }
+                PackedGatedDeltaNetExecutor::run(
+                    context, reference,
+                    *gated_delta, rows, static_cast<int>(layer_index),
+                    batch_models, row_descriptors);
             } else {
                 const auto* convolution = as_convolution(layer);
                 if (!convolution) {
@@ -532,7 +543,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                     shape_.vocab_size, stream.get());
         launch_embedding_rows(reference, rows);
         run_transformer_layers(reference, rows, attention.segmented,
-                               attention.chunks, &models, requests);
+                               attention.chunks, &models, requests,
+                               &row_descriptors);
         const bool any_finalize = std::any_of(row_descriptors.begin(), row_descriptors.end(),
             [](const PackedPrefillRow& row) { return row.finalize != 0; });
         if (any_finalize) {

@@ -50,6 +50,7 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     ResidencyController* controller = expert_controllers[static_cast<size_t>(layer)].get();
     if (!controller || !controller->cache) return;
 
+
     std::lock_guard<std::mutex> lock(controller->mutex);
     ExpertLayerCache* cache = controller->cache.get();
     cudaStream_t transfer = controller->transfer_stream->get();
@@ -119,6 +120,7 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
             }
         }
 
+
         // Wait for all async loads to complete!
         for (auto& f : futures) {
             f.get();
@@ -174,6 +176,14 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
         }
         // Publish all pointer and slot changes once after the promotion batch.
         cache->sync_residency_tables(transfer);
+        if (host_expert_cache) {
+            // Disk-backed sources live in a global bounded host cache.  The
+            // transfer must finish before the compute stream can use the GPU
+            // slots, so release these leases immediately instead of retaining
+            // them in one controller per layer until that layer is revisited.
+            CELEG_CUDA(cudaStreamSynchronize(transfer));
+            controller->inflight_transfers.clear();
+        }
 
     }
     // Admission can change slots, so apply the active-batch protection after
@@ -251,6 +261,22 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
                     workspace_.moe_gu_scratch_.data(), workspace_.moe_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_output_accum_.data(), workspace_.moe_output_.data(),
                                 resources_.shape_.hidden, stream_.get());
+    if (moe.shared_w13 != nullptr) {
+        const int shared_inter = resources_.shape_.shared_expert_intermediate;
+        linear(workspace_.normed_.data(), *moe.shared_w13, workspace_.gate_up_.data(),
+               1, 2 * shared_inter, resources_.shape_.hidden);
+        launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
+                            shared_inter, stream_.get());
+        linear(workspace_.activated_.data(), *moe.shared_w2, workspace_.mlp_output_.data(),
+               1, resources_.shape_.hidden, shared_inter);
+        linear(workspace_.normed_.data(), *moe.shared_gate, workspace_.moe_shared_gate_.data(),
+               1, 1, resources_.shape_.hidden);
+        launch_sigmoid_scale_by_scalar(workspace_.mlp_output_.data(),
+                                       workspace_.moe_shared_gate_.data(),
+                                       resources_.shape_.hidden, stream_.get());
+        launch_residual_add(workspace_.moe_output_.data(), workspace_.mlp_output_.data(),
+                            resources_.shape_.hidden, stream_.get());
+    }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
     // Residual add into the hidden state.
@@ -306,6 +332,28 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
                     workspace_.moe_pf_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
                                 rows * resources_.shape_.hidden, stream_.get());
+    if (moe.shared_w13 != nullptr) {
+        const int shared_inter = resources_.shape_.shared_expert_intermediate;
+        const size_t shared_plane = static_cast<size_t>(rows) * shared_inter;
+        linear(workspace_.prefill_normed_.data(), *moe.shared_w13,
+               workspace_.prefill_gate_up_.data(), rows, 2 * shared_inter,
+               resources_.shape_.hidden);
+        launch_swiglu_interleaved(workspace_.prefill_gate_up_.data(),
+                                  workspace_.prefill_activated_.data(), rows,
+                                  shared_inter, stream_.get());
+        linear(workspace_.prefill_activated_.data(), *moe.shared_w2,
+               workspace_.prefill_mlp_output_.data(), rows,
+               resources_.shape_.hidden, shared_inter);
+        linear(workspace_.prefill_normed_.data(), *moe.shared_gate,
+               workspace_.moe_pf_shared_gate_.data(), rows, 1,
+               resources_.shape_.hidden);
+        launch_sigmoid_multiply_strided(workspace_.prefill_mlp_output_.data(),
+                                        workspace_.moe_pf_shared_gate_.data(),
+                                        rows, resources_.shape_.hidden, stream_.get());
+        launch_residual_add(workspace_.moe_pf_output_.data(),
+                            workspace_.prefill_mlp_output_.data(),
+                            rows * resources_.shape_.hidden, stream_.get());
+    }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),

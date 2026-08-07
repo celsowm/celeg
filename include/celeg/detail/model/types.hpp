@@ -171,6 +171,10 @@ struct MoeFfnWeights {
     const __nv_bfloat16* const* gate_up_ptrs = nullptr;
     const __nv_bfloat16* const* down_ptrs = nullptr;
 
+    const LinearWeight* shared_w13 = nullptr;
+    const LinearWeight* shared_w2 = nullptr;
+    const LinearWeight* shared_gate = nullptr;
+
     bool offloaded() const { return gate_up_ptrs != nullptr; }
 };
 
@@ -326,6 +330,22 @@ struct Mamba2Layer {
     DeviceBuffer<__nv_bfloat16> ssm_state;
 };
 
+struct GatedDeltaNetLayer {
+    LayerCommon common;
+    GatedDeltaNetSpec spec;
+    const LinearWeight* qkv = nullptr;
+    const LinearWeight* z = nullptr;
+    const LinearWeight* b = nullptr;
+    const LinearWeight* a = nullptr;
+    const __nv_bfloat16* conv_weight = nullptr;
+    const __nv_bfloat16* dt_bias = nullptr;
+    const __nv_bfloat16* a_log = nullptr;
+    const __nv_bfloat16* norm = nullptr;
+    const LinearWeight* out = nullptr;
+    DeviceBuffer<__nv_bfloat16> conv_state;
+    DeviceBuffer<__nv_bfloat16> recurrent_state;
+};
+
 struct MlpOnlyLayer {
     LayerCommon common;
     MlpBlockSpec spec;
@@ -333,7 +353,8 @@ struct MlpOnlyLayer {
     const LinearWeight* down = nullptr;
 };
 
-using Layer = std::variant<AttentionLayer, ConvolutionLayer, Mamba2Layer, MlpOnlyLayer>;
+using Layer = std::variant<AttentionLayer, ConvolutionLayer, GatedDeltaNetLayer,
+                           Mamba2Layer, MlpOnlyLayer>;
 
 // Free-function visitors replace the old common / as_attention /
 // as_convolution statics). Putting them at namespace scope means callers
@@ -361,6 +382,12 @@ inline Mamba2Layer* as_mamba2(Layer& layer) {
 }
 inline const Mamba2Layer* as_mamba2(const Layer& layer) {
     return std::get_if<Mamba2Layer>(&layer);
+}
+inline GatedDeltaNetLayer* as_gated_delta_net(Layer& layer) {
+    return std::get_if<GatedDeltaNetLayer>(&layer);
+}
+inline const GatedDeltaNetLayer* as_gated_delta_net(const Layer& layer) {
+    return std::get_if<GatedDeltaNetLayer>(&layer);
 }
 inline MlpOnlyLayer* as_mlp_only(Layer& layer) {
     return std::get_if<MlpOnlyLayer>(&layer);
@@ -397,6 +424,7 @@ inline celeg::MoeRouterConfig moe_router_config(const RuntimeTopology& shape) {
     cfg.num_experts = shape.num_experts;
     cfg.experts_per_token = shape.experts_per_token;
     cfg.normalize_topk = shape.normalize_topk;
+    cfg.softmax = shape.moe_router_softmax;
     cfg.use_expert_bias = shape.use_expert_bias;
     cfg.routed_scaling_factor = shape.routed_scaling_factor;
     return cfg;

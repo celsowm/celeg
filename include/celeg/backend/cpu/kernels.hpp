@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <span>
 #include <vector>
 
@@ -109,6 +110,17 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       float rotary_fraction = 1.0f);
 void cpu_rope(float* data, int heads, int head_dim, int position,
               float rope_theta, float rotary_fraction = 1.0f);
+void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
+                            int heads, int head_dim,
+                            const std::array<int32_t, 3>& positions,
+                            const std::array<int, 3>& sections,
+                            bool interleaved, float rope_theta, float eps,
+                            float rotary_fraction = 1.0f);
+void cpu_rope_mrope(float* data, int heads, int head_dim,
+                    const std::array<int32_t, 3>& positions,
+                    const std::array<int, 3>& sections,
+                    bool interleaved, float rope_theta,
+                    float rotary_fraction = 1.0f);
 void cpu_gqa_decode(const float* q, const float* key_cache,
                     const float* value_cache, float* output,
                     int sequence_length, int q_heads, int kv_heads,
@@ -124,5 +136,21 @@ void cpu_conv_prefill(const float* projected_bcx, const float* weight,
                       float* state, float* output, size_t rows, int hidden,
                       int cache_length, int base_position,
                       CpuThreadPool& thread_pool);
+void cpu_gated_delta_net_decode(const float* projected_qkv, const float* projected_z,
+                                const float* projected_b, const float* projected_a,
+                                const float* conv_weight, const float* dt_bias,
+                                const float* a_log, const float* norm_weight,
+                                float* conv_state, float* recurrent_state,
+                                float* output, int conv_kernel, int key_head_dim,
+                                int value_head_dim, int key_heads, int value_heads,
+                                float eps);
+void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projected_z,
+                                 const float* projected_b, const float* projected_a,
+                                 const float* conv_weight, const float* dt_bias,
+                                 const float* a_log, const float* norm_weight,
+                                 float* conv_state, float* recurrent_state,
+                                 float* output, size_t rows, int conv_kernel,
+                                 int key_head_dim, int value_head_dim, int key_heads,
+                                 int value_heads, float eps);
 
 } // namespace celeg

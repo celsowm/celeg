@@ -45,6 +45,13 @@ struct Args {
     std::string repo;
     std::string quant = "Q4_K_M";
     std::string format = "auto";
+    std::string expert_offload = "none";
+    std::string expert_cache_policy = "lru";
+    std::string expert_backing = "host";
+    int expert_cache_per_layer = 0;
+    int expert_host_cache_mib = 4096;
+    bool enable_mtp = false;
+    int mtp_speculative_tokens = 1;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -65,10 +72,21 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--repo") args.repo = value();
         else if (key == "--quant") args.quant = value();
         else if (key == "--format") args.format = value();
+        else if (key == "--expert-offload") args.expert_offload = value();
+        else if (key == "--expert-cache-policy") args.expert_cache_policy = value();
+        else if (key == "--expert-backing") args.expert_backing = value();
+        else if (key == "--expert-cache-per-layer") args.expert_cache_per_layer = std::stoi(value());
+        else if (key == "--expert-host-cache-mib") args.expert_host_cache_mib = std::stoi(value());
+        else if (key == "--mtp") args.enable_mtp = true;
+        else if (key == "--mtp-speculative-tokens") args.mtp_speculative_tokens = std::stoi(value());
         else if (key == "--help") {
             std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--host 127.0.0.1] [--port 8080] [--context 4096] "
                          "[--threads N] [--backend cpu|cuda] "
                          "[--format auto|safetensors|gguf] [--quant TAG] "
+                         "[--expert-offload none|auto|host] [--expert-cache-policy static|lru|lfu-lru] "
+                         "[--expert-backing host|disk] [--expert-cache-per-layer N] "
+                         "[--expert-host-cache-mib N] "
+                         "[--mtp] [--mtp-speculative-tokens N] "
                          "[--served-model-name NAME]\n";
             std::exit(0);
         } else {
@@ -139,13 +157,12 @@ int main(int argc, char** argv) {
             bootstrap.model.topology.token_policy.eos_token_ids.end());
 
         celeg::VisualEmbeddingProvider visual_embeddings;
-        const std::filesystem::path projector = model.parent_path() / "mmproj-BF16.gguf";
-        if (std::filesystem::is_regular_file(projector)) {
-            const auto& vision_factory = runtime->vision_providers().select_if(
-                [&](const celeg::IVisionProviderFactory& provider) {
-                    return provider.supports(bootstrap.model.provenance.architecture_id, projector);
-                });
-            visual_embeddings = vision_factory.create(projector);
+        for (const auto& provider_id : runtime->vision_providers().ids()) {
+            const auto& provider = runtime->vision_providers().find(provider_id);
+            if (provider.supports(bootstrap.model.provenance.architecture_id, model)) {
+                visual_embeddings = provider.create(model);
+                break;
+            }
         }
 
         std::unique_ptr<celeg::serve::ServiceBundle> service;
@@ -160,11 +177,44 @@ int main(int argc, char** argv) {
                     model_options, engine_options, visual_embeddings, runtime));
         } else if (args.backend == "cuda") {
 #ifdef CELEG_SERVE_CUDA
+            celeg::CudaModelOptions model_options;
+            model_options.enable_mtp = args.enable_mtp;
+            model_options.mtp_speculative_tokens = args.mtp_speculative_tokens;
+            if (args.enable_mtp) model_options.cuda_graph = false;
+            if (args.expert_offload == "auto") {
+                model_options.expert_offload.mode = celeg::ExpertOffloadMode::Auto;
+            } else if (args.expert_offload == "host") {
+                model_options.expert_offload.mode = celeg::ExpertOffloadMode::Host;
+            } else if (args.expert_offload != "none") {
+                throw std::runtime_error("--expert-offload must be none, auto, or host");
+            }
+            if (args.expert_cache_policy == "static") {
+                model_options.expert_offload.policy = celeg::ExpertCachePolicy::Static;
+            } else if (args.expert_cache_policy == "lru") {
+                model_options.expert_offload.policy = celeg::ExpertCachePolicy::Lru;
+            } else if (args.expert_cache_policy == "lfu-lru") {
+                model_options.expert_offload.policy = celeg::ExpertCachePolicy::LayerLocalLfuLru;
+            } else {
+                throw std::runtime_error("--expert-cache-policy must be static, lru, or lfu-lru");
+            }
+            if (args.expert_backing == "host") {
+                model_options.expert_offload.backing = celeg::ExpertBackingMode::HostResident;
+            } else if (args.expert_backing == "disk") {
+                model_options.expert_offload.backing = celeg::ExpertBackingMode::DiskCached;
+            } else {
+                throw std::runtime_error("--expert-backing must be host or disk");
+            }
+            if (args.expert_cache_per_layer < 0 || args.expert_host_cache_mib <= 0) {
+                throw std::runtime_error("expert cache values must be positive");
+            }
+            model_options.expert_offload.experts_per_layer = args.expert_cache_per_layer;
+            model_options.expert_offload.host_expert_cache_bytes =
+                static_cast<std::size_t>(args.expert_host_cache_mib) * 1024 * 1024;
             celeg::ConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CudaInferenceService>(
-                    model.string(), args.context, celeg::CudaModelOptions{}, engine_options,
+                    model.string(), args.context, model_options, engine_options,
                     visual_embeddings, runtime));
 #else
             throw std::runtime_error("CUDA serving is not available in this build");

@@ -74,6 +74,11 @@ private:
 
 class HostExpertStore {
 public:
+    struct MappedRange {
+        void* host = nullptr;
+        const void* device = nullptr;
+    };
+
     HostExpertStore() = default;
     ~HostExpertStore();
 
@@ -83,7 +88,7 @@ public:
     HostExpertStore& operator=(HostExpertStore&&) noexcept;
 
     const void* register_mapped(const void* host_ptr, std::size_t bytes);
-    const void* alloc_mapped(std::size_t bytes);
+    MappedRange alloc_mapped(std::size_t bytes);
     const void* store_pinned_copy(const void* src, std::size_t bytes);
 
     std::size_t registered_bytes() const { return registered_bytes_; }

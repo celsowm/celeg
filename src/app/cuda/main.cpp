@@ -60,6 +60,8 @@ struct Args {
     bool lt_autotune = false;
     bool memory_report = false;
     bool runtime_metrics = false;
+    bool enable_mtp = false;
+    int mtp_speculative_tokens = 1;
     std::string expert_offload = "none";
     std::string expert_host_mode = "mapped";
     std::string expert_cache_policy = "lfu-lru";
@@ -122,6 +124,8 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--lt-autotune") args.lt_autotune = true;
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--runtime-metrics") args.runtime_metrics = true;
+        else if (key == "--mtp") args.enable_mtp = true;
+        else if (key == "--mtp-speculative-tokens") args.mtp_speculative_tokens = std::stoi(value());
         else if (key == "--expert-offload") args.expert_offload = value();
         else if (key == "--expert-host-mode") args.expert_host_mode = value();
         else if (key == "--expert-cache-policy") args.expert_cache_policy = value();
@@ -157,6 +161,7 @@ Args parse_args(int argc, char** argv) {
                 << "  [--dump-logits FILE.f32] [--print-top N]\n"
                 << "  [--save-session FILE] [--load-session FILE]\n"
                 << "  [--runtime-metrics]\n"
+                << "  [--mtp] [--mtp-speculative-tokens N]\n"
                 << "  [--expert-offload none|auto|host]\n"
                 << "  [--expert-host-mode mapped|pinned-copy|staged]\n"
                 << "  [--expert-cache-policy static|lru|lfu-lru]\n"
@@ -400,6 +405,8 @@ int main(int argc, char** argv) {
         model_options.fast_attention = args.fast_attention;
         model_options.fused_projections = args.fused_projections;
         model_options.cuda_graph = !args.no_cuda_graph;
+        model_options.enable_mtp = args.enable_mtp;
+        model_options.mtp_speculative_tokens = args.mtp_speculative_tokens;
         model_options.gemm_backend = args.gemm_backend == "cublaslt"
             ? celeg::GemmBackend::CublasLt
             : celeg::GemmBackend::Cublas;
@@ -592,7 +599,12 @@ int main(int argc, char** argv) {
                       << "runtime.decode_tokens=" << runtime.decoded_tokens << '\n'
                       << "runtime.decode_ms=" << runtime.cumulative_decode_ms << '\n'
                       << "runtime.decode_tokens_per_second="
-                      << runtime.decode_tokens_per_second() << '\n';
+                      << runtime.decode_tokens_per_second() << '\n'
+                      << "runtime.mtp_forward_tokens=" << runtime.mtp_forward_tokens << '\n'
+                      << "runtime.mtp_verified_tokens=" << runtime.mtp_verified_tokens << '\n'
+                      << "runtime.mtp_accepted_tokens=" << runtime.mtp_accepted_tokens << '\n'
+                      << "runtime.mtp_rejected_tokens=" << runtime.mtp_rejected_tokens << '\n'
+                      << "runtime.mtp_used_tokens=" << runtime.mtp_used_tokens << '\n';
         }
         return 0;
     } catch (const std::exception& error) {

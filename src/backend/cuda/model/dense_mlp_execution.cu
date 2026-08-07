@@ -12,9 +12,10 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
                        1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
                        stream_.get());
-        const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
-            ? resources_.shape_.intermediate
-            : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer));
+        const int intermediate = layer >= 0 &&
+                layer < static_cast<int>(resources_.shape_.feed_forward_intermediates.size())
+            ? resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer))
+            : resources_.shape_.intermediate;
         if (resources_.options_.fused_projections) {
             linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.gate_up_.data(),
                    1, 2 * intermediate, resources_.shape_.hidden);
@@ -28,7 +29,8 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + intermediate,
                    1, intermediate, resources_.shape_.hidden);
         }
-        const bool gelu_tanh = !resources_.shape_.feed_forward_activations.empty() &&
+        const bool gelu_tanh = layer >= 0 &&
+            layer < static_cast<int>(resources_.shape_.feed_forward_activations.size()) &&
             resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh;
         if (gelu_tanh) {
             launch_gated_gelu_tanh(workspace_.gate_up_.data(), workspace_.activated_.data(),

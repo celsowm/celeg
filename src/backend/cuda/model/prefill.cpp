@@ -32,6 +32,20 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
         throw std::invalid_argument("prefill exceeds max_context");
     }
     validate_token_ids(tokens);
+    if (resources_.mtp_.available()) {
+        prefill_chunk(tokens, true, true);
+        return;
+    }
+    // Disk-backed MoE residency needs the active routed set to fit in the
+    // per-layer GPU cache.  The packed prefill path can route an entire prompt
+    // at once (K * rows unique experts), so use the tokenwise scheduler here;
+    // it preserves recurrent GDN state and lets the residency coordinator
+    // promote exactly one routed set at a time.
+    if (resources_.options_.expert_offload.enabled() &&
+        resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
+        prefill_chunk(tokens, true, true);
+        return;
+    }
     if (resources_.shape_.mamba2_layer_count > 0) {
         prefill_chunk(tokens, true, true);
         return;
@@ -58,6 +72,9 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
              static_cast<size_t>(embeddings.width))) {
         throw std::invalid_argument("invalid CUDA prompt embedding layout");
     }
+    if (embeddings.has_rope_positions && embeddings.rope_positions.size() != tokens.size()) {
+        throw std::invalid_argument("CUDA prompt M-RoPE positions must cover every token");
+    }
     validate_token_ids(tokens);
     reset();
     session_.phase_ = SessionPhase::Prefilling;
@@ -65,7 +82,15 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
     const auto begin = std::chrono::steady_clock::now();
     for (size_t index = 0; index < tokens.size(); ++index) {
         const float* raw = embeddings.at_position(index);
-        forward_token_host(tokens[index], index + 1 == tokens.size(), raw);
+        forward_token_host(tokens[index], index + 1 == tokens.size(), raw,
+                           embeddings.rope_at_position(index));
+    }
+    if (embeddings.has_rope_positions) {
+        session_.next_rope_position_ = embeddings.next_rope_position;
+        CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(),
+                                   session_.next_rope_position_.data(),
+                                   sizeof(session_.next_rope_position_),
+                                   cudaMemcpyHostToDevice, stream_.get()));
     }
     CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &session_.position_,
                                sizeof(session_.position_), cudaMemcpyHostToDevice,

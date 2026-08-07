@@ -145,6 +145,63 @@ int main() {
     for (size_t i = 0; i < state_batched.size(); ++i) {
         CELEG_TEST_CHECK(std::abs(state_batched[i] - state_reference[i]) < 1e-6f);
     }
+
+    // GatedDeltaNet prefill must be exactly the same recurrent computation as
+    // feeding the same sequence through decode one token at a time.
+    constexpr int gdn_kernel = 3;
+    constexpr int gdn_key_dim = 3;
+    constexpr int gdn_value_dim = 2;
+    constexpr int gdn_key_heads = 2;
+    constexpr int gdn_value_heads = 4;
+    constexpr int gdn_qkv_width = 2 * gdn_key_dim * gdn_key_heads +
+        gdn_value_dim * gdn_value_heads;
+    constexpr int gdn_value_width = gdn_value_dim * gdn_value_heads;
+    std::vector<float> gdn_qkv(conv_rows * gdn_qkv_width);
+    std::vector<float> gdn_z(conv_rows * gdn_value_width);
+    std::vector<float> gdn_b(conv_rows * gdn_value_heads);
+    std::vector<float> gdn_a(conv_rows * gdn_value_heads);
+    std::vector<float> gdn_conv(static_cast<size_t>(gdn_qkv_width) * gdn_kernel);
+    std::vector<float> gdn_dt(gdn_value_heads), gdn_alog(gdn_value_heads);
+    std::vector<float> gdn_norm(gdn_value_dim, 1.0f);
+    for (size_t i = 0; i < gdn_qkv.size(); ++i) gdn_qkv[i] = std::sin(0.11f * static_cast<float>(i));
+    for (size_t i = 0; i < gdn_z.size(); ++i) gdn_z[i] = std::cos(0.07f * static_cast<float>(i));
+    for (size_t i = 0; i < gdn_b.size(); ++i) gdn_b[i] = -0.3f + 0.02f * static_cast<float>(i);
+    for (size_t i = 0; i < gdn_a.size(); ++i) gdn_a[i] = 0.1f * std::sin(static_cast<float>(i));
+    for (size_t i = 0; i < gdn_conv.size(); ++i) gdn_conv[i] = 0.03f * std::cos(static_cast<float>(i));
+    for (int i = 0; i < gdn_value_heads; ++i) {
+        gdn_dt[i] = 0.8f + 0.03f * static_cast<float>(i);
+        gdn_alog[i] = -0.2f + 0.04f * static_cast<float>(i);
+    }
+    std::vector<float> gdn_prefill_state_conv(gdn_conv.size());
+    std::vector<float> gdn_decode_state_conv(gdn_conv.size());
+    const size_t recurrent_size = static_cast<size_t>(gdn_value_heads) * gdn_key_dim * gdn_value_dim;
+    std::vector<float> gdn_prefill_state(recurrent_size);
+    std::vector<float> gdn_decode_state(recurrent_size);
+    std::vector<float> gdn_prefill_output(conv_rows * gdn_value_width);
+    std::vector<float> gdn_decode_output(conv_rows * gdn_value_width);
+    celeg::cpu_gated_delta_net_prefill(
+        gdn_qkv.data(), gdn_z.data(), gdn_b.data(), gdn_a.data(), gdn_conv.data(),
+        gdn_dt.data(), gdn_alog.data(), gdn_norm.data(), gdn_prefill_state_conv.data(),
+        gdn_prefill_state.data(), gdn_prefill_output.data(), conv_rows, gdn_kernel,
+        gdn_key_dim, gdn_value_dim, gdn_key_heads, gdn_value_heads, 1e-6f);
+    for (size_t row = 0; row < conv_rows; ++row) {
+        celeg::cpu_gated_delta_net_decode(
+            gdn_qkv.data() + row * gdn_qkv_width, gdn_z.data() + row * gdn_value_width,
+            gdn_b.data() + row * gdn_value_heads, gdn_a.data() + row * gdn_value_heads,
+            gdn_conv.data(), gdn_dt.data(), gdn_alog.data(), gdn_norm.data(),
+            gdn_decode_state_conv.data(), gdn_decode_state.data(),
+            gdn_decode_output.data() + row * gdn_value_width, gdn_kernel, gdn_key_dim,
+            gdn_value_dim, gdn_key_heads, gdn_value_heads, 1e-6f);
+    }
+    for (size_t i = 0; i < gdn_decode_output.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(gdn_decode_output[i] - gdn_prefill_output[i]) < 1e-5f);
+    }
+    for (size_t i = 0; i < gdn_decode_state_conv.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(gdn_decode_state_conv[i] - gdn_prefill_state_conv[i]) < 1e-5f);
+    }
+    for (size_t i = 0; i < gdn_decode_state.size(); ++i) {
+        CELEG_TEST_CHECK(std::abs(gdn_decode_state[i] - gdn_prefill_state[i]) < 1e-5f);
+    }
     std::cout << "cpu_kernels_test: isa=" << celeg::cpu_isa_name(best)
               << " max_q4_error=" << max_q4_error << '\n';
 }

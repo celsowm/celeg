@@ -22,6 +22,7 @@ void CudaCompiledModel::set_generation_config(GenerationConfig generation) {
             "cannot change generation configuration during decode");
     }
     session_.generation_ = generation;
+    mtp_candidate_ready_ = false;
     decode_graphs_.reset();
 }
 
@@ -70,14 +71,17 @@ void CudaCompiledModel::enqueue_decode_forward() {
             }
             const AttentionSpec& owner_layout = owner->layout;
             __nv_bfloat16* q = workspace_.qkv_output_.data();
-            __nv_bfloat16* k = q + layout.query_width();
+            const int query_projection_width = attention->query->rows;
+            const bool query_gate = layout.query_gate ||
+                query_projection_width == 2 * layout.query_width();
+            __nv_bfloat16* k = q + query_projection_width;
             __nv_bfloat16* v = k + layout.key_value_width();
             decode_phase_profile().begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
                 workspace_.normed_.data(), 1, resources_.shape_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q,
-                   1, layout.query_width(), resources_.shape_.hidden);
+                   1, query_projection_width, resources_.shape_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.normed_.data(), *attention->key, k,
                        1, layout.key_value_width(), resources_.shape_.hidden);
@@ -157,6 +161,11 @@ void CudaCompiledModel::enqueue_decode_forward() {
                         owner_layout.head_dim, layout.sliding_window, stream_.get());
                 }
             }
+            if (query_gate) {
+                launch_sigmoid_multiply(workspace_.op_output_.data(),
+                                        q + layout.query_width(),
+                                        layout.query_width(), stream_.get());
+            }
             decode_phase_profile().end(DecodePhase::Attention, stream_.get());
             decode_phase_profile().begin(stream_.get());
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
@@ -166,6 +175,35 @@ void CudaCompiledModel::enqueue_decode_forward() {
             launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.residual_multiplier,
                          stream_.get());
             decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
+        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+            const GatedDeltaNetSpec& spec = gated_delta->spec;
+            const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
+                spec.value_heads * spec.value_head_dim;
+            const int value_width = spec.value_heads * spec.value_head_dim;
+            linear(workspace_.normed_.data(), *gated_delta->qkv,
+                   workspace_.gated_delta_qkv_.data(), 1, qkv_width,
+                   resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), *gated_delta->z,
+                   workspace_.gated_delta_z_.data(), 1, value_width,
+                   resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), *gated_delta->b,
+                   workspace_.gated_delta_b_.data(), 1, spec.value_heads,
+                   resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), *gated_delta->a,
+                   workspace_.gated_delta_a_.data(), 1, spec.value_heads,
+                   resources_.shape_.hidden);
+            launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
+                workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
+                workspace_.gated_delta_a_.data(), gated_delta->conv_weight,
+                gated_delta->dt_bias, gated_delta->a_log, gated_delta->norm,
+                gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
+                workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
+                spec.key_head_dim, spec.value_head_dim, spec.key_heads,
+                spec.value_heads, resources_.shape_.numerical_policy.norm_eps,
+                stream_.get());
+            linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
+                   workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                   value_width);
         } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
             const Mamba2Spec& spec = mamba->spec;
             const int projection_width = 2 * spec.intermediate_size +
@@ -225,6 +263,9 @@ void CudaCompiledModel::enqueue_decode_forward() {
         decode_phase_profile().end(DecodePhase::Mlp, stream_.get());
         ++layer_idx;
     }
+    if (resources_.mtp_.available()) {
+        run_mtp_forward_device(sampling_.sampled_device.data());
+    }
     decode_phase_profile().begin(stream_.get());
     launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
                     1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
@@ -233,16 +274,29 @@ void CudaCompiledModel::enqueue_decode_forward() {
             1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
                  1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
-        if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
+    if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
                             resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());
     }
+    finalize_mtp_verification();
     decode_phase_profile().end(DecodePhase::Logits, stream_.get());
 }
 
 void CudaCompiledModel::enqueue_decode_step() {
     decode_phase_profile().begin(stream_.get());
-    enqueue_sampling();
+    mtp_candidate_used_ = resources_.mtp_.available() &&
+        session_.generation_.greedy() && mtp_candidate_ready_;
+    if (mtp_candidate_used_) {
+        CELEG_CUDA(cudaMemcpyAsync(
+            sampling_.sampled_device.data(), workspace_.mtp_candidate_.data(),
+            sizeof(int32_t), cudaMemcpyDeviceToDevice, stream_.get()));
+        launch_mark_seen(sampling_.sampled_device.data(),
+                         sampling_.seen_tokens.data(),
+                         resources_.shape_.vocab_size, stream_.get());
+        ++session_.metrics_.mtp_used_tokens;
+    } else {
+        enqueue_sampling();
+    }
     decode_phase_profile().end(DecodePhase::Sampling, stream_.get());
     decode_phase_profile().count_step();
     enqueue_decode_forward();
@@ -306,6 +360,15 @@ void CudaCompiledModel::decode_async_begin() {
     CELEG_CUDA(cudaMemcpyAsync(sampling_.sampled_host.data(), sampling_.sampled_device.data(),
                              sizeof(int32_t), cudaMemcpyDeviceToHost,
                              stream_.get()));
+    if (resources_.mtp_.available()) {
+        CELEG_CUDA(cudaMemcpyAsync(
+            mtp_verification_host_.data(), workspace_.mtp_candidate_.data(),
+            sizeof(int32_t), cudaMemcpyDeviceToHost, stream_.get()));
+        CELEG_CUDA(cudaMemcpyAsync(
+            mtp_verification_host_.data() + 1,
+            workspace_.mtp_target_candidate_.data(), sizeof(int32_t),
+            cudaMemcpyDeviceToHost, stream_.get()));
+    }
     session_.phase_ = SessionPhase::DecodePending;
 }
 
@@ -316,6 +379,19 @@ int32_t CudaCompiledModel::decode_async_finish() {
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     session_.phase_ = SessionPhase::Ready;
     ++session_.position_;
+    if (resources_.mtp_.available() && session_.generation_.greedy()) {
+        ++session_.metrics_.mtp_verified_tokens;
+        if (mtp_verification_host_.data()[0] ==
+            mtp_verification_host_.data()[1]) {
+            ++session_.metrics_.mtp_accepted_tokens;
+            mtp_candidate_ready_ = true;
+        } else {
+            ++session_.metrics_.mtp_rejected_tokens;
+            mtp_candidate_ready_ = false;
+        }
+    } else {
+        mtp_candidate_ready_ = false;
+    }
     const auto ended = std::chrono::steady_clock::now();
     session_.metrics_.cumulative_decode_ms +=
         std::chrono::duration<double, std::milli>(

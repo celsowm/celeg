@@ -361,3 +361,79 @@ void launch_dynamic_qk_norm_rope_prefill(
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
+
+__device__ __forceinline__ int mrope_axis_for_pair_device(
+    int pair, int section0, int section1, bool interleaved) {
+    if (interleaved) return pair % 3;
+    return pair < section0 ? 0 : (pair < section0 + section1 ? 1 : 2);
+}
+
+__global__ void dynamic_mrope_qk_norm_rope_kernel(
+    __nv_bfloat16* data, const __nv_bfloat16* norm_weight,
+    int rows, int heads, int head_dim, const int32_t* positions,
+    int section0, int section1, int section2, bool interleaved,
+    float theta, int rotary_pairs, float eps, bool normalize) {
+    const int block = blockIdx.x;
+    const int row = block / heads;
+    const int head = block % heads;
+    if (row >= rows) return;
+    __nv_bfloat16* vector = data +
+        (static_cast<size_t>(row) * heads + head) * head_dim;
+    __shared__ float warp_sums[32];
+    __shared__ float total;
+    __shared__ float inv;
+    if (normalize) {
+        float sum = 0.0f;
+        for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
+            const float value = bf16_float(vector[i]);
+            sum += value * value;
+        }
+        sum = block_sum(sum, warp_sums, &total);
+        if (threadIdx.x == 0) inv = rsqrtf(sum / static_cast<float>(head_dim) + eps);
+        __syncthreads();
+    } else if (threadIdx.x == 0) {
+        inv = 1.0f;
+    }
+    __syncthreads();
+    for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
+        const int axis = mrope_axis_for_pair_device(i, section0, section1, interleaved);
+        const float position = static_cast<float>(positions[axis]);
+        const float frequency = powf(theta, -2.0f * static_cast<float>(i) /
+                                             static_cast<float>(2 * rotary_pairs));
+        const float angle = position * frequency;
+        const float a = bf16_float(vector[i]) * inv *
+            (normalize ? bf16_float(norm_weight[i]) : 1.0f);
+        const float b = bf16_float(vector[rotary_pairs + i]) * inv *
+            (normalize ? bf16_float(norm_weight[rotary_pairs + i]) : 1.0f);
+        const float c = cosf(angle);
+        const float s = sinf(angle);
+        vector[i] = __float2bfloat16(a * c - b * s);
+        vector[rotary_pairs + i] = __float2bfloat16(b * c + a * s);
+    }
+    if (normalize) {
+        for (int i = threadIdx.x + 2 * rotary_pairs; i < head_dim; i += blockDim.x) {
+            vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv * bf16_float(norm_weight[i]));
+        }
+    }
+    (void)section2;
+}
+
+void launch_dynamic_mrope_qk_norm_rope(
+    __nv_bfloat16* q, __nv_bfloat16* k,
+    const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
+    int q_heads, int kv_heads, int head_dim,
+    const int32_t* positions, int section0, int section1, int section2,
+    bool interleaved, float rope_theta, float rotary_fraction, float eps,
+    bool normalize, cudaStream_t stream) {
+    const int threads = attention_threads(head_dim);
+    const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    dynamic_mrope_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
+        q, q_norm, 1, q_heads, head_dim, positions, section0, section1, section2,
+        interleaved, rope_theta, pairs, eps, normalize);
+    if (k) {
+        dynamic_mrope_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
+            k, k_norm, 1, kv_heads, head_dim, positions, section0, section1, section2,
+            interleaved, rope_theta, pairs, eps, normalize);
+    }
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}

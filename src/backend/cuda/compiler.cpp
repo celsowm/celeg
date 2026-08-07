@@ -9,7 +9,7 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
         throw std::invalid_argument("resolved model does not support CUDA");
     }
     CompiledModelProgram program = build_model_program(model);
-    validate_moe_backend_capabilities(program, "CUDA", {});
+    validate_moe_backend_capabilities(program, "CUDA", {false, true, false, false});
     return program;
 }
 

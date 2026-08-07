@@ -1,0 +1,181 @@
+#include "celeg/backend/cpu/kernels.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <vector>
+
+namespace celeg {
+namespace {
+
+float sigmoid(float value) {
+    return 1.0f / (1.0f + std::exp(-value));
+}
+
+float softplus(float value) {
+    if (value > 20.0f) return value;
+    if (value < -20.0f) return std::exp(value);
+    return std::log1p(std::exp(value));
+}
+
+float silu(float value) {
+    return value * sigmoid(value);
+}
+
+void validate_gated_delta_arguments(const float* projected_qkv, const float* projected_z,
+                                    const float* projected_b, const float* projected_a,
+                                    const float* conv_weight, const float* dt_bias,
+                                    const float* a_log, const float* norm_weight,
+                                    const float* conv_state, const float* recurrent_state,
+                                    const float* output, int conv_kernel, int key_head_dim,
+                                    int value_head_dim, int key_heads, int value_heads,
+                                    float eps) {
+    if (!projected_qkv || !projected_z || !projected_b || !projected_a ||
+        !conv_weight || !dt_bias || !a_log || !norm_weight || !conv_state ||
+        !recurrent_state || !output || conv_kernel <= 0 || key_head_dim <= 0 ||
+        value_head_dim <= 0 || key_heads <= 0 || value_heads <= 0 ||
+        value_heads % key_heads != 0 || eps <= 0.0f) {
+        throw std::invalid_argument("invalid GatedDeltaNet arguments");
+    }
+}
+
+void gated_delta_step(const float* projected_qkv, const float* projected_z,
+                      const float* projected_b, const float* projected_a,
+                      const float* conv_weight, const float* dt_bias,
+                      const float* a_log, const float* norm_weight,
+                      float* conv_state, float* recurrent_state, float* output,
+                      int conv_kernel, int key_head_dim, int value_head_dim,
+                      int key_heads, int value_heads, float eps) {
+    const int key_width = key_heads * key_head_dim;
+    const int value_width = value_heads * value_head_dim;
+    const int conv_dim = 2 * key_width + value_width;
+    std::vector<float> filtered_qkv(static_cast<size_t>(conv_dim));
+
+    for (int channel = 0; channel < conv_dim; ++channel) {
+        float* history = conv_state + static_cast<size_t>(channel) * conv_kernel;
+        for (int tap = 1; tap < conv_kernel; ++tap) history[tap - 1] = history[tap];
+        history[conv_kernel - 1] = projected_qkv[channel];
+        float filtered = 0.0f;
+        for (int tap = 0; tap < conv_kernel; ++tap) {
+            filtered += history[tap] * conv_weight[
+                static_cast<size_t>(channel) * conv_kernel + tap];
+        }
+        filtered_qkv[static_cast<size_t>(channel)] = silu(filtered);
+    }
+
+    const float* q = filtered_qkv.data();
+    const float* k = filtered_qkv.data() + key_width;
+    const float* v = filtered_qkv.data() + 2 * key_width;
+    const int repeat = value_heads / key_heads;
+    std::vector<float> normalized_q(static_cast<size_t>(key_width));
+    std::vector<float> normalized_k(static_cast<size_t>(key_width));
+    for (int head = 0; head < key_heads; ++head) {
+        float q_norm = 0.0f;
+        float k_norm = 0.0f;
+        for (int d = 0; d < key_head_dim; ++d) {
+            q_norm += q[head * key_head_dim + d] * q[head * key_head_dim + d];
+            k_norm += k[head * key_head_dim + d] * k[head * key_head_dim + d];
+        }
+        q_norm = std::sqrt(q_norm + eps);
+        k_norm = std::sqrt(k_norm + eps);
+        for (int d = 0; d < key_head_dim; ++d) {
+            normalized_q[head * key_head_dim + d] =
+                q[head * key_head_dim + d] / q_norm;
+            normalized_k[head * key_head_dim + d] =
+                k[head * key_head_dim + d] / k_norm;
+        }
+    }
+
+    for (int value_head = 0; value_head < value_heads; ++value_head) {
+        const int key_head = value_head / repeat;
+        const float beta = sigmoid(projected_b[value_head]);
+        const float decay = std::exp(-std::exp(a_log[value_head]) *
+            softplus(projected_a[value_head] + dt_bias[value_head]));
+        float* state = recurrent_state + static_cast<size_t>(value_head) *
+            key_head_dim * value_head_dim;
+        std::vector<float> delta(static_cast<size_t>(value_head_dim));
+        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
+            for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
+                state[k_dim * value_head_dim + v_dim] *= decay;
+            }
+        }
+        for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
+            float memory = 0.0f;
+            for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
+                memory += state[k_dim * value_head_dim + v_dim] *
+                    normalized_k[key_head * key_head_dim + k_dim];
+            }
+            delta[v_dim] = (v[value_head * value_head_dim + v_dim] - memory) * beta;
+        }
+        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
+            const float key_value = normalized_k[key_head * key_head_dim + k_dim];
+            for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
+                state[k_dim * value_head_dim + v_dim] += key_value * delta[v_dim];
+            }
+        }
+        for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
+            float value = 0.0f;
+            for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
+                value += state[k_dim * value_head_dim + v_dim] *
+                    normalized_q[key_head * key_head_dim + k_dim];
+            }
+            output[value_head * value_head_dim + v_dim] =
+                value / std::sqrt(static_cast<float>(key_head_dim));
+        }
+    }
+
+    std::vector<float> normalized_head(static_cast<size_t>(value_head_dim));
+    for (int value_head = 0; value_head < value_heads; ++value_head) {
+        float* head_output = output + value_head * value_head_dim;
+        cpu_rmsnorm(head_output, norm_weight, normalized_head.data(), value_head_dim, eps);
+        const float* gate = projected_z + value_head * value_head_dim;
+        for (int d = 0; d < value_head_dim; ++d) {
+            head_output[d] = normalized_head[static_cast<size_t>(d)] * silu(gate[d]);
+        }
+    }
+}
+
+} // namespace
+
+void cpu_gated_delta_net_decode(const float* projected_qkv, const float* projected_z,
+                                const float* projected_b, const float* projected_a,
+                                const float* conv_weight, const float* dt_bias,
+                                const float* a_log, const float* norm_weight,
+                                float* conv_state, float* recurrent_state,
+                                float* output, int conv_kernel, int key_head_dim,
+                                int value_head_dim, int key_heads, int value_heads,
+                                float eps) {
+    validate_gated_delta_arguments(projected_qkv, projected_z, projected_b, projected_a,
+        conv_weight, dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
+        conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
+    gated_delta_step(projected_qkv, projected_z, projected_b, projected_a, conv_weight,
+        dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, conv_kernel,
+        key_head_dim, value_head_dim, key_heads, value_heads, eps);
+}
+
+void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projected_z,
+                                 const float* projected_b, const float* projected_a,
+                                 const float* conv_weight, const float* dt_bias,
+                                 const float* a_log, const float* norm_weight,
+                                 float* conv_state, float* recurrent_state,
+                                 float* output, size_t rows, int conv_kernel,
+                                 int key_head_dim, int value_head_dim, int key_heads,
+                                 int value_heads, float eps) {
+    if (rows == 0) throw std::invalid_argument("GatedDeltaNet prefill needs rows");
+    validate_gated_delta_arguments(projected_qkv, projected_z, projected_b, projected_a,
+        conv_weight, dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
+        conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
+    const int qkv_width = 2 * key_heads * key_head_dim + value_heads * value_head_dim;
+    const int z_width = value_heads * value_head_dim;
+    for (size_t row = 0; row < rows; ++row) {
+        gated_delta_step(projected_qkv + row * static_cast<size_t>(qkv_width),
+            projected_z + row * static_cast<size_t>(z_width),
+            projected_b + row * static_cast<size_t>(value_heads),
+            projected_a + row * static_cast<size_t>(value_heads), conv_weight, dt_bias,
+            a_log, norm_weight, conv_state, recurrent_state,
+            output + row * static_cast<size_t>(z_width), conv_kernel, key_head_dim,
+            value_head_dim, key_heads, value_heads, eps);
+    }
+}
+
+} // namespace celeg

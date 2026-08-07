@@ -37,6 +37,20 @@ size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
         trait.type_size;
 }
 
+std::string named_expert_name(const std::string& prefix, int expert,
+                              const std::string& projection) {
+    return prefix + "." + std::to_string(expert) + "." + projection + ".weight";
+}
+
+void validate_named_bf16(const HostTensorView& tensor,
+                         const std::vector<int64_t>& shape,
+                         size_t bytes, const std::string& name) {
+    if (tensor.dtype != TensorDType::BF16 || tensor.shape != shape ||
+        tensor.bytes != bytes) {
+        throw std::runtime_error("inconsistent BF16 named MoE tensor: " + name);
+    }
+}
+
 } // namespace
 
 const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
@@ -211,6 +225,83 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
     view.cols = moe_intermediate;
     auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
     if (!inserted) throw std::runtime_error("duplicate expert weight: " + cache_key);
+    expert_cache_.emplace(cache_key, view);
+    return &expert_cache_.find(cache_key)->second;
+}
+
+const ExpertLinearWeight* WeightLoader::load_moe_gate_up_named(
+    const IWeightRepository& repo, const std::string& experts_prefix,
+    const std::string& gate_name, const std::string& up_name,
+    int num_experts, int moe_intermediate, int hidden) {
+    validate_expert_dimensions(0, num_experts, moe_intermediate, hidden, "named_gate_up");
+    const std::string cache_key = experts_prefix + ".packed_gate_up";
+    if (const auto cached = expert_cache_.find(cache_key);
+        cached != expert_cache_.end()) return &cached->second;
+
+    const size_t per_projection = static_cast<size_t>(moe_intermediate) * hidden;
+    const size_t per_expert = 2 * per_projection;
+    const size_t projection_bytes = per_projection * sizeof(__nv_bfloat16);
+    DeviceWeight weight;
+    weight.shape = {num_experts, 2 * moe_intermediate, hidden};
+    weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
+    for (int expert = 0; expert < num_experts; ++expert) {
+        const std::string gate = named_expert_name(experts_prefix, expert, gate_name);
+        const std::string up = named_expert_name(experts_prefix, expert, up_name);
+        const HostTensorView gate_tensor = repo.tensor(gate);
+        const HostTensorView up_tensor = repo.tensor(up);
+        validate_named_bf16(gate_tensor, {moe_intermediate, hidden},
+                            projection_bytes, gate);
+        validate_named_bf16(up_tensor, {moe_intermediate, hidden},
+                            projection_bytes, up);
+        __nv_bfloat16* destination = weight.bf16_storage.data() +
+            static_cast<size_t>(expert) * per_expert;
+        CELEG_CUDA(cudaMemcpy(destination, gate_tensor.data, projection_bytes,
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(destination + per_projection, up_tensor.data,
+                              projection_bytes, cudaMemcpyHostToDevice));
+    }
+    ExpertLinearWeight view;
+    view.kind = LinearStorageKind::Bf16;
+    view.bf16 = weight.bf16_storage.data();
+    view.experts = num_experts;
+    view.rows_per_expert = 2 * moe_intermediate;
+    view.cols = hidden;
+    auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate named expert weight: " + cache_key);
+    expert_cache_.emplace(cache_key, view);
+    return &expert_cache_.find(cache_key)->second;
+}
+
+const ExpertLinearWeight* WeightLoader::load_moe_down_named(
+    const IWeightRepository& repo, const std::string& experts_prefix,
+    const std::string& down_name, int num_experts, int moe_intermediate,
+    int hidden) {
+    validate_expert_dimensions(0, num_experts, moe_intermediate, hidden, "named_down");
+    const std::string cache_key = experts_prefix + ".packed_down";
+    if (const auto cached = expert_cache_.find(cache_key);
+        cached != expert_cache_.end()) return &cached->second;
+
+    const size_t per_expert = static_cast<size_t>(hidden) * moe_intermediate;
+    const size_t bytes = per_expert * sizeof(__nv_bfloat16);
+    DeviceWeight weight;
+    weight.shape = {num_experts, hidden, moe_intermediate};
+    weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
+    for (int expert = 0; expert < num_experts; ++expert) {
+        const std::string name = named_expert_name(experts_prefix, expert, down_name);
+        const HostTensorView tensor = repo.tensor(name);
+        validate_named_bf16(tensor, {hidden, moe_intermediate}, bytes, name);
+        CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data() +
+                              static_cast<size_t>(expert) * per_expert,
+                              tensor.data, bytes, cudaMemcpyHostToDevice));
+    }
+    ExpertLinearWeight view;
+    view.kind = LinearStorageKind::Bf16;
+    view.bf16 = weight.bf16_storage.data();
+    view.experts = num_experts;
+    view.rows_per_expert = hidden;
+    view.cols = moe_intermediate;
+    auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+    if (!inserted) throw std::runtime_error("duplicate named expert weight: " + cache_key);
     expert_cache_.emplace(cache_key, view);
     return &expert_cache_.find(cache_key)->second;
 }

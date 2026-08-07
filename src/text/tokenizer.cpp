@@ -298,6 +298,12 @@ void BpeTokenizer::load(const std::string& tokenizer_json_path) {
     if (root.contains("added_tokens")) {
         for (const Json& item : root["added_tokens"].as_array()) {
             SpecialToken token{item["content"].as_string(), static_cast<int32_t>(item["id"].as_i64())};
+            if (token.id < 0) throw std::runtime_error("tokenizer added token has a negative id");
+            vocab_[token.text] = token.id;
+            if (static_cast<size_t>(token.id) >= id_to_token_.size()) {
+                id_to_token_.resize(static_cast<size_t>(token.id) + 1);
+            }
+            id_to_token_[static_cast<size_t>(token.id)] = token.text;
             // Added vocabulary entries are matched verbatim even when the
             // tokenizer marks them non-special. SmolLM3 uses this for its
             // reasoning delimiters (<think> and </think>).

@@ -60,6 +60,12 @@ enum class TensorRole : uint8_t {
     MoeExpertGate,
     MoeExpertUp,
     MoeExpertDown,
+    MoePackedGateUp,
+    MoePackedDown,
+    MoeSharedGate,
+    MoeSharedUp,
+    MoeSharedDown,
+    MoeSharedGateWeight,
 };
 
 std::string_view tensor_role_name(TensorRole role);

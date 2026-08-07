@@ -42,6 +42,17 @@ CudaExecutionPlan CudaExecutionPlan::compile(
         throw std::invalid_argument(
             "attention_auto_threshold must be positive");
     }
+    if (requested.mtp_speculative_tokens <= 0) {
+        throw std::invalid_argument("mtp_speculative_tokens must be positive");
+    }
+    if (requested.enable_mtp && requested.cuda_graph) {
+        throw std::invalid_argument(
+            "MTP requires --no-cuda-graph until proposal metrics are graph-safe");
+    }
+    if (requested.enable_mtp && requested.mtp_speculative_tokens != 1) {
+        throw std::invalid_argument(
+            "MTP currently supports exactly one speculative token");
+    }
 #if defined(CELEG_DEBUG_SYNC) && CELEG_DEBUG_SYNC
     if (requested.cuda_graph) {
         throw std::invalid_argument(
@@ -114,6 +125,8 @@ CudaExecutionPlan CudaExecutionPlan::compile(
     mix(plan.options_.lt_heuristics);
     mix(plan.options_.lt_autotune);
     mix(plan.options_.allocate_local_kv_cache);
+    mix(plan.options_.enable_mtp);
+    mix(plan.options_.mtp_speculative_tokens);
     mix(plan.options_.expert_offload.fingerprint());
     mix(plan.device_.device_ordinal);
     mix(plan.device_.compute_major);

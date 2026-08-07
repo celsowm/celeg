@@ -49,6 +49,11 @@ struct PackedWorkspace {
     DeviceBuffer<__nv_bfloat16> k;
     DeviceBuffer<__nv_bfloat16> v;
     DeviceBuffer<__nv_bfloat16> conv_projected;
+    DeviceBuffer<__nv_bfloat16> gated_delta_qkv;
+    DeviceBuffer<__nv_bfloat16> gated_delta_z;
+    DeviceBuffer<__nv_bfloat16> gated_delta_b;
+    DeviceBuffer<__nv_bfloat16> gated_delta_a;
+    DeviceBuffer<__nv_bfloat16> gated_delta_output;
     DeviceBuffer<__nv_bfloat16> gate_up;
     DeviceBuffer<__nv_bfloat16> activated;
     DeviceBuffer<__nv_bfloat16> mlp_output;

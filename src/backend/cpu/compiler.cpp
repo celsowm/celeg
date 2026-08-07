@@ -9,7 +9,7 @@ CompiledModelProgram CpuModelCompiler::compile(const ResolvedModel& model) const
         throw std::invalid_argument("resolved model does not support CPU");
     }
     CompiledModelProgram program = build_model_program(model);
-    validate_moe_backend_capabilities(program, "CPU", {});
+    validate_moe_backend_capabilities(program, "CPU", {false, true, false, false});
     return program;
 }
 

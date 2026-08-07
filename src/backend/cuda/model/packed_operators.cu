@@ -1,6 +1,7 @@
 #include "celeg/backend/cuda/packed_operators.hpp"
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/kernels/gated_delta.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 
@@ -197,6 +198,65 @@ void run_local_attention_cache(PackedOperatorContext& context,
 }
 
 } // namespace
+
+void PackedGatedDeltaNetExecutor::run(
+    PackedOperatorContext& context,
+    const PackedSessionContext& reference,
+    const GatedDeltaNetLayer& gated_delta,
+    int rows,
+    int layer_index,
+    const std::vector<PackedSessionContext>* batch_models,
+    const std::vector<PackedPrefillRow>* row_descriptors) {
+    if (!batch_models || batch_models->empty()) {
+        throw std::invalid_argument("packed GatedDeltaNet execution needs session rows");
+    }
+    PackedWorkspace& w = context.workspace;
+    const GatedDeltaNetSpec& spec = gated_delta.spec;
+    const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
+        spec.value_heads * spec.value_head_dim;
+    const int value_width = spec.value_heads * spec.value_head_dim;
+    context.linear(w.normed.data(), *gated_delta.qkv, w.gated_delta_qkv.data(),
+                   rows, qkv_width, context.shape.hidden);
+    context.linear(w.normed.data(), *gated_delta.z, w.gated_delta_z.data(),
+                   rows, value_width, context.shape.hidden);
+    context.linear(w.normed.data(), *gated_delta.b, w.gated_delta_b.data(),
+                   rows, spec.value_heads, context.shape.hidden);
+    context.linear(w.normed.data(), *gated_delta.a, w.gated_delta_a.data(),
+                   rows, spec.value_heads, context.shape.hidden);
+
+    size_t flat = 0;
+    for (size_t request = 0; request < batch_models->size(); ++request) {
+        const PackedSessionContext& session = batch_models->at(request);
+        Layer& layer = session.layers().at(static_cast<size_t>(layer_index));
+        GatedDeltaNetLayer* state_layer = as_gated_delta_net(layer);
+        if (!state_layer) throw std::logic_error("packed GatedDeltaNet state binding mismatch");
+        const size_t count = row_descriptors
+            ? row_descriptors->at(request).token_count : 1;
+        for (size_t token = 0; token < count; ++token, ++flat) {
+            if (flat >= static_cast<size_t>(rows)) {
+                throw std::invalid_argument("packed GatedDeltaNet row mapping exceeds input");
+            }
+            launch_gated_delta_net(
+                w.gated_delta_qkv.data() + static_cast<size_t>(flat) * qkv_width,
+                w.gated_delta_z.data() + static_cast<size_t>(flat) * value_width,
+                w.gated_delta_b.data() + static_cast<size_t>(flat) * spec.value_heads,
+                w.gated_delta_a.data() + static_cast<size_t>(flat) * spec.value_heads,
+                gated_delta.conv_weight, gated_delta.dt_bias, gated_delta.a_log,
+                gated_delta.norm, state_layer->conv_state.data(),
+                state_layer->recurrent_state.data(),
+                w.gated_delta_output.data() + static_cast<size_t>(flat) * value_width,
+                1, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
+                spec.key_heads, spec.value_heads,
+                context.shape.numerical_policy.norm_eps, w.stream.get());
+        }
+    }
+    if (flat != static_cast<size_t>(rows)) {
+        throw std::invalid_argument("packed GatedDeltaNet row mapping is incomplete");
+    }
+    context.linear(w.gated_delta_output.data(), *gated_delta.out, w.hidden.data(),
+                   rows, context.shape.hidden, value_width,
+                   reference.options().fused_residuals ? 1.0f : 0.0f);
+}
 
 void PackedAttentionExecutor::run(
     PackedOperatorContext& context,

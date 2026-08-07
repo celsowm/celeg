@@ -37,6 +37,12 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
             buffers.conv_state_elements = mamba->conv_state.size();
             buffers.ssm_state = mamba->ssm_state.data();
             buffers.ssm_state_elements = mamba->ssm_state.size();
+        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+            buffers.is_gated_delta = true;
+            buffers.conv_state = gated_delta->conv_state.data();
+            buffers.conv_state_elements = gated_delta->conv_state.size();
+            buffers.recurrent_state = gated_delta->recurrent_state.data();
+            buffers.recurrent_state_elements = gated_delta->recurrent_state.size();
         }
         state.layer_buffers.push_back(buffers);
     }
@@ -75,6 +81,7 @@ PrefixState CudaCompiledModel::export_prefix_state() const {
     out.logits_bf16 = std::move(snapshot.logits_bf16);
     out.conv_state_bf16 = std::move(snapshot.conv_state_bf16);
     out.mamba_state_bf16 = std::move(snapshot.mamba_state_bf16);
+    out.gated_delta_state_bf16 = std::move(snapshot.gated_delta_state_bf16);
     return out;
 }
 
@@ -85,6 +92,7 @@ void CudaCompiledModel::restore_prefix_state(const PrefixState& state) {
     snapshot.logits_bf16 = state.logits_bf16;
     snapshot.conv_state_bf16 = state.conv_state_bf16;
     snapshot.mamba_state_bf16 = state.mamba_state_bf16;
+    snapshot.gated_delta_state_bf16 = state.gated_delta_state_bf16;
     auto session = make_session_state();
     SessionStore::restore_prefix(snapshot, session, session_.generation_.seed);
     session_.phase_ = SessionPhase::Prefilling;
@@ -216,6 +224,10 @@ void SessionStore::save(const std::string& path, SessionState& state) {
                 write_device(out, layer.ssm_state,
                              layer.ssm_state_elements * sizeof(__nv_bfloat16),
                              state.stream);
+            } else if (layer.is_gated_delta) {
+                write_device(out, layer.recurrent_state,
+                             layer.recurrent_state_elements * sizeof(__nv_bfloat16),
+                             state.stream);
             }
         }
     }
@@ -289,6 +301,9 @@ void SessionStore::load(const std::string& path, SessionState& state) {
             if (layer.is_mamba) {
                 read_device(in, layer.ssm_state,
                             layer.ssm_state_elements * sizeof(__nv_bfloat16));
+            } else if (layer.is_gated_delta) {
+                read_device(in, layer.recurrent_state,
+                            layer.recurrent_state_elements * sizeof(__nv_bfloat16));
             }
         }
     }
@@ -319,18 +334,22 @@ SessionStore::PrefixSnapshot SessionStore::export_prefix(const SessionState& sta
     }
     size_t conv_elements = 0;
     for (const auto& layer : state.layer_buffers) {
-        if (!layer.is_attention && !layer.is_mamba) {
+        if (!layer.is_attention && !layer.is_mamba && !layer.is_gated_delta) {
             conv_elements += layer.conv_state_elements;
         }
         if (layer.is_mamba) {
             snapshot.mamba_state_bf16.resize(snapshot.mamba_state_bf16.size() +
                 layer.conv_state_elements + layer.ssm_state_elements);
         }
+        if (layer.is_gated_delta) {
+            snapshot.gated_delta_state_bf16.resize(snapshot.gated_delta_state_bf16.size() +
+                layer.conv_state_elements + layer.recurrent_state_elements);
+        }
     }
     snapshot.conv_state_bf16.resize(conv_elements);
     size_t offset = 0;
     for (const auto& layer : state.layer_buffers) {
-        if (layer.is_attention || layer.is_mamba) continue;
+        if (layer.is_attention || layer.is_mamba || layer.is_gated_delta) continue;
         const size_t count = layer.conv_state_elements;
         if (count == 0) continue;
         CELEG_CUDA(cudaMemcpy(snapshot.conv_state_bf16.data() + offset,
@@ -353,6 +372,20 @@ SessionStore::PrefixSnapshot SessionStore::export_prefix(const SessionState& sta
                               cudaMemcpyDeviceToHost));
         mamba_offset += ssm_count;
     }
+    size_t gated_delta_offset = 0;
+    for (const auto& layer : state.layer_buffers) {
+        if (!layer.is_gated_delta) continue;
+        const size_t conv_count = layer.conv_state_elements;
+        const size_t recurrent_count = layer.recurrent_state_elements;
+        CELEG_CUDA(cudaMemcpy(snapshot.gated_delta_state_bf16.data() + gated_delta_offset,
+                              layer.conv_state, conv_count * sizeof(__nv_bfloat16),
+                              cudaMemcpyDeviceToHost));
+        gated_delta_offset += conv_count;
+        CELEG_CUDA(cudaMemcpy(snapshot.gated_delta_state_bf16.data() + gated_delta_offset,
+                              layer.recurrent_state, recurrent_count * sizeof(__nv_bfloat16),
+                              cudaMemcpyDeviceToHost));
+        gated_delta_offset += recurrent_count;
+    }
     return snapshot;
 }
 
@@ -372,17 +405,24 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
     }
     size_t expected_conv = 0;
     size_t expected_mamba = 0;
+    size_t expected_gated_delta = 0;
     for (const auto& layer : state.layer_buffers) {
-        if (!layer.is_attention && !layer.is_mamba) {
+        if (!layer.is_attention && !layer.is_mamba && !layer.is_gated_delta) {
             expected_conv += layer.conv_state_elements;
         }
         if (layer.is_mamba) expected_mamba += layer.conv_state_elements + layer.ssm_state_elements;
+        if (layer.is_gated_delta) {
+            expected_gated_delta += layer.conv_state_elements + layer.recurrent_state_elements;
+        }
     }
     if (snapshot.conv_state_bf16.size() != expected_conv) {
         throw std::invalid_argument("prefix state convolution dimensions differ");
     }
     if (snapshot.mamba_state_bf16.size() != expected_mamba) {
         throw std::invalid_argument("prefix state Mamba dimensions differ");
+    }
+    if (snapshot.gated_delta_state_bf16.size() != expected_gated_delta) {
+        throw std::invalid_argument("prefix state GatedDeltaNet dimensions differ");
     }
 
     state.position = snapshot.position;
@@ -410,6 +450,7 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
     for (const auto& layer : state.layer_buffers) {
         if (layer.is_attention) continue;
         if (layer.is_mamba) continue;
+        if (layer.is_gated_delta) continue;
         const size_t count = layer.conv_state_elements;
         if (count == 0) continue;
         CELEG_CUDA(cudaMemcpyAsync(layer.conv_state,
@@ -433,6 +474,22 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
                                    ssm_count * sizeof(__nv_bfloat16),
                                    cudaMemcpyHostToDevice, state.stream));
         mamba_offset += ssm_count;
+    }
+    size_t gated_delta_offset = 0;
+    for (const auto& layer : state.layer_buffers) {
+        if (!layer.is_gated_delta) continue;
+        const size_t conv_count = layer.conv_state_elements;
+        const size_t recurrent_count = layer.recurrent_state_elements;
+        CELEG_CUDA(cudaMemcpyAsync(layer.conv_state,
+                                 snapshot.gated_delta_state_bf16.data() + gated_delta_offset,
+                                 conv_count * sizeof(__nv_bfloat16),
+                                 cudaMemcpyHostToDevice, state.stream));
+        gated_delta_offset += conv_count;
+        CELEG_CUDA(cudaMemcpyAsync(layer.recurrent_state,
+                                 snapshot.gated_delta_state_bf16.data() + gated_delta_offset,
+                                 recurrent_count * sizeof(__nv_bfloat16),
+                                 cudaMemcpyHostToDevice, state.stream));
+        gated_delta_offset += recurrent_count;
     }
     if (state.stream != nullptr) {
         CELEG_CUDA(cudaStreamSynchronize(state.stream));

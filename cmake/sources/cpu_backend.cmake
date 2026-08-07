@@ -19,6 +19,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/kernels/rope.cpp
     src/backend/cpu/kernels/attention.cpp
     src/backend/cpu/kernels/convolution.cpp
+    src/backend/cpu/kernels/gated_delta.cpp
     src/backend/cpu/kernels/quantization.cpp
     src/backend/cpu/memory/expert_backing.cpp
     src/backend/cpu/memory/expert_cache.cpp

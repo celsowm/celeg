@@ -52,7 +52,49 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                        resources_.shape_.numerical_policy.norm_eps, stream_.get());
         prof.end(PrefillPhase::Norm, stream_.get());
 
-        if (AttentionLayer* attention = as_attention(layer)) {
+        if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+            const GatedDeltaNetSpec& spec = gated_delta->spec;
+            const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
+                spec.value_heads * spec.value_head_dim;
+            const int value_width = spec.value_heads * spec.value_head_dim;
+            prof.begin(stream_.get());
+            {
+            auto native_fanout = native_fanout_scope(
+                workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
+            linear(workspace_.prefill_normed_.data(), *gated_delta->qkv,
+                   workspace_.prefill_gated_delta_qkv_.data(), rows, qkv_width,
+                   resources_.shape_.hidden);
+            linear(workspace_.prefill_normed_.data(), *gated_delta->z,
+                   workspace_.prefill_gated_delta_z_.data(), rows, value_width,
+                   resources_.shape_.hidden);
+            linear(workspace_.prefill_normed_.data(), *gated_delta->b,
+                   workspace_.prefill_gated_delta_b_.data(), rows, spec.value_heads,
+                   resources_.shape_.hidden);
+            linear(workspace_.prefill_normed_.data(), *gated_delta->a,
+                   workspace_.prefill_gated_delta_a_.data(), rows, spec.value_heads,
+                   resources_.shape_.hidden);
+            }
+            prof.end(PrefillPhase::QkvProj, stream_.get());
+            prof.begin(stream_.get());
+            launch_gated_delta_net(workspace_.prefill_gated_delta_qkv_.data(),
+                workspace_.prefill_gated_delta_z_.data(),
+                workspace_.prefill_gated_delta_b_.data(),
+                workspace_.prefill_gated_delta_a_.data(), gated_delta->conv_weight,
+                gated_delta->dt_bias, gated_delta->a_log, gated_delta->norm,
+                gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
+                workspace_.prefill_gated_delta_output_.data(), rows, spec.conv_kernel,
+                spec.key_head_dim, spec.value_head_dim, spec.key_heads,
+                spec.value_heads, resources_.shape_.numerical_policy.norm_eps,
+                stream_.get());
+            prof.end(PrefillPhase::Conv, stream_.get());
+            prof.begin(stream_.get());
+            linear(workspace_.prefill_gated_delta_output_.data(), *gated_delta->out,
+                   workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                   value_width);
+            launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
+                         resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
+            prof.end(PrefillPhase::AttnOut, stream_.get());
+        } else if (AttentionLayer* attention = as_attention(layer)) {
             const AttentionSpec& layout = attention->layout;
             AttentionLayer* owner = attention;
             if (attention->kv_owner_layer >= 0) {
@@ -61,12 +103,15 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
             }
             const AttentionSpec& owner_layout = owner->layout;
+            const int query_projection_width = attention->query->rows;
+            const bool query_gate = layout.query_gate ||
+                query_projection_width == 2 * layout.query_width();
             prof.begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
                 workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
             linear(workspace_.prefill_normed_.data(), *attention->query,
-                   workspace_.prefill_q_.data(), rows, layout.query_width(),
+                   workspace_.prefill_q_.data(), rows, query_projection_width,
                    resources_.shape_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.prefill_normed_.data(), *attention->key,
@@ -78,6 +123,11 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             }
             }
             prof.end(PrefillPhase::QkvProj, stream_.get());
+            if (query_gate) {
+                launch_extract_query_gate(workspace_.prefill_q_.data(),
+                    workspace_.prefill_attention_gate_.data(), rows,
+                    layout.query_width(), stream_.get());
+            }
 
             prof.begin(stream_.get());
             if (layout.positional_encoding == PositionalEncodingKind::Rope) {
@@ -173,6 +223,11 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 }
             }
             prof.end(PrefillPhase::Attention, stream_.get());
+            if (query_gate) {
+                launch_sigmoid_multiply(workspace_.prefill_op_output_.data(),
+                    workspace_.prefill_attention_gate_.data(),
+                    rows * layout.query_width(), stream_.get());
+            }
 
             prof.begin(stream_.get());
             linear(workspace_.prefill_op_output_.data(), *attention->out,

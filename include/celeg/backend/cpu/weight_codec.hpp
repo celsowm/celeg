@@ -26,6 +26,8 @@ public:
     CpuLinearWeight concat(
         const std::string& synthetic,
         const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) const;
+    std::vector<CpuLinearWeight> packed_matrices(
+        const std::string& name, const std::vector<int64_t>& expected) const;
     std::vector<float> vector(const std::string& name,
                               const std::vector<int64_t>& expected) const;
 

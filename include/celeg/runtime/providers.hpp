@@ -89,9 +89,9 @@ public:
     virtual ~IVisionProviderFactory() = default;
     virtual std::string_view id() const = 0;
     virtual bool supports(std::string_view architecture_id,
-                          const std::filesystem::path& projector_path) const = 0;
+                          const std::filesystem::path& model_path) const = 0;
     virtual std::shared_ptr<const IVisualEmbeddingProvider> create(
-        const std::filesystem::path& projector_path) const = 0;
+        const std::filesystem::path& model_path) const = 0;
 };
 
 template <typename Provider>

@@ -198,8 +198,8 @@ int ExpertLayerCache::resolve_on_device(
 
     cold_host.resize(static_cast<size_t>(cold_count));
     CELEG_CUDA(cudaMemcpy(cold_host.data(), cold_list_dev_.data(),
-                              static_cast<size_t>(cold_count) * sizeof(int),
-                              cudaMemcpyDeviceToHost));
+                          static_cast<size_t>(cold_count) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
     if (route_scores_dev != nullptr) {
         cold_scores_host.resize(static_cast<size_t>(num_experts_));
         CELEG_CUDA(cudaMemcpy(cold_scores_host.data(), route_scores_dev,
@@ -383,10 +383,14 @@ void ExpertLayerCache::promote(int expert, int slot,
                         down_host_dev_[static_cast<size_t>(entry.expert)], stream);
     }
 
+    // This overload is used by the disk-backed residency path.  Its sources
+    // are ordinary/pinned host buffers owned by HostExpertCache, not CUDA
+    // device pointers.  Keep the direction explicit: cudaMemcpyDefault can
+    // misclassify a large Windows pinned allocation as a device/UVA pointer.
     CELEG_CUDA(cudaMemcpyAsync(entry.gate_up.data(), gate_up_src,
-                              gate_up_bytes_, cudaMemcpyDefault, stream));
+                              gate_up_bytes_, cudaMemcpyHostToDevice, stream));
     CELEG_CUDA(cudaMemcpyAsync(entry.down.data(), down_src,
-                              down_bytes_, cudaMemcpyDefault, stream));
+                              down_bytes_, cudaMemcpyHostToDevice, stream));
     entry.expert = expert;
     entry.protected_entry = false;
     entry.batch_pinned = false;

@@ -57,10 +57,12 @@ struct AttentionSpec {
     KvSharingSpec kv_sharing;
     float query_scale = 1.0f;
     PositionalEncodingKind positional_encoding = PositionalEncodingKind::Rope;
+    bool query_gate = false;
 
     int query_width() const { return query_heads * head_dim; }
+    int query_projection_width() const { return query_width() * (query_gate ? 2 : 1); }
     int key_value_width() const { return key_value_heads * head_dim; }
-    int projection_width() const { return query_width() + 2 * key_value_width(); }
+    int projection_width() const { return query_projection_width() + 2 * key_value_width(); }
     int rotary_pairs() const {
         if (positional_encoding == PositionalEncodingKind::None) return 0;
         return static_cast<int>(static_cast<double>(head_dim) * rotary_fraction) / 2;
@@ -127,6 +129,7 @@ struct MixtureOfExpertsSpec {
     bool has_shared_expert = false;
     int shared_intermediate_size = 0;
     bool shared_before_routed = false;
+    bool router_softmax = false;
 };
 
 struct ResidualSpec {

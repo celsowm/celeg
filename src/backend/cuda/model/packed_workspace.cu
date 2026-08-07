@@ -38,6 +38,16 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
       k(maximum_prefill_token_capacity * requirements_.maximum_projection_width),
       v(maximum_prefill_token_capacity * requirements_.maximum_projection_width),
       conv_projected(maximum_prefill_token_capacity * 3 * shape_.hidden),
+      gated_delta_qkv(maximum_prefill_token_capacity *
+                      static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_qkv_width()))),
+      gated_delta_z(maximum_prefill_token_capacity *
+                    static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_output_width()))),
+      gated_delta_b(maximum_prefill_token_capacity *
+                    static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_gate_width()))),
+      gated_delta_a(maximum_prefill_token_capacity *
+                    static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_gate_width()))),
+      gated_delta_output(maximum_prefill_token_capacity *
+                         static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_output_width()))),
       gate_up(maximum_prefill_token_capacity * 2 * requirements_.maximum_ffn_intermediate),
       activated(maximum_prefill_token_capacity * requirements_.maximum_ffn_intermediate),
       mlp_output(maximum_prefill_token_capacity * shape_.hidden),

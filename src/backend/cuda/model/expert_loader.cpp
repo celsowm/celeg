@@ -36,7 +36,8 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
     if (tensor.dtype != TensorDType::BF16) {
         throw std::runtime_error("expert weights must be BF16: " + name);
     }
-    if (tensor.shape != expected) {
+    const std::vector<int64_t> packed_shape = {experts, rows_per_expert, cols};
+    if (tensor.shape != expected && tensor.shape != packed_shape) {
         throw std::runtime_error("unexpected packed expert shape for " + name);
     }
     const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);

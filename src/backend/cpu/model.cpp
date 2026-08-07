@@ -97,11 +97,15 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
              static_cast<size_t>(embeddings.width))) {
         throw std::invalid_argument("invalid CPU prompt embedding layout");
     }
+    if (embeddings.has_rope_positions && embeddings.rope_positions.size() != tokens.size()) {
+        throw std::invalid_argument("CPU prompt M-RoPE positions must cover every token");
+    }
     state_->reset();
     state_->session_.phase = SessionPhase::Prefilling;
     state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
+    const bool has_per_token_rope = embeddings.has_rope_positions;
+    if (has_per_token_rope || tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
             state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
             state_->forward_token(tokens[i], i + 1 == tokens.size(),
@@ -118,6 +122,9 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
                 std::span<const int32_t>(tokens.data() + begin, end - begin),
                 end == tokens.size(), embeddings.empty() ? nullptr : &embeddings);
         }
+    }
+    if (embeddings.has_rope_positions) {
+        state_->session_.next_rope_position = embeddings.next_rope_position;
     }
     const auto ended = std::chrono::steady_clock::now();
     state_->session_.metrics.last_prefill_ms =

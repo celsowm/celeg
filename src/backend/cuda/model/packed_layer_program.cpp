@@ -19,6 +19,9 @@ PackedLayerProgram PackedLayerProgram::compile(const RuntimeTopology& shape) {
         case MixerKind::ShortConvolution:
             layers.push_back({PackedLayerKind::ShortConvolution});
             break;
+        case MixerKind::GatedDeltaNet:
+            layers.push_back({PackedLayerKind::GatedDeltaNet});
+            break;
         case MixerKind::Mamba2:
             layers.push_back({PackedLayerKind::Mamba2});
             break;

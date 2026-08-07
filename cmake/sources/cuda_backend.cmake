@@ -4,6 +4,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/kernels/embedding.cu
     src/backend/cuda/kernels/transform.cu
     src/backend/cuda/kernels/mamba2.cu
+    src/backend/cuda/kernels/gated_delta.cu
     src/backend/cuda/kernels/attention.cu
     src/backend/cuda/kernels/sampling.cu
     src/backend/cuda/kernels/packed.cu
@@ -41,6 +42,8 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/packed_operators.cu
     src/backend/cuda/model/packed_gemm_runtime.cpp
     src/backend/cuda/model/persistence.cu
+    src/backend/cuda/model/speculative_state.cu
+    src/backend/cuda/model/mtp_execution.cu
     src/backend/cuda/model/facade.cu
     src/backend/cuda/model/weight_layout.cu
     src/backend/cuda/model/gguf_dequant.cpp

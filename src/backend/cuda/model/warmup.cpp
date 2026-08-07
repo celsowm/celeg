@@ -27,8 +27,9 @@ void CudaCompiledModel::warmup_decode_gemms() {
     const LayerCommon& first_common = common(resources_.layers_.front());
 
     const AttentionSpec& layout = attention_layer->layout;
+    const int query_projection_width = attention_layer->query->rows;
     linear(workspace_.normed_.data(), *attention_layer->query, workspace_.qkv_output_.data(),
-           1, layout.query_width(), resources_.shape_.hidden);
+           1, query_projection_width, resources_.shape_.hidden);
     if (attention_layer->key && attention_layer->value) {
         linear(workspace_.normed_.data(), *attention_layer->key,
                workspace_.qkv_output_.data() + layout.query_width(),

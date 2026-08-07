@@ -2,6 +2,7 @@
 
 #include "celeg/detail/model/builtin_architectures.hpp"
 #include "celeg/models/gemma4/vision.hpp"
+#include "celeg/models/qwen35/vision.hpp"
 #include "celeg/runtime/context.hpp"
 #include "celeg/text/chat_template.hpp"
 #include "celeg/text/tokenizer.hpp"
@@ -48,6 +49,16 @@ public:
     }
 };
 
+class Qwen35VisionModule final : public IRuntimeModule {
+public:
+    std::string_view id() const override { return "qwen35-vision"; }
+
+    void register_into(RuntimeBuilder& builder) const override {
+        builder.vision_catalog_for_registration().add(
+            make_qwen35_vision_provider_factory());
+    }
+};
+
 } // namespace
 
 std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
@@ -69,6 +80,7 @@ std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
         "nemotron-h", &register_nemotron_h_architecture));
     modules.push_back(std::make_unique<BuiltinTextModule>());
     modules.push_back(std::make_unique<Gemma4VisionModule>());
+    modules.push_back(std::make_unique<Qwen35VisionModule>());
     return modules;
 }
 

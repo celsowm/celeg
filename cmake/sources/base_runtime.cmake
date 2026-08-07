@@ -42,6 +42,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/smollm3/tool_call_codec.cpp
     src/models/qwen35/architecture.cpp
     src/models/qwen35/naming_policy.cpp
+    src/models/qwen35/vision.cpp
     src/models/qwen35/chat_template.cpp
     src/models/nemotron_h/architecture.cpp
     src/models/nemotron_h/naming_policy.cpp

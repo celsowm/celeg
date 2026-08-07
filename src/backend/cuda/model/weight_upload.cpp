@@ -119,6 +119,36 @@ const __nv_bfloat16* WeightLoader::load_weight(
     return upload_bf16(*weights_, repo, name, expected, name);
 }
 
+const __nv_bfloat16* WeightLoader::load_rms_norm_weight(
+    const IWeightRepository& repo, const std::string& name,
+    std::vector<int64_t> expected, bool add_one) {
+    if (!add_one) return load_weight(repo, name, std::move(expected));
+    const std::string cache_key = name + "#rms_norm_add_one";
+    if (const auto cached = weights_->tensors.find(cache_key);
+        cached != weights_->tensors.end()) {
+        if (cached->second.shape != expected) {
+            throw std::runtime_error("cached RMSNorm shape mismatch for " + name);
+        }
+        return cached->second.bf16_storage.data();
+    }
+    const __nv_bfloat16* source = load_weight(repo, name, expected);
+    const size_t count = cuda_loader_detail::checked_element_count(expected);
+    std::vector<__nv_bfloat16> host(count);
+    CELEG_CUDA(cudaMemcpy(host.data(), source, count * sizeof(__nv_bfloat16),
+                          cudaMemcpyDeviceToHost));
+    for (__nv_bfloat16& value : host) {
+        value = __float2bfloat16(__bfloat162float(value) + 1.0f);
+    }
+    DeviceWeight adjusted;
+    adjusted.shape = expected;
+    adjusted.bf16_storage.reset(count);
+    CELEG_CUDA(cudaMemcpy(adjusted.bf16_storage.data(), host.data(),
+                          count * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
+    auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(adjusted));
+    if (!inserted) throw std::runtime_error("duplicate RMSNorm weight: " + name);
+    return it->second.bf16_storage.data();
+}
+
 const float* WeightLoader::load_f32_weight(
     const IWeightRepository& repo,
     const std::string& name,
@@ -159,7 +189,21 @@ const LinearWeight* WeightLoader::load_router_weight(
     // weight and would otherwise dereference a null BF16 pointer (Phase 1.1
     // hazard). We deliberately bypass load_linear_weight and go through the
     // BF16-only load_weight path.
-    const std::string name = layer_name(layer, "feed_forward.gate.weight");
+    std::string name = layer_name(layer, "feed_forward.gate.weight");
+    if (!repo.contains(name)) {
+        const std::string qwen_name = "model.language_model.layers." +
+            std::to_string(layer) + ".mlp.gate.weight";
+        if (repo.contains(qwen_name)) name = qwen_name;
+    }
+    return load_router_weight_named(repo, name, num_experts, hidden);
+}
+
+const LinearWeight* WeightLoader::load_router_weight_named(
+    const IWeightRepository& repo, const std::string& name,
+    int num_experts, int hidden) {
+    // The MoE router must always materialize as BF16 regardless of the global
+    // weight mode; the CUDA router consumes a float copy made by the setup
+    // path.  Keep this contract shared by base and auxiliary MoE layers.
     if (const auto cached = weights_->tensors.find(name);
         cached != weights_->tensors.end()) {
         if (cached->second.shape != std::vector<int64_t>{

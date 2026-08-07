@@ -56,6 +56,30 @@ int main() try {
     }
     CELEG_TEST_CHECK(rejected);
 
+    {
+        CudaModelOptions mtp;
+        mtp.enable_mtp = true;
+        bool rejected_graph = false;
+        try {
+            (void)CudaExecutionPlan::compile(mtp, 4096);
+        } catch (const std::invalid_argument&) {
+            rejected_graph = true;
+        }
+        CELEG_TEST_CHECK(rejected_graph);
+        mtp.cuda_graph = false;
+        mtp.mtp_speculative_tokens = 1;
+        auto mtp_plan = CudaExecutionPlan::compile(mtp, 4096);
+        CELEG_TEST_CHECK(mtp_plan.options().enable_mtp);
+        mtp.mtp_speculative_tokens = 2;
+        bool rejected_depth = false;
+        try {
+            (void)CudaExecutionPlan::compile(mtp, 4096);
+        } catch (const std::invalid_argument&) {
+            rejected_depth = true;
+        }
+        CELEG_TEST_CHECK(rejected_depth);
+    }
+
     // Phase 1.4: --weight-mode native must not report plain BF16 cuBLASLt. The
     // actual execution mixes BF16 (norms / conv) and GGUF MMQ (linear blocks);
     // the plan label must be honest about that, or the diagnostics contradict

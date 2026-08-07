@@ -50,6 +50,15 @@ void CpuCompiledModel::allocate_state() {
             state.ssm.resize(static_cast<size_t>(spec.intermediate_size) *
                              static_cast<size_t>(spec.state_size));
             session_.states.emplace_back(std::move(state));
+        } else if (const auto* gated_delta = gated_delta_net_operator(layer)) {
+            GatedDeltaNetState state;
+            const auto& spec = gated_delta->spec;
+            const int conv_dim = 2 * spec.key_heads * spec.key_head_dim +
+                spec.value_heads * spec.value_head_dim;
+            state.conv.resize(static_cast<size_t>(conv_dim) * spec.conv_kernel);
+            state.recurrent.resize(static_cast<size_t>(spec.value_heads) *
+                spec.key_head_dim * spec.value_head_dim);
+            session_.states.emplace_back(std::move(state));
         } else {
             ConvolutionState state;
             state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
@@ -101,6 +110,17 @@ const CpuCompiledModel::Mamba2Weights* CpuCompiledModel::mamba2_operator(
     return nullptr;
 }
 
+const CpuCompiledModel::GatedDeltaNetWeights* CpuCompiledModel::gated_delta_net_operator(
+    const WeightLayer& layer) {
+    if (const auto* gated_delta = std::get_if<GatedDeltaNetWeights>(&layer)) {
+        return gated_delta;
+    }
+    if (const auto* moe = std::get_if<MoeWeights>(&layer)) {
+        return std::get_if<GatedDeltaNetWeights>(&moe->operator_layer);
+    }
+    return nullptr;
+}
+
 CpuCompiledModel::AttentionState& CpuCompiledModel::attention_state(size_t layer) {
     return std::get<AttentionState>(session_.states.at(layer));
 }
@@ -126,6 +146,15 @@ CpuCompiledModel::Mamba2State& CpuCompiledModel::mamba2_state(size_t layer) {
 
 const CpuCompiledModel::Mamba2State& CpuCompiledModel::mamba2_state(size_t layer) const {
     return std::get<Mamba2State>(session_.states.at(layer));
+}
+
+CpuCompiledModel::GatedDeltaNetState& CpuCompiledModel::gated_delta_net_state(size_t layer) {
+    return std::get<GatedDeltaNetState>(session_.states.at(layer));
+}
+
+const CpuCompiledModel::GatedDeltaNetState& CpuCompiledModel::gated_delta_net_state(
+    size_t layer) const {
+    return std::get<GatedDeltaNetState>(session_.states.at(layer));
 }
 
 void CpuCompiledModel::release_attention_pages(AttentionState& state) noexcept {
@@ -202,6 +231,11 @@ CpuPrefixSnapshot CpuCompiledModel::export_prefix_snapshot() const {
         } else {
             if (const auto* convolution = std::get_if<ConvolutionState>(&layer)) {
                 snapshot.convolution_states.push_back(convolution->state);
+            } else if (const auto* gated_delta = std::get_if<GatedDeltaNetState>(&layer)) {
+                auto state = gated_delta->conv;
+                state.insert(state.end(), gated_delta->recurrent.begin(),
+                             gated_delta->recurrent.end());
+                snapshot.gated_delta_states.push_back(std::move(state));
             } else {
                 const auto& mamba = std::get<Mamba2State>(layer);
                 auto state = mamba.conv;
@@ -217,15 +251,18 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
                                                bool ready_for_decode) {
     size_t expected_attention = 0;
     size_t expected_convolution = 0;
+    size_t expected_gated_delta = 0;
     size_t expected_mamba = 0;
     for (const LayerState& layer : session_.states) {
         if (std::holds_alternative<AttentionState>(layer)) ++expected_attention;
         else if (std::holds_alternative<ConvolutionState>(layer)) ++expected_convolution;
+        else if (std::holds_alternative<GatedDeltaNetState>(layer)) ++expected_gated_delta;
         else ++expected_mamba;
     }
     if (snapshot.attention_pages.size() != expected_attention ||
         snapshot.attention_token_counts.size() != expected_attention ||
         snapshot.convolution_states.size() != expected_convolution ||
+        snapshot.gated_delta_states.size() != expected_gated_delta ||
         snapshot.mamba_states.size() != expected_mamba ||
         snapshot.logits.size() != workspace_.logits.size() ||
         snapshot.seen_tokens.size() != session_.seen.size() ||
@@ -245,6 +282,7 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
     reset();
     size_t attention_index = 0;
     size_t convolution_index = 0;
+    size_t gated_delta_index = 0;
     size_t mamba_index = 0;
     try {
         for (LayerState& layer : session_.states) {
@@ -254,6 +292,14 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
                 ++attention_index;
             } else if (auto* convolution = std::get_if<ConvolutionState>(&layer)) {
                 convolution->state = std::move(snapshot.convolution_states[convolution_index++]);
+            } else if (auto* gated_delta = std::get_if<GatedDeltaNetState>(&layer)) {
+                const auto& packed = snapshot.gated_delta_states[gated_delta_index++];
+                if (packed.size() != gated_delta->conv.size() + gated_delta->recurrent.size()) {
+                    throw std::invalid_argument("CPU GatedDeltaNet snapshot state shape is invalid");
+                }
+                std::copy_n(packed.begin(), gated_delta->conv.size(), gated_delta->conv.begin());
+                std::copy(packed.begin() + static_cast<std::ptrdiff_t>(gated_delta->conv.size()),
+                          packed.end(), gated_delta->recurrent.begin());
             } else {
                 auto& mamba = std::get<Mamba2State>(layer);
                 const auto& packed = snapshot.mamba_states[mamba_index++];
@@ -293,6 +339,7 @@ void CpuCompiledModel::restore_prefix_snapshot(CpuPrefixSnapshot snapshot,
 
 void CpuCompiledModel::reset() {
     session_.position_value = 0;
+    session_.next_rope_position = {0, 0, 0};
     session_.phase = SessionPhase::Empty;
     session_.metrics = {};
     session_.rng_state = session_.generation.seed;
@@ -303,6 +350,9 @@ void CpuCompiledModel::reset() {
             release_attention_pages(*attention);
         } else if (auto* convolution = std::get_if<ConvolutionState>(&state)) {
             std::fill(convolution->state.begin(), convolution->state.end(), 0.0f);
+        } else if (auto* gated_delta = std::get_if<GatedDeltaNetState>(&state)) {
+            std::fill(gated_delta->conv.begin(), gated_delta->conv.end(), 0.0f);
+            std::fill(gated_delta->recurrent.begin(), gated_delta->recurrent.end(), 0.0f);
         } else {
             auto& mamba = std::get<Mamba2State>(state);
             std::fill(mamba.conv.begin(), mamba.conv.end(), 0.0f);
@@ -333,6 +383,8 @@ CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
                 stats.kv_pages_total += pool.stats().total_pages;
             } else if constexpr (std::is_same_v<T, ConvolutionState>) {
                 stats.conv_state += value.state.size() * sizeof(float);
+            } else if constexpr (std::is_same_v<T, GatedDeltaNetState>) {
+                stats.conv_state += (value.conv.size() + value.recurrent.size()) * sizeof(float);
             } else {
                 stats.conv_state += (value.conv.size() + value.ssm.size()) * sizeof(float);
             }
@@ -343,8 +395,15 @@ CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
          workspace_.qkv.size() + workspace_.conv_projected.size() + workspace_.gate_up.size() + workspace_.activated.size() +
          workspace_.mlp_output.size() + workspace_.logits.size() + workspace_.chunk_hidden.size() +
          workspace_.chunk_residual.size() + workspace_.chunk_normed.size() + workspace_.chunk_op.size() +
-         workspace_.chunk_qkv.size() + workspace_.chunk_conv.size() + workspace_.chunk_gate_up.size() +
-         workspace_.chunk_activated.size() + workspace_.chunk_mlp.size()) * sizeof(float) + session_.seen.size();
+         workspace_.chunk_qkv.size() + workspace_.chunk_attention_gate.size() +
+         workspace_.chunk_conv.size() + workspace_.chunk_gate_up.size() +
+         workspace_.chunk_activated.size() + workspace_.chunk_mlp.size() +
+         workspace_.gated_delta_qkv.size() + workspace_.gated_delta_z.size() +
+         workspace_.gated_delta_b.size() + workspace_.gated_delta_a.size() +
+         workspace_.gated_delta_output.size() + workspace_.chunk_gated_delta_qkv.size() +
+         workspace_.chunk_gated_delta_z.size() + workspace_.chunk_gated_delta_b.size() +
+         workspace_.chunk_gated_delta_a.size() + workspace_.chunk_gated_delta_output.size()) *
+         sizeof(float) + session_.seen.size();
     return stats;
 }
 

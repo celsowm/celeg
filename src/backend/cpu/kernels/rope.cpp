@@ -2,6 +2,7 @@
 #include "celeg/backend/cpu/isa.hpp"
 
 #include <cmath>
+#include <array>
 #include <stdexcept>
 #include <vector>
 
@@ -127,6 +128,103 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
                         x1 * sin_vals[static_cast<size_t>(pair)];
             row[half + pair] = x1 * cos_vals[static_cast<size_t>(pair)] +
                                x0 * sin_vals[static_cast<size_t>(pair)];
+        }
+    }
+}
+
+namespace {
+
+int mrope_axis_for_pair(int pair, const std::array<int, 3>& sections,
+                        bool interleaved) {
+    if (interleaved) return pair % 3;
+    if (pair < sections[0]) return 0;
+    if (pair < sections[0] + sections[1]) return 1;
+    return 2;
+}
+
+void validate_mrope(int head_dim, const std::array<int, 3>& sections,
+                    float rope_theta, float rotary_fraction) {
+    if (head_dim <= 0 || (head_dim % 2) != 0 || !(rope_theta > 0.0f) ||
+        !(rotary_fraction > 0.0f) || rotary_fraction > 1.0f ||
+        sections[0] <= 0 || sections[1] <= 0 || sections[2] <= 0) {
+        throw std::invalid_argument("invalid MRoPE arguments");
+    }
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction);
+    if ((rotary_dim % 2) != 0 || sections[0] + sections[1] + sections[2] != rotary_dim / 2) {
+        throw std::invalid_argument("MRoPE sections do not match rotary dimension");
+    }
+}
+
+} // namespace
+
+void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
+                            int heads, int head_dim,
+                            const std::array<int32_t, 3>& positions,
+                            const std::array<int, 3>& sections,
+                            bool interleaved, float rope_theta, float eps,
+                            float rotary_fraction) {
+    if (!data || !norm_weight || heads <= 0) {
+        throw std::invalid_argument("invalid MRoPE QK arguments");
+    }
+    validate_mrope(head_dim, sections, rope_theta, rotary_fraction);
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction);
+    const int pairs = rotary_dim / 2;
+    std::vector<float> cos_values(static_cast<size_t>(pairs));
+    std::vector<float> sin_values(static_cast<size_t>(pairs));
+    for (int pair = 0; pair < pairs; ++pair) {
+        const int axis = mrope_axis_for_pair(pair, sections, interleaved);
+        const float frequency = std::pow(rope_theta,
+            -2.0f * static_cast<float>(pair) / static_cast<float>(rotary_dim));
+        const float angle = static_cast<float>(positions[static_cast<size_t>(axis)]) * frequency;
+        cos_values[static_cast<size_t>(pair)] = std::cos(angle);
+        sin_values[static_cast<size_t>(pair)] = std::sin(angle);
+    }
+    const float inv_dim = 1.0f / static_cast<float>(head_dim);
+    for (int head = 0; head < heads; ++head) {
+        float* row = data + static_cast<size_t>(head) * head_dim;
+        double sum = 0.0;
+        for (int d = 0; d < head_dim; ++d) sum += static_cast<double>(row[d]) * row[d];
+        const float inv = 1.0f / std::sqrt(static_cast<float>(sum * inv_dim) + eps);
+        for (int d = 0; d < head_dim; ++d) row[d] *= inv * norm_weight[d];
+        for (int pair = 0; pair < pairs; ++pair) {
+            const float a = row[pair];
+            const float b = row[pairs + pair];
+            row[pair] = a * cos_values[static_cast<size_t>(pair)] -
+                        b * sin_values[static_cast<size_t>(pair)];
+            row[pairs + pair] = b * cos_values[static_cast<size_t>(pair)] +
+                                a * sin_values[static_cast<size_t>(pair)];
+        }
+    }
+}
+
+void cpu_rope_mrope(float* data, int heads, int head_dim,
+                    const std::array<int32_t, 3>& positions,
+                    const std::array<int, 3>& sections,
+                    bool interleaved, float rope_theta,
+                    float rotary_fraction) {
+    if (!data || heads <= 0) throw std::invalid_argument("invalid MRoPE arguments");
+    validate_mrope(head_dim, sections, rope_theta, rotary_fraction);
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction);
+    const int pairs = rotary_dim / 2;
+    std::vector<float> cos_values(static_cast<size_t>(pairs));
+    std::vector<float> sin_values(static_cast<size_t>(pairs));
+    for (int pair = 0; pair < pairs; ++pair) {
+        const int axis = mrope_axis_for_pair(pair, sections, interleaved);
+        const float frequency = std::pow(rope_theta,
+            -2.0f * static_cast<float>(pair) / static_cast<float>(rotary_dim));
+        const float angle = static_cast<float>(positions[static_cast<size_t>(axis)]) * frequency;
+        cos_values[static_cast<size_t>(pair)] = std::cos(angle);
+        sin_values[static_cast<size_t>(pair)] = std::sin(angle);
+    }
+    for (int head = 0; head < heads; ++head) {
+        float* row = data + static_cast<size_t>(head) * head_dim;
+        for (int pair = 0; pair < pairs; ++pair) {
+            const float a = row[pair];
+            const float b = row[pairs + pair];
+            row[pair] = a * cos_values[static_cast<size_t>(pair)] -
+                        b * sin_values[static_cast<size_t>(pair)];
+            row[pairs + pair] = b * cos_values[static_cast<size_t>(pair)] +
+                                a * sin_values[static_cast<size_t>(pair)];
         }
     }
 }

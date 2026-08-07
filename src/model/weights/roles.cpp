@@ -21,7 +21,9 @@ std::string_view tensor_role_name(TensorRole role) {
         "mamba2_a_log", "mamba2_d", "mamba2_norm", "mamba2_output",
         "per_layer_embedding", "per_layer_context_projection", "per_layer_projection",
         "per_layer_projection_norm", "per_layer_input_gate", "per_layer_input_norm",
-        "layer_scalar", "moe_router", "moe_expert_gate", "moe_expert_up", "moe_expert_down"
+        "layer_scalar", "moe_router", "moe_expert_gate", "moe_expert_up", "moe_expert_down",
+        "moe_packed_gate_up", "moe_packed_down", "moe_shared_gate",
+        "moe_shared_up", "moe_shared_down", "moe_shared_gate_weight"
     };
     const auto index = static_cast<size_t>(role);
     return index < std::size(names) ? names[index] : "unknown";

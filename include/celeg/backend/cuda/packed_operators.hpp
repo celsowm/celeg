@@ -35,6 +35,17 @@ public:
                     int ragged_requests);
 };
 
+class PackedGatedDeltaNetExecutor {
+public:
+    static void run(PackedOperatorContext& context,
+                    const PackedSessionContext& reference,
+                    const GatedDeltaNetLayer& gated_delta,
+                    int rows,
+                    int layer_index,
+                    const std::vector<PackedSessionContext>* batch_models,
+                    const std::vector<PackedPrefillRow>* row_descriptors);
+};
+
 class PackedAttentionExecutor {
 public:
     static void run(PackedOperatorContext& context,

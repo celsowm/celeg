@@ -24,10 +24,23 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> conv_projected_;
     DeviceBuffer<__nv_bfloat16> mamba_projected_;
     DeviceBuffer<__nv_bfloat16> mamba_inner_;
+    DeviceBuffer<__nv_bfloat16> gated_delta_qkv_;
+    DeviceBuffer<__nv_bfloat16> gated_delta_z_;
+    DeviceBuffer<__nv_bfloat16> gated_delta_b_;
+    DeviceBuffer<__nv_bfloat16> gated_delta_a_;
+    DeviceBuffer<__nv_bfloat16> gated_delta_output_;
     DeviceBuffer<__nv_bfloat16> gate_up_;
     DeviceBuffer<__nv_bfloat16> activated_;
     DeviceBuffer<__nv_bfloat16> mlp_output_;
     DeviceBuffer<__nv_bfloat16> logits_;
+    DeviceBuffer<__nv_bfloat16> mtp_embedding_;
+    DeviceBuffer<__nv_bfloat16> mtp_hidden_norm_;
+    DeviceBuffer<__nv_bfloat16> mtp_fused_;
+    DeviceBuffer<__nv_bfloat16> mtp_base_hidden_;
+    DeviceBuffer<__nv_bfloat16> mtp_logits_;
+    DeviceBuffer<int32_t> mtp_token_;
+    DeviceBuffer<int32_t> mtp_candidate_;
+    DeviceBuffer<int32_t> mtp_target_candidate_;
     DeviceBuffer<__nv_bfloat16> per_layer_token_;
     DeviceBuffer<__nv_bfloat16> per_layer_context_;
     DeviceBuffer<__nv_bfloat16> per_layer_gate_;
@@ -46,9 +59,15 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> prefill_op_output_;
     DeviceBuffer<__nv_bfloat16> prefill_qkv_;
     DeviceBuffer<__nv_bfloat16> prefill_q_;
+    DeviceBuffer<__nv_bfloat16> prefill_attention_gate_;
     DeviceBuffer<__nv_bfloat16> prefill_k_;
     DeviceBuffer<__nv_bfloat16> prefill_v_;
     DeviceBuffer<__nv_bfloat16> prefill_conv_projected_;
+    DeviceBuffer<__nv_bfloat16> prefill_gated_delta_qkv_;
+    DeviceBuffer<__nv_bfloat16> prefill_gated_delta_z_;
+    DeviceBuffer<__nv_bfloat16> prefill_gated_delta_b_;
+    DeviceBuffer<__nv_bfloat16> prefill_gated_delta_a_;
+    DeviceBuffer<__nv_bfloat16> prefill_gated_delta_output_;
     DeviceBuffer<__nv_bfloat16> prefill_gate_up_;
     DeviceBuffer<__nv_bfloat16> prefill_activated_;
     DeviceBuffer<__nv_bfloat16> prefill_mlp_output_;
@@ -67,6 +86,7 @@ struct CudaWorkspace {
     DeviceBuffer<float> moe_router_scratch_;
     DeviceBuffer<float> moe_output_accum_;
     DeviceBuffer<__nv_bfloat16> moe_output_;
+    DeviceBuffer<__nv_bfloat16> moe_shared_gate_;
     DeviceBuffer<__nv_bfloat16> moe_gu_scratch_;
     DeviceBuffer<__nv_bfloat16> moe_act_scratch_;
 
@@ -76,6 +96,7 @@ struct CudaWorkspace {
     DeviceBuffer<float> moe_pf_router_scratch_;
     DeviceBuffer<float> moe_pf_output_accum_;
     DeviceBuffer<__nv_bfloat16> moe_pf_output_;
+    DeviceBuffer<__nv_bfloat16> moe_pf_shared_gate_;
     DeviceBuffer<__nv_bfloat16> moe_pf_gu_scratch_;
     DeviceBuffer<__nv_bfloat16> moe_pf_act_scratch_;
     std::vector<DeviceBuffer<float>> moe_router_float_;

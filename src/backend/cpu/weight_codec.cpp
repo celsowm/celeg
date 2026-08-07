@@ -198,6 +198,30 @@ CpuLinearWeight CpuWeightCodec::concat(
     return CpuLinearWeight::from_q4(std::move(packed));
 }
 
+std::vector<CpuLinearWeight> CpuWeightCodec::packed_matrices(
+    const std::string& name, const std::vector<int64_t>& expected) const {
+    if (!source_ || expected.size() != 3 || expected[0] <= 0 ||
+        expected[1] <= 0 || expected[2] <= 0) {
+        throw std::logic_error("packed CPU matrix source is invalid");
+    }
+    const HostTensorView tensor = source_->tensor(name);
+    if (tensor.shape != expected || tensor.dtype != TensorDType::BF16) {
+        throw std::runtime_error("unexpected packed CPU tensor: " + name);
+    }
+    const int64_t entries = expected[0];
+    const size_t rows = static_cast<size_t>(expected[1]);
+    const size_t cols = static_cast<size_t>(expected[2]);
+    const std::vector<float> values = read_vector(tensor, expected, name);
+    std::vector<CpuLinearWeight> result;
+    result.reserve(static_cast<size_t>(entries));
+    for (int64_t entry = 0; entry < entries; ++entry) {
+        const float* matrix = values.data() + static_cast<size_t>(entry) * rows * cols;
+        Q4GroupMatrix packed = quantize_float_groupwise_q4(matrix, rows, cols, group_size_);
+        result.push_back(CpuLinearWeight::from_q4(std::move(packed)));
+    }
+    return result;
+}
+
 std::vector<float> CpuWeightCodec::vector(
     const std::string& name, const std::vector<int64_t>& expected) const {
     if (reader_) return reader_->read_bf16_vector(name);

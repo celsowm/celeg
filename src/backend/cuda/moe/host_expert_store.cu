@@ -100,7 +100,7 @@ const void* HostExpertStore::store_pinned_copy(const void* src,
     return dev;
 }
 
-const void* HostExpertStore::alloc_mapped(std::size_t bytes) {
+HostExpertStore::MappedRange HostExpertStore::alloc_mapped(std::size_t bytes) {
     if (bytes == 0) {
         throw std::invalid_argument("alloc_mapped: empty range");
     }
@@ -115,7 +115,7 @@ const void* HostExpertStore::alloc_mapped(std::size_t bytes) {
     CELEG_CUDA(cudaHostGetDevicePointer(&dev, host, 0));
     registrations_.push_back(Registration{host, /*owned=*/true, /*mapped=*/false});
     pinned_bytes_ += bytes;
-    return dev;
+    return MappedRange{host, dev};
 }
 
 // ---------------------------------------------------------------------------

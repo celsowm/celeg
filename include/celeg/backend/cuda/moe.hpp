@@ -47,6 +47,7 @@ struct MoeRouterConfig {
     int num_experts = 0;
     int experts_per_token = 0;
     bool normalize_topk = false;   // norm_topk_prob
+    bool softmax = false;
     bool use_expert_bias = false;
     float routed_scaling_factor = 1.0f;
 };

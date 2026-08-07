@@ -61,6 +61,8 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
         options.cuda_graph,
         options.lt_autotune,
         options.allocate_local_kv_cache,
+        options.enable_mtp,
+        options.mtp_speculative_tokens,
         options.lt_workspace_bytes,
         options.lt_heuristics,
         options.attention_chunk_tokens,

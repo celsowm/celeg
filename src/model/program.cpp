@@ -295,6 +295,9 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             semantic.router.experts_per_token = moe->experts_per_token;
             semantic.router.normalization = moe->normalize_topk
                 ? MoeNormalizationKind::SumSelected : MoeNormalizationKind::None;
+            semantic.router.score = moe->router_softmax
+                ? MoeRouterScoreKind::SoftmaxLogits
+                : MoeRouterScoreKind::SigmoidProbabilities;
             semantic.router.has_expert_bias = moe->use_expert_bias;
             semantic.router.routed_scaling = moe->routed_scaling_factor;
             semantic.router.selection = moe->routing_group_count > 0

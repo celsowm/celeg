@@ -62,6 +62,7 @@ public:
         struct LayerBuffers {
             bool is_attention = false;
             bool is_mamba = false;
+            bool is_gated_delta = false;
             bool owns_kv_cache = false;
             // BF16 path (when kv_cache_mode == Bf16):
             __nv_bfloat16* key_cache_bf16 = nullptr;
@@ -76,6 +77,8 @@ public:
             size_t conv_state_elements = 0;
             __nv_bfloat16* ssm_state = nullptr;
             size_t ssm_state_elements = 0;
+            __nv_bfloat16* recurrent_state = nullptr;
+            size_t recurrent_state_elements = 0;
         };
         std::vector<LayerBuffers> layer_buffers;
     };
@@ -99,6 +102,7 @@ public:
         std::vector<uint16_t> logits_bf16;
         std::vector<uint16_t> conv_state_bf16;
         std::vector<uint16_t> mamba_state_bf16;
+        std::vector<uint16_t> gated_delta_state_bf16;
     };
 
     // Exports a prefix snapshot (host-side copies of seen_tokens, logits,

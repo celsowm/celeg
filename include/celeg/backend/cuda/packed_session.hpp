@@ -33,6 +33,8 @@ struct PackedCompatibilityKey {
     bool cuda_graph = false;
     bool lt_autotune = false;
     bool allocate_local_kv_cache = false;
+    bool enable_mtp = false;
+    int mtp_speculative_tokens = 1;
     size_t lt_workspace_bytes = 0;
     int lt_heuristics = 0;
     int attention_chunk_tokens = 0;

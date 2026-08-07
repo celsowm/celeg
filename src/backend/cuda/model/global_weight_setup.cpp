@@ -28,7 +28,10 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
                            LayerLoader load_layers) {
     model.resources_.weights_ = WeightLoader::acquire(
         model_path, model.resources_.options_.weight_mode,
-        model.resources_.options_.expert_offload.fingerprint());
+        model.resources_.options_.expert_offload.fingerprint() +
+        "|mtp=" + (model.resources_.options_.enable_mtp ? "1" : "0") +
+        "|mtp_steps=" +
+            std::to_string(model.resources_.options_.mtp_speculative_tokens));
     model.resources_.weight_loader_ = std::make_unique<WeightLoader>(
         model.resources_.weights_, model.resources_.options_.weight_mode);
 
@@ -42,10 +45,11 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
         repo, tensor_name(model.resources_.model_.weight_plan.requests,
                           TensorRole::TokenEmbedding),
         {model.resources_.shape_.vocab_size, model.resources_.shape_.hidden});
-    model.resources_.final_norm_ = model.resources_.weight_loader_->load_weight(
+    model.resources_.final_norm_ = model.resources_.weight_loader_->load_rms_norm_weight(
         repo, tensor_name(model.resources_.model_.weight_plan.requests,
                           TensorRole::FinalNorm),
-        {model.resources_.shape_.hidden});
+        {model.resources_.shape_.hidden},
+        model.resources_.shape_.numerical_policy.rms_norm_add_one);
 
     if (model.resources_.program_.per_layer_input.enabled) {
         const int input_size = model.resources_.program_.per_layer_input.input_size;

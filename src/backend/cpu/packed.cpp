@@ -141,9 +141,43 @@ struct CpuCompiledModel::BatchScratch {
                     shared.linear.gemm(weight, input, output, rows, beta);
                 }
             };
-            if (const AttentionWeights* attention = State::attention_operator(layer_program)) {
+            if (const GatedDeltaNetWeights* gated_delta =
+                    State::gated_delta_net_operator(layer_program)) {
+                const GatedDeltaNetSpec& spec = gated_delta->spec;
+                const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
+                    spec.value_heads * spec.value_head_dim;
+                const int value_width = spec.value_heads * spec.value_head_dim;
+                layer_gemm(gated_delta->qkv, workspace_.normed.data(),
+                           workspace_.gated_delta_qkv.data());
+                layer_gemm(gated_delta->z, workspace_.normed.data(),
+                           workspace_.gated_delta_z.data());
+                layer_gemm(gated_delta->b, workspace_.normed.data(),
+                           workspace_.gated_delta_b.data());
+                layer_gemm(gated_delta->a, workspace_.normed.data(),
+                           workspace_.gated_delta_a.data());
+                rows_for([&](size_t row) {
+                    GatedDeltaNetState& state = sessions[row]->gated_delta_net_state(index);
+                    cpu_gated_delta_net_decode(
+                        workspace_.gated_delta_qkv.data() + row * qkv_width,
+                        workspace_.gated_delta_z.data() + row * value_width,
+                        workspace_.gated_delta_b.data() + row * spec.value_heads,
+                        workspace_.gated_delta_a.data() + row * spec.value_heads,
+                        gated_delta->conv_weight.data(), gated_delta->dt_bias.data(),
+                        gated_delta->a_log.data(), gated_delta->norm.data(),
+                        state.conv.data(), state.recurrent.data(),
+                        workspace_.gated_delta_output.data() + row * value_width,
+                        spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
+                        spec.key_heads, spec.value_heads,
+                        shape.numerical_policy.norm_eps);
+                });
+                layer_gemm(gated_delta->out, workspace_.gated_delta_output.data(),
+                           workspace_.hidden.data());
+            } else if (const AttentionWeights* attention = State::attention_operator(layer_program)) {
                 const AttentionSpec& layout = shape.attention_layout(static_cast<int>(index));
                 const size_t q_width = static_cast<size_t>(layout.query_width());
+                const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
+                const bool query_gate = layout.query_gate ||
+                    q_projection_width == 2 * q_width;
                 const size_t kv_width = static_cast<size_t>(layout.key_value_width());
                 layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());
                 if (!attention->k.segments.empty()) {
@@ -151,7 +185,7 @@ struct CpuCompiledModel::BatchScratch {
                     layer_gemm(attention->v, workspace_.normed.data(), workspace_.conv_projected.data());
                 }
                 rows_for([&](size_t row) {
-                    float* q = workspace_.qkv.data() + row * q_width;
+                    float* q = workspace_.qkv.data() + row * q_projection_width;
                     float* k = workspace_.op_output.data() + row * kv_width;
                     const int position = sessions[row]->session_.position_value;
                     if (layout.positional_encoding == PositionalEncodingKind::None) {
@@ -169,6 +203,7 @@ struct CpuCompiledModel::BatchScratch {
                                              shape.numerical_policy.norm_eps,
                                              static_cast<float>(layout.rotary_fraction));
                         }
+                        for (size_t d = 0; d < q_width; ++d) q[d] *= layout.query_scale;
                     } else {
                         cpu_rope(q, layout.query_heads, layout.head_dim, position,
                                  static_cast<float>(layout.rope_theta),
@@ -192,9 +227,16 @@ struct CpuCompiledModel::BatchScratch {
                                                 workspace_.conv_projected.data() + row * kv_width);
                     }
                     sessions[row]->run_attention(state, layout,
-                                                 workspace_.qkv.data() + row * q_width,
+                                                 workspace_.qkv.data() + row * q_projection_width,
                                                  workspace_.op_output.data() + row * q_width,
                                                  sessions[row]->session_.position_value + 1);
+                    if (query_gate) {
+                        const float* gate = workspace_.qkv.data() + row * q_projection_width + q_width;
+                        float* output = workspace_.op_output.data() + row * q_width;
+                        for (size_t d = 0; d < q_width; ++d) {
+                            output[d] *= 1.0f / (1.0f + std::exp(-gate[d]));
+                        }
+                    }
                 }
                 layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
             } else {

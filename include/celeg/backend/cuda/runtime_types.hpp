@@ -50,6 +50,11 @@ struct CudaModelOptions {
     int attention_chunk_tokens = 32;
     int attention_auto_threshold = 1;
     bool allocate_local_kv_cache = true;
+    // Enable the native auxiliary predictor when the checkpoint provides an
+    // official MTP head.  The path is intentionally explicit because it
+    // changes loading, prefill scheduling, and the decode state machine.
+    bool enable_mtp = false;
+    int mtp_speculative_tokens = 1;
     ExpertOffloadOptions expert_offload;
 };
 

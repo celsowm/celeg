@@ -8,7 +8,7 @@
 
 namespace celeg {
 
-enum class PackedLayerKind { Attention, ShortConvolution, Mamba2, MlpOnly };
+enum class PackedLayerKind { Attention, ShortConvolution, GatedDeltaNet, Mamba2, MlpOnly };
 
 struct PackedLayerBinding {
     PackedLayerKind kind;

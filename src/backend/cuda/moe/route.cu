@@ -23,6 +23,7 @@ __global__ void moe_router_kernel(const float* expert_bias,
                                   float* routing_weights,
                                   int rows, int E, int K,
                                   bool use_expert_bias,
+                                  bool softmax,
                                   bool normalize_topk,
                                   float routed_scaling_factor,
                                   float* scratch) {
@@ -34,11 +35,25 @@ __global__ void moe_router_kernel(const float* expert_bias,
     float* probs = shared;
     float* scores = shared + E;
 
+    if (softmax) {
+        if (threadIdx.x == 0) {
+            float maximum = -1e30f;
+            for (int e = 0; e < E; ++e) maximum = fmaxf(maximum, logits[e]);
+            float denominator = 0.0f;
+            for (int e = 0; e < E; ++e) {
+                probs[e] = expf(logits[e] - maximum);
+                denominator += probs[e];
+            }
+            for (int e = 0; e < E; ++e) probs[e] /= denominator;
+        }
+    } else {
+        for (int e = threadIdx.x; e < E; e += blockDim.x) {
+            probs[e] = moe_sigmoid(logits[e]);
+        }
+    }
+    __syncthreads();
     for (int e = threadIdx.x; e < E; e += blockDim.x) {
-        const float logit = logits[e];
-        const float prob = moe_sigmoid(logit);
-        probs[e] = prob;
-        scores[e] = use_expert_bias ? prob + expert_bias[e] : prob;
+        scores[e] = use_expert_bias ? probs[e] + expert_bias[e] : probs[e];
     }
     __syncthreads();
 
@@ -49,17 +64,18 @@ __global__ void moe_router_kernel(const float* expert_bias,
     // replaces the O(K)-per-check scan of a taken[] array, making selection
     // O(E*K) instead of O(E*K^2).
     __shared__ int taken[64];
-    __shared__ unsigned taken_mask;
-    if (threadIdx.x == 0) taken_mask = 0u;
     if (threadIdx.x < K) taken[threadIdx.x] = -1;
     __syncthreads();
     for (int k = 0; k < K; ++k) {
         int best = -1;
         float best_s = -1e30f;
         if (threadIdx.x == k) {
-            const unsigned mask = taken_mask;
             for (int e = 0; e < E; ++e) {
-                if (mask & (1u << e)) continue;
+                bool already_taken = false;
+                for (int previous = 0; previous < k; ++previous) {
+                    if (taken[previous] == e) already_taken = true;
+                }
+                if (already_taken) continue;
                 const float s = scores[e];
                 bool better = false;
                 if (s != best_s) better = s > best_s;
@@ -67,7 +83,6 @@ __global__ void moe_router_kernel(const float* expert_bias,
                 if (better) { best = e; best_s = s; }
             }
             taken[k] = best;
-            taken_mask = mask | (1u << best);
         }
         __syncthreads();
     }
@@ -128,7 +143,7 @@ void launch_moe_router(const MoeRouterDevice& device,
         device.expert_bias,
         device.selected_experts, device.routing_weights,
         device.rows, E, cfg.experts_per_token,
-        cfg.use_expert_bias, cfg.normalize_topk, cfg.routed_scaling_factor,
+        cfg.use_expert_bias, cfg.softmax, cfg.normalize_topk, cfg.routed_scaling_factor,
         scratch_logits);
     CELEG_KERNEL_CHECK();
 }

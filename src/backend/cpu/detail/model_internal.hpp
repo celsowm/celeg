@@ -31,9 +31,28 @@ struct CpuWorkspace {
         normed.resize(rows * shape.hidden);
         const size_t attention_width = static_cast<size_t>(shape.maximum_attention_query_heads()) *
             static_cast<size_t>(shape.maximum_attention_head_dim());
-        op_output.resize(rows * std::max(attention_width,
-                         static_cast<size_t>(shape.mamba2_intermediate)));
+        op_output.resize(rows * std::max(
+            attention_width,
+            std::max(static_cast<size_t>(shape.mamba2_intermediate),
+                     static_cast<size_t>(shape.max_gated_delta_net_output_width()))));
         qkv.resize(rows * static_cast<size_t>(shape.maximum_attention_projection_width()));
+        size_t gated_delta_qkv_width = 0;
+        size_t gated_delta_z_width = 0;
+        size_t gated_delta_gate_width = 0;
+        for (const GatedDeltaNetSpec& spec : shape.gated_delta_net_layouts) {
+            gated_delta_qkv_width = std::max(gated_delta_qkv_width,
+                static_cast<size_t>(2 * spec.key_heads * spec.key_head_dim +
+                                    spec.value_heads * spec.value_head_dim));
+            gated_delta_z_width = std::max(gated_delta_z_width,
+                static_cast<size_t>(spec.value_heads * spec.value_head_dim));
+            gated_delta_gate_width = std::max(gated_delta_gate_width,
+                static_cast<size_t>(spec.value_heads));
+        }
+        gated_delta_qkv.resize(rows * gated_delta_qkv_width);
+        gated_delta_z.resize(rows * gated_delta_z_width);
+        gated_delta_b.resize(rows * gated_delta_gate_width);
+        gated_delta_a.resize(rows * gated_delta_gate_width);
+        gated_delta_output.resize(rows * gated_delta_z_width);
         size_t mamba_projection_width = 0;
         size_t mamba_conv_width = 0;
         for (const Mamba2Spec& spec : shape.mamba2_layouts) {
@@ -62,6 +81,13 @@ struct CpuWorkspace {
         chunk_op.resize(rows * static_cast<size_t>(shape.maximum_attention_query_heads()) *
                         static_cast<size_t>(shape.maximum_attention_head_dim()));
         chunk_qkv.resize(rows * static_cast<size_t>(shape.maximum_attention_projection_width()));
+        chunk_attention_gate.resize(rows * static_cast<size_t>(shape.maximum_attention_query_heads()) *
+                                    static_cast<size_t>(shape.maximum_attention_head_dim()));
+        chunk_gated_delta_qkv.resize(rows * static_cast<size_t>(shape.max_gated_delta_net_qkv_width()));
+        chunk_gated_delta_z.resize(rows * static_cast<size_t>(shape.max_gated_delta_net_output_width()));
+        chunk_gated_delta_b.resize(rows * static_cast<size_t>(shape.max_gated_delta_net_gate_width()));
+        chunk_gated_delta_a.resize(rows * static_cast<size_t>(shape.max_gated_delta_net_gate_width()));
+        chunk_gated_delta_output.resize(rows * static_cast<size_t>(shape.max_gated_delta_net_output_width()));
         chunk_conv.resize(rows * 3ULL * static_cast<size_t>(shape.hidden));
         chunk_gate_up.resize(rows * 2ULL * static_cast<size_t>(shape.max_feed_forward_intermediate));
         chunk_activated.resize(rows * static_cast<size_t>(shape.max_feed_forward_intermediate));
@@ -75,9 +101,14 @@ struct CpuWorkspace {
     std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
     std::vector<float> conv_projected, gate_up, activated, mlp_output;
     std::vector<float> mamba_projected, mamba_bcx, mamba_inner;
+    std::vector<float> gated_delta_qkv, gated_delta_z, gated_delta_b, gated_delta_a;
+    std::vector<float> gated_delta_output;
     std::vector<float> logits;
     std::vector<float> chunk_hidden, chunk_residual, chunk_normed, chunk_op;
     std::vector<float> chunk_qkv, chunk_conv, chunk_gate_up;
+    std::vector<float> chunk_attention_gate;
+    std::vector<float> chunk_gated_delta_qkv, chunk_gated_delta_z;
+    std::vector<float> chunk_gated_delta_b, chunk_gated_delta_a, chunk_gated_delta_output;
     std::vector<float> chunk_activated, chunk_mlp;
     std::vector<CpuQ8KBlock> chunk_q8;
     std::vector<float> final_normed, final_logits;
@@ -138,16 +169,33 @@ struct CpuCompiledModel {
         std::vector<float> norm;
         CpuLinearWeight out;
     };
+    struct GatedDeltaNetWeights {
+        CommonWeights common;
+        GatedDeltaNetSpec spec;
+        CpuLinearWeight qkv;
+        CpuLinearWeight z;
+        CpuLinearWeight b;
+        CpuLinearWeight a;
+        std::vector<float> conv_weight;
+        std::vector<float> dt_bias;
+        std::vector<float> a_log;
+        std::vector<float> norm;
+        CpuLinearWeight out;
+    };
     struct MlpOnlyWeights {
         CommonWeights common;
     };
     struct MoeWeights {
         CommonWeights common;
-        std::variant<AttentionWeights, ConvolutionWeights, Mamba2Weights, MlpOnlyWeights> operator_layer;
+        std::variant<AttentionWeights, ConvolutionWeights, GatedDeltaNetWeights,
+                     Mamba2Weights, MlpOnlyWeights> operator_layer;
         std::vector<float> router;
         std::vector<float> router_bias;
         std::vector<CpuLinearWeight> expert_w13;
         std::vector<CpuLinearWeight> expert_w2;
+        CpuLinearWeight shared_w13;
+        CpuLinearWeight shared_w2;
+        CpuLinearWeight shared_gate;
         int layer_index = -1;
         int num_experts = 0;
         int experts_per_token = 0;
@@ -156,7 +204,8 @@ struct CpuCompiledModel {
         bool disk_cached = false;
         float routed_scaling_factor = 1.0f;
     };
-    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights, Mamba2Weights,
+    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights,
+                                     GatedDeltaNetWeights, Mamba2Weights,
                                      MlpOnlyWeights, MoeWeights>;
 
     struct CpuWeightStore {
@@ -239,7 +288,12 @@ struct CpuCompiledModel {
         std::vector<float> conv;
         std::vector<float> ssm;
     };
-    using LayerState = std::variant<AttentionState, ConvolutionState, Mamba2State>;
+    struct GatedDeltaNetState {
+        std::vector<float> conv;
+        std::vector<float> recurrent;
+    };
+    using LayerState = std::variant<AttentionState, ConvolutionState,
+                                    GatedDeltaNetState, Mamba2State>;
 
     struct CpuSessionState {
         explicit CpuSessionState(GenerationConfig config)
@@ -249,6 +303,7 @@ struct CpuCompiledModel {
         std::vector<LayerState> states;
         std::vector<uint8_t> seen;
         int position_value = 0;
+        std::array<int32_t, 3> next_rope_position{0, 0, 0};
         uint64_t attention_parallel_calls = 0;
         SessionPhase phase = SessionPhase::Empty;
         uint64_t rng_state = 1;
@@ -277,6 +332,7 @@ struct CpuCompiledModel {
     const CommonWeights& common_weights(size_t layer) const;
     static const AttentionWeights* attention_operator(const WeightLayer& layer);
     static const ConvolutionWeights* convolution_operator(const WeightLayer& layer);
+    static const GatedDeltaNetWeights* gated_delta_net_operator(const WeightLayer& layer);
     static const Mamba2Weights* mamba2_operator(const WeightLayer& layer);
     AttentionState& attention_state(size_t layer);
     const AttentionState& attention_state(size_t layer) const;
@@ -284,6 +340,8 @@ struct CpuCompiledModel {
     const ConvolutionState& convolution_state(size_t layer) const;
     Mamba2State& mamba2_state(size_t layer);
     const Mamba2State& mamba2_state(size_t layer) const;
+    GatedDeltaNetState& gated_delta_net_state(size_t layer);
+    const GatedDeltaNetState& gated_delta_net_state(size_t layer) const;
 
     void store_kv(AttentionState& state, int position,
                   const float* key, const float* value);

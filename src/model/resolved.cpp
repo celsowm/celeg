@@ -46,11 +46,14 @@ void NumericalPolicy::validate() const {
 std::string RuntimeTopology::fingerprint() const {
     std::ostringstream out;
     out << "h" << hidden << "-l" << num_hidden_layers
+        << "-mtp" << mtp_num_hidden_layers
         << "-voc" << vocab_size
         << "-int" << intermediate << "-cc" << conv_cache
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
     out << "-m2i" << mamba2_intermediate;
+    out << "-mr" << mrope_interleaved << '-' << mrope_section[0]
+        << '-' << mrope_section[1] << '-' << mrope_section[2];
     for (MixerKind kind : mixer_kinds) {
         switch (kind) {
         case MixerKind::Attention: out << "-a"; break;
@@ -59,6 +62,11 @@ std::string RuntimeTopology::fingerprint() const {
         case MixerKind::Mamba2: out << "-m2"; break;
         case MixerKind::MlpOnly: out << "-mlp"; break;
         }
+    }
+    for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
+        out << "-gd" << layout.conv_kernel << '-' << layout.key_heads << 'x'
+            << layout.key_head_dim << '-' << layout.value_heads << 'x'
+            << layout.value_head_dim;
     }
     out << "-ff";
     for (int width : feed_forward_intermediates) out << '-' << width;
@@ -69,7 +77,8 @@ std::string RuntimeTopology::fingerprint() const {
         << numerical_policy.attention_multiplier << '-'
         << numerical_policy.residual_multiplier << '-'
         << numerical_policy.logits_divisor << '-'
-        << numerical_policy.final_logit_softcap;
+        << numerical_policy.final_logit_softcap << '-'
+        << numerical_policy.rms_norm_add_one;
     return out.str();
 }
 
@@ -77,6 +86,7 @@ std::string RuntimeTopology::summary() const {
     std::ostringstream out;
     out << "hidden=" << hidden << " intermediate=" << intermediate
         << " layers=" << num_hidden_layers
+        << " mtp_layers=" << mtp_num_hidden_layers
         << " attention_layers=" << attention_layer_count
         << " conv_layers=" << conv_layer_count
         << " vocab=" << vocab_size;
@@ -85,7 +95,7 @@ std::string RuntimeTopology::summary() const {
 
 void RuntimeTopology::validate() const {
     if (hidden <= 0 || intermediate <= 0 || vocab_size <= 0 ||
-        num_hidden_layers <= 0) {
+        num_hidden_layers <= 0 || mtp_num_hidden_layers < 0) {
         throw std::runtime_error("invalid resolved model topology");
     }
     token_policy.validate();
@@ -101,6 +111,18 @@ void RuntimeTopology::validate() const {
         validate_token_id(token, "EOS");
     }
     numerical_policy.validate();
+    if (mrope_interleaved) {
+        if (mrope_section[0] <= 0 || mrope_section[1] <= 0 || mrope_section[2] <= 0) {
+            throw std::runtime_error("M-RoPE requires three positive sections");
+        }
+        for (const AttentionSpec& layout : attention_layouts) {
+            if (layout.query_heads > 0 &&
+                layout.positional_encoding == PositionalEncodingKind::Rope &&
+                layout.rotary_pairs() <= 0) {
+                throw std::runtime_error("M-RoPE requires a positive rotary dimension");
+            }
+        }
+    }
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
             std::to_string(mixer_kinds.size()) + " expected=" +
@@ -119,6 +141,22 @@ void RuntimeTopology::validate() const {
     }
     if (static_cast<int>(attention_layouts.size()) != num_hidden_layers) {
         throw std::runtime_error("per-layer attention layout count mismatch");
+    }
+    if (gated_delta_net_layer_count > 0 &&
+        static_cast<int>(gated_delta_net_layouts.size()) != num_hidden_layers) {
+        throw std::runtime_error("per-layer GatedDeltaNet layout count mismatch");
+    }
+    for (int layer = 0; layer < num_hidden_layers; ++layer) {
+        if (mixer_kinds[static_cast<size_t>(layer)] != MixerKind::GatedDeltaNet) continue;
+        if (gated_delta_net_layouts.size() != static_cast<size_t>(num_hidden_layers)) {
+            throw std::runtime_error("GatedDeltaNet layer has no layout table");
+        }
+        const GatedDeltaNetSpec& layout = gated_delta_net_layouts[static_cast<size_t>(layer)];
+        if (layout.conv_kernel <= 0 || layout.key_head_dim <= 0 ||
+            layout.value_head_dim <= 0 || layout.key_heads <= 0 ||
+            layout.value_heads <= 0 || layout.value_heads % layout.key_heads != 0) {
+            throw std::runtime_error("invalid GatedDeltaNet layout");
+        }
     }
     if (!feed_forward_intermediates.empty() &&
         static_cast<int>(feed_forward_intermediates.size()) != num_hidden_layers) {

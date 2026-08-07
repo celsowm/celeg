@@ -36,6 +36,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     const float* raw_embedding = embeddings
         ? embeddings->at_position(static_cast<std::size_t>(session_.position_value))
         : nullptr;
+    const std::array<int32_t, 3> rope_position =
+        embeddings && embeddings->rope_at_position(static_cast<std::size_t>(session_.position_value))
+            ? *embeddings->rope_at_position(static_cast<std::size_t>(session_.position_value))
+            : session_.next_rope_position;
     if (raw_embedding) {
         if (embeddings->width != shared->shape.hidden) {
             throw std::invalid_argument("raw embedding width does not match model hidden size");
@@ -92,6 +96,28 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
             continue;
         }
+        if (const auto* gated_delta = gated_delta_net_operator(layer_program)) {
+            const GatedDeltaNetSpec& spec = gated_delta->spec;
+            shared->linear.gemv(gated_delta->qkv, workspace_.normed.data(),
+                                workspace_.gated_delta_qkv.data());
+            shared->linear.gemv(gated_delta->z, workspace_.normed.data(),
+                                workspace_.gated_delta_z.data());
+            shared->linear.gemv(gated_delta->b, workspace_.normed.data(),
+                                workspace_.gated_delta_b.data());
+            shared->linear.gemv(gated_delta->a, workspace_.normed.data(),
+                                workspace_.gated_delta_a.data());
+            auto& state = gated_delta_net_state(index);
+            cpu_gated_delta_net_decode(workspace_.gated_delta_qkv.data(),
+                workspace_.gated_delta_z.data(), workspace_.gated_delta_b.data(),
+                workspace_.gated_delta_a.data(), gated_delta->conv_weight.data(),
+                gated_delta->dt_bias.data(), gated_delta->a_log.data(),
+                gated_delta->norm.data(), state.conv.data(), state.recurrent.data(),
+                workspace_.gated_delta_output.data(), spec.conv_kernel,
+                spec.key_head_dim, spec.value_head_dim, spec.key_heads,
+                spec.value_heads, shared->shape.numerical_policy.norm_eps);
+            shared->linear.gemv(gated_delta->out, workspace_.gated_delta_output.data(),
+                                workspace_.hidden.data());
+        } else
         if (const auto* mamba = mamba2_operator(layer_program)) {
             const auto& spec = shared->shape.mamba2_layouts[index];
             const int inner = spec.intermediate_size;
@@ -143,13 +169,14 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
             continue;
         }
-        if (const auto* attention = attention_operator(layer_program)) {
+        else if (const auto* attention = attention_operator(layer_program)) {
             const AttentionSpec& layout = shared->shape.attention_layout(static_cast<int>(index));
             const int q_width = layout.query_width();
+            const int q_projection_width = layout.query_projection_width();
             const int kv_width = layout.key_value_width();
             shared->linear.gemv(attention->q, workspace_.normed.data(), workspace_.qkv.data());
             float* q = workspace_.qkv.data();
-            float* k = q + q_width;
+            float* k = q + q_projection_width;
             float* v = k + kv_width;
             if (!attention->k.segments.empty()) {
                 shared->linear.gemv(attention->k, workspace_.normed.data(), k);
@@ -160,22 +187,53 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
                 for (int i = 0; i < q_width; ++i) q[i] *= ratio;
             } else if (layout.query_key_norm) {
-                cpu_qk_norm_rope(q, attention->q_norm.data(), layout.query_heads,
-                    layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
-                    shared->shape.numerical_policy.norm_eps, static_cast<float>(layout.rotary_fraction));
-                if (!attention->k.segments.empty()) {
-                    cpu_qk_norm_rope(k, attention->k_norm.data(), layout.key_value_heads,
+                if (shared->shape.mrope_interleaved) {
+                    cpu_qk_norm_rope_mrope(q, attention->q_norm.data(), layout.query_heads,
+                        layout.head_dim, rope_position, shared->shape.mrope_section,
+                        true, static_cast<float>(layout.rope_theta),
+                        shared->shape.numerical_policy.norm_eps,
+                        static_cast<float>(layout.rotary_fraction));
+                } else {
+                    cpu_qk_norm_rope(q, attention->q_norm.data(), layout.query_heads,
                         layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
                         shared->shape.numerical_policy.norm_eps, static_cast<float>(layout.rotary_fraction));
                 }
-            } else {
-                cpu_rope(q, layout.query_heads, layout.head_dim,
-                         session_.position_value, static_cast<float>(layout.rope_theta),
-                         static_cast<float>(layout.rotary_fraction));
                 if (!attention->k.segments.empty()) {
-                    cpu_rope(k, layout.key_value_heads, layout.head_dim,
+                    if (shared->shape.mrope_interleaved) {
+                        cpu_qk_norm_rope_mrope(k, attention->k_norm.data(), layout.key_value_heads,
+                            layout.head_dim, rope_position, shared->shape.mrope_section,
+                            true, static_cast<float>(layout.rope_theta),
+                            shared->shape.numerical_policy.norm_eps,
+                            static_cast<float>(layout.rotary_fraction));
+                    } else {
+                        cpu_qk_norm_rope(k, attention->k_norm.data(), layout.key_value_heads,
+                            layout.head_dim, session_.position_value, static_cast<float>(layout.rope_theta),
+                            shared->shape.numerical_policy.norm_eps, static_cast<float>(layout.rotary_fraction));
+                    }
+                }
+                for (int i = 0; i < q_width; ++i) q[i] *= layout.query_scale;
+            } else {
+                if (shared->shape.mrope_interleaved) {
+                    cpu_rope_mrope(q, layout.query_heads, layout.head_dim, rope_position,
+                                   shared->shape.mrope_section, true,
+                                   static_cast<float>(layout.rope_theta),
+                                   static_cast<float>(layout.rotary_fraction));
+                } else {
+                    cpu_rope(q, layout.query_heads, layout.head_dim,
                              session_.position_value, static_cast<float>(layout.rope_theta),
                              static_cast<float>(layout.rotary_fraction));
+                }
+                if (!attention->k.segments.empty()) {
+                    if (shared->shape.mrope_interleaved) {
+                        cpu_rope_mrope(k, layout.key_value_heads, layout.head_dim, rope_position,
+                                       shared->shape.mrope_section, true,
+                                       static_cast<float>(layout.rope_theta),
+                                       static_cast<float>(layout.rotary_fraction));
+                    } else {
+                        cpu_rope(k, layout.key_value_heads, layout.head_dim,
+                                 session_.position_value, static_cast<float>(layout.rope_theta),
+                                 static_cast<float>(layout.rotary_fraction));
+                    }
                 }
                 const float ratio = shared->shape.numerical_policy.attention_multiplier /
                     (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
@@ -188,6 +246,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             run_attention(state, layout, q, workspace_.op_output.data(),
                           session_.position_value + 1);
+            if (layout.query_gate) {
+                const float* gate = q + q_width;
+                for (int i = 0; i < q_width; ++i) {
+                    workspace_.op_output[i] *= 1.0f / (1.0f + std::exp(-gate[i]));
+                }
+            }
             shared->linear.gemv(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
         } else {
             const auto* convolution = convolution_operator(layer_program);
@@ -237,9 +301,25 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             shared->linear.gemv_raw(moe->router.data(), workspace_.normed.data(), workspace_.moe_router_logits.data(),
                                     E, shared->shape.hidden);
 
+            float router_max = -std::numeric_limits<float>::infinity();
+            if (semantics.router.score == MoeRouterScoreKind::SoftmaxLogits) {
+                for (int e = 0; e < E; ++e) {
+                    router_max = std::max(router_max,
+                        workspace_.moe_router_logits[static_cast<size_t>(e)]);
+                }
+            }
+            float router_sum = 0.0f;
             for (int e = 0; e < E; ++e) {
-                workspace_.moe_router_probs[static_cast<size_t>(e)] =
-                    moe_sigmoid(workspace_.moe_router_logits[static_cast<size_t>(e)]);
+                const float probability = semantics.router.score == MoeRouterScoreKind::SoftmaxLogits
+                    ? std::exp(workspace_.moe_router_logits[static_cast<size_t>(e)] - router_max)
+                    : moe_sigmoid(workspace_.moe_router_logits[static_cast<size_t>(e)]);
+                workspace_.moe_router_probs[static_cast<size_t>(e)] = probability;
+                if (semantics.router.score == MoeRouterScoreKind::SoftmaxLogits) router_sum += probability;
+            }
+            if (semantics.router.score == MoeRouterScoreKind::SoftmaxLogits) {
+                for (float& probability : workspace_.moe_router_probs) probability /= router_sum;
+            }
+            for (int e = 0; e < E; ++e) {
                 float score = workspace_.moe_router_probs[static_cast<size_t>(e)];
                 if (semantics.router.has_expert_bias && e < static_cast<int>(moe->router_bias.size())) {
                     score += moe->router_bias[static_cast<size_t>(e)];
@@ -296,6 +376,22 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 shared->linear.gemv(*w2, workspace_.activated.data(), workspace_.op_output.data());
                 for (int j = 0; j < shared->shape.hidden; ++j) {
                     workspace_.mlp_output[static_cast<size_t>(j)] += rw * workspace_.op_output[static_cast<size_t>(j)];
+                }
+            }
+            if (semantics.shared) {
+                const int shared_intermediate = semantics.shared->mlp.intermediate_size;
+                shared->linear.gemv(moe->shared_w13, workspace_.normed.data(),
+                                    workspace_.gate_up.data());
+                cpu_swiglu(workspace_.gate_up.data(), workspace_.activated.data(),
+                           shared_intermediate);
+                shared->linear.gemv(moe->shared_w2, workspace_.activated.data(),
+                                    workspace_.op_output.data());
+                shared->linear.gemv(moe->shared_gate, workspace_.normed.data(),
+                                    workspace_.moe_router_probs.data());
+                const float gate = moe_sigmoid(workspace_.moe_router_probs.front());
+                for (int j = 0; j < shared->shape.hidden; ++j) {
+                    workspace_.mlp_output[static_cast<size_t>(j)] += gate *
+                        workspace_.op_output[static_cast<size_t>(j)];
                 }
             }
             if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
@@ -366,6 +462,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
     }
     ++session_.position_value;
+    if (!embeddings || !embeddings->rope_at_position(static_cast<std::size_t>(session_.position_value - 1))) {
+        for (int32_t& value : session_.next_rope_position) ++value;
+    }
 }
 
 void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
@@ -503,9 +602,37 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             }
         };
 
-        if (const auto* attention = attention_operator(layer_program)) {
+        if (const auto* gated_delta = gated_delta_net_operator(layer_program)) {
+            const GatedDeltaNetSpec& spec = gated_delta->spec;
+            linear_started = Clock::now();
+            layer_gemm(gated_delta->qkv, workspace_.chunk_normed.data(),
+                       workspace_.chunk_gated_delta_qkv.data());
+            layer_gemm(gated_delta->z, workspace_.chunk_normed.data(),
+                       workspace_.chunk_gated_delta_z.data());
+            layer_gemm(gated_delta->b, workspace_.chunk_normed.data(),
+                       workspace_.chunk_gated_delta_b.data());
+            layer_gemm(gated_delta->a, workspace_.chunk_normed.data(),
+                       workspace_.chunk_gated_delta_a.data());
+            session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+            auto gated_delta_started = Clock::now();
+            GatedDeltaNetState& state = gated_delta_net_state(index);
+            cpu_gated_delta_net_prefill(workspace_.chunk_gated_delta_qkv.data(),
+                workspace_.chunk_gated_delta_z.data(), workspace_.chunk_gated_delta_b.data(),
+                workspace_.chunk_gated_delta_a.data(), gated_delta->conv_weight.data(),
+                gated_delta->dt_bias.data(), gated_delta->a_log.data(),
+                gated_delta->norm.data(), state.conv.data(), state.recurrent.data(),
+                workspace_.chunk_gated_delta_output.data(), rows, spec.conv_kernel,
+                spec.key_head_dim, spec.value_head_dim, spec.key_heads,
+                spec.value_heads, shape.numerical_policy.norm_eps);
+            session_.prefill_profile.shortconv_ms += milliseconds_since(gated_delta_started);
+            linear_started = Clock::now();
+            layer_gemm(gated_delta->out, workspace_.chunk_gated_delta_output.data(),
+                       workspace_.chunk_hidden.data());
+            session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+        } else if (const auto* attention = attention_operator(layer_program)) {
             const AttentionSpec& layout = shape.attention_layout(static_cast<int>(index));
             const size_t q_width = static_cast<size_t>(layout.query_width());
+            const size_t q_projection_width = static_cast<size_t>(layout.query_projection_width());
             const size_t kv_width = static_cast<size_t>(layout.key_value_width());
             linear_started = Clock::now();
             layer_gemm(attention->q, workspace_.chunk_normed.data(),
@@ -518,7 +645,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             }
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             parallel_rows(shared->pool, rows, [&](size_t row) {
-                float* q = workspace_.chunk_qkv.data() + row * q_width;
+                float* projected_q = workspace_.chunk_qkv.data() + row * q_projection_width;
+                float* q = projected_q;
                 float* k = workspace_.chunk_op.data() + row * kv_width;
                 const int position = base_position + static_cast<int>(row);
                 if (layout.positional_encoding == PositionalEncodingKind::None) {
@@ -549,6 +677,15 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
                     for (size_t d = 0; d < q_width; ++d) q[d] *= ratio;
                 }
+                if (layout.query_key_norm) {
+                    for (size_t d = 0; d < q_width; ++d) q[d] *= layout.query_scale;
+                }
+                if (layout.query_gate) {
+                    std::copy_n(projected_q + q_width, q_width,
+                                workspace_.chunk_attention_gate.data() + row * q_width);
+                    std::copy_n(q, q_width,
+                                workspace_.chunk_qkv.data() + row * q_width);
+                }
             });
             const int owner = shared->layer_to_kv_owner.at(index);
             AttentionState& state = attention_state(static_cast<size_t>(owner));
@@ -567,6 +704,15 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   shared->pool,
                                   layout.mask == AttentionMaskKind::SlidingCausal
                                       ? layout.sliding_window : 0);
+            if (layout.query_gate) {
+                for (size_t row = 0; row < rows; ++row) {
+                    const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                    float* output = workspace_.chunk_op.data() + row * q_width;
+                    for (size_t d = 0; d < q_width; ++d) {
+                        output[d] *= 1.0f / (1.0f + std::exp(-gate[d]));
+                    }
+                }
+            }
             session_.prefill_profile.attention_ms += milliseconds_since(attention_started);
             linear_started = Clock::now();
             layer_gemm(attention->out, workspace_.chunk_op.data(),
@@ -631,13 +777,28 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     row * static_cast<size_t>(experts);
                 const float* logits = workspace_.moe_router_logits.data() +
                     row * static_cast<size_t>(experts);
+                const float row_max = semantics.router.score == MoeRouterScoreKind::SoftmaxLogits
+                    ? *std::max_element(logits, logits + experts) : 0.0f;
+                float row_sum = 0.0f;
                 for (int expert = 0; expert < experts; ++expert) {
-                    const float probability = moe_sigmoid(logits[expert]);
+                    const float probability = semantics.router.score == MoeRouterScoreKind::SoftmaxLogits
+                        ? std::exp(logits[expert] - row_max)
+                        : moe_sigmoid(logits[expert]);
                     probabilities[expert] = probability;
+                    row_sum += probability;
                     scored[expert] = {
                         probability + (semantics.router.has_expert_bias &&
                             expert < static_cast<int>(moe->router_bias.size())
                             ? moe->router_bias[expert] : 0.0f), expert};
+                }
+                if (semantics.router.score == MoeRouterScoreKind::SoftmaxLogits) {
+                    for (int expert = 0; expert < experts; ++expert) {
+                        probabilities[expert] /= row_sum;
+                        scored[expert].first = probabilities[expert] +
+                            (semantics.router.has_expert_bias &&
+                             expert < static_cast<int>(moe->router_bias.size())
+                                ? moe->router_bias[expert] : 0.0f);
+                    }
                 }
                 std::partial_sort(scored, scored + selected, scored + experts,
                                   [](const std::pair<float, int>& a,

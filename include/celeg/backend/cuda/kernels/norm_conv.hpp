@@ -25,11 +25,19 @@ void launch_gated_gelu_tanh(const __nv_bfloat16* gate_up, __nv_bfloat16* out,
                             int count, cudaStream_t stream);
 void launch_multiply(__nv_bfloat16* x, const __nv_bfloat16* y, int count,
                      cudaStream_t stream);
+void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
+                             int count, cudaStream_t stream);
+void launch_extract_query_gate(__nv_bfloat16* projected, __nv_bfloat16* gate,
+                               int rows, int width, cudaStream_t stream);
 void launch_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* y,
                              int rows, int width, int y_stride, int y_offset,
                              cudaStream_t stream);
 void launch_scale_by_scalar(__nv_bfloat16* x, const __nv_bfloat16* scalar,
                             int count, cudaStream_t stream);
+void launch_sigmoid_scale_by_scalar(__nv_bfloat16* x, const __nv_bfloat16* scalar,
+                                    int count, cudaStream_t stream);
+void launch_sigmoid_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* gate,
+                                     int rows, int width, cudaStream_t stream);
 
 void launch_conv_decode(const __nv_bfloat16* projected_bcx,
                        const __nv_bfloat16* conv_weight,

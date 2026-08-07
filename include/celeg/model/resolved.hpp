@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,6 +28,7 @@ struct NumericalPolicy {
     float residual_multiplier = 1.0f;
     float logits_divisor = 1.0f;
     float final_logit_softcap = 0.0f;
+    bool rms_norm_add_one = false;
 
     void validate() const;
 };
@@ -46,6 +48,8 @@ struct RuntimeTopology {
     TokenPolicy token_policy;
     NumericalPolicy numerical_policy;
     std::string rope_type = "default";
+    bool mrope_interleaved = false;
+    std::array<int, 3> mrope_section{0, 0, 0};
     std::vector<MixerKind> mixer_kinds;
     std::vector<FeedForwardKind> feed_forward_kinds;
     std::vector<int> attention_slot_for_layer;
@@ -56,14 +60,17 @@ struct RuntimeTopology {
     int mamba2_layer_count = 0;
     int mlp_only_layer_count = 0;
     int mamba2_intermediate = 0;
+    std::vector<GatedDeltaNetSpec> gated_delta_net_layouts;
     std::vector<Mamba2Spec> mamba2_layouts;
     std::vector<MlpBlockSpec> mlp_only_layouts;
     int dense_intermediate = 0;
     int moe_intermediate = 0;
+    int shared_expert_intermediate = 0;
     int num_dense_layers = 0;
     int num_experts = 0;
     int experts_per_token = 0;
     bool normalize_topk = false;
+    bool moe_router_softmax = false;
     bool use_expert_bias = false;
     float routed_scaling_factor = 1.0f;
     std::vector<AttentionSpec> attention_layouts;
@@ -73,6 +80,10 @@ struct RuntimeTopology {
     bool has_split_attention_norms = false;
     bool has_per_layer_input = false;
     int per_layer_input_size = 0;
+    // Auxiliary multi-token predictor depth. Kept after the established
+    // execution fields so older backend translation units cannot misread the
+    // existing topology while a build is being relinked.
+    int mtp_num_hidden_layers = 0;
 
     int maximum_attention_projection_width() const {
         int maximum = 0;
@@ -92,6 +103,28 @@ struct RuntimeTopology {
         int maximum = 0;
         for (const AttentionSpec& layout : attention_layouts) {
             maximum = std::max(maximum, layout.head_dim);
+        }
+        return maximum;
+    }
+    int max_gated_delta_net_qkv_width() const {
+        int maximum = 0;
+        for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
+            maximum = std::max(maximum, 2 * layout.key_heads * layout.key_head_dim +
+                layout.value_heads * layout.value_head_dim);
+        }
+        return maximum;
+    }
+    int max_gated_delta_net_output_width() const {
+        int maximum = 0;
+        for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
+            maximum = std::max(maximum, layout.value_heads * layout.value_head_dim);
+        }
+        return maximum;
+    }
+    int max_gated_delta_net_gate_width() const {
+        int maximum = 0;
+        for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
+            maximum = std::max(maximum, layout.value_heads);
         }
         return maximum;
     }

@@ -260,6 +260,8 @@ struct ExpertOffloadPlanInputs {
     std::size_t non_expert_weight_bytes = 0;
     std::size_t workspace_bytes = 0;
     int context_tokens = 0;
+    int extra_moe_layers = 0;
+    std::size_t extra_kv_reservation_bytes = 0;
 };
 
 // Computes the offload layout. When offload is disabled the returned plan has

@@ -93,13 +93,14 @@ celeg::CheckpointMetadata gemma_metadata(int hidden, int intermediate, int layer
     return metadata;
 }
 
-celeg::CheckpointMetadata qwen35_metadata() {
+celeg::CheckpointMetadata qwen35_metadata(bool moe = false) {
     celeg::CheckpointMetadata metadata;
-    metadata.values["model_type"] = std::string("qwen3_5");
-    metadata.values["text_config.model_type"] = std::string("qwen3_5_text");
+    metadata.values["model_type"] = std::string(moe ? "qwen3_5_moe" : "qwen3_5");
+    metadata.values["text_config.model_type"] = std::string(moe ? "qwen3_5_moe_text" : "qwen3_5_text");
     metadata.values["text_config.hidden_size"] = int64_t(1024);
     metadata.values["text_config.intermediate_size"] = int64_t(3584);
     metadata.values["text_config.num_hidden_layers"] = int64_t(4);
+    metadata.values["text_config.mtp_num_hidden_layers"] = int64_t(1);
     metadata.values["text_config.num_attention_heads"] = int64_t(8);
     metadata.values["text_config.num_key_value_heads"] = int64_t(2);
     metadata.values["text_config.head_dim"] = int64_t(256);
@@ -113,6 +114,13 @@ celeg::CheckpointMetadata qwen35_metadata() {
     metadata.values["text_config.linear_value_head_dim"] = int64_t(128);
     metadata.values["text_config.linear_num_key_heads"] = int64_t(16);
     metadata.values["text_config.linear_num_value_heads"] = int64_t(16);
+    if (moe) {
+        metadata.values["tie_word_embeddings"] = false;
+        metadata.values["text_config.moe_intermediate_size"] = int64_t(512);
+        metadata.values["text_config.shared_expert_intermediate_size"] = int64_t(512);
+        metadata.values["text_config.num_experts"] = int64_t(256);
+        metadata.values["text_config.num_experts_per_tok"] = int64_t(8);
+    }
     metadata.values["text_config.layer_types"] = std::vector<std::string>{
         "linear_attention", "linear_attention", "linear_attention", "full_attention"};
     metadata.repository_hint = "Qwen/Qwen3.5-0.8B";
@@ -172,11 +180,28 @@ int main() {
     qwen_checkpoint.metadata = qwen_metadata;
     const auto qwen = qwen_architecture.resolve(qwen_checkpoint);
     CELEG_TEST_CHECK(qwen.topology.gated_delta_net_layer_count == 3);
+    CELEG_TEST_CHECK(qwen.topology.mtp_num_hidden_layers == 1);
     CELEG_TEST_CHECK(qwen.topology.attention_layer_count == 1);
     CELEG_TEST_CHECK(qwen.graph.layers[0].mixer_kind() == celeg::MixerKind::GatedDeltaNet);
     CELEG_TEST_CHECK(qwen.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
-    CELEG_TEST_CHECK(!qwen.capabilities.supports_cpu && !qwen.capabilities.supports_cuda);
+    CELEG_TEST_CHECK(qwen.capabilities.supports_cpu && qwen.capabilities.supports_cuda);
     CELEG_TEST_CHECK(qwen.weight_plan.requests.size() > 40);
+
+    const auto qwen_moe_metadata = qwen35_metadata(true);
+    const auto& qwen_moe_architecture = catalog->select(qwen_moe_metadata);
+    celeg::CheckpointView qwen_moe_checkpoint;
+    qwen_moe_checkpoint.metadata = qwen_moe_metadata;
+    const auto qwen_moe = qwen_moe_architecture.resolve(qwen_moe_checkpoint);
+    CELEG_TEST_CHECK(qwen_moe.graph.has_moe());
+    CELEG_TEST_CHECK(qwen_moe.topology.num_experts == 256);
+    CELEG_TEST_CHECK(qwen_moe.topology.experts_per_token == 8);
+    CELEG_TEST_CHECK(qwen_moe.topology.moe_router_softmax);
+    CELEG_TEST_CHECK(qwen_moe.topology.shared_expert_intermediate == 512);
+    CELEG_TEST_CHECK(!qwen_moe.capabilities.tied_embeddings);
+    const auto& qwen_moe_spec = std::get<celeg::MixtureOfExpertsSpec>(
+        qwen_moe.graph.layers.front().feed_forward);
+    CELEG_TEST_CHECK(qwen_moe_spec.has_shared_expert);
+    CELEG_TEST_CHECK(qwen_moe_spec.shared_intermediate_size == 512);
 
     const auto nemotron_metadata = nemotron_h_metadata();
     const auto& nemotron_architecture = catalog->select(nemotron_metadata);

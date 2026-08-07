@@ -57,6 +57,11 @@ public:
         const IWeightRepository& repo,
         const std::string& name,
         std::vector<int64_t> expected = {});
+    const __nv_bfloat16* load_rms_norm_weight(
+        const IWeightRepository& repo,
+        const std::string& name,
+        std::vector<int64_t> expected,
+        bool add_one);
 
     // Loads a 2D linear weight, quantizing to Int8/Int4 if the weight mode
     // demands it. Returns a LinearWeight view into the shared arena.
@@ -99,6 +104,19 @@ public:
         const IWeightRepository& repo, int layer,
         int num_experts, int moe_intermediate, int hidden);
 
+    // General MoE names for architectures whose expert tensors are stored as
+    // individual gate/up/down projections instead of the legacy
+    // feed_forward.experts.{n}.w{1,2,3} spelling. `experts_prefix` names the
+    // collection, for example `mtp.layers.0.mlp.experts`.
+    const ExpertLinearWeight* load_moe_gate_up_named(
+        const IWeightRepository& repo, const std::string& experts_prefix,
+        const std::string& gate_name, const std::string& up_name,
+        int num_experts, int moe_intermediate, int hidden);
+    const ExpertLinearWeight* load_moe_down_named(
+        const IWeightRepository& repo, const std::string& experts_prefix,
+        const std::string& down_name,
+        int num_experts, int moe_intermediate, int hidden);
+
     // Loads an F32 tensor (e.g. expert_bias) and returns a device pointer.
     const float* load_f32_weight(
         const IWeightRepository& repo,
@@ -121,6 +139,9 @@ public:
     //   model.layers.{layer}.feed_forward.gate.weight
     const LinearWeight* load_router_weight(
         const IWeightRepository& repo, int layer,
+        int num_experts, int hidden);
+    const LinearWeight* load_router_weight_named(
+        const IWeightRepository& repo, const std::string& name,
         int num_experts, int hidden);
 
     // Result of loading a MoE layer's experts into host-backed storage for
@@ -145,11 +166,23 @@ public:
         int num_experts, int moe_intermediate, int hidden,
         class HostExpertStore& store, ExpertHostMode host_mode);
 
+    HostExpertLayer load_moe_experts_host_named(
+        const IWeightRepository& repo, const std::string& experts_prefix,
+        const std::string& gate_name, const std::string& up_name,
+        const std::string& down_name, int num_experts,
+        int moe_intermediate, int hidden, class HostExpertStore& store,
+        ExpertHostMode host_mode);
+
     // Builds a catalog of on-disk/safetensors expert locations for a MoE layer
     // without eagerly materializing any bytes.
     std::vector<ExpertLocation> build_expert_catalog(
         const IWeightRepository& repo, int layer,
         int num_experts, int moe_intermediate, int hidden);
+    std::vector<ExpertLocation> build_expert_catalog_named(
+        const IWeightRepository& repo, const std::string& experts_prefix,
+        const std::string& gate_name, const std::string& up_name,
+        const std::string& down_name, int num_experts,
+        int moe_intermediate, int hidden);
 
     WeightMode weight_mode() const { return weight_mode_; }
 

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <vector>
 
 namespace celeg {
@@ -12,6 +13,12 @@ struct PromptEmbedding {
     int width = 0;
     std::vector<std::size_t> positions;
     std::vector<float> values;
+    // Optional Qwen-style three-axis positions for the complete prompt.
+    // When present this vector has one entry per prompt token, including
+    // ordinary text tokens and visual placeholders.
+    std::vector<std::array<int32_t, 3>> rope_positions;
+    std::array<int32_t, 3> next_rope_position{0, 0, 0};
+    bool has_rope_positions = false;
 
     bool empty() const { return positions.empty(); }
 
@@ -22,6 +29,11 @@ struct PromptEmbedding {
             }
         }
         return nullptr;
+    }
+
+    const std::array<int32_t, 3>* rope_at_position(std::size_t position) const {
+        if (!has_rope_positions || position >= rope_positions.size()) return nullptr;
+        return &rope_positions[position];
     }
 };
 
@@ -48,6 +60,11 @@ struct RuntimeMetrics {
     uint64_t prefill_tokens = 0;
     double cumulative_decode_ms = 0.0;
     uint64_t decoded_tokens = 0;
+    uint64_t mtp_forward_tokens = 0;
+    uint64_t mtp_verified_tokens = 0;
+    uint64_t mtp_accepted_tokens = 0;
+    uint64_t mtp_rejected_tokens = 0;
+    uint64_t mtp_used_tokens = 0;
 
     double prefill_tokens_per_second() const;
     double decode_tokens_per_second() const;
@@ -72,6 +89,7 @@ struct PrefixState {
     std::vector<uint16_t> logits_bf16;
     std::vector<uint16_t> conv_state_bf16;
     std::vector<uint16_t> mamba_state_bf16;
+    std::vector<uint16_t> gated_delta_state_bf16;
 };
 
 struct GenerationConfig {

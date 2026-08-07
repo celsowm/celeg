@@ -150,6 +150,46 @@ void launch_multiply(__nv_bfloat16* x, const __nv_bfloat16* y, int count,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__global__ void sigmoid_multiply_kernel(__nv_bfloat16* x,
+                                        const __nv_bfloat16* gate, int count) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index < count) {
+        const float value = bf16_float(gate[index]);
+        x[index] = __float2bfloat16(bf16_float(x[index]) /
+            (1.0f + expf(-value)));
+    }
+}
+
+void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
+                             int count, cudaStream_t stream) {
+    sigmoid_multiply_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, gate, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void extract_query_gate_kernel(__nv_bfloat16* projected,
+                                          __nv_bfloat16* gate,
+                                          int rows, int width) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * width;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / width);
+    const int column = static_cast<int>(index % width);
+    const size_t source = static_cast<size_t>(row) * width * 2 + column;
+    const size_t source_gate = source + width;
+    const __nv_bfloat16 q = projected[source];
+    const __nv_bfloat16 g = projected[source_gate];
+    projected[index] = q;
+    gate[index] = g;
+}
+
+void launch_extract_query_gate(__nv_bfloat16* projected, __nv_bfloat16* gate,
+                               int rows, int width, cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * width;
+    extract_query_gate_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
+        projected, gate, rows, width);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
 __global__ void multiply_strided_kernel(__nv_bfloat16* x, const __nv_bfloat16* y,
                                         int rows, int width, int y_stride,
                                         int y_offset) {
@@ -183,5 +223,43 @@ __global__ void scale_by_scalar_kernel(__nv_bfloat16* x,
 void launch_scale_by_scalar(__nv_bfloat16* x, const __nv_bfloat16* scalar,
                             int count, cudaStream_t stream) {
     scale_by_scalar_kernel<<<(count + 255) / 256, 256, 0, stream>>>(x, scalar, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void sigmoid_scale_by_scalar_kernel(__nv_bfloat16* x,
+                                               const __nv_bfloat16* scalar,
+                                               int count) {
+    const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (index < count) {
+        const float gate = 1.0f / (1.0f + expf(-bf16_float(*scalar)));
+        x[index] = __float2bfloat16(bf16_float(x[index]) * gate);
+    }
+}
+
+void launch_sigmoid_scale_by_scalar(__nv_bfloat16* x,
+                                    const __nv_bfloat16* scalar,
+                                    int count, cudaStream_t stream) {
+    sigmoid_scale_by_scalar_kernel<<<(count + 255) / 256, 256, 0, stream>>>(
+        x, scalar, count);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+__global__ void sigmoid_multiply_strided_kernel(__nv_bfloat16* x,
+                                                const __nv_bfloat16* gate,
+                                                int rows, int width) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * width;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / width);
+    const float value = bf16_float(x[index]);
+    const float g = bf16_float(gate[row]);
+    x[index] = __float2bfloat16(value / (1.0f + expf(-g)));
+}
+
+void launch_sigmoid_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* gate,
+                                     int rows, int width, cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * width;
+    sigmoid_multiply_strided_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
+        x, gate, rows, width);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

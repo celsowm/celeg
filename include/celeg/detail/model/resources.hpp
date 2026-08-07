@@ -32,6 +32,24 @@ struct CudaPerLayerInputResources {
     }
 };
 
+struct CudaMtpResources {
+    bool enabled = false;
+    int layer_count = 0;
+    const LinearWeight* fc = nullptr;
+    const __nv_bfloat16* pre_fc_norm_embedding = nullptr;
+    const __nv_bfloat16* pre_fc_norm_hidden = nullptr;
+    const __nv_bfloat16* norm = nullptr;
+    const LinearWeight* logits = nullptr;
+    std::vector<Layer> layers;
+
+    bool available() const {
+        return enabled && layer_count > 0 && fc != nullptr &&
+            pre_fc_norm_embedding != nullptr && pre_fc_norm_hidden != nullptr &&
+            norm != nullptr && logits != nullptr &&
+            static_cast<int>(layers.size()) == layer_count;
+    }
+};
+
 // CUDA model resource owner for immutable/shared topology decisions. Device
 // weights and backend caches are attached by setup, while request-local
 // position, phase, and metrics live in SessionState.
@@ -48,6 +66,7 @@ struct CudaModelResources {
     std::shared_ptr<SharedModelWeights> weights_;
     std::unique_ptr<WeightLoader> weight_loader_;
     std::vector<Layer> layers_;
+    CudaMtpResources mtp_;
     const LinearWeight* embedding_ = nullptr;
     std::optional<CudaPerLayerInputResources> per_layer_input_;
     const LinearWeight* lm_head_ = nullptr;

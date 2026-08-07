@@ -146,6 +146,9 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     common.operator_norm = load_vector(source, reader, writer,
         tensor_name(weight_requests, TensorRole::AttentionInputNorm, layer),
         {shape.hidden});
+    if (shape.numerical_policy.rms_norm_add_one) {
+        for (float& value : common.operator_norm) value += 1.0f;
+    }
     if (shape.mamba2_layer_count > 0) {
         common.ffn_norm = common.operator_norm;
         if (shape.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::MlpOnly) {
@@ -167,6 +170,9 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     common.ffn_norm = load_vector(source, reader, writer,
         tensor_name(weight_requests, TensorRole::FfnInputNorm, layer),
         {shape.hidden});
+    if (shape.numerical_policy.rms_norm_add_one) {
+        for (float& value : common.ffn_norm) value += 1.0f;
+    }
     if (shape.has_split_attention_norms) {
         common.post_feed_forward_norm = load_vector(source, reader, writer,
             tensor_name(weight_requests, TensorRole::FfnOutputNorm, layer),
@@ -248,6 +254,9 @@ void CpuCompiledModel::Shared::load_weights() {
     weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
         tensor_name(weight_requests, TensorRole::FinalNorm),
         {shape.hidden});
+    if (shape.numerical_policy.rms_norm_add_one) {
+        for (float& value : weight_store.final_norm) value += 1.0f;
+    }
     if (shape.has_per_layer_input) {
         weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerEmbedding),
@@ -261,13 +270,14 @@ void CpuCompiledModel::Shared::load_weights() {
     }
 
     const auto load_operator = [&](int index, MixerKind layer_type)
-        -> std::variant<AttentionWeights, ConvolutionWeights, Mamba2Weights, MlpOnlyWeights> {
+        -> std::variant<AttentionWeights, ConvolutionWeights, GatedDeltaNetWeights,
+                        Mamba2Weights, MlpOnlyWeights> {
         if (layer_type == MixerKind::Attention) {
             AttentionWeights layer;
             const AttentionSpec& attention = shape.attention_layout(index);
             layer.q = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionQuery, index),
-                {attention.query_width(), shape.hidden});
+                {attention.query_projection_width(), shape.hidden});
             if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionKey, index),
@@ -286,12 +296,56 @@ void CpuCompiledModel::Shared::load_weights() {
                 layer.q_norm = load_vector(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionQueryNorm, index),
                     {attention.head_dim});
+                if (shape.numerical_policy.rms_norm_add_one) {
+                    for (float& value : layer.q_norm) value += 1.0f;
+                }
                 if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
                     layer.k_norm = load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
                         {attention.head_dim});
+                    if (shape.numerical_policy.rms_norm_add_one) {
+                        for (float& value : layer.k_norm) value += 1.0f;
+                    }
                 }
             }
+            return layer;
+        }
+
+        if (layer_type == MixerKind::GatedDeltaNet) {
+            GatedDeltaNetWeights layer;
+            layer.spec = shape.gated_delta_net_layouts.at(static_cast<size_t>(index));
+            const auto& spec = layer.spec;
+            const int key_width = spec.key_heads * spec.key_head_dim;
+            const int value_width = spec.value_heads * spec.value_head_dim;
+            const int qkv_width = 2 * key_width + value_width;
+            layer.qkv = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetQkv, index),
+                {qkv_width, shape.hidden});
+            layer.z = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetZ, index),
+                {value_width, shape.hidden});
+            layer.b = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetBeta, index),
+                {spec.value_heads, shape.hidden});
+            layer.a = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetAlpha, index),
+                {spec.value_heads, shape.hidden});
+            const int conv_dim = qkv_width;
+            layer.conv_weight = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetConv, index),
+                {conv_dim, 1, spec.conv_kernel});
+            layer.dt_bias = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetDtBias, index),
+                {spec.value_heads});
+            layer.a_log = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetALog, index),
+                {spec.value_heads});
+            layer.norm = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetNorm, index),
+                {spec.value_head_dim});
+            layer.out = load_matrix(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::GatedDeltaNetOutput, index),
+                {shape.hidden, value_width});
             return layer;
         }
 
@@ -360,10 +414,19 @@ void CpuCompiledModel::Shared::load_weights() {
             }
 
             MoeWeights layer;
+            const bool qwen_moe = shape.numerical_policy.rms_norm_add_one;
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
-                layer_name(index, "operator_norm.weight"), {shape.hidden});
+                qwen_moe
+                    ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
+                    : layer_name(index, "operator_norm.weight"), {shape.hidden});
             layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
-                layer_name(index, "ffn_norm.weight"), {shape.hidden});
+                qwen_moe
+                    ? tensor_name(weight_requests, TensorRole::FfnInputNorm, index)
+                    : layer_name(index, "ffn_norm.weight"), {shape.hidden});
+            if (qwen_moe) {
+                for (float& value : layer.common.operator_norm) value += 1.0f;
+                for (float& value : layer.common.ffn_norm) value += 1.0f;
+            }
             layer.operator_layer = load_operator(index, layer_type);
             layer.num_experts = shape.num_experts;
             layer.experts_per_token = shape.experts_per_token;
@@ -371,8 +434,35 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.use_expert_bias = shape.use_expert_bias;
             layer.routed_scaling_factor = shape.routed_scaling_factor;
             layer.router = load_vector(source, reader.get(), writer.get(),
-                layer_name(index, "feed_forward.gate.weight"),
+                qwen_moe
+                    ? tensor_name(weight_requests, TensorRole::MoeRouter, index)
+                    : layer_name(index, "feed_forward.gate.weight"),
                 {shape.num_experts, shape.hidden});
+
+            if (qwen_moe) {
+                const int shared_intermediate = shape.shared_expert_intermediate;
+                layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
+                    layer_name(index, "shared_expert.w13.weight"), {
+                        {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
+                         {shared_intermediate, shape.hidden}},
+                        {tensor_name(weight_requests, TensorRole::MoeSharedUp, index),
+                         {shared_intermediate, shape.hidden}},
+                    });
+                layer.shared_w2 = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
+                    {shape.hidden, shared_intermediate});
+                layer.shared_gate = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::MoeSharedGateWeight, index),
+                    {1, shape.hidden});
+                layer.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
+                    .packed_matrices(
+                        tensor_name(weight_requests, TensorRole::MoePackedGateUp, index),
+                        {shape.num_experts, 2 * shape.moe_intermediate, shape.hidden});
+                layer.expert_w2 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
+                    .packed_matrices(
+                        tensor_name(weight_requests, TensorRole::MoePackedDown, index),
+                        {shape.num_experts, shape.hidden, shape.moe_intermediate});
+            }
 
             const std::string bias_name =
                 layer_name(index, "feed_forward.expert_bias.weight");
@@ -389,6 +479,9 @@ void CpuCompiledModel::Shared::load_weights() {
             for (int expert = 0; expert < shape.num_experts; ++expert) {
                 const int moe_inter = shape.moe_intermediate > 0
                     ? shape.moe_intermediate : shape.intermediate;
+                if (qwen_moe) {
+                    continue;
+                }
                 const std::string prefix =
                     "feed_forward.experts." + std::to_string(expert);
                 const std::string w13_name =
@@ -486,6 +579,12 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                          (value.conv_weight.size() + value.conv_bias.size() +
                           value.dt_bias.size() + value.a_log.size() + value.d.size() +
                           value.norm.size()) * sizeof(float);
+            } else if constexpr (std::is_same_v<T, GatedDeltaNetWeights>) {
+                bytes += value.qkv.memory_bytes() + value.z.memory_bytes() +
+                         value.a.memory_bytes() + value.b.memory_bytes() +
+                         value.out.memory_bytes() +
+                         (value.conv_weight.size() + value.dt_bias.size() +
+                          value.a_log.size() + value.norm.size()) * sizeof(float);
             } else if constexpr (std::is_same_v<T, MlpOnlyWeights>) {
                 bytes += value.common.mlp_up.memory_bytes();
             } else {
@@ -506,6 +605,12 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                     } else if constexpr (std::is_same_v<Operator, Mamba2Weights>) {
                         bytes += operator_weights.in.memory_bytes() +
                                  operator_weights.out.memory_bytes();
+                    } else if constexpr (std::is_same_v<Operator, GatedDeltaNetWeights>) {
+                        bytes += operator_weights.qkv.memory_bytes() +
+                                 operator_weights.z.memory_bytes() +
+                                 operator_weights.a.memory_bytes() +
+                                 operator_weights.b.memory_bytes() +
+                                 operator_weights.out.memory_bytes();
                     }
                 }, value.operator_layer);
                 for (const CpuLinearWeight& weight : value.expert_w13) {
@@ -514,6 +619,8 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                 for (const CpuLinearWeight& weight : value.expert_w2) {
                     bytes += weight.memory_bytes();
                 }
+                bytes += value.shared_w13.memory_bytes() + value.shared_w2.memory_bytes() +
+                         value.shared_gate.memory_bytes();
             }
         }, layer);
     }

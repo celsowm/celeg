@@ -6,6 +6,9 @@
 namespace celeg {
 
 void CudaCompiledModel::reset(bool allocate_local_kv) {
+    discard_speculative_state();
+    mtp_candidate_ready_ = false;
+    mtp_candidate_used_ = false;
     ++storage_generation_;
     allocate_local_kv = allocate_local_kv && resources_.options_.allocate_local_kv_cache;
     if (allocate_local_kv && !local_kv_cache_available_) {
@@ -27,14 +30,36 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
                 attention->value_cache.reset(cache_elements);
             }
         }
+        for (Layer& layer : resources_.mtp_.layers) {
+            AttentionLayer* attention = as_attention(layer);
+            if (!attention || !attention->key) continue;
+            const AttentionSpec& layout = attention->layout;
+            const size_t cache_elements = static_cast<size_t>(max_context_) *
+                static_cast<size_t>(layout.key_value_width());
+            const size_t scale_elements = static_cast<size_t>(max_context_) *
+                static_cast<size_t>(layout.key_value_heads);
+            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+                attention->key_cache_int8.reset(cache_elements);
+                attention->value_cache_int8.reset(cache_elements);
+                attention->key_cache_scales.reset(scale_elements);
+                attention->value_cache_scales.reset(scale_elements);
+            } else {
+                attention->key_cache.reset(cache_elements);
+                attention->value_cache.reset(cache_elements);
+            }
+        }
         local_kv_cache_available_ = true;
     }
     session_.position_ = 0;
+    session_.next_rope_position_ = {0, 0, 0};
     session_.phase_ = SessionPhase::Empty;
     const int32_t zero = 0;
+    const std::array<int32_t, 3> zero_rope{0, 0, 0};
     uint64_t seed = session_.generation_.seed;
     CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &zero, sizeof(zero),
                              cudaMemcpyHostToDevice, stream_.get()));
+    CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(), zero_rope.data(),
+                               sizeof(zero_rope), cudaMemcpyHostToDevice, stream_.get()));
     CELEG_CUDA(cudaMemcpyAsync(sampling_.rng_state.data(), &seed, sizeof(seed),
                              cudaMemcpyHostToDevice, stream_.get()));
     sampling_.seen_tokens.zero_async(stream_.get());
@@ -49,6 +74,9 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
         }
         if (ConvolutionLayer* convolution = as_convolution(layer)) {
             convolution->conv_state.zero_async(stream_.get());
+        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+            gated_delta->conv_state.zero_async(stream_.get());
+            gated_delta->recurrent_state.zero_async(stream_.get());
         } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
             mamba->conv_state.zero_async(stream_.get());
             mamba->ssm_state.zero_async(stream_.get());
@@ -73,12 +101,20 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     workspace_.prefill_qkv_.reserve(r * resources_.shape_.maximum_attention_projection_width());
     const size_t projection_width = resources_.shape_.maximum_attention_projection_width();
     workspace_.prefill_q_.reserve(r * projection_width);
+    workspace_.prefill_attention_gate_.reserve(r * resources_.shape_.maximum_attention_query_heads() *
+                                               resources_.shape_.maximum_attention_head_dim());
     workspace_.prefill_k_.reserve(r * projection_width);
     workspace_.prefill_v_.reserve(r * projection_width);
     workspace_.prefill_conv_projected_.reserve(r * 3 * resources_.shape_.hidden);
+    workspace_.prefill_gated_delta_qkv_.reserve(r * resources_.shape_.max_gated_delta_net_qkv_width());
+    workspace_.prefill_gated_delta_z_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
+    workspace_.prefill_gated_delta_b_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
+    workspace_.prefill_gated_delta_a_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
+    workspace_.prefill_gated_delta_output_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
     workspace_.prefill_gate_up_.reserve(r * 2 * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_activated_.reserve(r * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_mlp_output_.reserve(r * resources_.shape_.hidden);
+    workspace_.moe_pf_shared_gate_.reserve(r);
     if (resources_.program_.per_layer_input.enabled) {
         const size_t packed = resources_.program_.per_layer_input.checked_elements(r);
         workspace_.prefill_per_layer_token_.reserve(packed);

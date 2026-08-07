@@ -16,7 +16,8 @@ int main() {
         "merges": ["h i", "' S"]
       },
       "added_tokens": [
-        {"id":0,"content":"<|startoftext|>","special":true}
+        {"id":0,"content":"<|startoftext|>","special":true},
+        {"id":99,"content":"<|image_pad|>","special":true}
       ]
     })";
     out.close();
@@ -25,6 +26,7 @@ int main() {
     const auto ids = tokenizer.encode("hi", false);
     CELEG_TEST_CHECK(ids.size() == 1 && ids[0] == 3);
     CELEG_TEST_CHECK(tokenizer.decode(ids, false) == "hi");
+    CELEG_TEST_CHECK(tokenizer.token_id("<|image_pad|>") == 99);
     const auto contraction = tokenizer.encode("'S", false);
     CELEG_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);
     std::filesystem::remove(path);

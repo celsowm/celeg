@@ -11,6 +11,7 @@ namespace celeg {
 size_t CpuPrefixSnapshot::host_bytes() const {
     size_t bytes = logits.size() * sizeof(float) + seen_tokens.size();
     for (const auto& state : convolution_states) bytes += state.size() * sizeof(float);
+    for (const auto& state : gated_delta_states) bytes += state.size() * sizeof(float);
     for (const auto& state : mamba_states) bytes += state.size() * sizeof(float);
     for (const auto& pages : attention_pages) bytes += pages.size() * sizeof(CpuKvPageId);
     bytes += attention_token_counts.size() * sizeof(size_t);

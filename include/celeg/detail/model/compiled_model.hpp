@@ -51,6 +51,36 @@ struct CudaCompiledModel {
     // 2048 rows keeps the scratch under ~1GB even at 32 attention heads.
     static constexpr int kMaxGemmAttentionRows = 2048;
 
+    // A speculative candidate may advance recurrent mixers before the target
+    // model decides whether to accept it.  KV storage is append-only and is
+    // made invisible again by restoring position; recurrent state is not, so
+    // it gets a device-side transaction buffer instead of a host round-trip.
+    struct SpeculativeLayerSnapshot {
+        DeviceBuffer<__nv_bfloat16> conv_state;
+        DeviceBuffer<__nv_bfloat16> ssm_state;
+        DeviceBuffer<__nv_bfloat16> recurrent_state;
+    };
+
+    struct SpeculativeStateSnapshot {
+        bool valid = false;
+        int position = 0;
+        std::array<int32_t, 3> next_rope_position{0, 0, 0};
+        SessionPhase phase = SessionPhase::Empty;
+        bool active_segmented_attention = false;
+        bool mtp_candidate_ready = false;
+        RuntimeMetrics metrics;
+        DeviceBuffer<uint8_t> seen_tokens;
+        DeviceBuffer<__nv_bfloat16> logits;
+        DeviceBuffer<__nv_bfloat16> mtp_logits;
+        DeviceBuffer<int32_t> mtp_candidate;
+        DeviceBuffer<int32_t> mtp_target_candidate;
+        DeviceBuffer<uint64_t> rng_state;
+        DeviceBuffer<int32_t> position_device;
+        DeviceBuffer<int32_t> mrope_position_device;
+        std::vector<SpeculativeLayerSnapshot> layers;
+        std::vector<SpeculativeLayerSnapshot> mtp_layers;
+    };
+
     CudaModelResources resources_;
     std::shared_ptr<const RuntimeContext> runtime_;
     SessionState session_;
@@ -111,6 +141,13 @@ struct CudaCompiledModel {
     void load_session(const std::string& path);
     PrefixState export_prefix_state() const;
     void restore_prefix_state(const PrefixState& state);
+    // Internal transaction boundary for stateful speculative decoding. The
+    // caller must snapshot only at a completed, ready session and must either
+    // commit by discarding the snapshot or restore before another operation.
+    void snapshot_speculative_state();
+    void restore_speculative_state();
+    void discard_speculative_state() { speculative_snapshot_.valid = false; }
+    bool mtp_enabled() const { return resources_.mtp_.available(); }
     SessionStore::SessionState make_session_state();
     void release_local_kv_cache();
     bool local_kv_cache_available() const { return local_kv_cache_available_; }
@@ -164,9 +201,14 @@ struct CudaCompiledModel {
     void initialize_per_layer_input_batch(const int32_t* tokens, int rows);
     void run_mlp_moe_decode(const LayerCommon& common_layer, int layer);
     void run_mlp_moe_prefill(const LayerCommon& common_layer, int rows, int layer);
+    void run_mtp_forward(int32_t token,
+                         const std::array<int32_t, 3>* rope_position = nullptr);
+    void run_mtp_forward_device(const int32_t* token_device);
+    void finalize_mtp_verification();
 
     void forward_token_host(int32_t token, bool compute_logits,
-                            const float* raw_embedding = nullptr);
+                            const float* raw_embedding = nullptr,
+                            const std::array<int32_t, 3>* rope_position = nullptr);
     void forward_token_paged_host(int32_t token, bool compute_logits,
                                   PhysicalPagedKvCache& paged_kv,
                                   const uint32_t* device_page_table,
@@ -195,7 +237,12 @@ struct CudaCompiledModel {
     uint64_t storage_generation_ = 0;
     std::chrono::steady_clock::time_point decode_async_begin_time_{};
     DeviceBuffer<int32_t> position_device_{1};
+    DeviceBuffer<int32_t> mrope_position_device_{3};
     CudaSamplingState sampling_;
+    PinnedBuffer<int32_t> mtp_verification_host_{2};
+    bool mtp_candidate_ready_ = false;
+    bool mtp_candidate_used_ = false;
+    SpeculativeStateSnapshot speculative_snapshot_;
 };
 
 } // namespace celeg

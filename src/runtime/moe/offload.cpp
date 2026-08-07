@@ -101,11 +101,12 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
     const ExpertOffloadOptions& options = inputs.options;
 
     ExpertOffloadPlan plan;
-    plan.moe_layers = moe_layer_count(shape);
+    plan.moe_layers = moe_layer_count(shape) + std::max(0, inputs.extra_moe_layers);
     plan.bytes_per_expert = bytes_per_expert_bf16(shape);
     plan.gpu_free_bytes = inputs.gpu_free_bytes;
     plan.non_expert_weight_bytes = inputs.non_expert_weight_bytes;
-    plan.kv_reservation_bytes = kv_cache_bytes(shape, inputs.context_tokens);
+    plan.kv_reservation_bytes = kv_cache_bytes(shape, inputs.context_tokens) +
+        inputs.extra_kv_reservation_bytes;
     plan.workspace_bytes = inputs.workspace_bytes;
     plan.reserve_bytes = options.gpu_memory_reserve_bytes;
     plan.host_mode = options.host_mode;
@@ -143,8 +144,14 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
             (static_cast<std::size_t>(plan.moe_layers) * plan.bytes_per_expert));
     }
 
-    const int min_experts =
-        std::max(0, std::min(options.minimum_experts_per_layer, shape.num_experts));
+    // Every routed token may select K distinct experts.  A disk-backed cache
+    // smaller than K cannot execute even a single token without a resident
+    // pointer for every routed expert, so make the topology's routing width a
+    // hard lower bound for the planner.
+    const int min_experts = std::max(
+        0, std::min(std::max(options.minimum_experts_per_layer,
+                             shape.experts_per_token),
+                    shape.num_experts));
     if (slots_per_layer < min_experts) {
         std::ostringstream msg;
         msg << "expert offload cannot fit the minimum "
