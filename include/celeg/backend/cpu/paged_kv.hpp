@@ -2,6 +2,7 @@
 
 #include "celeg/backend/cpu/runtime_types.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
+#include "celeg/model/graph.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,11 +25,27 @@ struct CpuKvPageStats {
     size_t numa_binding_failures = 0;
 };
 
+// Physical state layout for one token. Ordinary attention occupies the key
+// and value regions. For latent attention, latent_width is the combined key
+// and value width; the page exposes each half through the latent accessors.
+struct CpuStatePageLayout {
+    size_t key_width = 0;
+    size_t value_width = 0;
+    size_t latent_width = 0;
+    size_t rotary_width = 0;
+
+    size_t token_elements() const {
+        return key_width + value_width + latent_width + rotary_width;
+    }
+    void validate() const;
+};
+
 // A physically paged, reference-counted K/V arena for one attention layer.
 // Pages are stable in memory and may later be shared by prefix-cache entries.
 class CpuKvPagePool {
 public:
-    CpuKvPagePool(CpuKvCacheMode mode, size_t page_tokens, size_t kv_width);
+    CpuKvPagePool(CpuKvCacheMode mode, size_t page_tokens,
+                  CpuStatePageLayout layout);
     ~CpuKvPagePool();
 
     CpuKvPagePool(const CpuKvPagePool&) = delete;
@@ -44,15 +61,26 @@ public:
 
     void write(CpuKvPageId page, size_t token_offset,
                const float* key, const float* value);
+    void write_latent(CpuKvPageId page, size_t token_offset,
+                      const float* key, const float* value,
+                      const float* rotary);
 
     const float* key_fp32(CpuKvPageId page, size_t token_offset) const;
     const float* value_fp32(CpuKvPageId page, size_t token_offset) const;
     const uint16_t* key_bf16(CpuKvPageId page, size_t token_offset) const;
     const uint16_t* value_bf16(CpuKvPageId page, size_t token_offset) const;
+    const float* latent_key_fp32(CpuKvPageId page, size_t token_offset) const;
+    const float* latent_value_fp32(CpuKvPageId page, size_t token_offset) const;
+    const float* rotary_fp32(CpuKvPageId page, size_t token_offset) const;
+    const uint16_t* latent_key_bf16(CpuKvPageId page, size_t token_offset) const;
+    const uint16_t* latent_value_bf16(CpuKvPageId page, size_t token_offset) const;
+    const uint16_t* rotary_bf16(CpuKvPageId page, size_t token_offset) const;
 
     CpuKvCacheMode mode() const { return mode_; }
     size_t page_tokens() const { return page_tokens_; }
-    size_t kv_width() const { return kv_width_; }
+    const CpuStatePageLayout& layout() const { return layout_; }
+    size_t key_width() const { return layout_.key_width; }
+    size_t value_width() const { return layout_.value_width; }
     size_t page_bytes() const { return page_bytes_; }
     CpuKvPageStats stats() const;
 
@@ -63,7 +91,7 @@ private:
 
     CpuKvCacheMode mode_;
     size_t page_tokens_;
-    size_t kv_width_;
+    CpuStatePageLayout layout_;
     size_t page_bytes_;
     mutable std::mutex mutex_;
     std::vector<std::unique_ptr<Page>> pages_;
@@ -73,13 +101,83 @@ private:
 struct CpuPagedAttentionOptions {
     size_t parallel_threshold = 256;
     size_t page_tile = 4;
-    int sliding_window = 0;
+};
+
+// Immutable encoder/vision memory projected into the same paged state
+// representation as self-attention.  The owner is populated once and can be
+// shared by decoder sessions without tying the memory to a model family.
+class CpuExternalAttentionMemory {
+public:
+    CpuExternalAttentionMemory(CpuKvCacheMode mode, size_t page_tokens,
+                               size_t key_width, size_t value_width);
+    ~CpuExternalAttentionMemory() { clear(); }
+
+    CpuExternalAttentionMemory(const CpuExternalAttentionMemory&) = delete;
+    CpuExternalAttentionMemory& operator=(const CpuExternalAttentionMemory&) = delete;
+
+    void append(const float* key, const float* value);
+    void clear() noexcept;
+    size_t token_count() const { return token_count_; }
+    const CpuKvPagePool& pool() const { return pool_; }
+    std::span<const CpuKvPageId> pages() const { return pages_; }
+
+private:
+    CpuKvPagePool pool_;
+    std::vector<CpuKvPageId> pages_;
+    size_t token_count_ = 0;
 };
 
 struct CpuPagedAttentionStats {
     size_t tasks = 0;
     size_t page_tiles = 0;
     bool parallel = false;
+};
+
+// Load-time lowering of the backend-neutral attention pattern. Kernels
+// consume this compact value and never inspect checkpoint metadata.
+enum class CpuAttentionPatternKind : uint8_t {
+    FullCausal,
+    SlidingWindow,
+    Bidirectional,
+    PrefixLm,
+    BlockSparse,
+    DynamicSparse,
+};
+
+struct CpuAttentionPattern {
+    CpuAttentionPatternKind kind = CpuAttentionPatternKind::FullCausal;
+    int window = 0;
+    int prefix_length = 0;
+    int block_size = 0;
+    int local_blocks = 0;
+    int global_blocks = 0;
+    int max_selected_blocks = 0;
+
+    static CpuAttentionPattern lower(const AttentionPatternSpec& pattern);
+    bool allows(int query_position, int key_position) const;
+    bool may_read_future(int query_position, int sequence_length) const;
+    int first_candidate(int query_position) const;
+    bool parallel_safe() const {
+        return kind == CpuAttentionPatternKind::FullCausal;
+    }
+};
+
+struct CpuAttentionBias {
+    const float* alibi_slopes = nullptr;
+    size_t slope_count = 0;
+    const float* relative_values = nullptr;
+    int relative_bucket_count = 0;
+    int relative_max_distance = 0;
+    bool relative_bidirectional = false;
+
+    static CpuAttentionBias lower(const AttentionBiasSpec& bias,
+                                  std::span<const float> relative_values = {},
+                                  int query_heads = 0);
+    bool empty() const {
+        return (alibi_slopes == nullptr || slope_count == 0) &&
+               (relative_values == nullptr || relative_bucket_count == 0);
+    }
+    float score(int query_head, int query_position, int key_position) const;
 };
 
 void cpu_gqa_decode_paged(
@@ -91,7 +189,8 @@ void cpu_gqa_decode_paged(
     int q_heads,
     int kv_heads,
     int head_dim,
-    int sliding_window = 0);
+    CpuAttentionPattern pattern = {}, CpuAttentionBias bias = {},
+    int query_position = -1);
 
 void cpu_gqa_decode_paged_parallel(
     const float* q,
@@ -103,8 +202,17 @@ void cpu_gqa_decode_paged_parallel(
     int kv_heads,
     int head_dim,
     CpuThreadPool& thread_pool,
+    CpuAttentionPattern pattern = {},
+    CpuAttentionBias bias = {},
     CpuPagedAttentionOptions options = {},
     CpuPagedAttentionStats* stats = nullptr);
+
+void cpu_latent_attention_decode_paged(
+    const float* query_content, const float* query_rope,
+    const CpuKvPagePool& pool, std::span<const CpuKvPageId> pages,
+    float* output, int sequence_length, int query_heads, int latent_rank,
+    int rope_head_dim, float scale, CpuAttentionPattern pattern = {},
+    CpuAttentionBias bias = {}, int query_position = -1);
 
 // Causal multi-query prefill attention.  Keys and values for the full chunk
 // must already be committed to pages; query row r sees exactly
@@ -122,6 +230,6 @@ void cpu_gqa_prefill_paged(
     int kv_heads,
     int head_dim,
     CpuThreadPool& thread_pool,
-    int sliding_window = 0);
+    CpuAttentionPattern pattern = {}, CpuAttentionBias bias = {});
 
 } // namespace celeg

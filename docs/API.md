@@ -16,8 +16,11 @@ field supports size validation at the ABI boundary.
 celeg_cpu_model_options model;
 celeg_cpu_model_options_init(&model);
 
+celeg_cpu_backend_options backend;
+celeg_cpu_backend_options_init(&backend);
+
 celeg_engine_options engine;
-celeg_engine_options_init(&engine, CELEG_BACKEND_CPU);
+celeg_engine_options_init(&engine, "cpu", &backend, sizeof(backend));
 
 celeg_request_options request;
 celeg_request_options_init(&request);
@@ -42,8 +45,8 @@ celeg_model_destroy(model);
 ## Engine API
 
 `celeg_engine` provides request submission, polling, cancellation, status
-inspection, and explicit stepping. The backend is selected when calling
-`celeg_engine_options_init`.
+inspection, and explicit stepping. The backend is selected by the backend ID,
+and backend-owned options are passed as an opaque payload.
 
 ```c
 celeg_engine* engine = celeg_engine_create("model.safetensors", &engine_options);

@@ -30,6 +30,36 @@ void build_dense_weight_plan(ResolvedModel& model,
         add_request(model, {TensorRole::AttentionInputNorm, layer, -1,
                             {t.hidden}, std::nullopt, physical_layer});
         const AttentionSpec& attention = t.attention_layout(layer);
+        if (attention.uses_external_memory()) {
+            add_request(model, {TensorRole::AttentionQuery, layer, -1,
+                                {attention.query_projection_width(), t.hidden},
+                                std::nullopt, physical_layer});
+            add_request(model, {TensorRole::AttentionOutput, layer, -1,
+                                {t.hidden, attention.query_width()},
+                                std::nullopt, physical_layer});
+        } else if (attention.uses_latent_state()) {
+            add_request(model, {TensorRole::AttentionLatentQuery, layer, -1,
+                                {attention.latent_query_content_width(), t.hidden},
+                                std::nullopt, physical_layer});
+            if (attention.latent_query_rope_width() != 0) {
+                add_request(model, {TensorRole::AttentionLatentQueryRope, layer, -1,
+                                    {attention.latent_query_rope_width(), t.hidden},
+                                    std::nullopt, physical_layer});
+            }
+            const auto& latent = *attention.latent_state();
+            add_request(model, {TensorRole::AttentionLatentKey, layer, -1,
+                                {latent.latent_rank, t.hidden}, std::nullopt, physical_layer});
+            add_request(model, {TensorRole::AttentionLatentValue, layer, -1,
+                                {latent.latent_rank, t.hidden}, std::nullopt, physical_layer});
+            if (latent.decoupled_rope && latent.rope_head_dim != 0) {
+                add_request(model, {TensorRole::AttentionLatentKeyRope, layer, -1,
+                                    {latent.rope_head_dim, t.hidden},
+                                    std::nullopt, physical_layer});
+            }
+            add_request(model, {TensorRole::AttentionLatentOutput, layer, -1,
+                                {t.hidden, attention.latent_query_content_width()},
+                                std::nullopt, physical_layer});
+        } else {
         const int q_width = attention.query_heads * attention.head_dim;
         const int kv_width = attention.key_value_heads * attention.head_dim;
         add_request(model, {TensorRole::AttentionQuery, layer, -1,
@@ -40,6 +70,13 @@ void build_dense_weight_plan(ResolvedModel& model,
                             {kv_width, t.hidden}, std::nullopt, physical_layer});
         add_request(model, {TensorRole::AttentionOutput, layer, -1,
                             {t.hidden, q_width}, std::nullopt, physical_layer});
+        }
+        if (const auto* relative =
+                std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
+            add_request(model, {TensorRole::AttentionRelativePositionBias, layer, -1,
+                                {attention.query_heads * relative->bucket_count},
+                                std::nullopt, physical_layer});
+        }
         add_request(model, {TensorRole::FfnInputNorm, layer, -1,
                             {t.hidden}, std::nullopt, physical_layer});
         add_request(model, {TensorRole::FfnGate, layer, -1,

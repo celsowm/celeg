@@ -78,6 +78,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     native_checkpoint = native_storage != nullptr &&
                         native_storage->has_native_block_storage();
     shape = bootstrap.model.topology;
+    workspace_plan = CpuWorkspacePlan::from_topology(shape);
     tie_word_embeddings = bootstrap.model.capabilities.tied_embeddings;
     final_logit_softcap = bootstrap.model.topology.numerical_policy.final_logit_softcap;
     program = CpuModelCompiler{}.compile(bootstrap.model);
@@ -94,7 +95,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
             "CPU disk-backed experts require the CPU pack cache");
     }
     load_weights();
-    CpuKvTopology kv_topology = build_cpu_kv_topology(shape, options);
+    CpuKvTopology kv_topology = build_cpu_kv_topology(shape, program, options);
     kv_pools = std::move(kv_topology.pools);
     layer_to_kv_pool = std::move(kv_topology.layer_to_pool);
     layer_to_kv_owner = std::move(kv_topology.layer_to_owner);
@@ -280,10 +281,47 @@ void CpuCompiledModel::Shared::load_weights() {
         if (layer_type == MixerKind::Attention) {
             AttentionWeights layer;
             const AttentionSpec& attention = shape.attention_layout(index);
+            if (attention.uses_latent_state()) {
+                const auto& latent = *attention.latent_state();
+                layer.q = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::AttentionLatentQuery, index),
+                    {attention.latent_query_content_width(), shape.hidden});
+                if (attention.latent_query_rope_width() != 0) {
+                    layer.latent_q_rope = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentQueryRope, index),
+                        {attention.latent_query_rope_width(), shape.hidden});
+                }
+                layer.k = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::AttentionLatentKey, index),
+                    {latent.latent_rank, shape.hidden});
+                layer.v = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::AttentionLatentValue, index),
+                    {latent.latent_rank, shape.hidden});
+                if (latent.decoupled_rope && latent.rope_head_dim != 0) {
+                    layer.latent_k_rope = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentKeyRope, index),
+                        {latent.rope_head_dim, shape.hidden});
+                }
+                layer.out = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::AttentionLatentOutput, index),
+                    {shape.hidden, attention.latent_query_content_width()});
+                if (const auto* relative =
+                        std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
+                    layer.relative_bias = load_vector(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests,
+                                    TensorRole::AttentionRelativePositionBias, index),
+                        {attention.query_heads * relative->bucket_count});
+                }
+                return layer;
+            }
             layer.q = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionQuery, index),
                 {attention.query_projection_width(), shape.hidden});
-            if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
+            if (!attention.uses_external_memory() &&
+                (!attention.kv_sharing.shared() || attention.kv_sharing.publishes)) {
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionKey, index),
                     {attention.key_value_width(), shape.hidden});
@@ -304,7 +342,8 @@ void CpuCompiledModel::Shared::load_weights() {
                 if (shape.numerical_policy.rms_norm_add_one) {
                     for (float& value : layer.q_norm) value += 1.0f;
                 }
-                if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
+                if (!attention.uses_external_memory() &&
+                    (!attention.kv_sharing.shared() || attention.kv_sharing.publishes)) {
                     layer.k_norm = load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
                         {attention.head_dim});
@@ -312,6 +351,14 @@ void CpuCompiledModel::Shared::load_weights() {
                         for (float& value : layer.k_norm) value += 1.0f;
                     }
                 }
+            }
+            if (const auto* relative =
+                    std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
+                layer.relative_bias = load_vector(
+                    source, reader.get(), writer.get(),
+                    tensor_name(weight_requests,
+                                TensorRole::AttentionRelativePositionBias, index),
+                    {attention.query_heads * relative->bucket_count});
             }
             return layer;
         }

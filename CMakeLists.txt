@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(celeg VERSION 0.0.21 LANGUAGES C CXX)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+include(GNUInstallDirs)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -67,6 +68,9 @@ endif()
 
 add_library(celeg_base ${CELEG_BASE_RUNTIME_SOURCES})
 target_include_directories(celeg_base PUBLIC include)
+target_compile_definitions(celeg_base PUBLIC
+    CELEG_DESCRIPTOR_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/descriptors"
+    CELEG_DESCRIPTOR_INSTALL_DIRECTORY="${CMAKE_INSTALL_FULL_DATADIR}/celeg/descriptors")
 if(NOT MSVC)
     target_compile_options(celeg_base PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -358,7 +362,6 @@ add_executable(celeg-pack-experts src/tools/pack_experts.cpp)
 target_link_libraries(celeg-pack-experts PRIVATE celeg_base)
 target_include_directories(celeg-pack-experts PRIVATE include)
 
-include(GNUInstallDirs)
 set(CELEG_INSTALL_TARGETS celeg_base celeg_runtime celeg_cpu_backend celeg celeg-cpu-run celeg-cpu-pack celeg-cpu-kernel-benchmark celeg-c-api-example
     celeg-cpu-concurrent-benchmark
     celeg-cpu-prefill-benchmark celeg-cpu-prefix-cache-benchmark
@@ -420,6 +423,8 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/checkpoint/repositories/safetensors.hpp
     include/celeg/checkpoint/tensor_names.hpp
     include/celeg/model/definition.hpp
+    include/celeg/model/position.hpp
+    include/celeg/model/descriptor.hpp
     include/celeg/model/architecture.hpp
     include/celeg/model/graph.hpp
     include/celeg/model/profiles.hpp
@@ -472,6 +477,9 @@ foreach(_celeg_public_header IN LISTS CELEG_PUBLIC_HEADERS)
         message(FATAL_ERROR "Public header manifest entry is missing: ${_celeg_public_header}")
     endif()
 endforeach()
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/descriptors/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/celeg/descriptors")
 foreach(_celeg_public_header IN LISTS CELEG_PUBLIC_HEADERS)
     file(RELATIVE_PATH _celeg_header_relative
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -496,11 +504,6 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(architecture_resolution_test PRIVATE include)
     target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
-    add_executable(lfm2_layer_decoder_test tests/lfm2_layer_decoder_test.cpp
-        src/checkpoint/metadata.cpp src/checkpoint/formats/json.cpp
-        src/models/lfm2/layer_decoder.cpp)
-    target_include_directories(lfm2_layer_decoder_test PRIVATE include)
-    add_test(NAME lfm2_layer_decoder_test COMMAND lfm2_layer_decoder_test)
     set(CELEG_CHAT_TEMPLATE_SOURCES
         src/composition/builtin_chat_profiles.cpp
         src/text/chat_template.cpp src/text/chat_template_support.cpp

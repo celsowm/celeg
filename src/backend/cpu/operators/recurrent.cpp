@@ -121,20 +121,21 @@ void execute_cpu_gated_delta_chunk(
     size_t rows, bool& normed_q8_ready) {
     auto& workspace = model.workspace_;
     auto& shared = *model.shared;
+    CpuExecutionContext execution{shared, workspace, model.session_};
     const GatedDeltaNetSpec& spec = weights.spec;
     const size_t hidden = static_cast<size_t>(shared.shape.hidden);
 
     auto started = Clock::now();
-    cpu_chunk_layer_gemm(model, weights.qkv, workspace.chunk_normed.data(),
+    cpu_chunk_layer_gemm(execution, weights.qkv, workspace.chunk_normed.data(),
                          workspace.chunk_gated_delta_qkv.data(), rows, hidden,
                          normed_q8_ready);
-    cpu_chunk_layer_gemm(model, weights.z, workspace.chunk_normed.data(),
+    cpu_chunk_layer_gemm(execution, weights.z, workspace.chunk_normed.data(),
                          workspace.chunk_gated_delta_z.data(), rows, hidden,
                          normed_q8_ready);
-    cpu_chunk_layer_gemm(model, weights.b, workspace.chunk_normed.data(),
+    cpu_chunk_layer_gemm(execution, weights.b, workspace.chunk_normed.data(),
                          workspace.chunk_gated_delta_b.data(), rows, hidden,
                          normed_q8_ready);
-    cpu_chunk_layer_gemm(model, weights.a, workspace.chunk_normed.data(),
+    cpu_chunk_layer_gemm(execution, weights.a, workspace.chunk_normed.data(),
                          workspace.chunk_gated_delta_a.data(), rows, hidden,
                          normed_q8_ready);
     model.session_.prefill_profile.linear_ms += elapsed_ms(started);
@@ -152,7 +153,7 @@ void execute_cpu_gated_delta_chunk(
     model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();
-    cpu_chunk_layer_gemm(model, weights.out, workspace.chunk_gated_delta_output.data(),
+    cpu_chunk_layer_gemm(execution, weights.out, workspace.chunk_gated_delta_output.data(),
                          workspace.chunk_hidden.data(), rows, hidden,
                          normed_q8_ready);
     model.session_.prefill_profile.linear_ms += elapsed_ms(started);
@@ -164,10 +165,11 @@ void execute_cpu_short_convolution_chunk(
     size_t rows, bool& normed_q8_ready) {
     auto& workspace = model.workspace_;
     auto& shared = *model.shared;
+    CpuExecutionContext execution{shared, workspace, model.session_};
     const size_t hidden = static_cast<size_t>(shared.shape.hidden);
 
     auto started = Clock::now();
-    cpu_chunk_layer_gemm(model, weights.in, workspace.chunk_normed.data(),
+    cpu_chunk_layer_gemm(execution, weights.in, workspace.chunk_normed.data(),
                          workspace.chunk_conv.data(), rows, hidden,
                          normed_q8_ready);
     model.session_.prefill_profile.linear_ms += elapsed_ms(started);
@@ -181,7 +183,7 @@ void execute_cpu_short_convolution_chunk(
     model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();
-    cpu_chunk_layer_gemm(model, weights.out, workspace.chunk_op.data(),
+    cpu_chunk_layer_gemm(execution, weights.out, workspace.chunk_op.data(),
                          workspace.chunk_hidden.data(), rows, hidden,
                          normed_q8_ready);
     model.session_.prefill_profile.linear_ms += elapsed_ms(started);

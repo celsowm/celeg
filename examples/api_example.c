@@ -8,8 +8,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "usage: %s model.safetensors\n", argv[0]);
         return 2;
     }
+    celeg_cpu_backend_options backend;
+    celeg_cpu_backend_options_init(&backend);
     celeg_engine_options options;
-    celeg_engine_options_init(&options, CELEG_BACKEND_CPU);
+    celeg_engine_options_init(&options, "cpu", &backend, (uint32_t)sizeof(backend));
     celeg_engine* engine = celeg_engine_create(argv[1], &options);
     if (!engine) {
         fprintf(stderr, "%s\n", celeg_engine_last_error(NULL));

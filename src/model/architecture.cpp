@@ -17,6 +17,8 @@ ResolvedModel resolve_architecture_stages(
     model.topology = stages.topology(checkpoint);
     model.topology.validate();
     stages.graph(model, checkpoint);
+    derive_runtime_topology_from_graph(model.topology, model.graph);
+    model.topology.validate();
     stages.weights(model, checkpoint);
     model.validate();
     return model;

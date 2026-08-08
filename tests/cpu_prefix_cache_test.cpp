@@ -7,9 +7,11 @@
 int main() {
     std::vector<std::shared_ptr<celeg::CpuKvPagePool>> pools;
     pools.push_back(std::make_shared<celeg::CpuKvPagePool>(
-        celeg::CpuKvCacheMode::Fp32, 4, 4));
+        celeg::CpuKvCacheMode::Fp32, 4,
+        celeg::CpuStatePageLayout{4, 4, 0, 0}));
     pools.push_back(std::make_shared<celeg::CpuKvPagePool>(
-        celeg::CpuKvCacheMode::Fp32, 4, 4));
+        celeg::CpuKvCacheMode::Fp32, 4,
+        celeg::CpuStatePageLayout{4, 4, 0, 0}));
 
     celeg::CpuPrefixSnapshot request;
     request.position = 3;

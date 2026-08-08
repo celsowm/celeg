@@ -360,3 +360,95 @@ void launch_store_kv_int8_paged_batch(
         page_scale_elements, layer_scale_offset, kv_heads, head_dim);
     CELEG_KERNEL_CHECK();
 }
+
+__global__ void store_latent_kernel(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_cache,
+    __nv_bfloat16* value_cache, __nv_bfloat16* key_rope_cache,
+    const int32_t* position, int rows, int latent_rank, int rotary_width,
+    bool prefill) {
+    const int row = static_cast<int>(blockIdx.x);
+    if (row >= rows) return;
+    const int target = prefill ? row : *position;
+    for (int d = threadIdx.x; d < latent_rank; d += blockDim.x) {
+        const size_t source = static_cast<size_t>(row) * latent_rank + d;
+        const size_t destination = static_cast<size_t>(target) * latent_rank + d;
+        key_cache[destination] = key[source];
+        value_cache[destination] = value[source];
+    }
+    if (key_rope && key_rope_cache) {
+        for (int d = threadIdx.x; d < rotary_width; d += blockDim.x) {
+            key_rope_cache[static_cast<size_t>(target) * rotary_width + d] =
+                key_rope[static_cast<size_t>(row) * rotary_width + d];
+        }
+    }
+}
+
+__global__ void store_latent_paged_batch_kernel(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_pool,
+    __nv_bfloat16* value_pool, const uint32_t* page_tables,
+    int page_table_stride, const int32_t* positions, int rows,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, int latent_rank, int rotary_width) {
+    const int row = static_cast<int>(blockIdx.x);
+    if (row >= rows) return;
+    const int position = positions[row];
+    const int logical_page = position / page_tokens;
+    const int in_page = position % page_tokens;
+    const uint32_t page = page_tables[
+        static_cast<size_t>(row) * page_table_stride + logical_page];
+    const size_t stride = static_cast<size_t>(latent_rank + rotary_width);
+    const size_t target = static_cast<size_t>(page) * page_vector_elements +
+        layer_vector_offset + static_cast<size_t>(in_page) * stride;
+    for (int d = threadIdx.x; d < latent_rank; d += blockDim.x) {
+        const size_t source = static_cast<size_t>(row) * latent_rank + d;
+        key_pool[target + d] = key[source];
+        value_pool[target + d] = value[source];
+    }
+    if (key_rope) {
+        for (int d = threadIdx.x; d < rotary_width; d += blockDim.x) {
+            key_pool[target + latent_rank + d] =
+                key_rope[static_cast<size_t>(row) * rotary_width + d];
+        }
+    }
+}
+
+void launch_store_latent_device(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_cache,
+    __nv_bfloat16* value_cache, __nv_bfloat16* key_rope_cache,
+    const int32_t* position, int latent_rank, int rotary_width,
+    cudaStream_t stream) {
+    store_latent_kernel<<<1, 128, 0, stream>>>(
+        key, value, key_rope, key_cache, value_cache, key_rope_cache,
+        position, 1, latent_rank, rotary_width, false);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_store_latent_prefill(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_cache,
+    __nv_bfloat16* value_cache, __nv_bfloat16* key_rope_cache,
+    int rows, int latent_rank, int rotary_width, cudaStream_t stream) {
+    store_latent_kernel<<<rows, 128, 0, stream>>>(
+        key, value, key_rope, key_cache, value_cache, key_rope_cache,
+        nullptr, rows, latent_rank, rotary_width, true);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_store_latent_paged_batch(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_pool,
+    __nv_bfloat16* value_pool, const uint32_t* page_tables,
+    int page_table_stride, const int32_t* positions, int rows,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, int latent_rank, int rotary_width,
+    cudaStream_t stream) {
+    (void)attention_slot;
+    store_latent_paged_batch_kernel<<<rows, 128, 0, stream>>>(
+        key, value, key_rope, key_pool, value_pool, page_tables,
+        page_table_stride, positions, rows, attention_slot, page_tokens,
+        page_vector_elements, layer_vector_offset, latent_rank, rotary_width);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}

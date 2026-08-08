@@ -12,31 +12,10 @@ celeg_engine* celeg_engine_create(const char* path,
     }
     try {
         celeg::api::require_size(options->struct_size, sizeof(*options), "engine options");
-        celeg::api::require_size(options->model.struct_size,
-                                 sizeof(options->model), "model options");
+        celeg::api::require_size(options->generation.struct_size,
+                                 sizeof(options->generation), "generation options");
         auto result = std::make_unique<celeg_engine>();
         result->service = celeg::api::create_service_bundle(path, *options);
-        return result.release();
-    } catch (const std::exception& error) {
-        celeg::api::global_error = error.what();
-        return nullptr;
-    }
-}
-
-celeg_engine* celeg_engine_create_v2(const char* path,
-                                     const celeg_engine_v2_options* options) {
-    if (!path || !*path || !options) {
-        celeg::api::global_error = "v2 engine path and options are required";
-        return nullptr;
-    }
-    try {
-        celeg::api::require_size(options->struct_size, sizeof(*options),
-                                 "v2 engine options");
-        celeg::api::require_size(options->generation.struct_size,
-                                 sizeof(options->generation),
-                                 "v2 generation options");
-        auto result = std::make_unique<celeg_engine>();
-        result->service = celeg::api::create_service_bundle_v2(path, *options);
         return result.release();
     } catch (const std::exception& error) {
         celeg::api::global_error = error.what();

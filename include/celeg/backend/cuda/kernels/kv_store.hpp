@@ -71,4 +71,24 @@ void launch_store_kv_int8_paged_batch(
     int kv_heads, int head_dim,
     cudaStream_t stream);
 
+void launch_store_latent_device(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_cache,
+    __nv_bfloat16* value_cache, __nv_bfloat16* key_rope_cache,
+    const int32_t* position, int latent_rank, int rotary_width,
+    cudaStream_t stream);
+void launch_store_latent_prefill(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_cache,
+    __nv_bfloat16* value_cache, __nv_bfloat16* key_rope_cache,
+    int rows, int latent_rank, int rotary_width, cudaStream_t stream);
+void launch_store_latent_paged_batch(
+    const __nv_bfloat16* key, const __nv_bfloat16* value,
+    const __nv_bfloat16* key_rope, __nv_bfloat16* key_pool,
+    __nv_bfloat16* value_pool, const uint32_t* page_tables,
+    int page_table_stride, const int32_t* positions, int rows,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, int latent_rank, int rotary_width,
+    cudaStream_t stream);
+
 } // namespace celeg

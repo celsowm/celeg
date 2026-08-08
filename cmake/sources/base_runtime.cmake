@@ -15,6 +15,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/downloader.cpp
     src/checkpoint/bootstrap.cpp
     src/model/definition.cpp
+    src/model/descriptor.cpp
     src/model/architecture.cpp
     src/model/resolved.cpp
     src/model/program.cpp
@@ -22,40 +23,20 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/graph_builder.cpp
     src/composition/builtin_runtime.cpp
     src/composition/builtin_chat_profiles.cpp
-    src/models/lfm2/architecture.cpp
-    src/models/lfm2/layer_decoder.cpp
-    src/models/lfm2/metadata_decoder.cpp
     src/models/lfm2/chat_template.cpp
-    src/models/lfm2/naming_policy.cpp
     src/models/lfm2/tool_call_codec.cpp
-    src/models/granite/architecture.cpp
-    src/models/granite/topology.cpp
     src/models/granite/chat_template.cpp
-    src/models/granite/naming_policy.cpp
-    src/models/gemma4/architecture.cpp
-    src/models/gemma4/naming_policy.cpp
     src/models/gemma4/chat_template.cpp
     src/models/gemma4/tool_call_codec.cpp
     src/models/gemma4/vision.cpp
-    src/models/gemma4/runtime_module.cpp
-    src/models/minicpm5/architecture.cpp
-    src/models/minicpm5/naming_policy.cpp
     src/models/minicpm5/chat_template.cpp
     src/models/minicpm5/tool_call_codec.cpp
-    src/models/nanbeige/architecture.cpp
-    src/models/nanbeige/naming_policy.cpp
     src/models/nanbeige/chat_template.cpp
     src/models/nanbeige/tool_call_codec.cpp
-    src/models/smollm3/architecture.cpp
-    src/models/smollm3/naming_policy.cpp
     src/models/smollm3/chat_template.cpp
     src/models/smollm3/tool_call_codec.cpp
-    src/models/qwen35/architecture.cpp
-    src/models/qwen35/naming_policy.cpp
     src/models/qwen35/vision.cpp
     src/models/qwen35/chat_template.cpp
-    src/models/nemotron_h/architecture.cpp
-    src/models/nemotron_h/naming_policy.cpp
     src/models/nemotron_h/chat_template.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp

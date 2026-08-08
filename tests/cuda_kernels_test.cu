@@ -38,7 +38,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.token_policy.eos_token_ids = {7};
             shape.token_policy.pad_token_id = 0;
             shape.numerical_policy.norm_eps = 1e-5f;
-            shape.rope_type = "default";
             shape.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
@@ -61,7 +60,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.token_policy.eos_token_ids = {7};
             shape.token_policy.pad_token_id = 0;
             shape.numerical_policy.norm_eps = 1e-5f;
-            shape.rope_type = "default";
             shape.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
@@ -77,8 +75,10 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
         shape.attention_layouts.assign(
             static_cast<size_t>(shape.num_hidden_layers),
             celeg::AttentionSpec{query_heads, 8, 64, false,
-                                 celeg::AttentionMaskKind::Causal, 0,
-                                 1.0e6, 1.0, {}});
+                                 celeg::FullCausalPattern{}, {}});
+        for (auto& attention : shape.attention_layouts) {
+            attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
+        }
         shape.attention_layer_count = 0;
         shape.conv_layer_count = 0;
         for (int i = 0; i < shape.num_hidden_layers; ++i) {
@@ -288,7 +288,7 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dn.data(), norm.data(), dn.bytes(), cudaMemcpyHostToDevice));
         celeg::launch_dynamic_qk_norm_rope(
             dq.data(), dk.data(), dn.data(), dn.data(), 1, 1, 4, 0,
-            10000.0f, 1.0f, 1e-5f, true, stream.get());
+            10000.0f, 1.0f, 1e-5f, true, celeg::CudaRopeScaling{}, stream.get());
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
         CELEG_CUDA(cudaMemcpy(q.data(), dq.data(), dq.bytes(), cudaMemcpyDeviceToHost));
         CELEG_CUDA(cudaMemcpy(k.data(), dk.data(), dk.bytes(), cudaMemcpyDeviceToHost));
@@ -325,6 +325,107 @@ int main() {
         const auto expected = celeg::reference::gqa_decode_strict_bf16(
             qf, kf, vf, 2, 2, 1, 2);
         for (int i = 0; i < 4; ++i) expect_near(to_float(output[i]), expected[i], 0.01f);
+    }
+
+    // ALiBi changes the score before softmax and is lowered on the CUDA path.
+    {
+        const std::vector<float> qf = {1, 0};
+        const std::vector<float> kf = {1, 0, 0, 1};
+        const std::vector<float> vf = {2, 4, 6, 8};
+        const std::vector<__nv_bfloat16> q = {to_bf16(1), to_bf16(0)};
+        const std::vector<__nv_bfloat16> k = {
+            to_bf16(1), to_bf16(0), to_bf16(0), to_bf16(1)};
+        const std::vector<__nv_bfloat16> v = {
+            to_bf16(2), to_bf16(4), to_bf16(6), to_bf16(8)};
+        const float slope = 0.5f;
+        const int32_t position = 1;
+        celeg::DeviceBuffer<__nv_bfloat16> dq(2), dk(4), dv(4), dout(2);
+        celeg::DeviceBuffer<float> dslope(1);
+        celeg::DeviceBuffer<int32_t> dposition(1);
+        CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dslope.data(), &slope, sizeof(slope), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position), cudaMemcpyHostToDevice));
+        celeg::launch_gqa_decode_alibi_device(
+            dq.data(), dk.data(), dv.data(), dout.data(), dposition.data(),
+            dslope.data(), 1, 1, 2, 0, stream.get());
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        std::vector<__nv_bfloat16> output(2);
+        CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
+        const float s0 = std::exp(1.0f / std::sqrt(2.0f) - 0.5f);
+        const float s1 = std::exp(-0.5f);
+        const float denominator = s0 + s1;
+        expect_near(to_float(output[0]), (s0 * 2 + s1 * 6) / denominator, 0.02f);
+        expect_near(to_float(output[1]), (s0 * 4 + s1 * 8) / denominator, 0.02f);
+    }
+
+    // Latent attention keeps [latent key | decoupled rotary key] in the paged
+    // key pool and reads only the latent prefix from the value pool.
+    {
+        constexpr int latent_rank = 2;
+        constexpr int rotary_width = 2;
+        constexpr int page_tokens = 2;
+        constexpr int page_elements = page_tokens * (latent_rank + rotary_width);
+        constexpr int page_count = 2;
+        const std::vector<__nv_bfloat16> query_content = {
+            to_bf16(1.0f), to_bf16(0.0f)};
+        const std::vector<__nv_bfloat16> query_rope = {
+            to_bf16(1.0f), to_bf16(0.0f)};
+        const std::vector<__nv_bfloat16> keys = {
+            to_bf16(1.0f), to_bf16(0.0f), to_bf16(1.0f), to_bf16(0.0f),
+            to_bf16(0.0f), to_bf16(1.0f), to_bf16(0.0f), to_bf16(1.0f)};
+        const std::vector<__nv_bfloat16> values = {
+            to_bf16(2.0f), to_bf16(4.0f), to_bf16(6.0f), to_bf16(8.0f)};
+        const std::vector<__nv_bfloat16> key_ropes = {
+            to_bf16(1.0f), to_bf16(0.0f), to_bf16(0.0f), to_bf16(1.0f)};
+        const std::vector<uint32_t> page_table = {1};
+        const std::vector<int32_t> positions = {0, 1};
+        const int32_t query_position = 1;
+        celeg::DeviceBuffer<__nv_bfloat16> dquery_content(query_content.size());
+        celeg::DeviceBuffer<__nv_bfloat16> dquery_rope(query_rope.size());
+        celeg::DeviceBuffer<__nv_bfloat16> dkeys(keys.size());
+        celeg::DeviceBuffer<__nv_bfloat16> dvalues(values.size());
+        celeg::DeviceBuffer<__nv_bfloat16> dkey_ropes(key_ropes.size());
+        celeg::DeviceBuffer<__nv_bfloat16> key_pool(page_count * page_elements);
+        celeg::DeviceBuffer<__nv_bfloat16> value_pool(page_count * page_elements);
+        celeg::DeviceBuffer<__nv_bfloat16> output(latent_rank);
+        celeg::DeviceBuffer<uint32_t> dpage_table(page_table.size());
+        celeg::DeviceBuffer<int32_t> dpositions(positions.size());
+        celeg::DeviceBuffer<int32_t> dquery_position(1);
+        key_pool.zero_async(stream.get());
+        value_pool.zero_async(stream.get());
+        CELEG_CUDA(cudaMemcpy(dquery_content.data(), query_content.data(),
+                              dquery_content.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dquery_rope.data(), query_rope.data(),
+                              dquery_rope.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dkeys.data(), keys.data(), dkeys.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dvalues.data(), values.data(), dvalues.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dkey_ropes.data(), key_ropes.data(), dkey_ropes.bytes(),
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dpage_table.data(), page_table.data(), dpage_table.bytes(),
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dpositions.data(), positions.data(), dpositions.bytes(),
+                              cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dquery_position.data(), &query_position,
+                              sizeof(query_position), cudaMemcpyHostToDevice));
+        celeg::launch_store_latent_paged_batch(
+            dkeys.data(), dvalues.data(), dkey_ropes.data(), key_pool.data(),
+            value_pool.data(), dpage_table.data(), 1, dpositions.data(), 2, 0,
+            page_tokens, page_elements, 0, latent_rank, rotary_width, stream.get());
+        celeg::launch_latent_attention_paged_batch(
+            dquery_content.data(), dquery_rope.data(), key_pool.data(), value_pool.data(),
+            output.data(), dpage_table.data(), 1, dquery_position.data(), nullptr, 1, 0,
+            page_tokens, page_elements, 0, 1, latent_rank, rotary_width, 1.0f, 0,
+            stream.get());
+        std::vector<__nv_bfloat16> host_output(latent_rank);
+        CELEG_CUDA(cudaMemcpyAsync(host_output.data(), output.data(), output.bytes(),
+                                   cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        const float s0 = std::exp(2.0f);
+        const float denominator = s0 + 1.0f;
+        expect_near(to_float(host_output[0]), (s0 * 2.0f + 6.0f) / denominator, 0.03f);
+        expect_near(to_float(host_output[1]), (s0 * 4.0f + 8.0f) / denominator, 0.03f);
     }
 
     // Causal short-convolution state and C gate.
@@ -641,7 +742,7 @@ int main() {
 
 
 
-    // Fused sampler matches the legacy multi-launch pipeline.
+    // Fused sampler matches the reference multi-launch pipeline.
     {
         std::vector<__nv_bfloat16> logits = {
             to_bf16(4.0f), to_bf16(3.0f), to_bf16(2.0f),
@@ -651,37 +752,37 @@ int main() {
         constexpr float top_p = 0.85f;
         constexpr float temperature = 0.75f;
         constexpr float penalty = 1.1f;
-        uint64_t legacy_seed = 77;
-        uint64_t fused_seed = legacy_seed;
+        uint64_t reference_seed = 77;
+        uint64_t fused_seed = reference_seed;
 
         celeg::DeviceBuffer<__nv_bfloat16> dlogits(logits.size());
         celeg::DeviceBuffer<uint8_t> dseen(seen.size());
-        celeg::DeviceBuffer<float> legacy_scores(logits.size());
+        celeg::DeviceBuffer<float> reference_scores(logits.size());
         celeg::DeviceBuffer<float> fused_scores(logits.size());
-        celeg::DeviceBuffer<float> legacy_values(top_k), fused_values(top_k);
-        celeg::DeviceBuffer<int32_t> legacy_indices(top_k), fused_indices(top_k);
-        celeg::DeviceBuffer<int32_t> legacy_result(1), fused_result(1);
-        celeg::DeviceBuffer<uint64_t> legacy_rng(1), fused_rng(1);
+        celeg::DeviceBuffer<float> reference_values(top_k), fused_values(top_k);
+        celeg::DeviceBuffer<int32_t> reference_indices(top_k), fused_indices(top_k);
+        celeg::DeviceBuffer<int32_t> reference_result(1), fused_result(1);
+        celeg::DeviceBuffer<uint64_t> reference_rng(1), fused_rng(1);
         CELEG_CUDA(cudaMemcpy(dlogits.data(), logits.data(), dlogits.bytes(),
                             cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dseen.data(), seen.data(), dseen.bytes(),
                             cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(legacy_rng.data(), &legacy_seed, sizeof(legacy_seed),
+        CELEG_CUDA(cudaMemcpy(reference_rng.data(), &reference_seed, sizeof(reference_seed),
                             cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(fused_rng.data(), &fused_seed, sizeof(fused_seed),
                             cudaMemcpyHostToDevice));
 
         celeg::launch_prepare_sampling_scores(
-            dlogits.data(), dseen.data(), legacy_scores.data(),
+            dlogits.data(), dseen.data(), reference_scores.data(),
             static_cast<int>(logits.size()), temperature, penalty, stream.get());
         for (int rank = 0; rank < top_k; ++rank) {
-            celeg::launch_select_topk(legacy_scores.data(), legacy_values.data(),
-                                    legacy_indices.data(), rank,
+            celeg::launch_select_topk(reference_scores.data(), reference_values.data(),
+                                    reference_indices.data(), rank,
                                     static_cast<int>(logits.size()), stream.get());
         }
-        celeg::launch_sample_topk(legacy_values.data(), legacy_indices.data(),
-                                top_k, top_p, legacy_rng.data(),
-                                legacy_result.data(), stream.get());
+        celeg::launch_sample_topk(reference_values.data(), reference_indices.data(),
+                                top_k, top_p, reference_rng.data(),
+                                reference_result.data(), stream.get());
 
         celeg::launch_fused_sample_topk(
             dlogits.data(), dseen.data(), fused_scores.data(),
@@ -689,14 +790,14 @@ int main() {
             static_cast<int>(logits.size()), temperature, penalty,
             top_k, top_p, fused_rng.data(), fused_result.data(), stream.get());
 
-        int32_t legacy_token = -1;
+        int32_t reference_token = -1;
         int32_t fused_token = -1;
-        CELEG_CUDA(cudaMemcpyAsync(&legacy_token, legacy_result.data(), sizeof(legacy_token),
+        CELEG_CUDA(cudaMemcpyAsync(&reference_token, reference_result.data(), sizeof(reference_token),
                                  cudaMemcpyDeviceToHost, stream.get()));
         CELEG_CUDA(cudaMemcpyAsync(&fused_token, fused_result.data(), sizeof(fused_token),
                                  cudaMemcpyDeviceToHost, stream.get()));
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
-        CELEG_TEST_CHECK(legacy_token == fused_token);
+        CELEG_TEST_CHECK(reference_token == fused_token);
     }
 
     // Fused sampler produces the exact ordered top-k at realistic vocabulary

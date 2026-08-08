@@ -69,19 +69,16 @@ void require_size(uint32_t actual, size_t expected, const char* name);
 celeg::GenerationConfig generation(const celeg_generation_options& source);
 celeg::CpuModelOptions cpu_options(const celeg_cpu_model_config& source);
 celeg::CpuModelOptions cpu_options(const celeg_cpu_model_options& source);
-celeg::CpuModelOptions cpu_options(const celeg_engine_model_options& source);
 celeg::CpuConcurrentEngineOptions cpu_engine_options(
-    const celeg_engine_options& source);
+    const celeg_cpu_engine_options& source);
 std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     const char* path, const celeg_engine_options& options);
-std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle_v2(
-    const char* path, const celeg_engine_v2_options& options);
 celeg_request_status status(celeg::serve::RequestStatus source);
 
 #ifdef CELEG_API_WITH_CUDA
-celeg::CudaModelOptions cuda_options(const celeg_engine_model_options& source);
+celeg::CudaModelOptions cuda_options(const celeg_cuda_model_options& source);
 celeg::ConcurrentEngineOptions cuda_engine_options(
-    const celeg_engine_options& source);
+    const celeg_cuda_engine_options& source);
 #endif
 
 } // namespace celeg::api

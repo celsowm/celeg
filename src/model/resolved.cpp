@@ -1,11 +1,126 @@
 #include "celeg/model/resolved.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 
 namespace celeg {
+
+void derive_runtime_topology_from_graph(RuntimeTopology& topology,
+                                        const ModelGraph& graph) {
+    if (graph.layers.empty()) {
+        throw std::invalid_argument("cannot derive runtime shape from an empty graph");
+    }
+    const std::size_t layer_count = graph.layers.size();
+    topology.num_hidden_layers = static_cast<int>(layer_count);
+    topology.norm_after_layers = graph.norm_after_layers;
+    topology.mixer_kinds.resize(layer_count);
+    topology.feed_forward_kinds.resize(layer_count);
+    topology.feed_forward_intermediates.resize(layer_count);
+    topology.feed_forward_activations.resize(layer_count);
+    topology.attention_layouts.resize(layer_count);
+    topology.gated_delta_net_layouts.clear();
+    topology.mamba2_layouts.clear();
+    topology.mlp_only_layouts.resize(layer_count);
+    topology.attention_slot_for_layer.assign(layer_count, -1);
+    topology.layer_for_attention_slot.clear();
+    topology.attention_layer_count = 0;
+    topology.conv_layer_count = 0;
+    topology.gated_delta_net_layer_count = 0;
+    topology.mamba2_layer_count = 0;
+    topology.mlp_only_layer_count = 0;
+    topology.num_dense_layers = 0;
+    topology.mamba2_intermediate = 0;
+    topology.max_feed_forward_intermediate = 0;
+    topology.dense_intermediate = 0;
+    topology.moe_intermediate = 0;
+    topology.shared_expert_intermediate = 0;
+    topology.num_experts = 0;
+    topology.experts_per_token = 0;
+    topology.normalize_topk = false;
+    topology.moe_router_softmax = false;
+    topology.use_expert_bias = false;
+    topology.routed_scaling_factor = 1.0f;
+    topology.has_per_layer_input = false;
+    topology.per_layer_input_size = 0;
+    int maximum_conv_cache = 0;
+    int maximum_conv_dim = 0;
+    for (std::size_t index = 0; index < layer_count; ++index) {
+        const LayerSpec& layer = graph.layers[index];
+        topology.mixer_kinds[index] = layer.mixer_kind();
+        topology.feed_forward_kinds[index] = layer.feed_forward_kind();
+        std::visit([&](const auto& mixer) {
+            using Mixer = std::decay_t<decltype(mixer)>;
+            if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
+                topology.attention_layouts[index] = mixer;
+                topology.attention_slot_for_layer[index] = topology.attention_layer_count++;
+                topology.layer_for_attention_slot.push_back(static_cast<int>(index));
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+                maximum_conv_cache = std::max(maximum_conv_cache, mixer.cache_length);
+                maximum_conv_dim = std::max(maximum_conv_dim, mixer.channels);
+                ++topology.conv_layer_count;
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                topology.gated_delta_net_layouts.resize(layer_count);
+                topology.gated_delta_net_layouts[index] = mixer;
+                ++topology.gated_delta_net_layer_count;
+            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                topology.mamba2_layouts.resize(layer_count);
+                topology.mamba2_layouts[index] = mixer;
+                topology.mamba2_intermediate = std::max(
+                    topology.mamba2_intermediate, mixer.intermediate_size);
+                ++topology.mamba2_layer_count;
+            } else {
+                topology.mlp_only_layouts[index] = mixer;
+                ++topology.mlp_only_layer_count;
+            }
+        }, layer.mixer);
+        std::visit([&](const auto& feed_forward) {
+            using FeedForward = std::decay_t<decltype(feed_forward)>;
+            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+                topology.feed_forward_intermediates[index] = feed_forward.intermediate_size;
+                topology.feed_forward_activations[index] = feed_forward.activation;
+                ++topology.num_dense_layers;
+                topology.dense_intermediate = std::max(
+                    topology.dense_intermediate, feed_forward.intermediate_size);
+            } else if constexpr (std::is_same_v<FeedForward, MlpBlockSpec>) {
+                topology.feed_forward_intermediates[index] = feed_forward.intermediate_size;
+                topology.feed_forward_activations[index] = feed_forward.activation;
+                ++topology.num_dense_layers;
+                topology.dense_intermediate = std::max(
+                    topology.dense_intermediate, feed_forward.intermediate_size);
+            } else {
+                topology.feed_forward_intermediates[index] = feed_forward.intermediate_size;
+                topology.feed_forward_activations[index] = ActivationKind::SwiGLU;
+                topology.moe_intermediate = std::max(
+                    topology.moe_intermediate, feed_forward.intermediate_size);
+                topology.num_experts = std::max(topology.num_experts, feed_forward.num_experts);
+                topology.experts_per_token = std::max(
+                    topology.experts_per_token, feed_forward.experts_per_token);
+                topology.normalize_topk = topology.normalize_topk || feed_forward.normalize_topk;
+                topology.moe_router_softmax = topology.moe_router_softmax ||
+                    feed_forward.router_softmax;
+                topology.use_expert_bias = topology.use_expert_bias ||
+                    feed_forward.use_expert_bias;
+                topology.routed_scaling_factor = feed_forward.routed_scaling_factor;
+                topology.shared_expert_intermediate = std::max(
+                    topology.shared_expert_intermediate, feed_forward.shared_intermediate_size);
+            }
+        }, layer.feed_forward);
+        if (layer.per_layer_input.enabled) {
+            topology.has_per_layer_input = true;
+            topology.per_layer_input_size = layer.per_layer_input.input_size;
+        }
+    }
+    topology.conv_cache = maximum_conv_cache;
+    topology.conv_dim = maximum_conv_dim;
+    for (int width : topology.feed_forward_intermediates) {
+        topology.max_feed_forward_intermediate = std::max(
+            topology.max_feed_forward_intermediate, width);
+    }
+}
 
 void ModelGraph::validate() const {
     if (layers.empty()) {
@@ -17,11 +132,77 @@ void ModelGraph::validate() const {
         !std::isfinite(final_logit_softcap) || final_logit_softcap < 0.0f) {
         throw std::runtime_error("resolved model graph has invalid policies");
     }
+    for (size_t index = 0; index < norm_after_layers.size(); ++index) {
+        const int layer = norm_after_layers[index];
+        if (layer < 0 || layer >= static_cast<int>(layers.size()) - 1 ||
+            (index > 0 && norm_after_layers[index - 1] >= layer)) {
+            throw std::runtime_error("resolved model graph has invalid norm boundary");
+        }
+    }
     for (const LayerSpec& layer : layers) {
         if (!(layer.operator_norm.epsilon > 0.0f) ||
             !std::isfinite(layer.residual.multiplier) ||
             !std::isfinite(layer.layer_scalar)) {
             throw std::runtime_error("resolved model graph has invalid layer policy");
+        }
+    }
+}
+
+void AlibiBiasSpec::validate(int query_heads) const {
+    if (query_heads <= 0 || slopes.size() != static_cast<size_t>(query_heads)) {
+        throw std::runtime_error("ALiBi slope count does not match query heads");
+    }
+    for (float slope : slopes) {
+        if (!(slope > 0.0f) || !std::isfinite(slope)) {
+            throw std::runtime_error("ALiBi slopes must be finite and positive");
+        }
+    }
+}
+
+void RelativePositionBiasSpec::validate() const {
+    if (bucket_count <= 0 || max_distance <= 0) {
+        throw std::runtime_error("relative position bias dimensions must be positive");
+    }
+    if (bidirectional && (bucket_count < 2 || (bucket_count % 2) != 0)) {
+        throw std::runtime_error(
+            "bidirectional relative position bias requires an even bucket count");
+    }
+}
+
+void AttentionStateStorageSpec::validate(const AttentionStateSpec& state) const {
+    const auto validate_scalar = [](StateScalarType scalar) {
+        switch (scalar) {
+        case StateScalarType::FP32:
+        case StateScalarType::FP16:
+        case StateScalarType::BF16:
+        case StateScalarType::FP8:
+        case StateScalarType::INT8:
+        case StateScalarType::INT4:
+            return;
+        }
+        throw std::runtime_error("invalid attention state scalar type");
+    };
+    const auto validate_granularity = [](StateQuantizationGranularity granularity) {
+        switch (granularity) {
+        case StateQuantizationGranularity::PerTensor:
+        case StateQuantizationGranularity::PerHead:
+        case StateQuantizationGranularity::PerToken:
+        case StateQuantizationGranularity::PerBlock:
+            return;
+        }
+        throw std::runtime_error("invalid attention state quantization granularity");
+    };
+    validate_scalar(key);
+    validate_scalar(value);
+    validate_scalar(latent);
+    validate_scalar(rotary);
+    validate_scalar(recurrent);
+    validate_granularity(granularity);
+    if (const auto* latent_state = std::get_if<LatentAttentionStateSpec>(&state)) {
+        if (latent_state->latent_rank <= 0 || latent_state->rope_head_dim < 0 ||
+            latent_state->nope_head_dim < 0 ||
+            latent_state->rope_head_dim + latent_state->nope_head_dim <= 0) {
+            throw std::runtime_error("invalid latent attention state dimensions");
         }
     }
 }
@@ -56,8 +237,58 @@ std::string RuntimeTopology::fingerprint() const {
     for (int layer : checkpoint_layer_for_layer) out << '-' << layer;
     out << "-norms";
     for (int layer : norm_after_layers) out << '-' << layer;
-    out << "-mr" << mrope_interleaved << '-' << mrope_section[0]
-        << '-' << mrope_section[1] << '-' << mrope_section[2];
+    for (const AttentionSpec& attention : attention_layouts) {
+        if (const auto* rope = attention.rope_position()) {
+            out << "-r" << rope->theta << '-' << rope->rotary_fraction
+                << '-' << static_cast<int>(rope->scaling.kind)
+                << '-' << rope->scaling.factor
+                << '-' << rope->scaling.original_context;
+        } else {
+            out << "-rnone";
+        }
+        if (const auto* multi = attention.multi_axis_position()) {
+            out << "-ma" << multi->interleaved;
+            for (int section : multi->sections) out << '-' << section;
+        }
+        std::visit([&out](const auto& pattern) {
+            using Pattern = std::decay_t<decltype(pattern)>;
+            if constexpr (std::is_same_v<Pattern, FullCausalPattern>) {
+                out << "-causal";
+            } else if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
+                out << "-slide" << pattern.window;
+            } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
+                out << "-bidir";
+            } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
+                out << "-prefix" << pattern.prefix_length;
+            } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
+                out << "-block" << pattern.block_size << '-' << pattern.local_blocks
+                    << '-' << pattern.global_blocks;
+            } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
+                out << "-dynamic" << pattern.block_size << '-'
+                    << pattern.max_selected_blocks;
+            }
+        }, attention.pattern);
+        out << "-state" << static_cast<int>(attention.state_storage.key) << '-'
+            << static_cast<int>(attention.state_storage.value) << '-'
+            << static_cast<int>(attention.state_storage.latent) << '-'
+            << static_cast<int>(attention.state_storage.rotary) << '-'
+            << static_cast<int>(attention.state_storage.recurrent) << '-'
+            << static_cast<int>(attention.state_storage.granularity) << '-'
+            << attention.state_storage.paged;
+        std::visit([&out](const auto& state) {
+            using State = std::decay_t<decltype(state)>;
+            if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
+                out << "-ordinary-kv";
+            } else {
+                out << "-latent" << state.latent_rank << '-'
+                    << state.rope_head_dim << '-' << state.nope_head_dim << '-'
+                    << state.decoupled_rope;
+            }
+        }, attention.state);
+        out << "-src" << static_cast<int>(attention.sources.query) << '-'
+            << static_cast<int>(attention.sources.key_value) << '-'
+            << attention.sources.memory_slot;
+    }
     for (MixerKind kind : mixer_kinds) {
         switch (kind) {
         case MixerKind::Attention: out << "-a"; break;
@@ -130,18 +361,6 @@ void RuntimeTopology::validate() const {
         validate_token_id(token, "EOS");
     }
     numerical_policy.validate();
-    if (mrope_interleaved) {
-        if (mrope_section[0] <= 0 || mrope_section[1] <= 0 || mrope_section[2] <= 0) {
-            throw std::runtime_error("M-RoPE requires three positive sections");
-        }
-        for (const AttentionSpec& layout : attention_layouts) {
-            if (layout.query_heads > 0 &&
-                layout.positional_encoding == PositionalEncodingKind::Rope &&
-                layout.rotary_pairs() <= 0) {
-                throw std::runtime_error("M-RoPE requires a positive rotary dimension");
-            }
-        }
-    }
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
             std::to_string(mixer_kinds.size()) + " expected=" +
@@ -205,18 +424,48 @@ void RuntimeTopology::validate() const {
             if (layout.query_heads <= 0 || layout.key_value_heads <= 0 ||
                 layout.query_heads % layout.key_value_heads != 0 ||
                 layout.head_dim <= 0 || (layout.head_dim % 2) != 0 ||
-                (layout.positional_encoding == PositionalEncodingKind::Rope &&
-                 (layout.rope_theta <= 0.0 || layout.rotary_fraction <= 0.0 ||
-                  layout.rotary_fraction > 1.0)) ||
-                (layout.positional_encoding == PositionalEncodingKind::None &&
-                 layout.query_key_norm) ||
-                layout.rotary_fraction > 1.0) {
+                (layout.rope_position() != nullptr && layout.rotary_pairs() <= 0) ||
+                (std::holds_alternative<NoPositionEncodingSpec>(layout.position) &&
+                 layout.query_key_norm)) {
                 throw std::runtime_error("invalid per-layer attention layout");
             }
-            if (layout.mask == AttentionMaskKind::SlidingCausal &&
-                layout.sliding_window <= 0) {
-                throw std::runtime_error("sliding attention requires a window");
+            if (const auto* rope = layout.rope_position()) {
+                try {
+                    if (const auto* multi = layout.multi_axis_position()) {
+                        multi->validate(layout.head_dim);
+                    } else {
+                        rope->validate(layout.head_dim);
+                    }
+                } catch (const std::exception& error) {
+                    throw std::runtime_error(std::string("invalid per-layer position specification: ") +
+                                             error.what());
+                }
             }
+            if (const auto* alibi = std::get_if<AlibiBiasSpec>(&layout.bias)) {
+                alibi->validate(layout.query_heads);
+            } else if (const auto* relative =
+                           std::get_if<RelativePositionBiasSpec>(&layout.bias)) {
+                relative->validate();
+            }
+            std::visit([](const auto& pattern) {
+                using Pattern = std::decay_t<decltype(pattern)>;
+                if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
+                    if (pattern.window <= 0) throw std::runtime_error(
+                        "sliding attention requires a window");
+                } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
+                    if (pattern.prefix_length < 0) throw std::runtime_error(
+                        "prefix-LM attention requires a non-negative prefix");
+                } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
+                    if (pattern.block_size <= 0 || pattern.local_blocks < 0 ||
+                        pattern.global_blocks < 0) throw std::runtime_error(
+                        "block-sparse attention has invalid geometry");
+                } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
+                    if (pattern.block_size <= 0 || pattern.max_selected_blocks <= 0) {
+                        throw std::runtime_error("dynamic sparse attention has invalid geometry");
+                    }
+                }
+            }, layout.pattern);
+            layout.state_storage.validate(layout.state);
     }
 }
 
@@ -230,6 +479,9 @@ void ResolvedModel::validate() const {
         graph.logits_divisor != topology.numerical_policy.logits_divisor ||
         graph.final_norm.epsilon != topology.numerical_policy.norm_eps) {
         throw std::runtime_error("resolved graph/topology numerical policy mismatch");
+    }
+    if (graph.norm_after_layers != topology.norm_after_layers) {
+        throw std::runtime_error("resolved graph/topology norm boundary mismatch");
     }
     for (size_t layer = 0; layer < graph.layers.size(); ++layer) {
         if (graph.layers[layer].mixer_kind() != topology.mixer_kinds[layer] ||

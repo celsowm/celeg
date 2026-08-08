@@ -83,6 +83,15 @@ public:
     int layer_kv_heads(int attention_slot) const {
         return layout_.layers.at(static_cast<size_t>(attention_slot)).kv_heads;
     }
+    bool layer_is_latent(int attention_slot) const {
+        return layout_.layers.at(static_cast<size_t>(attention_slot)).latent;
+    }
+    int layer_latent_rank(int attention_slot) const {
+        return layout_.layers.at(static_cast<size_t>(attention_slot)).latent_rank;
+    }
+    int layer_rotary_width(int attention_slot) const {
+        return layout_.layers.at(static_cast<size_t>(attention_slot)).rotary_width;
+    }
     // Returns the attention slot for a given model layer index, or -1 if the
     // layer is a convolution layer.
     int attention_slot(int model_layer) const {

@@ -4,6 +4,7 @@
 #include "celeg/backend/cpu/gguf.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
+#include "celeg/model/definition.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -106,21 +107,19 @@ void cpu_relu2(const float* input, float* output, size_t count);
 void cpu_gelu_tanh(float* data, size_t count);
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
-                      float rope_theta, float eps,
-                      float rotary_fraction = 1.0f);
+                      const RopePositionSpec& rope, float eps);
 void cpu_rope(float* data, int heads, int head_dim, int position,
-              float rope_theta, float rotary_fraction = 1.0f);
+              const RopePositionSpec& rope);
 void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
                             int heads, int head_dim,
                             const std::array<int32_t, 3>& positions,
                             const std::array<int, 3>& sections,
-                            bool interleaved, float rope_theta, float eps,
-                            float rotary_fraction = 1.0f);
+                            bool interleaved, const RopePositionSpec& rope,
+                            float eps);
 void cpu_rope_mrope(float* data, int heads, int head_dim,
                     const std::array<int32_t, 3>& positions,
                     const std::array<int, 3>& sections,
-                    bool interleaved, float rope_theta,
-                    float rotary_fraction = 1.0f);
+                    bool interleaved, const RopePositionSpec& rope);
 void cpu_gqa_decode(const float* q, const float* key_cache,
                     const float* value_cache, float* output,
                     int sequence_length, int q_heads, int kv_heads,

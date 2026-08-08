@@ -1,68 +1,73 @@
 #include "celeg/model/runtime_modules.hpp"
 
-#include "celeg/models/gemma4/architecture.hpp"
 #include "celeg/models/gemma4/chat_template.hpp"
 #include "celeg/models/gemma4/vision.hpp"
-#include "celeg/models/granite/architecture.hpp"
 #include "celeg/models/granite/chat_template.hpp"
-#include "celeg/models/lfm2/architecture.hpp"
 #include "celeg/models/lfm2/chat_template.hpp"
-#include "celeg/models/minicpm5/architecture.hpp"
 #include "celeg/models/minicpm5/chat_template.hpp"
-#include "celeg/models/nanbeige/architecture.hpp"
+#include "celeg/model/descriptor.hpp"
 #include "celeg/models/nanbeige/chat_template.hpp"
-#include "celeg/models/nemotron_h/architecture.hpp"
 #include "celeg/models/nemotron_h/chat_template.hpp"
-#include "celeg/models/qwen35/architecture.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
 #include "celeg/models/qwen35/vision.hpp"
-#include "celeg/models/smollm3/architecture.hpp"
 #include "celeg/models/smollm3/chat_template.hpp"
 #include "celeg/runtime/context.hpp"
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
 
+#include <filesystem>
+
 namespace celeg {
 namespace {
 
-using ArchitectureRegistrar = void (*)(ArchitectureCatalog&);
 using ChatRegistrar = void (*)(ChatProfileCatalog&);
 
-struct BuiltinFamilyRegistration {
+struct BuiltinChatRegistration {
     std::string_view module_id;
-    ArchitectureRegistrar architecture;
     ChatRegistrar chat;
 };
 
-constexpr BuiltinFamilyRegistration kBuiltinFamilies[] = {
-    {"lfm2", &detail::register_lfm2_architecture, &add_lfm2_chat_profile},
-    {"granite", &detail::register_granite_architecture, &add_granite_chat_profile},
-    {"gemma4", &detail::register_gemma4_architecture, &add_gemma4_chat_profile},
-    {"minicpm5", &detail::register_minicpm5_architecture, &add_minicpm5_chat_profile},
-    {"nanbeige42", &detail::register_nanbeige42_architecture, &add_nanbeige42_chat_profile},
-    {"smollm3", &detail::register_smollm3_architecture, &add_smollm3_chat_profile},
-    {"qwen35", &detail::register_qwen35_architecture, &add_qwen35_chat_profile},
-    {"nemotron-h", &detail::register_nemotron_h_architecture, &add_nemotron_h_chat_profile},
+constexpr BuiltinChatRegistration kDeclarativeChats[] = {
+    {"lfm2-chat", &add_lfm2_chat_profile},
+    {"granite-chat", &add_granite_chat_profile},
+    {"gemma4-chat", &add_gemma4_chat_profile},
+    {"minicpm5-chat", &add_minicpm5_chat_profile},
+    {"smollm3-chat", &add_smollm3_chat_profile},
+    {"nanbeige42-chat", &add_nanbeige42_chat_profile},
+    {"qwen35-chat", &add_qwen35_chat_profile},
+    {"nemotron-h-chat", &add_nemotron_h_chat_profile},
 };
 
-class ArchitectureFamilyModule final : public IRuntimeModule {
+class DeclarativeArchitectureModule final : public IRuntimeModule {
 public:
-    ArchitectureFamilyModule(std::string_view module_id,
-                             ArchitectureRegistrar architecture,
-                             ChatRegistrar chat)
-        : id_(module_id), architecture_(architecture), chat_(chat) {}
-
-    std::string_view id() const override { return id_; }
+    std::string_view id() const override { return "declarative-dense-architectures"; }
 
     void register_into(RuntimeBuilder& builder) const override {
-        architecture_(builder.architecture_catalog_for_registration());
-        chat_(builder.chat_profile_catalog_for_registration());
+        std::filesystem::path descriptor_directory(CELEG_DESCRIPTOR_DIRECTORY);
+        if (!std::filesystem::exists(descriptor_directory)) {
+#ifdef CELEG_DESCRIPTOR_INSTALL_DIRECTORY
+            descriptor_directory = std::filesystem::path(CELEG_DESCRIPTOR_INSTALL_DIRECTORY);
+#endif
+        }
+        register_descriptor_architectures(
+            builder.architecture_catalog_for_registration(),
+            descriptor_directory);
+    }
+};
+
+class ChatProfileModule final : public IRuntimeModule {
+public:
+    ChatProfileModule(std::string_view id, ChatRegistrar registrar)
+        : id_(id), registrar_(registrar) {}
+
+    std::string_view id() const override { return id_; }
+    void register_into(RuntimeBuilder& builder) const override {
+        registrar_(builder.chat_profile_catalog_for_registration());
     }
 
 private:
     std::string_view id_;
-    ArchitectureRegistrar architecture_;
-    ChatRegistrar chat_;
+    ChatRegistrar registrar_;
 };
 
 class BuiltinTokenizerModule final : public IRuntimeModule {
@@ -104,9 +109,9 @@ public:
 
 std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
     std::vector<std::unique_ptr<IRuntimeModule>> modules;
-    for (const BuiltinFamilyRegistration& family : kBuiltinFamilies) {
-        modules.push_back(std::make_unique<ArchitectureFamilyModule>(
-            family.module_id, family.architecture, family.chat));
+    modules.push_back(std::make_unique<DeclarativeArchitectureModule>());
+    for (const BuiltinChatRegistration& chat : kDeclarativeChats) {
+        modules.push_back(std::make_unique<ChatProfileModule>(chat.module_id, chat.chat));
     }
     modules.push_back(std::make_unique<BuiltinTokenizerModule>());
     modules.push_back(std::make_unique<Gemma4VisionModule>());

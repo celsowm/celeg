@@ -507,12 +507,79 @@ void CudaCompiledModel::load_checkpoint_weights(
             attention_layer.layout = resources_.shape_.attention_layout(i);
             const std::string query_name = tensor_name(
                 resources_.model_.weight_plan.requests, TensorRole::AttentionQuery, i);
-            const HostTensorView query_source = repo.tensor(query_name);
-            if (query_source.shape.size() == 2 &&
-                query_source.shape[0] == 2LL * attention_layer.layout.query_width()) {
-                attention_layer.layout.query_gate = true;
-            }
             const AttentionSpec& layout = attention_layer.layout;
+            if (!layout.uses_latent_state()) {
+                const HostTensorView query_source = repo.tensor(query_name);
+                if (query_source.shape.size() == 2 &&
+                    query_source.shape[0] == 2LL * attention_layer.layout.query_width()) {
+                    attention_layer.layout.query_gate = true;
+                }
+            }
+            if (const auto* alibi = std::get_if<AlibiBiasSpec>(&layout.bias)) {
+                if (static_cast<int>(alibi->slopes.size()) != layout.query_heads) {
+                    throw std::invalid_argument("CUDA ALiBi slope count does not match query heads");
+                }
+                attention_layer.alibi_slopes.reset(alibi->slopes.size());
+                CELEG_CUDA(cudaMemcpy(
+                    attention_layer.alibi_slopes.data(), alibi->slopes.data(),
+                    attention_layer.alibi_slopes.bytes(), cudaMemcpyHostToDevice));
+            }
+            if (layout.uses_latent_state()) {
+                if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+                    throw std::invalid_argument(
+                        "CUDA latent attention currently requires BF16 state storage");
+                }
+                const auto& latent = *layout.latent_state();
+                attention_layer.latent_query = resources_.weight_loader_->load_linear_weight(
+                    repo, tensor_name(resources_.model_.weight_plan.requests,
+                                      TensorRole::AttentionLatentQuery, i),
+                    {layout.latent_query_content_width(), resources_.shape_.hidden});
+                if (layout.latent_query_rope_width() != 0) {
+                    attention_layer.latent_query_rope = resources_.weight_loader_->load_linear_weight(
+                        repo, tensor_name(resources_.model_.weight_plan.requests,
+                                          TensorRole::AttentionLatentQueryRope, i),
+                        {layout.latent_query_rope_width(), resources_.shape_.hidden});
+                }
+                const bool owns_latent_state =
+                    !layout.kv_sharing.shared() || layout.kv_sharing.publishes;
+                if (owns_latent_state) {
+                    attention_layer.latent_key = resources_.weight_loader_->load_linear_weight(
+                        repo, tensor_name(resources_.model_.weight_plan.requests,
+                                          TensorRole::AttentionLatentKey, i),
+                        {latent.latent_rank, resources_.shape_.hidden});
+                    attention_layer.latent_value = resources_.weight_loader_->load_linear_weight(
+                        repo, tensor_name(resources_.model_.weight_plan.requests,
+                                          TensorRole::AttentionLatentValue, i),
+                        {latent.latent_rank, resources_.shape_.hidden});
+                    if (latent.decoupled_rope && latent.rope_head_dim != 0) {
+                        attention_layer.latent_key_rope = resources_.weight_loader_->load_linear_weight(
+                            repo, tensor_name(resources_.model_.weight_plan.requests,
+                                              TensorRole::AttentionLatentKeyRope, i),
+                            {latent.rope_head_dim, resources_.shape_.hidden});
+                    }
+                }
+                attention_layer.out = resources_.weight_loader_->load_linear_weight(
+                    repo, tensor_name(resources_.model_.weight_plan.requests,
+                                      TensorRole::AttentionLatentOutput, i),
+                    {resources_.shape_.hidden, layout.latent_query_content_width()});
+                if (resources_.options_.allocate_local_kv_cache && owns_latent_state) {
+                    attention_layer.latent_key_cache.reset(
+                        static_cast<size_t>(max_context_) * latent.latent_rank);
+                    attention_layer.latent_value_cache.reset(
+                        static_cast<size_t>(max_context_) * latent.latent_rank);
+                    if (latent.decoupled_rope && latent.rope_head_dim != 0) {
+                        attention_layer.latent_key_rope_cache.reset(
+                            static_cast<size_t>(max_context_) * latent.rope_head_dim);
+                    }
+                }
+                if (layout.kv_sharing.publishes) {
+                    shared_owner[static_cast<size_t>(layout.kv_sharing.group)] = i;
+                    attention_layer.kv_owner_layer = i;
+                }
+                if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
+                resources_.layers_.emplace_back(std::move(attention_layer));
+                continue;
+            }
             attention_layer.query = resources_.weight_loader_->load_linear_weight(
                 repo, query_name,
                 {layout.query_projection_width(), resources_.shape_.hidden});

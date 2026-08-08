@@ -99,6 +99,33 @@ void ExpertMlpProgram::validate() const {
     }
 }
 
+void CompiledAttentionStateLayout::validate() const {
+    if (key_width < 0 || value_width < 0 || latent_width < 0 || rotary_width < 0 ||
+        persistent_elements == 0 ||
+        persistent_elements != key_elements + value_elements +
+            latent_elements + rotary_elements) {
+        throw std::invalid_argument("invalid compiled attention state layout");
+    }
+    if (kind == CompiledStateLayoutKind::OrdinaryKv &&
+        (key_width <= 0 || value_width <= 0 || latent_width != 0 || rotary_width != 0 ||
+         key_elements == 0 || value_elements == 0 || latent_elements != 0 ||
+         rotary_elements != 0)) {
+        throw std::invalid_argument("ordinary KV state layout has invalid widths");
+    }
+    if (kind == CompiledStateLayoutKind::Latent &&
+        (latent_width <= 0 || latent_elements == 0)) {
+        throw std::invalid_argument("latent state layout has no persistent latent width");
+    }
+    (void)scalar_bytes(storage.key);
+    (void)scalar_bytes(storage.value);
+    (void)scalar_bytes(storage.latent);
+    (void)scalar_bytes(storage.rotary);
+    (void)scalar_bytes(storage.recurrent);
+    if (persistent_bytes() == 0) {
+        throw std::invalid_argument("compiled attention state has zero byte size");
+    }
+}
+
 std::string ExpertMlpProgram::fingerprint() const {
     std::ostringstream out;
     append_field(out, activation);
@@ -215,6 +242,14 @@ void CompiledModelProgram::validate() const {
         }
     }
     for (const auto& layer : layers) {
+        switch (layer.chunk_capability) {
+        case CompiledChunkCapability::Native:
+        case CompiledChunkCapability::SequentialAdapter:
+        case CompiledChunkCapability::Unsupported:
+            break;
+        default:
+            throw std::invalid_argument("invalid compiled chunk capability");
+        }
         if (layer.weight_request_indices.empty()) {
             throw std::invalid_argument("compiled layer has no weight plan");
         }
@@ -236,6 +271,13 @@ void CompiledModelProgram::validate() const {
         if (layer.mixer == CompiledMixer::Attention && !layer.attention) {
             throw std::invalid_argument("compiled attention layer has no attention semantics");
         }
+        if (layer.attention && !layer.state_layout) {
+            throw std::invalid_argument("compiled attention layer has no state layout");
+        }
+        if (!layer.attention && layer.state_layout) {
+            throw std::invalid_argument("non-attention layer has an attention state layout");
+        }
+        if (layer.state_layout) layer.state_layout->validate();
         if (layer.mixer == CompiledMixer::ShortConvolution && !layer.short_convolution) {
             throw std::invalid_argument("compiled convolution layer has no convolution semantics");
         }
@@ -291,7 +333,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     if (model.graph.layers.empty()) throw std::invalid_argument("model has no layers");
     CompiledModelProgram program;
     program.identity = model.provenance.identity;
-    program.norm_after_layers = model.topology.norm_after_layers;
+    program.norm_after_layers = model.graph.norm_after_layers;
     program.per_layer_input = PerLayerInputPlan::derive(model);
     program.layers.reserve(model.graph.layers.size());
 
@@ -305,6 +347,13 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
 
     for (std::size_t layer_index = 0; layer_index < model.graph.layers.size(); ++layer_index) {
         const LayerSpec& layer = model.graph.layers[layer_index];
+        if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
+            if (!attention->rope_position() &&
+                !std::holds_alternative<NoPositionEncodingSpec>(attention->position)) {
+                throw std::invalid_argument(
+                    "model program does not implement this position policy");
+            }
+        }
         CompiledLayerProgram compiled{
             layer.mixer_kind() == MixerKind::Attention ? CompiledMixer::Attention :
             layer.mixer_kind() == MixerKind::ShortConvolution ? CompiledMixer::ShortConvolution :
@@ -314,9 +363,14 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             layer.feed_forward_kind() == FeedForwardKind::Dense
                 ? CompiledFeedForward::Dense : CompiledFeedForward::MixtureOfExperts,
             layer.execute_feed_forward,
+            CompiledChunkCapability::Native,
             {}, {}, {}, {},
             0, ActivationKind::SwiGLU,
             {}, std::nullopt};
+        if (layer.mixer_kind() == MixerKind::Mamba2 ||
+            layer.mixer_kind() == MixerKind::MlpOnly) {
+            compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;
+        }
         std::visit([&](const auto& mixer) {
             using Mixer = std::decay_t<decltype(mixer)>;
             if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
@@ -349,6 +403,33 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         }
         if (compiled.weight_request_indices.empty()) {
             throw std::invalid_argument("layer has no resolved weight requests");
+        }
+        if (compiled.attention.has_value()) {
+            CompiledAttentionStateLayout state_layout;
+            const AttentionSpec& attention = *compiled.attention;
+            state_layout.storage = attention.state_storage;
+            std::visit([&](const auto& state) {
+                using State = std::decay_t<decltype(state)>;
+                if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
+                    state_layout.kind = CompiledStateLayoutKind::OrdinaryKv;
+                    state_layout.key_width = attention.key_value_width();
+                    state_layout.value_width = attention.key_value_width();
+                    state_layout.key_elements = static_cast<std::size_t>(state_layout.key_width);
+                    state_layout.value_elements = static_cast<std::size_t>(state_layout.value_width);
+                } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
+                    state_layout.kind = CompiledStateLayoutKind::Latent;
+                    state_layout.latent_width = 2 * state.latent_rank;
+                    state_layout.rotary_width = state.decoupled_rope
+                        ? state.rope_head_dim : 0;
+                    state_layout.latent_elements = static_cast<std::size_t>(state_layout.latent_width);
+                    state_layout.rotary_elements = static_cast<std::size_t>(state_layout.rotary_width);
+                }
+            }, attention.state);
+            state_layout.persistent_elements = state_layout.key_elements +
+                state_layout.value_elements + state_layout.latent_elements +
+                state_layout.rotary_elements;
+            state_layout.validate();
+            compiled.state_layout = state_layout;
         }
         if (const auto* moe = std::get_if<MixtureOfExpertsSpec>(&layer.feed_forward)) {
             MoeLayerProgram semantic;
@@ -394,7 +475,63 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     semantic << "norms";
     for (const int boundary : program.norm_after_layers) semantic << boundary << ';';
     for (const auto& layer : program.layers) {
+        if (layer.attention) {
+            std::visit([&semantic](const auto& pattern) {
+                using Pattern = std::decay_t<decltype(pattern)>;
+                if constexpr (std::is_same_v<Pattern, FullCausalPattern>) {
+                    semantic << "causal;";
+                } else if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
+                    semantic << "sliding:" << pattern.window << ';';
+                } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
+                    semantic << "bidirectional;";
+                } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
+                    semantic << "prefix-lm:" << pattern.prefix_length << ';';
+                } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
+                    semantic << "block-sparse:" << pattern.block_size << ':'
+                             << pattern.local_blocks << ':' << pattern.global_blocks << ';';
+                } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
+                    semantic << "dynamic-sparse:" << pattern.block_size << ':'
+                             << pattern.max_selected_blocks << ';';
+                }
+            }, layer.attention->pattern);
+            std::visit([&semantic](const auto& bias) {
+                using Bias = std::decay_t<decltype(bias)>;
+                if constexpr (std::is_same_v<Bias, NoAttentionBiasSpec>) {
+                    semantic << "no-bias;";
+                } else if constexpr (std::is_same_v<Bias, AlibiBiasSpec>) {
+                    semantic << "alibi:";
+                    for (float slope : bias.slopes) semantic << slope << ',';
+                    semantic << ';';
+                } else if constexpr (std::is_same_v<Bias, RelativePositionBiasSpec>) {
+                    semantic << "relative-bias:" << bias.bucket_count << ':'
+                             << bias.max_distance << ':' << bias.bidirectional << ';';
+                }
+            }, layer.attention->bias);
+            semantic << (layer.attention->uses_latent_state() ? "latent;" : "ordinary-kv;");
+            semantic << (layer.attention->uses_external_memory() ? "external-memory;"
+                                                                  : "self-memory;");
+            semantic << "state-storage:" << static_cast<int>(layer.attention->state_storage.key)
+                     << ':' << static_cast<int>(layer.attention->state_storage.value)
+                     << ':' << static_cast<int>(layer.attention->state_storage.latent)
+                     << ':' << static_cast<int>(layer.attention->state_storage.rotary)
+                     << ':' << static_cast<int>(layer.attention->state_storage.recurrent)
+                     << ':' << static_cast<int>(layer.attention->state_storage.granularity)
+                     << ':' << layer.attention->state_storage.paged << ';';
+            if (layer.state_layout) {
+                semantic << "state-layout:" << static_cast<int>(layer.state_layout->kind)
+                         << ':' << layer.state_layout->key_width << ':'
+                         << layer.state_layout->value_width << ':'
+                         << layer.state_layout->latent_width << ':'
+                         << layer.state_layout->rotary_width << ':'
+                         << layer.state_layout->key_elements << ':'
+                         << layer.state_layout->value_elements << ':'
+                         << layer.state_layout->latent_elements << ':'
+                         << layer.state_layout->rotary_elements << ':'
+                         << layer.state_layout->persistent_elements << ';';
+            }
+        }
         semantic << (layer.moe ? layer.moe->fingerprint() : "dense") << ';';
+        semantic << "chunk:" << static_cast<int>(layer.chunk_capability) << ';';
     }
     program.semantic_fingerprint = fingerprint_text(semantic.str());
     program.validate();

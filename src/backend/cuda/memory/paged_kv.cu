@@ -33,6 +33,14 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
     if (attention_layer_count_ <= 0) {
         throw std::invalid_argument("paged KV requires at least one attention layer");
     }
+    if (mode_ == KvCacheMode::Int8) {
+        for (const auto& layer : layout_.layers) {
+            if (layer.latent) {
+                throw std::invalid_argument(
+                    "CUDA INT8 paged state does not support latent attention");
+            }
+        }
+    }
     max_pages_per_request_ =
         (max_context + page_tokens_ - 1) / page_tokens_;
 

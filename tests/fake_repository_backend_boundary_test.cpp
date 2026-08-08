@@ -59,7 +59,7 @@ int main() {
     attention.query_heads = 1;
     attention.key_value_heads = 1;
     attention.head_dim = 4;
-    attention.rope_theta = 10000.0;
+    attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
     layer.mixer = attention;
     layer.feed_forward = celeg::DenseFeedForwardSpec{8, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);

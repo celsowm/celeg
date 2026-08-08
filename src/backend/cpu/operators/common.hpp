@@ -41,7 +41,7 @@ inline float cpu_moe_sigmoid(float value) {
     return 1.0f / (1.0f + std::exp(-value));
 }
 
-inline void cpu_chunk_layer_gemm(CpuCompiledModel& model,
+inline void cpu_chunk_layer_gemm(CpuExecutionContext& context,
                                  const CpuLinearWeight& weight,
                                  const float* input,
                                  float* output,
@@ -49,8 +49,8 @@ inline void cpu_chunk_layer_gemm(CpuCompiledModel& model,
                                  size_t hidden,
                                  bool& normed_q8_ready,
                                  float beta = 0.0f) {
-    auto& workspace = model.workspace_;
-    auto& shared = *model.shared;
+    auto& workspace = context.workspace;
+    auto& shared = context.shared;
     const bool cacheable = weight.gguf_native() && weight.cols == hidden &&
         input == workspace.chunk_normed.data();
     if (cacheable) {

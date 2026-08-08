@@ -256,11 +256,63 @@ void launch_rope_batch_positions(
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__device__ __forceinline__ float scaled_rope_frequency(
+    float theta, int pair, int rotary_dimension, int position,
+    CudaRopeScaling scaling) {
+    float base = theta;
+    if (scaling.kind == 2 && scaling.original_context > 0 &&
+        position > scaling.original_context) {
+        const float context = static_cast<float>(position);
+        const float ratio = scaling.factor * context /
+            static_cast<float>(scaling.original_context) - (scaling.factor - 1.0f);
+        const int denominator = rotary_dimension - 2 > 2 ? rotary_dimension - 2 : 2;
+        base *= powf(fmaxf(1.0f, ratio),
+                     static_cast<float>(rotary_dimension) /
+                     static_cast<float>(denominator));
+    }
+    float frequency = powf(base, -2.0f * static_cast<float>(pair) /
+                           static_cast<float>(rotary_dimension));
+    if (scaling.kind == 1) {
+        frequency /= scaling.factor;
+    } else if (scaling.kind == 3) {
+        const float span = fmaxf(1.0f, scaling.beta_slow - scaling.beta_fast);
+        const float ramp = fminf(1.0f, fmaxf(0.0f,
+            (static_cast<float>(pair) - scaling.beta_fast) / span));
+        frequency /= 1.0f + ramp * (scaling.factor - 1.0f);
+    } else if (scaling.kind == 4) {
+        if (pair < scaling.factor_count) {
+            const float factor = position > scaling.original_context
+                ? scaling.long_factors[pair] : scaling.short_factors[pair];
+            frequency /= factor;
+        }
+    } else if (scaling.kind == 5) {
+        const float wavelength = 6.28318530717958647692f / frequency;
+        if (wavelength > static_cast<float>(scaling.original_context) /
+                         scaling.low_frequency_factor) {
+            frequency /= scaling.factor;
+        } else if (wavelength <= static_cast<float>(scaling.original_context) /
+                                  scaling.high_frequency_factor) {
+            // Preserve the high-frequency region.
+        } else {
+            const float span = scaling.low_frequency_factor -
+                scaling.high_frequency_factor;
+            const float blend = span > 0.0f
+                ? (wavelength * scaling.high_frequency_factor /
+                   static_cast<float>(scaling.original_context) - 1.0f) / span
+                : 0.0f;
+            frequency /= 1.0f + fminf(1.0f, fmaxf(0.0f, blend)) *
+                (scaling.factor - 1.0f);
+        }
+    }
+    return frequency;
+}
+
 __global__ void dynamic_qk_norm_rope_kernel(
     __nv_bfloat16* data, const __nv_bfloat16* norm_weight,
     int rows, int heads, int head_dim, int position_value,
     const int32_t* position_pointer, int mode, float theta,
-    int rotary_pairs, float eps, bool normalize) {
+    int rotary_pairs, float eps, bool normalize, CudaRopeScaling scaling,
+    float attention_scale) {
     const int block = blockIdx.x;
     const int row = block / heads;
     const int head = block % heads;
@@ -290,8 +342,8 @@ __global__ void dynamic_qk_norm_rope_kernel(
             (normalize ? bf16_float(norm_weight[i]) : 1.0f);
         const float b = bf16_float(vector[rotary_pairs + i]) * inv *
             (normalize ? bf16_float(norm_weight[rotary_pairs + i]) : 1.0f);
-        const float frequency = powf(theta, -2.0f * static_cast<float>(i) /
-                                     static_cast<float>(head_dim));
+        const float frequency = scaled_rope_frequency(
+            theta, i, head_dim, position, scaling);
         const float angle = static_cast<float>(position) * frequency;
         const float c = cosf(angle);
         const float s = sinf(angle);
@@ -303,6 +355,12 @@ __global__ void dynamic_qk_norm_rope_kernel(
             vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv * bf16_float(norm_weight[i]));
         }
     }
+    __syncthreads();
+    if (attention_scale != 1.0f) {
+        for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
+            vector[i] = __float2bfloat16(bf16_float(vector[i]) * attention_scale);
+        }
+    }
 }
 
 void launch_dynamic_qk_norm_rope(
@@ -310,16 +368,17 @@ void launch_dynamic_qk_norm_rope(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int q_heads, int kv_heads, int head_dim, int position,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    cudaStream_t stream) {
+    CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     dynamic_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, position, nullptr, 0,
-        rope_theta, pairs, eps, normalize);
+        rope_theta, pairs, eps, normalize, scaling,
+        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, position, nullptr, 0,
-            rope_theta, pairs, eps, normalize);
+            rope_theta, pairs, eps, normalize, scaling, 1.0f);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -329,16 +388,17 @@ void launch_dynamic_qk_norm_rope_device(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int q_heads, int kv_heads, int head_dim, const int32_t* position,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    cudaStream_t stream) {
+    CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     dynamic_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, 0, position, 1,
-        rope_theta, pairs, eps, normalize);
+        rope_theta, pairs, eps, normalize, scaling,
+        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, 0, position, 1,
-            rope_theta, pairs, eps, normalize);
+            rope_theta, pairs, eps, normalize, scaling, 1.0f);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -348,16 +408,17 @@ void launch_dynamic_qk_norm_rope_prefill(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int rows, int q_heads, int kv_heads, int head_dim,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    cudaStream_t stream) {
+    CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     dynamic_qk_norm_rope_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, q_norm, rows, q_heads, head_dim, 0, nullptr, 2,
-        rope_theta, pairs, eps, normalize);
+        rope_theta, pairs, eps, normalize, scaling,
+        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<rows * kv_heads, threads, 0, stream>>>(
             k, k_norm, rows, kv_heads, head_dim, 0, nullptr, 2,
-            rope_theta, pairs, eps, normalize);
+            rope_theta, pairs, eps, normalize, scaling, 1.0f);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -372,7 +433,8 @@ __global__ void dynamic_mrope_qk_norm_rope_kernel(
     __nv_bfloat16* data, const __nv_bfloat16* norm_weight,
     int rows, int heads, int head_dim, const int32_t* positions,
     int section0, int section1, int section2, bool interleaved,
-    float theta, int rotary_pairs, float eps, bool normalize) {
+    float theta, int rotary_pairs, float eps, bool normalize,
+    CudaRopeScaling scaling, float attention_scale) {
     const int block = blockIdx.x;
     const int row = block / heads;
     const int head = block % heads;
@@ -398,8 +460,8 @@ __global__ void dynamic_mrope_qk_norm_rope_kernel(
     for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
         const int axis = mrope_axis_for_pair_device(i, section0, section1, interleaved);
         const float position = static_cast<float>(positions[axis]);
-        const float frequency = powf(theta, -2.0f * static_cast<float>(i) /
-                                             static_cast<float>(2 * rotary_pairs));
+        const float frequency = scaled_rope_frequency(
+            theta, i, head_dim, static_cast<int>(position), scaling);
         const float angle = position * frequency;
         const float a = bf16_float(vector[i]) * inv *
             (normalize ? bf16_float(norm_weight[i]) : 1.0f);
@@ -415,6 +477,12 @@ __global__ void dynamic_mrope_qk_norm_rope_kernel(
             vector[i] = __float2bfloat16(bf16_float(vector[i]) * inv * bf16_float(norm_weight[i]));
         }
     }
+    __syncthreads();
+    if (attention_scale != 1.0f) {
+        for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
+            vector[i] = __float2bfloat16(bf16_float(vector[i]) * attention_scale);
+        }
+    }
     (void)section2;
 }
 
@@ -424,16 +492,17 @@ void launch_dynamic_mrope_qk_norm_rope(
     int q_heads, int kv_heads, int head_dim,
     const int32_t* positions, int section0, int section1, int section2,
     bool interleaved, float rope_theta, float rotary_fraction, float eps,
-    bool normalize, cudaStream_t stream) {
+    bool normalize, CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     dynamic_mrope_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, positions, section0, section1, section2,
-        interleaved, rope_theta, pairs, eps, normalize);
+        interleaved, rope_theta, pairs, eps, normalize, scaling,
+        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
     if (k) {
         dynamic_mrope_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, positions, section0, section1, section2,
-            interleaved, rope_theta, pairs, eps, normalize);
+            interleaved, rope_theta, pairs, eps, normalize, scaling, 1.0f);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

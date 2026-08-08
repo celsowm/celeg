@@ -4,8 +4,10 @@
 #include "celeg/model/weights/roles.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -26,10 +28,32 @@ enum class ActivationKind : uint8_t {
     Relu2,
 };
 
-enum class AttentionMaskKind : uint8_t {
-    Causal,
-    SlidingCausal,
+struct FullCausalPattern {};
+
+struct SlidingWindowPattern {
+    int window = 0;
 };
+
+struct BidirectionalPattern {};
+
+struct PrefixLmPattern {
+    int prefix_length = 0;
+};
+
+struct BlockSparsePattern {
+    int block_size = 0;
+    int local_blocks = 0;
+    int global_blocks = 0;
+};
+
+struct DynamicSparsePattern {
+    int block_size = 0;
+    int max_selected_blocks = 0;
+};
+
+using AttentionPatternSpec = std::variant<FullCausalPattern, SlidingWindowPattern,
+                                         BidirectionalPattern, PrefixLmPattern,
+                                         BlockSparsePattern, DynamicSparsePattern>;
 
 // A KV group identifies the full-context stream published by an attention
 // owner and consumed by later layers. -1 means that the layer owns its normal
@@ -41,6 +65,86 @@ struct KvSharingSpec {
     bool shared() const { return group >= 0; }
 };
 
+struct OrdinaryKvStateSpec {
+    bool quantizable = true;
+};
+
+struct NoAttentionBiasSpec {};
+
+struct AlibiBiasSpec {
+    std::vector<float> slopes;
+
+    void validate(int query_heads) const;
+};
+
+struct RelativePositionBiasSpec {
+    int bucket_count = 0;
+    int max_distance = 0;
+    bool bidirectional = false;
+
+    void validate() const;
+};
+
+using AttentionBiasSpec = std::variant<NoAttentionBiasSpec, AlibiBiasSpec,
+                                       RelativePositionBiasSpec>;
+
+// Latent state is a semantic representation.  It is lowered independently
+// from ordinary K/V state so compressed attention does not inherit an
+// equal-width K/V page contract.
+struct LatentAttentionStateSpec {
+    int latent_rank = 0;
+    int rope_head_dim = 0;
+    int nope_head_dim = 0;
+    bool decoupled_rope = false;
+};
+
+using AttentionStateSpec = std::variant<OrdinaryKvStateSpec,
+                                        LatentAttentionStateSpec>;
+
+enum class StateScalarType : uint8_t {
+    FP32,
+    FP16,
+    BF16,
+    FP8,
+    INT8,
+    INT4,
+};
+
+enum class StateQuantizationGranularity : uint8_t {
+    PerTensor,
+    PerHead,
+    PerToken,
+    PerBlock,
+};
+
+struct AttentionStateStorageSpec {
+    StateScalarType key = StateScalarType::BF16;
+    StateScalarType value = StateScalarType::BF16;
+    StateScalarType latent = StateScalarType::BF16;
+    StateScalarType rotary = StateScalarType::BF16;
+    StateScalarType recurrent = StateScalarType::FP32;
+    StateQuantizationGranularity granularity = StateQuantizationGranularity::PerTensor;
+    bool paged = true;
+
+    void validate(const AttentionStateSpec& state) const;
+};
+
+enum class AttentionSourceKind : uint8_t {
+    CurrentSequence,
+    ExternalMemory,
+};
+
+struct AttentionSourceSpec {
+    AttentionSourceKind query = AttentionSourceKind::CurrentSequence;
+    AttentionSourceKind key_value = AttentionSourceKind::CurrentSequence;
+    int memory_slot = -1;
+
+    bool self_attention() const {
+        return query == AttentionSourceKind::CurrentSequence &&
+               key_value == AttentionSourceKind::CurrentSequence;
+    }
+};
+
 struct NormSpec {
     float epsilon = 0.0f;
 };
@@ -50,22 +154,83 @@ struct AttentionSpec {
     int key_value_heads = 0;
     int head_dim = 0;
     bool query_key_norm = true;
-    AttentionMaskKind mask = AttentionMaskKind::Causal;
-    int sliding_window = 0;
-    double rope_theta = 0.0;
-    double rotary_fraction = 1.0;
+    AttentionPatternSpec pattern = FullCausalPattern{};
     KvSharingSpec kv_sharing;
     float query_scale = 1.0f;
-    PositionalEncodingKind positional_encoding = PositionalEncodingKind::Rope;
     bool query_gate = false;
+    PositionSpec position = RopePositionSpec{};
+    AttentionBiasSpec bias = NoAttentionBiasSpec{};
+    AttentionStateSpec state = OrdinaryKvStateSpec{};
+    AttentionStateStorageSpec state_storage;
+    AttentionSourceSpec sources;
 
     int query_width() const { return query_heads * head_dim; }
     int query_projection_width() const { return query_width() * (query_gate ? 2 : 1); }
     int key_value_width() const { return key_value_heads * head_dim; }
-    int projection_width() const { return query_projection_width() + 2 * key_value_width(); }
+    int projection_width() const {
+        if (uses_latent_state()) {
+            return latent_query_width() + latent_state_projection_width();
+        }
+        return query_projection_width() + 2 * key_value_width();
+    }
+    const LatentAttentionStateSpec* latent_state() const {
+        return std::get_if<LatentAttentionStateSpec>(&state);
+    }
+    int latent_query_content_width() const {
+        const auto* latent = latent_state();
+        return latent ? query_heads * latent->latent_rank : 0;
+    }
+    int latent_query_rope_width() const {
+        const auto* latent = latent_state();
+        return latent && latent->decoupled_rope ? query_heads * latent->rope_head_dim : 0;
+    }
+    int latent_query_width() const {
+        return latent_query_content_width() + latent_query_rope_width();
+    }
+    int latent_state_projection_width() const {
+        const auto* latent = latent_state();
+        return latent ? 2 * latent->latent_rank + latent->rope_head_dim : 0;
+    }
     int rotary_pairs() const {
-        if (positional_encoding == PositionalEncodingKind::None) return 0;
-        return static_cast<int>(static_cast<double>(head_dim) * rotary_fraction) / 2;
+        const auto rotary_dimension = [this](const auto& position) {
+            using T = std::decay_t<decltype(position)>;
+            if constexpr (std::is_same_v<T, RopePositionSpec>) {
+                return static_cast<int>(static_cast<double>(head_dim) *
+                                        position.rotary_fraction) / 2;
+            } else if constexpr (std::is_same_v<T, MultiAxisRopeSpec>) {
+                return static_cast<int>(static_cast<double>(head_dim) *
+                                        position.base.rotary_fraction) / 2;
+            } else {
+                return 0;
+            }
+        };
+        return std::visit(rotary_dimension, position);
+    }
+    const RopePositionSpec* rope_position() const {
+        if (const auto* rope = std::get_if<RopePositionSpec>(&position)) return rope;
+        if (const auto* multi = std::get_if<MultiAxisRopeSpec>(&position)) return &multi->base;
+        return nullptr;
+    }
+    const MultiAxisRopeSpec* multi_axis_position() const {
+        return std::get_if<MultiAxisRopeSpec>(&position);
+    }
+    bool uses_latent_state() const {
+        return std::holds_alternative<LatentAttentionStateSpec>(state);
+    }
+    bool uses_external_memory() const { return !sources.self_attention(); }
+    bool has_causal_pattern() const {
+        return std::holds_alternative<FullCausalPattern>(pattern) ||
+               std::holds_alternative<SlidingWindowPattern>(pattern);
+    }
+    bool has_sparse_pattern() const {
+        return std::holds_alternative<BlockSparsePattern>(pattern) ||
+               std::holds_alternative<DynamicSparsePattern>(pattern);
+    }
+    int sliding_window_size() const {
+        if (const auto* sliding = std::get_if<SlidingWindowPattern>(&pattern)) {
+            return sliding->window;
+        }
+        return 0;
     }
 };
 
@@ -170,6 +335,10 @@ struct LayerSpec {
 struct ModelGraph {
     std::vector<LayerSpec> layers;
     NormSpec final_norm;
+    // Intermediate normalization boundaries are semantic graph edges.  The
+    // runtime shape may cache a derived copy for allocation, but compilation
+    // must consume this graph-owned schedule.
+    std::vector<int> norm_after_layers;
     float embedding_multiplier = 1.0f;
     float logits_divisor = 1.0f;
     float final_logit_softcap = 0.0f;

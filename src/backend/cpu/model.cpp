@@ -80,6 +80,11 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens) {
     prefill_session(tokens, {});
 }
 
+void CpuModel::set_external_attention_memory(
+    int slot, std::shared_ptr<const CpuExternalAttentionMemory> memory) {
+    state_->set_external_attention_memory(slot, std::move(memory));
+}
+
 void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
                                const PromptEmbedding& embeddings) {
     if (tokens.empty()) throw std::invalid_argument("CPU prefill needs at least one token");

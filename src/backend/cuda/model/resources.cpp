@@ -10,9 +10,21 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.hidden_.reset(static_cast<size_t>(resources_.shape_.hidden));
     workspace_.residual_.reset(static_cast<size_t>(resources_.shape_.hidden));
     workspace_.normed_.reset(static_cast<size_t>(resources_.shape_.hidden));
-    workspace_.op_output_.reset(static_cast<size_t>(resources_.shape_.hidden));
+    workspace_.op_output_.reset(static_cast<size_t>(std::max(
+        resources_.shape_.hidden,
+        resources_.shape_.maximum_attention_output_width())));
     workspace_.qkv_output_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_projection_width()));
+    workspace_.latent_query_content_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_output_width()));
+    workspace_.latent_query_rope_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_latent_query_rope_width()));
+    workspace_.latent_key_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_latent_rank()));
+    workspace_.latent_value_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_latent_rank()));
+    workspace_.latent_key_rope_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_latent_rope_width()));
     workspace_.conv_projected_.reset(static_cast<size_t>(3 * resources_.shape_.hidden));
     size_t mamba_projection_width = 0;
     for (const Mamba2Spec& spec : resources_.shape_.mamba2_layouts) {

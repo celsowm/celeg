@@ -68,13 +68,13 @@ void project_attention_qkv(PackedOperatorContext& context,
         context.linear(w.normed.data(), *attention.value, w.v.data(), rows,
                        layout.key_value_width(), context.shape.hidden);
     }
-    if (layout.positional_encoding == PositionalEncodingKind::Rope) {
+    if (const auto* rope = layout.rope_position()) {
         launch_dynamic_qk_norm_rope_device(
             w.q.data(), attention.key ? w.k.data() : nullptr, attention.q_norm,
             attention.k_norm, layout.query_heads, layout.key_value_heads,
-            layout.head_dim, w.positions.data(), static_cast<float>(layout.rope_theta),
-            static_cast<float>(layout.rotary_fraction), context.shape.numerical_policy.norm_eps,
-            layout.query_key_norm, w.stream.get());
+            layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
+            static_cast<float>(rope->rotary_fraction), context.shape.numerical_policy.norm_eps,
+            layout.query_key_norm, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
                  layout.query_scale, w.stream.get());
@@ -105,7 +105,18 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             w.paged_kv->page_vector_elements(), w.paged_kv->layer_vector_offset(slot),
             w.paged_kv->page_scale_elements(), w.paged_kv->layer_scale_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, w.stream.get());
-        if (segmented_attention) {
+        if (current.alibi_slopes.data()) {
+            launch_gqa_decode_alibi_int8_paged_batch(
+                w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
+                w.paged_kv->key_scales(), w.paged_kv->value_scales(),
+                w.d_page_tables.data(), stride, w.op_output.data(),
+                w.positions.data(), current.alibi_slopes.data(), rows, slot,
+                w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
+                w.paged_kv->layer_vector_offset(slot), w.paged_kv->page_scale_elements(),
+                w.paged_kv->layer_scale_offset(slot), layout.query_heads,
+                owner_layout.key_value_heads, owner_layout.head_dim,
+                layout.sliding_window_size(), w.stream.get());
+        } else if (segmented_attention) {
             launch_gqa_decode_int8_paged_segmented_batch(
                 w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
                 w.paged_kv->key_scales(), w.paged_kv->value_scales(),
@@ -115,7 +126,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
                 w.paged_kv->layer_scale_offset(slot), layout.query_heads,
                 owner_layout.key_value_heads, owner_layout.head_dim,
                 reference.options().attention_chunk_tokens, segmented_chunks,
-                layout.sliding_window, w.segmented_partial_max.data(),
+                layout.sliding_window_size(), w.segmented_partial_max.data(),
                 w.segmented_partial_denom.data(), w.segmented_partial_accum.data(),
                 w.stream.get());
         } else {
@@ -127,7 +138,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
                 w.paged_kv->layer_vector_offset(slot), w.paged_kv->page_scale_elements(),
                 w.paged_kv->layer_scale_offset(slot), layout.query_heads,
                 owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window, reference.options().fast_attention, w.stream.get());
+                layout.sliding_window_size(), reference.options().fast_attention, w.stream.get());
         }
         return;
     }
@@ -137,7 +148,15 @@ void run_paged_attention_cache(PackedOperatorContext& context,
         w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
         w.paged_kv->layer_vector_offset(slot), owner_layout.key_value_heads,
         owner_layout.head_dim, w.stream.get());
-    if (segmented_attention) {
+    if (current.alibi_slopes.data()) {
+        launch_gqa_decode_alibi_paged_batch(
+            w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
+            w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
+            current.alibi_slopes.data(), rows, slot, w.paged_kv->page_tokens(),
+            w.paged_kv->page_vector_elements(), w.paged_kv->layer_vector_offset(slot),
+            layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
+            layout.sliding_window_size(), w.stream.get());
+    } else if (segmented_attention) {
         launch_gqa_decode_paged_segmented_batch(
             w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
             w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
@@ -145,7 +164,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             w.paged_kv->layer_vector_offset(slot), layout.query_heads,
             owner_layout.key_value_heads, owner_layout.head_dim,
             reference.options().attention_chunk_tokens, segmented_chunks,
-            layout.sliding_window, w.segmented_partial_max.data(),
+                layout.sliding_window_size(), w.segmented_partial_max.data(),
             w.segmented_partial_denom.data(), w.segmented_partial_accum.data(),
             w.stream.get());
     } else {
@@ -155,7 +174,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
             w.paged_kv->layer_vector_offset(slot), layout.query_heads,
             owner_layout.key_value_heads, owner_layout.head_dim,
-            layout.sliding_window, reference.options().fast_attention, w.stream.get());
+                layout.sliding_window_size(), reference.options().fast_attention, w.stream.get());
     }
 }
 
@@ -178,23 +197,40 @@ void run_local_attention_cache(PackedOperatorContext& context,
             w.d_value_int8.data() + offset, w.d_key_scales.data() + offset,
             w.d_value_scales.data() + offset, w.positions.data(), rows,
             owner_layout.key_value_heads, owner_layout.head_dim, w.stream.get());
-        launch_gqa_decode_int8_batch_ptrs(
+        if (current.alibi_slopes.data()) {
+            launch_gqa_decode_alibi_int8_batch_ptrs(
+                w.q.data(), w.d_key_int8.data() + offset, w.d_value_int8.data() + offset,
+                w.d_key_scales.data() + offset, w.d_value_scales.data() + offset,
+                w.op_output.data(), w.positions.data(), current.alibi_slopes.data(), rows,
+                layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
+                layout.sliding_window_size(), w.stream.get());
+        } else {
+            launch_gqa_decode_int8_batch_ptrs(
             w.q.data(), w.d_key_int8.data() + offset, w.d_value_int8.data() + offset,
             w.d_key_scales.data() + offset, w.d_value_scales.data() + offset,
             w.op_output.data(), w.positions.data(), rows, layout.query_heads,
-            owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window,
+            owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window_size(),
             reference.options().fast_attention, w.stream.get());
+        }
         return;
     }
     if (current.key && current.value) launch_store_kv_batch_ptrs(
         w.k.data(), w.v.data(), w.d_key_bf16.data() + offset,
         w.d_value_bf16.data() + offset, w.positions.data(), rows,
         owner_layout.key_value_width(), w.stream.get());
+    if (current.alibi_slopes.data()) {
+        launch_gqa_decode_alibi_batch_ptrs(
+            w.q.data(), w.d_key_bf16.data() + offset, w.d_value_bf16.data() + offset,
+            w.op_output.data(), w.positions.data(), current.alibi_slopes.data(), rows,
+            layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
+            layout.sliding_window_size(), w.stream.get());
+    } else {
     launch_gqa_decode_batch_ptrs(
         w.q.data(), w.d_key_bf16.data() + offset, w.d_value_bf16.data() + offset,
         w.op_output.data(), w.positions.data(), rows, layout.query_heads,
-        owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window,
+        owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window_size(),
         reference.options().fast_attention, w.stream.get());
+    }
 }
 
 } // namespace

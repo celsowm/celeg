@@ -6,5 +6,7 @@ namespace celeg {
 #include "attention_segmented.cuh"
 #include "attention_batch_ptrs.cuh"
 #include "attention_paged.cuh"
+#include "attention_alibi.cuh"
+#include "attention_latent.cuh"
 #include "attention_gemm.cuh"
 }

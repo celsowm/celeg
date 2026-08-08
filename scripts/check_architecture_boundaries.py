@@ -105,6 +105,53 @@ def main() -> int:
             if re.search(r"\b(?:is_gguf|CheckpointSourceFormat)\b", path.read_text(encoding="utf-8")):
                 errors.append(f"format dispatch leaked into backend: {path}")
 
+    # Model-family implementations are an importer concern.  Keep the
+    # dependency direction structural so adding the hundredth family never
+    # requires extending a family-name denylist.
+    family_include = re.compile(r"#\s*include\s*[<\"]celeg/models/")
+    neutral_dependency_roots = (
+        "include/celeg/model", "src/model", "include/celeg/runtime", "src/runtime",
+        "include/celeg/checkpoint", "src/checkpoint", "include/celeg/backend", "src/backend",
+    )
+    for relative in neutral_dependency_roots:
+        for path in files(root / relative, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".inl"}:
+                continue
+            if family_include.search(path.read_text(encoding="utf-8")):
+                errors.append(f"model-family include leaked across neutral boundary: {path}")
+
+    # Once a model is expressible by the descriptor vocabulary, its execution
+    # and naming policies must not return as family-owned production files.
+    # Keep this check filename/structure based so it applies to future models
+    # without maintaining a list of family names.
+    for relative in ("src/models", "include/celeg/models"):
+        for path in files(root / relative, "**/*"):
+            if path.name.lower() in {"architecture.cpp", "architecture.hpp",
+                                     "naming_policy.cpp", "naming_policy.hpp",
+                                     "layer_decoder.cpp", "metadata_decoder.cpp"}:
+                errors.append(f"family execution/import file remains: {path}")
+
+    # CELEG's replacement API deliberately has no version-stacked symbols.
+    # External protocol/library versions (for example cublas_v2) are outside
+    # this rule because the pattern is scoped to CELEG-owned public symbols.
+    celeg_versioned = re.compile(r"\bceleg_[A-Za-z0-9_]*_v[23]\b")
+    compatibility_identifier = re.compile(
+        r"\b(?:legacy|deprecated|compat(?!ible|ibility))[A-Za-z0-9_]*\b",
+        re.IGNORECASE)
+    for relative in ("include/celeg", "src", "tests", "examples"):
+        for path in files(root / relative, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".inl"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if celeg_versioned.search(text):
+                errors.append(f"version-stacked CELEG symbol remains: {path}")
+            for line_number, line in enumerate(text.splitlines(), 1):
+                code = line.split("//", 1)[0]
+                if compatibility_identifier.search(code):
+                    errors.append(
+                        f"compatibility-named CELEG symbol remains: {path}:{line_number}")
+                    break
+
     removed_paths = (
         root / "include/celeg/model/execution/runtime_types.hpp",
         root / "include/celeg/model/execution/plan.hpp",
@@ -138,25 +185,6 @@ def main() -> int:
             if backend_source.match(line):
                 errors.append(
                     f"backend-specific source in CELEG_BASE_RUNTIME_SOURCES: {line.strip()}")
-
-    generic_runtime = re.compile(
-        r"\b(?:Lfm2|LFM2|LFM2\.5|Granite|GraniteModel|Gemma4|"
-        r"MiniCPM5|SmolLM3|Qwen35|Qwen3\.5|Nemotron(?:-H|_H)?)\b",
-        re.IGNORECASE,
-    )
-    generic_model_dirs = (
-        "include/celeg/model", "src/model",
-        "include/celeg/runtime", "src/runtime",
-        "include/celeg/text", "src/text",
-        "include/celeg/checkpoint", "src/checkpoint",
-        "include/celeg/backend", "src/backend",
-    )
-    for relative in generic_model_dirs:
-        for path in files(root / relative, "**/*"):
-            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".inl"}:
-                continue
-            if generic_runtime.search(path.read_text(encoding="utf-8")):
-                errors.append(f"architecture-specific type leaked into generic runtime: {path}")
 
     # The host expert cache is a byte store. Format readers and semantic
     # region names belong to source/binding adapters, never to the generic

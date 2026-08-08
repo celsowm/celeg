@@ -1,4 +1,5 @@
 #include "celeg/backend/cuda/packed.hpp"
+#include "celeg/detail/model/types.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -23,6 +24,14 @@ PackedEligibility validate_packed_batch_common(
         if (session.owner == nullptr) {
             result.reason = "null packed session";
             return result;
+        }
+        for (const Layer& layer : session.layers()) {
+            if (const auto* attention = as_attention(layer);
+                attention && attention->layout.uses_latent_state()) {
+                result.reason =
+                    "packed CUDA execution currently requires ordinary KV attention";
+                return result;
+            }
         }
     }
     result.accepted = true;

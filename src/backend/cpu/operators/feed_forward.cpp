@@ -23,10 +23,10 @@ bool uses_gelu_tanh(const CpuCompiledModel::Shared& shared, size_t layer) {
 
 } // namespace
 
-void execute_cpu_mlp_only_token(CpuCompiledModel& model, size_t layer,
+void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
                                 const CpuCompiledModel::MlpOnlyWeights& weights) {
-    auto& shared = *model.shared;
-    auto& workspace = model.workspace_;
+    auto& shared = context.shared;
+    auto& workspace = context.workspace;
     const int intermediate = shared.shape.mlp_only_layouts.at(layer).intermediate_size;
     shared.linear.gemv(weights.common.mlp_up, workspace.normed.data(),
                        workspace.activated.data());
@@ -38,10 +38,10 @@ void execute_cpu_mlp_only_token(CpuCompiledModel& model, size_t layer,
 }
 
 void execute_cpu_dense_feed_forward_token(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, size_t layer,
     const CpuCompiledModel::CommonWeights& weights) {
-    auto& shared = *model.shared;
-    auto& workspace = model.workspace_;
+    auto& shared = context.shared;
+    auto& workspace = context.workspace;
     const int intermediate = intermediate_size(shared, layer);
     const auto started = Clock::now();
     shared.linear.gemv(weights.w13, workspace.normed.data(), workspace.gate_up.data());
@@ -51,24 +51,24 @@ void execute_cpu_dense_feed_forward_token(
         cpu_swiglu(workspace.gate_up.data(), workspace.activated.data(), intermediate);
     }
     shared.linear.gemv(weights.w2, workspace.activated.data(), workspace.mlp_output.data());
-    if (model.session_.phase == SessionPhase::Prefilling) {
-        model.session_.prefill_profile.linear_ms += elapsed_ms(started);
+    if (context.session.phase == SessionPhase::Prefilling) {
+        context.session.prefill_profile.linear_ms += elapsed_ms(started);
     }
 }
 
 void execute_cpu_dense_feed_forward_chunk(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, size_t layer,
     const CpuCompiledModel::CommonWeights& weights,
     size_t rows, bool& normed_q8_ready) {
-    auto& shared = *model.shared;
-    auto& workspace = model.workspace_;
+    auto& shared = context.shared;
+    auto& workspace = context.workspace;
     const int intermediate = intermediate_size(shared, layer);
     const auto started = Clock::now();
-    cpu_chunk_layer_gemm(model, weights.w13,
+    cpu_chunk_layer_gemm(context, weights.w13,
                          workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
                          rows, static_cast<size_t>(shared.shape.hidden), normed_q8_ready);
-    if (model.session_.phase == SessionPhase::Prefilling) {
-        model.session_.prefill_profile.linear_ms += elapsed_ms(started);
+    if (context.session.phase == SessionPhase::Prefilling) {
+        context.session.prefill_profile.linear_ms += elapsed_ms(started);
     }
     cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
         const float* gate_up = workspace.chunk_gate_up.data() +
@@ -82,11 +82,11 @@ void execute_cpu_dense_feed_forward_chunk(
         }
     });
     const auto output_started = Clock::now();
-    cpu_chunk_layer_gemm(model, weights.w2,
+    cpu_chunk_layer_gemm(context, weights.w2,
                          workspace.chunk_activated.data(), workspace.chunk_mlp.data(),
                          rows, static_cast<size_t>(shared.shape.hidden), normed_q8_ready);
-    if (model.session_.phase == SessionPhase::Prefilling) {
-        model.session_.prefill_profile.linear_ms += elapsed_ms(output_started);
+    if (context.session.phase == SessionPhase::Prefilling) {
+        context.session.prefill_profile.linear_ms += elapsed_ms(output_started);
     }
 }
 

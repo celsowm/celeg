@@ -8,7 +8,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 // The online-softmax attention kernel below is AVX2/FMA.  GCC and Clang need
@@ -33,6 +35,141 @@
 #endif
 
 namespace celeg {
+
+CpuAttentionPattern CpuAttentionPattern::lower(const AttentionPatternSpec& pattern) {
+    return std::visit([](const auto& value) -> CpuAttentionPattern {
+        using Pattern = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Pattern, FullCausalPattern>) {
+            return {CpuAttentionPatternKind::FullCausal};
+        } else if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
+            return {CpuAttentionPatternKind::SlidingWindow, value.window};
+        } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
+            return {CpuAttentionPatternKind::Bidirectional};
+        } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
+            return {CpuAttentionPatternKind::PrefixLm, 0, value.prefix_length};
+        } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
+            return {CpuAttentionPatternKind::BlockSparse, 0, 0,
+                    value.block_size, value.local_blocks, value.global_blocks};
+        } else {
+            return {CpuAttentionPatternKind::DynamicSparse, 0, 0,
+                    value.block_size, 0, 0, value.max_selected_blocks};
+        }
+    }, pattern);
+}
+
+bool CpuAttentionPattern::allows(int query_position, int key_position) const {
+    if (query_position < 0 || key_position < 0) return false;
+    switch (kind) {
+    case CpuAttentionPatternKind::FullCausal:
+        return key_position <= query_position;
+    case CpuAttentionPatternKind::SlidingWindow:
+        return key_position <= query_position &&
+               key_position >= query_position - window + 1;
+    case CpuAttentionPatternKind::Bidirectional:
+        return true;
+    case CpuAttentionPatternKind::PrefixLm:
+        return query_position < prefix_length
+            ? key_position < prefix_length
+            : key_position <= query_position;
+    case CpuAttentionPatternKind::BlockSparse: {
+        const int query_block = query_position / block_size;
+        const int key_block = key_position / block_size;
+        if (key_block < global_blocks) return key_block <= query_block;
+        return key_block <= query_block &&
+               key_block >= query_block - local_blocks + 1;
+    }
+    case CpuAttentionPatternKind::DynamicSparse: {
+        const int query_block = query_position / block_size;
+        const int key_block = key_position / block_size;
+        if (key_block > query_block) return false;
+        if (key_block == query_block) return true;
+        return key_block < max_selected_blocks;
+    }
+    }
+    return false;
+}
+
+bool CpuAttentionPattern::may_read_future(int query_position,
+                                          int sequence_length) const {
+    if (kind == CpuAttentionPatternKind::Bidirectional) return true;
+    return kind == CpuAttentionPatternKind::PrefixLm &&
+           query_position < prefix_length && prefix_length < sequence_length;
+}
+
+int CpuAttentionPattern::first_candidate(int query_position) const {
+    switch (kind) {
+    case CpuAttentionPatternKind::SlidingWindow:
+        return std::max(0, query_position - window + 1);
+    case CpuAttentionPatternKind::BlockSparse:
+        return 0;
+    case CpuAttentionPatternKind::DynamicSparse:
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+CpuAttentionBias CpuAttentionBias::lower(const AttentionBiasSpec& bias,
+                                         std::span<const float> relative_values,
+                                         int query_heads) {
+    if (const auto* alibi = std::get_if<AlibiBiasSpec>(&bias)) {
+        return {alibi->slopes.data(), alibi->slopes.size()};
+    }
+    if (const auto* relative = std::get_if<RelativePositionBiasSpec>(&bias)) {
+        if (query_heads <= 0 || relative->bucket_count <= 0 ||
+            relative->max_distance <= 0 || relative_values.size() !=
+                static_cast<size_t>(query_heads) *
+                    static_cast<size_t>(relative->bucket_count)) {
+            throw std::invalid_argument("relative position bias dimensions are invalid");
+        }
+        return {nullptr, 0, relative_values.data(), relative->bucket_count,
+                relative->max_distance, relative->bidirectional};
+    }
+    return {};
+}
+
+float CpuAttentionBias::score(int query_head, int query_position,
+                              int key_position) const {
+    if (empty()) return 0.0f;
+    if (relative_values != nullptr && relative_bucket_count != 0) {
+        if (query_head < 0) {
+            throw std::invalid_argument("relative position bias query head is out of range");
+        }
+        const int relative_position = key_position - query_position;
+        const int bucket_count = relative_bidirectional
+            ? relative_bucket_count / 2 : relative_bucket_count;
+        if (bucket_count <= 0) {
+            throw std::invalid_argument("relative position bias bucket count is invalid");
+        }
+        const bool positive = relative_bidirectional && relative_position > 0;
+        const int distance = relative_bidirectional
+            ? std::abs(relative_position) : std::max(-relative_position, 0);
+        const int max_exact = bucket_count / 2;
+        int bucket = 0;
+        if (distance < max_exact) {
+            bucket = distance;
+        } else {
+            const float denominator = std::log(
+                static_cast<float>(std::max(relative_max_distance, max_exact + 1)) /
+                static_cast<float>(std::max(max_exact, 1)));
+            const float logarithmic = denominator == 0.0f ? 0.0f : std::log(
+                static_cast<float>(std::max(distance, max_exact)) /
+                static_cast<float>(std::max(max_exact, 1))) / denominator;
+            bucket = max_exact + static_cast<int>(
+                logarithmic * static_cast<float>(bucket_count - max_exact));
+            bucket = std::min(bucket, bucket_count - 1);
+        }
+        if (positive) bucket += bucket_count;
+        return relative_values[static_cast<size_t>(query_head) *
+                               static_cast<size_t>(relative_bucket_count) +
+                               static_cast<size_t>(bucket)];
+    }
+    if (query_head < 0 || static_cast<size_t>(query_head) >= slope_count) {
+        throw std::invalid_argument("ALiBi query head is out of range");
+    }
+    return -alibi_slopes[static_cast<size_t>(query_head)] *
+        static_cast<float>(std::abs(query_position - key_position));
+}
 
 namespace {
 
@@ -176,12 +313,15 @@ void update_online_avx2(const float* query, int kv_head, int head_dim, float sca
 }
 #endif
 
-void update_online(const float* query, int kv_head, int head_dim, float scale,
+void update_online(const float* query, int query_head, int kv_head, int head_dim, float scale,
                    const CpuKvPagePool& pool, CpuKvPageId page,
-                   int token_begin, int token_end, float* accumulator,
+                   int token_begin, int token_end, int page_token_base,
+                   int query_position, const CpuAttentionPattern& pattern,
+                   const CpuAttentionBias& bias, float* accumulator,
                    PartialAttention& state) {
 #if CELEG_CPU_HAS_AVX2_KERNEL
-    if (g_has_avx2_fma) {
+    if (g_has_avx2_fma && bias.empty() &&
+        pattern.kind == CpuAttentionPatternKind::FullCausal) {
         update_online_avx2(query, kv_head, head_dim, scale, pool, page,
                            token_begin, token_end, accumulator, state);
         return;
@@ -189,6 +329,7 @@ void update_online(const float* query, int kv_head, int head_dim, float scale,
 #endif
 
     for (int local = token_begin; local < token_end; ++local) {
+        if (!pattern.allows(query_position, page_token_base + local)) continue;
         float dot = 0.0f;
         if (pool.mode() == CpuKvCacheMode::Fp32) {
             const float* key = pool.key_fp32(page, static_cast<size_t>(local)) +
@@ -201,7 +342,8 @@ void update_online(const float* query, int kv_head, int head_dim, float scale,
                 dot += query[d] * bf16_bits_to_float(key[d]);
             }
         }
-        const float score = dot * scale;
+        const float score = dot * scale +
+            bias.score(query_head, query_position, page_token_base + local);
         const float new_max = std::max(state.maximum, score);
         const float old_scale = std::isfinite(state.maximum)
             ? std::exp(state.maximum - new_max) : 0.0f;
@@ -224,6 +366,12 @@ void update_online(const float* query, int kv_head, int head_dim, float scale,
 }
 }
 
+void CpuStatePageLayout::validate() const {
+    if (token_elements() == 0) {
+        throw std::invalid_argument("CPU state page layout must contain state");
+    }
+}
+
 struct CpuKvPagePool::Page {
     size_t references = 0;
     void* storage = nullptr;
@@ -237,14 +385,14 @@ struct CpuKvPagePool::Page {
 
 CpuKvPagePool::CpuKvPagePool(CpuKvCacheMode mode,
                              size_t page_tokens,
-                             size_t kv_width)
-    : mode_(mode), page_tokens_(page_tokens), kv_width_(kv_width) {
-    if (page_tokens_ == 0 || kv_width_ == 0) {
-        throw std::invalid_argument("CPU KV page dimensions must be positive");
+                             CpuStatePageLayout layout)
+    : mode_(mode), page_tokens_(page_tokens), layout_(layout) {
+    if (page_tokens_ == 0) {
+        throw std::invalid_argument("CPU state page token count must be positive");
     }
+    layout_.validate();
     const size_t elements = checked_multiply(
-        checked_multiply(page_tokens_, kv_width_, "CPU KV page dimensions overflow"),
-        size_t{2}, "CPU KV page dimensions overflow");
+        page_tokens_, layout_.token_elements(), "CPU state page dimensions overflow");
     page_bytes_ = checked_multiply(elements,
         mode_ == CpuKvCacheMode::Fp32 ? sizeof(float) : sizeof(uint16_t),
         "CPU KV page byte size overflow");
@@ -338,14 +486,20 @@ CpuKvPageId CpuKvPagePool::clone_prefix(CpuKvPageId source,
     try {
         const size_t element_bytes = mode_ == CpuKvCacheMode::Fp32
             ? sizeof(float) : sizeof(uint16_t);
-        const size_t valid_bytes = used_tokens * kv_width_ * element_bytes;
+        const size_t key_bytes = used_tokens * layout_.key_width * element_bytes;
+        const size_t value_bytes = used_tokens * layout_.value_width * element_bytes;
         const Page& source_page = checked_page(source);
         Page& destination_page = checked_page(destination);
         const auto* src = static_cast<const std::byte*>(source_page.storage);
         auto* dst = static_cast<std::byte*>(destination_page.storage);
-        std::memcpy(dst, src, valid_bytes);
-        const size_t value_base = page_tokens_ * kv_width_ * element_bytes;
-        std::memcpy(dst + value_base, src + value_base, valid_bytes);
+        std::memcpy(dst, src, key_bytes);
+        const size_t value_base = page_tokens_ * layout_.key_width * element_bytes;
+        std::memcpy(dst + value_base, src + value_base, value_bytes);
+        const size_t state_base = page_tokens_ *
+            (layout_.key_width + layout_.value_width) * element_bytes;
+        const size_t latent_bytes = used_tokens *
+            (layout_.latent_width + layout_.rotary_width) * element_bytes;
+        if (latent_bytes != 0) std::memcpy(dst + state_base, src + state_base, latent_bytes);
         return destination;
     } catch (...) {
         release(destination);
@@ -356,20 +510,64 @@ CpuKvPageId CpuKvPagePool::clone_prefix(CpuKvPageId source,
 void CpuKvPagePool::write(CpuKvPageId page_id, size_t token_offset,
                           const float* key, const float* value) {
     if (!key || !value) throw std::invalid_argument("CPU KV write pointers are required");
+    if (layout_.key_width == 0 || layout_.value_width == 0) {
+        throw std::logic_error("CPU state page has no ordinary KV regions");
+    }
     if (token_offset >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
     Page& page = checked_page(page_id);
     if (page.references == 0) throw std::logic_error("writing to a free CPU KV page");
-    const size_t key_offset = token_offset * kv_width_;
-    const size_t value_offset = page_tokens_ * kv_width_ + key_offset;
+    const size_t key_offset = token_offset * layout_.key_width;
+    const size_t value_offset = page_tokens_ * layout_.key_width +
+        token_offset * layout_.value_width;
     if (mode_ == CpuKvCacheMode::Fp32) {
         auto* data = static_cast<float*>(page.storage);
-        std::copy(key, key + kv_width_, data + key_offset);
-        std::copy(value, value + kv_width_, data + value_offset);
+        std::copy(key, key + layout_.key_width, data + key_offset);
+        std::copy(value, value + layout_.value_width, data + value_offset);
     } else {
         auto* data = static_cast<uint16_t*>(page.storage);
-        for (size_t i = 0; i < kv_width_; ++i) {
+        for (size_t i = 0; i < layout_.key_width; ++i) {
+            data[key_offset + i] = float_to_bf16_bits(key[i]);
+        }
+        for (size_t i = 0; i < layout_.value_width; ++i) {
+            data[value_offset + i] = float_to_bf16_bits(value[i]);
+        }
+    }
+}
+
+void CpuKvPagePool::write_latent(CpuKvPageId page_id, size_t token_offset,
+                                 const float* key, const float* value,
+                                 const float* rotary) {
+    if (!key || !value) throw std::invalid_argument("CPU latent state pointers are required");
+    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0) {
+        throw std::logic_error("CPU latent state width must contain key and value regions");
+    }
+    if (layout_.rotary_width != 0 && !rotary) {
+        throw std::invalid_argument("CPU latent rotary pointer is required");
+    }
+    if (token_offset >= page_tokens_) throw std::out_of_range("CPU latent token offset out of range");
+    Page& page = checked_page(page_id);
+    if (page.references == 0) throw std::logic_error("writing to a free CPU state page");
+    const size_t width = layout_.latent_width / 2;
+    const size_t state_base = page_tokens_ * (layout_.key_width + layout_.value_width);
+    const size_t key_offset = state_base + token_offset * width;
+    const size_t value_offset = state_base + page_tokens_ * width + token_offset * width;
+    const size_t rotary_offset = state_base + page_tokens_ * layout_.latent_width +
+        token_offset * layout_.rotary_width;
+    if (mode_ == CpuKvCacheMode::Fp32) {
+        auto* data = static_cast<float*>(page.storage);
+        std::copy(key, key + width, data + key_offset);
+        std::copy(value, value + width, data + value_offset);
+        if (layout_.rotary_width != 0) {
+            std::copy(rotary, rotary + layout_.rotary_width, data + rotary_offset);
+        }
+    } else {
+        auto* data = static_cast<uint16_t*>(page.storage);
+        for (size_t i = 0; i < width; ++i) {
             data[key_offset + i] = float_to_bf16_bits(key[i]);
             data[value_offset + i] = float_to_bf16_bits(value[i]);
+        }
+        for (size_t i = 0; i < layout_.rotary_width; ++i) {
+            data[rotary_offset + i] = float_to_bf16_bits(rotary[i]);
         }
     }
 }
@@ -377,24 +575,73 @@ void CpuKvPagePool::write(CpuKvPageId page_id, size_t token_offset,
 const float* CpuKvPagePool::key_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
-    return static_cast<const float*>(checked_page(id).storage) + token * kv_width_;
+    return static_cast<const float*>(checked_page(id).storage) + token * layout_.key_width;
 }
 const float* CpuKvPagePool::value_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
     return static_cast<const float*>(checked_page(id).storage) +
-        page_tokens_ * kv_width_ + token * kv_width_;
+        page_tokens_ * layout_.key_width + token * layout_.value_width;
 }
 const uint16_t* CpuKvPagePool::key_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
-    return static_cast<const uint16_t*>(checked_page(id).storage) + token * kv_width_;
+    return static_cast<const uint16_t*>(checked_page(id).storage) + token * layout_.key_width;
 }
 const uint16_t* CpuKvPagePool::value_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
     return static_cast<const uint16_t*>(checked_page(id).storage) +
-        page_tokens_ * kv_width_ + token * kv_width_;
+        page_tokens_ * layout_.key_width + token * layout_.value_width;
+}
+
+const float* CpuKvPagePool::latent_key_fp32(CpuKvPageId id, size_t token) const {
+    if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
+    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+        throw std::out_of_range("CPU latent token is out of range");
+    return static_cast<const float*>(checked_page(id).storage) +
+        page_tokens_ * (layout_.key_width + layout_.value_width) +
+        token * (layout_.latent_width / 2);
+}
+const float* CpuKvPagePool::latent_value_fp32(CpuKvPageId id, size_t token) const {
+    if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
+    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+        throw std::out_of_range("CPU latent token is out of range");
+    return static_cast<const float*>(checked_page(id).storage) +
+        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width / 2) +
+        token * (layout_.latent_width / 2);
+}
+const float* CpuKvPagePool::rotary_fp32(CpuKvPageId id, size_t token) const {
+    if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
+    if (layout_.rotary_width == 0 || token >= page_tokens_)
+        throw std::out_of_range("CPU latent rotary token is out of range");
+    return static_cast<const float*>(checked_page(id).storage) +
+        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width) +
+        token * layout_.rotary_width;
+}
+const uint16_t* CpuKvPagePool::latent_key_bf16(CpuKvPageId id, size_t token) const {
+    if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
+    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+        throw std::out_of_range("CPU latent token is out of range");
+    return static_cast<const uint16_t*>(checked_page(id).storage) +
+        page_tokens_ * (layout_.key_width + layout_.value_width) +
+        token * (layout_.latent_width / 2);
+}
+const uint16_t* CpuKvPagePool::latent_value_bf16(CpuKvPageId id, size_t token) const {
+    if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
+    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+        throw std::out_of_range("CPU latent token is out of range");
+    return static_cast<const uint16_t*>(checked_page(id).storage) +
+        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width / 2) +
+        token * (layout_.latent_width / 2);
+}
+const uint16_t* CpuKvPagePool::rotary_bf16(CpuKvPageId id, size_t token) const {
+    if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
+    if (layout_.rotary_width == 0 || token >= page_tokens_)
+        throw std::out_of_range("CPU latent rotary token is out of range");
+    return static_cast<const uint16_t*>(checked_page(id).storage) +
+        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width) +
+        token * layout_.rotary_width;
 }
 
 const CpuKvPagePool::Page& CpuKvPagePool::checked_page(CpuKvPageId id) const {
@@ -431,7 +678,9 @@ void cpu_gqa_decode_paged(const float* q,
                           int q_heads,
                           int kv_heads,
                           int head_dim,
-                          int sliding_window) {
+                          CpuAttentionPattern pattern,
+                          CpuAttentionBias bias,
+                          int query_position) {
     if (!q || !output) throw std::invalid_argument("paged GQA pointers are required");
     if (sequence_length <= 0 || q_heads <= 0 || kv_heads <= 0 || head_dim <= 0 ||
         q_heads % kv_heads != 0) {
@@ -441,14 +690,17 @@ void cpu_gqa_decode_paged(const float* q,
         (static_cast<size_t>(sequence_length) + pool.page_tokens() - 1) /
         pool.page_tokens();
     if (pages.size() < required_pages) throw std::invalid_argument("paged GQA page table is incomplete");
-    if (pool.kv_width() != static_cast<size_t>(kv_heads * head_dim)) {
+    if (pool.key_width() != static_cast<size_t>(kv_heads * head_dim) ||
+        pool.value_width() != static_cast<size_t>(kv_heads * head_dim)) {
         throw std::invalid_argument("paged GQA KV width mismatch");
     }
     const int queries_per_kv = q_heads / kv_heads;
     const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    if (sliding_window < 0) throw std::invalid_argument("negative sliding attention window");
-    const int first_token = sliding_window > 0
-        ? std::max(0, sequence_length - sliding_window) : 0;
+    if (query_position < 0) query_position = sequence_length - 1;
+    if (query_position >= sequence_length) {
+        throw std::invalid_argument("paged attention query position is out of range");
+    }
+    const int first_token = pattern.first_candidate(query_position);
     for (int qh = 0; qh < q_heads; ++qh) {
         const int kvh = qh / queries_per_kv;
         const float* query = q + static_cast<size_t>(qh) * head_dim;
@@ -461,8 +713,13 @@ void cpu_gqa_decode_paged(const float* q,
             const int offset = std::max(first_token - page_start, 0);
             const int tokens_in_page = std::min<int>(
                 static_cast<int>(pool.page_tokens()) - offset, sequence_length - page_start - offset);
-            update_online(query, kvh, head_dim, scale, pool, pages[page_index],
-                          static_cast<size_t>(offset), tokens_in_page, destination, state);
+            update_online(query, qh, kvh, head_dim, scale, pool, pages[page_index],
+                          offset, offset + tokens_in_page,
+                          page_start, query_position, pattern, bias,
+                          destination, state);
+        }
+        if (state.denominator == 0.0f) {
+            throw std::invalid_argument("attention pattern selected no KV tokens");
         }
         const float reciprocal = 1.0f / state.denominator;
         for (int d = 0; d < head_dim; ++d) destination[d] *= reciprocal;
@@ -473,17 +730,19 @@ void cpu_gqa_decode_paged_parallel(
     const float* q, const CpuKvPagePool& pool,
     std::span<const CpuKvPageId> pages, float* output,
     int sequence_length, int q_heads, int kv_heads, int head_dim,
-    CpuThreadPool& thread_pool, CpuPagedAttentionOptions options,
+    CpuThreadPool& thread_pool, CpuAttentionPattern pattern,
+    CpuAttentionBias bias,
+    CpuPagedAttentionOptions options,
     CpuPagedAttentionStats* stats) {
     if (options.page_tile == 0) throw std::invalid_argument("CPU attention page tile must be positive");
     const size_t required_pages =
         (static_cast<size_t>(sequence_length) + pool.page_tokens() - 1) /
         pool.page_tokens();
     const size_t tiles = (required_pages + options.page_tile - 1) / options.page_tile;
-    if (options.sliding_window > 0 || static_cast<size_t>(sequence_length) < options.parallel_threshold ||
+    if (!pattern.parallel_safe() || static_cast<size_t>(sequence_length) < options.parallel_threshold ||
         thread_pool.size() == 0 || tiles == 0) {
         cpu_gqa_decode_paged(q, pool, pages, output, sequence_length,
-                             q_heads, kv_heads, head_dim, options.sliding_window);
+                             q_heads, kv_heads, head_dim, pattern, bias);
         if (stats) *stats = {static_cast<size_t>(q_heads), tiles, false};
         return;
     }
@@ -510,8 +769,9 @@ void cpu_gqa_decode_paged_parallel(
                 const int first_token = static_cast<int>(page_index * pool.page_tokens());
                 const int tokens_in_page = std::min<int>(
                     static_cast<int>(pool.page_tokens()), sequence_length - first_token);
-                update_online(query, kvh, head_dim, scale, pool, pages[page_index],
-                              0, tokens_in_page, accumulator, state);
+                update_online(query, qh, kvh, head_dim, scale, pool, pages[page_index],
+                              0, tokens_in_page, first_token, sequence_length - 1,
+                              pattern, bias, accumulator, state);
             }
         }
     });
@@ -537,10 +797,124 @@ void cpu_gqa_decode_paged_parallel(
             }
             combined.maximum = new_max;
         }
+        if (combined.denominator == 0.0f) {
+            throw std::invalid_argument("attention pattern selected no KV tokens");
+        }
         const float reciprocal = 1.0f / combined.denominator;
         for (int d = 0; d < head_dim; ++d) destination[d] *= reciprocal;
     }
     if (stats) *stats = {task_count, tiles, true};
+}
+
+CpuExternalAttentionMemory::CpuExternalAttentionMemory(
+    CpuKvCacheMode mode, size_t page_tokens, size_t key_width,
+    size_t value_width)
+    : pool_(mode, page_tokens, CpuStatePageLayout{key_width, value_width, 0, 0}) {}
+
+void CpuExternalAttentionMemory::append(const float* key, const float* value) {
+    if (!key || !value) throw std::invalid_argument("external attention memory pointers are required");
+    if (token_count_ % pool_.page_tokens() == 0) pages_.push_back(pool_.allocate());
+    pool_.write(pages_.back(), token_count_ % pool_.page_tokens(), key, value);
+    ++token_count_;
+}
+
+void CpuExternalAttentionMemory::clear() noexcept {
+    for (CpuKvPageId page : pages_) {
+        try { pool_.release(page); } catch (...) {}
+    }
+    pages_.clear();
+    token_count_ = 0;
+}
+
+void cpu_latent_attention_decode_paged(
+    const float* query_content, const float* query_rope,
+    const CpuKvPagePool& pool, std::span<const CpuKvPageId> pages,
+    float* output, int sequence_length, int query_heads, int latent_rank,
+    int rope_head_dim, float scale, CpuAttentionPattern pattern,
+    CpuAttentionBias bias, int query_position) {
+    if (!query_content || !output || sequence_length <= 0 || query_heads <= 0 ||
+        latent_rank <= 0 || rope_head_dim < 0 || pool.layout().latent_width !=
+            static_cast<size_t>(2 * latent_rank) ||
+        pool.layout().rotary_width != static_cast<size_t>(rope_head_dim)) {
+        throw std::invalid_argument("invalid CPU latent attention dimensions");
+    }
+    const size_t required_pages = (static_cast<size_t>(sequence_length) +
+        pool.page_tokens() - 1) / pool.page_tokens();
+    if (pages.size() < required_pages) throw std::invalid_argument("latent page table is incomplete");
+    if (rope_head_dim != 0 && !query_rope) {
+        throw std::invalid_argument("latent rotary query is required");
+    }
+    if (query_position < 0) query_position = sequence_length - 1;
+    if (query_position >= sequence_length) throw std::invalid_argument("latent query position is out of range");
+    const int first_token = pattern.first_candidate(query_position);
+    for (int qh = 0; qh < query_heads; ++qh) {
+        float* destination = output + static_cast<size_t>(qh) * latent_rank;
+        const float* content = query_content + static_cast<size_t>(qh) * latent_rank;
+        const float* rotary = query_rope ? query_rope + static_cast<size_t>(qh) * rope_head_dim : nullptr;
+        float maximum = -std::numeric_limits<float>::infinity();
+        for (int key_position = first_token; key_position < sequence_length; ++key_position) {
+            if (!pattern.allows(query_position, key_position)) continue;
+            const size_t page_index = static_cast<size_t>(key_position) / pool.page_tokens();
+            const size_t offset = static_cast<size_t>(key_position) % pool.page_tokens();
+            float score = 0.0f;
+            if (pool.mode() == CpuKvCacheMode::Fp32) {
+                const float* key = pool.latent_key_fp32(pages[page_index], offset);
+                score = std::inner_product(content, content + latent_rank, key, 0.0f);
+                if (rope_head_dim != 0) {
+                    const float* key_rope = pool.rotary_fp32(pages[page_index], offset);
+                    score += std::inner_product(rotary, rotary + rope_head_dim, key_rope, 0.0f);
+                }
+            } else {
+                const uint16_t* key = pool.latent_key_bf16(pages[page_index], offset);
+                for (int d = 0; d < latent_rank; ++d) score += content[d] * bf16_bits_to_float(key[d]);
+                if (rope_head_dim != 0) {
+                    const uint16_t* key_rope = pool.rotary_bf16(pages[page_index], offset);
+                    for (int d = 0; d < rope_head_dim; ++d) {
+                        score += rotary[d] * bf16_bits_to_float(key_rope[d]);
+                    }
+                }
+            }
+            score = score * scale + bias.score(qh, query_position, key_position);
+            maximum = std::max(maximum, score);
+        }
+        if (!std::isfinite(maximum)) throw std::invalid_argument("latent pattern selected no tokens");
+        std::fill(destination, destination + latent_rank, 0.0f);
+        float denominator = 0.0f;
+        for (int key_position = first_token; key_position < sequence_length; ++key_position) {
+            if (!pattern.allows(query_position, key_position)) continue;
+            const size_t page_index = static_cast<size_t>(key_position) / pool.page_tokens();
+            const size_t offset = static_cast<size_t>(key_position) % pool.page_tokens();
+            float score = 0.0f;
+            if (pool.mode() == CpuKvCacheMode::Fp32) {
+                const float* key = pool.latent_key_fp32(pages[page_index], offset);
+                score = std::inner_product(content, content + latent_rank, key, 0.0f);
+                if (rope_head_dim != 0) {
+                    const float* key_rope = pool.rotary_fp32(pages[page_index], offset);
+                    score += std::inner_product(rotary, rotary + rope_head_dim, key_rope, 0.0f);
+                }
+            } else {
+                const uint16_t* key = pool.latent_key_bf16(pages[page_index], offset);
+                for (int d = 0; d < latent_rank; ++d) score += content[d] * bf16_bits_to_float(key[d]);
+                if (rope_head_dim != 0) {
+                    const uint16_t* key_rope = pool.rotary_bf16(pages[page_index], offset);
+                    for (int d = 0; d < rope_head_dim; ++d) score += rotary[d] * bf16_bits_to_float(key_rope[d]);
+                }
+            }
+            const float probability = std::exp(
+                score * scale + bias.score(qh, query_position, key_position) - maximum);
+            denominator += probability;
+            if (pool.mode() == CpuKvCacheMode::Fp32) {
+                const float* value = pool.latent_value_fp32(pages[page_index], offset);
+                for (int d = 0; d < latent_rank; ++d) destination[d] += probability * value[d];
+            } else {
+                const uint16_t* value = pool.latent_value_bf16(pages[page_index], offset);
+                for (int d = 0; d < latent_rank; ++d) {
+                    destination[d] += probability * bf16_bits_to_float(value[d]);
+                }
+            }
+        }
+        for (int d = 0; d < latent_rank; ++d) destination[d] /= denominator;
+    }
 }
 
 void cpu_gqa_prefill_paged(
@@ -548,7 +922,8 @@ void cpu_gqa_prefill_paged(
     const CpuKvPagePool& pool,
     std::span<const CpuKvPageId> pages, float* output,
     int base_sequence_length, int q_heads, int kv_heads, int head_dim,
-    CpuThreadPool& thread_pool, int sliding_window) {
+    CpuThreadPool& thread_pool, CpuAttentionPattern pattern,
+    CpuAttentionBias bias) {
     if (!queries || !output || query_rows == 0 || base_sequence_length < 0 ||
         q_heads <= 0 || kv_heads <= 0 || q_heads % kv_heads != 0 || head_dim <= 0) {
         throw std::invalid_argument("invalid CPU paged prefill GQA arguments");
@@ -557,14 +932,21 @@ void cpu_gqa_prefill_paged(
     if (query_stride < query_width) {
         throw std::invalid_argument("CPU paged prefill GQA query stride is too small");
     }
-    // One parallel region covers the complete chunk.  Each query is causal and
-    // writes its own output row, so the only shared state is immutable KV.
+    // One parallel region covers the complete chunk. Each query writes its own
+    // output row, so the only shared state is immutable KV. Patterns that can
+    // read future tokens use the complete committed chunk as their horizon.
+    const int committed_sequence_length = base_sequence_length +
+        static_cast<int>(query_rows);
     thread_pool.parallel_for(0, query_rows, 1, [&](size_t begin, size_t end) {
         for (size_t row = begin; row < end; ++row) {
-            const int sequence_length = base_sequence_length + static_cast<int>(row) + 1;
+            const int query_position = base_sequence_length + static_cast<int>(row);
+            const int sequence_length = pattern.may_read_future(
+                query_position, committed_sequence_length)
+                ? committed_sequence_length : query_position + 1;
             cpu_gqa_decode_paged(queries + row * query_stride, pool, pages,
                                  output + row * query_width, sequence_length,
-                                 q_heads, kv_heads, head_dim, sliding_window);
+                                 q_heads, kv_heads, head_dim, pattern,
+                                 bias, query_position);
         }
     });
 }

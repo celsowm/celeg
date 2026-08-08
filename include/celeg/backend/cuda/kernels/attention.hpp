@@ -210,4 +210,88 @@ void launch_gqa_decode_int8_paged_segmented_batch(
     float* partial_max, float* partial_denom, float* partial_accum,
     cudaStream_t stream);
 
+void launch_gqa_decode_alibi_device(
+    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
+    const __nv_bfloat16* value_cache, __nv_bfloat16* out,
+    const int32_t* position, const float* alibi_slopes, int q_heads,
+    int kv_heads, int head_dim, int sliding_window, cudaStream_t stream);
+void launch_gqa_decode_alibi_int8_device(
+    const __nv_bfloat16* q, const int8_t* key_cache,
+    const int8_t* value_cache, const float* key_scales,
+    const float* value_scales, __nv_bfloat16* out, const int32_t* position,
+    const float* alibi_slopes, int q_heads, int kv_heads, int head_dim,
+    int sliding_window, cudaStream_t stream);
+void launch_gqa_prefill_alibi(
+    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
+    const __nv_bfloat16* value_cache, __nv_bfloat16* out, int rows,
+    const float* alibi_slopes, int q_heads, int kv_heads, int head_dim,
+    int sliding_window, cudaStream_t stream);
+void launch_gqa_prefill_alibi_int8(
+    const __nv_bfloat16* q, const int8_t* key_cache,
+    const int8_t* value_cache, const float* key_scales,
+    const float* value_scales, __nv_bfloat16* out, int rows,
+    const float* alibi_slopes, int q_heads, int kv_heads, int head_dim,
+    int sliding_window, cudaStream_t stream);
+void launch_gqa_decode_alibi_batch_ptrs(
+    const __nv_bfloat16* q, const __nv_bfloat16* const* key_cache,
+    const __nv_bfloat16* const* value_cache, __nv_bfloat16* out,
+    const int32_t* positions, const float* alibi_slopes, int rows,
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    cudaStream_t stream);
+void launch_gqa_decode_alibi_int8_batch_ptrs(
+    const __nv_bfloat16* q, const int8_t* const* key_cache,
+    const int8_t* const* value_cache, const float* const* key_scales,
+    const float* const* value_scales, __nv_bfloat16* out,
+    const int32_t* positions, const float* alibi_slopes, int rows,
+    int q_heads, int kv_heads, int head_dim, int sliding_window,
+    cudaStream_t stream);
+void launch_gqa_decode_alibi_paged_batch(
+    const __nv_bfloat16* q, const __nv_bfloat16* key_pool,
+    const __nv_bfloat16* value_pool, const uint32_t* page_tables,
+    int page_table_stride, __nv_bfloat16* out, const int32_t* positions,
+    const float* alibi_slopes, int rows, int attention_slot, int page_tokens,
+    size_t page_vector_elements, size_t layer_vector_offset, int q_heads,
+    int kv_heads, int head_dim, int sliding_window, cudaStream_t stream);
+void launch_gqa_decode_alibi_int8_paged_batch(
+    const __nv_bfloat16* q, const int8_t* key_pool, const int8_t* value_pool,
+    const float* key_scale_pool, const float* value_scale_pool,
+    const uint32_t* page_tables, int page_table_stride, __nv_bfloat16* out,
+    const int32_t* positions, const float* alibi_slopes, int rows,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, size_t page_scale_elements,
+    size_t layer_scale_offset, int q_heads, int kv_heads, int head_dim,
+    int sliding_window, cudaStream_t stream);
+
+void launch_latent_attention_device(
+    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
+    const __nv_bfloat16* key_cache, const __nv_bfloat16* value_cache,
+    const __nv_bfloat16* key_rope_cache, __nv_bfloat16* out,
+    const int32_t* position, const float* alibi_slopes, int query_heads,
+    int latent_rank, int rotary_width, float score_scale,
+    int sliding_window, cudaStream_t stream);
+void launch_latent_attention_prefill(
+    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
+    const __nv_bfloat16* key_cache, const __nv_bfloat16* value_cache,
+    const __nv_bfloat16* key_rope_cache, __nv_bfloat16* out, int rows,
+    const float* alibi_slopes, int query_heads, int latent_rank,
+    int rotary_width, float score_scale, int sliding_window,
+    cudaStream_t stream);
+void launch_latent_attention_paged_batch(
+    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
+    const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
+    __nv_bfloat16* out, const uint32_t* page_tables, int page_table_stride,
+    const int32_t* positions, const float* alibi_slopes, int rows,
+    int attention_slot, int page_tokens, size_t page_vector_elements,
+    size_t layer_vector_offset, int query_heads, int latent_rank,
+    int rotary_width, float score_scale, int sliding_window,
+    cudaStream_t stream);
+void launch_latent_attention_batch_ptrs(
+    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
+    const __nv_bfloat16* const* key_cache,
+    const __nv_bfloat16* const* value_cache,
+    const __nv_bfloat16* const* key_rope_cache, __nv_bfloat16* out,
+    const int32_t* positions, const float* alibi_slopes, int rows,
+    int query_heads, int latent_rank, int rotary_width, float score_scale,
+    int sliding_window, cudaStream_t stream);
+
 } // namespace celeg

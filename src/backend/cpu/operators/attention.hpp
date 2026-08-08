@@ -17,6 +17,11 @@ void apply_cpu_attention_qk(const RuntimeTopology& shape,
                             int scalar_position,
                             const std::array<int32_t, 3>& rope_position);
 
+void apply_cpu_latent_attention_positions(
+    const RuntimeTopology& shape, const AttentionSpec& layout,
+    float* query_rope, float* key_rope, int scalar_position,
+    const std::array<int32_t, 3>& rope_position);
+
 void apply_cpu_query_gate(float* output, const float* gate, size_t width);
 
 } // namespace celeg

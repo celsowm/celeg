@@ -3,8 +3,8 @@
 #include "celeg/runtime/context.hpp"
 #include "support/assertions.hpp"
 
-#include <iostream>
 #include <memory>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -220,8 +220,8 @@ int main() {
     CELEG_TEST_CHECK(nemotron.topology.mamba2_intermediate == 7680);
     CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).query_heads == 40);
     CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).key_value_heads == 8);
-    CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).positional_encoding ==
-                     celeg::PositionalEncodingKind::None);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+        nemotron.topology.attention_layout(12).position));
     CELEG_TEST_CHECK(nemotron.graph.layers[0].mixer_kind() == celeg::MixerKind::Mamba2);
     CELEG_TEST_CHECK(nemotron.graph.layers[1].mixer_kind() == celeg::MixerKind::MlpOnly);
     CELEG_TEST_CHECK(nemotron.graph.layers[12].mixer_kind() == celeg::MixerKind::Attention);
@@ -256,7 +256,7 @@ int main() {
     CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[21] == 21);
     CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[22] == 0);
     CELEG_TEST_CHECK(nanbeige.topology.norm_after_layers == std::vector<int>{21});
-    CELEG_TEST_CHECK(nanbeige.topology.attention_layout(0).rope_theta == 70000000.0);
+    CELEG_TEST_CHECK(nanbeige.topology.attention_layout(0).rope_position()->theta == 70000000.0);
     CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].physical_layer == 0);
     CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].source_name.value() ==
                      "model.layers.0.input_layernorm.weight");
@@ -288,7 +288,7 @@ int main() {
     CELEG_TEST_CHECK(lfm25_model.topology.token_policy.bos_token_id == 124894);
     CELEG_TEST_CHECK(lfm25_model.topology.token_policy.eos_token_ids ==
                      std::vector<int>{124900});
-    CELEG_TEST_CHECK(lfm25_model.topology.attention_layout(2).rope_theta == 10000000.0);
+    CELEG_TEST_CHECK(lfm25_model.topology.attention_layout(2).rope_position()->theta == 10000000.0);
 
     celeg::CheckpointMetadata minicpm5;
     minicpm5.repository_hint = "openbmb/MiniCPM5-1B";
@@ -368,10 +368,10 @@ int main() {
     smollm3_checkpoint.metadata = smollm3;
     const auto smollm3_model = smollm3_architecture.resolve(smollm3_checkpoint);
     CELEG_TEST_CHECK(smollm3_model.topology.num_hidden_layers == 36);
-    CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[0].positional_encoding ==
-                     celeg::PositionalEncodingKind::Rope);
-    CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[3].positional_encoding ==
-                     celeg::PositionalEncodingKind::None);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
+        smollm3_model.topology.attention_layouts[0].position));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+        smollm3_model.topology.attention_layouts[3].position));
     CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[0].key_value_heads == 4);
     CELEG_TEST_CHECK(smollm3_model.capabilities.tied_embeddings);
     CELEG_TEST_CHECK(smollm3_model.topology.token_policy.eos_token_ids == (std::vector<int>{128012}));
@@ -400,13 +400,41 @@ int main() {
     smollm3_gguf_checkpoint.metadata = smollm3_gguf;
     const auto smollm3_gguf_model = smollm3_gguf_architecture.resolve(smollm3_gguf_checkpoint);
     CELEG_TEST_CHECK(smollm3_gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(smollm3_gguf_model.topology.attention_layouts[0].positional_encoding ==
-                     celeg::PositionalEncodingKind::Rope);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
+        smollm3_gguf_model.topology.attention_layouts[0].position));
 
     auto granite = metadata;
     granite.values["model_type"] = std::string("granite");
+    granite.values["rope_scaling_type"] = std::string("longrope");
+    granite.values["rope_scaling_factor"] = 2.0;
+    granite.values["rope_scaling_original_context"] = int64_t(32);
+    granite.values["rope_scaling_short_factors"] = std::vector<double>(32, 1.0);
+    granite.values["rope_scaling_long_factors"] = std::vector<double>(32, 2.0);
     const auto& granite_architecture = catalog.select(granite);
     CELEG_TEST_CHECK(granite_architecture.id() == "granite");
+    celeg::CheckpointView granite_checkpoint;
+    granite_checkpoint.metadata = granite;
+    const auto granite_model = granite_architecture.resolve(granite_checkpoint);
+    CELEG_TEST_CHECK(granite_model.topology.attention_layouts.front().rope_position()
+                         ->scaling.kind == celeg::RopeScalingKind::Long);
+    CELEG_TEST_CHECK(granite_model.topology.attention_layouts.front().rope_position()
+                         ->scaling.long_factors.size() == 32);
+    auto granite_alibi = granite;
+    granite_alibi.values["position_encoding"] = std::string("alibi");
+    granite_alibi.values["alibi_slopes"] = std::vector<double>(32, 1.0);
+    celeg::CheckpointView granite_alibi_checkpoint;
+    granite_alibi_checkpoint.metadata = granite_alibi;
+    const auto granite_alibi_model = granite_architecture.resolve(granite_alibi_checkpoint);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::AlibiBiasSpec>(
+        granite_alibi_model.topology.attention_layouts.front().bias));
+    auto granite_relative = granite;
+    granite_relative.values["position_encoding"] = std::string("relative_bias");
+    celeg::CheckpointView granite_relative_checkpoint;
+    granite_relative_checkpoint.metadata = granite_relative;
+    const auto granite_relative_model =
+        granite_architecture.resolve(granite_relative_checkpoint);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::RelativePositionBiasSpec>(
+        granite_relative_model.topology.attention_layouts.front().bias));
 
     celeg::CheckpointMetadata granite_gguf;
     granite_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
@@ -421,6 +449,8 @@ int main() {
     granite_gguf.values["granite.attention.layer_norm_rms_epsilon"] = 1.0e-5;
     granite_gguf.values["granite.rope.freq_base"] = 10000.0;
     granite_gguf.values["granite.vocab_size"] = int64_t(32);
+    granite_gguf.values["granite.attention.layer_types"] =
+        std::vector<std::string>{"sliding_attention"};
     granite_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(1);
     granite_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(2);
     granite_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
@@ -432,6 +462,9 @@ int main() {
     CELEG_TEST_CHECK(granite_gguf_model.provenance.chat_profile_id == "granite-instruct");
     CELEG_TEST_CHECK(granite_gguf_model.topology.vocab_size == 32);
     CELEG_TEST_CHECK(granite_gguf_model.graph.layers.size() == 1);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
+        granite_gguf_model.topology.attention_layouts.front().pattern));
+    CELEG_TEST_CHECK(granite_gguf_model.topology.attention_layouts.front().sliding_window_size() == 512);
 
     for (const auto& gemma : {
         gemma_metadata(1536, 6144, 35, 1, 20, "google/gemma-4-E2B-it"),
@@ -443,23 +476,25 @@ int main() {
         const auto resolved = gemma_architecture.resolve(gemma_checkpoint);
         CELEG_TEST_CHECK(resolved.topology.attention_layouts.size() ==
                          resolved.topology.num_hidden_layers);
-        CELEG_TEST_CHECK(resolved.topology.attention_layouts[0].mask ==
-                         celeg::AttentionMaskKind::SlidingCausal);
-        CELEG_TEST_CHECK(resolved.topology.attention_layouts[5].mask ==
-                         celeg::AttentionMaskKind::Causal);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
+        resolved.topology.attention_layouts[0].pattern));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
+        resolved.topology.attention_layouts[5].pattern));
         const auto& local = resolved.topology.attention_layouts[0];
         const int expected_local_kv_heads = resolved.topology.hidden == 1536 ? 1 : 2;
         CELEG_TEST_CHECK(local.query_heads == 8 && local.key_value_heads ==
                          expected_local_kv_heads);
         CELEG_TEST_CHECK(local.head_dim == 256 && local.query_width() == 2048);
         CELEG_TEST_CHECK(local.key_value_width() == local.key_value_heads * 256);
-        CELEG_TEST_CHECK(local.mask == celeg::AttentionMaskKind::SlidingCausal);
-        CELEG_TEST_CHECK(local.sliding_window == 512 && local.rope_theta == 10000.0);
+        CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(local.pattern));
+        CELEG_TEST_CHECK(local.sliding_window_size() == 512 &&
+                         local.rope_position()->theta == 10000.0);
         const auto& full = resolved.topology.attention_layouts[5];
-        CELEG_TEST_CHECK(full.mask == celeg::AttentionMaskKind::Causal);
+        CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(full.pattern));
         CELEG_TEST_CHECK(full.head_dim == 512 && full.query_width() == 4096);
         CELEG_TEST_CHECK(full.key_value_width() == local.key_value_heads * 512);
-        CELEG_TEST_CHECK(full.rotary_fraction == 0.25 && full.rope_theta == 1000000.0);
+        CELEG_TEST_CHECK(full.rope_position()->rotary_fraction == 0.25 &&
+                         full.rope_position()->theta == 1000000.0);
         const int shared_start = resolved.topology.num_hidden_layers -
             static_cast<int>(gemma.integer("text_config.num_kv_shared_layers"));
         CELEG_TEST_CHECK(resolved.topology.attention_layouts[shared_start]
@@ -511,17 +546,16 @@ int main() {
     CELEG_TEST_CHECK(gemma_gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(gemma_gguf_model.topology.hidden == 1536);
     CELEG_TEST_CHECK(gemma_gguf_model.topology.intermediate == 6144);
-    CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].mask ==
-                     celeg::AttentionMaskKind::Causal);
-    CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[6].mask ==
-                     celeg::AttentionMaskKind::SlidingCausal);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
+        gemma_gguf_model.topology.attention_layouts[5].pattern));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
+        gemma_gguf_model.topology.attention_layouts[6].pattern));
     CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].head_dim == 512);
-
     auto malformed_gemma = gemma_metadata(1536, 6144, 35, 1, 20, "bad");
     malformed_gemma.values["text_config.model_type"] = std::string("gemma4_vision");
     bool malformed_rejected = false;
     try { (void)catalog.select(malformed_gemma); }
-    catch (const std::runtime_error&) { malformed_rejected = true; }
+    catch (const std::exception&) { malformed_rejected = true; }
     CELEG_TEST_CHECK(malformed_rejected);
 
     auto malformed_schedule = gemma_metadata(1536, 6144, 35, 1, 20, "bad-schedule");
@@ -534,7 +568,7 @@ int main() {
         checkpoint.metadata = malformed_schedule;
         (void)architecture.resolve(checkpoint);
     }
-    catch (const std::runtime_error&) { malformed_rejected = true; }
+    catch (const std::exception&) { malformed_rejected = true; }
     CELEG_TEST_CHECK(malformed_rejected);
 
     auto malformed_sharing = gemma_metadata(1536, 6144, 35, 1, 20, "bad-sharing");
@@ -545,7 +579,7 @@ int main() {
         celeg::CheckpointView checkpoint;
         checkpoint.metadata = malformed_sharing;
         (void)architecture.resolve(checkpoint);
-    } catch (const std::runtime_error&) { malformed_rejected = true; }
+    } catch (const std::exception&) { malformed_rejected = true; }
     CELEG_TEST_CHECK(malformed_rejected);
 
     celeg::ArchitectureCatalog mutable_catalog;

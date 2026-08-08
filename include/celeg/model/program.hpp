@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -108,6 +109,52 @@ struct PerLayerInputPlan {
     void validate() const;
 };
 
+enum class CompiledStateLayoutKind : uint8_t {
+    OrdinaryKv,
+    Latent,
+};
+
+struct CompiledAttentionStateLayout {
+    CompiledStateLayoutKind kind = CompiledStateLayoutKind::OrdinaryKv;
+    int key_width = 0;
+    int value_width = 0;
+    int latent_width = 0;
+    int rotary_width = 0;
+    std::size_t key_elements = 0;
+    std::size_t value_elements = 0;
+    std::size_t latent_elements = 0;
+    std::size_t rotary_elements = 0;
+    std::size_t persistent_elements = 0;
+    AttentionStateStorageSpec storage;
+
+    std::size_t scalar_bytes(StateScalarType scalar) const {
+        switch (scalar) {
+        case StateScalarType::FP32: return sizeof(float);
+        case StateScalarType::FP16:
+        case StateScalarType::BF16: return sizeof(uint16_t);
+        case StateScalarType::FP8:
+        case StateScalarType::INT8: return sizeof(uint8_t);
+        case StateScalarType::INT4: return 1;
+        }
+        throw std::invalid_argument("invalid compiled state scalar type");
+    }
+
+    std::size_t persistent_bytes() const {
+        return key_elements * scalar_bytes(storage.key) +
+               value_elements * scalar_bytes(storage.value) +
+               latent_elements * scalar_bytes(storage.latent) +
+               rotary_elements * scalar_bytes(storage.rotary);
+    }
+
+    void validate() const;
+};
+
+enum class CompiledChunkCapability : uint8_t {
+    Native,
+    SequentialAdapter,
+    Unsupported,
+};
+
 // Immutable execution description produced before a backend starts serving.
 // It contains no checkpoint or architecture probing state, so decode can use
 // direct indices and function selection instead of format/architecture tests.
@@ -115,6 +162,7 @@ struct CompiledLayerProgram {
     CompiledMixer mixer;
     CompiledFeedForward feed_forward;
     bool execute_feed_forward = true;
+    CompiledChunkCapability chunk_capability = CompiledChunkCapability::Native;
     std::optional<AttentionSpec> attention;
     std::optional<ShortConvolutionSpec> short_convolution;
     std::optional<GatedDeltaNetSpec> gated_delta_net;
@@ -123,6 +171,7 @@ struct CompiledLayerProgram {
     ActivationKind feed_forward_activation = ActivationKind::SwiGLU;
     std::vector<std::size_t> weight_request_indices;
     std::optional<MoeLayerProgram> moe;
+    std::optional<CompiledAttentionStateLayout> state_layout;
 };
 
 struct CompiledModelProgram {

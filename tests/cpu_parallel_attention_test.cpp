@@ -11,8 +11,9 @@ int main() {
     constexpr int kv_heads = 2;
     constexpr int head_dim = 8;
     constexpr int sequence = 37;
-    celeg::CpuKvPagePool pool(celeg::CpuKvCacheMode::Bf16, 8,
-                            kv_heads * head_dim);
+    celeg::CpuKvPagePool pool(
+        celeg::CpuKvCacheMode::Bf16, 8,
+        celeg::CpuStatePageLayout{kv_heads * head_dim, kv_heads * head_dim, 0, 0});
     std::vector<celeg::CpuKvPageId> pages;
     std::vector<float> key(kv_heads * head_dim);
     std::vector<float> value(kv_heads * head_dim);
@@ -36,6 +37,8 @@ int main() {
     celeg::cpu_gqa_decode_paged_parallel(
         query.data(), pool, pages, parallel.data(), sequence,
         q_heads, kv_heads, head_dim, workers,
+        celeg::CpuAttentionPattern{},
+        celeg::CpuAttentionBias{},
         celeg::CpuPagedAttentionOptions{1, 2}, &stats);
     CELEG_TEST_CHECK(stats.parallel);
     CELEG_TEST_CHECK(stats.tasks == q_heads * 3);
@@ -70,6 +73,28 @@ int main() {
             std::abs(chunk_output[i] - chunk_reference[i]));
     }
     CELEG_TEST_CHECK(chunk_maximum < 1e-5f);
+
+    // Non-causal and prefix-LM patterns use the complete committed chunk as
+    // their horizon while retaining each row's logical query position.
+    std::vector<float> bidirectional_output(query_rows * query.size());
+    const celeg::CpuAttentionPattern bidirectional =
+        celeg::CpuAttentionPattern::lower(celeg::BidirectionalPattern{});
+    celeg::cpu_gqa_prefill_paged(
+        query_chunk.data(), query_rows, query.size(), pool, pages,
+        bidirectional_output.data(), base, q_heads, kv_heads, head_dim,
+        workers, bidirectional);
+    for (size_t row = 0; row < query_rows; ++row) {
+        std::vector<float> row_reference(query.size());
+        celeg::cpu_gqa_decode_paged(
+            query_chunk.data() + row * query.size(), pool, pages,
+            row_reference.data(), base + static_cast<int>(query_rows),
+            q_heads, kv_heads, head_dim, bidirectional,
+            {}, base + static_cast<int>(row));
+        for (size_t i = 0; i < query.size(); ++i) {
+            CELEG_TEST_CHECK(std::abs(
+                bidirectional_output[row * query.size() + i] - row_reference[i]) < 1e-5f);
+        }
+    }
     for (auto page : pages) pool.release(page);
     std::cout << "cpu_parallel_attention_test: ok max_error=" << maximum
               << " chunk_max_error=" << chunk_maximum << '\n';

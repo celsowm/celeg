@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 namespace celeg::reference {
 
@@ -128,6 +129,102 @@ std::vector<float> gqa_decode_strict_bf16(
         }
     }
     return out;
+}
+
+namespace {
+
+bool latent_key_allowed(const AttentionPatternSpec& pattern,
+                        int query_position, int key_position) {
+    return std::visit([&](const auto& value) {
+        using Pattern = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Pattern, FullCausalPattern>) {
+            return key_position <= query_position;
+        } else if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
+            return key_position <= query_position &&
+                   key_position >= query_position - value.window + 1;
+        } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
+            return true;
+        } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
+            return query_position < value.prefix_length
+                ? key_position < value.prefix_length
+                : key_position <= query_position;
+        } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
+            const int query_block = query_position / value.block_size;
+            const int key_block = key_position / value.block_size;
+            return key_block <= query_block &&
+                   (key_block < value.global_blocks ||
+                    key_block >= query_block - value.local_blocks + 1);
+        } else {
+            const int query_block = query_position / value.block_size;
+            const int key_block = key_position / value.block_size;
+            return key_block <= query_block &&
+                   (key_block < value.max_selected_blocks || key_block == query_block);
+        }
+    }, pattern);
+}
+
+} // namespace
+
+std::vector<float> latent_attention_decode_bf16(
+    const LatentAttentionReferenceSpec& spec,
+    const std::vector<float>& query_content,
+    const std::vector<float>& query_rope,
+    const std::vector<float>& latent_keys,
+    const std::vector<float>& latent_values,
+    const std::vector<float>& key_rope,
+    int seq_len,
+    int query_position) {
+    if (spec.query_heads <= 0 || spec.latent_rank <= 0 || spec.rope_head_dim < 0 ||
+        !(spec.scale > 0.0f) || seq_len <= 0 || query_position < 0 ||
+        query_position >= seq_len ||
+        query_content.size() != static_cast<size_t>(spec.query_heads * spec.latent_rank) ||
+        query_rope.size() != static_cast<size_t>(spec.query_heads * spec.rope_head_dim) ||
+        latent_keys.size() != static_cast<size_t>(seq_len * spec.latent_rank) ||
+        latent_values.size() != latent_keys.size() ||
+        key_rope.size() != static_cast<size_t>(seq_len * spec.rope_head_dim)) {
+        throw std::invalid_argument("latent attention reference shape mismatch");
+    }
+
+    std::vector<float> output(static_cast<size_t>(spec.query_heads * spec.latent_rank));
+    for (int head = 0; head < spec.query_heads; ++head) {
+        std::vector<float> scores(static_cast<size_t>(seq_len),
+                                   -std::numeric_limits<float>::infinity());
+        float maximum = -std::numeric_limits<float>::infinity();
+        for (int token = 0; token < seq_len; ++token) {
+            if (!latent_key_allowed(spec.pattern, query_position, token)) continue;
+            float score = 0.0f;
+            for (int rank = 0; rank < spec.latent_rank; ++rank) {
+                score += round_bf16(query_content[static_cast<size_t>(head * spec.latent_rank + rank)]) *
+                         round_bf16(latent_keys[static_cast<size_t>(token * spec.latent_rank + rank)]);
+            }
+            for (int dimension = 0; dimension < spec.rope_head_dim; ++dimension) {
+                score += round_bf16(query_rope[static_cast<size_t>(head * spec.rope_head_dim + dimension)]) *
+                         round_bf16(key_rope[static_cast<size_t>(token * spec.rope_head_dim + dimension)]);
+            }
+            scores[static_cast<size_t>(token)] = round_bf16(round_bf16(score) * spec.scale);
+            maximum = std::max(maximum, scores[static_cast<size_t>(token)]);
+        }
+        if (!std::isfinite(maximum)) {
+            throw std::invalid_argument("latent attention pattern selects no keys");
+        }
+        float denominator = 0.0f;
+        for (float score : scores) {
+            if (std::isfinite(score)) denominator += std::exp(score - maximum);
+        }
+        for (int rank = 0; rank < spec.latent_rank; ++rank) {
+            float value = 0.0f;
+            for (int token = 0; token < seq_len; ++token) {
+                const float score = scores[static_cast<size_t>(token)];
+                if (!std::isfinite(score)) continue;
+                const float probability = round_bf16(
+                    std::exp(score - maximum) / denominator);
+                value += probability * round_bf16(
+                    latent_values[static_cast<size_t>(token * spec.latent_rank + rank)]);
+            }
+            output[static_cast<size_t>(head * spec.latent_rank + rank)] = round_bf16(value);
+        }
+    }
+    return output;
 }
 
 std::vector<float> conv_decode_bf16(

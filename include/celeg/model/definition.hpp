@@ -1,8 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace celeg {
@@ -23,18 +24,51 @@ struct TransformerDimensions {
     void validate() const;
 };
 
-enum class PositionalEncodingKind : uint8_t {
+enum class RopeScalingKind : uint8_t {
     None,
-    Rope,
+    Linear,
+    DynamicNtk,
+    Yarn,
+    Long,
+    Llama3Frequency,
 };
 
-struct RopeSpec {
-    PositionalEncodingKind kind = PositionalEncodingKind::None;
+struct RopeScalingSpec {
+    RopeScalingKind kind = RopeScalingKind::None;
+    double factor = 1.0;
+    int original_context = 0;
+    double attention_factor = 1.0;
+    double beta_fast = 0.0;
+    double beta_slow = 0.0;
+    double low_frequency_factor = 1.0;
+    double high_frequency_factor = 1.0;
+    std::vector<float> short_factors;
+    std::vector<float> long_factors;
+
+    void validate(int rotary_dimension) const;
+};
+
+struct NoPositionEncodingSpec {};
+
+struct RopePositionSpec {
     double theta = 0.0;
-    std::optional<double> scaling_factor;
+    double rotary_fraction = 1.0;
+    RopeScalingSpec scaling;
 
-    void validate() const;
+    void validate(int head_dimension) const;
 };
+
+struct MultiAxisRopeSpec {
+    RopePositionSpec base;
+    std::array<int, 3> sections{0, 0, 0};
+    bool interleaved = false;
+    int axes = 3;
+
+    void validate(int head_dimension) const;
+};
+
+using PositionSpec = std::variant<NoPositionEncodingSpec, RopePositionSpec,
+                                  MultiAxisRopeSpec>;
 
 struct ModelNumerics {
     float norm_epsilon = 0.0f;
@@ -58,7 +92,7 @@ struct TokenIds {
 // own specification instead of being added to this common structure.
 struct ModelDefinition {
     TransformerDimensions dimensions;
-    RopeSpec rope;
+    PositionSpec position;
     ModelNumerics numerics;
     TokenIds tokens;
     std::string architecture;

@@ -5,7 +5,17 @@
 
 namespace celeg {
 
+CpuStatePageLayout lower_cpu_state_page_layout(const CompiledAttentionStateLayout& state) {
+    if (state.kind == CompiledStateLayoutKind::OrdinaryKv) {
+        return CpuStatePageLayout{
+            state.key_elements, state.value_elements, 0, 0};
+    }
+    return CpuStatePageLayout{
+        0, 0, state.latent_elements, state.rotary_elements};
+}
+
 CpuKvTopology build_cpu_kv_topology(const RuntimeTopology& shape,
+                                    const CompiledModelProgram& program,
                                     const CpuModelOptions& options) {
     CpuKvTopology result;
     result.layer_to_pool.assign(static_cast<size_t>(shape.num_hidden_layers), -1);
@@ -37,6 +47,12 @@ CpuKvTopology build_cpu_kv_topology(const RuntimeTopology& shape,
         }
         const size_t index = static_cast<size_t>(layer);
         const AttentionSpec& attention = shape.attention_layout(layer);
+        if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
+            !program.layers[index].state_layout.has_value()) {
+            throw std::runtime_error("compiled attention layer has no state layout");
+        }
+        const CpuStatePageLayout state_layout = lower_cpu_state_page_layout(
+            *program.layers[index].state_layout);
         if (attention.kv_sharing.shared() && !attention.kv_sharing.publishes) {
             const int group = attention.kv_sharing.group;
             if (group < 0 || group >= static_cast<int>(shared_pool.size()) ||
@@ -51,7 +67,7 @@ CpuKvTopology build_cpu_kv_topology(const RuntimeTopology& shape,
         result.layer_to_pool[index] = static_cast<int>(result.pools.size());
         result.pools.push_back(std::make_shared<CpuKvPagePool>(
             options.kv_cache_mode, options.kv_page_tokens,
-            static_cast<size_t>(attention.key_value_width())));
+            state_layout));
         if (attention.kv_sharing.shared()) {
             shared_pool[static_cast<size_t>(attention.kv_sharing.group)] =
                 result.layer_to_pool[index];

@@ -7,23 +7,23 @@ int main(void) {
     celeg_cpu_model_options model;
     celeg_cpu_model_options_init(&model);
     if (model.max_context != 4096 || model.cpu.q4_group_size != 32) return 1;
+    celeg_cpu_backend_options backend;
+    celeg_cpu_backend_options_init(&backend);
     celeg_engine_options engine;
-    celeg_engine_options_init(&engine, CELEG_BACKEND_CPU);
-    if (engine.backend_options.cpu.max_active_requests != 16) return 1;
+    celeg_engine_options_init(&engine, "cpu", &backend, (uint32_t)sizeof(backend));
+    if (backend.engine.max_active_requests != 16) return 1;
     celeg_request_options request;
     celeg_request_options_init(&request);
     if (request.max_new_tokens != 128) return 1;
     if (!celeg_backend_capabilities(CELEG_BACKEND_CPU) ||
         strlen(celeg_backend_capabilities(CELEG_BACKEND_CPU)) == 0) return 1;
-    if (celeg_model_create("", &model) != 0) return 1;
+    if (celeg_model_create("", &model) != NULL) return 1;
 
     {
-        celeg_cpu_backend_v2_options v2_backend;
-        celeg_cpu_backend_v2_options_init(&v2_backend);
-        celeg_engine_v2_options unknown;
-        celeg_engine_v2_options_init(&unknown, "test-only-unknown",
-                                     &v2_backend, (uint32_t)sizeof(v2_backend));
-        if (celeg_engine_create_v2("missing-model", &unknown) != NULL) return 1;
+        celeg_engine_options unknown;
+        celeg_engine_options_init(&unknown, "test-only-unknown",
+                                  &backend, (uint32_t)sizeof(backend));
+        if (celeg_engine_create("missing-model", &unknown) != NULL) return 1;
         if (strstr(celeg_engine_last_error(NULL), "unknown") == NULL) return 1;
     }
 
@@ -41,24 +41,22 @@ int main(void) {
             }
             celeg_model_destroy(instance);
 
-            celeg_engine_options_init(&engine, CELEG_BACKEND_CPU);
-            engine.model.max_context = 16;
-            engine.backend_options.cpu.max_active_requests = 1;
+            celeg_cpu_backend_options_init(&backend);
+            backend.engine.max_active_requests = 1;
+            celeg_engine_options_init(&engine, "cpu", &backend,
+                                      (uint32_t)sizeof(backend));
+            engine.max_context = 16;
             celeg_engine* service = celeg_engine_create(gguf, &engine);
             if (!service) return 1;
             celeg_engine_destroy(service);
 
-            celeg_cpu_backend_v2_options v2_backend;
-            celeg_cpu_backend_v2_options_init(&v2_backend);
-            v2_backend.model.prefill_chunk_threshold = 1;
-            v2_backend.engine.max_active_requests = 1;
-            celeg_engine_v2_options v2;
-            celeg_engine_v2_options_init(&v2, "cpu", &v2_backend,
-                                         (uint32_t)sizeof(v2_backend));
-            v2.max_context = 16;
-            celeg_engine* v2_service = celeg_engine_create_v2(gguf, &v2);
-            if (!v2_service) return 1;
-            celeg_engine_destroy(v2_service);
+            backend.model.prefill_chunk_threshold = 1;
+            celeg_engine_options_init(&engine, "cpu", &backend,
+                                      (uint32_t)sizeof(backend));
+            engine.max_context = 16;
+            celeg_engine* configured_service = celeg_engine_create(gguf, &engine);
+            if (!configured_service) return 1;
+            celeg_engine_destroy(configured_service);
         }
     }
     return 0;

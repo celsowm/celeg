@@ -21,6 +21,13 @@ enum class TensorRole : uint8_t {
     AttentionKey,
     AttentionKeyNorm,
     AttentionValue,
+    AttentionRelativePositionBias,
+    AttentionLatentQuery,
+    AttentionLatentQueryRope,
+    AttentionLatentKey,
+    AttentionLatentValue,
+    AttentionLatentKeyRope,
+    AttentionLatentOutput,
     AttentionOutput,
     AttentionValueNorm,
     AttentionPostNorm,
@@ -92,9 +99,10 @@ public:
     virtual std::vector<std::string> candidates(const TensorRequest& request) const = 0;
 };
 
-// Concrete naming policies live in their owning src/models/<arch>/ directory.
-// module. This generic header depends on ITensorNamingPolicy only, so adding
-// an architecture never requires touching a central tensor-name switch.
+// Binding data is preferred for descriptor-backed architectures. Transitional
+// family policies may still implement this interface while they migrate; the
+// generic header depends only on the narrow capability and never owns a
+// central tensor-name switch.
 
 class TensorResolver {
 public:

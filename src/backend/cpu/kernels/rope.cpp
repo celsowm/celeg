@@ -1,5 +1,6 @@
 #include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/backend/cpu/isa.hpp"
+#include "celeg/model/position.hpp"
 
 #include <cmath>
 #include <array>
@@ -51,36 +52,33 @@ void cpu_qk_norm_rope_avx2(float* data, const float* norm_weight,
 
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
-                      float rope_theta, float eps, float rotary_fraction) {
+                      const RopePositionSpec& rope, float eps) {
     if (!data || !norm_weight || heads <= 0 || head_dim <= 0 ||
         (head_dim % 2) != 0 || position < 0) {
         throw std::invalid_argument("invalid QK norm/RoPE arguments");
     }
-    if (!(rotary_fraction > 0.0f) || rotary_fraction > 1.0f) {
-        throw std::invalid_argument("invalid rotary fraction");
-    }
-    const int half = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const int half = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction) / 2;
     thread_local std::vector<float> cos_vals;
     thread_local std::vector<float> sin_vals;
     cos_vals.resize(static_cast<size_t>(half));
     sin_vals.resize(static_cast<size_t>(half));
     for (int d = 0; d < half; ++d) {
-        const float frequency = std::pow(rope_theta, -2.0f * static_cast<float>(d) /
-                                        static_cast<float>(head_dim));
+        const float frequency = static_cast<float>(rope_frequency(
+            rope, d, head_dim, position));
         const float angle = static_cast<float>(position) * frequency;
         cos_vals[d] = std::cos(angle);
         sin_vals[d] = std::sin(angle);
     }
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (g_has_avx2_fma) {
-        if (rotary_fraction == 1.0f) {
+        if (rope.rotary_fraction == 1.0 && rope.scaling.kind == RopeScalingKind::None) {
             cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
             return;
         }
     }
 #elif defined(_MSC_VER) && CELEG_CPU_X86
     if (g_has_avx2_fma) {
-        if (rotary_fraction == 1.0f) {
+        if (rope.rotary_fraction == 1.0 && rope.scaling.kind == RopeScalingKind::None) {
             detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
             return;
         }
@@ -101,20 +99,17 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
 }
 
 void cpu_rope(float* data, int heads, int head_dim, int position,
-              float rope_theta, float rotary_fraction) {
+              const RopePositionSpec& rope) {
     if (!data || heads <= 0 || head_dim <= 0 || (head_dim % 2) != 0 ||
-        position < 0 || !(rope_theta > 0.0f)) {
+        position < 0 || !(rope.theta > 0.0)) {
         throw std::invalid_argument("invalid RoPE arguments");
     }
-    if (!(rotary_fraction > 0.0f) || rotary_fraction > 1.0f) {
-        throw std::invalid_argument("invalid rotary fraction");
-    }
-    const int half = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const int half = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction) / 2;
     std::vector<float> cos_vals(static_cast<size_t>(half));
     std::vector<float> sin_vals(static_cast<size_t>(half));
     for (int pair = 0; pair < half; ++pair) {
-        const float frequency = std::pow(rope_theta,
-            -2.0f * static_cast<float>(pair) / static_cast<float>(head_dim));
+        const float frequency = static_cast<float>(rope_frequency(
+            rope, pair, head_dim, position));
         const float angle = static_cast<float>(position) * frequency;
         cos_vals[static_cast<size_t>(pair)] = std::cos(angle);
         sin_vals[static_cast<size_t>(pair)] = std::sin(angle);
@@ -161,20 +156,20 @@ void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
                             int heads, int head_dim,
                             const std::array<int32_t, 3>& positions,
                             const std::array<int, 3>& sections,
-                            bool interleaved, float rope_theta, float eps,
-                            float rotary_fraction) {
+                    bool interleaved, const RopePositionSpec& rope, float eps) {
     if (!data || !norm_weight || heads <= 0) {
         throw std::invalid_argument("invalid MRoPE QK arguments");
     }
-    validate_mrope(head_dim, sections, rope_theta, rotary_fraction);
-    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction);
+    validate_mrope(head_dim, sections, static_cast<float>(rope.theta),
+                   static_cast<float>(rope.rotary_fraction));
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
     const int pairs = rotary_dim / 2;
     std::vector<float> cos_values(static_cast<size_t>(pairs));
     std::vector<float> sin_values(static_cast<size_t>(pairs));
     for (int pair = 0; pair < pairs; ++pair) {
         const int axis = mrope_axis_for_pair(pair, sections, interleaved);
-        const float frequency = std::pow(rope_theta,
-            -2.0f * static_cast<float>(pair) / static_cast<float>(rotary_dim));
+        const float frequency = static_cast<float>(rope_frequency(
+            rope, pair, rotary_dim, positions[static_cast<size_t>(axis)]));
         const float angle = static_cast<float>(positions[static_cast<size_t>(axis)]) * frequency;
         cos_values[static_cast<size_t>(pair)] = std::cos(angle);
         sin_values[static_cast<size_t>(pair)] = std::sin(angle);
@@ -200,18 +195,18 @@ void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
 void cpu_rope_mrope(float* data, int heads, int head_dim,
                     const std::array<int32_t, 3>& positions,
                     const std::array<int, 3>& sections,
-                    bool interleaved, float rope_theta,
-                    float rotary_fraction) {
+                    bool interleaved, const RopePositionSpec& rope) {
     if (!data || heads <= 0) throw std::invalid_argument("invalid MRoPE arguments");
-    validate_mrope(head_dim, sections, rope_theta, rotary_fraction);
-    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction);
+    validate_mrope(head_dim, sections, static_cast<float>(rope.theta),
+                   static_cast<float>(rope.rotary_fraction));
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
     const int pairs = rotary_dim / 2;
     std::vector<float> cos_values(static_cast<size_t>(pairs));
     std::vector<float> sin_values(static_cast<size_t>(pairs));
     for (int pair = 0; pair < pairs; ++pair) {
         const int axis = mrope_axis_for_pair(pair, sections, interleaved);
-        const float frequency = std::pow(rope_theta,
-            -2.0f * static_cast<float>(pair) / static_cast<float>(rotary_dim));
+        const float frequency = static_cast<float>(rope_frequency(
+            rope, pair, rotary_dim, positions[static_cast<size_t>(axis)]));
         const float angle = static_cast<float>(positions[static_cast<size_t>(axis)]) * frequency;
         cos_values[static_cast<size_t>(pair)] = std::cos(angle);
         sin_values[static_cast<size_t>(pair)] = std::sin(angle);

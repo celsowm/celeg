@@ -18,6 +18,7 @@ void near(float a, float b, float tolerance = 0.02f) {
 int main() {
     using celeg::reference::conv_decode_bf16;
     using celeg::reference::gqa_decode_strict_bf16;
+    using celeg::reference::latent_attention_decode_bf16;
     using celeg::reference::rmsnorm_bf16;
     using celeg::reference::rope_bf16_inplace;
     using celeg::reference::round_bf16;
@@ -50,6 +51,19 @@ int main() {
     near(attention[0], attention[2]);
     near(attention[1], attention[3]);
     CELEG_TEST_CHECK(attention[0] > 2.0f && attention[0] < 6.0f);
+
+    celeg::reference::LatentAttentionReferenceSpec latent_spec;
+    latent_spec.query_heads = 1;
+    latent_spec.latent_rank = 2;
+    latent_spec.rope_head_dim = 2;
+    latent_spec.scale = 1.0f;
+    const auto latent = latent_attention_decode_bf16(
+        latent_spec,
+        {1, 0}, {1, 0},
+        {1, 0, 0, 1}, {2, 4, 6, 8}, {1, 0, 0, 1}, 2, 1);
+    CELEG_TEST_CHECK(latent.size() == 2);
+    CELEG_TEST_CHECK(latent[0] > 2.0f && latent[0] < 6.0f);
+    CELEG_TEST_CHECK(latent[1] > 3.0f && latent[1] < 7.0f);
 
     std::vector<float> state(6, 0.0f);
     const std::vector<float> weights = {1, 2, 3, 1, 2, 3};

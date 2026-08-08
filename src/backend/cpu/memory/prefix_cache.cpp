@@ -122,7 +122,7 @@ CpuPrefixSnapshot CpuPrefixCacheManager::clone_snapshot(
                 destination_pages.back() = private_tail;
                 pools_[layer]->release(shared_tail);
                 ++metrics_.cow_pages;
-                metrics_.cow_bytes += partial * pools_[layer]->kv_width() * 2 *
+                metrics_.cow_bytes += partial * pools_[layer]->layout().token_elements() *
                     (pools_[layer]->mode() == CpuKvCacheMode::Fp32
                         ? sizeof(float) : sizeof(uint16_t));
             }

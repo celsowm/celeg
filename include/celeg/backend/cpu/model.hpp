@@ -52,6 +52,7 @@ struct CpuModelMemoryStats {
 
 class CpuConcurrentEngine;
 class CpuKvPagePool;
+class CpuExternalAttentionMemory;
 struct CpuPrefixSnapshot;
 class CpuModel;
 struct CpuCompiledModel;
@@ -152,6 +153,8 @@ public:
     std::unique_ptr<CpuModel> clone_session_on_node(int numa_node) const;
 
     std::vector<std::shared_ptr<CpuKvPagePool>> shared_kv_pools() const;
+    void set_external_attention_memory(
+        int slot, std::shared_ptr<const CpuExternalAttentionMemory> memory);
 
     static CpuBatchMetrics prefill_batch(std::span<const CpuPrefillItem> items);
     static CpuBatchMetrics prefill_chunk(CpuModel& session,

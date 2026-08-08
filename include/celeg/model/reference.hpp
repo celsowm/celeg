@@ -1,5 +1,7 @@
 #pragma once
 
+#include "celeg/model/graph.hpp"
+
 #include <cstdint>
 #include <vector>
 
@@ -23,6 +25,29 @@ std::vector<float> gqa_decode_strict_bf16(
     int q_heads,
     int kv_heads,
     int head_dim);
+
+// Correctness-first latent-KV attention reference.  The persistent key/value
+// state is represented by one latent vector per token; query-side content
+// projections and the optional decoupled rotary component are already
+// resolved by the caller.  This keeps the reference independent of a
+// checkpoint naming convention or a particular latent-attention family.
+struct LatentAttentionReferenceSpec {
+    int query_heads = 0;
+    int latent_rank = 0;
+    int rope_head_dim = 0;
+    float scale = 1.0f;
+    AttentionPatternSpec pattern = FullCausalPattern{};
+};
+
+std::vector<float> latent_attention_decode_bf16(
+    const LatentAttentionReferenceSpec& spec,
+    const std::vector<float>& query_content,
+    const std::vector<float>& query_rope,
+    const std::vector<float>& latent_keys,
+    const std::vector<float>& latent_values,
+    const std::vector<float>& key_rope,
+    int seq_len,
+    int query_position);
 std::vector<float> conv_decode_bf16(
     const std::vector<float>& projected_bcx,
     const std::vector<float>& conv_weight,

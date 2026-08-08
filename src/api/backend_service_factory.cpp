@@ -41,22 +41,15 @@ public:
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
-        if (bytes.size() < sizeof(celeg_cpu_backend_v2_options)) {
-            throw std::invalid_argument("CPU v2 options are truncated");
+        if (bytes.size() < sizeof(celeg_cpu_backend_options)) {
+            throw std::invalid_argument("CPU backend options are truncated");
         }
-        const auto* source = reinterpret_cast<const celeg_cpu_backend_v2_options*>(bytes.data());
+        const auto* source = reinterpret_cast<const celeg_cpu_backend_options*>(bytes.data());
         if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
-            throw std::invalid_argument("CPU v2 options have an invalid struct size");
+            throw std::invalid_argument("CPU backend options have an invalid struct size");
         }
-        celeg_engine_model_options model{};
-        model.backend = CELEG_BACKEND_CPU;
-        model.backend_options.cpu = source->model;
-        celeg_engine_options engine{};
-        engine.backend = CELEG_BACKEND_CPU;
-        engine.model = model;
-        engine.backend_options.cpu = source->engine;
         return std::make_shared<CpuBackendOptions>(
-            cpu_options(model), cpu_engine_options(engine));
+            cpu_options(source->model), cpu_engine_options(source->engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
@@ -104,22 +97,15 @@ public:
 
     std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const override {
-        if (bytes.size() < sizeof(celeg_cuda_backend_v2_options)) {
-            throw std::invalid_argument("CUDA v2 options are truncated");
+        if (bytes.size() < sizeof(celeg_cuda_backend_options)) {
+            throw std::invalid_argument("CUDA backend options are truncated");
         }
-        const auto* source = reinterpret_cast<const celeg_cuda_backend_v2_options*>(bytes.data());
+        const auto* source = reinterpret_cast<const celeg_cuda_backend_options*>(bytes.data());
         if (source->struct_size < sizeof(*source) || source->struct_size > bytes.size()) {
-            throw std::invalid_argument("CUDA v2 options have an invalid struct size");
+            throw std::invalid_argument("CUDA backend options have an invalid struct size");
         }
-        celeg_engine_model_options model{};
-        model.backend = CELEG_BACKEND_CUDA;
-        model.backend_options.cuda = source->model;
-        celeg_engine_options engine{};
-        engine.backend = CELEG_BACKEND_CUDA;
-        engine.model = model;
-        engine.backend_options.cuda = source->engine;
         return std::make_shared<CudaBackendOptions>(
-            cuda_options(model), cuda_engine_options(engine));
+            cuda_options(source->model), cuda_engine_options(source->engine));
     }
 
     std::unique_ptr<serve::ServiceBundle> create(
@@ -139,63 +125,15 @@ public:
 };
 #endif
 
-std::shared_ptr<const RuntimeContext> create_backend_runtime(
-    const celeg_engine_options& options) {
-    RuntimeBuilder builder;
-    builder.add_builtins();
-    builder.add_backend_factory(std::make_unique<CpuBackendFactory>());
-#ifdef CELEG_API_WITH_CUDA
-    builder.add_backend_factory(std::make_unique<CudaBackendFactory>());
-#else
-    if (options.backend == CELEG_BACKEND_CUDA) {
-        throw std::invalid_argument("CUDA backend is unavailable in this build");
-    }
-#endif
-    return builder.build_shared();
-}
-
 } // namespace
 
 std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     const char* path, const celeg_engine_options& options) {
-    if (!path || !*path) throw std::invalid_argument("engine path is required");
-    if (options.backend != options.model.backend) {
-        throw std::invalid_argument("engine backend must match model backend");
-    }
-    const std::shared_ptr<const RuntimeContext> runtime =
-        create_backend_runtime(options);
-    BackendCreateRequest request;
-    request.model_path = path;
-    request.max_context = options.model.max_context;
-    request.backend_id = options.backend == CELEG_BACKEND_CPU ? "cpu" : "cuda";
-    request.runtime = runtime;
-    if (options.backend == CELEG_BACKEND_CPU) {
-        request.options = std::make_shared<CpuBackendOptions>(
-            cpu_options(options.model), cpu_engine_options(options));
-    }
-#ifdef CELEG_API_WITH_CUDA
-    else if (options.backend == CELEG_BACKEND_CUDA) {
-        request.options = std::make_shared<CudaBackendOptions>(
-            cuda_options(options.model), cuda_engine_options(options));
-    }
-#endif
-    else {
-        throw std::invalid_argument("unknown backend");
-    }
-    const IBackendFactory& factory = runtime->backends().select_best_if(
-        [backend_id = request.backend_id](const IBackendFactory& candidate) {
-            return candidate.supports(backend_id);
-        });
-    return factory.create(request);
-}
-
-std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle_v2(
-    const char* path, const celeg_engine_v2_options& options) {
     if (!path || !*path || !options.backend_id || !*options.backend_id) {
-        throw std::invalid_argument("v2 engine path and backend id are required");
+        throw std::invalid_argument("engine path and backend id are required");
     }
     if (!options.backend_options || options.backend_options_size == 0) {
-        throw std::invalid_argument("v2 backend options are required");
+        throw std::invalid_argument("backend options are required");
     }
     RuntimeBuilder builder;
     builder.add_builtins();
@@ -217,7 +155,7 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle_v2(
     const IBackendFactory& factory = *selected;
     const auto* decoder = dynamic_cast<const IBackendOptionsDecoder*>(&factory);
     if (!decoder) {
-        throw std::invalid_argument("selected backend does not expose v2 options");
+        throw std::invalid_argument("selected backend does not expose backend options");
     }
     const auto* raw = static_cast<const std::byte*>(options.backend_options);
     BackendCreateRequest request;

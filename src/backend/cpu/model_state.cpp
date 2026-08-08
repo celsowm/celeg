@@ -69,7 +69,7 @@ void CpuCompiledModel::allocate_state() {
 }
 
 void CpuCompiledModel::allocate_activations() {
-    workspace_.ensure(1, shared->shape);
+    workspace_.ensure(1, shared->workspace_plan);
     workspace_.logits.resize(shared->shape.vocab_size);
     session_.seen.resize(shared->shape.vocab_size);
 }
@@ -194,10 +194,33 @@ void CpuCompiledModel::store_kv(AttentionState& state, int position,
     state.token_count = std::max(state.token_count, position_value + 1);
 }
 
+void CpuCompiledModel::store_latent(AttentionState& state, int position,
+                                    const float* key, const float* value,
+                                    const float* rotary) {
+    if (position < 0) throw std::invalid_argument("negative CPU latent position");
+    CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
+    const size_t position_value = static_cast<size_t>(position);
+    const size_t page_index = position_value / pool.page_tokens();
+    const size_t token_offset = position_value % pool.page_tokens();
+    while (state.pages.size() <= page_index) {
+        state.pages.push_back(pool.allocate(preferred_numa_node));
+    }
+    if (token_offset != 0 && pool.reference_count(state.pages[page_index]) > 1) {
+        const CpuKvPageId shared_page = state.pages[page_index];
+        const CpuKvPageId private_page = pool.clone_prefix(
+            shared_page, token_offset, preferred_numa_node);
+        state.pages[page_index] = private_page;
+        pool.release(shared_page);
+    }
+    pool.write_latent(state.pages[page_index], token_offset, key, value, rotary);
+    state.token_count = std::max(state.token_count, position_value + 1);
+}
+
 void CpuCompiledModel::run_attention(const AttentionState& state,
                                      const AttentionSpec& attention,
                                      const float* q, float* output,
-                                     int sequence_length) const {
+                                     int sequence_length,
+                                     std::span<const float> relative_bias) const {
     if (sequence_length <= 0 || static_cast<size_t>(sequence_length) > state.token_count) {
         throw std::invalid_argument("CPU paged attention sequence length is invalid");
     }
@@ -207,15 +230,66 @@ void CpuCompiledModel::run_attention(const AttentionState& state,
         q, pool, state.pages, output, sequence_length,
         attention.query_heads, attention.key_value_heads, attention.head_dim,
         shared->pool,
+        CpuAttentionPattern::lower(attention.pattern),
+        CpuAttentionBias::lower(attention.bias, relative_bias, attention.query_heads),
         CpuPagedAttentionOptions{
             shared->options.attention_parallel_threshold,
-            shared->options.attention_page_tile,
-            attention.mask == AttentionMaskKind::SlidingCausal
-                ? attention.sliding_window : 0},
+            shared->options.attention_page_tile},
         &attention_stats);
     if (attention_stats.parallel) {
         ++const_cast<CpuCompiledModel*>(this)->session_.attention_parallel_calls;
     }
+}
+
+void CpuCompiledModel::run_latent_attention(
+    const AttentionState& state, const AttentionSpec& attention,
+    const float* query_content, const float* query_rope,
+    float* output, int sequence_length, int query_position,
+    std::span<const float> relative_bias) const {
+    const auto& latent = *attention.latent_state();
+    if (sequence_length <= 0 || static_cast<size_t>(sequence_length) > state.token_count) {
+        throw std::invalid_argument("CPU latent attention sequence length is invalid");
+    }
+    const CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
+    const int rotary_width = latent.decoupled_rope ? latent.rope_head_dim : 0;
+    cpu_latent_attention_decode_paged(
+        query_content, query_rope, pool, state.pages, output, sequence_length,
+        attention.query_heads, latent.latent_rank, rotary_width,
+        attention.query_scale * shared->shape.numerical_policy.attention_multiplier,
+        CpuAttentionPattern::lower(attention.pattern),
+        CpuAttentionBias::lower(attention.bias, relative_bias, attention.query_heads), query_position);
+}
+
+void CpuCompiledModel::set_external_attention_memory(
+    int slot, std::shared_ptr<const CpuExternalAttentionMemory> memory) {
+    if (slot < 0 || !memory) {
+        throw std::invalid_argument("external attention memory slot and memory are required");
+    }
+    if (memory->token_count() == 0) {
+        throw std::invalid_argument("external attention memory cannot be empty");
+    }
+    shared->external_attention_memory[slot] = std::move(memory);
+}
+
+void CpuCompiledModel::run_external_attention(
+    const AttentionSpec& attention, const CpuExternalAttentionMemory& memory,
+    const float* q, float* output, std::span<const float> relative_bias) const {
+    if (memory.token_count() == 0) {
+        throw std::invalid_argument("external attention memory is empty");
+    }
+    if (memory.pool().key_width() != static_cast<size_t>(
+            attention.key_value_heads * attention.head_dim) ||
+        memory.pool().value_width() != static_cast<size_t>(
+            attention.key_value_heads * attention.head_dim)) {
+        throw std::invalid_argument("external attention memory width does not match attention");
+    }
+    cpu_gqa_decode_paged(
+        q, memory.pool(), memory.pages(), output,
+        static_cast<int>(memory.token_count()), attention.query_heads,
+        attention.key_value_heads, attention.head_dim,
+        CpuAttentionPattern::lower(BidirectionalPattern{}),
+        CpuAttentionBias::lower(attention.bias, relative_bias, attention.query_heads),
+        static_cast<int>(memory.token_count()) - 1);
 }
 
 CpuPrefixSnapshot CpuCompiledModel::export_prefix_snapshot() const {

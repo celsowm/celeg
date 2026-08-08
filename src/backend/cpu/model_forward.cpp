@@ -29,6 +29,7 @@ void parallel_rows(CpuThreadPool& pool, size_t rows, const Body& body) {
 
 void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                      const PromptEmbedding* embeddings) {
+    CpuExecutionContext execution{*shared, workspace_, session_};
     if (session_.position_value >= shared->max_context) {
         throw std::runtime_error("CPU context limit reached");
     }
@@ -87,7 +88,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (!semantics.execute_feed_forward &&
             semantics.mixer == CompiledMixer::MlpOnly) {
             const auto& mlp = std::get<CpuCompiledModel::MlpOnlyWeights>(layer_program);
-            execute_cpu_mlp_only_token(*this, index, mlp);
+            execute_cpu_mlp_only_token(execution, index, mlp);
             continue;
         }
         if (const auto* gated_delta = gated_delta_net_operator(layer_program)) {
@@ -98,6 +99,63 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
         else if (const auto* attention = attention_operator(layer_program)) {
             const AttentionSpec& layout = semantics.attention.value();
+            if (layout.uses_external_memory()) {
+                const int q_width = layout.query_width();
+                shared->linear.gemv(attention->q, workspace_.normed.data(), workspace_.qkv.data());
+                float* q = workspace_.qkv.data();
+                apply_cpu_attention_qk(shared->shape, layout, *attention, q, nullptr,
+                                       session_.position_value, rope_position);
+                const auto memory_it = shared->external_attention_memory.find(
+                    layout.sources.memory_slot);
+                if (memory_it == shared->external_attention_memory.end()) {
+                    throw std::logic_error("external attention memory slot is not bound");
+                }
+                run_external_attention(layout, *memory_it->second, q,
+                                       workspace_.op_output.data(),
+                                       attention->relative_bias);
+                if (layout.query_gate) {
+                    apply_cpu_query_gate(workspace_.op_output.data(), q + q_width,
+                                         static_cast<size_t>(q_width));
+                }
+                shared->linear.gemv(attention->out, workspace_.op_output.data(),
+                                    workspace_.hidden.data());
+            } else if (layout.uses_latent_state()) {
+                const auto& latent = *layout.latent_state();
+                if (layout.query_gate) {
+                    throw std::invalid_argument("latent attention query gating is not supported");
+                }
+                const int content_width = layout.latent_query_content_width();
+                const int rope_width = layout.latent_query_rope_width();
+                shared->linear.gemv(attention->q, workspace_.normed.data(),
+                                    workspace_.qkv.data());
+                float* query_content = workspace_.qkv.data();
+                float* query_rope = rope_width == 0 ? nullptr : workspace_.latent_rope.data();
+                if (query_rope) {
+                    shared->linear.gemv(attention->latent_q_rope, workspace_.normed.data(),
+                                        query_rope);
+                }
+                shared->linear.gemv(attention->k, workspace_.normed.data(),
+                                    workspace_.latent_key.data());
+                shared->linear.gemv(attention->v, workspace_.normed.data(),
+                                    workspace_.latent_value.data());
+                float* key_rope = nullptr;
+                if (latent.decoupled_rope && latent.rope_head_dim != 0) {
+                    key_rope = workspace_.latent_key_rope.data();
+                    shared->linear.gemv(attention->latent_k_rope, workspace_.normed.data(), key_rope);
+                }
+                apply_cpu_latent_attention_positions(
+                    shared->shape, layout, query_rope, key_rope,
+                    session_.position_value, rope_position);
+                const int owner = shared->layer_to_kv_owner.at(index);
+                AttentionState& state = attention_state(static_cast<size_t>(owner));
+                store_latent(state, session_.position_value, workspace_.latent_key.data(),
+                             workspace_.latent_value.data(), key_rope);
+                run_latent_attention(state, layout, query_content, query_rope,
+                                     workspace_.op_output.data(), session_.position_value + 1,
+                                     session_.position_value, attention->relative_bias);
+                shared->linear.gemv(attention->out, workspace_.op_output.data(),
+                                    workspace_.hidden.data());
+            } else {
             const int q_width = layout.query_width();
             const int q_projection_width = layout.query_projection_width();
             const int kv_width = layout.key_value_width();
@@ -117,12 +175,13 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 store_kv(state, session_.position_value, k, v);
             }
             run_attention(state, layout, q, workspace_.op_output.data(),
-                          session_.position_value + 1);
+                          session_.position_value + 1, attention->relative_bias);
             if (layout.query_gate) {
                 apply_cpu_query_gate(workspace_.op_output.data(), q + q_width,
                                      static_cast<size_t>(q_width));
             }
             shared->linear.gemv(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
+            }
         } else {
             const auto* convolution = convolution_operator(layer_program);
             if (!convolution) throw std::logic_error("CPU layer has no operator");
@@ -156,7 +215,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
         } else {
-            execute_cpu_dense_feed_forward_token(*this, index, common);
+            execute_cpu_dense_feed_forward_token(execution, index, common);
             if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= shared->shape.numerical_policy.residual_multiplier;
             }
@@ -236,8 +295,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     const bool has_sequential_only_layer = std::any_of(
         shared->program.layers.begin(), shared->program.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            return layer.mixer == CompiledMixer::Mamba2 ||
-                   layer.mixer == CompiledMixer::MlpOnly;
+            return layer.chunk_capability != CompiledChunkCapability::Native;
         });
     if (has_sequential_only_layer) {
         for (size_t i = 0; i < tokens.size(); ++i) {
@@ -250,7 +308,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     const int base_position = session_.position_value;
     const RuntimeTopology& shape = shared->shape;
     const size_t hidden = static_cast<size_t>(shape.hidden);
-    workspace_.ensure_chunk(rows, shape);
+    CpuExecutionContext execution{*shared, workspace_, session_};
+    workspace_.ensure_chunk(rows, shared->workspace_plan);
 
     auto scale = [&](std::vector<float>& values, size_t count, float factor) {
         if (factor == 1.0f) return;
@@ -369,6 +428,116 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                           normed_q8_ready);
         } else if (const auto* attention = attention_operator(layer_program)) {
             const AttentionSpec& layout = semantics.attention.value();
+            if (layout.uses_external_memory()) {
+                const size_t q_width = static_cast<size_t>(layout.query_width());
+                linear_started = Clock::now();
+                layer_gemm(attention->q, workspace_.chunk_normed.data(),
+                           workspace_.chunk_qkv.data());
+                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+                parallel_rows(shared->pool, rows, [&](size_t row) {
+                    const int position = base_position + static_cast<int>(row);
+                    const auto* explicit_rope = embeddings
+                        ? embeddings->rope_at_position(static_cast<size_t>(position)) : nullptr;
+                    const std::array<int32_t, 3> scalar_rope = {
+                        position, position, position};
+                    const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
+                    apply_cpu_attention_qk(
+                        shape, layout, *attention,
+                        workspace_.chunk_qkv.data() + row * layout.query_projection_width(),
+                        nullptr, position, rope_position);
+                });
+                const auto memory_it = shared->external_attention_memory.find(
+                    layout.sources.memory_slot);
+                if (memory_it == shared->external_attention_memory.end()) {
+                    throw std::logic_error("external attention memory slot is not bound");
+                }
+                const auto& memory = *memory_it->second;
+                parallel_rows(shared->pool, rows, [&](size_t row) {
+                    run_external_attention(
+                        layout, memory,
+                        workspace_.chunk_qkv.data() + row * layout.query_projection_width(),
+                        workspace_.chunk_op.data() + row * q_width,
+                        attention->relative_bias);
+                });
+                if (layout.query_gate) {
+                    for (size_t row = 0; row < rows; ++row) {
+                        apply_cpu_query_gate(
+                            workspace_.chunk_op.data() + row * q_width,
+                            workspace_.chunk_qkv.data() +
+                                row * layout.query_projection_width() + q_width,
+                            q_width);
+                    }
+                }
+                linear_started = Clock::now();
+                layer_gemm(attention->out, workspace_.chunk_op.data(),
+                           workspace_.chunk_hidden.data());
+                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+            } else if (layout.uses_latent_state()) {
+                const auto& latent = *layout.latent_state();
+                if (layout.query_gate) {
+                    throw std::invalid_argument("latent attention query gating is not supported");
+                }
+                const size_t content_width = static_cast<size_t>(layout.latent_query_content_width());
+                const size_t rope_width = static_cast<size_t>(layout.latent_query_rope_width());
+                linear_started = Clock::now();
+                layer_gemm(attention->q, workspace_.chunk_normed.data(),
+                           workspace_.chunk_qkv.data());
+                if (rope_width != 0) {
+                    layer_gemm(attention->latent_q_rope, workspace_.chunk_normed.data(),
+                               workspace_.chunk_latent_rope.data());
+                }
+                layer_gemm(attention->k, workspace_.chunk_normed.data(),
+                           workspace_.chunk_latent_key.data());
+                layer_gemm(attention->v, workspace_.chunk_normed.data(),
+                           workspace_.chunk_latent_value.data());
+                if (latent.decoupled_rope && latent.rope_head_dim != 0) {
+                    layer_gemm(attention->latent_k_rope, workspace_.chunk_normed.data(),
+                               workspace_.chunk_latent_key_rope.data());
+                }
+                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+                parallel_rows(shared->pool, rows, [&](size_t row) {
+                    const int position = base_position + static_cast<int>(row);
+                    const auto* explicit_rope = embeddings
+                        ? embeddings->rope_at_position(static_cast<size_t>(position)) : nullptr;
+                    const std::array<int32_t, 3> scalar_rope = {
+                        position, position, position};
+                    const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
+                    float* query_rope = rope_width == 0 ? nullptr :
+                        workspace_.chunk_latent_rope.data() + row * rope_width;
+                    float* key_rope = (latent.decoupled_rope && latent.rope_head_dim != 0)
+                        ? workspace_.chunk_latent_key_rope.data() +
+                            row * static_cast<size_t>(latent.rope_head_dim) : nullptr;
+                    apply_cpu_latent_attention_positions(shape, layout, query_rope, key_rope,
+                                                         position, rope_position);
+                });
+                const int owner = shared->layer_to_kv_owner.at(index);
+                AttentionState& state = attention_state(static_cast<size_t>(owner));
+                for (size_t row = 0; row < rows; ++row) {
+                    store_latent(state, base_position + static_cast<int>(row),
+                                 workspace_.chunk_latent_key.data() + row * latent.latent_rank,
+                                 workspace_.chunk_latent_value.data() + row * latent.latent_rank,
+                                 latent.decoupled_rope && latent.rope_head_dim != 0
+                                     ? workspace_.chunk_latent_key_rope.data() +
+                                         row * static_cast<size_t>(latent.rope_head_dim)
+                                     : nullptr);
+                }
+                auto attention_started = Clock::now();
+                const int committed_length = base_position + static_cast<int>(rows);
+                parallel_rows(shared->pool, rows, [&](size_t row) {
+                    const int position = base_position + static_cast<int>(row);
+                    run_latent_attention(
+                        state, layout,
+                        workspace_.chunk_qkv.data() + row * content_width,
+                        rope_width == 0 ? nullptr : workspace_.chunk_latent_rope.data() + row * rope_width,
+                        workspace_.chunk_op.data() + row * content_width,
+                        committed_length, position, attention->relative_bias);
+                });
+                session_.prefill_profile.attention_ms += milliseconds_since(attention_started);
+                linear_started = Clock::now();
+                layer_gemm(attention->out, workspace_.chunk_op.data(),
+                           workspace_.chunk_hidden.data());
+                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+            } else {
             const size_t q_width = static_cast<size_t>(layout.query_width());
             const size_t q_projection_width = static_cast<size_t>(layout.query_projection_width());
             const size_t kv_width = static_cast<size_t>(layout.key_value_width());
@@ -416,8 +585,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   state.pages, workspace_.chunk_op.data(), base_position,
                                   layout.query_heads, layout.key_value_heads, layout.head_dim,
                                   shared->pool,
-                                  layout.mask == AttentionMaskKind::SlidingCausal
-                                      ? layout.sliding_window : 0);
+                                  CpuAttentionPattern::lower(layout.pattern),
+                                  CpuAttentionBias::lower(layout.bias, attention->relative_bias,
+                                                          layout.query_heads));
             if (layout.query_gate) {
                 for (size_t row = 0; row < rows; ++row) {
                     const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
@@ -430,6 +600,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             layer_gemm(attention->out, workspace_.chunk_op.data(),
                        workspace_.chunk_hidden.data());
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+            }
         } else {
             const auto* convolution = convolution_operator(layer_program);
             if (!convolution) throw std::logic_error("CPU layer has no operator");
@@ -454,7 +625,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             execute_cpu_moe_chunk(*this, index, *moe, moe_semantics, rows,
                                   normed_q8_ready);
         } else {
-            execute_cpu_dense_feed_forward_chunk(*this, index, common, rows,
+            execute_cpu_dense_feed_forward_chunk(execution, index, common, rows,
                                                  normed_q8_ready);
         }
         if (shape.numerical_policy.residual_multiplier != 1.0f) {

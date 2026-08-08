@@ -88,22 +88,24 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
         linear(workspace_.normed_.data(), *attention->value, v, 1,
                layout.key_value_width(), hidden);
     }
-    if (resources_.shape_.mrope_interleaved) {
+    const auto* rope = layout.rope_position();
+    if (!rope) throw std::logic_error("MTP attention requires positional encoding");
+    if (const auto* multi = layout.multi_axis_position()) {
         launch_dynamic_mrope_qk_norm_rope(
             q, k, attention->q_norm, attention->k_norm,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
-            mrope_position_device_.data(), resources_.shape_.mrope_section[0],
-            resources_.shape_.mrope_section[1], resources_.shape_.mrope_section[2],
-            true, static_cast<float>(layout.rope_theta),
-            static_cast<float>(layout.rotary_fraction), eps,
-            layout.query_key_norm, stream);
+            mrope_position_device_.data(), multi->sections[0],
+            multi->sections[1], multi->sections[2], multi->interleaved,
+            static_cast<float>(rope->theta),
+            static_cast<float>(rope->rotary_fraction), eps,
+            layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream);
     } else {
         launch_dynamic_qk_norm_rope_device(
             q, k, attention->q_norm, attention->k_norm,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
-            position_device_.data(), static_cast<float>(layout.rope_theta),
-            static_cast<float>(layout.rotary_fraction), eps,
-            layout.query_key_norm, stream);
+            position_device_.data(), static_cast<float>(rope->theta),
+            static_cast<float>(rope->rotary_fraction), eps,
+            layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream);
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream);
     if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
@@ -111,37 +113,50 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             k, v, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
             attention->key_cache_scales.data(), attention->value_cache_scales.data(),
             position_device_.data(), layout.key_value_heads, layout.head_dim, stream);
-        if (resources_.options_.fast_attention) {
+        if (attention->alibi_slopes.data()) {
+            launch_gqa_decode_alibi_int8_device(
+                q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
+                attention->key_cache_scales.data(), attention->value_cache_scales.data(),
+                workspace_.op_output_.data(), position_device_.data(),
+                attention->alibi_slopes.data(), layout.query_heads,
+                layout.key_value_heads, layout.head_dim, layout.sliding_window_size(), stream);
+        } else if (resources_.options_.fast_attention) {
             launch_gqa_decode_online_int8_device(
                 q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
                 attention->key_cache_scales.data(), attention->value_cache_scales.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
-                layout.sliding_window, stream);
+                layout.sliding_window_size(), stream);
         } else {
             launch_gqa_decode_strict_int8_device(
                 q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
                 attention->key_cache_scales.data(), attention->value_cache_scales.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
-                layout.sliding_window, stream);
+                layout.sliding_window_size(), stream);
         }
     } else {
         launch_store_kv_device(k, v, attention->key_cache.data(),
                                attention->value_cache.data(), position_device_.data(),
                                layout.key_value_width(), stream);
-        if (resources_.options_.fast_attention) {
+        if (attention->alibi_slopes.data()) {
+            launch_gqa_decode_alibi_device(
+                q, attention->key_cache.data(), attention->value_cache.data(),
+                workspace_.op_output_.data(), position_device_.data(),
+                attention->alibi_slopes.data(), layout.query_heads,
+                layout.key_value_heads, layout.head_dim, layout.sliding_window_size(), stream);
+        } else if (resources_.options_.fast_attention) {
             launch_gqa_decode_online_device(
                 q, attention->key_cache.data(), attention->value_cache.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
-                layout.sliding_window, stream);
+                layout.sliding_window_size(), stream);
         } else {
             launch_gqa_decode_strict_device(
                 q, attention->key_cache.data(), attention->value_cache.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
-                layout.sliding_window, stream);
+                layout.sliding_window_size(), stream);
         }
     }
     if (layout.query_gate) {

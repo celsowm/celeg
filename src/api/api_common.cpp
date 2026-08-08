@@ -92,15 +92,7 @@ CpuModelOptions cpu_options(const celeg_cpu_model_options& source) {
     return cpu_options(source.cpu);
 }
 
-CpuModelOptions cpu_options(const celeg_engine_model_options& source) {
-    if (source.backend != CELEG_BACKEND_CPU) {
-        throw std::invalid_argument("CPU options require CPU backend");
-    }
-    return cpu_options(source.backend_options.cpu);
-}
-
-CpuConcurrentEngineOptions cpu_engine_options(const celeg_engine_options& source) {
-    const auto& input = source.backend_options.cpu;
+CpuConcurrentEngineOptions cpu_engine_options(const celeg_cpu_engine_options& input) {
     CpuConcurrentEngineOptions result;
     result.max_active_requests = input.max_active_requests;
     result.max_batched_tokens = input.max_batched_tokens;
@@ -172,11 +164,7 @@ SchedulerPolicy cuda_scheduler_policy(int value) {
 }
 } // namespace
 
-CudaModelOptions cuda_options(const celeg_engine_model_options& source) {
-    const auto& input = source.backend_options.cuda;
-    if (source.backend != CELEG_BACKEND_CUDA) {
-        throw std::invalid_argument("CUDA options require CUDA backend");
-    }
+CudaModelOptions cuda_options(const celeg_cuda_model_options& input) {
     if (input.flags != 0) {
         throw std::invalid_argument("CUDA model option flags are reserved and must be zero");
     }
@@ -194,8 +182,7 @@ CudaModelOptions cuda_options(const celeg_engine_model_options& source) {
     return result;
 }
 
-ConcurrentEngineOptions cuda_engine_options(const celeg_engine_options& source) {
-    const auto& input = source.backend_options.cuda;
+ConcurrentEngineOptions cuda_engine_options(const celeg_cuda_engine_options& input) {
     ConcurrentEngineOptions result;
     result.max_active_requests = input.max_active_requests;
     result.max_batched_tokens = input.max_batched_tokens;

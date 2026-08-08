@@ -296,6 +296,11 @@ struct AttentionLayer {
     const LinearWeight* key = nullptr;
     const LinearWeight* value = nullptr;
     const LinearWeight* out = nullptr;
+    const LinearWeight* latent_query = nullptr;
+    const LinearWeight* latent_query_rope = nullptr;
+    const LinearWeight* latent_key = nullptr;
+    const LinearWeight* latent_value = nullptr;
+    const LinearWeight* latent_key_rope = nullptr;
     const __nv_bfloat16* q_norm = nullptr;
     const __nv_bfloat16* k_norm = nullptr;
     DeviceBuffer<__nv_bfloat16> key_cache;
@@ -304,6 +309,10 @@ struct AttentionLayer {
     DeviceBuffer<int8_t> value_cache_int8;
     DeviceBuffer<float> key_cache_scales;
     DeviceBuffer<float> value_cache_scales;
+    DeviceBuffer<__nv_bfloat16> latent_key_cache;
+    DeviceBuffer<__nv_bfloat16> latent_value_cache;
+    DeviceBuffer<__nv_bfloat16> latent_key_rope_cache;
+    DeviceBuffer<float> alibi_slopes;
     int kv_owner_layer = -1;
 };
 

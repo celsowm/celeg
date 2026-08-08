@@ -53,9 +53,6 @@ struct RuntimeTopology {
     std::vector<int> norm_after_layers;
     TokenPolicy token_policy;
     NumericalPolicy numerical_policy;
-    std::string rope_type = "default";
-    bool mrope_interleaved = false;
-    std::array<int, 3> mrope_section{0, 0, 0};
     std::vector<MixerKind> mixer_kinds;
     std::vector<FeedForwardKind> feed_forward_kinds;
     std::vector<int> attention_slot_for_layer;
@@ -109,6 +106,40 @@ struct RuntimeTopology {
         int maximum = 0;
         for (const AttentionSpec& layout : attention_layouts) {
             maximum = std::max(maximum, layout.head_dim);
+        }
+        return maximum;
+    }
+    int maximum_attention_output_width() const {
+        int maximum = 0;
+        for (const AttentionSpec& layout : attention_layouts) {
+            maximum = std::max(maximum, layout.uses_latent_state()
+                ? layout.latent_query_content_width() : layout.query_width());
+        }
+        return maximum;
+    }
+    int maximum_attention_latent_rank() const {
+        int maximum = 0;
+        for (const AttentionSpec& layout : attention_layouts) {
+            if (const auto* latent = layout.latent_state()) {
+                maximum = std::max(maximum, latent->latent_rank);
+            }
+        }
+        return maximum;
+    }
+    int maximum_attention_latent_rope_width() const {
+        int maximum = 0;
+        for (const AttentionSpec& layout : attention_layouts) {
+            if (const auto* latent = layout.latent_state()) {
+                maximum = std::max(maximum, latent->decoupled_rope
+                    ? latent->rope_head_dim : 0);
+            }
+        }
+        return maximum;
+    }
+    int maximum_attention_latent_query_rope_width() const {
+        int maximum = 0;
+        for (const AttentionSpec& layout : attention_layouts) {
+            maximum = std::max(maximum, layout.latent_query_rope_width());
         }
         return maximum;
     }
@@ -170,5 +201,11 @@ struct ResolvedModel {
     const RuntimeTopology& shape() const { return topology; }
     void validate() const;
 };
+
+// Rebuild allocation-oriented shape tables from the canonical graph after
+// import.  Importers may use an initial shape while constructing the graph,
+// but execution-facing schedules have one semantic owner: ModelGraph.
+void derive_runtime_topology_from_graph(RuntimeTopology& topology,
+                                        const ModelGraph& graph);
 
 } // namespace celeg

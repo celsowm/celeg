@@ -20,6 +20,9 @@ struct PageLayout {
     struct Layer {
         int kv_width = 0;
         int kv_heads = 0;
+        bool latent = false;
+        int latent_rank = 0;
+        int rotary_width = 0;
         size_t vector_offset = 0;
         size_t scale_offset = 0;
     };
@@ -52,12 +55,29 @@ struct PageLayout {
             if (!attention) {
                 throw std::invalid_argument("PageLayout requires an attention layout for every slot");
             }
+            if (const auto* latent = attention->latent_state()) {
+                const int rotary_width = latent->decoupled_rope ? latent->rope_head_dim : 0;
+                const int layer_width = latent->latent_rank + rotary_width;
+                if (latent->latent_rank <= 0 || layer_width <= 0) {
+                    throw std::invalid_argument("PageLayout latent layer has invalid dimensions");
+                }
+                // The key pool stores [latent key | rotary key], while the
+                // value pool uses the first latent_rank elements. Keeping a
+                // common stride preserves page-table and COW invariants.
+                layers.push_back({layer_width, 1, true, latent->latent_rank,
+                                  rotary_width, vector_offset, scale_offset});
+                vector_offset += static_cast<size_t>(page_tokens) *
+                    static_cast<size_t>(layer_width);
+                scale_offset += static_cast<size_t>(page_tokens);
+                continue;
+            }
             const int layer_kv_width = attention->key_value_width();
             const int layer_kv_heads = attention->key_value_heads;
             if (layer_kv_width <= 0 || layer_kv_heads <= 0) {
                 throw std::invalid_argument("PageLayout layer has invalid KV dimensions");
             }
-            layers.push_back({layer_kv_width, layer_kv_heads, vector_offset, scale_offset});
+            layers.push_back({layer_kv_width, layer_kv_heads, false, 0, 0,
+                              vector_offset, scale_offset});
             vector_offset += static_cast<size_t>(page_tokens) *
                 static_cast<size_t>(layer_kv_width);
             scale_offset += static_cast<size_t>(page_tokens) *

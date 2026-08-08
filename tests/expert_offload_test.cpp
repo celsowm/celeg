@@ -25,8 +25,10 @@ celeg::RuntimeTopology make_8b_a1b_shape() {
     std::fill_n(shape.mixer_kinds.begin(), 6, celeg::MixerKind::Attention);
     shape.attention_layouts.assign(
         static_cast<size_t>(shape.num_hidden_layers),
-        celeg::AttentionSpec{32, 8, 64, false, celeg::AttentionMaskKind::Causal,
-                             0, 1.0e6, 1.0, {}});
+        celeg::AttentionSpec{32, 8, 64, false, celeg::FullCausalPattern{}, {}});
+    for (auto& attention : shape.attention_layouts) {
+        attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
+    }
     // Derived field used by the KV planner; the 8B-A1B model has 6 attention
     // layers.
     shape.attention_layer_count = 6;
