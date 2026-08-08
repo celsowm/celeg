@@ -1,17 +1,21 @@
 # CELEG SOLID Model-Agnostic Architecture Refactoring Plan
 
-Status: active execution plan  
-Baseline reviewed: `master` at `b7ee89fee117c9bee389793cec8aebd19332b4fe`  
+Status: active architecture plan  
 Date: 2026-08-07  
-Scope: SOLID architecture, model-agnostic semantic IR, importers, data-driven model descriptors, weight binding, primitive/lowering boundaries, CPU execution, quantized weight extensibility, tokenizer/chat/vision ownership, C API cleanup, and architectural enforcement
+Scope: SOLID architecture, model-agnostic IR, importers, data-driven descriptors, weight binding, backend compilation, C API cleanup, and removal of model-family runtime code
 
-This revision supersedes the previous contents of this file and `CELEG_SOLID_EXECUTION_AND_TOKENIZER_REFACTORING_PLAN.md` as the primary CELEG architecture plan.
+This is the architectural north-star document for CELEG.
 
-The strategic direction has changed in one important way:
+The detailed implementation roadmap for attention mechanisms, positional encodings, context-extension techniques, KV/cache policies, sparse/linear attention, cross-attention, state representations, and CPU/CUDA lowerings lives in:
 
-> `src/models/**` and `include/celeg/models/**` are migration scaffolding, not the desired final architecture.
+> **`CELEG_ATTENTION_CONTEXT_AND_RUNTIME_PRIMITIVES_PLAN.md`**
 
-The final goal is not to make model-family modules perfectly modular. The final goal is to make model-family C++ modules unnecessary for every model that can be expressed using primitives CELEG already knows how to execute.
+The two documents have deliberately different responsibilities:
+
+- this document defines **architectural ownership, SOLID boundaries, migration strategy, and the end state**;
+- `CELEG_ATTENTION_CONTEXT_AND_RUNTIME_PRIMITIVES_PLAN.md` defines **the primitive vocabulary and implementation sequence required to support modern 2025-2026 model mathematics without adding model-family execution code**.
+
+This document supersedes `CELEG_SOLID_EXECUTION_AND_TOKENIZER_REFACTORING_PLAN.md` as the primary architecture plan.
 
 ---
 
@@ -29,7 +33,7 @@ into:
 compiler/runtime that imports and executes a model IR composed of supported primitives
 ```
 
-The target data flow is:
+Target data flow:
 
 ```text
 External checkpoint
@@ -68,26 +72,22 @@ Model descriptor resolution    Weight binding resolution
       CPU program         CUDA program
 ```
 
-Model-family identity may be useful while importing an external checkpoint or recording provenance, but it must not control execution.
-
-The runtime should eventually be able to execute a model without knowing whether the source checkpoint called itself Qwen, Granite, LFM, Gemma, Nanbeige, Nemotron, MiniCPM, or something that did not exist when CELEG was compiled.
+Model-family identity may exist while interpreting external metadata or recording provenance, but it must disappear before generic execution and backend compilation decisions.
 
 ---
 
-# 2. The strongest Open/Closed rule
-
-The architectural success criterion is:
+# 2. Strongest Open/Closed criterion
 
 ## 2.1 New model, existing mathematics
 
-If a newly released model can be expressed entirely with CELEG primitives that already exist, supporting it should require:
+If a newly released model can be expressed entirely using CELEG primitives that already exist, support should require only:
 
 - descriptor/import data;
-- test fixtures;
-- possibly chat/tokenizer metadata;
-- possibly weight-name/binding rules;
+- tensor binding rules;
+- tokenizer/chat/vision metadata where required;
+- fixtures and tests.
 
-and **zero new model-family C++ source files**.
+It should require **zero new model-family C++ production files**.
 
 No new:
 
@@ -99,71 +99,65 @@ include/celeg/models/foo/architecture.hpp
 
 should be necessary.
 
-## 2.2 New mathematical primitive
+## 2.2 New mathematics
 
-If a new model introduces genuinely new mathematics, CELEG may need a new primitive such as:
+If a new model introduces genuinely new mathematics, CELEG may need a new generic primitive.
 
-```text
-NewMixer
-NewAttentionVariant
-NewStateSpaceOperator
-NewRoutingOperator
-```
-
-The new code belongs to the primitive/operator and backend lowering boundaries, not to a model-family runtime directory.
-
-The desired extension is:
+The extension should be:
 
 ```text
 new mathematics
     |
     v
-new generic primitive
+new generic semantic primitive
     |
-    +--> semantic validation
-    +--> CPU lowering/kernel
-    +--> CUDA lowering/kernel
+    +--> validation
+    +--> CPU lowering
+    +--> CUDA lowering
+    +--> tests
 ```
 
 not:
 
 ```text
-new mathematics
+new model
     |
     v
-new model-family execution fork
+new family execution fork
 ```
+
+The detailed catalog and implementation order for these primitives is maintained in `CELEG_ATTENTION_CONTEXT_AND_RUNTIME_PRIMITIVES_PLAN.md`.
 
 ## 2.3 New checkpoint storage representation
 
-A new storage representation such as GPTQ, AWQ, packed INT8, FP8, MXFP, or another future encoding belongs to:
+GPTQ, AWQ, packed INT8, FP8, MXFP, GGUF native blocks, and future weight encodings belong to:
 
-- checkpoint repository capability;
-- tensor codec;
-- loaded weight representation;
-- backend linear kernel selection;
+- repository capabilities;
+- tensor codecs;
+- loaded weight representations;
+- backend kernel selection.
 
-It must not create model-family execution logic.
+They do not create model-family semantics.
 
 ## 2.4 New checkpoint format
 
-A new container/metadata format belongs to an importer/repository boundary.
+A new container/metadata format belongs to importer/repository boundaries.
 
-It must not require changes in model execution.
+It must not change model execution semantics.
 
 ## 2.5 New backend
 
-A new backend belongs behind backend factory/compiler/lowering interfaces.
+A new backend belongs behind backend factory/compiler/lowering boundaries.
 
-It must not require changes in model descriptors or model semantics.
+It must not change descriptors or canonical Model IR.
 
 ---
 
-# 3. Non-negotiable project directives
+# 3. Non-negotiable directives
 
 ## 3.1 No backward-compatibility commitment
 
-CELEG currently has **no source, ABI, API, configuration, file-layout, or internal compatibility commitment** unless a future explicit stability milestone says otherwise.
+CELEG currently has no source, ABI, API, configuration, file-layout, or internal backward-compatibility commitment unless a future explicit stability milestone says otherwise.
 
 Refactors replace obsolete interfaces. They do not stack versions or retain migration shims.
 
@@ -173,22 +167,20 @@ Do not preserve CELEG-owned patterns such as:
 - `legacyFoo`;
 - `deprecatedFoo`;
 - `compatFoo`;
-- old/new duplicate entry points;
+- duplicate old/new entry points;
 - transitional aliases;
 - compatibility typedefs;
-- wrappers that exist only to preserve an obsolete signature.
+- wrappers that exist only to preserve obsolete signatures.
 
 If an interface is replaced, migrate repository callers and remove the superseded interface in the same refactoring series.
 
-Versioning remains valid where it is intrinsic to an external protocol, external file format, third-party ABI, or explicitly declared future CELEG stability contract.
+Versioning remains valid where intrinsic to an external protocol, file format, third-party ABI, or an explicitly declared future CELEG stability contract.
 
 ## 3.2 Performance is an architectural constraint
 
-SOLID must not convert decode or prefill into a dynamic interpreter of descriptors.
+Descriptors and generic IR are load/import-time abstractions.
 
-Descriptors and generic IR are **load-time/import-time abstractions**.
-
-Before hot execution, CELEG should resolve them into compact backend programs.
+They must not become hot-path interpreters.
 
 Prefer:
 
@@ -198,27 +190,27 @@ Prefer:
 - immutable compiled programs;
 - contiguous reusable scratch storage;
 - zero-allocation steady-state execution;
-- static or load-time kernel dispatch;
 - precomputed weight bindings;
-- precomputed workspace plans.
+- precomputed workspace plans;
+- static or load-time kernel dispatch.
 
-Avoid in hot loops:
+Avoid in decode/prefill hot loops:
 
-- metadata lookup;
 - JSON parsing;
+- metadata lookup;
 - descriptor evaluation;
 - architecture probing;
 - checkpoint-format probing;
 - string-based operator dispatch;
 - repeated `dynamic_cast`;
-- per-layer heap allocation;
-- generic attribute-map access for every token.
+- family checks;
+- per-layer heap allocation.
 
-## 3.3 Architecture identity must disappear before backend compilation
+## 3.3 Architecture identity disappears before execution
 
-CPU and CUDA consume semantics, never family identity.
+Backends consume mathematical semantics.
 
-No backend execution decision may depend on:
+No CPU/CUDA execution decision may depend on:
 
 ```text
 model_type
@@ -231,799 +223,274 @@ Gemma
 Nanbeige
 Nemotron
 MiniCPM
+Mistral
+DeepSeek
+Kimi
 ```
 
 or any future model-family identifier.
 
 ## 3.4 Model semantics and checkpoint binding are different responsibilities
 
-The mathematical graph says what must be computed.
+The graph says what must be computed.
 
-The binding plan says where the parameters come from.
+The binding plan says where parameters come from.
 
-Do not encode tensor file names into model semantics.
+Do not encode tensor file names into semantic primitives.
 
 Do not encode architecture semantics into tensor storage codecs.
 
-## 3.5 Descriptors must be declarative, deterministic, and constrained
+## 3.5 Descriptors are declarative and constrained
 
-The model descriptor system must not become a second embedded general-purpose programming language.
+The descriptor system must support only the operations required to interpret metadata and construct canonical IR/bindings.
 
-It should support only the operations needed to interpret checkpoint metadata and construct a model graph.
+It must not become an unrestricted embedded programming language.
 
-No arbitrary file I/O, networking, process execution, or unrestricted scripting.
+No arbitrary:
+
+- filesystem I/O;
+- network access;
+- process execution;
+- runtime C++ callbacks per family;
+- unrestricted scripts.
 
 ---
 
-# 4. Revision of the previous SOLID plan
-
-The previous plan remains directionally correct in several areas, but some assumptions are now explicitly temporary.
-
-## 4.1 Keep
+# 4. What remains valid from the previous SOLID review
 
 Keep these goals:
 
-- make `ModelGraph` the canonical semantic source;
-- eliminate duplicated `RuntimeTopology` semantics;
+- make `ModelGraph` / successor Model IR the canonical semantic source;
+- eliminate duplicated semantic state from `RuntimeTopology`;
 - compile token/chunk execution rather than implement semantics twice;
 - narrow CPU operator dependencies;
-- replace the oversized workspace responsibility with a workspace plan/view;
+- replace oversized workspace ownership with workspace planning/views;
 - make quantized weight dispatch extensible;
 - eliminate hard-coded family-name boundary checks;
 - remove `v2`/legacy compatibility debt;
 - preserve capability-oriented repository interfaces;
 - preserve backend-neutral semantics;
-- preserve load-time resolution for hot-path performance.
+- preserve load-time resolution for performance.
 
-## 4.2 Change
+What changes is the destination.
 
-The following are now migration mechanisms, not final abstractions:
+`IArchitecture`, `ArchitectureCatalog`, and one-runtime-module-per-family are useful migration mechanisms, not the desired permanent extension boundary.
 
-### `IArchitecture`
+---
 
-Useful today, but the end state should not require one C++ implementation per model family.
+# 5. Explicit transitional abstractions
 
-### `ArchitectureCatalog`
+## 5.1 `IArchitecture`
 
-Useful while family-specific resolvers exist, but expected to shrink or disappear after generic importers/descriptors can produce the canonical IR.
+Useful while family-specific C++ resolvers exist.
 
-### one runtime module per model family
+End-state expectation:
 
-This is better than centralized switches, but it is still family-centric.
+- descriptor/importer infrastructure replaces most family resolvers;
+- `IArchitecture` shrinks to a genuinely generic import extension point or disappears.
 
-It is an intermediate organization step only.
+## 5.2 `ArchitectureCatalog`
 
-### family-extension test
+Useful during migration.
 
-The stronger final test is not "a family can be added by adding one module".
+It should not be required forever just to enumerate model family names.
+
+## 5.3 one module per family
+
+This is better than centralized switches but remains family-centric.
+
+Treat it only as an intermediate organization step.
+
+## 5.4 family extension test
+
+The weaker test is:
+
+> a family can be added by adding one module.
 
 The stronger final test is:
 
-> a model using existing primitives can be added without adding or modifying production C++ code.
+> a model using existing primitives can be added without adding or modifying production C++.
 
-## 4.3 Explicitly reject as final state
-
-The following would still be insufficient even if beautifully factored:
-
-```text
-models/qwen35/
-models/granite/
-models/gemma4/
-models/new_model_2027/
-models/new_model_2028/
-```
-
-A directory-per-family architecture scales source organization, but it does not reach the desired Open/Closed boundary.
+The stronger test is the target.
 
 ---
 
-# 5. Current code evidence motivating the new direction
+# 6. Canonical Model IR
 
-The current model-family sources already show that a large fraction of family code is declarative information encoded manually in C++.
-
-For example, a family resolver commonly performs several separable tasks:
-
-1. recognize metadata;
-2. read dimensions/policies from metadata;
-3. choose layer primitive kinds from metadata;
-4. build semantic layer specifications;
-5. declare expected tensor roles/shapes;
-6. map tensor roles to checkpoint names;
-7. set capabilities/provenance/chat/tokenizer identifiers.
-
-Most of these are not model-family runtime algorithms.
-
-They are import rules.
-
-Similarly, current tensor naming policies frequently reduce to a mapping like:
-
-```text
-TensorRole + layer + expert -> one or more candidate checkpoint paths
-```
-
-That should become binding data rather than one C++ switch per family.
-
----
-
-# 6. Target responsibility map
-
-The target architecture should assign responsibilities as follows.
-
-```text
-checkpoint/
-    parse physical containers
-    expose metadata
-    expose tensor inventory/data capabilities
-
-model/import/
-    match external model descriptions
-    evaluate declarative descriptors
-    build canonical CELEG Model IR
-    build logical weight requirements
-
-model/ir/
-    own mathematical semantics
-    own validation
-    own model-level policies
-
-model/binding/
-    map logical weight slots to checkpoint tensors
-    describe transforms/aliases/ties
-
-model/primitives/
-    define supported semantic operations
-    validate primitive attributes
-
-runtime/
-    compose importers, descriptors, backends, tokenizer/chat providers
-    contain no family execution behavior
-
-backend/cpu/
-    lower canonical program to CPU execution records
-    own CPU kernels, workspace and caches
-
-backend/cuda/
-    lower canonical program to CUDA execution records
-    own CUDA kernels, workspace and caches
-```
-
-Long-term there should be no production responsibility that naturally requires `src/models/<family>/`.
-
----
-
-# Phase 0 - Lock the new architectural invariants
-
-Priority: critical  
-Risk: low  
-Purpose: make the direction executable and prevent regression.
-
-## 0.1 Update architecture-boundary checks
-
-Replace family-name enumeration with structural rules.
-
-At minimum enforce:
-
-```text
-src/backend/**             must not include celeg/models/**
-src/runtime/**             must not include celeg/models/**
-src/checkpoint/**          must not include celeg/models/**
-src/model/** generic code  must not include celeg/models/**
-include/celeg/model/**      must not include celeg/models/**
-include/celeg/runtime/**    must not include celeg/models/**
-include/celeg/checkpoint/** must not include celeg/models/**
-```
-
-During migration, explicit composition/import glue may temporarily reference old family modules.
-
-That allow-list must shrink over time.
-
-## 0.2 Add a model-agnostic extension test
-
-Introduce a test fixture model descriptor that uses only existing primitives and is not represented by a production C++ architecture class.
-
-The test must prove that CELEG can:
-
-- match the fixture metadata;
-- construct valid IR;
-- bind weights;
-- compile a backend program;
-- run a minimal forward path;
-
-without adding model-specific `.cpp` or `.hpp` code.
-
-## 0.3 Add compatibility-debt enforcement
-
-Flag newly introduced CELEG-owned API/runtime symbols containing suspicious compatibility versioning such as:
-
-```text
-_v2
-_v3
-legacy
-deprecated
-compat
-```
-
-with narrow allow-lists only for external format/protocol terminology.
-
-## 0.4 Add forbidden execution identity checks
-
-Backend and compiled-program code must fail CI if execution decisions use family/model identity.
-
-## 0.5 Acceptance gate
-
-- no hard-coded list of family names in the architecture boundary checker;
-- fake backend remains externally registrable;
-- test-only model descriptor works without production family C++;
-- new CELEG API version stacking is rejected;
-- backend code contains no family-based execution branch.
-
----
-
-# Phase 1 - Make canonical semantics real
-
-Priority: critical  
-Risk: high if postponed  
-Purpose: create the foundation required before family code can become data.
-
-Today semantic information overlaps among:
-
-- `RuntimeTopology`;
-- `ModelGraph`;
-- `CompiledModelProgram`.
-
-That duplication must be removed before a generic importer can become trustworthy.
-
-## 1.1 `ModelGraph` becomes the semantic authority
-
-Target transition:
-
-```text
-current:
-checkpoint -> RuntimeTopology -> ModelGraph -> CompiledModelProgram
-
-intermediate target:
-checkpoint/import -> ModelGraph -> derived RuntimeShape -> CompiledModelProgram
-
-long-term target:
-checkpoint/import -> Model IR -> validation -> CompiledModelProgram
-```
-
-## 1.2 Stop reconstructing graph semantics from topology arrays
-
-Remove semantic duplication such as parallel ownership of:
-
-- mixer kinds;
-- attention layouts;
-- feed-forward kinds;
-- FFN intermediate sizes;
-- recurrent layouts;
-- layer semantic flags.
-
-Architecture/import logic should construct canonical layer/primitive semantics directly.
-
-## 1.3 Reduce `RuntimeTopology`
-
-Replace it with a derived runtime shape/view or progressively delete it.
-
-A derived runtime shape may contain:
-
-- global dimensions;
-- counts;
-- allocation maxima;
-- token policy;
-- truly global numerical policy;
-- lookup tables derived from canonical semantics.
-
-It must not independently describe what every layer does.
-
-## 1.4 Move logical-to-physical layer mapping out of semantics
-
-Mappings such as repeated physical checkpoint layers are binding/import concerns.
-
-Execution should receive resolved logical weights/programs and not care why two logical layers originated from the same physical checkpoint block.
-
-## 1.5 Move boundary operations into canonical graph semantics
-
-Intermediate/final normalization boundaries, residual behavior, layer scaling and similar semantics need one owner.
-
-## 1.6 Acceptance gate
-
-- each mathematical property has one semantic source;
-- graph/program building no longer cross-references duplicated semantic arrays;
-- `CompiledModelProgram` can be generated from canonical IR plus binding/model policies;
-- adding one semantic attribute does not require updating parallel representations.
-
----
-
-# Phase 2 - Evolve `ModelGraph` into a CELEG Model IR
-
-Priority: critical  
-Risk: moderate  
-Purpose: define a model language rather than a model-family catalog.
-
-Do not perform a gratuitous rename immediately. `ModelGraph` can evolve in place first.
-
-The conceptual target is an IR whose nodes describe supported mathematical primitives.
-
-## 2.1 Primitive vocabulary
-
-The IR should be able to represent current CELEG semantics without architecture identity.
-
-Examples include:
-
-- token embedding;
-- RMSNorm/other supported norms;
-- attention;
-- causal/sliding masks;
-- RoPE/M-RoPE positional semantics;
-- query/key normalization;
-- query gating;
-- short convolution;
-- GatedDeltaNet;
-- Mamba2/state-space operations;
-- dense gated FFN;
-- MoE routing;
-- grouped top-K;
-- shared experts;
-- residual add/scale;
-- per-layer external input;
-- final normalization;
-- language-model head;
-- multimodal projection/merge primitives as support matures.
-
-Names such as `QwenAttention` or `GraniteMlp` must not become IR primitives.
-
-## 2.2 Separate semantic primitive IDs from backend implementations
-
-A semantic primitive says what operation means.
-
-A backend lowering says how to execute it.
-
-Target concept:
-
-```cpp
-struct PrimitiveNode {
-    PrimitiveId primitive;
-    AttributeBlock attributes;
-    std::vector<ValueId> inputs;
-    std::vector<WeightSlotId> weights;
-};
-```
-
-The exact representation may remain typed variants initially.
-
-The important direction is that family identity is not part of a node.
-
-## 2.3 Do not pay dynamic-IR costs in decode
-
-Generic IDs/attributes may exist during import and validation.
-
-CPU/CUDA compilation must lower them into backend-specific typed records before inference.
-
-## 2.4 Primitive registration
-
-Avoid one giant central execution switch if practical.
-
-A primitive module should own:
-
-- primitive identifier/schema;
-- semantic validation;
-- shape inference where appropriate;
-- CPU lowering registration;
-- CUDA lowering registration;
-- capability declaration.
-
-Adding new mathematics is allowed to extend the primitive language. OCP does not mean the mathematical language can never grow.
-
-## 2.5 Acceptance gate
-
-- every current family graph can be expressed using family-neutral primitives;
-- model-family identity is absent from IR validation/execution;
-- new primitive support is organized by primitive, not by every model that uses it;
-- backend programs are precompiled from IR before hot execution.
-
----
-
-# Phase 3 - Introduce a constrained model descriptor system
-
-Priority: very high  
-Risk: moderate  
-Purpose: move family import rules from C++ into declarative data.
-
-The descriptor system translates external checkpoint metadata into canonical CELEG IR.
-
-## 3.1 Descriptor responsibilities
-
-A descriptor may declare:
-
-- match/probe rules;
-- metadata aliases/paths;
-- required fields;
-- optional fields/defaults;
-- global dimensions;
-- token policy;
-- numerical policy;
-- layer count;
-- per-layer primitive selection;
-- per-layer primitive attributes;
-- capabilities;
-- provenance labels;
-- logical weight roles;
-- weight-name candidates;
-- safe tensor transforms/bindings;
-- optional chat/tokenizer/profile references.
-
-It must not execute model math.
-
-## 3.2 Expression language
-
-Provide a small deterministic expression language supporting operations such as:
-
-- metadata field reference;
-- integer/float/string/bool literal;
-- `+ - * /` where type-safe;
-- `min`, `max`;
-- boolean comparisons;
-- conditional selection;
-- array indexing;
-- array length;
-- enum/string mapping;
-- bounded layer/expert comprehensions;
-- explicit assertions;
-- fallbacks/defaults.
-
-Avoid unrestricted scripting.
-
-## 3.3 Example direction
-
-A Qwen-like hybrid descriptor could conceptually express:
-
-```yaml
-match:
-  all:
-    - path: model_type
-      in: [qwen3_5, qwen3_5_moe]
-    - path: text_config.model_type
-      in: [qwen3_5_text, qwen3_5_moe_text]
-
-globals:
-  hidden: ${text_config.hidden_size}
-  layers: ${text_config.num_hidden_layers}
-  vocab: ${text_config.vocab_size}
-  head_dim: ${text_config.head_dim}
-
-layers:
-  count: ${globals.layers}
-  mixer:
-    switch: ${text_config.layer_types[layer]}
-    cases:
-      full_attention:
-        primitive: attention
-        attributes:
-          query_heads: ${text_config.num_attention_heads}
-          kv_heads: ${text_config.num_key_value_heads}
-          head_dim: ${globals.head_dim}
-      linear_attention:
-        primitive: gated_delta_net
-        attributes:
-          key_heads: ${text_config.linear_num_key_heads}
-          value_heads: ${text_config.linear_num_value_heads}
-          key_dim: ${text_config.linear_key_head_dim}
-          value_dim: ${text_config.linear_value_head_dim}
-```
-
-Exact syntax is not prescribed by this plan.
-
-The important property is that this information no longer requires a model-family C++ resolver.
-
-## 3.4 Descriptor compilation
-
-Parse and validate descriptors at startup/build/load time.
-
-Compile expressions into a simple internal representation so model import is deterministic and testable.
-
-Do not repeatedly parse descriptor text for every layer if avoidable.
-
-## 3.5 Descriptor schema versioning
-
-Descriptor schema versioning is an internal data-format concern, not a reason to create CELEG API `v2` symbols.
-
-Until a stability commitment exists, incompatible descriptor schema changes may simply update bundled descriptors and tests.
-
-## 3.6 Acceptance gate
-
-- one existing simple family can be resolved entirely from descriptor data;
-- its old architecture C++ can be deleted;
-- malformed descriptors fail with actionable validation errors;
-- descriptors cannot perform arbitrary code execution;
-- descriptors are evaluated only before backend hot execution.
-
----
-
-# Phase 4 - Make weight binding data-driven
-
-Priority: very high  
-Risk: moderate  
-Purpose: eliminate one of the largest sources of per-family source files.
-
-Current naming policies frequently implement a switch from `TensorRole` to checkpoint paths.
-
-That is data.
-
-## 4.1 Logical weight slots
-
-Model IR should reference logical weight slots such as:
-
-```text
-token_embedding
-final_norm
-attention.query
-attention.key
-attention.value
-attention.output
-ffn.gate
-ffn.up
-ffn.down
-moe.router
-moe.expert.gate_up
-moe.expert.down
-state_space.*
-```
-
-The exact existing `TensorRole` representation may be reused/evolved.
-
-## 4.2 Binding templates
-
-A descriptor should be able to map a logical slot to one or more candidate tensor paths, for example:
-
-```yaml
-weights:
-  attention.query:
-    candidates:
-      - "model.language_model.layers.{layer}.self_attn.q_proj.weight"
-```
-
-Support placeholders such as:
-
-- `{layer}`;
-- `{physical_layer}`;
-- `{expert}`;
-- `{role}` where appropriate.
-
-## 4.3 Safe binding transforms
-
-Some checkpoints require structural transformations.
-
-Represent a constrained set explicitly, for example:
-
-- transpose;
-- reshape;
-- concatenate;
-- split;
-- permutation;
-- alias/tie;
-- repeated physical-layer binding;
-- packed expert binding;
-- supported quantized storage decode/attach.
-
-Transforms must be typed and validated.
-
-Do not allow arbitrary descriptor code.
-
-## 4.4 Shape validation
-
-Expected logical shapes should derive from canonical IR.
-
-The binding layer validates physical tensors against those requirements and transforms.
-
-A model-family source file should not manually duplicate shape formulas already derivable from IR.
-
-## 4.5 Delete naming policies incrementally
-
-For each migrated family:
-
-1. express bindings declaratively;
-2. prove equivalence with old naming-policy tests;
-3. remove the C++ naming policy;
-4. remove its registration/build entries.
-
-## 4.6 Acceptance gate
-
-- a new tensor naming convention needs descriptor data only;
-- weight binding has no model-family switch in generic code;
-- repeated physical layers are represented as binding semantics;
-- shapes derive from IR where possible;
-- no per-family `TensorNamingPolicy` remains for migrated models.
-
----
-
-# Phase 5 - Build a generic importer pipeline
-
-Priority: very high  
-Risk: moderate  
-Purpose: replace `IArchitecture` with import-time composition.
-
-## 5.1 Separate physical format from semantic model import
+The current overlapping semantic representations across `RuntimeTopology`, `ModelGraph`, and `CompiledModelProgram` must be reduced to one semantic authority.
 
 Target:
 
 ```text
-Safetensors repository -----+
-GGUF repository ------------+--> CheckpointView
-future repository ----------+         |
-                                      v
-                              GenericModelImporter
-                                      |
-                                      v
-                                  Model IR
+Checkpoint metadata
+      |
+      v
+Importer / descriptor
+      |
+      v
+Canonical Model IR
+      |
+      +--> derived shape/allocation information
+      |
+      +--> logical weight requirements
+      |
+      +--> CompiledModelProgram
 ```
 
-A repository exposes data.
+## 6.1 Stop building graph semantics from topology arrays
 
-An importer interprets semantics.
+Architecture/import code should construct semantic layer specifications directly.
 
-## 5.2 Descriptor registry
+Do not populate parallel arrays such as mixer kinds, attention layouts, FFN kinds, and recurrent layouts and later rebuild the graph from them.
 
-The generic importer should select descriptors based on declarative probe rules.
+## 6.2 Runtime topology becomes derived shape only
 
-Do not add a C++ switch over model types.
+A derived runtime shape may contain:
 
-## 5.3 Avoid central registration edits
+- dimensions;
+- maxima needed for allocation;
+- counts;
+- lookup tables derived from the graph;
+- global token/numerical policies where truly global.
 
-Adding a descriptor should not require editing `builtin_runtime.cpp` or another central C++ table.
+It must not independently describe layer mathematics.
 
-Possible implementation directions:
+## 6.3 Boundary semantics belong in the IR
 
-- package descriptors as runtime resources discovered from an installed descriptor directory;
-- generate an embedded descriptor table automatically from descriptor files during the build;
-- generate a source/resource manifest from a directory scan.
+Intermediate normalization boundaries, residual policies, per-layer inputs, mixer-only layers, routing policies, and other mathematical behavior must have one canonical semantic owner.
 
-The selected implementation should preserve reproducible packaging without manual family registration.
+## 6.4 Checkpoint layer reuse belongs to binding
 
-## 5.4 `IArchitecture` becomes an anti-corruption migration layer
+Physical checkpoint-layer mapping is parameter binding, not execution semantics.
 
-During migration:
+Logical layers should execute resolved parameters without caring whether two logical layers came from the same physical checkpoint block.
+
+---
+
+# 7. Primitive vocabulary is a prerequisite for deleting `models/`
+
+The model-agnostic goal only works if the IR can express modern model mathematics generically.
+
+Therefore the following implementation work is a direct dependency of this architecture plan:
+
+> See `CELEG_ATTENTION_CONTEXT_AND_RUNTIME_PRIMITIVES_PLAN.md`.
+
+That companion roadmap owns the detailed design and implementation sequence for:
+
+- decomposed attention semantics;
+- MHA/GQA/MQA projection semantics;
+- causal/sliding/bidirectional/prefix/block-sparse/dynamic sparse patterns;
+- first-class RoPE policies;
+- linear position interpolation;
+- dynamic/NTK-aware RoPE;
+- YaRN;
+- LongRoPE;
+- Llama-3-style frequency-aware scaling;
+- partial rotary;
+- M-RoPE/multi-axis positions;
+- Multi-head Latent Attention;
+- cross-attention and multi-source attention;
+- Native Sparse Attention-style components;
+- Kimi Delta Attention / modern linear attention;
+- ALiBi and relative position biases;
+- generalized attention/recurrent state descriptions;
+- KV/state quantization;
+- attention sinks / streaming cache policy;
+- context-parallel/distributed attention lowerings;
+- backend flash/fused/paged kernel selection.
+
+Architectural rule:
+
+> These are primitives/policies/lowerings. None of them may be introduced as a model-family execution mode.
+
+---
+
+# 8. Generic model descriptor
+
+Most current family resolver code performs declarative import work:
+
+1. recognize metadata;
+2. read dimensions and policies;
+3. choose per-layer primitive kinds;
+4. build semantic layer specifications;
+5. declare logical tensor roles/shapes;
+6. map logical roles to checkpoint tensor names;
+7. set provenance/tokenizer/chat/vision data.
+
+These should progressively move from family C++ into a declarative descriptor system.
+
+## 8.1 Required descriptor features
+
+Support at least:
+
+- metadata lookup;
+- typed defaults;
+- validation;
+- list lookup;
+- per-layer selection;
+- bounded conditionals;
+- simple arithmetic for dimensions;
+- enum/variant construction;
+- repeated layer templates;
+- layer schedules;
+- tensor binding patterns;
+- capability/provenance declarations.
+
+## 8.2 Descriptor output
+
+Descriptor evaluation should produce only validated CELEG-owned structures:
 
 ```text
-old family IArchitecture ----+
-                             +--> canonical IR
-new generic descriptor ------+
+Model IR
+Logical Weight Plan
+Binding Descriptor
+Tokenizer/Chat/Vision metadata references
+Provenance
 ```
 
-Once all supported models use generic import:
-
-- remove family `IArchitecture` implementations;
-- remove `ArchitectureCatalog` if no longer needed;
-- remove architecture registration tables;
-- delete `src/models/**` and `include/celeg/models/**`.
-
-## 5.5 Acceptance gate
-
-- importer can select and resolve descriptors without family C++ factories;
-- descriptor addition requires no central C++ registry edit;
-- migrated families bypass `IArchitecture` entirely;
-- final migration can remove `ArchitectureCatalog` without changing backend code.
+It should not produce arbitrary execution callbacks.
 
 ---
 
-# Phase 6 - Migrate current families as vertical slices
+# 9. Weight binding becomes data
 
-Priority: very high  
-Risk: controlled by equivalence tests  
-Purpose: prove that the architecture works on real CELEG diversity.
-
-Do not convert all families in one large rewrite.
-
-## 6.1 Migration order
-
-Use capability complexity, not brand importance.
-
-A good sequence is:
-
-1. simplest currently supported dense transformer family;
-2. family with different numerical/normalization policy;
-3. family with hybrid mixer selection;
-4. MoE family;
-5. family with repeated/aliased physical layers;
-6. state-space/recurrent family;
-7. multimodal family;
-8. remaining combinations.
-
-Choose the exact first family after verifying current fixture/test coverage.
-
-## 6.2 Per-family migration checklist
-
-For each existing family:
-
-- capture current probe behavior as fixture tests;
-- capture current canonical semantic result;
-- capture expected logical weight requests;
-- capture tensor binding candidates;
-- create descriptor;
-- resolve through generic importer;
-- compare generated IR against old resolver;
-- compare weight bindings;
-- compare token/chunk forward numerics within tolerance;
-- migrate chat/tokenizer/vision references;
-- delete architecture C++;
-- delete naming-policy C++;
-- delete family registration glue;
-- remove empty family directory.
-
-## 6.3 Equivalence is semantic, not structural
-
-The new IR does not need to have byte-identical internal structs to the old path.
-
-It must preserve mathematical behavior, model capabilities and required bindings.
-
-## 6.4 Acceptance gate
-
-A migrated model family has no production C++ directory named after that family.
-
----
-
-# Phase 7 - Tokenizer, chat, and vision must stop requiring family modules
-
-Priority: high  
-Risk: moderate  
-Purpose: prevent non-execution features from preserving the `models/` architecture indefinitely.
-
-## 7.1 Tokenizer
-
-The generic tokenizer engine already moved in the right direction by using generic pre-tokenizer behaviors rather than family-specific branches.
-
-Continue toward:
+Current family naming policies often reduce to:
 
 ```text
-checkpoint tokenizer data
-        +
-optional descriptor tokenizer hints
-        |
-        v
-Generic tokenizer provider
+TensorRole + layer + expert -> candidate checkpoint tensor path(s)
 ```
 
-Family names must not be embedded in tokenization mechanics.
+Move this into declarative binding rules.
 
-## 7.2 Chat
+Example concept:
 
-Chat templates/tool codecs are presentation/protocol concerns, not model mathematical semantics.
+```text
+attention.query:
+    model.layers.{layer}.self_attn.q_proj.weight
 
-Represent them as independent profiles/resources selected from checkpoint metadata or descriptor references.
+ffn.gate:
+    model.layers.{layer}.mlp.gate_proj.weight
+```
 
-Do not keep an architecture C++ module alive only to register a chat profile.
+More advanced binding rules may support:
 
-## 7.3 Vision
+- multiple candidate names;
+- fused tensor sources;
+- split/concat transforms;
+- expert indexing;
+- transposition/layout transforms;
+- physical-layer remapping;
+- tied embeddings.
 
-Vision requires a distinction.
-
-If multimodal behavior is mathematical model structure, represent it in IR using generic multimodal primitives.
-
-If behavior is input preprocessing such as image resize/normalization/patch preparation, keep it behind generic preprocessing/provider interfaces.
-
-Do not encode `if family == Gemma` or `if family == Qwen` in generic runtime execution.
-
-## 7.4 Acceptance gate
-
-- migrated families need no family C++ for tokenizer registration;
-- chat profiles are data/provider resources;
-- multimodal model math lowers from IR;
-- preprocessing is capability/provider based;
-- removal of `src/models/**` does not remove chat/tokenizer/vision functionality.
+Transforms must remain declarative and validated.
 
 ---
 
-# Phase 8 - Compile CPU layers instead of interpreting semantics twice
+# 10. Backend compilation
 
-Priority: critical  
-Risk: moderate after IR equivalence coverage  
-Purpose: preserve performance while improving SRP and eliminating token/chunk semantic duplication.
+Backends should compile canonical semantics once.
 
-This phase remains from the previous plan and becomes even more important once IR is generic.
-
-## 8.1 Introduce backend-compiled layer records
-
-Possible direction:
+Target CPU shape:
 
 ```cpp
 struct CpuCompiledLayer {
@@ -1034,67 +501,37 @@ struct CpuCompiledLayer {
 };
 ```
 
-The exact type is flexible.
+The exact types may differ, but the principle is:
 
-The principle is that generic model semantics are lowered once into CPU execution decisions.
+- semantic dispatch is resolved at load time;
+- token/chunk paths are execution strategies for one semantic layer;
+- model-family identity is absent.
 
-## 8.2 One semantic pipeline, multiple execution shapes
+## 10.1 `model_forward.cpp` becomes orchestration
 
-Token and chunk paths may use different kernels, but they must originate from the same compiled semantics.
+It should prepare input, invoke compiled layers, finalize logits, and update session state.
 
-Do not reconstruct model semantics independently in `forward_token()` and `forward_chunk()`.
+It should not independently reconstruct the model's semantic decision tree.
 
-## 8.3 Sequential chunk fallback is a lowering capability
+## 10.2 Chunk support is a compiled capability
 
-If a primitive lacks a native chunk implementation, select a generic sequential adapter at backend compile time.
+A primitive/lowering declares one of:
 
-Do not detect architecture identity or infer behavior from family names.
+```text
+native chunk implementation
+generic sequential adapter
+unsupported by backend
+```
 
-## 8.4 Equivalence tests
-
-Compare:
-
-- repeated token execution;
-- one chunk;
-- multiple chunk partitions;
-- mixed partitions.
-
-Cover all supported primitive combinations including:
-
-- causal attention;
-- sliding attention;
-- Q/K norm;
-- query gate;
-- M-RoPE;
-- short convolution;
-- GatedDeltaNet;
-- Mamba2;
-- dense FFN;
-- MoE;
-- shared expert;
-- grouped routing;
-- per-layer input;
-- special normalization boundaries.
-
-## 8.5 Acceptance gate
-
-- `model_forward.cpp` is orchestration, not a second semantic engine;
-- token/chunk semantics compile from the same IR;
-- no model-family identity enters CPU compilation or execution.
+Do not infer chunk behavior from architecture or family identity.
 
 ---
 
-# Phase 9 - Narrow CPU operator dependencies
+# 11. Narrow CPU operator dependencies
 
-Priority: high  
-Risk: moderate  
-Purpose: improve DIP/SRP/testability without introducing hot-path polymorphism.
+Focused operators should not receive the whole `CpuCompiledModel&` by default.
 
-Current focused operators should not receive the entire concrete `CpuCompiledModel` when they only need a few services/views.
-
-## 9.1 Execution contexts
-
-Possible direction:
+Introduce focused views/contexts such as:
 
 ```cpp
 struct CpuExecutionContext {
@@ -1105,68 +542,47 @@ struct CpuExecutionContext {
 };
 ```
 
-Use narrower operator-specific views where useful.
+Use even narrower operator-specific views where beneficial.
 
-## 9.2 Compiled weights separate from global model object
+Benefits:
 
-A layer executor should receive its compiled layer weights/metadata rather than navigating unrelated global state.
-
-## 9.3 Acceptance gate
-
-- operator helpers do not require unrelated `CpuCompiledModel` state;
-- operators can be unit-tested with focused fixtures;
-- no per-token virtual service graph is introduced.
+- improved SRP;
+- clearer dependencies;
+- simpler unit tests;
+- better primitive reuse;
+- lower risk of hidden cross-operator coupling.
 
 ---
 
-# Phase 10 - Replace workspace god-object behavior with planning
+# 12. Workspace planning
 
-Priority: high  
-Risk: moderate  
-Purpose: separate memory planning/storage from operator semantics.
+`CpuWorkspace` should become storage governed by a compile/load-time workspace plan.
 
-## 10.1 `CpuWorkspacePlan`
-
-Derive scratch requirements from compiled CPU program.
-
-Conceptually:
+Target idea:
 
 ```text
-CompiledCpuProgram
-      |
-      v
-CpuWorkspacePlan
-      |
-      v
-CpuWorkspaceStorage
-      |
-      v
-CpuWorkspaceView(s)
+Model IR
+   |
+   v
+CPU compiler
+   |
+   +--> CpuProgram
+   +--> CpuWorkspacePlan
 ```
 
-## 10.2 Operators request views, not global scratch knowledge
+The plan computes required scratch sizes from compiled primitives.
 
-Attention, MoE, recurrent and FFN operations should receive the scratch slices they need.
-
-## 10.3 Acceptance gate
-
-- workspace sizing does not manually know every model family;
-- new primitive declares/plans its own scratch requirements through backend lowering/planning;
-- steady-state inference remains allocation-free where intended.
+The workspace owns reusable buffers but does not need to understand every model/operator semantic.
 
 ---
 
-# Phase 11 - Make loaded weight representation extensible
+# 13. Quantized weights and physical representations
 
-Priority: high  
-Risk: moderate  
-Purpose: prevent quantization growth from becoming the next giant switch.
+New weight formats must not grow central `if/variant/switch` chains indefinitely.
 
-The arrival of packed INT8 already demonstrates the pressure point.
+Prefer load-time resolution to compact operations tables or equivalent backend-local compiled representations.
 
-## 11.1 Resolve storage/kernel behavior at load time
-
-Possible concept:
+Target concept:
 
 ```cpp
 struct LinearKernelOps {
@@ -1174,577 +590,298 @@ struct LinearKernelOps {
     GemmFn gemm;
     EmbeddingFn embedding;
 };
-
-struct CpuLinearSegment {
-    const void* data;
-    LinearKernelOps ops;
-    LinearMetadata metadata;
-};
 ```
 
-Exact implementation is open.
+A loaded segment resolves the correct ops once.
 
-The rule is to avoid repeatedly branching over every supported weight representation in hot GEMV/GEMM paths.
-
-## 11.2 Codec and model semantics remain independent
-
-A descriptor may require a logical matrix.
-
-The checkpoint/binding/codec layers decide how that matrix is physically represented.
-
-No model descriptor should say "execute Nanbeige INT8 math" when the semantics are simply a linear transform whose storage happens to be packed INT8.
-
-## 11.3 Acceptance gate
-
-- a new supported weight encoding does not require model-family code;
-- hot-path weight representation dispatch is load-time resolved where practical;
-- CPU linear engine does not grow an unbounded central branch tree.
+Adding GPTQ/AWQ/FP8/MXFP/other formats should not require model-family edits.
 
 ---
 
-# Phase 12 - Collapse the C API to one current design
+# 14. C API cleanup
 
-Priority: high  
-Risk: deliberate breaking change  
-Purpose: enforce the project's no-backward-compatibility directive and preserve backend OCP.
+Because CELEG has no current backward-compatibility commitment, the extensible API replaces the old API instead of becoming `v2`.
 
-The current public C API must not retain old enum/union backend selection next to a newer generic backend-ID path.
+Required direction:
 
-## 12.1 Keep only backend-ID based creation
+- `celeg_engine_v2_options` -> `celeg_engine_options`;
+- `celeg_cpu_backend_v2_options` -> `celeg_cpu_backend_options`;
+- `celeg_cuda_backend_v2_options` -> `celeg_cuda_backend_options`;
+- `celeg_engine_create_v2()` -> `celeg_engine_create()`;
+- remove the obsolete enum/union backend-selection path;
+- retain `backend_id + backend-owned options payload`;
+- migrate repository callers and delete old symbols in the same series.
 
-Target concept:
-
-```c
-typedef struct celeg_engine_options {
-    uint32_t struct_size;
-    const char* backend_id;
-    int32_t max_context;
-    const void* backend_options;
-    uint32_t backend_options_size;
-    celeg_generation_options generation;
-} celeg_engine_options;
-
-CELEG_API celeg_engine* celeg_engine_create(
-    const char* path,
-    const celeg_engine_options* options);
-```
-
-## 12.2 Remove compatibility duplicates
-
-Delete rather than deprecate:
-
-- `celeg_engine_create_v2`;
-- `celeg_engine_v2_options`;
-- `celeg_cpu_backend_v2_options` naming;
-- `celeg_cuda_backend_v2_options` naming;
-- legacy CPU/CUDA enum/union engine creation path if superseded;
-- duplicate `create_service_bundle` paths created only for compatibility.
-
-Rename the chosen current backend option types without version suffixes.
-
-## 12.3 Acceptance gate
-
-- one engine creation model exists;
-- adding a backend does not require extending a public CPU/CUDA enum union;
-- no CELEG-owned `_v2` engine API remains.
+No deprecated wrappers or compatibility aliases.
 
 ---
 
-# Phase 13 - Delete family-centric runtime composition
+# 15. Architectural enforcement
 
-Priority: very high after descriptor migration  
-Risk: low once all families migrate  
-Purpose: remove the final structural reason for `models/`.
+Static checks should be structural, not a hard-coded list of family names.
 
-## 13.1 Remove built-in family tables
-
-A central list such as:
+Enforce rules such as:
 
 ```text
-lfm2
-granite
-gemma4
-qwen35
-nanbeige
-...
+src/backend/**              must not include celeg/models/**
+src/runtime/**              must not include celeg/models/**
+src/checkpoint/**           must not include celeg/models/**
+include/celeg/model/**      must not include celeg/models/**
+include/celeg/runtime/**    must not include celeg/models/**
+include/celeg/checkpoint/** must not include celeg/models/**
 ```
 
-must not be required to compose the runtime.
+Also reject backend execution dispatch using:
 
-Descriptors/resources should be discovered or generated automatically.
+- `architecture_id`;
+- `architecture_kind`;
+- `model_type`;
+- family names.
 
-## 13.2 Remove family registration functions
+The checker must scale to the 100th model family without editing a family-name regex.
 
-Delete functions whose only purpose is:
+## 15.1 Compatibility debt checker
+
+Flag suspicious CELEG-owned public/runtime symbols containing patterns such as:
 
 ```text
-register_qwen35_architecture
-register_granite_chat_profile
-register_gemma4_vision_provider
+_v2
+_v3
+legacy
+deprecated
+compat
 ```
 
-after equivalent generic data/provider mechanisms exist.
-
-## 13.3 Remove `IArchitecture`
-
-Once no supported model depends on a family-specific resolver, remove:
-
-- `IArchitecture` if it serves no remaining generic purpose;
-- `ArchitectureCatalog`;
-- architecture factory registration;
-- migration adapters.
-
-Do not keep them as compatibility shims.
-
-## 13.4 Delete `src/models/**` and `include/celeg/models/**`
-
-This is a planned milestone, not an aspirational comment.
-
-The repository should eventually have no production model-family source tree.
-
-## 13.5 Acceptance gate
-
-```text
-src/models/          does not exist
-include/celeg/models/ does not exist
-```
-
-and all supported model fixtures still load and execute.
+with allowlists only for legitimate external format/protocol versions.
 
 ---
 
-# Phase 14 - Optional CELEG self-describing model artifact
+# 16. Migration roadmap
 
-Priority: strategic, after generic import is mature  
-Risk: separate design project  
-Purpose: eliminate repeated interpretation of external family conventions and make the runtime maximally model-agnostic.
+## Phase 0 - Lock invariants
 
-External Hugging Face/GGUF/etc. checkpoints may remain imperfectly self-describing.
+- structural architecture-boundary checks;
+- no-compatibility-debt checks;
+- backend-extension regression tests;
+- descriptor extension test proving production C++ is unnecessary for an existing primitive set.
 
-Even after C++ family modules disappear, CELEG may still ship model descriptors that know external family conventions.
+## Phase 1 - Canonical Model IR
 
-A CELEG-native artifact can eliminate that at execution time.
+- move semantic ownership into the graph/IR;
+- reduce/remove duplicated `RuntimeTopology` semantics;
+- derive runtime shape from the IR;
+- compile `CompiledModelProgram` from canonical semantics only.
 
-## 14.1 Concept
+## Phase 2 - Primitive vocabulary
+
+Execute the P0/P1 roadmap in `CELEG_ATTENTION_CONTEXT_AND_RUNTIME_PRIMITIVES_PLAN.md` sufficiently to cover the intended proof models without family hacks.
+
+At minimum before broad family migration:
+
+- first-class position specification;
+- explicit RoPE scaling algorithms;
+- M-RoPE in canonical IR;
+- generalized attention patterns;
+- state-layout abstraction capable of ordinary KV and future latent state.
+
+## Phase 3 - Generic descriptor/importer
+
+- descriptor schema/evaluator;
+- metadata expressions;
+- per-layer schedules;
+- IR construction;
+- logical weight-plan construction;
+- validation.
+
+## Phase 4 - Declarative weight binding
+
+- migrate role/name switches into binding data;
+- support candidates, layer/expert indices, transforms, and remapping;
+- remove family naming policies as each family migrates.
+
+## Phase 5 - Dense model proof
+
+Recommended proofs:
+
+1. Qwen3-0.6B: small bootstrap model;
+2. Ministral-8B-Instruct-2410: per-layer full/sliding attention schedule.
+
+Acceptance:
 
 ```text
-model.celeg/
-    manifest
-    model_ir
-    weight_bindings
-    tokenizer
-    chat_profile
-    weights or external weight references
+0 new family .cpp
+0 new family .hpp
+0 if(model_type == ...)
+0 switch(architecture)
 ```
 
-The artifact records already-resolved model semantics.
+Production changes are allowed only for genuinely missing generic primitives/importer capabilities.
 
-## 14.2 Import once, execute generically
+## Phase 6 - Context-extension proof
 
-```text
-External checkpoint
-      |
-      v
-CELEG importer
-      |
-      v
-Self-describing CELEG artifact
-      |
-      v
-Generic CELEG runtime
-```
+Use models requiring YaRN/LongRoPE/related policies to prove that new positional mathematics is added once as a primitive and then selected by data.
 
-At this point the runtime does not even need the original external family descriptor.
+See the companion primitives roadmap for sequence and acceptance gates.
 
-## 14.3 Not required to delete `models/`
+## Phase 7 - Advanced-attention proof
 
-Do not block the main refactor waiting for a new file format.
+Use MLA, sparse-attention, modern linear-attention, and cross-attention models as proofs that genuinely new mathematics extends the primitive set rather than recreating family runtime directories.
 
-The generic descriptor/import pipeline is sufficient to remove family C++ first.
+## Phase 8 - CPU compiled execution
+
+- compile per-layer token/chunk executors;
+- narrow operator contexts;
+- introduce workspace plans;
+- preserve token/chunk equivalence tests.
+
+## Phase 9 - Weight representation OCP
+
+- resolve physical weight ops at load time;
+- avoid format switch growth in hot/shared paths;
+- preserve backend-specific optimized kernels.
+
+## Phase 10 - Remove family runtime composition
+
+As descriptors replace family modules, move tokenizer/chat/vision registration toward data/provider capabilities instead of per-family runtime modules.
+
+## Phase 11 - Delete `models/`
+
+Only after coverage proves it is safe:
+
+- delete migrated `src/models/**`;
+- delete migrated `include/celeg/models/**`;
+- remove architecture catalogs/resolvers that have no remaining generic role;
+- add CI rule preventing reintroduction of model-family production directories for models expressible by existing primitives.
 
 ---
 
-# 15. Descriptor and importer safety rules
+# 17. Proof ladder
 
-A data-driven architecture can become worse than C++ if the descriptor language grows without boundaries.
+Do not try to prove everything with one hostile model.
 
-Enforce these rules.
+Use increasingly demanding integration proofs.
 
-## 15.1 No Turing-complete scripting
+## Proof 1 - Qwen3-0.6B
 
-No embedded Python, JavaScript, Lua, shell, or arbitrary callback expressions for normal model descriptors.
+Goal:
 
-## 15.2 Deterministic evaluation
+- generic importer;
+- descriptor-driven dense transformer;
+- generic binding;
+- no family C++.
 
-Given:
+## Proof 2 - Ministral-8B-Instruct-2410
 
-- descriptor;
-- metadata;
-- tensor inventory;
+Goal:
 
-resolution must be deterministic.
+- another external family;
+- per-layer full/sliding attention schedule;
+- prove importer is not accidentally a Qwen importer.
 
-## 15.3 Resource limits
+## Proof 3 - YaRN / Ministral-3-class model
 
-Descriptor evaluation must bound:
+Goal:
 
-- recursion;
-- generated node count;
-- generated weight request count;
-- expression depth;
-- layer/expert comprehensions.
+- explicit context-extension semantics;
+- generic position policy;
+- no family-specific RoPE branch.
 
-## 15.4 Validation before allocation-heavy execution
+## Proof 4 - Phi-4-Mini-class model
 
-Reject invalid model descriptions before backend compilation where possible.
+Goal:
 
-## 15.5 Clear provenance
+- LongRoPE;
+- partial rotary;
+- position policies composed generically.
 
-Record:
+## Proof 5 - DeepSeek-V2/V3-class model
 
-- matched descriptor identity;
-- external format;
-- descriptor revision/hash;
-- generated IR fingerprint;
-- relevant tokenizer/chat profile identity.
+Goal:
 
-This supports debugging without making provenance part of execution semantics.
+- MLA as a reusable primitive;
+- latent state layout;
+- no DeepSeek runtime fork.
 
----
+## Proof 6 - Kimi-Linear-class model
 
-# 16. Testing strategy
+Goal:
 
-The model-agnostic direction requires stronger tests than architecture-specific happy paths.
+- modern linear attention extension;
+- token/chunk/recurrent-state contracts;
+- no Kimi runtime fork.
 
-## 16.1 Descriptor parser tests
+## Proof 7 - multimodal/cross-attention model
 
-Cover:
+Goal:
 
-- required fields;
-- optional defaults;
-- type mismatches;
-- array indexing;
-- conditionals;
-- enum mapping;
-- arithmetic;
-- assertions;
-- invalid references;
-- bounded comprehensions.
-
-## 16.2 IR validation tests
-
-Cover every primitive schema and cross-node invariant.
-
-## 16.3 Binding tests
-
-Cover:
-
-- candidate selection;
-- aliases/tied weights;
-- repeated physical layers;
-- expert placeholders;
-- transforms;
-- quantized representations;
-- shape mismatches;
-- missing required tensors.
-
-## 16.4 Old-vs-new migration equivalence
-
-While a family has both paths temporarily, compare old C++ resolver output with generic descriptor output.
-
-Delete the old path after equivalence is demonstrated.
-
-Do not retain dual paths indefinitely.
-
-## 16.5 Execution equivalence
-
-For migrated fixtures compare:
-
-- logits;
-- token decode;
-- chunk prefill;
-- stateful/recurrent transitions;
-- MoE routing where deterministic;
-- CPU/CUDA agreement within established tolerances.
-
-## 16.6 Extension tests
-
-CI should include synthetic fixtures proving independently that:
-
-- new model descriptor: no production C++ change;
-- new backend: no model/importer change;
-- new weight codec: no model semantic change;
-- new primitive: no family execution fork.
+- multi-source graph values;
+- encoder/vision memory;
+- cross-attention as semantics, not family code.
 
 ---
 
-# 17. SOLID interpretation in the target architecture
+# 18. SOLID interpretation of the target architecture
 
-## 17.1 Single Responsibility Principle
+## Single Responsibility
 
-Target responsibility boundaries:
+- checkpoint reader parses storage/container;
+- importer interprets external metadata;
+- descriptor declares import rules;
+- Model IR owns mathematics;
+- binding owns parameter location/transforms;
+- backend compiler owns lowering;
+- runtime owns scheduling/state;
+- kernel owns numerical implementation.
 
-- repository reads physical data;
-- descriptor interprets external metadata conventions;
-- importer builds IR;
-- IR owns mathematical semantics;
-- binding maps logical weights to physical tensors;
-- primitive validates one mathematical operation;
-- backend compiler lowers semantics;
-- kernel executes backend-specific math;
-- workspace planner owns scratch sizing;
-- tokenizer tokenizes;
-- chat profile formats conversations.
+## Open/Closed
 
-A model-family class doing several of those simultaneously should disappear.
+Existing mathematics -> descriptor only.
 
-## 17.2 Open/Closed Principle
+New mathematics -> new generic primitive/lowering only.
 
-The strongest target:
+New storage -> repository/codec/kernel only.
 
-```text
-new model using known primitives -> data only
-new tensor naming -> data only
-new backend -> backend module only
-new checkpoint format -> repository/import adapter only
-new quantization -> codec/kernel representation only
-new mathematics -> new primitive + lowerings
-```
+New backend -> backend compiler/factory only.
 
-This is materially stronger than "add one new model-family subclass".
+## Liskov Substitution
 
-## 17.3 Liskov Substitution Principle
+Capability interfaces should remain behaviorally substitutable and avoid fake unsupported operations.
 
-Keep capability interfaces honest.
+## Interface Segregation
 
-Do not create base interfaces with default "unsupported" methods merely to accommodate unrelated repositories/providers/backends.
+Preserve narrow repository capabilities and introduce similarly narrow primitive/backend capabilities where needed.
 
-## 17.4 Interface Segregation Principle
+## Dependency Inversion
 
-Preserve the existing good direction of narrow repository capabilities.
-
-Apply the same principle to:
-
-- importers;
-- descriptor sources;
-- backend compilers;
-- preprocessing providers;
-- weight readers/codecs.
-
-## 17.5 Dependency Inversion Principle
-
-High-level model semantics depend on primitive contracts, not CPU/CUDA kernels.
-
-Backends depend on canonical semantic programs, not model-family classes.
-
-Importers depend on checkpoint metadata/tensor interfaces, not concrete file readers.
-
-Operators depend on focused execution contexts, not whole compiled-model god objects.
+Generic import/model/runtime layers depend on CELEG semantic abstractions, not CPU/CUDA implementations or model-family classes.
 
 ---
 
-# 18. Revised SOLID assessment
+# 19. Definition of done
 
-At the current baseline, the previous numerical score remains broadly useful, but the model-agnostic north star exposes an additional OCP limitation that the older assessment treated as acceptable modularity.
+The architecture plan is complete when:
 
-Approximate current state:
+- canonical Model IR is the sole semantic authority;
+- backend execution contains no model-family identity;
+- common new models can be added with descriptors/bindings/tests only;
+- missing mathematics extends generic primitives rather than family code;
+- weight storage/quantization is orthogonal to model semantics;
+- token/chunk execution is compiled from one semantic source;
+- CPU operators depend on focused execution views;
+- workspace is plan-driven;
+- the C API has no unnecessary version stacking;
+- architecture checks are structural;
+- `src/models/**` and `include/celeg/models/**` are removed when no longer necessary;
+- CI prevents their reintroduction for models expressible with existing primitives.
 
-| Principle | Score | Reason |
-| --- | ---: | --- |
-| Single Responsibility | 7.4/10 | Good subsystem separation, but family resolvers still combine import semantics, graph construction, weight planning and provenance; CPU orchestration/workspace remain broad. |
-| Open/Closed | 6.9/10 | Backend/provider catalogs are strong, but a new model family still commonly means new architecture/naming C++ plus central composition changes. |
-| Liskov Substitution | 8.8/10 | Capability-oriented interfaces are already strong. |
-| Interface Segregation | 9.2/10 | Repository capability split is an architectural asset. |
-| Dependency Inversion | 8.0/10 | Generic runtime is abstraction-oriented, but family C++ remains above the desired IR/import boundary and CPU operators still depend too broadly on concrete state. |
-
-Target after the complete plan: approximately **9.4-9.7/10** while preserving low-level performance.
-
-The target is not academic interface count. It is a codebase in which unrelated kinds of extension stop forcing edits in the same places.
-
----
-
-# 19. Execution order
-
-Recommended order to minimize rework:
-
-```text
-Phase 0   architectural guards
-   |
-Phase 1   canonical semantic source
-   |
-Phase 2   CELEG Model IR vocabulary
-   |
-Phase 3   descriptor evaluator
-   |
-Phase 4   generic weight binding
-   |
-Phase 5   generic importer
-   |
-Phase 6   migrate model families incrementally
-   |\
-   | +---- Phase 7 tokenizer/chat/vision decoupling
-   |
-   +------ Phase 8 CPU compiled-layer execution
-   |       Phase 9 narrow CPU contexts
-   |       Phase 10 workspace planning
-   |
-   +------ Phase 11 extensible weight representations
-   |
-Phase 12  collapse C API / remove v2 compatibility debt
-   |
-Phase 13  remove family-centric composition and delete models/
-   |
-Phase 14  optional self-describing CELEG artifact
-```
-
-CPU execution work can proceed in parallel after canonical semantics stabilize because it consumes the same target IR/program boundary.
+The companion `CELEG_ATTENTION_CONTEXT_AND_RUNTIME_PRIMITIVES_PLAN.md` is considered a direct implementation dependency of this definition of done for modern model coverage.
 
 ---
 
-# 20. Concrete migration definition of done
+# 20. Final invariant
 
-The architecture refactor is not complete merely because the code looks cleaner.
+The intended end state is:
 
-It is complete when the following statements are true.
+> **CELEG does not support model families. CELEG supports a vocabulary of mathematical primitives, positional policies, state representations, import rules, weight bindings, and backend lowerings. External model descriptions are compiled into that vocabulary.**
 
-## 20.1 Model extension
-
-A synthetic new model family composed entirely from existing primitives is supported by adding descriptor/resources/tests only.
-
-No production C++ source modification is required.
-
-## 20.2 No production model-family tree
-
-```text
-src/models/
-include/celeg/models/
-```
-
-are gone.
-
-## 20.3 No family resolver hierarchy
-
-There is no required one-class-per-family `IArchitecture` mechanism.
-
-## 20.4 No family execution identity
-
-CPU/CUDA/runtime/model-program code does not branch on family/model identity.
-
-## 20.5 Canonical semantics
-
-One canonical IR owns model mathematics.
-
-Derived backend/runtime structures do not duplicate semantic ownership.
-
-## 20.6 Data-driven binding
-
-Tensor names/layout conventions are import/binding data, not per-family C++ switches.
-
-## 20.7 Primitive-based growth
-
-When genuinely new mathematics arrives, CELEG grows by adding a reusable primitive and backend lowering(s), not by forking a model execution path.
-
-## 20.8 Backend extensibility
-
-A new backend registers through backend abstractions without changes to model semantics or a CPU/CUDA public enum switch.
-
-## 20.9 Quantization extensibility
-
-A new storage/weight representation extends codec/kernel representation boundaries without changing model-family semantics.
-
-## 20.10 No compatibility clutter
-
-There is one current CELEG API design, with no retained `_v2`/legacy path solely for compatibility.
-
-## 20.11 Performance
-
-Descriptor/IR flexibility is resolved before the hot path.
-
-Decode/prefill remain compiled backend execution rather than descriptor interpretation.
-
----
-
-# 21. Final architectural rule set
-
-The following rules should eventually be enforceable in CI.
-
-```text
-RULE 1
-Model-family identity may exist in external descriptors and provenance,
-but not in generic execution semantics.
-
-RULE 2
-A model that uses existing CELEG primitives must not require new model-family C++.
-
-RULE 3
-New mathematics extends the primitive language, not a family execution fork.
-
-RULE 4
-Model IR owns mathematics; weight binding owns checkpoint tensor mapping.
-
-RULE 5
-Checkpoint format and quantization/storage format do not define model semantics.
-
-RULE 6
-Descriptors are deterministic, declarative, constrained and evaluated before hot execution.
-
-RULE 7
-Backends compile semantic programs and never probe model families.
-
-RULE 8
-Token and chunk execution derive from one compiled semantic source.
-
-RULE 9
-Focused operators depend on focused execution views, not global god objects.
-
-RULE 10
-CELEG has no backward-compatibility debt unless an explicit stability contract creates one.
-
-RULE 11
-Central registries must not require manual edits for every new descriptor/model family.
-
-RULE 12
-The planned end state contains no production src/models/ or include/celeg/models/ tree.
-```
-
----
-
-# 22. End-state mental model
-
-The desired CELEG architecture is analogous to a compiler.
-
-```text
-External model conventions
-        |
-        v
-Importer / descriptor front-end
-        |
-        v
-      CELEG IR
-        |
-        v
-Backend lowering/compiler
-      /       \
-     v         v
-   CPU        CUDA
-```
-
-The analogy is intentional:
-
-```text
-Qwen --------\
-Granite ------\
-LFM -----------\
-Gemma ----------> CELEG IR ---> CPU
-Nanbeige ------/             ---> CUDA
-Nemotron -----/
-FutureModel --/
-```
-
-Just as an LLVM backend should not care whether the source program was originally C, C++, Rust, Swift or Fortran, a CELEG backend should not care which model-family convention produced the semantic IR.
-
-The ultimate product definition should become:
-
-> **CELEG executes any model graph composed of primitives it supports, regardless of the model-family name used by the source checkpoint.**
-
-That is the architectural direction this plan now treats as the SOLID end state.
+Once this invariant is true, adding the next ordinary model should feel like adding data and tests, not adding another runtime subsystem.
