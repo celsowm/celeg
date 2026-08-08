@@ -14,6 +14,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/configuration.cpp
     src/backend/cuda/model/resources.cpp
     src/backend/cuda/model/weight_setup.cpp
+    src/backend/cuda/model/mtp_weight_setup.cpp
     src/backend/cuda/model/global_weight_setup.cpp
     src/backend/cuda/model/weight_setup_support.cpp
     src/backend/cuda/model/expert_setup.cpp

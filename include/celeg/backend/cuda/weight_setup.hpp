@@ -22,4 +22,6 @@ public:
                      LayerLoader load_layers);
 };
 
+void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repository);
+
 } // namespace celeg

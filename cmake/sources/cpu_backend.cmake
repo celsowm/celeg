@@ -2,9 +2,11 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/compiler.cpp
     src/backend/cpu/model.cpp
     src/backend/cpu/weights.cpp
+    src/backend/cpu/weights_loader.cpp
     src/backend/cpu/weight_codec.cpp
     src/backend/cpu/model_state.cpp
-    src/backend/cpu/model_forward.cpp
+    src/backend/cpu/model_forward_token.cpp
+    src/backend/cpu/model_forward_chunk.cpp
     src/backend/cpu/operators/attention.cpp
     src/backend/cpu/operators/feed_forward.cpp
     src/backend/cpu/operators/moe.cpp
@@ -27,6 +29,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/kernels/quantization.cpp
     src/backend/cpu/memory/expert_backing.cpp
     src/backend/cpu/memory/expert_cache.cpp
+    src/backend/cpu/memory/attention_policy.cpp
     src/backend/cpu/memory/paged_kv.cpp
     src/backend/cpu/memory/prefix_cache.cpp
     src/backend/cpu/runtime/isa.cpp

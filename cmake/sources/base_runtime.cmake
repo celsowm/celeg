@@ -16,6 +16,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/bootstrap.cpp
     src/model/definition.cpp
     src/model/descriptor.cpp
+    src/model/descriptor_weight_plan.cpp
     src/model/architecture.cpp
     src/model/resolved.cpp
     src/model/program.cpp
