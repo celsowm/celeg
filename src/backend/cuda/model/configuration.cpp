@@ -2,6 +2,7 @@
 #include "celeg/backend/cuda/compiler.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/weight_policy.hpp"
+#include "celeg/checkpoint/packed_int8.hpp"
 
 #include <stdexcept>
 namespace celeg {
@@ -9,6 +10,16 @@ namespace celeg {
 void CudaCompiledModel::configure_model(
     const detail::ModelBootstrap& bootstrap) {
     resources_.model_ = bootstrap.model;
+    if (resources_.options_.weight_mode == WeightMode::Bf16 &&
+        has_packed_int8_matrix(*bootstrap.checkpoint.repository,
+                               "model.layers.0.self_attn.q_proj.weight")) {
+        // compressed-tensors checkpoints carry their quantization contract in
+        // the tensors themselves; execute them as native W8A16 even when the
+        // caller did not request a conversion mode.
+        resources_.options_.weight_mode = WeightMode::Int8;
+        resources_.plan_ = CudaExecutionPlan::compile(
+            resources_.options_, max_context_, resources_.plan_.device());
+    }
     resources_.program_ = CudaModelCompiler{}.compile(resources_.model_);
     resources_.shape_ = resources_.model_.topology;
     if (resources_.shape_.conv_layer_count == 0 &&

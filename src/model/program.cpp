@@ -207,6 +207,13 @@ bool CompiledModelProgram::has_moe() const {
 
 void CompiledModelProgram::validate() const {
     per_layer_input.validate();
+    for (size_t index = 0; index < norm_after_layers.size(); ++index) {
+        const int layer = norm_after_layers[index];
+        if (layer < 0 || layer >= static_cast<int>(layers.size()) - 1 ||
+            (index > 0 && norm_after_layers[index - 1] >= layer)) {
+            throw std::invalid_argument("invalid compiled norm boundary");
+        }
+    }
     for (const auto& layer : layers) {
         if (layer.weight_request_indices.empty()) {
             throw std::invalid_argument("compiled layer has no weight plan");
@@ -284,6 +291,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     if (model.graph.layers.empty()) throw std::invalid_argument("model has no layers");
     CompiledModelProgram program;
     program.identity = model.provenance.identity;
+    program.norm_after_layers = model.topology.norm_after_layers;
     program.per_layer_input = PerLayerInputPlan::derive(model);
     program.layers.reserve(model.graph.layers.size());
 
@@ -383,6 +391,8 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         program.layers.push_back(std::move(compiled));
     }
     std::ostringstream semantic;
+    semantic << "norms";
+    for (const int boundary : program.norm_after_layers) semantic << boundary << ';';
     for (const auto& layer : program.layers) {
         semantic << (layer.moe ? layer.moe->fingerprint() : "dense") << ';';
     }

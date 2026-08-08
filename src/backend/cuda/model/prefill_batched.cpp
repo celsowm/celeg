@@ -6,6 +6,7 @@
 #include "celeg/backend/cuda/moe.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -267,6 +268,12 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         }
         prof.begin(stream_.get());
         run_mlp_prefill(common_layer, rows, layer_idx);
+        if (std::binary_search(resources_.program_.norm_after_layers.begin(),
+                               resources_.program_.norm_after_layers.end(), layer_idx)) {
+            launch_rmsnorm(workspace_.prefill_hidden_.data(), resources_.final_norm_,
+                           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
+        }
         prof.end(PrefillPhase::Mlp, stream_.get());
         ++layer_idx;
     }

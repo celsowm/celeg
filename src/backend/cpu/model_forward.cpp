@@ -187,6 +187,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
         }
+        if (std::binary_search(shared->program.norm_after_layers.begin(),
+                               shared->program.norm_after_layers.end(),
+                               static_cast<int>(index))) {
+            cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.final_norm.data(),
+                                shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
+        }
     }
     if (compute_logits) {
         cpu_rmsnorm(workspace_.hidden.data(), shared->weight_store.final_norm.data(), workspace_.normed.data(),
@@ -484,6 +490,12 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 scale(workspace_.chunk_hidden, rows * hidden, common.layer_scalar);
             }
             residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
+        }
+        if (std::binary_search(shared->program.norm_after_layers.begin(),
+                               shared->program.norm_after_layers.end(),
+                               static_cast<int>(index))) {
+            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(),
+                                 shared->weight_store.final_norm, hidden);
         }
     }
 

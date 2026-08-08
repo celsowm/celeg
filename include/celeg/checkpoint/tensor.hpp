@@ -8,7 +8,7 @@ namespace celeg {
 
 // Non-quantized source element types. Pre-quantized tensors additionally
 // carry a `block_encoding` (see below) and set `dtype == Quantized`.
-enum class TensorDType { BF16, F16, F32, I8, Quantized, Unknown };
+enum class TensorDType { BF16, F16, F32, I8, I32, I64, Quantized, Unknown };
 
 // Format-neutral identifier for an on-disk quantized block encoding. This
 // header must not depend on any concrete checkpoint format: the owning

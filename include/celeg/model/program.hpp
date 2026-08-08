@@ -129,6 +129,7 @@ struct CompiledModelProgram {
     std::string identity;
     std::size_t weight_request_count = 0;
     std::vector<CompiledLayerProgram> layers;
+    std::vector<int> norm_after_layers;
     std::vector<std::size_t> unlayered_weight_request_indices;
     PerLayerInputPlan per_layer_input;
     std::string semantic_fingerprint;

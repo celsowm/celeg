@@ -212,6 +212,32 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
         if (dispatched_q4) return;
     }
 
+    if (std::all_of(weight.segments.begin(), weight.segments.end(),
+                    [](const CpuLinearMatrix& segment) {
+                        return std::holds_alternative<CpuInt8Matrix>(segment);
+                    })) {
+        size_t output_offset = 0;
+        for (const CpuLinearMatrix& segment : weight.segments) {
+            const CpuInt8Matrix& matrix = std::get<CpuInt8Matrix>(segment);
+            const size_t grain = std::max<size_t>(
+                1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
+            pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
+                for (size_t row = begin; row < end; ++row) {
+                    float value = 0.0f;
+                    const int8_t* weights = matrix.data() + row * matrix.cols;
+                    for (size_t col = 0; col < matrix.cols; ++col) {
+                        value += static_cast<float>(weights[col]) * input[col];
+                    }
+                    value *= matrix.scales->at(row);
+                    float& destination = output[output_offset + row];
+                    destination = beta == 0.0f ? value : value + beta * destination;
+                }
+            });
+            output_offset += matrix.rows;
+        }
+        return;
+    }
+
     const std::vector<CpuQ8KBlock> activation =
         cpu_quantize_q8k(input, weight.cols, isa_);
     size_t output_offset = 0;
@@ -247,6 +273,36 @@ void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
         std::holds_alternative<Q4GroupMatrix>(weight.segments.front())) {
         gemm(std::get<Q4GroupMatrix>(weight.segments.front()),
              input, output, rows, beta);
+        return;
+    }
+
+    if (std::all_of(weight.segments.begin(), weight.segments.end(),
+                    [](const CpuLinearMatrix& segment) {
+                        return std::holds_alternative<CpuInt8Matrix>(segment);
+                    })) {
+        size_t output_offset = 0;
+        for (const CpuLinearMatrix& segment : weight.segments) {
+            const CpuInt8Matrix& matrix = std::get<CpuInt8Matrix>(segment);
+            const size_t grain = std::max<size_t>(
+                1, rows / std::max<size_t>(1, pool_->size() * 4));
+            pool_->parallel_for(0, rows, grain, [&](size_t begin, size_t end) {
+                for (size_t row = begin; row < end; ++row) {
+                    float* destination = output + row * weight.rows + output_offset;
+                    const float* activation = input + row * matrix.cols;
+                    for (size_t out = 0; out < matrix.rows; ++out) {
+                        float value = 0.0f;
+                        const int8_t* weights = matrix.data() + out * matrix.cols;
+                        for (size_t col = 0; col < matrix.cols; ++col) {
+                            value += static_cast<float>(weights[col]) * activation[col];
+                        }
+                        const float previous = destination[out];
+                        destination[out] = matrix.scales->at(out) * value;
+                        if (beta != 0.0f) destination[out] += beta * previous;
+                    }
+                }
+            });
+            output_offset += matrix.rows;
+        }
         return;
     }
 
@@ -416,6 +472,11 @@ void CpuLinearEngine::embedding(const CpuLinearWeight& table, int32_t token,
         }
         if (const auto* q4 = std::get_if<Q4GroupMatrix>(&segment)) {
             dequantize_q4_row(*q4, row, output);
+        } else if (const auto* int8 = std::get_if<CpuInt8Matrix>(&segment)) {
+            const int8_t* weights = int8->data() + row * int8->cols;
+            for (size_t col = 0; col < int8->cols; ++col) {
+                output[col] = static_cast<float>(weights[col]) * int8->scales->at(row);
+            }
         } else {
             cpu_gguf_dequantize_row(
                 std::get<CpuGgufMatrix>(segment), row, output);

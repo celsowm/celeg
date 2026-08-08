@@ -372,6 +372,13 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                     rows * shape_.hidden, stream.get());
             }
             run_mlp_layer(reference, common_layer, rows, batch_models, layer_index);
+            if (std::binary_search(reference.program().norm_after_layers.begin(),
+                                   reference.program().norm_after_layers.end(),
+                                   static_cast<int>(layer_index))) {
+                launch_rmsnorm(hidden.data(), reference.final_norm(), hidden.data(),
+                               rows, shape_.hidden, shape_.numerical_policy.norm_eps,
+                               stream.get());
+            }
         }
     }
 

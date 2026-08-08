@@ -76,6 +76,9 @@ struct TensorRequest {
     int expert = -1;
     std::vector<int64_t> expected_shape;
     std::optional<std::string> source_name;
+    // Physical checkpoint layer used by architectures that execute a
+    // smaller set of blocks more than once.  -1 means the logical layer.
+    int physical_layer = -1;
 };
 
 struct ResolvedTensor {

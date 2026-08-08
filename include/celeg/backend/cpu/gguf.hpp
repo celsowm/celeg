@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <variant>
 #include <vector>
 
@@ -24,7 +25,23 @@ struct CpuGgufMatrix {
     void validate() const;
 };
 
-using CpuLinearMatrix = std::variant<Q4GroupMatrix, CpuGgufMatrix>;
+struct CpuInt8Matrix {
+    uint32_t rows = 0;
+    uint32_t cols = 0;
+    std::shared_ptr<std::vector<int8_t>> values =
+        std::make_shared<std::vector<int8_t>>();
+    std::shared_ptr<std::vector<float>> scales =
+        std::make_shared<std::vector<float>>();
+
+    size_t memory_bytes() const {
+        return values->size() * sizeof(int8_t) + scales->size() * sizeof(float);
+    }
+    const int8_t* data() const { return values->data(); }
+    const float* scale_data() const { return scales->data(); }
+    void validate() const;
+};
+
+using CpuLinearMatrix = std::variant<Q4GroupMatrix, CpuGgufMatrix, CpuInt8Matrix>;
 
 // A logical [rows, cols] linear weight. Most weights have one segment.
 // GGUF concatenations may retain multiple row-contiguous Q4_K/Q6_K segments
@@ -36,6 +53,7 @@ struct CpuLinearWeight {
 
     static CpuLinearWeight from_q4(Q4GroupMatrix matrix);
     static CpuLinearWeight from_gguf(CpuGgufMatrix matrix);
+    static CpuLinearWeight from_int8(CpuInt8Matrix matrix);
     size_t memory_bytes() const;
     bool gguf_native() const;
     void validate() const;

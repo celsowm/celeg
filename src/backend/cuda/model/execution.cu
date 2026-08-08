@@ -260,6 +260,12 @@ void CudaCompiledModel::enqueue_decode_forward() {
         }
         decode_phase_profile().begin(stream_.get());
         if (resources_.shape_.mamba2_layer_count == 0) run_mlp_decode(common_layer, layer_idx);
+        if (std::binary_search(resources_.program_.norm_after_layers.begin(),
+                               resources_.program_.norm_after_layers.end(), layer_idx)) {
+            launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
+                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
+        }
         decode_phase_profile().end(DecodePhase::Mlp, stream_.get());
         ++layer_idx;
     }

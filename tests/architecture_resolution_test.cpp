@@ -160,7 +160,7 @@ celeg::CheckpointMetadata nemotron_h_metadata() {
 int main() {
     const auto runtime = celeg::create_builtin_runtime_context();
     const auto& catalog = runtime->architectures();
-    CELEG_TEST_CHECK(catalog.ids().size() == 7);
+    CELEG_TEST_CHECK(catalog.ids().size() == 8);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog.select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -229,6 +229,38 @@ int main() {
     CELEG_TEST_CHECK(mamba_spec.num_heads == 96 && mamba_spec.head_dim == 80);
     CELEG_TEST_CHECK(mamba_spec.state_size == 128 && mamba_spec.group_count == 8);
     CELEG_TEST_CHECK(nemotron.capabilities.supports_cpu);
+
+    celeg::CheckpointMetadata nanbeige_metadata;
+    nanbeige_metadata.repository_hint = "Nanbeige/Nanbeige4.2-3B";
+    nanbeige_metadata.values["model_type"] = std::string("nanbeige");
+    nanbeige_metadata.values["hidden_size"] = int64_t(3072);
+    nanbeige_metadata.values["intermediate_size"] = int64_t(10752);
+    nanbeige_metadata.values["num_hidden_layers"] = int64_t(22);
+    nanbeige_metadata.values["num_loops"] = int64_t(2);
+    nanbeige_metadata.values["num_attention_heads"] = int64_t(48);
+    nanbeige_metadata.values["num_key_value_heads"] = int64_t(8);
+    nanbeige_metadata.values["vocab_size"] = int64_t(166144);
+    nanbeige_metadata.values["max_position_embeddings"] = int64_t(262144);
+    nanbeige_metadata.values["bos_token_id"] = int64_t(166100);
+    nanbeige_metadata.values["eos_token_id"] = int64_t(166101);
+    nanbeige_metadata.values["pad_token_id"] = int64_t(0);
+    nanbeige_metadata.values["rms_norm_eps"] = 1.0e-5;
+    nanbeige_metadata.values["rope_theta"] = 70000000.0;
+    const auto& nanbeige_architecture = catalog.select(nanbeige_metadata);
+    CELEG_TEST_CHECK(nanbeige_architecture.id() == "nanbeige42");
+    celeg::CheckpointView nanbeige_checkpoint;
+    nanbeige_checkpoint.metadata = nanbeige_metadata;
+    const auto nanbeige = nanbeige_architecture.resolve(nanbeige_checkpoint);
+    CELEG_TEST_CHECK(nanbeige.topology.num_hidden_layers == 44);
+    CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[0] == 0);
+    CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[21] == 21);
+    CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[22] == 0);
+    CELEG_TEST_CHECK(nanbeige.topology.norm_after_layers == std::vector<int>{21});
+    CELEG_TEST_CHECK(nanbeige.topology.attention_layout(0).rope_theta == 70000000.0);
+    CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].physical_layer == 0);
+    CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].source_name.value() ==
+                     "model.layers.0.input_layernorm.weight");
+    CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3 + 21 * 9].physical_layer == 21);
 
     // LFM2.5-2.6B (Transformers 5.x config) keeps RoPE under the nested
     // rope_parameters object and uses a 128k vocabulary/context.

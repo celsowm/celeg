@@ -21,6 +21,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unordered_map>
 
 namespace celeg {
 
@@ -257,6 +258,7 @@ struct CpuCompiledModel {
         std::string model_path;
         std::shared_ptr<const RuntimeContext> runtime;
         bool native_checkpoint = false;
+        bool compressed_checkpoint = false;
         std::shared_ptr<IWeightRepository> repository;
         int max_context = 0;
         CpuModelOptions options;
@@ -271,6 +273,7 @@ struct CpuCompiledModel {
         CompiledModelProgram program;
         std::string model_identity;
         std::vector<TensorRequest> weight_requests;
+        std::unordered_map<std::string, CpuLinearWeight> compressed_linear_cache;
         bool tie_word_embeddings = true;
         float final_logit_softcap = 0.0f;
         CpuWeightStore weight_store;

@@ -427,6 +427,12 @@ struct CpuCompiledModel::BatchScratch {
                 }
                 residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
             }
+            if (std::binary_search(shared.program.norm_after_layers.begin(),
+                                   shared.program.norm_after_layers.end(),
+                                   static_cast<int>(index))) {
+                rmsnorm_rows_inplace(workspace_.hidden.data(),
+                                     shared.weight_store.final_norm, hidden);
+            }
         }
         for (size_t row = 0; row < rows; ++row) {
             State& session = *sessions[row];

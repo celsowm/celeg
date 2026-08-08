@@ -2,6 +2,7 @@
 set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp
+    src/checkpoint/packed_int8.cpp
     src/checkpoint/formats/gguf.cpp
     src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp
@@ -41,6 +42,10 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/minicpm5/naming_policy.cpp
     src/models/minicpm5/chat_template.cpp
     src/models/minicpm5/tool_call_codec.cpp
+    src/models/nanbeige/architecture.cpp
+    src/models/nanbeige/naming_policy.cpp
+    src/models/nanbeige/chat_template.cpp
+    src/models/nanbeige/tool_call_codec.cpp
     src/models/smollm3/architecture.cpp
     src/models/smollm3/naming_policy.cpp
     src/models/smollm3/chat_template.cpp

@@ -30,6 +30,8 @@ TensorDType parse_dtype(const std::string& name) {
     if (name == "F16") return TensorDType::F16;
     if (name == "F32") return TensorDType::F32;
     if (name == "I8") return TensorDType::I8;
+    if (name == "I32") return TensorDType::I32;
+    if (name == "I64") return TensorDType::I64;
     return TensorDType::Unknown;
 }
 
@@ -39,7 +41,10 @@ size_t dtype_size(TensorDType dtype) {
         case TensorDType::F16:
             return 2;
         case TensorDType::F32:
+        case TensorDType::I32:
             return 4;
+        case TensorDType::I64:
+            return 8;
         case TensorDType::I8:
             return 1;
         case TensorDType::Unknown:

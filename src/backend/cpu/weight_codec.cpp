@@ -1,6 +1,7 @@
 #include "celeg/backend/cpu/weight_codec.hpp"
 
 #include "celeg/checkpoint/weight_repository.hpp"
+#include "celeg/checkpoint/packed_int8.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
@@ -103,6 +104,15 @@ CpuLinearWeight CpuWeightCodec::matrix(
     const std::string& name, const std::vector<int64_t>& expected) const {
     if (reader_) return CpuLinearWeight::from_q4(reader_->read_q4_matrix(name));
     if (!source_) throw std::logic_error("CPU weight source is missing");
+    if (has_packed_int8_matrix(*source_, name)) {
+        const PackedInt8Matrix packed = load_packed_int8_matrix(*source_, name, expected);
+        CpuInt8Matrix matrix;
+        matrix.rows = static_cast<uint32_t>(packed.rows);
+        matrix.cols = static_cast<uint32_t>(packed.cols);
+        *matrix.values = packed.values;
+        *matrix.scales = packed.scales;
+        return CpuLinearWeight::from_int8(std::move(matrix));
+    }
     const HostTensorView tensor = source_->tensor(name);
     if (tensor.shape != expected || expected.size() != 2) {
         throw std::runtime_error("unexpected CPU linear tensor: " + name);
@@ -139,6 +149,26 @@ CpuLinearWeight CpuWeightCodec::concat(
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) const {
     if (reader_) return CpuLinearWeight::from_q4(reader_->read_q4_matrix(synthetic));
     if (!source_ || parts.empty()) throw std::logic_error("invalid CPU concat source");
+    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
+            return has_packed_int8_matrix(*source_, part.first);
+        })) {
+        const int64_t cols = parts.front().second.at(1);
+        CpuLinearWeight result;
+        result.cols = static_cast<uint32_t>(cols);
+        for (const auto& [name, expected] : parts) {
+            const PackedInt8Matrix packed = load_packed_int8_matrix(*source_, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed CPU concat width mismatch");
+            CpuInt8Matrix matrix;
+            matrix.rows = static_cast<uint32_t>(packed.rows);
+            matrix.cols = static_cast<uint32_t>(packed.cols);
+            *matrix.values = packed.values;
+            *matrix.scales = packed.scales;
+            result.rows += matrix.rows;
+            result.segments.emplace_back(std::move(matrix));
+        }
+        result.validate();
+        return result;
+    }
     const int64_t cols = parts.front().second[1];
     size_t total_rows = 0;
     std::vector<HostTensorView> tensors;

@@ -75,6 +75,7 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
     context.options_state = &resources_.options_;
     context.generation_state = &session_.generation_;
     context.shape_state = &resources_.shape_;
+    context.program_state = &resources_.program_;
     context.weights_state = resources_.weights_;
     context.logits_state = &workspace_.logits_;
     context.seen_tokens_state = &sampling_.seen_tokens;

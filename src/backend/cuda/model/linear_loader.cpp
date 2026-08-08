@@ -4,6 +4,7 @@
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
+#include "celeg/checkpoint/packed_int8.hpp"
 #include "weight_loader_internal.hpp"
 
 #include <cstddef>
@@ -84,6 +85,26 @@ const LinearWeight* WeightLoader::load_linear_weight(
             throw std::runtime_error("cached linear shape mismatch for " + name);
         }
         return &cached->second.linear;
+    }
+    if (has_packed_int8_matrix(repo, name)) {
+        const PackedInt8Matrix packed = load_packed_int8_matrix(repo, name, expected);
+        DeviceWeight weight;
+        weight.shape = expected;
+        weight.int8_storage.reset(packed.values.size());
+        weight.scales_storage.reset(packed.scales.size());
+        CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(), packed.values.data(),
+                              packed.values.size() * sizeof(int8_t), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), packed.scales.data(),
+                              packed.scales.size() * sizeof(float), cudaMemcpyHostToDevice));
+        weight.linear.kind = LinearStorageKind::Int8;
+        weight.linear.int8 = weight.int8_storage.data();
+        weight.linear.scales = weight.scales_storage.data();
+        weight.linear.rows = packed.rows;
+        weight.linear.cols = packed.cols;
+        weight.linear.validate_storage();
+        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+        return &it->second.linear;
     }
     const HostTensorView tensor = repo.tensor(name);
     if (tensor.shape != expected || tensor.shape.size() != 2) {
@@ -376,6 +397,38 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         return &cached->second.linear;
     }
     if (parts.empty()) throw std::invalid_argument("concat weight requires parts");
+    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
+            return has_packed_int8_matrix(repo, part.first);
+        })) {
+        const int64_t cols = parts.front().second.at(1);
+        int64_t rows = 0;
+        std::vector<int8_t> values;
+        std::vector<float> scales;
+        for (const auto& [name, expected] : parts) {
+            const PackedInt8Matrix packed = load_packed_int8_matrix(repo, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed concat width mismatch");
+            values.insert(values.end(), packed.values.begin(), packed.values.end());
+            scales.insert(scales.end(), packed.scales.begin(), packed.scales.end());
+            rows += packed.rows;
+        }
+        DeviceWeight weight;
+        weight.shape = {rows, cols};
+        weight.int8_storage.reset(values.size());
+        weight.scales_storage.reset(scales.size());
+        CELEG_CUDA(cudaMemcpy(weight.int8_storage.data(), values.data(),
+                              values.size() * sizeof(int8_t), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
+                              scales.size() * sizeof(float), cudaMemcpyHostToDevice));
+        weight.linear.kind = LinearStorageKind::Int8;
+        weight.linear.int8 = weight.int8_storage.data();
+        weight.linear.scales = weight.scales_storage.data();
+        weight.linear.rows = static_cast<int>(rows);
+        weight.linear.cols = static_cast<int>(cols);
+        weight.linear.validate_storage();
+        auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
+        return &it->second.linear;
+    }
     int64_t common_width = -1;
     int64_t total_rows = 0;
     size_t total_count = 0;

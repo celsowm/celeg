@@ -152,6 +152,23 @@ CpuLinearWeight CpuLinearWeight::from_gguf(CpuGgufMatrix matrix) {
     return result;
 }
 
+void CpuInt8Matrix::validate() const {
+    if (rows == 0 || cols == 0 || !values || !scales ||
+        values->size() != static_cast<size_t>(rows) * cols ||
+        scales->size() != static_cast<size_t>(rows)) {
+        throw std::runtime_error("invalid CPU INT8 matrix");
+    }
+}
+
+CpuLinearWeight CpuLinearWeight::from_int8(CpuInt8Matrix matrix) {
+    matrix.validate();
+    CpuLinearWeight result;
+    result.rows = matrix.rows;
+    result.cols = matrix.cols;
+    result.segments.emplace_back(std::move(matrix));
+    return result;
+}
+
 size_t CpuLinearWeight::memory_bytes() const {
     size_t total = 0;
     for (const CpuLinearMatrix& segment : segments) {

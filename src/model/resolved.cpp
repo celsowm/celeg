@@ -52,6 +52,10 @@ std::string RuntimeTopology::fingerprint() const {
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
     out << "-m2i" << mamba2_intermediate;
+    out << "-map";
+    for (int layer : checkpoint_layer_for_layer) out << '-' << layer;
+    out << "-norms";
+    for (int layer : norm_after_layers) out << '-' << layer;
     out << "-mr" << mrope_interleaved << '-' << mrope_section[0]
         << '-' << mrope_section[1] << '-' << mrope_section[2];
     for (MixerKind kind : mixer_kinds) {
@@ -97,6 +101,21 @@ void RuntimeTopology::validate() const {
     if (hidden <= 0 || intermediate <= 0 || vocab_size <= 0 ||
         num_hidden_layers <= 0 || mtp_num_hidden_layers < 0) {
         throw std::runtime_error("invalid resolved model topology");
+    }
+    if (!checkpoint_layer_for_layer.empty()) {
+        if (static_cast<int>(checkpoint_layer_for_layer.size()) != num_hidden_layers) {
+            throw std::runtime_error("checkpoint layer mapping length mismatch");
+        }
+        for (int layer : checkpoint_layer_for_layer) {
+            if (layer < 0) throw std::runtime_error("negative checkpoint layer mapping");
+        }
+    }
+    for (size_t index = 0; index < norm_after_layers.size(); ++index) {
+        const int layer = norm_after_layers[index];
+        if (layer < 0 || layer >= num_hidden_layers - 1 ||
+            (index > 0 && norm_after_layers[index - 1] >= layer)) {
+            throw std::runtime_error("invalid intermediate norm boundary");
+        }
     }
     token_policy.validate();
     const auto validate_token_id = [this](int token, const char* name) {

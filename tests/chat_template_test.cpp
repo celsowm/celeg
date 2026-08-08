@@ -3,6 +3,7 @@
 #include "celeg/models/granite/chat_template.hpp"
 #include "celeg/models/lfm2/chat_template.hpp"
 #include "celeg/models/minicpm5/chat_template.hpp"
+#include "celeg/models/nanbeige/chat_template.hpp"
 #include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
 #include "celeg/models/smollm3/chat_template.hpp"
@@ -162,6 +163,25 @@ int main() {
         std::vector<celeg::ChatToolDefinition>{tool_definition}, true);
     CELEG_TEST_CHECK(minicpm5_tools.find("<tools>") != std::string::npos);
     CELEG_TEST_CHECK(minicpm5_tools.find("\"name\":\"weather\"") != std::string::npos);
+
+    const auto& nanbeige = catalog.find("nanbeige42-instruct");
+    const std::string nanbeige_think = nanbeige.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);
+    CELEG_TEST_CHECK(nanbeige_think.find("<|im_start|>system\n") == 0);
+    CELEG_TEST_CHECK(nanbeige_think.ends_with("<|im_start|>assistant\n<think>\n"));
+    const std::string nanbeige_no_think = nanbeige.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}},
+        {}, true, celeg::ChatTemplateOptions{false});
+    CELEG_TEST_CHECK(nanbeige_no_think.ends_with(
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+    const auto* nanbeige_codec = catalog.tool_codec("nanbeige42-instruct");
+    CELEG_TEST_CHECK(nanbeige_codec != nullptr);
+    const auto nanbeige_parse = nanbeige_codec->parse_generation(
+        "answer <tool_call>\n<function=weather>\n<parameter=city>Paris</parameter>\n</function>\n</tool_call>");
+    CELEG_TEST_CHECK(nanbeige_parse.status == celeg::ToolParseStatus::Complete);
+    CELEG_TEST_CHECK(nanbeige_parse.calls.size() == 1);
+    CELEG_TEST_CHECK(nanbeige_parse.calls[0].name == "weather");
+    CELEG_TEST_CHECK(nanbeige_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
 
     const auto& smollm3 = catalog.find("smollm3-instruct");
     const auto smollm3_capabilities = catalog.capabilities("smollm3-instruct");

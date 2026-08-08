@@ -84,9 +84,12 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     model_identity = bootstrap.model.provenance.identity;
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
+    compressed_checkpoint = repository->contains(
+        "model.layers.0.self_attn.q_proj.weight_packed");
     prepare_pack_path();
     if (options.expert_backing == CpuExpertBacking::DiskCached &&
-        !native_checkpoint && (!options.use_pack_cache || pack_file.empty())) {
+        !native_checkpoint && !compressed_checkpoint &&
+        (!options.use_pack_cache || pack_file.empty())) {
         throw std::invalid_argument(
             "CPU disk-backed experts require the CPU pack cache");
     }
@@ -119,7 +122,7 @@ CpuIsa CpuCompiledModel::Shared::resolve_isa(CpuIsa requested) {
 }
 
 void CpuCompiledModel::Shared::prepare_pack_path() {
-    if (native_checkpoint || !options.use_pack_cache) return;
+    if (native_checkpoint || compressed_checkpoint || !options.use_pack_cache) return;
     std::filesystem::path directory = options.pack_cache_directory.empty()
         ? default_cache_directory() : options.pack_cache_directory;
     std::error_code error;
@@ -542,6 +545,13 @@ void CpuCompiledModel::Shared::load_weights() {
 CpuLinearWeight CpuCompiledModel::Shared::load_matrix(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
+    if (compressed_checkpoint) {
+        if (const auto cached = compressed_linear_cache.find(name);
+            cached != compressed_linear_cache.end()) return cached->second;
+        CpuLinearWeight loaded = CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
+        auto [it, inserted] = compressed_linear_cache.emplace(name, std::move(loaded));
+        return it->second;
+    }
     return CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
 }
 
@@ -549,6 +559,22 @@ CpuLinearWeight CpuCompiledModel::Shared::load_concat(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& synthetic,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
+    if (compressed_checkpoint) {
+        if (const auto cached = compressed_linear_cache.find(synthetic);
+            cached != compressed_linear_cache.end()) return cached->second;
+        if (parts.empty()) throw std::invalid_argument("compressed CPU concat has no parts");
+        CpuLinearWeight result;
+        result.cols = static_cast<uint32_t>(parts.front().second.at(1));
+        for (const auto& [name, expected] : parts) {
+            CpuLinearWeight part = load_matrix(source, nullptr, nullptr, name, expected);
+            if (part.cols != result.cols) throw std::runtime_error("compressed CPU concat width mismatch");
+            result.rows += part.rows;
+            for (const CpuLinearMatrix& segment : part.segments) result.segments.push_back(segment);
+        }
+        result.validate();
+        auto [it, inserted] = compressed_linear_cache.emplace(synthetic, std::move(result));
+        return it->second;
+    }
     return CpuWeightCodec(source, reader, writer, group_size).concat(synthetic, parts);
 }
 

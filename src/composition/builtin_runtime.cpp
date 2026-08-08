@@ -9,6 +9,8 @@
 #include "celeg/models/lfm2/chat_template.hpp"
 #include "celeg/models/minicpm5/architecture.hpp"
 #include "celeg/models/minicpm5/chat_template.hpp"
+#include "celeg/models/nanbeige/architecture.hpp"
+#include "celeg/models/nanbeige/chat_template.hpp"
 #include "celeg/models/nemotron_h/architecture.hpp"
 #include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/qwen35/architecture.hpp"
@@ -37,6 +39,7 @@ constexpr BuiltinFamilyRegistration kBuiltinFamilies[] = {
     {"granite", &detail::register_granite_architecture, &add_granite_chat_profile},
     {"gemma4", &detail::register_gemma4_architecture, &add_gemma4_chat_profile},
     {"minicpm5", &detail::register_minicpm5_architecture, &add_minicpm5_chat_profile},
+    {"nanbeige42", &detail::register_nanbeige42_architecture, &add_nanbeige42_chat_profile},
     {"smollm3", &detail::register_smollm3_architecture, &add_smollm3_chat_profile},
     {"qwen35", &detail::register_qwen35_architecture, &add_qwen35_chat_profile},
     {"nemotron-h", &detail::register_nemotron_h_architecture, &add_nemotron_h_chat_profile},

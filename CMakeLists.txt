@@ -488,6 +488,10 @@ if(CELEG_BUILD_TESTS)
     add_executable(json_test tests/json_test.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(json_test PRIVATE include)
     add_test(NAME json_test COMMAND json_test)
+    add_executable(packed_int8_test tests/packed_int8_test.cpp
+        src/checkpoint/packed_int8.cpp)
+    target_include_directories(packed_int8_test PRIVATE include tests)
+    add_test(NAME packed_int8_test COMMAND packed_int8_test)
     add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
@@ -504,6 +508,7 @@ if(CELEG_BUILD_TESTS)
         src/models/granite/chat_template.cpp
         src/models/gemma4/chat_template.cpp src/models/gemma4/tool_call_codec.cpp
         src/models/minicpm5/chat_template.cpp src/models/minicpm5/tool_call_codec.cpp
+        src/models/nanbeige/chat_template.cpp src/models/nanbeige/tool_call_codec.cpp
         src/models/smollm3/chat_template.cpp src/models/smollm3/tool_call_codec.cpp
         src/models/qwen35/chat_template.cpp
         src/models/nemotron_h/chat_template.cpp)
