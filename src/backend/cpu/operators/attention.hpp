@@ -22,6 +22,10 @@ void apply_cpu_latent_attention_positions(
     float* query_rope, float* key_rope, int scalar_position,
     const std::array<int32_t, 3>& rope_position);
 
+void apply_cpu_attention_output_transform(const AttentionSpec& layout,
+                                          float* output,
+                                          const float* current_value);
+
 void apply_cpu_query_gate(float* output, const float* gate, size_t width);
 
 void execute_cpu_attention_token(
