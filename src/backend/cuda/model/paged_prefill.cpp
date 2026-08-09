@@ -5,6 +5,7 @@
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -21,6 +22,21 @@ void CudaCompiledModel::prefill_chunk_paged(
     const std::vector<uint32_t>& page_table) {
     if (tokens.empty()) {
         throw std::invalid_argument("prefill_chunk_paged needs at least one token");
+    }
+    const bool needs_semantic_attention_path = std::any_of(
+        resources_.program_.layers.begin(), resources_.program_.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            if (!layer.attention.has_value()) return false;
+            const AttentionSpec& attention = *layer.attention;
+            const RopePositionSpec* rope = attention.rope_position();
+            return !std::holds_alternative<NoAttentionOutputTransformSpec>(
+                       attention.output_transform) ||
+                   (rope && rope->pairing != RopePairingKind::SplitHalf);
+        });
+    if (needs_semantic_attention_path) {
+        throw std::invalid_argument(
+            "direct paged prefill does not implement this attention semantic; "
+            "use packed or tokenwise prefill");
     }
     validate_token_ids(tokens);
     if (paged_kv.mode() != resources_.options_.kv_cache_mode) {
@@ -80,4 +96,3 @@ void CudaCompiledModel::prefill_chunk_paged(
 }
 
 } // namespace celeg
-
