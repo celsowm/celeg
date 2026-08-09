@@ -17,6 +17,14 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
     } else {
         model.graph.norm_after_layers.clear();
     }
+    const bool orthogonalize_current_value = boolean_value(
+        metadata, descriptor.orthogonalize_current_value, false);
+    const float orthogonalize_minimum_norm_squared =
+        descriptor.orthogonalize_current_value_minimum_norm_squared.has_value()
+            ? static_cast<float>(number_value(
+                metadata, *descriptor.orthogonalize_current_value_minimum_norm_squared))
+            : 1.0e-6f;
+
     model.graph.layers.clear();
     model.graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
     for (int layer_index = 0; layer_index < topology.num_hidden_layers; ++layer_index) {
@@ -30,7 +38,12 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
             layer.post_feed_forward_norm.epsilon = epsilon;
         }
         if (topology.mixer_kinds[static_cast<size_t>(layer_index)] == MixerKind::Attention) {
-            layer.mixer = topology.attention_layout(layer_index);
+            AttentionSpec attention = topology.attention_layout(layer_index);
+            if (orthogonalize_current_value) {
+                attention.output_transform = OrthogonalizeCurrentValueSpec{
+                    orthogonalize_minimum_norm_squared};
+            }
+            layer.mixer = std::move(attention);
         } else if (topology.mixer_kinds[static_cast<size_t>(layer_index)] ==
                    MixerKind::ShortConvolution) {
             layer.mixer = ShortConvolutionSpec{topology.conv_cache, topology.conv_dim, false};
