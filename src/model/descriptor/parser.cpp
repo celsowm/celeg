@@ -126,6 +126,10 @@ Descriptor parse_descriptor(const Json& value) {
         const Json& attention = value.at("attention");
         result.query_key_norm = optional_bool(attention, "query_key_norm");
         result.query_gate = optional_bool(attention, "query_gate");
+        result.orthogonalize_current_value = optional_field(
+            attention, "orthogonalize_current_value");
+        result.orthogonalize_current_value_minimum_norm_squared = optional_field(
+            attention, "orthogonalize_current_value_minimum_norm_squared");
         if (attention.contains("sources")) {
             const Json& sources = attention.at("sources");
             result.attention_key_value_source = optional_string(
