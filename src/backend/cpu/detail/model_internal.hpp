@@ -443,4 +443,9 @@ struct CpuExecutionContext {
     CpuCompiledModel::CpuSessionState& session;
 };
 
+void validate_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions);
+void execute_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions,
+                              std::span<const int32_t> tokens,
+                              std::span<const uint8_t> compute_logits);
+
 } // namespace celeg

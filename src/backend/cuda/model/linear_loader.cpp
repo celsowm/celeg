@@ -21,60 +21,6 @@
 
 namespace celeg {
 
-namespace {
-
-// llama.cpp's GGUF conversion stores Llama-family Q/K rows in the RoPE layout
-// used by its attention kernel. Native SafeTensors keep the ordinary HF row
-// order. Models using 128-dimensional heads require undoing the row permutation while
-// the GGUF tensor is still at the loader boundary.
-void undo_rope_permutation(std::vector<__nv_bfloat16>& values,
-                                   int rows, int cols) {
-    constexpr int head_dim = 128;
-    if (rows <= 0 || cols <= 0 || rows % head_dim != 0 ||
-        values.size() != static_cast<size_t>(rows) * cols) {
-        throw std::runtime_error("invalid GGUF Q/K shape for RoPE permutation");
-    }
-    std::vector<__nv_bfloat16> reordered(values.size());
-    const int heads = rows / head_dim;
-    for (int head = 0; head < heads; ++head) {
-        for (int output = 0; output < head_dim; ++output) {
-            const int source = (output % (head_dim / 2)) * 2 +
-                               output / (head_dim / 2);
-            std::copy_n(values.data() +
-                            static_cast<size_t>(head * head_dim + source) * cols,
-                        cols,
-                        reordered.data() +
-                            static_cast<size_t>(head * head_dim + output) * cols);
-        }
-    }
-    values.swap(reordered);
-}
-
-void undo_rope_permutation_raw(std::vector<uint8_t>& blocks,
-                                       int rows, size_t row_bytes) {
-    constexpr int head_dim = 128;
-    if (rows <= 0 || rows % head_dim != 0 ||
-        blocks.size() != static_cast<size_t>(rows) * row_bytes) {
-        throw std::runtime_error("invalid GGUF Q/K block shape for RoPE permutation");
-    }
-    std::vector<uint8_t> reordered(blocks.size());
-    const int heads = rows / head_dim;
-    for (int head = 0; head < heads; ++head) {
-        for (int output = 0; output < head_dim; ++output) {
-            const int source = (output % (head_dim / 2)) * 2 +
-                               output / (head_dim / 2);
-            std::copy_n(blocks.data() +
-                            static_cast<size_t>(head * head_dim + source) * row_bytes,
-                        row_bytes,
-                        reordered.data() +
-                            static_cast<size_t>(head * head_dim + output) * row_bytes);
-        }
-    }
-    blocks.swap(reordered);
-}
-
-} // namespace
-
 const LinearWeight* WeightLoader::load_linear_weight(
     const IWeightRepository& repo,
     const std::string& name,
@@ -195,7 +141,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                 reinterpret_cast<const uint8_t*>(tensor.data);
             if (needs_rope_permutation) {
                 host_blocks.assign(source_blocks, source_blocks + tensor.bytes);
-                undo_rope_permutation_raw(host_blocks, rows, row_bytes);
+                cuda_loader_detail::undo_rope_permutation_raw(host_blocks, rows, row_bytes);
                 source_blocks = host_blocks.data();
             }
             DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
@@ -230,7 +176,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         std::vector<__nv_bfloat16> transformed_host;
         if (needs_rope_permutation) {
             dequantize_gguf_to_bf16(tensor, transformed_host);
-            undo_rope_permutation(transformed_host, rows, cols);
+            cuda_loader_detail::undo_rope_permutation(transformed_host, rows, cols);
             CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), transformed_host.data(),
                                 transformed_host.size() * sizeof(__nv_bfloat16),
                                 cudaMemcpyHostToDevice));

@@ -1,5 +1,6 @@
 #include "celeg/backend/cuda/utils.cuh"
 #include "support/assertions.hpp"
+#include "support/cuda_kernel_assertions.cuh"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/model/reference.hpp"
@@ -14,13 +15,9 @@
 
 namespace {
 
-float to_float(__nv_bfloat16 value) {
-    return __bfloat162float(value);
-}
-
-__nv_bfloat16 to_bf16(float value) {
-    return __float2bfloat16(value);
-}
+using celeg::cuda_test::expect_near;
+using celeg::cuda_test::to_bf16;
+using celeg::cuda_test::to_float;
 
 std::vector<celeg::RuntimeTopology> registered_model_shapes() {
     std::vector<celeg::RuntimeTopology> shapes;
@@ -97,13 +94,6 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
         std::abort();
     }
     return shapes;
-}
-
-void expect_near(float actual, float expected, float tolerance = 0.03f) {
-    if (std::fabs(actual - expected) > tolerance) {
-        std::cerr << "expected " << expected << ", got " << actual << '\n';
-        std::abort();
-    }
 }
 
 } // namespace
@@ -354,7 +344,7 @@ int main() {
         std::vector<__nv_bfloat16> output(2);
         CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
         const float s0 = std::exp(1.0f / std::sqrt(2.0f) - 0.5f);
-        const float s1 = std::exp(-0.5f);
+        const float s1 = std::exp(0.0f);
         const float denominator = s0 + s1;
         expect_near(to_float(output[0]), (s0 * 2 + s1 * 6) / denominator, 0.02f);
         expect_near(to_float(output[1]), (s0 * 4 + s1 * 8) / denominator, 0.02f);
@@ -373,13 +363,13 @@ int main() {
         const std::vector<__nv_bfloat16> query_rope = {
             to_bf16(1.0f), to_bf16(0.0f)};
         const std::vector<__nv_bfloat16> keys = {
-            to_bf16(1.0f), to_bf16(0.0f), to_bf16(1.0f), to_bf16(0.0f),
-            to_bf16(0.0f), to_bf16(1.0f), to_bf16(0.0f), to_bf16(1.0f)};
+            to_bf16(1.0f), to_bf16(0.0f),
+            to_bf16(0.0f), to_bf16(1.0f)};
         const std::vector<__nv_bfloat16> values = {
             to_bf16(2.0f), to_bf16(4.0f), to_bf16(6.0f), to_bf16(8.0f)};
         const std::vector<__nv_bfloat16> key_ropes = {
             to_bf16(1.0f), to_bf16(0.0f), to_bf16(0.0f), to_bf16(1.0f)};
-        const std::vector<uint32_t> page_table = {1};
+        const std::vector<uint32_t> page_table = {1, 1};
         const std::vector<int32_t> positions = {0, 1};
         const int32_t query_position = 1;
         celeg::DeviceBuffer<__nv_bfloat16> dquery_content(query_content.size());

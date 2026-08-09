@@ -12,7 +12,8 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/operators/moe.cpp
     src/backend/cpu/operators/recurrent.cpp
     src/backend/cpu/sampler.cpp
-    src/backend/cpu/packed.cpp
+    src/backend/cpu/packed_execution.cpp
+    src/backend/cpu/packed_api.cpp
     src/backend/cpu/concurrent.cpp
     src/backend/cpu/concurrent_metrics.cpp
     src/backend/cpu/kernels/quantized_dot.cpp
@@ -29,6 +30,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/kernels/quantization.cpp
     src/backend/cpu/memory/expert_backing.cpp
     src/backend/cpu/memory/expert_cache.cpp
+    src/backend/cpu/memory/external_attention_memory.cpp
     src/backend/cpu/memory/attention_policy.cpp
     src/backend/cpu/memory/paged_kv.cpp
     src/backend/cpu/memory/prefix_cache.cpp
