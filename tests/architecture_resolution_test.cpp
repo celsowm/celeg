@@ -155,12 +155,35 @@ celeg::CheckpointMetadata nemotron_h_metadata() {
     return metadata;
 }
 
+celeg::CheckpointMetadata gptx25_metadata() {
+    celeg::CheckpointMetadata metadata;
+    metadata.repository_hint = "AxiomicLabs/GPT-X2.5-135M";
+    metadata.values["model_type"] = std::string("gptx2");
+    metadata.values["hidden_size"] = int64_t(576);
+    metadata.values["intermediate_size"] = int64_t(1728);
+    metadata.values["num_hidden_layers"] = int64_t(30);
+    metadata.values["num_attention_heads"] = int64_t(9);
+    metadata.values["num_key_value_heads"] = int64_t(3);
+    metadata.values["head_dim"] = int64_t(64);
+    metadata.values["vocab_size"] = int64_t(32770);
+    metadata.values["max_position_embeddings"] = int64_t(8192);
+    metadata.values["bos_token_id"] = int64_t(0);
+    metadata.values["eos_token_id"] = int64_t(0);
+    metadata.values["pad_token_id"] = int64_t(1);
+    metadata.values["rms_norm_eps"] = 1.0e-6;
+    metadata.values["rope_theta"] = 100000.0;
+    metadata.values["qk_norm"] = false;
+    metadata.values["xsa_projection"] = true;
+    metadata.values["tie_word_embeddings"] = true;
+    return metadata;
+}
+
 } // namespace
 
 int main() {
     const auto runtime = celeg::create_builtin_runtime_context();
     const auto& catalog = runtime->architectures();
-    CELEG_TEST_CHECK(catalog.ids().size() == 8);
+    CELEG_TEST_CHECK(catalog.ids().size() == 9);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog.select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -174,6 +197,31 @@ int main() {
     CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
     CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(!model.graph.has_moe());
+
+    const auto gptx_metadata = gptx25_metadata();
+    const auto& gptx_architecture = catalog.select(gptx_metadata);
+    CELEG_TEST_CHECK(gptx_architecture.id() == "gptx2");
+    celeg::CheckpointView gptx_checkpoint;
+    gptx_checkpoint.metadata = gptx_metadata;
+    const auto gptx = gptx_architecture.resolve(gptx_checkpoint);
+    CELEG_TEST_CHECK(gptx.topology.hidden == 576);
+    CELEG_TEST_CHECK(gptx.topology.intermediate == 1728);
+    CELEG_TEST_CHECK(gptx.graph.layers.size() == 30);
+    CELEG_TEST_CHECK(gptx.capabilities.tied_embeddings);
+    CELEG_TEST_CHECK(gptx.topology.numerical_policy.attention_multiplier == 0.125f);
+    const auto& gptx_attention = std::get<celeg::AttentionSpec>(
+        gptx.graph.layers.front().mixer);
+    CELEG_TEST_CHECK(gptx_attention.query_heads == 9);
+    CELEG_TEST_CHECK(gptx_attention.key_value_heads == 3);
+    CELEG_TEST_CHECK(gptx_attention.head_dim == 64);
+    CELEG_TEST_CHECK(!gptx_attention.query_key_norm);
+    CELEG_TEST_CHECK(gptx_attention.query_scale == 1.0f);
+    CELEG_TEST_CHECK(gptx_attention.rope_position()->pairing ==
+                     celeg::RopePairingKind::AdjacentPairs);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(
+        gptx_attention.output_transform));
+    CELEG_TEST_CHECK(std::get<celeg::OrthogonalizeCurrentValueSpec>(
+        gptx_attention.output_transform).minimum_norm_squared == 1.0e-6f);
 
     const auto qwen_metadata = qwen35_metadata();
     const auto& qwen_architecture = catalog.select(qwen_metadata);
