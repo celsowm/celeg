@@ -1,13 +1,12 @@
 #include "celeg/backend/cuda/kernels/rope_pairing.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 
-#include <algorithm>
 #include <stdexcept>
 
 namespace celeg {
 namespace {
 
-__device__ __forceinline__ float adjacent_scaled_rope_frequency(
+__device__ __forceinline__ float scaled_rope_frequency_for_pairing(
     float theta, int pair, int rotary_dimension, int position,
     CudaRopeScaling scaling) {
     float base = theta;
@@ -63,7 +62,7 @@ __device__ __forceinline__ float warp_sum(float value) {
     return value;
 }
 
-__global__ void adjacent_qk_norm_rope_kernel(
+__global__ void paired_qk_norm_rope_kernel(
     __nv_bfloat16* data,
     const __nv_bfloat16* norm_weight,
     int rows,
@@ -74,6 +73,7 @@ __global__ void adjacent_qk_norm_rope_kernel(
     int rotary_pairs,
     float epsilon,
     bool normalize,
+    bool adjacent_pairs,
     CudaRopeScaling scaling,
     float attention_scale) {
     const int block = static_cast<int>(blockIdx.x);
@@ -117,13 +117,13 @@ __global__ void adjacent_qk_norm_rope_kernel(
     const int position = positions[row];
     for (int pair = static_cast<int>(threadIdx.x);
          pair < rotary_pairs; pair += static_cast<int>(blockDim.x)) {
-        const int first = 2 * pair;
-        const int second = first + 1;
+        const int first = adjacent_pairs ? 2 * pair : pair;
+        const int second = adjacent_pairs ? first + 1 : rotary_pairs + pair;
         const float norm_first = normalize ? __bfloat162float(norm_weight[first]) : 1.0f;
         const float norm_second = normalize ? __bfloat162float(norm_weight[second]) : 1.0f;
         const float a = __bfloat162float(vector[first]) * inverse_norm * norm_first;
         const float b = __bfloat162float(vector[second]) * inverse_norm * norm_second;
-        const float frequency = adjacent_scaled_rope_frequency(
+        const float frequency = scaled_rope_frequency_for_pairing(
             theta, pair, head_dim, position, scaling);
         const float angle = static_cast<float>(position) * frequency;
         const float cosine = cosf(angle);
@@ -158,7 +158,7 @@ int rope_threads(int head_dim) {
 
 } // namespace
 
-void launch_adjacent_qk_norm_rope_positions(
+void launch_qk_norm_rope_positions(
     __nv_bfloat16* query,
     __nv_bfloat16* key,
     const __nv_bfloat16* query_norm,
@@ -172,32 +172,34 @@ void launch_adjacent_qk_norm_rope_positions(
     float rotary_fraction,
     float epsilon,
     bool normalize,
+    RopePairingKind pairing,
     CudaRopeScaling scaling,
     cudaStream_t stream) {
     if (!query || !positions || rows <= 0 || query_heads <= 0 ||
         key_value_heads <= 0 || head_dim <= 0 || (head_dim % 2) != 0 ||
         !(rope_theta > 0.0f) || !(rotary_fraction > 0.0f) ||
         rotary_fraction > 1.0f || (normalize && !query_norm)) {
-        throw std::invalid_argument("invalid adjacent-pair RoPE arguments");
+        throw std::invalid_argument("invalid position-vector RoPE arguments");
     }
     if (key && normalize && !key_norm) {
-        throw std::invalid_argument("adjacent-pair RoPE key norm is missing");
+        throw std::invalid_argument("position-vector RoPE key norm is missing");
     }
     const int rotary_dimension = static_cast<int>(
         static_cast<float>(head_dim) * rotary_fraction);
     if (rotary_dimension <= 0 || (rotary_dimension % 2) != 0) {
-        throw std::invalid_argument("adjacent-pair RoPE rotary dimension must be even");
+        throw std::invalid_argument("position-vector RoPE rotary dimension must be even");
     }
     const int pairs = rotary_dimension / 2;
     const int threads = rope_threads(head_dim);
-    adjacent_qk_norm_rope_kernel<<<rows * query_heads, threads, 0, stream>>>(
+    const bool adjacent_pairs = pairing == RopePairingKind::AdjacentPairs;
+    paired_qk_norm_rope_kernel<<<rows * query_heads, threads, 0, stream>>>(
         query, query_norm, rows, query_heads, head_dim, positions, rope_theta,
-        pairs, epsilon, normalize, scaling,
+        pairs, epsilon, normalize, adjacent_pairs, scaling,
         scaling.kind == 3 ? scaling.attention_factor : 1.0f);
     if (key) {
-        adjacent_qk_norm_rope_kernel<<<rows * key_value_heads, threads, 0, stream>>>(
+        paired_qk_norm_rope_kernel<<<rows * key_value_heads, threads, 0, stream>>>(
             key, key_norm, rows, key_value_heads, head_dim, positions, rope_theta,
-            pairs, epsilon, normalize, scaling, 1.0f);
+            pairs, epsilon, normalize, adjacent_pairs, scaling, 1.0f);
     }
     CELEG_CUDA(cudaGetLastError());
 }
