@@ -50,8 +50,21 @@ bool CudaSchedulerDriver::run_prefill_work() {
         std::lock_guard<std::mutex> lock(mutex_);
         return !registry_.at(item.id).options.prompt_embedding.empty();
     });
-    if (!has_embedded && packed_executor_ && engine_options_.ragged_packed_prefill &&
-        work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)) {
+    const bool requires_attention_transform = !has_embedded && packed_executor_ &&
+        std::any_of(work.begin(), work.end(), [](const Work& item) {
+            const PackedSessionContext context = packed_session_context(*item.lane->model);
+            return std::any_of(context.program().layers.begin(), context.program().layers.end(),
+                [](const CompiledLayerProgram& layer) {
+                    return layer.attention.has_value() &&
+                        !std::holds_alternative<NoAttentionOutputTransformSpec>(
+                            layer.attention->output_transform);
+                });
+        });
+    const bool use_packed_prefill = !has_embedded && packed_executor_ &&
+        (requires_attention_transform ||
+         (engine_options_.ragged_packed_prefill &&
+          work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)));
+    if (use_packed_prefill) {
         std::vector<Work> active;
         std::vector<PackedSessionContext> models;
         std::vector<std::vector<uint32_t>> page_tables;
