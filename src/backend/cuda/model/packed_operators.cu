@@ -3,6 +3,7 @@
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/kernels/gated_delta.hpp"
 #include "celeg/backend/cuda/kernels/attention_output.hpp"
+#include "celeg/backend/cuda/kernels/rope_pairing.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 
@@ -70,12 +71,13 @@ void project_attention_qkv(PackedOperatorContext& context,
                        layout.key_value_width(), context.shape.hidden);
     }
     if (const auto* rope = layout.rope_position()) {
-        launch_dynamic_qk_norm_rope_device(
+        launch_qk_norm_rope_positions(
             w.q.data(), attention.key ? w.k.data() : nullptr, attention.q_norm,
-            attention.k_norm, layout.query_heads, layout.key_value_heads,
+            attention.k_norm, rows, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
-            static_cast<float>(rope->rotary_fraction), context.shape.numerical_policy.norm_eps,
-            layout.query_key_norm, lower_cuda_rope_scaling(*rope), w.stream.get());
+            static_cast<float>(rope->rotary_fraction),
+            context.shape.numerical_policy.norm_eps, layout.query_key_norm,
+            rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
                  layout.query_scale, w.stream.get());
