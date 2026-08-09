@@ -2,6 +2,7 @@
 #include "celeg/backend/cuda/phase_profile.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/kernels/attention_output.hpp"
+#include "celeg/backend/cuda/kernels/rope_pairing.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
 
@@ -61,6 +62,10 @@ void CudaCompiledModel::enqueue_decode_attention(
                 if (const auto* rope = layout.rope_position();
                     rope && attention->latent_key_rope && latent.decoupled_rope &&
                     latent.rope_head_dim != 0) {
+                    if (rope->pairing != RopePairingKind::SplitHalf) {
+                        throw std::invalid_argument(
+                            "CUDA latent attention requires split-half RoPE pairing");
+                    }
                     launch_dynamic_qk_norm_rope_device(
                         workspace_.latent_query_rope_.data(),
                         attention->latent_key ? workspace_.latent_key_rope_.data() : nullptr,
@@ -130,12 +135,23 @@ void CudaCompiledModel::enqueue_decode_attention(
             decode_phase_profile().end(DecodePhase::Projection, stream_.get());
             decode_phase_profile().begin(stream_.get());
             if (const auto* rope = layout.rope_position()) {
-                launch_dynamic_qk_norm_rope_device(
-                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                    layout.query_heads, layout.key_value_heads, layout.head_dim,
-                    position_device_.data(), static_cast<float>(rope->theta),
-                    static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
-                    layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                if (rope->pairing == RopePairingKind::AdjacentPairs) {
+                    launch_adjacent_qk_norm_rope_positions(
+                        q, attention->key ? k : nullptr,
+                        attention->q_norm, attention->k_norm, 1,
+                        layout.query_heads, layout.key_value_heads, layout.head_dim,
+                        position_device_.data(), static_cast<float>(rope->theta),
+                        static_cast<float>(rope->rotary_fraction),
+                        resources_.shape_.numerical_policy.norm_eps,
+                        layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                } else {
+                    launch_dynamic_qk_norm_rope_device(
+                        q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
+                        layout.query_heads, layout.key_value_heads, layout.head_dim,
+                        position_device_.data(), static_cast<float>(rope->theta),
+                        static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
+                        layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                }
             }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
@@ -239,4 +255,3 @@ void CudaCompiledModel::enqueue_decode_attention(
 }
 
 } // namespace celeg
-
