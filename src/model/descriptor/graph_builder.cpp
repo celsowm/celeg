@@ -24,6 +24,10 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
             ? static_cast<float>(number_value(
                 metadata, *descriptor.orthogonalize_current_value_minimum_norm_squared))
             : 1.0e-6f;
+    const auto query_scale_field = descriptor.numbers.find("query_scale");
+    const bool has_explicit_query_scale = query_scale_field != descriptor.numbers.end();
+    const float explicit_query_scale = has_explicit_query_scale
+        ? static_cast<float>(number_value(metadata, query_scale_field->second)) : 1.0f;
 
     model.graph.layers.clear();
     model.graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
@@ -39,6 +43,9 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
         }
         if (topology.mixer_kinds[static_cast<size_t>(layer_index)] == MixerKind::Attention) {
             AttentionSpec attention = topology.attention_layout(layer_index);
+            if (has_explicit_query_scale) {
+                attention.query_scale = explicit_query_scale;
+            }
             if (orthogonalize_current_value) {
                 attention.output_transform = OrthogonalizeCurrentValueSpec{
                     orthogonalize_minimum_norm_squared};
