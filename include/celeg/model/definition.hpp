@@ -48,12 +48,18 @@ struct RopeScalingSpec {
     void validate(int rotary_dimension) const;
 };
 
+enum class RopePairingKind : uint8_t {
+    SplitHalf,
+    AdjacentPairs,
+};
+
 struct NoPositionEncodingSpec {};
 
 struct RopePositionSpec {
     double theta = 0.0;
     double rotary_fraction = 1.0;
     RopeScalingSpec scaling;
+    RopePairingKind pairing = RopePairingKind::SplitHalf;
 
     void validate(int head_dimension) const;
 };
