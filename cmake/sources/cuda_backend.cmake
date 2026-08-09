@@ -6,6 +6,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/kernels/mamba2.cu
     src/backend/cuda/kernels/gated_delta.cu
     src/backend/cuda/kernels/attention.cu
+    src/backend/cuda/kernels/attention_output.cu
     src/backend/cuda/kernels/sampling.cu
     src/backend/cuda/kernels/packed.cu
     src/backend/cuda/kernels/gguf.cu
