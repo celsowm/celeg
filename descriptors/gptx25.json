@@ -1,0 +1,67 @@
+{
+  "architectures": [
+    {
+      "id": "gptx2",
+      "specificity": 300,
+      "probe": [
+        {
+          "all": [
+            {"key": "architecture_type", "equals": "gptx2"}
+          ]
+        }
+      ],
+      "dimensions": {
+        "hidden": {"json": "hidden_size"},
+        "intermediate": {"json": "intermediate_size"},
+        "layers": {"json": "num_hidden_layers"},
+        "query_heads": {"json": "num_attention_heads"},
+        "kv_heads": {"json": "num_key_value_heads"},
+        "head_dim": {"json": "head_dim", "default": "hidden_div_query_heads"},
+        "vocab": {"json": "vocab_size"},
+        "context": {"json": "max_position_embeddings"}
+      },
+      "tokens": {
+        "bos": {"json": "bos_token_id", "default": 0},
+        "eos": {"json": "eos_token_id", "default": 0},
+        "pad": {"json": "pad_token_id", "default": 1}
+      },
+      "numbers": {
+        "norm_eps": {"json": "rms_norm_eps", "default": 0.000001},
+        "rope_theta": {"json": "rope_theta", "default": 100000.0},
+        "embedding_multiplier": {"default": 1.0},
+        "attention_multiplier": {"default": 0.125},
+        "query_scale": {"default": 1.0},
+        "residual_multiplier": {"default": 1.0},
+        "logits_divisor": {"default": 1.0}
+      },
+      "attention": {
+        "query_key_norm": false,
+        "orthogonalize_current_value": {"json": "xsa_projection", "default": 1},
+        "orthogonalize_current_value_minimum_norm_squared": {"default": 0.000001}
+      },
+      "position": {
+        "kind": "rope",
+        "rotary_fraction": {"default": 1.0}
+      },
+      "graph": {
+        "feed_forward_activation": "swiglu"
+      },
+      "bindings": {
+        "TokenEmbedding": ["transformer.wte.weight"],
+        "LanguageModelHead": ["lm_head.weight", "transformer.wte.weight"],
+        "FinalNorm": ["transformer.ln_f.weight"],
+        "AttentionInputNorm": ["transformer.h.{physical_layer}.ln_1.weight"],
+        "AttentionQuery": ["transformer.h.{physical_layer}.attn.q_proj.weight"],
+        "AttentionKey": ["transformer.h.{physical_layer}.attn.k_proj.weight"],
+        "AttentionValue": ["transformer.h.{physical_layer}.attn.v_proj.weight"],
+        "AttentionOutput": ["transformer.h.{physical_layer}.attn.o_proj.weight"],
+        "FfnInputNorm": ["transformer.h.{physical_layer}.ln_2.weight"],
+        "FfnGate": ["transformer.h.{physical_layer}.mlp.w_gate.weight"],
+        "FfnUp": ["transformer.h.{physical_layer}.mlp.w_up.weight"],
+        "FfnDown": ["transformer.h.{physical_layer}.mlp.w_down.weight"]
+      },
+      "tied_embeddings": {"json": "tie_word_embeddings", "default": 1},
+      "chat_profile": ""
+    }
+  ]
+}
