@@ -2,6 +2,7 @@
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/kernels/gated_delta.hpp"
+#include "celeg/backend/cuda/kernels/attention_output.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 
@@ -164,7 +165,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             w.paged_kv->layer_vector_offset(slot), layout.query_heads,
             owner_layout.key_value_heads, owner_layout.head_dim,
             reference.options().attention_chunk_tokens, segmented_chunks,
-                layout.sliding_window_size(), w.segmented_partial_max.data(),
+            layout.sliding_window_size(), w.segmented_partial_max.data(),
             w.segmented_partial_denom.data(), w.segmented_partial_accum.data(),
             w.stream.get());
     } else {
@@ -174,7 +175,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
             w.paged_kv->layer_vector_offset(slot), layout.query_heads,
             owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window_size(), reference.options().fast_attention, w.stream.get());
+            layout.sliding_window_size(), reference.options().fast_attention, w.stream.get());
     }
 }
 
@@ -310,7 +311,15 @@ void PackedAttentionExecutor::run(
     } else {
         run_local_attention_cache(context, reference, rows, layer_index);
     }
-    const int query_width = attention.layout.query_width();
+    const AttentionSpec& layout = attention.layout;
+    if (const auto* transform = std::get_if<OrthogonalizeCurrentValueSpec>(
+            &layout.output_transform)) {
+        launch_orthogonalize_current_value(
+            w.op_output.data(), w.v.data(), rows, layout.query_heads,
+            layout.key_value_heads, layout.head_dim,
+            transform->minimum_norm_squared, w.stream.get());
+    }
+    const int query_width = layout.query_width();
     context.linear(w.op_output.data(), *attention.out, w.hidden.data(), rows,
                    context.shape.hidden, query_width,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
