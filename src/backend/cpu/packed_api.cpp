@@ -9,20 +9,29 @@
 
 namespace celeg {
 
+namespace {
+
+bool requires_sequential_execution(const CompiledModelProgram& program) {
+    return std::any_of(program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return layer.chunk_capability != CompiledChunkCapability::Native ||
+                (layer.attention.has_value() &&
+                 !std::holds_alternative<NoAttentionOutputTransformSpec>(
+                     layer.attention->output_transform));
+        });
+}
+
+} // namespace
+
 void CpuCompiledModel::forward_batch(std::span<CpuCompiledModel* const> sessions,
                                      std::span<const int32_t> tokens,
                                      std::span<const uint8_t> compute_logits) {
-    const bool has_sequential_only_layer = !sessions.empty() && std::any_of(
-        sessions.front()->shared->program.layers.begin(),
-        sessions.front()->shared->program.layers.end(),
-        [](const CompiledLayerProgram& layer) {
-            return layer.mixer == CompiledMixer::Mamba2 ||
-                   layer.mixer == CompiledMixer::MlpOnly;
-        });
+    const bool has_sequential_only_layer = !sessions.empty() &&
+        requires_sequential_execution(sessions.front()->shared->program);
     if (has_sequential_only_layer) {
         if (tokens.size() != sessions.size()) {
             throw std::invalid_argument(
-                "sequential-only mixer batch requires one token per session");
+                "sequential-only model batch requires one token per session");
         }
         for (size_t row = 0; row < sessions.size(); ++row) {
             sessions[row]->forward_token(tokens[row],
@@ -89,7 +98,13 @@ CpuBatchMetrics CpuModel::prefill_chunk(
     }
     session.session_.phase = SessionPhase::Prefilling;
     const auto started = std::chrono::steady_clock::now();
-    session.forward_chunk(tokens, final_chunk);
+    if (requires_sequential_execution(session.shared->program)) {
+        for (size_t index = 0; index < tokens.size(); ++index) {
+            session.forward_token(tokens[index], final_chunk && index + 1 == tokens.size());
+        }
+    } else {
+        session.forward_chunk(tokens, final_chunk);
+    }
     const auto ended = std::chrono::steady_clock::now();
     const double elapsed =
         std::chrono::duration<double, std::milli>(ended - started).count();
