@@ -12,6 +12,19 @@
 
 namespace celeg {
 
+namespace {
+
+bool requires_sequential_attention_transform(const CompiledModelProgram& program) {
+    return std::any_of(program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return layer.attention.has_value() &&
+                !std::holds_alternative<NoAttentionOutputTransformSpec>(
+                    layer.attention->output_transform);
+        });
+}
+
+} // namespace
+
 const char* cpu_kv_cache_mode_name(CpuKvCacheMode mode) {
     switch (mode) {
         case CpuKvCacheMode::Fp32: return "fp32";
@@ -109,7 +122,10 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
     state_->session_.phase = SessionPhase::Prefilling;
     state_->session_.prefill_profile = {};
     const auto started = std::chrono::steady_clock::now();
-    if (tokens.size() < state_->shared->options.prefill_chunk_threshold) {
+    const bool sequential_transform =
+        requires_sequential_attention_transform(state_->shared->program);
+    if (sequential_transform ||
+        tokens.size() < state_->shared->options.prefill_chunk_threshold) {
         for (size_t i = 0; i < tokens.size(); ++i) {
             state_->session_.seen[static_cast<size_t>(tokens[i])] = 1;
             state_->forward_token(tokens[i], i + 1 == tokens.size(),
