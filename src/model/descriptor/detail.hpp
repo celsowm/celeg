@@ -118,6 +118,8 @@ struct Descriptor {
     bool split_attention_norms = false;
     bool query_key_norm = false;
     bool query_gate = false;
+    std::optional<Field> orthogonalize_current_value;
+    std::optional<Field> orthogonalize_current_value_minimum_norm_squared;
     std::string attention_key_value_source = "current_sequence";
     std::optional<Field> attention_memory_slot;
     std::string attention_state_kind = "ordinary_kv";
