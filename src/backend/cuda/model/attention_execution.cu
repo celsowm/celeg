@@ -1,6 +1,7 @@
 #include "celeg/detail/model/compiled_model.hpp"
 #include "celeg/backend/cuda/phase_profile.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/kernels/attention_output.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
 
@@ -212,6 +213,13 @@ void CudaCompiledModel::enqueue_decode_attention(
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
                 }
+            }
+            if (const auto* transform = std::get_if<OrthogonalizeCurrentValueSpec>(
+                    &layout.output_transform)) {
+                launch_orthogonalize_current_value(
+                    workspace_.op_output_.data(), v, 1, layout.query_heads,
+                    layout.key_value_heads, layout.head_dim,
+                    transform->minimum_norm_squared, stream_.get());
             }
             if (query_gate) {
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
