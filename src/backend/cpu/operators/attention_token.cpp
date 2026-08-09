@@ -88,6 +88,8 @@ void execute_cpu_attention_token(
             }
             model.run_attention(state, layout, q, execution.workspace.op_output.data(),
                           execution.session.position_value + 1, attention.relative_bias);
+            apply_cpu_attention_output_transform(
+                layout, execution.workspace.op_output.data(), v);
             if (layout.query_gate) {
                 apply_cpu_query_gate(execution.workspace.op_output.data(), q + q_width,
                                      static_cast<size_t>(q_width));
