@@ -41,6 +41,7 @@
       },
       "position": {
         "kind": "rope",
+        "pairing": "adjacent_pairs",
         "rotary_fraction": {"default": 1.0}
       },
       "graph": {
