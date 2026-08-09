@@ -5,6 +5,7 @@
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -14,6 +15,18 @@
 #include <vector>
 
 namespace celeg {
+namespace {
+
+bool has_attention_output_transform(const CompiledModelProgram& program) {
+    return std::any_of(program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return layer.attention.has_value() &&
+                !std::holds_alternative<NoAttentionOutputTransformSpec>(
+                    layer.attention->output_transform);
+        });
+}
+
+} // namespace
 
 void CudaCompiledModel::validate_token_ids(
     const std::vector<int32_t>& tokens) const {
@@ -33,6 +46,14 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
     }
     validate_token_ids(tokens);
     if (resources_.mtp_.available()) {
+        prefill_chunk(tokens, true, true);
+        return;
+    }
+    // Output transforms are token-local but sit between attention and its
+    // output projection. Until every bulk-prefill implementation consumes the
+    // same primitive vocabulary, keep exact semantics by using the device
+    // token path that shares enqueue_decode_attention with decode.
+    if (has_attention_output_transform(resources_.program_)) {
         prefill_chunk(tokens, true, true);
         return;
     }
@@ -74,6 +95,10 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens,
     }
     if (embeddings.has_rope_positions && embeddings.rope_positions.size() != tokens.size()) {
         throw std::invalid_argument("CUDA prompt M-RoPE positions must cover every token");
+    }
+    if (has_attention_output_transform(resources_.program_)) {
+        throw std::invalid_argument(
+            "CUDA prompt embeddings are not supported with attention output transforms");
     }
     validate_token_ids(tokens);
     reset();
@@ -133,8 +158,20 @@ void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
                            sampling_.seen_tokens.data(), resources_.shape_.vocab_size,
                            stream_.get());
     const auto started = std::chrono::steady_clock::now();
+    const bool exact_device_path = has_attention_output_transform(resources_.program_);
     for (size_t i = 0; i < tokens.size(); ++i) {
-        forward_token_host(tokens[i], finalize && i + 1 == tokens.size());
+        if (exact_device_path) {
+            session_.active_segmented_attention_ =
+                use_segmented_attention(session_.position_);
+            CELEG_CUDA(cudaMemcpyAsync(
+                sampling_.sampled_device.data(), &tokens[i], sizeof(int32_t),
+                cudaMemcpyHostToDevice, stream_.get()));
+            enqueue_decode_forward();
+            launch_increment_position(position_device_.data(), stream_.get());
+            ++session_.position_;
+        } else {
+            forward_token_host(tokens[i], finalize && i + 1 == tokens.size());
+        }
     }
     CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &session_.position_,
                              sizeof(session_.position_), cudaMemcpyHostToDevice,
