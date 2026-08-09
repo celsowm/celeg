@@ -1,6 +1,30 @@
 #include "detail.hpp"
 
 namespace celeg::descriptor_detail {
+namespace {
+
+RopePairingKind rope_pairing_kind(std::string_view value) {
+    if (value.empty() || value == "split_half") return RopePairingKind::SplitHalf;
+    if (value == "adjacent_pairs") return RopePairingKind::AdjacentPairs;
+    throw std::invalid_argument("descriptor has unsupported RoPE pairing: " +
+                                std::string(value));
+}
+
+void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
+    if (auto* rope = std::get_if<RopePositionSpec>(&position)) {
+        rope->pairing = pairing;
+        return;
+    }
+    if (auto* multi = std::get_if<MultiAxisRopeSpec>(&position)) {
+        if (pairing != RopePairingKind::SplitHalf) {
+            throw std::invalid_argument(
+                "multi-axis RoPE currently supports split-half pairing only");
+        }
+        multi->base.pairing = pairing;
+    }
+}
+
+} // namespace
 
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
                             const CheckpointMetadata& metadata) {
@@ -28,6 +52,7 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
     const bool has_explicit_query_scale = query_scale_field != descriptor.numbers.end();
     const float explicit_query_scale = has_explicit_query_scale
         ? static_cast<float>(number_value(metadata, query_scale_field->second)) : 1.0f;
+    const RopePairingKind rope_pairing = rope_pairing_kind(descriptor.rope_pairing);
 
     model.graph.layers.clear();
     model.graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
@@ -43,6 +68,7 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
         }
         if (topology.mixer_kinds[static_cast<size_t>(layer_index)] == MixerKind::Attention) {
             AttentionSpec attention = topology.attention_layout(layer_index);
+            apply_rope_pairing(attention.position, rope_pairing);
             if (has_explicit_query_scale) {
                 attention.query_scale = explicit_query_scale;
             }
@@ -88,6 +114,5 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
         model.graph.layers.push_back(std::move(layer));
     }
 }
-
 
 } // namespace celeg::descriptor_detail
