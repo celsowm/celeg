@@ -88,6 +88,17 @@ struct RelativePositionBiasSpec {
 using AttentionBiasSpec = std::variant<NoAttentionBiasSpec, AlibiBiasSpec,
                                        RelativePositionBiasSpec>;
 
+// Output transforms are semantic post-attention operations applied before the
+// output projection. They deliberately do not encode a model-family name.
+struct NoAttentionOutputTransformSpec {};
+
+struct OrthogonalizeCurrentValueSpec {
+    float minimum_norm_squared = 1.0e-6f;
+};
+
+using AttentionOutputTransformSpec = std::variant<
+    NoAttentionOutputTransformSpec, OrthogonalizeCurrentValueSpec>;
+
 // Latent state is a semantic representation.  It is lowered independently
 // from ordinary K/V state so compressed attention does not inherit an
 // equal-width K/V page contract.
@@ -163,6 +174,7 @@ struct AttentionSpec {
     AttentionStateSpec state = OrdinaryKvStateSpec{};
     AttentionStateStorageSpec state_storage;
     AttentionSourceSpec sources;
+    AttentionOutputTransformSpec output_transform = NoAttentionOutputTransformSpec{};
 
     int query_width() const { return query_heads * head_dim; }
     int query_projection_width() const { return query_width() * (query_gate ? 2 : 1); }
