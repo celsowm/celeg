@@ -33,6 +33,7 @@ Descriptor parse_descriptor(const Json& value) {
                 result.position_kind_field = parse_field(position.at("kind"));
             }
         }
+        result.rope_pairing = optional_string(position, "pairing", result.rope_pairing);
         result.disable_rope_json = optional_string(position, "disable_rope_key");
         result.disable_rope_gguf = optional_string(position, "disable_rope_gguf_key");
         if (position.contains("alibi_slopes")) {
