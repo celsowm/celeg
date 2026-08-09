@@ -48,9 +48,6 @@ struct RuntimeTopology {
     // Maps each executable layer to its source checkpoint block.  An empty
     // table means the identity mapping.
     std::vector<int> checkpoint_layer_for_layer;
-    // Apply the model's final RMSNorm after these executable layer indices.
-    // The ordinary final norm remains applied after the last layer.
-    std::vector<int> norm_after_layers;
     TokenPolicy token_policy;
     NumericalPolicy numerical_policy;
     std::vector<MixerKind> mixer_kinds;

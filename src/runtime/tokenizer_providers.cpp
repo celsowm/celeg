@@ -29,7 +29,7 @@ public:
                std::filesystem::is_regular_file(tokenizer_json_path(model_path));
     }
 
-    std::unique_ptr<BpeTokenizer> create(
+    std::unique_ptr<ITokenizer> create(
         const CheckpointView& checkpoint,
         const std::filesystem::path& model_path) const override {
         if (checkpoint.tokenizer) {

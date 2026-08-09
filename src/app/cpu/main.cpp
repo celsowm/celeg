@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, model);
-        const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
+        const celeg::ITokenizer& tokenizer = *tokenizer_storage;
         std::vector<celeg::ChatMessage> chat_messages;
         if (!args.system.empty()) {
             chat_messages.push_back({celeg::ChatRole::System, args.system});

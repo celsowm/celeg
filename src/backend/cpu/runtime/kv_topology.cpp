@@ -22,31 +22,36 @@ CpuKvTopology build_cpu_kv_topology(const RuntimeTopology& shape,
     result.layer_to_owner.assign(static_cast<size_t>(shape.num_hidden_layers), -1);
 
     int shared_group_count = 0;
-    for (const AttentionSpec& attention : shape.attention_layouts) {
-        if (attention.kv_sharing.shared()) {
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (layer.attention && layer.attention->kv_sharing.shared()) {
             shared_group_count = std::max(shared_group_count,
-                                          attention.kv_sharing.group + 1);
+                                          layer.attention->kv_sharing.group + 1);
         }
     }
     std::vector<int> shared_owner(static_cast<size_t>(shared_group_count), -1);
     std::vector<int> shared_pool(static_cast<size_t>(shared_group_count), -1);
 
     for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
-        if (shape.mixer_kinds[static_cast<size_t>(layer)] != MixerKind::Attention) {
+        if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
+            program.layers[static_cast<size_t>(layer)].mixer != CompiledMixer::Attention ||
+            !program.layers[static_cast<size_t>(layer)].attention) {
             continue;
         }
-        const AttentionSpec& attention = shape.attention_layout(layer);
+        const AttentionSpec& attention =
+            *program.layers[static_cast<size_t>(layer)].attention;
         if (attention.kv_sharing.publishes) {
             shared_owner[static_cast<size_t>(attention.kv_sharing.group)] = layer;
         }
     }
 
     for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
-        if (shape.mixer_kinds[static_cast<size_t>(layer)] != MixerKind::Attention) {
+        if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
+            program.layers[static_cast<size_t>(layer)].mixer != CompiledMixer::Attention ||
+            !program.layers[static_cast<size_t>(layer)].attention) {
             continue;
         }
         const size_t index = static_cast<size_t>(layer);
-        const AttentionSpec& attention = shape.attention_layout(layer);
+        const AttentionSpec& attention = *program.layers[index].attention;
         if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
             !program.layers[index].state_layout.has_value()) {
             throw std::runtime_error("compiled attention layer has no state layout");

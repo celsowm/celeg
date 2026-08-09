@@ -3,7 +3,11 @@
 #include "support/assertions.hpp"
 
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -31,12 +35,41 @@ public:
 
 class ExtensionTokenizerProvider final : public celeg::ITokenizerProvider {
 public:
+    class FakeTokenizer final : public celeg::ITokenizer {
+    public:
+        std::vector<int32_t> encode(std::string_view text, bool add_bos) const override {
+            std::vector<int32_t> result;
+            if (add_bos) result.push_back(bos_id());
+            for (const unsigned char byte : text) result.push_back(byte);
+            return result;
+        }
+        std::string decode(const std::vector<int32_t>& ids, bool skip_special) const override {
+            std::string result;
+            for (const int32_t id : ids) {
+                if (skip_special && id == bos_id()) continue;
+                result.push_back(static_cast<char>(id));
+            }
+            return result;
+        }
+        std::string decode_token(int32_t id, bool skip_special) const override {
+            return skip_special && id == bos_id() ? std::string{} :
+                std::string(1, static_cast<char>(id));
+        }
+        std::optional<int32_t> token_id(std::string_view text) const override {
+            return text.size() == 1 ? std::optional<int32_t>{
+                static_cast<unsigned char>(text.front())} : std::nullopt;
+        }
+        int32_t bos_id() const override { return 1; }
+        int32_t eos_id() const override { return 2; }
+        int32_t pad_id() const override { return 0; }
+    };
+
     std::string_view id() const override { return "test-tokenizer"; }
     bool supports(const celeg::CheckpointView&,
                   const std::filesystem::path&) const override { return false; }
-    std::unique_ptr<celeg::BpeTokenizer> create(
+    std::unique_ptr<celeg::ITokenizer> create(
         const celeg::CheckpointView&, const std::filesystem::path&) const override {
-        throw std::logic_error("test tokenizer provider is not selected");
+        return std::make_unique<FakeTokenizer>();
     }
 };
 
@@ -104,6 +137,9 @@ int main() {
     CELEG_TEST_CHECK(tokenizer_provider.id() == "bpe");
     const auto tokenizer = tokenizer_provider.create(tokenizer_checkpoint, "model.gguf");
     CELEG_TEST_CHECK(tokenizer->encode("hi", false).size() == 1);
+    ExtensionTokenizerProvider extension_tokenizer;
+    const auto fake_tokenizer = extension_tokenizer.create(tokenizer_checkpoint, "model.gguf");
+    CELEG_TEST_CHECK(fake_tokenizer->decode(fake_tokenizer->encode("x")) == "x");
     CELEG_TEST_CHECK(runtime.backends().find("test-backend").id() == "test-backend");
     CELEG_TEST_CHECK(runtime.vision_providers().find("test-vision").id() == "test-vision");
 

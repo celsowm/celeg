@@ -255,7 +255,7 @@ int main() {
     CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[0] == 0);
     CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[21] == 21);
     CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[22] == 0);
-    CELEG_TEST_CHECK(nanbeige.topology.norm_after_layers == std::vector<int>{21});
+    CELEG_TEST_CHECK(nanbeige.graph.norm_after_layers == std::vector<int>{21});
     CELEG_TEST_CHECK(nanbeige.topology.attention_layout(0).rope_position()->theta == 70000000.0);
     CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].physical_layer == 0);
     CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].source_name.value() ==

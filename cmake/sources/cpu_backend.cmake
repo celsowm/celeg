@@ -8,6 +8,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/model_forward_token.cpp
     src/backend/cpu/model_forward_chunk.cpp
     src/backend/cpu/operators/attention.cpp
+    src/backend/cpu/operators/attention_token.cpp
     src/backend/cpu/operators/feed_forward.cpp
     src/backend/cpu/operators/moe.cpp
     src/backend/cpu/operators/recurrent.cpp
@@ -15,6 +16,10 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/packed_execution.cpp
     src/backend/cpu/packed_api.cpp
     src/backend/cpu/concurrent.cpp
+    src/backend/cpu/detail/batch_scheduler.cpp
+    src/backend/cpu/detail/admission_controller.cpp
+    src/backend/cpu/detail/request_lifecycle.cpp
+    src/backend/cpu/detail/metrics_collector.cpp
     src/backend/cpu/concurrent_metrics.cpp
     src/backend/cpu/kernels/quantized_dot.cpp
     src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
@@ -33,9 +38,12 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/memory/external_attention_memory.cpp
     src/backend/cpu/memory/attention_policy.cpp
     src/backend/cpu/memory/paged_kv.cpp
+    src/backend/cpu/attention/paged_prefill.cpp
+    src/backend/cpu/attention/paged_attention.cpp
     src/backend/cpu/memory/prefix_cache.cpp
     src/backend/cpu/runtime/isa.cpp
     src/backend/cpu/runtime/numa.cpp
+    src/backend/cpu/runtime/numa_placement.cpp
     src/backend/cpu/runtime/thread_pool.cpp
     src/backend/cpu/runtime/topology.cpp
     src/backend/cpu/runtime/kv_topology.cpp

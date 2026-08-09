@@ -50,7 +50,7 @@ void forget_after_abort(GenerationDispatcher& dispatcher, RequestId id) {
 void register_chat_completions_route(uWS::App& app,
                                      GenerationDispatcher& dispatcher,
                                      IRequestService& service,
-                                     const celeg::BpeTokenizer& tokenizer,
+                                     const celeg::ITokenizer& tokenizer,
                                      const celeg::IChatTemplate& chat_template,
                                      const celeg::ChatCapabilities& capabilities,
                                      const celeg::IChatToolCallCodec* tool_codec,

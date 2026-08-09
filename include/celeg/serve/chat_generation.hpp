@@ -24,13 +24,13 @@ struct ChatGenerationDelta {
 // incomplete UTF-8 suffix is withheld from the client.
 class ChatGenerationInterpreter {
 public:
-    ChatGenerationInterpreter(const BpeTokenizer& tokenizer,
+    ChatGenerationInterpreter(const ITokenizer& tokenizer,
                               const IChatToolCallCodec* tool_codec);
 
     ChatGenerationDelta consume(std::span<const std::int32_t> tokens, bool finished);
 
 private:
-    const BpeTokenizer& tokenizer_;
+    const ITokenizer& tokenizer_;
     const IChatToolCallCodec* tool_codec_;
     std::string generated_text_;
     std::string emitted_text_;

@@ -69,6 +69,39 @@ PackedEligibility PackedBatchValidator::validate_session(
     return result;
 }
 
+PackedEligibility PackedCompatibilityPolicy::validate_executor(
+    const PackedSessionContext& session) const {
+    PackedEligibility result;
+    if (session.compatibility_key.execution_plan_fingerprint !=
+            execution_plan_fingerprint_ ||
+        session.compatibility_key.device_ordinal != device_ordinal_) {
+        result.reason = "packed session plan does not match executor device policy";
+        return result;
+    }
+    result.accepted = true;
+    return result;
+}
+
+PackedEligibility PackedCompatibilityPolicy::validate_batch(
+    const PackedSessionContext& reference,
+    const std::vector<PackedSessionContext>& sessions) const {
+    PackedEligibility result;
+    for (size_t row = 0; row < sessions.size(); ++row) {
+        for (size_t previous = 0; previous < row; ++previous) {
+            if (sessions[previous].owner == sessions[row].owner) {
+                result.reason = "duplicate session in packed batch";
+                return result;
+            }
+        }
+        if (!(reference.compatibility_key == sessions[row].compatibility_key)) {
+            result.reason = "sessions use incompatible packed execution keys";
+            return result;
+        }
+    }
+    result.accepted = true;
+    return result;
+}
+
 PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     size_t maximum_batch,
     size_t maximum_prefill_tokens,

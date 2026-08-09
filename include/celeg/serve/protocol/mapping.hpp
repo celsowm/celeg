@@ -29,7 +29,7 @@ ErrorResponseDto error_response(std::string message,
 // the message list through the tokenizer's chat template and tokenizes it.
 // Stop token ids are passed through unchanged (callers own the model's token ids).
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
-                                    const celeg::BpeTokenizer& tokenizer,
+                                    const celeg::ITokenizer& tokenizer,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
                                     std::span<const std::int32_t> eos_token_ids,
@@ -47,7 +47,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    std::size_t prompt_token_count,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
-                                                   const celeg::BpeTokenizer& tokenizer,
+                                                   const celeg::ITokenizer& tokenizer,
                                                    const celeg::IChatToolCallCodec* tool_codec);
 
 // Builds one SSE chunk for a batch of newly generated tokens. include_role
@@ -59,7 +59,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              const std::vector<std::int32_t>& new_tokens,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
-                                             const celeg::BpeTokenizer& tokenizer,
+                                             const celeg::ITokenizer& tokenizer,
                                              const celeg::IChatToolCallCodec* tool_codec,
                                              std::string_view accumulated_text = {});
 
@@ -75,7 +75,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
 // if neither (or both) are given. max_model_len is the server's configured
 // context window, echoed back as-is.
 TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
-                                      const celeg::BpeTokenizer& tokenizer,
+                                      const celeg::ITokenizer& tokenizer,
                                       const celeg::IChatTemplate& chat_template,
                                       std::size_t max_model_len);
 

@@ -40,7 +40,7 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     if (!layer_program.execute_feed_forward) {
         common.ffn_norm = common.operator_norm;
         if (layer_program.mixer == CompiledMixer::MlpOnly) {
-            const int intermediate = shape.mlp_only_layouts.at(static_cast<size_t>(layer)).intermediate_size;
+            const int intermediate = layer_program.feed_forward_intermediate;
             common.mlp_up = load_matrix(source, reader, writer,
                 tensor_name(weight_requests, TensorRole::FfnUp, layer),
                 {intermediate, shape.hidden});
@@ -66,8 +66,8 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
             tensor_name(weight_requests, TensorRole::FfnOutputNorm, layer),
             {shape.hidden});
     }
-    const int intermediate = shape.feed_forward_intermediates.empty()
-        ? shape.intermediate : shape.feed_forward_intermediates.at(static_cast<size_t>(layer));
+    const int intermediate = layer_program.feed_forward_intermediate > 0
+        ? layer_program.feed_forward_intermediate : shape.intermediate;
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {tensor_name(weight_requests, TensorRole::FfnGate, layer),
@@ -157,12 +157,13 @@ void CpuCompiledModel::Shared::load_weights() {
             {shape.per_layer_input_size});
     }
 
-    const auto load_operator = [&](int index, MixerKind layer_type)
+    const auto load_operator = [&](int index,
+                                   const CompiledLayerProgram& layer_program)
         -> std::variant<AttentionWeights, ConvolutionWeights, GatedDeltaNetWeights,
                         Mamba2Weights, MlpOnlyWeights> {
-        if (layer_type == MixerKind::Attention) {
+        if (layer_program.mixer == CompiledMixer::Attention) {
             AttentionWeights layer;
-            const AttentionSpec& attention = shape.attention_layout(index);
+            const AttentionSpec& attention = layer_program.attention.value();
             if (attention.uses_latent_state()) {
                 const auto& latent = *attention.latent_state();
                 layer.q = load_matrix(source, reader.get(), writer.get(),
@@ -245,9 +246,9 @@ void CpuCompiledModel::Shared::load_weights() {
             return layer;
         }
 
-        if (layer_type == MixerKind::GatedDeltaNet) {
+        if (layer_program.mixer == CompiledMixer::GatedDeltaNet) {
             GatedDeltaNetWeights layer;
-            layer.spec = shape.gated_delta_net_layouts.at(static_cast<size_t>(index));
+            layer.spec = layer_program.gated_delta_net.value();
             const auto& spec = layer.spec;
             const int key_width = spec.key_heads * spec.key_head_dim;
             const int value_width = spec.value_heads * spec.value_head_dim;
@@ -283,9 +284,9 @@ void CpuCompiledModel::Shared::load_weights() {
             return layer;
         }
 
-        if (layer_type == MixerKind::Mamba2) {
+        if (layer_program.mixer == CompiledMixer::Mamba2) {
             Mamba2Weights layer;
-            const auto& spec = shape.mamba2_layouts.at(static_cast<size_t>(index));
+            const auto& spec = layer_program.mamba2.value();
             const int conv_dim = spec.intermediate_size + 2 * spec.group_count * spec.state_size;
             layer.in = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::Mamba2Input, index),
@@ -309,18 +310,20 @@ void CpuCompiledModel::Shared::load_weights() {
                 {shape.hidden, spec.intermediate_size});
             return layer;
         }
-        if (layer_type == MixerKind::MlpOnly) return MlpOnlyWeights{};
+        if (layer_program.mixer == CompiledMixer::MlpOnly) return MlpOnlyWeights{};
 
         ConvolutionWeights layer;
+        const ShortConvolutionSpec& convolution =
+            layer_program.short_convolution.value();
         layer.in = load_matrix(source, reader.get(), writer.get(),
             layer_name(index, "conv.in_proj.weight"),
             {3 * shape.hidden, shape.hidden});
         const std::vector<float> channel_major =
             load_vector(source, reader.get(), writer.get(),
             layer_name(index, "conv.conv.weight"),
-            {shape.hidden, 1, shape.conv_cache});
+            {shape.hidden, 1, convolution.cache_length});
         layer.weight_tap_major.resize(channel_major.size());
-        for (int tap = 0; tap < shape.conv_cache; ++tap) {
+        for (int tap = 0; tap < convolution.cache_length; ++tap) {
             for (int channel = 0; channel < shape.hidden; ++channel) {
                 layer.weight_tap_major[static_cast<size_t>(tap) * shape.hidden + channel] =
                     channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
@@ -335,11 +338,12 @@ void CpuCompiledModel::Shared::load_weights() {
     if (shape.num_experts > 0) {
         weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
         for (int index = 0; index < shape.num_hidden_layers; ++index) {
-            const MixerKind layer_type = shape.mixer_kinds[static_cast<size_t>(index)];
-            if (!shape.layer_uses_moe(index)) {
+            const CompiledLayerProgram& layer_program = program.layers.at(
+                static_cast<size_t>(index));
+            if (layer_program.feed_forward != CompiledFeedForward::MixtureOfExperts) {
                 CommonWeights common =
                     load_common(source, reader.get(), writer.get(), index);
-                auto layer = load_operator(index, layer_type);
+                auto layer = load_operator(index, layer_program);
                 std::visit([&](auto& value) {
                     value.common = std::move(common);
                     weight_store.layers.emplace_back(std::move(value));
@@ -361,7 +365,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 for (float& value : layer.common.operator_norm) value += 1.0f;
                 for (float& value : layer.common.ffn_norm) value += 1.0f;
             }
-            layer.operator_layer = load_operator(index, layer_type);
+            layer.operator_layer = load_operator(index, layer_program);
             layer.num_experts = shape.num_experts;
             layer.experts_per_token = shape.experts_per_token;
             layer.normalize_topk = shape.normalize_topk;
@@ -460,8 +464,7 @@ void CpuCompiledModel::Shared::load_weights() {
         for (int index = 0; index < shape.num_hidden_layers; ++index) {
             CommonWeights common =
                 load_common(source, reader.get(), writer.get(), index);
-            auto layer = load_operator(
-                index, shape.mixer_kinds[static_cast<size_t>(index)]);
+            auto layer = load_operator(index, program.layers.at(static_cast<size_t>(index)));
             std::visit([&](auto& value) {
                 value.common = std::move(common);
                 weight_store.layers.emplace_back(std::move(value));

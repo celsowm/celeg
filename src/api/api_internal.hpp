@@ -31,7 +31,7 @@ struct celeg_engine {
 };
 
 struct celeg_tokenizer {
-    std::unique_ptr<celeg::BpeTokenizer> value;
+    std::unique_ptr<celeg::ITokenizer> value;
     std::string error;
 };
 

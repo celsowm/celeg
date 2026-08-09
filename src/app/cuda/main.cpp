@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
             *runtime, bootstrap.checkpoint, is_gguf ? gguf_path : model);
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, is_gguf ? gguf_path : model);
-        const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
+        const celeg::ITokenizer& tokenizer = *tokenizer_storage;
         if (tokenizer.bos_id() != topology.token_policy.bos_token_id ||
             !celeg::is_stop_token(topology.token_policy.eos_token_ids, tokenizer.eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +

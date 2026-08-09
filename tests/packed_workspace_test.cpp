@@ -88,14 +88,45 @@ int main() {
 
         celeg::PackedCompatibilityKey compatibility;
         compatibility.execution_plan_fingerprint = 11;
+        compatibility.device_ordinal = 3;
         compatibility.expert_residency_fingerprint = 17;
         const auto same_compatibility = compatibility;
         if (!(compatibility == same_compatibility)) {
             throw std::runtime_error("packed compatibility key is not value comparable");
         }
         compatibility.expert_residency_fingerprint++;
+        compatibility.execution_plan_fingerprint = 99;
         if (compatibility == same_compatibility) {
             throw std::runtime_error("packed compatibility key ignored residency identity");
+        }
+
+        celeg::PackedSessionContext compatible_a;
+        celeg::PackedSessionContext compatible_b;
+        celeg::PackedSessionContext incompatible;
+        compatible_a.owner = reinterpret_cast<void*>(0x10);
+        compatible_b.owner = reinterpret_cast<void*>(0x20);
+        incompatible.owner = reinterpret_cast<void*>(0x30);
+        compatible_a.compatibility_key = same_compatibility;
+        compatible_b.compatibility_key = same_compatibility;
+        incompatible.compatibility_key = compatibility;
+        const celeg::PackedCompatibilityPolicy policy(11, 3);
+        if (!policy.validate_executor(compatible_a).accepted) {
+            throw std::runtime_error("matching packed executor identity was rejected");
+        }
+        if (policy.validate_executor(incompatible).accepted) {
+            throw std::runtime_error("mismatched packed executor identity was accepted");
+        }
+        const std::array<celeg::PackedSessionContext, 2> compatible_batch = {
+            compatible_a, compatible_b};
+        if (!policy.validate_batch(compatible_a, std::vector<celeg::PackedSessionContext>(
+                compatible_batch.begin(), compatible_batch.end())).accepted) {
+            throw std::runtime_error("matching packed batch was rejected");
+        }
+        const std::array<celeg::PackedSessionContext, 2> duplicate_batch = {
+            compatible_a, compatible_a};
+        if (policy.validate_batch(compatible_a, std::vector<celeg::PackedSessionContext>(
+                duplicate_batch.begin(), duplicate_batch.end())).accepted) {
+            throw std::runtime_error("duplicate packed session was accepted");
         }
         std::cout << "packed_workspace_test: ok\n";
         return 0;

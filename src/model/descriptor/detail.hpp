@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/model/descriptor.hpp"
+#include "celeg/checkpoint/formats/json.hpp"
 #include "celeg/model/graph_builder.hpp"
 #include "celeg/model/weight_plan.hpp"
 
@@ -144,6 +145,55 @@ struct Descriptor {
     std::string chat_profile;
 };
 
+const Json& required(const Json& object, std::string_view key);
+TensorRole parse_role(std::string_view name);
+std::vector<BindingPattern> parse_bindings(const Json& object);
+std::vector<ProbeCondition> parse_probe_conditions(const Json& value);
+Field parse_field(const Json& value);
+Descriptor parse_descriptor(const Json& value);
+std::string selected_key(const CheckpointMetadata& metadata, const Field& field);
+std::vector<std::string> selected_keys(const CheckpointMetadata& metadata, const Field& field);
+int integer_value(const CheckpointMetadata& metadata, const Field& field,
+                  int hidden = 0, int query_heads = 0);
+double number_value(const CheckpointMetadata& metadata, const Field& field, int hidden = 0);
+int scaling_integer_value(const CheckpointMetadata& metadata,
+                          const std::optional<Field>& field, int fallback = 0);
+double scaling_number_value(const CheckpointMetadata& metadata,
+                            const std::optional<Field>& field, double fallback);
+std::vector<float> scaling_factor_values(const CheckpointMetadata& metadata,
+                                         const std::optional<Field>& field);
+std::string position_kind_value(const CheckpointMetadata& metadata,
+                                const Descriptor& descriptor);
+RopeScalingKind parse_scaling_kind(std::string_view value);
+StateScalarType parse_state_scalar(std::string_view value);
+StateQuantizationGranularity parse_state_granularity(std::string_view value);
+std::string scaling_kind_value(const CheckpointMetadata& metadata,
+                               const Descriptor& descriptor);
+std::vector<int> integer_values(const CheckpointMetadata& metadata,
+                                const std::string& key);
+std::vector<bool> attention_pattern_values(const CheckpointMetadata& metadata,
+                                           const Descriptor& descriptor);
+std::vector<int> field_integer_values(const CheckpointMetadata& metadata,
+                                      const std::optional<Field>& field);
+std::vector<bool> mixer_is_convolution(const CheckpointMetadata& metadata,
+                                       const Descriptor& descriptor);
+std::vector<std::string> mixer_schedule_values(const CheckpointMetadata& metadata,
+                                               const Descriptor& descriptor);
+bool boolean_value(const CheckpointMetadata& metadata, const std::optional<Field>& field,
+                   bool fallback);
+int token_value(const CheckpointMetadata& metadata, const Field& field,
+                std::string_view gguf_override);
+std::vector<int> eos_values(const CheckpointMetadata& metadata, const Descriptor& descriptor);
+bool probe_condition(const CheckpointMetadata& metadata, const ProbeCondition& condition);
+void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
+                            const CheckpointMetadata& metadata);
+std::unique_ptr<IArchitecture> make_descriptor_architecture(Descriptor descriptor);
+std::optional<Field> optional_field(const Json& object, std::string_view key);
+std::string optional_string(const Json& object, std::string_view key,
+                            std::string fallback = {});
+bool optional_bool(const Json& object, std::string_view key, bool fallback = false);
+AttentionVariant parse_attention_variant(const Json& value);
+ActivationKind parse_activation_kind(std::string_view value);
 std::unique_ptr<ITensorNamingPolicy> create_naming_policy(const Descriptor& descriptor);
 void build_weight_plan(ResolvedModel& model, const Descriptor& descriptor,
                        const ITensorNamingPolicy& naming_policy);

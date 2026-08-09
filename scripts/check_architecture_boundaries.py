@@ -120,6 +120,21 @@ def main() -> int:
             if family_include.search(path.read_text(encoding="utf-8")):
                 errors.append(f"model-family include leaked across neutral boundary: {path}")
 
+    # Tokenizer providers and neutral serving/runtime consumers depend on the
+    # tokenizer contract, not on the built-in BPE implementation.
+    tokenizer_contract_roots = (
+        root / "include/celeg/runtime", root / "src/runtime",
+        root / "include/celeg/serve", root / "src/serve",
+    )
+    for directory in tokenizer_contract_roots:
+        for path in files(directory, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu"}:
+                continue
+            if path.name == "tokenizer_providers.cpp":
+                continue
+            if re.search(r"\bBpeTokenizer\b", path.read_text(encoding="utf-8")):
+                errors.append(f"concrete BPE tokenizer leaked across contract boundary: {path}")
+
     # Once a model is expressible by the descriptor vocabulary, its execution
     # and naming policies must not return as family-owned production files.
     # Keep this check filename/structure based so it applies to future models
@@ -221,6 +236,36 @@ def main() -> int:
         for pattern, description in forbidden_packed:
             if re.search(pattern, packed_text):
                 errors.append(f"{description} remains in {packed_execution}")
+
+    # Paged KV storage owns page lifetime and byte movement; attention kernels
+    # belong to the attention execution unit. Keep the split structural so a
+    # future storage edit cannot quietly reintroduce the execution dependency.
+    paged_storage = root / "src/backend/cpu/memory/paged_kv.cpp"
+    if paged_storage.is_file():
+        storage_text = paged_storage.read_text(encoding="utf-8")
+        forbidden_attention = (
+            "update_online", "cpu_gqa_decode", "cpu_latent_attention_decode",
+            "PartialAttention", "CELEG_CPU_AVX2_TARGET", "cpu_gqa_prefill_paged",
+        )
+        for symbol in forbidden_attention:
+            if symbol in storage_text:
+                errors.append(
+                    f"attention implementation remains in paged KV storage: {paged_storage} ({symbol})")
+
+    # Descriptor/import code resolves semantic data; primitive execution bodies
+    # belong to backend operator/executor translation units.
+    for path in files(root / "src/model", "descriptor*.cpp"):
+        if re.search(r"\b(?:execute_cpu_|execute_cuda_|launch_[A-Za-z0-9_]+\s*\()",
+                     path.read_text(encoding="utf-8")):
+            errors.append(f"primitive execution body leaked into descriptor/import file: {path}")
+
+    # Ordinary CUDA decode is orchestration after the attention and mixer
+    # extraction. Kernel launch policy must not silently grow back here.
+    cuda_decode = root / "src/backend/cuda/model/execution.cu"
+    if cuda_decode.is_file() and re.search(
+            r"\b(?:launch_gqa_decode|launch_latent_attention|launch_store_kv|"
+            r"launch_dynamic_qk_norm_rope)_", cuda_decode.read_text(encoding="utf-8")):
+        errors.append(f"CUDA attention execution body remains in orchestration file: {cuda_decode}")
 
     if errors:
         print("\n".join(errors), file=sys.stderr)

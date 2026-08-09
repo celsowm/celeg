@@ -13,10 +13,22 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/repositories/detail/gguf_tensor_resolver.cpp
     src/checkpoint/formats/detail/gguf_tokenizer_metadata.cpp
     src/checkpoint/downloader.cpp
+    src/checkpoint/hf_http.cpp
     src/checkpoint/bootstrap.cpp
     src/model/definition.cpp
-    src/model/descriptor.cpp
-    src/model/descriptor_weight_plan.cpp
+    src/model/descriptor/registration.cpp
+    src/model/descriptor/parser.cpp
+    src/model/descriptor/field_resolver.cpp
+    src/model/descriptor/probe_matcher.cpp
+    src/model/descriptor/graph_builder.cpp
+    src/model/descriptor/architecture.cpp
+    src/model/descriptor/binding_parser.cpp
+    src/model/descriptor/field_parser.cpp
+    src/model/descriptor/naming_policy.cpp
+    src/model/descriptor/probe.cpp
+    src/model/descriptor/role_codec.cpp
+    src/model/descriptor/weight_requirements.cpp
+    src/model/descriptor/weight_plan.cpp
     src/model/architecture.cpp
     src/model/resolved.cpp
     src/model/program.cpp

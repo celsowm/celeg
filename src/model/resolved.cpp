@@ -16,7 +16,6 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
     }
     const std::size_t layer_count = graph.layers.size();
     topology.num_hidden_layers = static_cast<int>(layer_count);
-    topology.norm_after_layers = graph.norm_after_layers;
     topology.mixer_kinds.resize(layer_count);
     topology.feed_forward_kinds.resize(layer_count);
     topology.feed_forward_intermediates.resize(layer_count);
@@ -235,8 +234,6 @@ std::string RuntimeTopology::fingerprint() const {
     out << "-m2i" << mamba2_intermediate;
     out << "-map";
     for (int layer : checkpoint_layer_for_layer) out << '-' << layer;
-    out << "-norms";
-    for (int layer : norm_after_layers) out << '-' << layer;
     for (const AttentionSpec& attention : attention_layouts) {
         if (const auto* rope = attention.rope_position()) {
             out << "-r" << rope->theta << '-' << rope->rotary_fraction
@@ -339,13 +336,6 @@ void RuntimeTopology::validate() const {
         }
         for (int layer : checkpoint_layer_for_layer) {
             if (layer < 0) throw std::runtime_error("negative checkpoint layer mapping");
-        }
-    }
-    for (size_t index = 0; index < norm_after_layers.size(); ++index) {
-        const int layer = norm_after_layers[index];
-        if (layer < 0 || layer >= num_hidden_layers - 1 ||
-            (index > 0 && norm_after_layers[index - 1] >= layer)) {
-            throw std::runtime_error("invalid intermediate norm boundary");
         }
     }
     token_policy.validate();
@@ -479,9 +469,6 @@ void ResolvedModel::validate() const {
         graph.logits_divisor != topology.numerical_policy.logits_divisor ||
         graph.final_norm.epsilon != topology.numerical_policy.norm_eps) {
         throw std::runtime_error("resolved graph/topology numerical policy mismatch");
-    }
-    if (graph.norm_after_layers != topology.norm_after_layers) {
-        throw std::runtime_error("resolved graph/topology norm boundary mismatch");
     }
     for (size_t layer = 0; layer < graph.layers.size(); ++layer) {
         if (graph.layers[layer].mixer_kind() != topology.mixer_kinds[layer] ||

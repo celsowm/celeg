@@ -25,3 +25,9 @@ new packed operator or metadata field.
 Decode and ragged prefill use separate pipeline entry points and share the
 same compiled model semantics and residency transaction. Batch compatibility
 must be established before device work or host-visible state mutation.
+
+The executor composes a `PackedBatchValidator` for session lifecycle rules and
+an immutable `PackedCompatibilityPolicy` for executor plan/device identity and
+cross-session compatibility. These policies are independently testable;
+operation-specific row, page-table, and token-buffer checks remain in the
+decode/prefill workflow.

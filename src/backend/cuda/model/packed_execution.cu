@@ -7,6 +7,8 @@
 #include "celeg/backend/cuda/packed_metadata_cache.hpp"
 #include "celeg/backend/cuda/packed_operators.hpp"
 #include "celeg/backend/cuda/packed_pipelines.hpp"
+#include "celeg/backend/cuda/packed_batch_planner.hpp"
+#include "celeg/backend/cuda/packed_layer_executor.hpp"
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/moe.hpp"
@@ -34,7 +36,10 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                           paged_kv_value, shape),
           layer_program_(PackedLayerProgram::compile(shape)),
           plan_(std::move(plan_value)),
-          metadata_cache_(maximum_batch) {
+          compatibility_(plan_.fingerprint(), plan_.device().device_ordinal),
+          metadata_cache_(maximum_batch),
+          batch_planner_(*this, metadata_cache_),
+          layer_executor_(*this, layer_program_, plan_, gemm_) {
         // Segmented attention workspace is part of the executor's fixed
         // capacity contract. Allocate it before request execution so the
         // scheduler never grows device storage on the hot path.
@@ -46,25 +51,18 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
 
     PackedLayerProgram layer_program_;
     CudaExecutionPlan plan_;
+    PackedCompatibilityPolicy compatibility_;
     PackedBatchValidator validator_;
     PackedDecodeMetrics metric;
     PackedGemmRuntime gemm_;
     PackedMetadataCache metadata_cache_;
+    PackedAttentionBatchPlanner batch_planner_;
+    PackedLayerExecutor layer_executor_;
     std::unique_ptr<PackedDecodePipeline> decode_pipeline_;
     std::unique_ptr<PackedPrefillPipeline> prefill_pipeline_;
 
     void ensure_gemm_dispatcher(const CudaModelOptions& options) {
         gemm_.ensure(stream.get(), options);
-    }
-
-    static bool options_compatible(const PackedSessionContext& left,
-                                   const PackedSessionContext& right,
-                                   std::string* reason) {
-        if (!(left.compatibility_key == right.compatibility_key)) {
-            if (reason) *reason = "sessions use incompatible packed execution keys";
-            return false;
-        }
-        return true;
     }
 
     PackedEligibility validate_session(const PackedSessionContext& model,
@@ -73,58 +71,22 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             model, operation, PackedExecutorCapabilities{paged_kv != nullptr});
     }
 
-    void linear(const __nv_bfloat16* x,
-                const LinearWeight& weight,
-                __nv_bfloat16* y,
-                int m,
-                int n,
-                int k_width,
-                float beta = 0.0f) {
-        if (weight.rows != n || weight.cols != k_width) {
-            throw std::runtime_error("packed linear shape mismatch");
-        }
-        gemm_.dispatcher().linear(x, weight, y, m, n, k_width, beta, plan_);
-    }
-
-    bool session_layout_changed(
-        const std::vector<PackedSessionContext>& models) const {
-        return metadata_cache_.changed(models);
-    }
-
-    void copy_persistent_metadata(
-        const std::vector<PackedSessionContext>& models) {
-        stage_packed_persistent_metadata(*this, models, shape_);
-    }
-
-    void copy_step_metadata(const std::vector<PackedSessionContext>& models,
-                            const std::vector<std::vector<uint32_t>>* page_tables) {
-        stage_packed_step_metadata(*this, models, page_tables);
-    }
-
-
     const PackedSessionContext& validate_decode_batch(
         const std::vector<PackedSessionContext>& models) const {
         const PackedEligibility common = validate_packed_batch_common(
             models, maximum_batch, PackedOperation::Decode);
         if (!common) throw std::invalid_argument(common.reason);
         const PackedSessionContext& reference = models.front();
-        if (reference.compatibility_key.execution_plan_fingerprint != plan_.fingerprint() ||
-            reference.compatibility_key.device_ordinal != plan_.device().device_ordinal) {
-            throw std::invalid_argument(
-                "packed session plan does not match executor device policy");
-        }
+        PackedEligibility compatibility = compatibility_.validate_executor(reference);
+        if (!compatibility) throw std::invalid_argument(compatibility.reason);
+        compatibility = compatibility_.validate_batch(reference, models);
+        if (!compatibility) throw std::invalid_argument(compatibility.reason);
         PackedEligibility eligibility =
             validate_session(reference, PackedOperation::Decode);
         if (!eligibility) throw std::invalid_argument(eligibility.reason);
         for (size_t row = 1; row < models.size(); ++row) {
-            for (size_t previous = 0; previous < row; ++previous) {
-                if (models[previous].owner == models[row].owner) {
-                    throw std::invalid_argument("duplicate session in packed batch");
-                }
-            }
             eligibility = validate_session(models[row], PackedOperation::Decode);
-            if (!eligibility ||
-                !options_compatible(reference, models[row], &eligibility.reason)) {
+            if (!eligibility) {
                 throw std::invalid_argument(eligibility.reason);
             }
         }
@@ -155,11 +117,10 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             throw std::invalid_argument("null packed session");
         }
         const PackedSessionContext& reference = models.front();
-        if (reference.compatibility_key.execution_plan_fingerprint != plan_.fingerprint() ||
-            reference.compatibility_key.device_ordinal != plan_.device().device_ordinal) {
-            throw std::invalid_argument(
-                "packed session plan does not match executor device policy");
-        }
+        PackedEligibility compatibility = compatibility_.validate_executor(reference);
+        if (!compatibility) throw std::invalid_argument(compatibility.reason);
+        compatibility = compatibility_.validate_batch(reference, models);
+        if (!compatibility) throw std::invalid_argument(compatibility.reason);
         PackedEligibility eligibility =
             validate_session(reference, PackedOperation::Prefill);
         if (!eligibility) throw std::invalid_argument(eligibility.reason);
@@ -170,216 +131,12 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             if (models[row].owner == nullptr) {
                 throw std::invalid_argument("null packed session");
             }
-            for (size_t previous = 0; previous < row; ++previous) {
-                if (models[previous].owner == models[row].owner) {
-                    throw std::invalid_argument("duplicate session in packed batch");
-                }
-            }
             eligibility = validate_session(models[row], PackedOperation::Prefill);
-            if (!eligibility ||
-                !options_compatible(reference, models[row], &eligibility.reason)) {
+            if (!eligibility) {
                 throw std::invalid_argument(eligibility.reason);
             }
         }
         return reference;
-    }
-
-    struct AttentionBatchPlan {
-        bool segmented = false;
-        int chunks = 0;
-    };
-
-    AttentionBatchPlan prepare_batch_metadata(
-        const std::vector<PackedSessionContext>& models,
-        const std::vector<std::vector<uint32_t>>* page_tables) {
-        if (session_layout_changed(models)) {
-            copy_persistent_metadata(models);
-            metadata_cache_.update(models);
-        }
-        copy_step_metadata(models, page_tables);
-        int maximum_position = 0;
-        AttentionBatchPlan plan;
-        for (size_t row = 0; row < models.size(); ++row) {
-            maximum_position = std::max(maximum_position,
-                                        h_positions.data()[row]);
-            plan.segmented = plan.segmented ||
-                models[row].use_segmented_attention(
-                    h_positions.data()[row]);
-        }
-        if (plan.segmented) {
-            const int chunk_tokens =
-                models.front().options().attention_chunk_tokens;
-            plan.chunks = (maximum_position + 1 + chunk_tokens - 1) /
-                          chunk_tokens;
-            ensure_segmented_workspace(static_cast<int>(models.size()),
-                                       plan.chunks);
-        }
-        return plan;
-    }
-
-    AttentionBatchPlan prepare_flat_prefill_metadata(
-        const std::vector<PackedSessionContext>& models,
-        const std::vector<std::vector<uint32_t>>& page_tables,
-        const std::vector<PackedPrefillRow>& descriptors) {
-        const size_t tokens = [&] {
-            size_t value = 0;
-            for (const PackedPrefillRow& row : descriptors) value += row.token_count;
-            return value;
-        }();
-        const int page_stride = paged_kv->max_pages_per_request();
-        std::fill_n(h_page_tables.data(), tokens * static_cast<size_t>(page_stride),
-                    std::numeric_limits<uint32_t>::max());
-        size_t flat = 0;
-        int maximum_position = 0;
-        for (size_t request = 0; request < models.size(); ++request) {
-            const int start = models[request].position();
-            const auto& pages = page_tables[request];
-            for (size_t token = 0; token < descriptors[request].token_count; ++token, ++flat) {
-                h_positions.data()[flat] = start + static_cast<int>(token);
-                maximum_position = std::max(maximum_position, h_positions.data()[flat]);
-                std::copy(pages.begin(), pages.end(),
-                          h_page_tables.data() + flat * static_cast<size_t>(page_stride));
-            }
-        }
-        CELEG_CUDA(cudaMemcpyAsync(positions.data(), h_positions.data(),
-                                 tokens * sizeof(int32_t), cudaMemcpyHostToDevice,
-                                 stream.get()));
-        CELEG_CUDA(cudaMemcpyAsync(d_page_tables.data(), h_page_tables.data(),
-                                 tokens * static_cast<size_t>(page_stride) * sizeof(uint32_t),
-                                 cudaMemcpyHostToDevice, stream.get()));
-        AttentionBatchPlan plan;
-        for (size_t request = 0; request < models.size(); ++request) {
-            plan.segmented = plan.segmented || models[request].use_segmented_attention(
-                models[request].position() + static_cast<int>(descriptors[request].token_count) - 1);
-        }
-        if (plan.segmented) {
-            const int chunk_tokens = models.front().options().attention_chunk_tokens;
-            plan.chunks = (maximum_position + 1 + chunk_tokens - 1) / chunk_tokens;
-            ensure_segmented_workspace(static_cast<int>(tokens), plan.chunks);
-        }
-        return plan;
-    }
-
-    void launch_embedding_rows(const PackedSessionContext& reference, int rows) {
-        if (reference.embedding()->int4_quantized()) {
-            launch_embedding_int4_batch(
-                sampled.data(), rows, reference.embedding()->int4,
-                reference.embedding()->scales, hidden.data(),
-                shape_.hidden, stream.get());
-        } else if (reference.embedding()->int8_quantized()) {
-            launch_embedding_int8_batch(
-                sampled.data(), rows, reference.embedding()->int8,
-                reference.embedding()->scales, hidden.data(),
-                shape_.hidden, stream.get());
-        } else {
-            launch_embedding_batch(
-                sampled.data(), rows, reference.embedding()->bf16,
-                hidden.data(), shape_.hidden, stream.get());
-        }
-        launch_scale(hidden.data(), rows * shape_.hidden,
-                shape_.numerical_policy.embedding_multiplier, stream.get());
-    }
-
-    void run_attention_layer(const PackedSessionContext& reference,
-                             const AttentionLayer& attention,
-                             int rows, int layer_index,
-                             bool segmented_attention,
-                             int segmented_chunks) {
-        PackedOperatorContext context{*this, gemm_.dispatcher(), plan_, shape_};
-        PackedAttentionExecutor::run(context, reference, attention, rows,
-                                     layer_index, segmented_attention,
-                                     segmented_chunks);
-    }
-
-    void run_convolution_layer(
-        const PackedSessionContext& reference,
-        const ConvolutionLayer& convolution,
-        int rows, int layer_index, int ragged_requests = 0) {
-        PackedOperatorContext context{*this, gemm_.dispatcher(), plan_, shape_};
-        PackedConvolutionExecutor::run(context, reference, convolution,
-                                       rows, layer_index, ragged_requests);
-    }
-
-    void run_mlp_layer(const PackedSessionContext& reference,
-                       const LayerCommon& common_layer,
-                       int rows,
-                       const std::vector<PackedSessionContext>* batch_models = nullptr,
-                       int layer_index = -1) {
-        if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
-            (void)moe;
-            PackedOperatorContext context{*this, gemm_.dispatcher(), plan_, shape_};
-            PackedMoeExecutor::run(context, reference, common_layer, rows,
-                                   batch_models, layer_index);
-            return;
-        }
-        PackedOperatorContext context{*this, gemm_.dispatcher(), plan_, shape_};
-        PackedDenseFfnExecutor::run(context, reference, common_layer,
-                                    rows, layer_index);
-    }
-
-    void run_transformer_layers(const PackedSessionContext& reference, int rows,
-                                bool segmented_attention,
-                                int segmented_chunks,
-                                const std::vector<PackedSessionContext>* batch_models = nullptr,
-                                int ragged_requests = 0,
-                                const std::vector<PackedPrefillRow>* row_descriptors = nullptr) {
-        for (size_t layer_index = 0; layer_index < layer_program_.size();
-             ++layer_index) {
-            const auto& layer = reference.layers()[layer_index];
-            const auto& common_layer = common(layer);
-            if (!reference.options().fused_residuals) {
-                CELEG_CUDA(cudaMemcpyAsync(
-                    residual.data(), hidden.data(),
-                    static_cast<size_t>(rows) * shape_.hidden *
-                        sizeof(__nv_bfloat16),
-                    cudaMemcpyDeviceToDevice, stream.get()));
-            }
-            launch_rmsnorm(hidden.data(), common_layer.operator_norm,
-                           normed.data(), rows, shape_.hidden,
-                           shape_.numerical_policy.norm_eps, stream.get());
-            PackedOperatorContext context{*this, gemm_.dispatcher(), plan_, shape_};
-            if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2 ||
-                layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
-                throw std::runtime_error(
-                    "packed CUDA execution requires tokenwise scheduling for sequential mixers");
-            }
-            if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
-                const auto* attention = as_attention(layer);
-                if (!attention) {
-                    throw std::logic_error("packed layer program disagrees with layer binding");
-                }
-                run_attention_layer(reference, *attention, rows, layer_index,
-                                    segmented_attention, segmented_chunks);
-            } else if (layer_program_.kind(layer_index) == PackedLayerKind::GatedDeltaNet) {
-                const auto* gated_delta = as_gated_delta_net(layer);
-                if (!gated_delta) {
-                    throw std::logic_error("packed layer program disagrees with GatedDeltaNet binding");
-                }
-                PackedGatedDeltaNetExecutor::run(
-                    context, reference,
-                    *gated_delta, rows, static_cast<int>(layer_index),
-                    batch_models, row_descriptors);
-            } else {
-                const auto* convolution = as_convolution(layer);
-                if (!convolution) {
-                    throw std::logic_error("packed layer program disagrees with layer binding");
-                }
-                run_convolution_layer(reference, *convolution, rows,
-                                     static_cast<int>(layer_index), ragged_requests);
-            }
-            if (!reference.options().fused_residuals) {
-                launch_residual_add(hidden.data(), residual.data(),
-                                    rows * shape_.hidden, stream.get());
-            }
-            run_mlp_layer(reference, common_layer, rows, batch_models, layer_index);
-            if (std::binary_search(reference.program().norm_after_layers.begin(),
-                                   reference.program().norm_after_layers.end(),
-                                   static_cast<int>(layer_index))) {
-                launch_rmsnorm(hidden.data(), reference.final_norm(), hidden.data(),
-                               rows, shape_.hidden, shape_.numerical_policy.norm_eps,
-                               stream.get());
-            }
-        }
     }
 
     void decode_into(
@@ -398,8 +155,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         const auto started = std::chrono::steady_clock::now();
         CudaEvent gpu_begin;
         CudaEvent gpu_end;
-        const AttentionBatchPlan attention =
-            prepare_batch_metadata(models, page_tables);
+        const PackedAttentionBatchPlan attention =
+            batch_planner_.prepare_decode(models, page_tables);
         gpu_begin.record(stream.get());
         const auto host_prepare_done = std::chrono::steady_clock::now();
 
@@ -410,15 +167,17 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             selected_values.data(), selected_indices.data(), rows,
             shape_.vocab_size, sampled.data(), stream.get());
 
-        launch_embedding_rows(reference, rows);
+        layer_executor_.launch_embedding_rows(reference, rows);
 
-        run_transformer_layers(reference, rows, attention.segmented,
-                               attention.chunks, &models);
+        layer_executor_.run_transformer_layers(reference, rows,
+                                                attention.segmented,
+                                                attention.chunks, &models);
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
                                rows, shape_.hidden, shape_.numerical_policy.norm_eps,
                        stream.get());
-        linear(normed.data(), *reference.logits_weight(), logits.data(), rows,
-               shape_.vocab_size, shape_.hidden);
+        layer_executor_.linear(normed.data(), *reference.logits_weight(),
+                               logits.data(), rows, shape_.vocab_size,
+                               shape_.hidden);
         launch_scale(logits.data(), rows * shape_.vocab_size,
                      1.0f / shape_.numerical_policy.logits_divisor, stream.get());
         if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
@@ -517,8 +276,6 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         const auto started = std::chrono::steady_clock::now();
         CudaEvent gpu_begin;
         CudaEvent gpu_end;
-        copy_persistent_metadata(models);
-        metadata_cache_.update(models);
         for (int request = 0; request < requests; ++request) {
             h_span_offsets.data()[request] = static_cast<int>(row_descriptors[request].token_offset);
             h_span_counts.data()[request] = static_cast<int>(row_descriptors[request].token_count);
@@ -530,8 +287,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                  requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
         CELEG_CUDA(cudaMemcpyAsync(d_final_rows.data(), h_final_rows.data(),
                                  requests * sizeof(int32_t), cudaMemcpyHostToDevice, stream.get()));
-        const AttentionBatchPlan attention =
-            prepare_flat_prefill_metadata(models, *page_tables, row_descriptors);
+        const PackedAttentionBatchPlan attention =
+            batch_planner_.prepare_prefill(models, *page_tables, row_descriptors);
         CELEG_CUDA(cudaMemcpyAsync(sampled.data(), explicit_tokens.data(),
                                  static_cast<size_t>(rows) * sizeof(int32_t),
                                  cudaMemcpyHostToDevice, stream.get()));
@@ -548,10 +305,11 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         const auto host_prepare_done = std::chrono::steady_clock::now();
         launch_mark_seen_batch_ptrs(sampled.data(), d_flat_seen.data(), rows,
                                     shape_.vocab_size, stream.get());
-        launch_embedding_rows(reference, rows);
-        run_transformer_layers(reference, rows, attention.segmented,
-                               attention.chunks, &models, requests,
-                               &row_descriptors);
+        layer_executor_.launch_embedding_rows(reference, rows);
+        layer_executor_.run_transformer_layers(reference, rows,
+                                                attention.segmented,
+                                                attention.chunks, &models,
+                                                requests, &row_descriptors);
         const bool any_finalize = std::any_of(row_descriptors.begin(), row_descriptors.end(),
             [](const PackedPrefillRow& row) { return row.finalize != 0; });
         if (any_finalize) {
@@ -573,8 +331,9 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                     normed.data(), finalized, shape_.hidden, stream.get());
             launch_rmsnorm(normed.data(), reference.final_norm(), normed.data(),
                            finalized, shape_.hidden, shape_.numerical_policy.norm_eps, stream.get());
-            linear(normed.data(), *reference.logits_weight(), logits.data(), finalized,
-                   shape_.vocab_size, shape_.hidden);
+            layer_executor_.linear(normed.data(), *reference.logits_weight(),
+                                   logits.data(), finalized,
+                                   shape_.vocab_size, shape_.hidden);
             launch_scale(logits.data(), finalized * shape_.vocab_size,
                    1.0f / shape_.numerical_policy.logits_divisor, stream.get());
             if (shape_.numerical_policy.final_logit_softcap > 0.0f) {

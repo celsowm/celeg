@@ -27,6 +27,8 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/per_layer_execution.cu
     src/backend/cuda/model/dense_mlp_execution.cu
     src/backend/cuda/model/execution.cu
+    src/backend/cuda/model/attention_execution.cu
+    src/backend/cuda/model/non_attention_execution.cu
     src/backend/cuda/model/sampler.cu
     src/backend/cuda/model/decode.cpp
     src/backend/cuda/model/prefill.cpp
@@ -35,6 +37,8 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/prefill_profile.cpp
     src/backend/cuda/model/weights.cpp
     src/backend/cuda/model/packed_execution.cu
+    src/backend/cuda/model/packed_batch_planner.cu
+    src/backend/cuda/model/packed_layer_executor.cu
     src/backend/cuda/model/packed_validation.cu
     src/backend/cuda/model/packed_workspace.cu
     src/backend/cuda/model/packed_commit.cpp

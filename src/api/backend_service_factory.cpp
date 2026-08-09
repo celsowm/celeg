@@ -31,8 +31,7 @@ public:
     CpuConcurrentEngineOptions engine;
 };
 
-class CpuBackendFactory final : public IBackendFactory,
-                                public IBackendOptionsDecoder {
+class CpuBackendFactory final : public IAbiBackendFactory {
 public:
     std::string_view id() const override { return "cpu"; }
     bool supports(BackendId backend) const override {
@@ -87,8 +86,7 @@ public:
     ConcurrentEngineOptions engine;
 };
 
-class CudaBackendFactory final : public IBackendFactory,
-                                 public IBackendOptionsDecoder {
+class CudaBackendFactory final : public IAbiBackendFactory {
 public:
     std::string_view id() const override { return "cuda"; }
     bool supports(BackendId backend) const override {
@@ -153,10 +151,9 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
                                     std::string(options.backend_id));
     }
     const IBackendFactory& factory = *selected;
-    const auto* decoder = dynamic_cast<const IBackendOptionsDecoder*>(&factory);
-    if (!decoder) {
-        throw std::invalid_argument("selected backend does not expose backend options");
-    }
+    const auto* decoder = dynamic_cast<const IAbiBackendFactory*>(&factory);
+    if (!decoder) throw std::invalid_argument(
+        "selected backend does not implement the ABI backend factory capability");
     const auto* raw = static_cast<const std::byte*>(options.backend_options);
     BackendCreateRequest request;
     request.model_path = path;

@@ -10,7 +10,7 @@ namespace {
 namespace protocol = celeg::serve::protocol;
 } // namespace
 
-void register_tokenize_route(uWS::App& app, const celeg::BpeTokenizer& tokenizer,
+void register_tokenize_route(uWS::App& app, const celeg::ITokenizer& tokenizer,
                              const celeg::IChatTemplate& chat_template,
                              std::size_t max_model_len) {
     app.post("/tokenize", [&tokenizer, &chat_template, max_model_len](auto* res, auto* /*req*/) {

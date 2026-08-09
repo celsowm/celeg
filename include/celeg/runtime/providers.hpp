@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/checkpoint/view.hpp"
+#include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
 
 #include <filesystem>
@@ -21,7 +22,6 @@ namespace serve {
 class ServiceBundle;
 }
 
-class BpeTokenizer;
 class IVisualEmbeddingProvider;
 
 using BackendId = std::string_view;
@@ -62,7 +62,7 @@ public:
     virtual std::string_view id() const = 0;
     virtual bool supports(const CheckpointView& checkpoint,
                           const std::filesystem::path& model_path) const = 0;
-    virtual std::unique_ptr<BpeTokenizer> create(
+    virtual std::unique_ptr<ITokenizer> create(
         const CheckpointView& checkpoint,
         const std::filesystem::path& model_path) const = 0;
 };
@@ -91,9 +91,9 @@ public:
 // separate interface lets ordinary runtime factories remain focused on
 // already-typed options while extensible API entry points delegate decoding
 // to the backend that owns the byte representation.
-class IBackendOptionsDecoder {
+class IAbiBackendFactory : public IBackendFactory {
 public:
-    virtual ~IBackendOptionsDecoder() = default;
+    ~IAbiBackendFactory() override = default;
     virtual std::shared_ptr<const IBackendOptions> decode_options(
         std::span<const std::byte> bytes) const = 0;
 };

@@ -181,7 +181,7 @@ ErrorResponseDto error_response(std::string message, std::optional<std::string> 
 }
 
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
-                                    const celeg::BpeTokenizer& tokenizer,
+                                    const celeg::ITokenizer& tokenizer,
                                     const celeg::IChatTemplate& chat_template,
                                     const celeg::ChatCapabilities& capabilities,
                                     std::span<const std::int32_t> eos_token_ids,
@@ -355,7 +355,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    std::size_t prompt_token_count,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
-                                                   const celeg::BpeTokenizer& tokenizer,
+                                                   const celeg::ITokenizer& tokenizer,
                                                    const celeg::IChatToolCallCodec* tool_codec) {
     ChatCompletionResponse response;
     response.id = id;
@@ -400,7 +400,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              const std::vector<std::int32_t>& new_tokens,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
-                                             const celeg::BpeTokenizer& tokenizer,
+                                             const celeg::ITokenizer& tokenizer,
                                              const celeg::IChatToolCallCodec* tool_codec,
                                              std::string_view accumulated_text) {
     ChatCompletionChunk chunk;
@@ -466,7 +466,7 @@ ChatCompletionChunk to_chat_completion_chunk(
 }
 
 TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
-                                      const celeg::BpeTokenizer& tokenizer,
+                                      const celeg::ITokenizer& tokenizer,
                                       const celeg::IChatTemplate& chat_template,
                                       std::size_t max_model_len) {
     if (static_cast<bool>(request.prompt) == static_cast<bool>(request.messages)) {

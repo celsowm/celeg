@@ -18,7 +18,10 @@ int main() {
 
     celeg::CompiledModelProgram program;
     program.layers.resize(2);
-    for (auto& layer : program.layers) {
+    for (size_t index = 0; index < program.layers.size(); ++index) {
+        auto& layer = program.layers[index];
+        layer.mixer = celeg::CompiledMixer::Attention;
+        layer.attention = shape.attention_layouts[index];
         layer.state_layout = celeg::CompiledAttentionStateLayout{};
         layer.state_layout->key_width = 4;
         layer.state_layout->value_width = 4;
@@ -42,6 +45,8 @@ int main() {
         celeg::LatentAttentionStateSpec{16, 2, 6, true};
     celeg::CompiledModelProgram latent_program;
     latent_program.layers.resize(1);
+    latent_program.layers[0].mixer = celeg::CompiledMixer::Attention;
+    latent_program.layers[0].attention = latent_shape.attention_layouts[0];
     latent_program.layers[0].state_layout = celeg::CompiledAttentionStateLayout{};
     latent_program.layers[0].state_layout->kind = celeg::CompiledStateLayoutKind::Latent;
     latent_program.layers[0].state_layout->latent_width = 16;

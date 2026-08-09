@@ -17,7 +17,7 @@ namespace celeg::app::serve {
 void register_chat_completions_route(uWS::App& app,
                                      celeg::serve::GenerationDispatcher& dispatcher,
                                      celeg::serve::IRequestService& service,
-                                     const celeg::BpeTokenizer& tokenizer,
+                                     const celeg::ITokenizer& tokenizer,
                                      const celeg::IChatTemplate& chat_template,
                                      const celeg::ChatCapabilities& capabilities,
                                      const celeg::IChatToolCallCodec* tool_codec,

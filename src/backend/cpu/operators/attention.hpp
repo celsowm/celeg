@@ -24,4 +24,12 @@ void apply_cpu_latent_attention_positions(
 
 void apply_cpu_query_gate(float* output, const float* gate, size_t width);
 
+void execute_cpu_attention_token(
+    CpuExecutionContext& execution,
+    CpuCompiledModel& model,
+    size_t index,
+    const CpuCompiledModel::AttentionWeights& attention,
+    const CompiledLayerProgram& semantics,
+    const std::array<int32_t, 3>& rope_position);
+
 } // namespace celeg

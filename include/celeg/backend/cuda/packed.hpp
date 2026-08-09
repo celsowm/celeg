@@ -64,6 +64,27 @@ public:
         PackedExecutorCapabilities capabilities) const;
 };
 
+// Immutable policy for the execution plan and device identity shared by a
+// packed batch.  Session lifecycle and row/page validation remain separate;
+// this policy only owns the compatibility invariant.
+class PackedCompatibilityPolicy {
+public:
+    PackedCompatibilityPolicy(uint64_t execution_plan_fingerprint,
+                              int device_ordinal)
+        : execution_plan_fingerprint_(execution_plan_fingerprint),
+          device_ordinal_(device_ordinal) {}
+
+    PackedEligibility validate_executor(
+        const PackedSessionContext& session) const;
+    PackedEligibility validate_batch(
+        const PackedSessionContext& reference,
+        const std::vector<PackedSessionContext>& sessions) const;
+
+private:
+    uint64_t execution_plan_fingerprint_ = 0;
+    int device_ordinal_ = -1;
+};
+
 // Backend-internal factory. Keeping this operation-specific context factory
 // out of the public CudaModel surface prevents CUDA packed-execution types from
 // becoming part of the generic model API.

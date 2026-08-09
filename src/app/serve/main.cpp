@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, model);
-        const celeg::BpeTokenizer& tokenizer = *tokenizer_storage;
+        const celeg::ITokenizer& tokenizer = *tokenizer_storage;
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.provenance.identity : args.served_model_name;

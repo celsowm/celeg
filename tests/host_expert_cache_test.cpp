@@ -140,7 +140,10 @@ void test_coalescing_and_concurrency() {
     CELEG_TEST_CHECK(load_starts == 1);
     CELEG_TEST_CHECK(load_completes == 1);
     CELEG_TEST_CHECK(cache.misses() == 1);
-    CELEG_TEST_CHECK(cache.coalesced_waits() == 3);
+    // Depending on OS scheduling, a consumer may arrive just after the
+    // loader completes and be counted as a hit instead of a coalesced wait.
+    // The invariant is that all three consumers reuse the single load.
+    CELEG_TEST_CHECK(cache.coalesced_waits() + cache.hits() == 3);
 
     for (int i = 0; i < 4; ++i) {
         CELEG_TEST_CHECK(leases[i].valid());

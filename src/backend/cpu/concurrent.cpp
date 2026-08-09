@@ -2,9 +2,14 @@
 
 #include "celeg/backend/cpu/prefix_cache.hpp"
 #include "celeg/backend/cpu/numa.hpp"
+#include "celeg/backend/cpu/numa_placement.hpp"
 #include "celeg/detail/runtime/concurrency/worker.hpp"
 #include "celeg/detail/runtime/concurrency/batch_planner.hpp"
 #include "detail/concurrent_request.hpp"
+#include "detail/batch_scheduler.hpp"
+#include "detail/admission_controller.hpp"
+#include "detail/request_lifecycle.hpp"
+#include "detail/metrics_collector.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -32,10 +37,11 @@ struct CpuSchedulerDriver {
          CpuConcurrentEngineOptions requested,
          std::shared_ptr<const RuntimeContext> runtime)
         : max_context(context), engine_options(std::move(requested)),
-          numa_mode(model_options.numa_mode),
-          numa_topology(detect_cpu_numa_topology()),
+          numa_placement(model_options.numa_mode, detect_cpu_numa_topology()),
           runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
-          base_model(path, context, std::move(model_options), {}, runtime_) {
+          base_model(path, context, std::move(model_options), {}, runtime_),
+          admission(base_model, numa_placement, prefix_cache),
+          metrics_collector(metrics) {
         if (engine_options.max_active_requests == 0 ||
             engine_options.max_batched_tokens == 0 ||
             engine_options.max_prefill_batch == 0 ||
@@ -95,28 +101,6 @@ struct CpuSchedulerDriver {
         metrics.queued_requests = queued_count_locked();
     }
 
-    int choose_numa_node_locked() {
-        if (numa_mode == CpuNumaMode::Disabled || numa_topology.node_count() <= 1) {
-            return -1;
-        }
-        const int node = static_cast<int>(next_numa_node % numa_topology.node_count());
-        ++next_numa_node;
-        return node;
-    }
-
-    void sync_prefix_metrics_locked() {
-        if (!prefix_cache) return;
-        const auto& source = prefix_cache->metrics();
-        metrics.prefix_cache_hits = source.hits;
-        metrics.prefix_cache_misses = source.misses;
-        metrics.prefix_cache_partial_hits = source.partial_hits;
-        metrics.prefix_cache_inserts = source.inserts;
-        metrics.prefix_cache_evictions = source.evictions;
-        metrics.prefix_reused_tokens = source.reused_tokens;
-        metrics.prefix_cow_pages = source.cow_pages;
-        metrics.prefix_cow_bytes = source.cow_bytes;
-    }
-
     void cache_completed_prefix_locked(Request& request) {
         if (!prefix_cache || !request.options.prompt_embedding.empty() ||
             request.prefix_inserted || !request.session ||
@@ -124,119 +108,17 @@ struct CpuSchedulerDriver {
         try {
             request.prefix_inserted = prefix_cache->insert(
                 request.prompt, request.session->persistence().export_prefix_snapshot());
-            sync_prefix_metrics_locked();
+            admission.sync_prefix_metrics(metrics);
         } catch (const std::exception& error) {
             last_error_text = std::string("CPU prefix cache insert: ") + error.what();
         }
-    }
-
-    void record_attention_parallel_locked(Request& request) {
-        if (!request.session) return;
-        const uint64_t current = request.session->diagnostics().attention_parallel_calls();
-        if (current >= request.attention_parallel_observed) {
-            metrics.attention_parallel_calls +=
-                current - request.attention_parallel_observed;
-        }
-        request.attention_parallel_observed = current;
-    }
-
-    void admit_locked() {
-        size_t available = engine_options.max_active_requests -
-                           std::min(engine_options.max_active_requests,
-                                    active_count_locked());
-        if (available == 0) return;
-        std::vector<std::shared_ptr<Request>> queued;
-        for (const auto& [id, request] : requests) {
-            (void)id;
-            if (request->status == RequestStatus::Queued) queued.push_back(request);
-        }
-        std::vector<detail::RequestPriorityView> queued_views;
-        queued_views.reserve(queued.size());
-        for (const auto& request : queued) {
-            queued_views.push_back({request->id, request->options.priority});
-        }
-        const auto queued_order = planner.order_priority(queued_views);
-        std::vector<std::shared_ptr<Request>> ordered_queued;
-        ordered_queued.reserve(queued.size());
-        for (const size_t index : queued_order) ordered_queued.push_back(queued[index]);
-        queued = std::move(ordered_queued);
-        for (const auto& request : queued) {
-            if (available == 0) break;
-            try {
-                request->numa_node = choose_numa_node_locked();
-                request->session = base_model.clone_session_on_node(request->numa_node);
-                request->session->session().set_generation_config(request->options.generation);
-                request->status = RequestStatus::Prefill;
-                if (prefix_cache && request->options.prompt_embedding.empty()) {
-                    if (auto match = prefix_cache->acquire(
-                            request->prompt, request->numa_node)) {
-                        const bool exact = match->matched_tokens == request->prompt.size();
-                        request->session->persistence().restore_prefix_snapshot(
-                            std::move(match->snapshot), exact);
-                        request->prompt_offset = match->matched_tokens;
-                        request->status = exact ? RequestStatus::Decoding
-                                                : RequestStatus::Prefill;
-                    }
-                    sync_prefix_metrics_locked();
-                }
-                --available;
-            } catch (const std::exception& error) {
-                request->status = RequestStatus::Failed;
-                request->error = error.what();
-                ++metrics.failed_requests;
-            }
-        }
-        refresh_counts_locked();
-    }
-
-    std::vector<std::shared_ptr<Request>> plan_decode_locked(size_t limit) {
-        std::vector<std::shared_ptr<Request>> result;
-        for (const auto& [id, request] : requests) {
-            (void)id;
-            if (request->status == RequestStatus::Decoding) result.push_back(request);
-        }
-        std::vector<detail::RequestPriorityView> views;
-        views.reserve(result.size());
-        for (const auto& request : result) {
-            views.push_back({request->id, request->options.priority});
-        }
-        const auto order = planner.order_priority(views);
-        std::vector<std::shared_ptr<Request>> ordered;
-        ordered.reserve(result.size());
-        for (const size_t index : order) ordered.push_back(result[index]);
-        result = std::move(ordered);
-        if (result.size() > limit) result.resize(limit);
-        return result;
-    }
-
-    std::vector<std::shared_ptr<Request>> plan_prefill_locked(size_t limit) {
-        std::vector<std::shared_ptr<Request>> result;
-        for (const auto& [id, request] : requests) {
-            (void)id;
-            if (request->status == RequestStatus::Prefill &&
-                request->prompt_offset < request->prompt.size()) {
-                result.push_back(request);
-            }
-        }
-        std::vector<detail::RequestPriorityView> views;
-        views.reserve(result.size());
-        for (const auto& request : result) {
-            views.push_back({request->id, request->options.priority});
-        }
-        const auto order = planner.order_priority(views);
-        std::vector<std::shared_ptr<Request>> ordered;
-        ordered.reserve(result.size());
-        for (const size_t index : order) ordered.push_back(result[index]);
-        result = std::move(ordered);
-        if (result.size() > limit) result.resize(limit);
-        return result;
     }
 
     bool run_decode_batch(size_t& budget) {
         std::vector<std::shared_ptr<Request>> plan;
         {
             std::lock_guard lock(mutex);
-            plan = plan_decode_locked(std::min({budget,
+            plan = CpuBatchScheduler::plan_decode(requests, planner, std::min({budget,
                 engine_options.max_decode_batch,
                 engine_options.max_active_requests}));
         }
@@ -248,57 +130,17 @@ struct CpuSchedulerDriver {
             auto [tokens, step_metrics] = CpuModel::decode_batch(sessions);
             const Clock::time_point now = Clock::now();
             std::lock_guard lock(mutex);
-            metrics.packed_decode_steps++;
-            metrics.decode_tokens += tokens.size();
-            metrics.maximum_decode_batch = std::max<uint64_t>(
-                metrics.maximum_decode_batch, tokens.size());
-            metrics.cumulative_decode_ms += step_metrics.elapsed_ms;
+            metrics_collector.record_decode_batch(tokens.size(), step_metrics);
             for (size_t index = 0; index < plan.size(); ++index) {
-                Request& request = *plan[index];
-                if (request.status == RequestStatus::Cancelled) continue;
-                if (request.cancel_requested) {
-                    request.status = RequestStatus::Cancelled;
-                    request.session.reset();
-                    ++metrics.cancelled_requests;
-                    continue;
-                }
-                const int32_t token = tokens[index];
-                request.generated.push_back(token);
-                if (!request.first_token_recorded) {
-                    request.first_token_recorded = true;
-                    metrics.cumulative_ttft_ms += milliseconds(now - request.submitted_at);
-                    ++metrics.ttft_samples;
-                } else {
-                    metrics.cumulative_itl_ms += milliseconds(now - request.last_token_at);
-                    ++metrics.itl_samples;
-                }
-                request.last_token_at = now;
-                record_attention_parallel_locked(request);
-                if (is_stop_token(request.options.eos_tokens, token) ||
-                    request.generated.size() >= request.options.max_new_tokens) {
-                    request.status = RequestStatus::Finished;
-                    request.session.reset();
-                    ++metrics.completed_requests;
-                }
+                CpuRequestLifecycle::apply_decode_token(
+                    plan[index], tokens[index], now, metrics);
             }
             refresh_counts_locked();
         } catch (const std::exception& error) {
             std::lock_guard lock(mutex);
             last_error_text = error.what();
             for (const auto& request : plan) {
-                if (!is_terminal(request->status)) {
-                    request->status = request->cancel_requested
-                        ? RequestStatus::Cancelled : RequestStatus::Failed;
-                    if (request->status == RequestStatus::Failed) {
-                        request->error = error.what();
-                    }
-                    request->session.reset();
-                    if (request->status == RequestStatus::Failed) {
-                        ++metrics.failed_requests;
-                    } else {
-                        ++metrics.cancelled_requests;
-                    }
-                }
+                CpuRequestLifecycle::fail(request, error.what(), metrics);
             }
             refresh_counts_locked();
         }
@@ -313,7 +155,8 @@ struct CpuSchedulerDriver {
         size_t chunk_tokens = 0;
         {
             std::lock_guard lock(mutex);
-            auto candidates = plan_prefill_locked(engine_options.max_active_requests);
+            auto candidates = CpuBatchScheduler::plan_prefill(
+                requests, planner, engine_options.max_active_requests);
             for (const auto& candidate : candidates) {
                 if (!candidate->options.prompt_embedding.empty()) {
                     plan = {candidate};
@@ -351,26 +194,17 @@ struct CpuSchedulerDriver {
                 request->session->session().prefill(
                     request->prompt, request->options.prompt_embedding);
                 std::lock_guard lock(mutex);
-                if (request->cancel_requested) {
-                    request->status = RequestStatus::Cancelled;
-                    request->session.reset();
-                    ++metrics.cancelled_requests;
-                } else if (request->status != RequestStatus::Cancelled) {
-                    request->prompt_offset = request->prompt.size();
-                    request->status = RequestStatus::Decoding;
-                    metrics.prefill_tokens += request->prompt.size();
+                const size_t consumed = request->prompt.size() - request->prompt_offset;
+                CpuRequestLifecycle::apply_prefill(request, consumed, metrics);
+                if (request->status == RequestStatus::Decoding) {
+                    metrics_collector.record_prefill_tokens(request->prompt.size());
                     cache_completed_prefix_locked(*request);
                 }
                 refresh_counts_locked();
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex);
                 last_error_text = error.what();
-                request->status = request->cancel_requested
-                    ? RequestStatus::Cancelled : RequestStatus::Failed;
-                request->error = error.what();
-                request->session.reset();
-                if (request->status == RequestStatus::Failed) ++metrics.failed_requests;
-                else ++metrics.cancelled_requests;
+                CpuRequestLifecycle::fail(request, error.what(), metrics);
                 refresh_counts_locked();
             }
             return true;
@@ -387,41 +221,17 @@ struct CpuSchedulerDriver {
                                              chunk_tokens),
                     final_chunk);
                 std::lock_guard lock(mutex);
-                ++metrics.chunked_prefill_steps;
-                metrics.chunked_prefill_tokens += chunk_tokens;
-                metrics.prefill_tokens += chunk_tokens;
-                metrics.maximum_prefill_chunk = std::max<uint64_t>(
-                    metrics.maximum_prefill_chunk, chunk_tokens);
-                metrics.cumulative_prefill_ms += step_metrics.elapsed_ms;
-                record_attention_parallel_locked(*request);
-                if (request->cancel_requested) {
-                    request->status = RequestStatus::Cancelled;
-                    request->session.reset();
-                    ++metrics.cancelled_requests;
-                } else if (request->status != RequestStatus::Cancelled) {
-                    request->prompt_offset += chunk_tokens;
-                    if (request->prompt_offset == request->prompt.size()) {
-                        request->status = RequestStatus::Decoding;
-                        cache_completed_prefix_locked(*request);
-                    }
+                metrics_collector.record_chunked_prefill(chunk_tokens, step_metrics);
+                CpuRequestLifecycle::observe_attention(request, metrics);
+                CpuRequestLifecycle::apply_prefill(request, chunk_tokens, metrics);
+                if (request->status == RequestStatus::Decoding) {
+                    cache_completed_prefix_locked(*request);
                 }
                 refresh_counts_locked();
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex);
                 last_error_text = error.what();
-                if (!is_terminal(request->status)) {
-                    request->status = request->cancel_requested
-                        ? RequestStatus::Cancelled : RequestStatus::Failed;
-                    if (request->status == RequestStatus::Failed) {
-                        request->error = error.what();
-                    }
-                    request->session.reset();
-                    if (request->status == RequestStatus::Failed) {
-                        ++metrics.failed_requests;
-                    } else {
-                        ++metrics.cancelled_requests;
-                    }
-                }
+                CpuRequestLifecycle::fail(request, error.what(), metrics);
                 refresh_counts_locked();
             }
             budget -= chunk_tokens;
@@ -438,23 +248,13 @@ struct CpuSchedulerDriver {
         try {
             const CpuBatchMetrics step_metrics = CpuModel::prefill_batch(items);
             std::lock_guard lock(mutex);
-            ++metrics.ragged_prefill_steps;
-            metrics.prefill_tokens += items.size();
-            metrics.maximum_prefill_batch = std::max<uint64_t>(
-                metrics.maximum_prefill_batch, items.size());
-            metrics.cumulative_prefill_ms += step_metrics.elapsed_ms;
+            metrics_collector.record_ragged_prefill(items.size(), step_metrics);
             for (const auto& request : plan) {
-                if (request->status == RequestStatus::Cancelled) continue;
-                if (request->cancel_requested) {
-                    request->status = RequestStatus::Cancelled;
-                    request->session.reset();
-                    ++metrics.cancelled_requests;
-                    continue;
-                }
-                record_attention_parallel_locked(*request);
-                ++request->prompt_offset;
-                if (request->prompt_offset == request->prompt.size()) {
-                    request->status = RequestStatus::Decoding;
+                CpuRequestLifecycle::observe_attention(request, metrics);
+                const RequestStatus before = request->status;
+                CpuRequestLifecycle::apply_prefill(request, 1, metrics);
+                if (before != RequestStatus::Cancelled &&
+                    request->status == RequestStatus::Decoding) {
                     cache_completed_prefix_locked(*request);
                 }
             }
@@ -463,19 +263,7 @@ struct CpuSchedulerDriver {
             std::lock_guard lock(mutex);
             last_error_text = error.what();
             for (const auto& request : plan) {
-                if (!is_terminal(request->status)) {
-                    request->status = request->cancel_requested
-                        ? RequestStatus::Cancelled : RequestStatus::Failed;
-                    if (request->status == RequestStatus::Failed) {
-                        request->error = error.what();
-                    }
-                    request->session.reset();
-                    if (request->status == RequestStatus::Failed) {
-                        ++metrics.failed_requests;
-                    } else {
-                        ++metrics.cancelled_requests;
-                    }
-                }
+                CpuRequestLifecycle::fail(request, error.what(), metrics);
             }
             refresh_counts_locked();
         }
@@ -488,7 +276,9 @@ struct CpuSchedulerDriver {
         const auto started = Clock::now();
         {
             std::lock_guard lock(mutex);
-            admit_locked();
+            admission.admit(requests, planner,
+                            engine_options.max_active_requests, metrics);
+            refresh_counts_locked();
         }
         size_t budget = engine_options.max_batched_tokens;
         bool progressed = false;
@@ -508,8 +298,10 @@ struct CpuSchedulerDriver {
         }
         {
             std::lock_guard lock(mutex);
-            admit_locked();
-            metrics.cumulative_scheduler_ms += milliseconds(Clock::now() - started);
+            admission.admit(requests, planner,
+                            engine_options.max_active_requests, metrics);
+            metrics_collector.record_scheduler(
+                milliseconds(Clock::now() - started));
             refresh_counts_locked();
         }
         return progressed;
@@ -525,12 +317,11 @@ struct CpuSchedulerDriver {
 
     int max_context = 0;
     CpuConcurrentEngineOptions engine_options;
-    CpuNumaMode numa_mode = CpuNumaMode::Disabled;
-    CpuNumaTopology numa_topology;
-    size_t next_numa_node = 0;
+    CpuNumaPlacement numa_placement;
     std::shared_ptr<const RuntimeContext> runtime_;
     CpuModel base_model;
     std::unique_ptr<CpuPrefixCacheManager> prefix_cache;
+    CpuAdmissionController admission;
     detail::BatchPlanner planner;
 
     mutable std::mutex mutex;
@@ -539,6 +330,7 @@ struct CpuSchedulerDriver {
     RequestId next_id = 1;
     uint64_t next_sequence = 1;
     CpuConcurrentMetrics metrics;
+    CpuMetricsCollector metrics_collector;
     std::string last_error_text;
     bool running = false;
     bool stopping = false;
@@ -657,17 +449,7 @@ void CpuConcurrentEngine::stop() {
 CpuConcurrentMetrics CpuConcurrentEngine::metrics() const {
     std::lock_guard lock(state_->mutex);
     CpuConcurrentMetrics result = state_->metrics;
-    if (state_->prefix_cache) {
-        const auto& source = state_->prefix_cache->metrics();
-        result.prefix_cache_hits = source.hits;
-        result.prefix_cache_misses = source.misses;
-        result.prefix_cache_partial_hits = source.partial_hits;
-        result.prefix_cache_inserts = source.inserts;
-        result.prefix_cache_evictions = source.evictions;
-        result.prefix_reused_tokens = source.reused_tokens;
-        result.prefix_cow_pages = source.cow_pages;
-        result.prefix_cow_bytes = source.cow_bytes;
-    }
+    state_->admission.sync_prefix_metrics(result);
     result.active_requests = state_->active_count_locked();
     result.queued_requests = state_->queued_count_locked();
     return result;

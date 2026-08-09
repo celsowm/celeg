@@ -33,7 +33,7 @@ std::size_t complete_utf8_prefix(std::string_view text) {
 namespace celeg::serve {
 
 ChatGenerationInterpreter::ChatGenerationInterpreter(
-    const BpeTokenizer& tokenizer, const IChatToolCallCodec* tool_codec)
+    const ITokenizer& tokenizer, const IChatToolCallCodec* tool_codec)
     : tokenizer_(tokenizer), tool_codec_(tool_codec) {}
 
 ChatGenerationDelta ChatGenerationInterpreter::consume(

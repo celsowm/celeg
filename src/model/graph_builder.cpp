@@ -11,7 +11,7 @@ void build_dense_transformer_graph(ResolvedModel& model) {
     model.graph.logits_divisor = t.numerical_policy.logits_divisor;
     model.graph.final_norm.epsilon = t.numerical_policy.norm_eps;
     model.graph.final_logit_softcap = 0.0f;
-    model.graph.norm_after_layers = t.norm_after_layers;
+    model.graph.norm_after_layers.clear();
     model.graph.layers.clear();
     model.graph.layers.reserve(static_cast<size_t>(t.num_hidden_layers));
     for (int i = 0; i < t.num_hidden_layers; ++i) {

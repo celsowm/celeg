@@ -1,5 +1,6 @@
 #include "celeg/checkpoint/downloader.hpp"
 #include "celeg/checkpoint/formats/json.hpp"
+#include "hf_http.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -11,17 +12,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <winhttp.h>
-#include <shlwapi.h>
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "shlwapi.lib")
-#endif
 
 namespace celeg {
 
@@ -82,245 +72,6 @@ std::string format_bytes(size_t bytes) {
 
 namespace {
 
-std::wstring to_wide(const std::string& s) {
-    if (s.empty()) return L"";
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
-                                  static_cast<int>(s.size()), nullptr, 0);
-    std::wstring w(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
-                        static_cast<int>(s.size()), w.data(), len);
-    return w;
-}
-
-std::string to_narrow(const wchar_t* w, int len) {
-    if (len == 0) return "";
-    int n = WideCharToMultiByte(CP_UTF8, 0, w, len,
-                                nullptr, 0, nullptr, nullptr);
-    std::string s(n, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w, len,
-                        s.data(), n, nullptr, nullptr);
-    return s;
-}
-
-std::string url_encode(const std::string& s) {
-    static const char hex[] = "0123456789ABCDEF";
-    std::string out;
-    for (unsigned char c : s) {
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~'
-            || c == '/' || c == ':')
-            out += static_cast<char>(c);
-        else {
-            out += '%';
-            out += hex[c >> 4];
-            out += hex[c & 0xF];
-        }
-    }
-    return out;
-}
-
-constexpr const char* HF_ENDPOINT = "https://huggingface.co";
-constexpr const wchar_t* HF_HOST_W = L"huggingface.co";
-constexpr INTERNET_PORT HF_PORT = INTERNET_DEFAULT_HTTPS_PORT;
-
-struct WinHttpHandle {
-    HINTERNET h = nullptr;
-    WinHttpHandle() = default;
-    explicit WinHttpHandle(HINTERNET v) : h(v) {}
-    ~WinHttpHandle() { if (h) WinHttpCloseHandle(h); }
-    WinHttpHandle(const WinHttpHandle&) = delete;
-    WinHttpHandle& operator=(const WinHttpHandle&) = delete;
-    operator HINTERNET() const { return h; }
-    explicit operator bool() const { return h != nullptr; }
-};
-
-struct HttpResponse {
-    DWORD status = 0;
-    std::string body;
-};
-
-HttpResponse http_request(const std::string& method,
-                          const std::string& path,
-                          bool follow_redirects = true) {
-    WinHttpHandle session(WinHttpOpen(
-        L"celeg-native-cpp/0.0.20",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-    if (!session) throw std::runtime_error("WinHttpOpen failed");
-
-    DWORD policy = follow_redirects
-        ? WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS
-        : WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-    WinHttpSetOption(session, WINHTTP_OPTION_REDIRECT_POLICY,
-                     &policy, sizeof(policy));
-
-    WinHttpHandle conn(WinHttpConnect(session, HF_HOST_W, HF_PORT, 0));
-    if (!conn) throw std::runtime_error("WinHttpConnect failed");
-
-    std::wstring wpath = to_wide(path);
-    WinHttpHandle req(WinHttpOpenRequest(
-        conn, to_wide(method).c_str(), wpath.c_str(),
-        nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-        WINHTTP_FLAG_SECURE));
-    if (!req) throw std::runtime_error("WinHttpOpenRequest failed");
-
-    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
-        throw std::runtime_error("WinHttpSendRequest failed: " +
-            std::to_string(GetLastError()));
-
-    if (!WinHttpReceiveResponse(req, nullptr))
-        throw std::runtime_error("WinHttpReceiveResponse failed: " +
-            std::to_string(GetLastError()));
-
-    DWORD statusCode = 0;
-    DWORD size = sizeof(statusCode);
-    WinHttpQueryHeaders(req,
-        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &size,
-        WINHTTP_NO_HEADER_INDEX);
-
-    HttpResponse resp;
-    resp.status = statusCode;
-
-    DWORD avail = 0;
-    do {
-        avail = 0;
-        if (!WinHttpQueryDataAvailable(req, &avail)) break;
-        if (avail > 0) {
-            std::vector<char> buf(avail);
-            DWORD read = 0;
-            if (WinHttpReadData(req, buf.data(), avail, &read) && read > 0)
-                resp.body.append(buf.data(), read);
-        }
-    } while (avail > 0);
-
-    return resp;
-}
-
-void http_download_file(const std::string& path,
-                        const std::filesystem::path& output,
-                        size_t expected_size,
-                        bool quiet) {
-    std::error_code ec;
-    size_t total = std::filesystem::exists(output, ec)
-        ? static_cast<size_t>(std::filesystem::file_size(output, ec)) : 0;
-    if (ec) throw std::runtime_error("cannot inspect: " + output.string());
-    if (expected_size != 0 && total > expected_size) {
-        std::filesystem::resize_file(output, 0, ec);
-        if (ec) throw std::runtime_error("cannot reset: " + output.string());
-        total = 0;
-    }
-
-    constexpr int kAttempts = 5;
-    constexpr DWORD kChunk = 1024 * 1024;
-    constexpr size_t kProgressInterval = 16 * 1024 * 1024;
-    std::vector<char> buffer(kChunk);
-    std::string last_error;
-    for (int attempt = 0; attempt < kAttempts; ++attempt) {
-        WinHttpHandle session(WinHttpOpen(
-            L"celeg-native-cpp/0.0.20",
-            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-        if (!session) throw std::runtime_error("WinHttpOpen failed");
-        // A dropped large-file connection must fail and resume, rather than
-        // leaving a silent, truncated blob in the Hugging Face cache.
-        WinHttpSetTimeouts(session, 30000, 30000, 30000, 60000);
-        DWORD read_buffer_size = kChunk;
-        WinHttpSetOption(session, WINHTTP_OPTION_READ_BUFFER_SIZE,
-                         &read_buffer_size, sizeof(read_buffer_size));
-        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
-        WinHttpSetOption(session, WINHTTP_OPTION_REDIRECT_POLICY,
-                         &policy, sizeof(policy));
-
-        WinHttpHandle conn(WinHttpConnect(session, HF_HOST_W, HF_PORT, 0));
-        if (!conn) throw std::runtime_error("WinHttpConnect failed");
-        WinHttpHandle req(WinHttpOpenRequest(
-            conn, L"GET", to_wide(path).c_str(),
-            nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-            WINHTTP_FLAG_SECURE));
-        if (!req) throw std::runtime_error("WinHttpOpenRequest failed");
-
-        std::wstring range;
-        if (total != 0) {
-            range = L"Range: bytes=" + std::to_wstring(total) + L"-\r\n";
-            if (!WinHttpAddRequestHeaders(req, range.c_str(),
-                                          static_cast<DWORD>(range.size()),
-                                          WINHTTP_ADDREQ_FLAG_ADD)) {
-                throw std::runtime_error("cannot add Range header: " +
-                                         std::to_string(GetLastError()));
-            }
-        }
-        if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-            !WinHttpReceiveResponse(req, nullptr)) {
-            last_error = "HTTP request failed: " + std::to_string(GetLastError());
-            continue;
-        }
-
-        DWORD status = 0;
-        DWORD status_size = sizeof(status);
-        WinHttpQueryHeaders(req,
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
-            WINHTTP_NO_HEADER_INDEX);
-        if (status == 200 && total != 0) {
-            // Some mirrors ignore Range. Restart instead of appending a full
-            // file after the partial prefix.
-            std::ofstream reset(output, std::ios::binary | std::ios::trunc);
-            if (!reset) throw std::runtime_error("cannot reset: " + output.string());
-            total = 0;
-            continue;
-        }
-        if (status != (total == 0 ? 200 : 206)) {
-            last_error = "HTTP " + std::to_string(status) + " for " + path;
-            continue;
-        }
-
-        std::ofstream out(output, std::ios::binary | std::ios::app);
-        if (!out) throw std::runtime_error("cannot open: " + output.string());
-        size_t last_report = total;
-        bool complete = false;
-        for (;;) {
-            DWORD available = 0;
-            if (!WinHttpQueryDataAvailable(req, &available)) {
-                last_error = "download interrupted: " + std::to_string(GetLastError());
-                break;
-            }
-            if (available == 0) {
-                complete = true;
-                break;
-            }
-            const DWORD to_read = std::min(available, kChunk);
-            DWORD read = 0;
-            if (!WinHttpReadData(req, buffer.data(), to_read, &read) || read == 0) {
-                last_error = "download interrupted: " + std::to_string(GetLastError());
-                break;
-            }
-            out.write(buffer.data(), static_cast<std::streamsize>(read));
-            if (!out) throw std::runtime_error("write failed: " + output.string());
-            total += read;
-            if (!quiet && expected_size != 0 &&
-                (total - last_report >= kProgressInterval || total == expected_size)) {
-                const double percent = 100.0 * static_cast<double>(total) /
-                                       static_cast<double>(expected_size);
-                std::fprintf(stderr, "\r  %zu / %zu bytes (%.1f%%)",
-                             total, expected_size, percent);
-                last_report = total;
-            }
-        }
-        out.close();
-        if (complete && (expected_size == 0 || total == expected_size)) {
-            if (!quiet && expected_size != 0) std::fprintf(stderr, "\n");
-            return;
-        }
-        if (complete) {
-            last_error = "download size mismatch: got " + std::to_string(total) +
-                         ", expected " + std::to_string(expected_size);
-        }
-    }
-    throw std::runtime_error("download failed after retries: " + last_error);
-}
-
 std::string normalize_etag(const std::string& etag) {
     std::string s = etag;
     if (s.rfind("W/", 0) == 0) s = s.substr(2);
@@ -377,9 +128,9 @@ std::filesystem::path resume_path_for(const std::filesystem::path& blob_path) {
 
 std::string resolve_revision(const std::string& repo_id,
                              const std::string& revision) {
-    std::string path = "/api/models/" + url_encode(repo_id)
-                     + "/revision/" + url_encode(revision);
-    HttpResponse resp = http_request("GET", path);
+    std::string path = "/api/models/" + hf_internal::url_encode(repo_id)
+                     + "/revision/" + hf_internal::url_encode(revision);
+    hf_internal::HttpResponse resp = hf_internal::http_request("GET", path);
     if (resp.status != 200)
         throw std::runtime_error("cannot resolve revision " + revision
             + " for " + repo_id + ": HTTP " + std::to_string(resp.status));
@@ -391,10 +142,10 @@ std::string resolve_revision(const std::string& repo_id,
 
 std::vector<TreeFile> list_repo_files(const std::string& repo_id,
                                       const std::string& commit) {
-    std::string path = "/api/models/" + url_encode(repo_id)
-                     + "/tree/" + url_encode(commit)
+    std::string path = "/api/models/" + hf_internal::url_encode(repo_id)
+                     + "/tree/" + hf_internal::url_encode(commit)
                      + "?recursive=true&expand=true";
-    HttpResponse resp = http_request("GET", path);
+    hf_internal::HttpResponse resp = hf_internal::http_request("GET", path);
     if (resp.status != 200)
         throw std::runtime_error("cannot list files: HTTP "
             + std::to_string(resp.status));
@@ -497,13 +248,14 @@ DownloadResult download_model(const DownloadOptions& options) {
                 std::cerr << "  downloading: " << tf.path
                           << " (" << format_bytes(tf.size) << ")\n";
 
-            std::string url_path = "/" + url_encode(options.repo_id)
-                                 + "/resolve/" + url_encode(commit)
-                                 + "/" + url_encode(tf.path);
+            std::string url_path = "/" + hf_internal::url_encode(options.repo_id)
+                                 + "/resolve/" + hf_internal::url_encode(commit)
+                                 + "/" + hf_internal::url_encode(tf.path);
 
             const std::filesystem::path incomplete = resume_path_for(blob_path);
 
-            http_download_file(url_path, incomplete, tf.size, options.quiet);
+            hf_internal::http_download_file(url_path, incomplete, tf.size,
+                                            options.quiet);
 
             std::filesystem::rename(incomplete, blob_path);
             result.downloaded_files.push_back(tf.path);

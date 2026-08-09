@@ -14,17 +14,32 @@
 
 namespace celeg {
 
-class BpeTokenizer {
+class ITokenizer {
+public:
+    virtual ~ITokenizer() = default;
+    virtual std::vector<int32_t> encode(std::string_view text,
+                                        bool add_bos = true) const = 0;
+    virtual std::string decode(const std::vector<int32_t>& ids,
+                               bool skip_special = true) const = 0;
+    virtual std::string decode_token(int32_t id,
+                                     bool skip_special = true) const = 0;
+    virtual std::optional<int32_t> token_id(std::string_view text) const = 0;
+    virtual int32_t bos_id() const = 0;
+    virtual int32_t eos_id() const = 0;
+    virtual int32_t pad_id() const = 0;
+};
+
+class BpeTokenizer final : public ITokenizer {
 public:
     explicit BpeTokenizer(const TokenizerDefinition& definition);
 
-    std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const;
-    std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const;
-    std::string decode_token(int32_t id, bool skip_special = true) const;
-    int32_t bos_id() const { return bos_id_; }
-    int32_t eos_id() const { return eos_id_; }
-    int32_t pad_id() const { return pad_id_; }
-    std::optional<int32_t> token_id(std::string_view text) const;
+    std::vector<int32_t> encode(std::string_view text, bool add_bos = true) const override;
+    std::string decode(const std::vector<int32_t>& ids, bool skip_special = true) const override;
+    std::string decode_token(int32_t id, bool skip_special = true) const override;
+    int32_t bos_id() const override { return bos_id_; }
+    int32_t eos_id() const override { return eos_id_; }
+    int32_t pad_id() const override { return pad_id_; }
+    std::optional<int32_t> token_id(std::string_view text) const override;
 
 private:
     struct SpecialToken {

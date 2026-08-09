@@ -69,7 +69,10 @@ int main(int argc, char** argv) {
 
         std::vector<int> moe_layer_ids;
         for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
-            if (shape.layer_uses_moe(layer)) moe_layer_ids.push_back(layer);
+            if (model.graph.layers.at(static_cast<size_t>(layer)).feed_forward_kind() ==
+                    celeg::FeedForwardKind::MixtureOfExperts) {
+                moe_layer_ids.push_back(layer);
+            }
         }
         const int moe_layers = static_cast<int>(moe_layer_ids.size());
         if (moe_layers == 0) {

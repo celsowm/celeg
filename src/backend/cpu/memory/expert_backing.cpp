@@ -96,7 +96,9 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
     }
     if (layer < 0 || layer >= shape.num_hidden_layers ||
         expert < 0 || expert >= shape.num_experts ||
-        !shape.layer_uses_moe(layer)) {
+        layer >= static_cast<int>(program.layers.size()) ||
+        program.layers[static_cast<size_t>(layer)].feed_forward !=
+            CompiledFeedForward::MixtureOfExperts) {
         throw std::out_of_range("CPU expert cache request is out of range");
     }
 
