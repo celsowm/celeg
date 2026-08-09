@@ -64,6 +64,7 @@ struct Descriptor {
     std::string disable_rope_json;
     std::string disable_rope_gguf;
     std::string position_kind = "rope";
+    std::string rope_pairing = "split_half";
     std::optional<Field> position_kind_field;
     std::optional<Field> alibi_slopes;
     std::optional<Field> relative_bucket_count;
