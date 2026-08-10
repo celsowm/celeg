@@ -351,7 +351,10 @@ int main(int argc, char** argv) {
         }
 
         const auto chat_catalog = celeg::make_chat_profile_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
+        const celeg::IChatTemplate* chat_template = nullptr;
+        if (!args.raw_prompt) {
+            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
+        }
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, is_gguf ? gguf_path : model);
         const auto tokenizer_storage = tokenizer_provider.create(
@@ -373,7 +376,7 @@ int main(int argc, char** argv) {
             }
             chat_messages.push_back({celeg::ChatRole::User, args.prompt});
             const std::string formatted = args.raw_prompt
-                ? args.prompt : celeg::render_chat(chat_messages, chat_template);
+                ? args.prompt : celeg::render_chat(chat_messages, *chat_template);
             // Chat formatting contains <|startoftext|>; raw prompts receive BOS automatically.
             input = tokenizer.encode(formatted, args.raw_prompt);
             if (args.benchmark_prefill_tokens > 0) {

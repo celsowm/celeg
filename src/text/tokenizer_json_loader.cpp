@@ -106,6 +106,7 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
     }
 
     add_reasoning_delimiters(definition);
+    int32_t endoftext_id = -1;
     for (const auto& token : definition.special_tokens) {
         if (token.text == "<|startoftext|>" || token.text == "<|start_of_text|>" ||
             token.text == "<|begin_of_text|>" || token.text == "<bos>" ||
@@ -114,7 +115,12 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
         }
         if (token.text == "<|im_end|>" || token.text == "<eos>" ||
             token.text == "<|end_of_text|>") definition.eos_id = token.id;
+        if (token.text == "<|endoftext|>") endoftext_id = token.id;
         if (token.text == "<pad>" || token.text == "<|pad|>") definition.pad_id = token.id;
+    }
+    if (endoftext_id >= 0) {
+        definition.bos_id = endoftext_id;
+        definition.eos_id = endoftext_id;
     }
     return definition;
 }

@@ -183,7 +183,10 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--context exceeds model maximum");
         }
         const auto chat_catalog = celeg::make_chat_profile_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
+        const celeg::IChatTemplate* chat_template = nullptr;
+        if (!args.raw_prompt) {
+            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
+        }
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
@@ -195,7 +198,7 @@ int main(int argc, char** argv) {
         }
         chat_messages.push_back({celeg::ChatRole::User, args.prompt});
         const std::string text = args.raw_prompt
-            ? args.prompt : celeg::render_chat(chat_messages, chat_template);
+            ? args.prompt : celeg::render_chat(chat_messages, *chat_template);
         const std::vector<int32_t> input = tokenizer.encode(text, args.raw_prompt);
         if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {
             throw std::runtime_error("prompt plus output exceeds context");

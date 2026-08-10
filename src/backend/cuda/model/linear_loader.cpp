@@ -380,6 +380,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     size_t total_count = 0;
     std::vector<HostTensorView> views;
     views.reserve(parts.size());
+    std::vector<std::vector<__nv_bfloat16>> converted_dense;
+    converted_dense.reserve(parts.size());
     for (const auto& [name, expected] : parts) {
         const HostTensorView tensor = repo.tensor(name);
         if (tensor.shape != expected || tensor.shape.size() != 2) {
@@ -394,16 +396,41 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             total_rows += tensor.shape[0];
             continue;
         }
-        if (tensor.dtype != TensorDType::BF16) {
+        if (tensor.dtype != TensorDType::BF16 && tensor.dtype != TensorDType::F16 &&
+            tensor.dtype != TensorDType::F32) {
             throw std::runtime_error("unexpected concat tensor dtype: " + name);
         }
         const size_t count = cuda_loader_detail::checked_element_count(tensor.shape);
-        if (tensor.bytes != count * sizeof(__nv_bfloat16)) {
+        const size_t element_bytes = tensor.dtype == TensorDType::F32
+            ? sizeof(float)
+            : (tensor.dtype == TensorDType::F16 ? sizeof(__half) : sizeof(__nv_bfloat16));
+        if (tensor.bytes != count * element_bytes) {
             throw std::runtime_error("invalid concatenated tensor bytes: " + name);
+        }
+        if (tensor.dtype != TensorDType::BF16) {
+            converted_dense.emplace_back(count);
+            auto& converted = converted_dense.back();
+            if (tensor.dtype == TensorDType::F16) {
+                const __half* source = reinterpret_cast<const __half*>(tensor.data);
+                for (size_t i = 0; i < count; ++i) {
+                    converted[i] = __float2bfloat16(__half2float(source[i]));
+                }
+            } else {
+                const float* source = reinterpret_cast<const float*>(tensor.data);
+                for (size_t i = 0; i < count; ++i) {
+                    converted[i] = __float2bfloat16(source[i]);
+                }
+            }
+            HostTensorView converted_view = tensor;
+            converted_view.dtype = TensorDType::BF16;
+            converted_view.data = reinterpret_cast<const std::byte*>(converted.data());
+            converted_view.bytes = count * sizeof(__nv_bfloat16);
+            views.push_back(std::move(converted_view));
+        } else {
+            views.push_back(tensor);
         }
         total_count += count;
         total_rows += tensor.shape[0];
-        views.push_back(tensor);
     }
 
     bool any_quantized = false;
