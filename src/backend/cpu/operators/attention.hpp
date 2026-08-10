@@ -26,7 +26,7 @@ void apply_cpu_attention_output_transform(const AttentionSpec& layout,
                                           float* output,
                                           const float* current_value);
 
-void apply_cpu_query_gate(float* output, const float* gate, size_t width);
+void apply_cpu_attention_output_gate(float* output, const float* gate, size_t width);
 
 void execute_cpu_attention_token(
     CpuExecutionContext& execution,

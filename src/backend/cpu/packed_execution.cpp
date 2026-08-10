@@ -200,7 +200,7 @@ struct CpuCompiledModel::BatchScratch {
                             workspace_.op_output.data() + row * q_width,
                             attention->relative_bias);
                         if (layout.output_gate.enabled()) {
-                            apply_cpu_query_gate(
+                            apply_cpu_attention_output_gate(
                                 workspace_.op_output.data() + row * q_width,
                                 workspace_.qkv.data() + row * q_projection_width + q_width,
                                 q_width);
@@ -260,7 +260,7 @@ struct CpuCompiledModel::BatchScratch {
                 } else {
                 const size_t q_width = static_cast<size_t>(layout.query_width());
                 const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
-            const bool query_gate = layout.output_gate.enabled() ||
+            const bool attention_output_gate = layout.output_gate.enabled() ||
                     q_projection_width == 2 * q_width;
                 const size_t kv_width = static_cast<size_t>(layout.key_value_width());
                 layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());
@@ -290,10 +290,10 @@ struct CpuCompiledModel::BatchScratch {
                                                  workspace_.op_output.data() + row * q_width,
                                                  sessions[row]->session_.position_value + 1,
                                                  attention->relative_bias);
-                    if (query_gate) {
+                    if (attention_output_gate) {
                         const float* gate = workspace_.qkv.data() + row * q_projection_width + q_width;
                         float* output = workspace_.op_output.data() + row * q_width;
-                        apply_cpu_query_gate(output, gate, q_width);
+                        apply_cpu_attention_output_gate(output, gate, q_width);
                     }
                 }
                 layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());

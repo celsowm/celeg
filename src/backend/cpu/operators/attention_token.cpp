@@ -29,7 +29,7 @@ void execute_cpu_attention_token(
                     execution.shared.linear.gemv(attention.gate,
                                                  execution.workspace.normed.data(),
                                                  execution.workspace.attention_gate.data());
-                    apply_cpu_query_gate(execution.workspace.op_output.data(),
+                    apply_cpu_attention_output_gate(execution.workspace.op_output.data(),
                                          execution.workspace.attention_gate.data(),
                                          static_cast<size_t>(q_width));
                 }
@@ -104,7 +104,7 @@ void execute_cpu_attention_token(
                                                  execution.workspace.attention_gate.data());
                     gate = execution.workspace.attention_gate.data();
                 }
-                apply_cpu_query_gate(execution.workspace.op_output.data(),
+                    apply_cpu_attention_output_gate(execution.workspace.op_output.data(),
                                      gate,
                                      static_cast<size_t>(q_width));
             }

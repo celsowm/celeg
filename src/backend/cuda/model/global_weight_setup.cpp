@@ -11,6 +11,8 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <cstdlib>
+#include <string_view>
 
 namespace celeg {
 namespace {
@@ -26,6 +28,9 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
                            const std::string& model_path,
                            const detail::ModelBootstrap& bootstrap,
                            LayerLoader load_layers) {
+    const char* managed = std::getenv("CELEG_CUDA_MANAGED_WEIGHTS");
+    CudaManagedWeightAllocationScope managed_scope(
+        managed && std::string_view(managed) == "1");
     model.resources_.weights_ = WeightLoader::acquire(
         model_path, model.resources_.options_.weight_mode,
         model.resources_.options_.expert_offload.fingerprint() +

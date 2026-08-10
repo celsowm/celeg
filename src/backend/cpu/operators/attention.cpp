@@ -129,7 +129,7 @@ void apply_cpu_attention_output_transform(const AttentionSpec& layout,
     }
 }
 
-void apply_cpu_query_gate(float* output, const float* gate, size_t width) {
+void apply_cpu_attention_output_gate(float* output, const float* gate, size_t width) {
     for (size_t i = 0; i < width; ++i) {
         output[i] *= 1.0f / (1.0f + std::exp(-gate[i]));
     }

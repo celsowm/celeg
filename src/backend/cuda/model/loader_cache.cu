@@ -19,6 +19,7 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
     CELEG_CUDA(cudaGetDevice(&device_id));
     std::ostringstream key_builder;
     key_builder << device_id << ':' << static_cast<int>(weight_mode) << ':'
+                << (g_cuda_managed_weight_allocations ? "managed" : "device") << ':'
                 << std::filesystem::weakly_canonical(model_path).string();
     const std::string key = key_builder.str();
     std::lock_guard<std::mutex> lock(cache_mutex);

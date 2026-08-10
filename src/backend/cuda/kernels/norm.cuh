@@ -166,7 +166,7 @@ void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-__global__ void extract_query_gate_kernel(__nv_bfloat16* projected,
+__global__ void extract_attention_output_gate_kernel(__nv_bfloat16* projected,
                                           __nv_bfloat16* gate,
                                           int rows, int width) {
     const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -182,10 +182,10 @@ __global__ void extract_query_gate_kernel(__nv_bfloat16* projected,
     gate[index] = g;
 }
 
-void launch_extract_query_gate(__nv_bfloat16* projected, __nv_bfloat16* gate,
+void launch_extract_attention_output_gate(__nv_bfloat16* projected, __nv_bfloat16* gate,
                                int rows, int width, cudaStream_t stream) {
     const size_t total = static_cast<size_t>(rows) * width;
-    extract_query_gate_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
+    extract_attention_output_gate_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
         projected, gate, rows, width);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

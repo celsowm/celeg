@@ -47,6 +47,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
     int layer_idx = 0;
     for (Layer& layer : resources_.layers_) {
         LayerCommon& common_layer = common(layer);
+        const CompiledLayerProgram& semantics = resources_.program_.layers.at(static_cast<size_t>(layer_idx));
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
             CELEG_CUDA(cudaMemcpyAsync(
                 workspace_.prefill_residual_.data(), workspace_.prefill_hidden_.data(),
@@ -56,7 +57,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         prof.begin(stream_.get());
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.operator_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
-                       resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                       semantics.operator_norm.epsilon, stream_.get());
         prof.end(PrefillPhase::Norm, stream_.get());
 
         if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
@@ -219,7 +220,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.begin(stream_.get());
             if (output_gate) {
                 if (layout.output_gate.packed_with_query) {
-                    launch_extract_query_gate(workspace_.prefill_q_.data(),
+                    launch_extract_attention_output_gate(workspace_.prefill_q_.data(),
                                               workspace_.prefill_attention_gate_.data(),
                                               rows, layout.query_width(), stream_.get());
                 } else {
@@ -377,7 +378,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.post_attention_norm,
                            workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
-                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                           semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
             prof.begin(stream_.get());
@@ -391,7 +392,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), resources_.final_norm_,
                            workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
-                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                           resources_.program_.final_norm.epsilon, stream_.get());
         }
         prof.end(PrefillPhase::Mlp, stream_.get());
         ++layer_idx;
@@ -401,7 +402,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
     const __nv_bfloat16* last_hidden = workspace_.prefill_hidden_.data() +
         static_cast<size_t>(rows - 1) * resources_.shape_.hidden;
     launch_rmsnorm(last_hidden, resources_.final_norm_, workspace_.normed_.data(),
-                   1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
+                   1, resources_.shape_.hidden, resources_.program_.final_norm.epsilon,
                    stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
            1, resources_.shape_.vocab_size, resources_.shape_.hidden);

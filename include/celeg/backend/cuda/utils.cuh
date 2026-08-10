@@ -13,6 +13,22 @@
 
 namespace celeg {
 
+inline bool g_cuda_managed_weight_allocations = false;
+
+class CudaManagedWeightAllocationScope {
+public:
+    explicit CudaManagedWeightAllocationScope(bool enabled)
+        : previous_(g_cuda_managed_weight_allocations) {
+        g_cuda_managed_weight_allocations = enabled;
+    }
+    ~CudaManagedWeightAllocationScope() {
+        g_cuda_managed_weight_allocations = previous_;
+    }
+
+private:
+    bool previous_;
+};
+
 struct CudaAllocationSnapshot {
     size_t device_allocations = 0;
     size_t device_bytes = 0;
@@ -81,6 +97,13 @@ inline void check_cublas(cublasStatus_t status, const char* call) {
 #define CELEG_CUDA_STRINGIFY_IMPL(value) #value
 #define CELEG_CUDA_STRINGIFY(value) CELEG_CUDA_STRINGIFY_IMPL(value)
 #define CELEG_KERNEL_CHECK() ::celeg::check_cuda(cudaPeekAtLastError(), "CUDA kernel launch at " __FILE__ ":" CELEG_CUDA_STRINGIFY(__LINE__))
+
+inline void cuda_prefer_managed_host(const void* pointer, size_t bytes) {
+    cudaMemLocation location{};
+    location.type = cudaMemLocationTypeHost;
+    location.id = 0;
+    CELEG_CUDA(cudaMemAdvise(pointer, bytes, cudaMemAdviseSetPreferredLocation, location));
+}
 
 #if defined(CELEG_DEBUG_SYNC) && CELEG_DEBUG_SYNC
 #define CELEG_KERNEL_DEBUG_SYNC(stream)                    \
@@ -247,7 +270,13 @@ public:
         ptr_ = nullptr;
         count_ = count;
         if (count_) {
-            CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            if (g_cuda_managed_weight_allocations) {
+                CELEG_CUDA(cudaMallocManaged(reinterpret_cast<void**>(&ptr_),
+                    count_ * sizeof(T), cudaMemAttachGlobal));
+                cuda_prefer_managed_host(ptr_, count_ * sizeof(T));
+            } else {
+                CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            }
             record_cuda_device_allocation(count_ * sizeof(T));
         }
     }
@@ -258,7 +287,13 @@ public:
         ptr_ = nullptr;
         count_ = count;
         if (count_) {
-            CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            if (g_cuda_managed_weight_allocations) {
+                CELEG_CUDA(cudaMallocManaged(reinterpret_cast<void**>(&ptr_),
+                    count_ * sizeof(T), cudaMemAttachGlobal));
+                cuda_prefer_managed_host(ptr_, count_ * sizeof(T));
+            } else {
+                CELEG_CUDA(cudaMalloc(reinterpret_cast<void**>(&ptr_), count_ * sizeof(T)));
+            }
             record_cuda_device_allocation(count_ * sizeof(T));
         }
     }

@@ -27,7 +27,7 @@ void launch_multiply(__nv_bfloat16* x, const __nv_bfloat16* y, int count,
                      cudaStream_t stream);
 void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
                              int count, cudaStream_t stream);
-void launch_extract_query_gate(__nv_bfloat16* projected, __nv_bfloat16* gate,
+void launch_extract_attention_output_gate(__nv_bfloat16* projected, __nv_bfloat16* gate,
                                int rows, int width, cudaStream_t stream);
 void launch_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* y,
                              int rows, int width, int y_stride, int y_offset,

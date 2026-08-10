@@ -227,7 +227,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                             }
                             gate = workspace_.chunk_attention_gate.data() + row * q_width;
                         }
-                        apply_cpu_query_gate(workspace_.chunk_op.data() + row * q_width,
+                        apply_cpu_attention_output_gate(workspace_.chunk_op.data() + row * q_width,
                                              gate,
                                              q_width);
                     }
@@ -357,7 +357,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         ? workspace_.chunk_qkv.data() + row * q_projection_width + q_width
                         : workspace_.chunk_attention_gate.data() + row * q_width;
                     float* output = workspace_.chunk_op.data() + row * q_width;
-                    apply_cpu_query_gate(output, gate, q_width);
+                    apply_cpu_attention_output_gate(output, gate, q_width);
                 }
             }
             session_.prefill_profile.attention_ms += milliseconds_since(attention_started);

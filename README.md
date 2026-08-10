@@ -1,7 +1,7 @@
 # Celeg
 
 Celeg is a native C++20 inference runtime for LFM2, LFM2.5, Granite, MiniCPM5,
-SmolLM3, and Nemotron 3 Nano language models. It provides independent CPU and NVIDIA CUDA
+SmolLM3, Muse Glimmer, and Nemotron 3 Nano language models. It provides independent CPU and NVIDIA CUDA
 backends, direct checkpoint loading, quantized execution, an OpenAI-compatible
 server, and a public C API.
 
@@ -18,6 +18,12 @@ Safetensors checkpoint directory, or a local GGUF file.
 | MiniCPM5-1B | Yes | Yes | Yes | Yes |
 | SmolLM3-3B | Yes | Yes | Yes | Yes |
 | Nemotron 3 Nano 4B | Yes | Q4_K_M | Yes | Yes |
+| Muse Glimmer 30B | Yes | UD-IQ2_XXS* | Yes | Yes |
+
+* Muse Glimmer is Tier A native text support and includes a registered Tier B
+image provider for the official Safetensors packaging. The CUDA loader also
+supports managed host-preferred weight residency for low-VRAM smoke checks;
+enable it with `CELEG_CUDA_MANAGED_WEIGHTS=1`.
 
 MiniCPM5-1B uses the standard Llama tensor layout with GQA (16 query heads,
 2 KV heads), 131072-token context metadata, and both EOS markers from the

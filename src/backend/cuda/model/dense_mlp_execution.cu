@@ -10,7 +10,8 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         run_mlp_moe_decode(common_layer, layer);
     } else {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                       1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
+                       1, resources_.shape_.hidden,
+                       resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward_norm.epsilon,
                        stream_.get());
         const int intermediate = layer >= 0 &&
                 layer < static_cast<int>(resources_.shape_.feed_forward_intermediates.size())
@@ -49,7 +50,8 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             if (split_output) {
                 launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
                                workspace_.mlp_output_.data(), 1, resources_.shape_.hidden,
-                               resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                               resources_.program_.layers.at(static_cast<size_t>(layer)).post_feed_forward_norm.epsilon,
+                               stream_.get());
             }
             launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.residual_multiplier,
                          stream_.get());
@@ -72,7 +74,8 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
-                       resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                       resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward_norm.epsilon,
+                       stream_.get());
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
                rows, 2 * intermediate, resources_.shape_.hidden);
@@ -115,7 +118,8 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         if (split_output) {
             launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
                            workspace_.prefill_mlp_output_.data(), rows, resources_.shape_.hidden,
-                           resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                           resources_.program_.layers.at(static_cast<size_t>(layer)).post_feed_forward_norm.epsilon,
+                           stream_.get());
         }
         launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.shape_.hidden,
                      resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
