@@ -3,6 +3,7 @@
 #include "celeg/models/granite/chat_template.hpp"
 #include "celeg/models/lfm2/chat_template.hpp"
 #include "celeg/models/minicpm5/chat_template.hpp"
+#include "celeg/models/muse_glimmer/chat_template.hpp"
 #include "celeg/models/nanbeige/chat_template.hpp"
 #include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
@@ -125,6 +126,16 @@ int main() {
     CELEG_TEST_CHECK(qwen35_prompt ==
         "<|im_start|>user\nDescribe <|vision_start|><|image_pad|><|vision_end|>.<|im_end|>\n"
         "<|im_start|>assistant\n");
+
+    const auto& muse = catalog.find("muse-glimmer");
+    const auto muse_capabilities = catalog.capabilities("muse-glimmer");
+    CELEG_TEST_CHECK(muse_capabilities.vision);
+    CELEG_TEST_CHECK(muse_capabilities.video);
+    CELEG_TEST_CHECK(muse_capabilities.image_marker == "<|patch|>");
+    const std::string muse_prompt = muse.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Describe <|image|>."}}, true);
+    CELEG_TEST_CHECK(muse_prompt.find("<|patch|>") != std::string::npos);
+    CELEG_TEST_CHECK(muse_prompt.ends_with("<|start|>assistant"));
 
     const auto& nemotron = catalog.find("nemotron-h-instruct");
     CELEG_TEST_CHECK(!catalog.capabilities("nemotron-h-instruct").native_tool_call_codec);

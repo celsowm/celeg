@@ -31,10 +31,18 @@ std::string MuseGlimmerChatTemplate::format(
         if (message.role == ChatRole::Tool || message.role == ChatRole::Developer) {
             throw std::invalid_argument("Muse Glimmer profile does not support this chat role");
         }
+        std::string content = message.content.value_or("");
+        constexpr std::string_view generic_image_marker = "<|image|>";
+        constexpr std::string_view muse_image_marker = "<|patch|>";
+        for (std::size_t found = content.find(generic_image_marker);
+             found != std::string::npos;
+             found = content.find(generic_image_marker, found + muse_image_marker.size())) {
+            content.replace(found, generic_image_marker.size(), muse_image_marker);
+        }
         const char* role = message.role == ChatRole::System ? "system" :
                            message.role == ChatRole::User ? "user" : "assistant";
         out += "<|start|>" + std::string(role) + "<|message|>" +
-               message.content.value_or("") + "<|eot|>";
+               content + "<|eot|>";
     }
     if (add_generation_prompt) out += "<|start|>assistant";
     return out;

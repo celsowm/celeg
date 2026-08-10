@@ -140,11 +140,15 @@ void CpuCompiledModel::Shared::load_weights() {
             tensor_name(weight_requests, TensorRole::LanguageModelHead),
             {shape.vocab_size, shape.hidden});
     }
-    weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
-        tensor_name(weight_requests, TensorRole::FinalNorm),
-        {shape.hidden});
-    if (program.final_norm.weight_kind == NormWeightKind::OnePlusScale) {
-        for (float& value : weight_store.final_norm) value += 1.0f;
+    if (program.final_norm.weightless()) {
+        weight_store.final_norm.assign(static_cast<size_t>(shape.hidden), 1.0f);
+    } else {
+        weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
+            tensor_name(weight_requests, TensorRole::FinalNorm),
+            {shape.hidden});
+        if (program.final_norm.weight_kind == NormWeightKind::OnePlusScale) {
+            for (float& value : weight_store.final_norm) value += 1.0f;
+        }
     }
     if (program.embedding_transform.post_norm) {
         const NormSpec& spec = *program.embedding_transform.post_norm;

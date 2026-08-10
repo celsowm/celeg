@@ -301,12 +301,13 @@ private:
         }
         constexpr int window = 32;
         std::vector<std::vector<int>> groups;
+        int reordered_offset = 0;
         for (int begin_y = 0; begin_y < height; begin_y += window) {
             for (int begin_x = 0; begin_x < width; begin_x += window) {
                 std::vector<int> group;
                 for (int y = begin_y; y < std::min(begin_y + window, height); ++y) {
                     for (int x = begin_x; x < std::min(begin_x + window, width); ++x) {
-                        group.push_back(y * width + x);
+                        group.push_back(reordered_offset++);
                     }
                 }
                 groups.push_back(std::move(group));
