@@ -504,6 +504,10 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(architecture_resolution_test PRIVATE include)
     target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
+    add_executable(automatic_inference_test tests/automatic_inference_test.cpp)
+    target_include_directories(automatic_inference_test PRIVATE include tests)
+    target_link_libraries(automatic_inference_test PRIVATE celeg_base)
+    add_test(NAME automatic_inference_test COMMAND automatic_inference_test)
     set(CELEG_CHAT_TEMPLATE_SOURCES
         src/composition/builtin_chat_profiles.cpp
         src/text/chat_template.cpp src/text/chat_template_support.cpp

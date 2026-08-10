@@ -56,4 +56,9 @@ private:
     std::vector<std::unique_ptr<IArchitecture>> architectures_;
 };
 
+// Registers the evidence-driven checkpoint provider. It is deliberately a
+// fallback provider: explicit descriptors/importers outrank it when they
+// supply semantics that cannot be inferred from the checkpoint itself.
+std::unique_ptr<IArchitecture> make_automatic_architecture();
+
 } // namespace celeg

@@ -1,4 +1,5 @@
 #include "celeg/checkpoint/metadata.hpp"
+#include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/model/architecture.hpp"
 #include "celeg/runtime/context.hpp"
 #include "support/assertions.hpp"
@@ -7,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include <unordered_map>
 
 namespace {
 
@@ -178,6 +180,42 @@ celeg::CheckpointMetadata gptx25_metadata() {
     return metadata;
 }
 
+class GptxRepository final : public celeg::IWeightRepository {
+public:
+    GptxRepository() {
+        shapes_["transformer.wte.weight"] = {32770, 576};
+        shapes_["transformer.ln_f.weight"] = {576};
+        for (int layer = 0; layer < 30; ++layer) {
+            const std::string prefix = "transformer.h." + std::to_string(layer);
+            shapes_[prefix + ".ln_1.weight"] = {576};
+            shapes_[prefix + ".attn.q_proj.weight"] = {576, 576};
+            shapes_[prefix + ".attn.k_proj.weight"] = {192, 576};
+            shapes_[prefix + ".attn.v_proj.weight"] = {192, 576};
+            shapes_[prefix + ".attn.o_proj.weight"] = {576, 576};
+            shapes_[prefix + ".ln_2.weight"] = {576};
+            shapes_[prefix + ".mlp.w_gate.weight"] = {1728, 576};
+            shapes_[prefix + ".mlp.w_up.weight"] = {1728, 576};
+            shapes_[prefix + ".mlp.w_down.weight"] = {576, 1728};
+        }
+    }
+    bool contains(std::string_view name) const override {
+        return shapes_.contains(std::string(name));
+    }
+    celeg::HostTensorView tensor(std::string_view name) const override {
+        return {celeg::TensorDType::BF16, shapes_.at(std::string(name)), nullptr, 0};
+    }
+    std::vector<std::string> names() const override {
+        std::vector<std::string> result;
+        for (const auto& [name, shape] : shapes_) {
+            (void)shape;
+            result.push_back(name);
+        }
+        return result;
+    }
+private:
+    std::unordered_map<std::string, std::vector<int64_t>> shapes_;
+};
+
 } // namespace
 
 int main() {
@@ -200,9 +238,10 @@ int main() {
 
     const auto gptx_metadata = gptx25_metadata();
     const auto& gptx_architecture = catalog.select(gptx_metadata);
-    CELEG_TEST_CHECK(gptx_architecture.id() == "gptx2");
+    CELEG_TEST_CHECK(gptx_architecture.id() == "automatic");
     celeg::CheckpointView gptx_checkpoint;
     gptx_checkpoint.metadata = gptx_metadata;
+    gptx_checkpoint.repository = std::make_shared<GptxRepository>();
     const auto gptx = gptx_architecture.resolve(gptx_checkpoint);
     CELEG_TEST_CHECK(gptx.topology.hidden == 576);
     CELEG_TEST_CHECK(gptx.topology.intermediate == 1728);

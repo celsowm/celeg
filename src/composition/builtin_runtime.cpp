@@ -43,6 +43,7 @@ public:
     std::string_view id() const override { return "declarative-dense-architectures"; }
 
     void register_into(RuntimeBuilder& builder) const override {
+        builder.add_architecture(make_automatic_architecture());
         std::filesystem::path descriptor_directory(CELEG_DESCRIPTOR_DIRECTORY);
         if (!std::filesystem::exists(descriptor_directory)) {
 #ifdef CELEG_DESCRIPTOR_INSTALL_DIRECTORY
