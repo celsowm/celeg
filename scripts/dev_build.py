@@ -1,0 +1,288 @@
+"""Build, test, and smoke orchestration."""
+
+from __future__ import annotations
+
+import argparse
+import pathlib
+import re
+import subprocess
+import sys
+from typing import Mapping, Sequence
+
+from dev_environment import DevError, Environment, env_value, run_capture, which
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+HF_REPO = "LiquidAI/LFM2.5-230M"
+
+
+def build_directory(args: argparse.Namespace, environment: Environment) -> pathlib.Path:
+    if args.build_dir:
+        return pathlib.Path(args.build_dir).expanduser().resolve()
+    flavor = f"{environment.platform_name}-{environment.backend}-{args.build_type.lower()}"
+    return ROOT / "out" / flavor
+
+
+def configure_command(
+    args: argparse.Namespace,
+    environment: Environment,
+    directory: pathlib.Path,
+    *,
+    allow_unsupported: bool = False,
+) -> list[str]:
+    assert environment.cmake
+    command = [
+        str(environment.cmake.path),
+        "--fresh",
+        "-S",
+        str(ROOT),
+        "-B",
+        str(directory),
+        "-G",
+        "Ninja",
+        f"-DCMAKE_BUILD_TYPE={args.build_type}",
+        f"-DCELEG_ENABLE_CUDA={'ON' if environment.backend == 'cuda' else 'OFF'}",
+        "-DCELEG_BUILD_TESTS=ON",
+        f"-DCELEG_RUN_CUDA_TESTS={'ON' if args.celeg_tests == 'on' else 'OFF'}",
+    ]
+    # Do not let CMake rediscover a newer preview toolset from the global
+    # machine when the harness already selected a CUDA-compatible MSVC host.
+    # This also makes --fresh deterministic after a prior build cached a
+    # different compiler.
+    if environment.platform_name == "windows" and environment.compiler:
+        command.extend(
+            [
+                f"-DCMAKE_C_COMPILER={environment.compiler.path}",
+                f"-DCMAKE_CXX_COMPILER={environment.compiler.path}",
+            ]
+        )
+    if environment.backend == "cuda":
+        assert environment.nvcc
+        command.extend(
+            [
+                f"-DCMAKE_CUDA_COMPILER={environment.nvcc.path}",
+                f"-DCMAKE_CUDA_ARCHITECTURES={environment.gpu_arch}",
+                # Pin the host compiler by absolute path. NVCC's compiler
+                # identification can otherwise invoke bare `cl.exe` from a
+                # different process environment than CMake's CXX compiler.
+                "-DCMAKE_CUDA_FLAGS_INIT=--use-local-env",
+            ]
+        )
+        if allow_unsupported:
+            command.append("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler")
+    if environment.msvc_include_prefix:
+        command.append(f"-DCELEG_MSVC_SHOWINCLUDES_PREFIX={environment.msvc_include_prefix}")
+    serve = env_value(environment.values, "CELEG_ENABLE_SERVE")
+    if serve:
+        command.append(f"-DCELEG_ENABLE_SERVE={serve}")
+    return command
+
+
+def run_visible(
+    command: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    cwd: pathlib.Path = ROOT,
+    capture: bool = False,
+    filter_includes: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    print("+", subprocess.list2cmdline(list(command)))
+    if capture:
+        result = run_capture(command, env=env, cwd=cwd)
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+        return result
+    if filter_includes:
+        process = subprocess.Popen(
+            list(command),
+            cwd=str(cwd),
+            env=dict(env),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        assert process.stdout
+        for line in process.stdout:
+            lower = line.casefold()
+            if "including file:" in lower or "incluindo arquivo:" in lower:
+                continue
+            print(line, end="")
+        return subprocess.CompletedProcess(list(command), process.wait())
+    return subprocess.run(list(command), cwd=str(cwd), env=dict(env), text=True, check=False)
+
+
+def configure(args: argparse.Namespace, environment: Environment, directory: pathlib.Path) -> None:
+    result = run_visible(
+        configure_command(args, environment, directory),
+        env=environment.values,
+        capture=True,
+    )
+    if result.returncode == 0:
+        return
+    unsupported = re.search(
+        r"unsupported\s+(?:Microsoft\s+)?Visual Studio|allow-unsupported-compiler",
+        result.stdout or "",
+        re.IGNORECASE,
+    )
+    if environment.backend == "cuda" and unsupported:
+        print("configure: NVCC rejected this host compiler; retrying with -allow-unsupported-compiler")
+        retry = run_visible(
+            configure_command(args, environment, directory, allow_unsupported=True),
+            env=environment.values,
+            capture=True,
+        )
+        if retry.returncode == 0:
+            return
+    raise DevError("CMake configure failed.")
+
+
+class BuildCoordinator:
+    """Owns CMake configuration and compilation for one build directory."""
+
+    def __init__(self, args: argparse.Namespace, environment: Environment,
+                 directory: pathlib.Path) -> None:
+        self.args = args
+        self.environment = environment
+        self.directory = directory
+
+    def run(self) -> None:
+        configure(self.args, self.environment, self.directory)
+        assert self.environment.cmake
+        result = run_visible(
+            [
+                str(self.environment.cmake.path),
+                "--build",
+                str(self.directory),
+                "--parallel",
+                str(self.args.jobs),
+            ],
+            env=self.environment.values,
+            filter_includes=self.environment.platform_name == "windows",
+        )
+        if result.returncode != 0:
+            raise DevError("Build failed.")
+
+
+class TestCoordinator:
+    """Owns language-level and CTest validation for a completed build."""
+
+    def __init__(self, args: argparse.Namespace, environment: Environment,
+                 directory: pathlib.Path) -> None:
+        self.args = args
+        self.environment = environment
+        self.directory = directory
+
+    def run_python(self) -> None:
+        result = run_visible(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "tests",
+                "-p",
+                "dev_cli_test.py",
+            ],
+            env=self.environment.values,
+        )
+        if result.returncode != 0:
+            raise DevError("Developer CLI unit tests failed.")
+
+    def run_ctest(self) -> None:
+        assert self.environment.cmake
+        ctest_name = "ctest.exe" if self.environment.platform_name == "windows" else "ctest"
+        ctest = self.environment.cmake.path.with_name(ctest_name)
+        if not ctest.is_file():
+            found = which(ctest_name, self.environment.values)
+            if not found:
+                raise DevError("CTest was not found.")
+            ctest = found
+        result = run_visible(
+            [
+                str(ctest),
+                "--test-dir",
+                str(self.directory),
+                "--output-on-failure",
+                "--parallel",
+                str(self.args.jobs),
+            ],
+            env=self.environment.values,
+        )
+        if result.returncode != 0:
+            raise DevError("CTest failed.")
+
+    def run(self) -> None:
+        self.run_python()
+        self.run_ctest()
+
+
+def executable(directory: pathlib.Path, name: str, environment: Environment) -> pathlib.Path:
+    suffix = ".exe" if environment.platform_name == "windows" else ""
+    candidate = directory / f"{name}{suffix}"
+    if candidate.is_file():
+        return candidate
+    raise DevError(f"Expected executable was not built: {name}{suffix}")
+
+
+class SmokeCoordinator:
+    """Owns executable smoke checks and optional cached-model inference."""
+
+    def __init__(self, args: argparse.Namespace, environment: Environment,
+                 directory: pathlib.Path) -> None:
+        self.args = args
+        self.environment = environment
+        self.directory = directory
+
+    def _runner(self) -> pathlib.Path:
+        name = "celeg-run" if self.environment.backend == "cuda" else "celeg-cpu-run"
+        return executable(self.directory, name, self.environment)
+
+    def _commands(self, runner: pathlib.Path) -> list[list[str]]:
+        commands = [
+            [str(runner), "--help"],
+            [str(executable(self.directory, "cpu_c_api_smoke_test", self.environment))],
+        ]
+        if self.environment.backend == "cuda" and self.args.celeg_tests == "on":
+            commands.append([
+                str(executable(self.directory, "expert_residency_test", self.environment))
+            ])
+        return commands
+
+    def _run_commands(self, commands: Sequence[Sequence[str]]) -> None:
+        for command in commands:
+            result = run_visible(command, env=self.environment.values)
+            if result.returncode != 0:
+                raise DevError(f"Smoke command failed: {pathlib.Path(command[0]).name}")
+
+    def _run_cached_inference(self, runner: pathlib.Path) -> None:
+        if self.environment.backend != "cuda":
+            print("smoke: model inference skipped for CPU verification")
+            return
+        if not self.environment.checkpoint:
+            print(f"smoke: {HF_REPO} is not cached; model inference skipped")
+            return
+        if not self.environment.gpu_name:
+            print("smoke: no CUDA device is visible; model inference skipped")
+            return
+        result = run_visible(
+            [
+                str(runner),
+                "--repo",
+                HF_REPO,
+                "--prompt",
+                "Hello",
+                "--max-new-tokens",
+                "4",
+            ],
+            env=self.environment.values,
+        )
+        if result.returncode != 0:
+            raise DevError("Cached model inference smoke test failed.")
+
+    def run(self) -> None:
+        runner = self._runner()
+        self._run_commands(self._commands(runner))
+        self._run_cached_inference(runner)
+
