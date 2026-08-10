@@ -51,9 +51,11 @@ std::string MuseGlimmerChatTemplate::format(
 void add_muse_glimmer_chat_profile(ChatProfileCatalog& catalog) {
     ChatCapabilities capabilities;
     capabilities.vision = true;
-    capabilities.video = true;
+    // The current serving contract accepts image data URLs only. Keep the
+    // capability catalog honest until a temporal sampling/provider path is
+    // added; the text and image tiers remain independently usable.
+    capabilities.video = false;
     capabilities.image_marker = "<|patch|>";
-    capabilities.video_marker = "<|video|>";
     capabilities.roles.developer = false;
     capabilities.roles.tool = false;
     catalog.add("muse-glimmer", std::make_unique<MuseGlimmerChatTemplate>(), nullptr,

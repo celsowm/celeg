@@ -130,7 +130,7 @@ int main() {
     const auto& muse = catalog.find("muse-glimmer");
     const auto muse_capabilities = catalog.capabilities("muse-glimmer");
     CELEG_TEST_CHECK(muse_capabilities.vision);
-    CELEG_TEST_CHECK(muse_capabilities.video);
+    CELEG_TEST_CHECK(!muse_capabilities.video);
     CELEG_TEST_CHECK(muse_capabilities.image_marker == "<|patch|>");
     const std::string muse_prompt = muse.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Describe <|image|>."}}, true);
