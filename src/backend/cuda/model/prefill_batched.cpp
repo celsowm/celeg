@@ -115,7 +115,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     throw std::invalid_argument(
                         "CUDA latent attention requires BF16 state storage");
                 }
-                if (layout.query_gate || layout.multi_axis_position()) {
+                if (layout.output_gate.enabled() || layout.multi_axis_position()) {
                     throw std::invalid_argument(
                         "CUDA latent attention does not support query gates or M-RoPE yet");
                 }

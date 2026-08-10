@@ -60,6 +60,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/models/qwen35/chat_template.cpp
     src/models/nemotron_h/chat_template.cpp
     src/models/muse_glimmer/chat_template.cpp
+    src/models/muse_glimmer/vision.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp

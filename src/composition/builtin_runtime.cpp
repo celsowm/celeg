@@ -10,6 +10,7 @@
 #include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
 #include "celeg/models/muse_glimmer/chat_template.hpp"
+#include "celeg/models/muse_glimmer/vision.hpp"
 #include "celeg/models/qwen35/vision.hpp"
 #include "celeg/models/smollm3/chat_template.hpp"
 #include "celeg/runtime/context.hpp"
@@ -108,6 +109,16 @@ public:
     }
 };
 
+class MuseGlimmerVisionModule final : public IRuntimeModule {
+public:
+    std::string_view id() const override { return "muse-glimmer-vision"; }
+
+    void register_into(RuntimeBuilder& builder) const override {
+        builder.vision_catalog_for_registration().add(
+            make_muse_glimmer_vision_provider_factory());
+    }
+};
+
 } // namespace
 
 std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
@@ -119,6 +130,7 @@ std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
     modules.push_back(std::make_unique<BuiltinTokenizerModule>());
     modules.push_back(std::make_unique<Gemma4VisionModule>());
     modules.push_back(std::make_unique<Qwen35VisionModule>());
+    modules.push_back(std::make_unique<MuseGlimmerVisionModule>());
     return modules;
 }
 
