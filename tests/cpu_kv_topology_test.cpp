@@ -9,11 +9,19 @@ int main() {
     shape.mixer_kinds = {celeg::MixerKind::Attention,
                          celeg::MixerKind::Attention};
     shape.attention_layouts.resize(2);
-    shape.attention_layouts[0] = celeg::AttentionSpec{
-        2, 1, 4, true, celeg::FullCausalPattern{}, {0, true}};
+    shape.attention_layouts[0].query_heads = 2;
+    shape.attention_layouts[0].key_value_heads = 1;
+    shape.attention_layouts[0].head_dim = 4;
+    shape.attention_layouts[0].query_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+    shape.attention_layouts[0].key_norm = shape.attention_layouts[0].query_norm;
+    shape.attention_layouts[0].kv_sharing = {0, true};
     shape.attention_layouts[0].position = celeg::RopePositionSpec{10000.0, 1.0, {}};
-    shape.attention_layouts[1] = celeg::AttentionSpec{
-        2, 1, 4, true, celeg::FullCausalPattern{}, {0, false}};
+    shape.attention_layouts[1].query_heads = 2;
+    shape.attention_layouts[1].key_value_heads = 1;
+    shape.attention_layouts[1].head_dim = 4;
+    shape.attention_layouts[1].query_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+    shape.attention_layouts[1].key_norm = shape.attention_layouts[1].query_norm;
+    shape.attention_layouts[1].kv_sharing = {0, false};
     shape.attention_layouts[1].position = celeg::RopePositionSpec{10000.0, 1.0, {}};
 
     celeg::CompiledModelProgram program;

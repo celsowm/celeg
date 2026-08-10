@@ -15,6 +15,8 @@ void CudaCompiledModel::allocate_celeg_resources() {
         resources_.shape_.maximum_attention_output_width())));
     workspace_.qkv_output_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_projection_width()));
+    workspace_.attention_gate_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_output_width()));
     workspace_.latent_query_content_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_output_width()));
     workspace_.latent_query_rope_.reset(static_cast<size_t>(

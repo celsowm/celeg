@@ -65,17 +65,19 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         });
     };
     auto rmsnorm_rows = [&](const float* input, const std::vector<float>& weight,
-                            float* output, size_t width) {
+                            float* output, size_t width, float epsilon = -1.0f) {
+        if (epsilon < 0.0f) epsilon = shape.numerical_policy.norm_eps;
         parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
-                        width, shape.numerical_policy.norm_eps);
+                        width, epsilon);
         });
     };
     auto rmsnorm_rows_inplace = [&](float* data, const std::vector<float>& weight,
-                                    size_t width) {
+                                    size_t width, float epsilon = -1.0f) {
+        if (epsilon < 0.0f) epsilon = shape.numerical_policy.norm_eps;
         parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_rmsnorm_inplace(data + row * width, weight.data(), width,
-                                shape.numerical_policy.norm_eps);
+                                epsilon);
         });
     };
     auto residual_rows = [&](float* data, const float* residual, size_t width) {
@@ -93,14 +95,19 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             std::copy(raw, raw + hidden, destination);
         } else {
             shared->linear.embedding(shared->weight_store.embedding, tokens[row], destination);
-            if (shape.numerical_policy.embedding_multiplier != 1.0f) {
+            if (shared->program.embedding_transform.multiplier != 1.0f) {
                 for (size_t d = 0; d < hidden; ++d) {
-                    destination[d] *= shape.numerical_policy.embedding_multiplier;
+                    destination[d] *= shared->program.embedding_transform.multiplier;
                 }
             }
         }
     });
     session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+    if (shared->program.embedding_transform.post_norm) {
+        rmsnorm_rows(workspace_.chunk_hidden.data(), shared->weight_store.embedding_norm,
+                     workspace_.chunk_hidden.data(), hidden,
+                     shared->program.embedding_transform.post_norm->epsilon);
+    }
 
     const PerLayerInputPlan& input_plan = shared->program.per_layer_input;
     if (input_plan.enabled) {
@@ -150,7 +157,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
                   workspace_.chunk_residual.begin());
         rmsnorm_rows(workspace_.chunk_hidden.data(), common.operator_norm,
-                     workspace_.chunk_normed.data(), hidden);
+                     workspace_.chunk_normed.data(), hidden,
+                     semantics.operator_norm.epsilon);
         bool normed_q8_ready = false;
         auto layer_gemm = [&](const CpuLinearWeight& weight, const float* input,
                               float* output, float beta = 0.0f) {
@@ -205,13 +213,23 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         workspace_.chunk_op.data() + row * q_width,
                         attention->relative_bias);
                 });
-                if (layout.query_gate) {
+                if (layout.output_gate.enabled()) {
                     for (size_t row = 0; row < rows; ++row) {
-                        apply_cpu_query_gate(
-                            workspace_.chunk_op.data() + row * q_width,
-                            workspace_.chunk_qkv.data() +
-                                row * layout.query_projection_width() + q_width,
-                            q_width);
+                        const float* gate = nullptr;
+                        if (layout.output_gate.packed_with_query) {
+                            gate = workspace_.chunk_qkv.data() + row * layout.query_projection_width() + q_width;
+                        } else {
+                            if (row == 0) {
+                                linear_started = Clock::now();
+                                layer_gemm(attention->gate, workspace_.chunk_normed.data(),
+                                           workspace_.chunk_attention_gate.data());
+                                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+                            }
+                            gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                        }
+                        apply_cpu_query_gate(workspace_.chunk_op.data() + row * q_width,
+                                             gate,
+                                             q_width);
                     }
                 }
                 linear_started = Clock::now();
@@ -220,7 +238,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             } else if (layout.uses_latent_state()) {
                 const auto& latent = *layout.latent_state();
-                if (layout.query_gate) {
+                if (layout.output_gate.enabled()) {
                     throw std::invalid_argument("latent attention query gating is not supported");
                 }
                 const size_t content_width = static_cast<size_t>(layout.latent_query_content_width());
@@ -309,12 +327,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
                 apply_cpu_attention_qk(shape, layout, *attention, q, k, position,
                                        rope_position);
-                if (layout.query_gate) {
-                    std::copy_n(projected_q + q_width, q_width,
-                                workspace_.chunk_attention_gate.data() + row * q_width);
-                    std::copy_n(q, q_width,
-                                workspace_.chunk_qkv.data() + row * q_width);
-                }
+                (void)projected_q;
             });
             const int owner = shared->layer_to_kv_owner.at(index);
             AttentionState& state = attention_state(static_cast<size_t>(owner));
@@ -334,9 +347,15 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   CpuAttentionPattern::lower(layout.pattern),
                                   CpuAttentionBias::lower(layout.bias, attention->relative_bias,
                                                           layout.query_heads));
-            if (layout.query_gate) {
+            if (layout.output_gate.enabled()) {
+                if (!layout.output_gate.packed_with_query) {
+                    layer_gemm(attention->gate, workspace_.chunk_normed.data(),
+                               workspace_.chunk_attention_gate.data());
+                }
                 for (size_t row = 0; row < rows; ++row) {
-                    const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                    const float* gate = layout.output_gate.packed_with_query
+                        ? workspace_.chunk_qkv.data() + row * q_projection_width + q_width
+                        : workspace_.chunk_attention_gate.data() + row * q_width;
                     float* output = workspace_.chunk_op.data() + row * q_width;
                     apply_cpu_query_gate(output, gate, q_width);
                 }
@@ -359,11 +378,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                   shape.numerical_policy.residual_multiplier);
         }
         if (shape.has_split_attention_norms) {
-            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.post_attention_norm, hidden);
+            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.post_attention_norm, hidden,
+                                 semantics.post_attention_norm.epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
         rmsnorm_rows(workspace_.chunk_hidden.data(), common.ffn_norm,
-                     workspace_.chunk_normed.data(), hidden);
+                     workspace_.chunk_normed.data(), hidden,
+                     semantics.feed_forward_norm.epsilon);
         normed_q8_ready = false;
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
@@ -379,7 +400,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                   shape.numerical_policy.residual_multiplier);
         }
         if (shape.has_split_attention_norms) {
-            rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.post_feed_forward_norm, hidden);
+            rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.post_feed_forward_norm, hidden,
+                                 semantics.post_feed_forward_norm.epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_mlp.data(), hidden);
 
@@ -412,17 +434,21 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                shared->program.norm_after_layers.end(),
                                static_cast<int>(index))) {
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(),
-                                 shared->weight_store.final_norm, hidden);
+                                 shared->weight_store.final_norm, hidden,
+                                 shared->program.final_norm.epsilon);
         }
     }
 
     if (compute_logits) {
         const float* last_hidden = workspace_.chunk_hidden.data() + (rows - 1) * hidden;
         cpu_rmsnorm(last_hidden, shared->weight_store.final_norm.data(), workspace_.final_normed.data(),
-                    hidden, shape.numerical_policy.norm_eps);
+                    hidden, shared->program.final_norm.epsilon);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.final_normed.data(),
                             workspace_.logits.data());
+        if (shape.numerical_policy.logits_multiplier != 1.0f) {
+            for (float& value : workspace_.logits) value *= shape.numerical_policy.logits_multiplier;
+        }
         if (shape.numerical_policy.logits_divisor != 1.0f) {
             for (float& value : workspace_.logits) value /= shape.numerical_policy.logits_divisor;
         }

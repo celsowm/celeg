@@ -36,7 +36,7 @@ std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
                 bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.key_value_width()) * shape.hidden);
             }
             bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden) * attention.query_width());
-            if (attention.query_key_norm) {
+            if (attention.has_query_key_norm()) {
                 bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.head_dim));
             }
         } else if (mixer == MixerKind::GatedDeltaNet) {
@@ -95,7 +95,7 @@ std::size_t estimate_mtp_non_expert_weights(const RuntimeTopology& shape) {
         bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * shape.hidden);
         bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * shape.hidden);
         bytes += bf16_bytes(static_cast<size_t>(shape.hidden) * attention.query_width());
-        if (attention.query_key_norm) bytes += bf16_bytes(2ull * attention.head_dim);
+        if (attention.has_query_key_norm()) bytes += bf16_bytes(2ull * attention.head_dim);
         if (shape.num_experts > 0) {
             bytes += bf16_bytes(static_cast<size_t>(shape.num_experts) * shape.hidden);
             bytes += static_cast<size_t>(shape.num_experts) * shape.hidden * sizeof(float);

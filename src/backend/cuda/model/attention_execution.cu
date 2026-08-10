@@ -30,7 +30,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         "CUDA latent attention requires BF16 state storage");
                 }
                 const auto& latent = *layout.latent_state();
-                if (layout.query_gate || layout.multi_axis_position()) {
+                if (layout.output_gate.enabled() || layout.multi_axis_position()) {
                     throw std::invalid_argument(
                         "CUDA latent attention does not support query gates or M-RoPE yet");
                 }
@@ -115,8 +115,7 @@ void CudaCompiledModel::enqueue_decode_attention(
             } else {
             __nv_bfloat16* q = workspace_.qkv_output_.data();
             const int query_projection_width = attention->query->rows;
-            const bool query_gate = layout.query_gate ||
-                query_projection_width == 2 * layout.query_width();
+            const bool output_gate = layout.output_gate.enabled();
             __nv_bfloat16* k = q + query_projection_width;
             __nv_bfloat16* v = k + layout.key_value_width();
             decode_phase_profile().begin(stream_.get());
@@ -143,14 +142,14 @@ void CudaCompiledModel::enqueue_decode_attention(
                         position_device_.data(), static_cast<float>(rope->theta),
                         static_cast<float>(rope->rotary_fraction),
                         resources_.shape_.numerical_policy.norm_eps,
-                        layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                        layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
                 } else {
                     launch_dynamic_qk_norm_rope_device(
                         q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
                         layout.query_heads, layout.key_value_heads, layout.head_dim,
                         position_device_.data(), static_cast<float>(rope->theta),
                         static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
-                        layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                        layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
                 }
             }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
@@ -237,9 +236,16 @@ void CudaCompiledModel::enqueue_decode_attention(
                     layout.key_value_heads, layout.head_dim,
                     transform->minimum_norm_squared, stream_.get());
             }
-            if (query_gate) {
+            if (output_gate) {
+                const __nv_bfloat16* gate = q + layout.query_width();
+                if (!layout.output_gate.packed_with_query) {
+                    linear(workspace_.normed_.data(), *attention->gate,
+                           workspace_.attention_gate_.data(), 1,
+                           layout.query_width(), resources_.shape_.hidden);
+                    gate = workspace_.attention_gate_.data();
+                }
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
-                                        q + layout.query_width(),
+                                        gate,
                                         layout.query_width(), stream_.get());
             }
             decode_phase_profile().end(DecodePhase::Attention, stream_.get());

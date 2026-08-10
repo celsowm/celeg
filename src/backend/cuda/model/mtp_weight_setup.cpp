@@ -61,13 +61,13 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         {resources.shape_.hidden, 2 * resources.shape_.hidden});
     mtp.pre_fc_norm_embedding = resources.weight_loader_->load_rms_norm_weight(
         repo, "mtp.pre_fc_norm_embedding.weight", {resources.shape_.hidden},
-        resources.shape_.numerical_policy.rms_norm_add_one);
+        NormWeightKind::Scale);
     mtp.pre_fc_norm_hidden = resources.weight_loader_->load_rms_norm_weight(
         repo, "mtp.pre_fc_norm_hidden.weight", {resources.shape_.hidden},
-        resources.shape_.numerical_policy.rms_norm_add_one);
+        NormWeightKind::Scale);
     mtp.norm = resources.weight_loader_->load_rms_norm_weight(
         repo, "mtp.norm.weight", {resources.shape_.hidden},
-        resources.shape_.numerical_policy.rms_norm_add_one);
+        NormWeightKind::Scale);
     mtp.logits = resources.lm_head_ ? resources.lm_head_ : resources.embedding_;
     mtp.layers.reserve(static_cast<size_t>(mtp.layer_count));
 
@@ -76,10 +76,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         LayerCommon common_layer;
         common_layer.operator_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".input_layernorm.weight", {resources.shape_.hidden},
-            resources.shape_.numerical_policy.rms_norm_add_one);
+            NormWeightKind::Scale);
         common_layer.ffn_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".post_attention_layernorm.weight", {resources.shape_.hidden},
-            resources.shape_.numerical_policy.rms_norm_add_one);
+            NormWeightKind::Scale);
 
         if (resources.shape_.num_experts > 0) {
             const int E = resources.shape_.num_experts;
@@ -216,10 +216,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             {resources.shape_.hidden, mtp_layout.query_width()});
         attention.q_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".self_attn.q_norm.weight", {mtp_layout.head_dim},
-            resources.shape_.numerical_policy.rms_norm_add_one);
+            NormWeightKind::Scale);
         attention.k_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".self_attn.k_norm.weight", {mtp_layout.head_dim},
-            resources.shape_.numerical_policy.rms_norm_add_one);
+            NormWeightKind::Scale);
         const size_t cache_elements = static_cast<size_t>(model.max_context_) *
             static_cast<size_t>(mtp_layout.key_value_width());
         if (resources.options_.kv_cache_mode == KvCacheMode::Int8) {

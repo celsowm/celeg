@@ -63,6 +63,7 @@ struct Descriptor {
     std::string gguf_eot;
     std::string disable_rope_json;
     std::string disable_rope_gguf;
+    std::optional<Field> rope_theta_schedule;
     std::string position_kind = "rope";
     std::string rope_pairing = "split_half";
     std::optional<Field> position_kind_field;
@@ -117,8 +118,16 @@ struct Descriptor {
     std::optional<Field> mamba_groups;
     std::optional<Field> mamba_chunk_size;
     bool split_attention_norms = false;
-    bool query_key_norm = false;
-    bool query_gate = false;
+    NormWeightKind operator_norm_kind = NormWeightKind::Scale;
+    NormWeightKind feed_forward_norm_kind = NormWeightKind::Scale;
+    NormWeightKind final_norm_kind = NormWeightKind::Scale;
+    NormWeightKind query_norm_kind = NormWeightKind::None;
+    NormWeightKind key_norm_kind = NormWeightKind::None;
+    bool query_norm_enabled = false;
+    bool key_norm_enabled = false;
+    std::optional<NormWeightKind> embedding_post_norm_kind;
+    AttentionGateKind attention_gate_kind = AttentionGateKind::None;
+    bool attention_gate_packed_with_query = false;
     std::optional<Field> orthogonalize_current_value;
     std::optional<Field> orthogonalize_current_value_minimum_norm_squared;
     std::string attention_key_value_source = "current_sequence";
@@ -197,6 +206,7 @@ std::string optional_string(const Json& object, std::string_view key,
 bool optional_bool(const Json& object, std::string_view key, bool fallback = false);
 AttentionVariant parse_attention_variant(const Json& value);
 ActivationKind parse_activation_kind(std::string_view value);
+NormWeightKind parse_norm_weight_kind(std::string_view value);
 std::unique_ptr<ITensorNamingPolicy> create_naming_policy(const Descriptor& descriptor);
 void build_weight_plan(ResolvedModel& model, const Descriptor& descriptor,
                        const ITensorNamingPolicy& naming_policy);

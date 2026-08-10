@@ -66,7 +66,16 @@ public:
         topology.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
         const auto& numbers = descriptor_.numbers;
         topology.numerical_policy.norm_eps = static_cast<float>(number_value(metadata, numbers.at("norm_eps")));
+        topology.numerical_policy.post_norm_eps = numbers.contains("post_norm_eps")
+            ? static_cast<float>(number_value(metadata, numbers.at("post_norm_eps")))
+            : topology.numerical_policy.norm_eps;
         const double rope_theta = number_value(metadata, numbers.at("rope_theta"));
+        const std::vector<float> scheduled_rope_theta = scaling_factor_values(
+            metadata, descriptor_.rope_theta_schedule);
+        if (!scheduled_rope_theta.empty() && scheduled_rope_theta.size() !=
+            static_cast<size_t>(topology.num_hidden_layers)) {
+            throw std::invalid_argument("descriptor RoPE schedule length does not match layer schedule");
+        }
         RopeScalingSpec scaling;
         scaling.kind = parse_scaling_kind(scaling_kind_value(metadata, descriptor_));
         scaling.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
@@ -88,6 +97,8 @@ public:
             ? number_value(metadata, *descriptor_.rotary_fraction) : 1.0;
         topology.numerical_policy.embedding_multiplier = static_cast<float>(
             number_value(metadata, numbers.at("embedding_multiplier"), hidden));
+        topology.numerical_policy.logits_multiplier = numbers.contains("logits_multiplier")
+            ? static_cast<float>(number_value(metadata, numbers.at("logits_multiplier"))) : 1.0f;
         topology.numerical_policy.attention_multiplier = static_cast<float>(number_value(metadata, numbers.at("attention_multiplier")));
         topology.numerical_policy.residual_multiplier = static_cast<float>(number_value(metadata, numbers.at("residual_multiplier")));
         topology.numerical_policy.logits_divisor = static_cast<float>(number_value(metadata, numbers.at("logits_divisor")));
@@ -291,8 +302,10 @@ public:
             const int layer_head_dim = variant && variant->head_dim.has_value()
                 ? integer_value(metadata, *variant->head_dim, hidden, layer_query_heads)
                 : head_dim;
-            const double layer_rope_theta = variant && variant->rope_theta.has_value()
-                ? number_value(metadata, *variant->rope_theta) : rope_theta;
+            const double layer_rope_theta = !scheduled_rope_theta.empty()
+                ? scheduled_rope_theta[static_cast<size_t>(layer)]
+                : variant && variant->rope_theta.has_value()
+                    ? number_value(metadata, *variant->rope_theta) : rope_theta;
             const double layer_rotary_fraction = variant && variant->rotary_fraction.has_value()
                 ? number_value(metadata, *variant->rotary_fraction) : rotary_fraction;
             const int layer_sliding_window = variant && variant->sliding_window.has_value()
@@ -302,10 +315,20 @@ public:
             }
         const int scheduled_layer_kv_heads = scheduled_kv_heads.empty()
             ? layer_kv_heads : scheduled_kv_heads[static_cast<size_t>(layer)];
-            AttentionSpec attention{layer_query_heads, scheduled_layer_kv_heads, layer_head_dim,
-                descriptor_.query_key_norm,
-                FullCausalPattern{}, {},
-                topology.numerical_policy.attention_multiplier, descriptor_.query_gate};
+            AttentionSpec attention;
+            attention.query_heads = layer_query_heads;
+            attention.key_value_heads = scheduled_layer_kv_heads;
+            attention.head_dim = layer_head_dim;
+            attention.query_norm = {descriptor_.query_norm_enabled
+                ? topology.numerical_policy.norm_eps : 0.0f,
+                descriptor_.query_norm_kind};
+            attention.key_norm = {descriptor_.key_norm_enabled
+                ? topology.numerical_policy.norm_eps : 0.0f,
+                descriptor_.key_norm_kind};
+            attention.pattern = FullCausalPattern{};
+            attention.query_scale = topology.numerical_policy.attention_multiplier;
+            attention.output_gate = {descriptor_.attention_gate_kind,
+                                     descriptor_.attention_gate_packed_with_query};
             if (descriptor_.attention_state_kind == "latent") {
                 if (!descriptor_.latent_rank.has_value()) {
                     throw std::invalid_argument("latent attention descriptor has no latent rank");
@@ -366,7 +389,9 @@ public:
                 }
                 attention.kv_sharing = KvSharingSpec{group, publishes};
             }
-            if (layer < static_cast<int>(disabled.size()) &&
+            if (layer_rope_theta == 0.0) {
+                attention.position = NoPositionEncodingSpec{};
+            } else if (layer < static_cast<int>(disabled.size()) &&
                 disabled[static_cast<size_t>(layer)] == 0) {
                 attention.position = NoPositionEncodingSpec{};
             } else if (position_kind == "none") {

@@ -335,6 +335,8 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     program.identity = model.provenance.identity;
     program.norm_after_layers = model.graph.norm_after_layers;
     program.per_layer_input = PerLayerInputPlan::derive(model);
+    program.final_norm = model.graph.final_norm;
+    program.embedding_transform = model.graph.embedding_transform;
     program.layers.reserve(model.graph.layers.size());
 
     program.weight_request_count = model.weight_plan.requests.size();
@@ -366,7 +368,9 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             CompiledChunkCapability::Native,
             {}, {}, {}, {},
             0, ActivationKind::SwiGLU,
-            {}, std::nullopt};
+            {}, std::nullopt,
+            {}, layer.operator_norm, layer.post_attention_norm,
+            layer.feed_forward_norm, layer.post_feed_forward_norm};
         if (layer.mixer_kind() == MixerKind::Mamba2 ||
             layer.mixer_kind() == MixerKind::MlpOnly) {
             compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;

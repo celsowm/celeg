@@ -6,6 +6,16 @@
 
 namespace celeg::descriptor_detail {
 
+NormWeightKind parse_norm_weight_kind(std::string_view value) {
+    if (value == "scale") return NormWeightKind::Scale;
+    if (value == "one_plus_scale" || value == "one-plus-scale") {
+        return NormWeightKind::OnePlusScale;
+    }
+    if (value == "none" || value == "weightless") return NormWeightKind::None;
+    throw std::invalid_argument("descriptor has unsupported norm weight kind: " +
+                                std::string(value));
+}
+
 const Json& required(const Json& object, std::string_view key) {
     if (!object.is_object() || !object.contains(key)) {
         throw std::invalid_argument("descriptor is missing field: " + std::string(key));

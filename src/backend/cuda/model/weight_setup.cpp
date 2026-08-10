@@ -65,21 +65,27 @@ void CudaCompiledModel::load_checkpoint_weights(
     for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
         const bool sequential_mixer_model = resources_.shape_.mamba2_layer_count > 0;
+        const CompiledLayerProgram& semantic_layer = resources_.program_.layers.at(
+            static_cast<size_t>(i));
+        const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
+            const std::string name = spec.weightless()
+                ? std::string{} : tensor_name(resources_.model_.weight_plan.requests, role, i);
+            return resources_.weight_loader_->load_rms_norm_weight(
+                repo, name, {resources_.shape_.hidden}, spec.weight_kind);
+        };
         common_layer.operator_norm = resources_.weight_loader_->load_rms_norm_weight(
-            repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
-            {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
+            repo, semantic_layer.operator_norm.weightless() ? std::string{} :
+                tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
+            {resources_.shape_.hidden}, semantic_layer.operator_norm.weight_kind);
         if (!sequential_mixer_model) {
-            common_layer.ffn_norm = resources_.weight_loader_->load_rms_norm_weight(
-                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnInputNorm, i),
-                {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
+            common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
+                                              semantic_layer.feed_forward_norm);
         }
         if (!sequential_mixer_model && resources_.shape_.has_split_attention_norms) {
-            common_layer.post_attention_norm = resources_.weight_loader_->load_rms_norm_weight(
-                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionPostNorm, i),
-                {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
-            common_layer.post_feed_forward_norm = resources_.weight_loader_->load_rms_norm_weight(
-                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnOutputNorm, i),
-                {resources_.shape_.hidden}, resources_.shape_.numerical_policy.rms_norm_add_one);
+            common_layer.post_attention_norm = load_norm(
+                TensorRole::AttentionPostNorm, semantic_layer.post_attention_norm);
+            common_layer.post_feed_forward_norm = load_norm(
+                TensorRole::FfnOutputNorm, semantic_layer.post_feed_forward_norm);
         }
         if (resources_.program_.per_layer_input.enabled) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(
@@ -293,13 +299,6 @@ void CudaCompiledModel::load_checkpoint_weights(
             const std::string query_name = tensor_name(
                 resources_.model_.weight_plan.requests, TensorRole::AttentionQuery, i);
             const AttentionSpec& layout = attention_layer.layout;
-            if (!layout.uses_latent_state()) {
-                const HostTensorView query_source = repo.tensor(query_name);
-                if (query_source.shape.size() == 2 &&
-                    query_source.shape[0] == 2LL * attention_layer.layout.query_width()) {
-                    attention_layer.layout.query_gate = true;
-                }
-            }
             if (const auto* alibi = std::get_if<AlibiBiasSpec>(&layout.bias)) {
                 if (static_cast<int>(alibi->slopes.size()) != layout.query_heads) {
                     throw std::invalid_argument("CUDA ALiBi slope count does not match query heads");
@@ -368,6 +367,12 @@ void CudaCompiledModel::load_checkpoint_weights(
             attention_layer.query = resources_.weight_loader_->load_linear_weight(
                 repo, query_name,
                 {layout.query_projection_width(), resources_.shape_.hidden});
+            if (layout.output_gate.enabled() && !layout.output_gate.packed_with_query) {
+                attention_layer.gate = resources_.weight_loader_->load_linear_weight(
+                    repo, tensor_name(resources_.model_.weight_plan.requests,
+                                      TensorRole::AttentionGate, i),
+                    {layout.query_width(), resources_.shape_.hidden});
+            }
             if (!layout.kv_sharing.shared() || layout.kv_sharing.publishes) {
                 attention_layer.key = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKey, i),
@@ -387,14 +392,16 @@ void CudaCompiledModel::load_checkpoint_weights(
             attention_layer.out = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionOutput, i),
                 {resources_.shape_.hidden, layout.query_width()});
-            if (layout.query_key_norm) {
+            if (layout.has_query_key_norm()) {
                 attention_layer.q_norm = resources_.weight_loader_->load_rms_norm_weight(
-                    repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionQueryNorm, i),
-                    {layout.head_dim}, resources_.shape_.numerical_policy.rms_norm_add_one);
+                    repo, layout.query_norm.weightless() ? std::string{} :
+                        tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionQueryNorm, i),
+                    {layout.head_dim}, layout.query_norm.weight_kind);
                 if (attention_layer.key) {
                     attention_layer.k_norm = resources_.weight_loader_->load_rms_norm_weight(
-                    repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKeyNorm, i),
-                        {layout.head_dim}, resources_.shape_.numerical_policy.rms_norm_add_one);
+                    repo, layout.key_norm.weightless() ? std::string{} :
+                        tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKeyNorm, i),
+                        {layout.head_dim}, layout.key_norm.weight_kind);
                 }
             }
 

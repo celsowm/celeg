@@ -295,6 +295,7 @@ struct AttentionLayer {
     const LinearWeight* query = nullptr;
     const LinearWeight* key = nullptr;
     const LinearWeight* value = nullptr;
+    const LinearWeight* gate = nullptr;
     const LinearWeight* out = nullptr;
     const LinearWeight* latent_query = nullptr;
     const LinearWeight* latent_query_rope = nullptr;

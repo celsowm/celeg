@@ -43,7 +43,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
     resources_.weight_layout_->embed_token_device(
         sampling_.sampled_device.data(), workspace_.hidden_.data(), resources_.shape_.hidden,
         stream_.get());
-    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.embedding_multiplier,
+        launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.program_.embedding_transform.multiplier,
                  stream_.get());
     initialize_per_layer_input_device(sampling_.sampled_device.data());
     decode_phase_profile().end(DecodePhase::Embed, stream_.get());
@@ -99,7 +99,8 @@ void CudaCompiledModel::enqueue_decode_forward() {
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
             1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
+                 resources_.shape_.numerical_policy.logits_multiplier /
+                     resources_.shape_.numerical_policy.logits_divisor, stream_.get());
     if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
                             resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());

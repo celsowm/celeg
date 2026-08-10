@@ -70,6 +70,7 @@ struct CudaModelResources {
     const LinearWeight* embedding_ = nullptr;
     std::optional<CudaPerLayerInputResources> per_layer_input_;
     const LinearWeight* lm_head_ = nullptr;
+    const __nv_bfloat16* embedding_norm_ = nullptr;
     const __nv_bfloat16* final_norm_ = nullptr;
     std::unique_ptr<IWeightLayout> weight_layout_;
 };

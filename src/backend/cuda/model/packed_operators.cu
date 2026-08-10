@@ -76,7 +76,7 @@ void project_attention_qkv(PackedOperatorContext& context,
             attention.k_norm, rows, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            context.shape.numerical_policy.norm_eps, layout.query_key_norm,
+            context.shape.numerical_policy.norm_eps, layout.has_query_key_norm(),
             rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),

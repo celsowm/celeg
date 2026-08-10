@@ -121,9 +121,9 @@ const __nv_bfloat16* WeightLoader::load_weight(
 
 const __nv_bfloat16* WeightLoader::load_rms_norm_weight(
     const IWeightRepository& repo, const std::string& name,
-    std::vector<int64_t> expected, bool add_one) {
-    if (!add_one) return load_weight(repo, name, std::move(expected));
-    const std::string cache_key = name + "#rms_norm_add_one";
+    std::vector<int64_t> expected, NormWeightKind weight_kind) {
+    const std::string cache_key = name + "#rms_norm_" +
+        std::to_string(static_cast<int>(weight_kind));
     if (const auto cached = weights_->tensors.find(cache_key);
         cached != weights_->tensors.end()) {
         if (cached->second.shape != expected) {
@@ -131,13 +131,19 @@ const __nv_bfloat16* WeightLoader::load_rms_norm_weight(
         }
         return cached->second.bf16_storage.data();
     }
-    const __nv_bfloat16* source = load_weight(repo, name, expected);
     const size_t count = cuda_loader_detail::checked_element_count(expected);
     std::vector<__nv_bfloat16> host(count);
-    CELEG_CUDA(cudaMemcpy(host.data(), source, count * sizeof(__nv_bfloat16),
-                          cudaMemcpyDeviceToHost));
-    for (__nv_bfloat16& value : host) {
-        value = __float2bfloat16(__bfloat162float(value) + 1.0f);
+    if (weight_kind == NormWeightKind::None) {
+        for (__nv_bfloat16& value : host) value = __float2bfloat16(1.0f);
+    } else {
+        const __nv_bfloat16* source = load_weight(repo, name, expected);
+        CELEG_CUDA(cudaMemcpy(host.data(), source, count * sizeof(__nv_bfloat16),
+                              cudaMemcpyDeviceToHost));
+        if (weight_kind == NormWeightKind::OnePlusScale) {
+            for (__nv_bfloat16& value : host) {
+                value = __float2bfloat16(__bfloat162float(value) + 1.0f);
+            }
+        }
     }
     DeviceWeight adjusted;
     adjusted.shape = expected;

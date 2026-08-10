@@ -78,10 +78,10 @@ struct CpuCompiledModel::BatchScratch {
         rows_for([&](size_t row) {
             shared.linear.embedding(shared.weight_store.embedding, tokens[row],
                                     workspace_.hidden.data() + row * hidden);
-            if (shape.numerical_policy.embedding_multiplier != 1.0f) {
+            if (shared.program.embedding_transform.multiplier != 1.0f) {
                 float* destination = workspace_.hidden.data() + row * hidden;
                 for (size_t d = 0; d < hidden; ++d) {
-                    destination[d] *= shape.numerical_policy.embedding_multiplier;
+                    destination[d] *= shared.program.embedding_transform.multiplier;
                 }
             }
         });
@@ -199,7 +199,7 @@ struct CpuCompiledModel::BatchScratch {
                             workspace_.qkv.data() + row * q_projection_width,
                             workspace_.op_output.data() + row * q_width,
                             attention->relative_bias);
-                        if (layout.query_gate) {
+                        if (layout.output_gate.enabled()) {
                             apply_cpu_query_gate(
                                 workspace_.op_output.data() + row * q_width,
                                 workspace_.qkv.data() + row * q_projection_width + q_width,
@@ -209,7 +209,7 @@ struct CpuCompiledModel::BatchScratch {
                     layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 } else if (layout.uses_latent_state()) {
                     const auto& latent = *layout.latent_state();
-                    if (layout.query_gate) {
+                    if (layout.output_gate.enabled()) {
                         throw std::invalid_argument("latent attention query gating is not supported");
                     }
                     const size_t content_width = static_cast<size_t>(layout.latent_query_content_width());
@@ -260,7 +260,7 @@ struct CpuCompiledModel::BatchScratch {
                 } else {
                 const size_t q_width = static_cast<size_t>(layout.query_width());
                 const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
-                const bool query_gate = layout.query_gate ||
+            const bool query_gate = layout.output_gate.enabled() ||
                     q_projection_width == 2 * q_width;
                 const size_t kv_width = static_cast<size_t>(layout.key_value_width());
                 layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());
@@ -555,4 +555,3 @@ void execute_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions,
 }
 
 } // namespace celeg
-

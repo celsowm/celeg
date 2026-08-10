@@ -114,7 +114,8 @@ int main() {
     CELEG_TEST_CHECK(cuda_latent.layers[0].state_layout->kind ==
                      celeg::CompiledStateLayoutKind::Latent);
     celeg::ResolvedModel latent_gate = latent_state;
-    std::get<celeg::AttentionSpec>(latent_gate.graph.layers[0].mixer).query_gate = true;
+    std::get<celeg::AttentionSpec>(latent_gate.graph.layers[0].mixer).output_gate.kind =
+        celeg::AttentionGateKind::Sigmoid;
     bool cuda_latent_gate_rejected = false;
     try { (void)celeg::CudaModelCompiler{}.compile(latent_gate); }
     catch (const std::invalid_argument&) { cuda_latent_gate_rejected = true; }

@@ -18,6 +18,7 @@ TensorRole parse_role(std::string_view name) {
         {"AttentionKey", TensorRole::AttentionKey},
         {"AttentionKeyNorm", TensorRole::AttentionKeyNorm},
         {"AttentionValue", TensorRole::AttentionValue},
+        {"AttentionGate", TensorRole::AttentionGate},
         {"AttentionRelativePositionBias", TensorRole::AttentionRelativePositionBias},
         {"AttentionLatentQuery", TensorRole::AttentionLatentQuery},
         {"AttentionLatentQueryRope", TensorRole::AttentionLatentQueryRope},

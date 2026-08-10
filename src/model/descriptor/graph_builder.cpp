@@ -29,9 +29,15 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
                             const CheckpointMetadata& metadata) {
     const RuntimeTopology& topology = model.topology;
-    model.graph.embedding_multiplier = topology.numerical_policy.embedding_multiplier;
+    model.graph.embedding_transform.multiplier =
+        topology.numerical_policy.embedding_multiplier;
+    if (descriptor.embedding_post_norm_kind) {
+        model.graph.embedding_transform.post_norm = NormSpec{
+            topology.numerical_policy.norm_eps, *descriptor.embedding_post_norm_kind};
+    }
     model.graph.logits_divisor = topology.numerical_policy.logits_divisor;
-    model.graph.final_norm.epsilon = topology.numerical_policy.norm_eps;
+    model.graph.final_norm = {topology.numerical_policy.norm_eps,
+                              descriptor.final_norm_kind};
     model.graph.final_logit_softcap = descriptor.final_logit_softcap.has_value()
         ? static_cast<float>(number_value(metadata, *descriptor.final_logit_softcap)) : 0.0f;
     if (descriptor.norm_after_physical_block) {
@@ -59,12 +65,13 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
     for (int layer_index = 0; layer_index < topology.num_hidden_layers; ++layer_index) {
         LayerSpec layer;
         const float epsilon = topology.numerical_policy.norm_eps;
-        layer.operator_norm.epsilon = epsilon;
-        layer.feed_forward_norm.epsilon = epsilon;
+        const float post_epsilon = topology.numerical_policy.post_norm_eps;
+        layer.operator_norm = {epsilon, descriptor.operator_norm_kind};
+        layer.feed_forward_norm = {epsilon, descriptor.feed_forward_norm_kind};
         if (descriptor.split_attention_norms) {
-            layer.post_attention_norm.epsilon = epsilon;
-            layer.pre_feed_forward_norm.epsilon = epsilon;
-            layer.post_feed_forward_norm.epsilon = epsilon;
+            layer.post_attention_norm = {post_epsilon, descriptor.operator_norm_kind};
+            layer.pre_feed_forward_norm = {epsilon, descriptor.feed_forward_norm_kind};
+            layer.post_feed_forward_norm = {post_epsilon, descriptor.feed_forward_norm_kind};
         }
         if (topology.mixer_kinds[static_cast<size_t>(layer_index)] == MixerKind::Attention) {
             AttentionSpec attention = topology.attention_layout(layer_index);

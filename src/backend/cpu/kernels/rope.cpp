@@ -109,6 +109,20 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
     }
 }
 
+void cpu_qk_norm_only(float* data, const float* norm_weight,
+                      int heads, int head_dim, float eps) {
+    if (!data || !norm_weight || heads <= 0 || head_dim <= 0 || !(eps > 0.0f)) {
+        throw std::invalid_argument("invalid QK norm arguments");
+    }
+    for (int head = 0; head < heads; ++head) {
+        float* vector = data + static_cast<size_t>(head) * head_dim;
+        double sum = 0.0;
+        for (int d = 0; d < head_dim; ++d) sum += static_cast<double>(vector[d]) * vector[d];
+        const float scale = 1.0f / std::sqrt(static_cast<float>(sum / head_dim) + eps);
+        for (int d = 0; d < head_dim; ++d) vector[d] *= scale * norm_weight[d];
+    }
+}
+
 void cpu_rope(float* data, int heads, int head_dim, int position,
               const RopePositionSpec& rope) {
     if (!data || heads <= 0 || head_dim <= 0 || (head_dim % 2) != 0 ||

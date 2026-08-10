@@ -10,7 +10,7 @@ std::string_view tensor_role_name(TensorRole role) {
     static constexpr std::string_view names[] = {
         "token_embedding", "language_model_head", "final_norm",
         "attention_input_norm", "attention_query", "attention_query_norm",
-        "attention_key", "attention_key_norm", "attention_value",
+        "attention_key", "attention_key_norm", "attention_value", "attention_gate",
         "attention_relative_position_bias",
         "attention_latent_query", "attention_latent_query_rope",
         "attention_latent_key", "attention_latent_value",

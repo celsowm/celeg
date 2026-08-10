@@ -45,11 +45,22 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
         repo, tensor_name(model.resources_.model_.weight_plan.requests,
                           TensorRole::TokenEmbedding),
         {model.resources_.shape_.vocab_size, model.resources_.shape_.hidden});
+    const NormSpec& final_norm = model.resources_.program_.final_norm;
+    const std::string final_name = final_norm.weightless()
+        ? std::string{} : tensor_name(model.resources_.model_.weight_plan.requests,
+                                      TensorRole::FinalNorm);
     model.resources_.final_norm_ = model.resources_.weight_loader_->load_rms_norm_weight(
-        repo, tensor_name(model.resources_.model_.weight_plan.requests,
-                          TensorRole::FinalNorm),
-        {model.resources_.shape_.hidden},
-        model.resources_.shape_.numerical_policy.rms_norm_add_one);
+        repo, final_name, {model.resources_.shape_.hidden}, final_norm.weight_kind);
+    if (model.resources_.program_.embedding_transform.post_norm) {
+        const NormSpec& embedding_norm =
+            *model.resources_.program_.embedding_transform.post_norm;
+        const std::string embedding_name = embedding_norm.weightless()
+            ? std::string{} : final_name;
+        model.resources_.embedding_norm_ =
+            model.resources_.weight_loader_->load_rms_norm_weight(
+                repo, embedding_name, {model.resources_.shape_.hidden},
+                embedding_norm.weight_kind);
+    }
 
     if (model.resources_.program_.per_layer_input.enabled) {
         const int input_size = model.resources_.program_.per_layer_input.input_size;

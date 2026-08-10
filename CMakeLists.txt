@@ -518,7 +518,8 @@ if(CELEG_BUILD_TESTS)
         src/models/nanbeige/chat_template.cpp src/models/nanbeige/tool_call_codec.cpp
         src/models/smollm3/chat_template.cpp src/models/smollm3/tool_call_codec.cpp
         src/models/qwen35/chat_template.cpp
-        src/models/nemotron_h/chat_template.cpp)
+        src/models/nemotron_h/chat_template.cpp
+        src/models/muse_glimmer/chat_template.cpp)
     add_executable(chat_template_test tests/chat_template_test.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         )

@@ -31,7 +31,13 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         resources_.weight_layout_->embed_token(
             token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
         launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
-                     resources_.shape_.numerical_policy.embedding_multiplier, stream_.get());
+                     resources_.program_.embedding_transform.multiplier, stream_.get());
+        if (resources_.program_.embedding_transform.post_norm) {
+            launch_rmsnorm(workspace_.hidden_.data(), resources_.embedding_norm_,
+                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           resources_.program_.embedding_transform.post_norm->epsilon,
+                           stream_.get());
+        }
         initialize_per_layer_input_host(token);
     }
 
@@ -56,8 +62,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             }
             __nv_bfloat16* q = workspace_.qkv_output_.data();
             const int query_projection_width = attention->query->rows;
-            const bool query_gate = layout.query_gate ||
-                query_projection_width == 2 * layout.query_width();
+            const bool output_gate = layout.output_gate.enabled();
             __nv_bfloat16* k = q + query_projection_width;
             __nv_bfloat16* v = k + layout.key_value_width();
             {
@@ -84,7 +89,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                         multi->sections[1], multi->sections[2], multi->interleaved,
                         static_cast<float>(rope->theta),
                         static_cast<float>(rope->rotary_fraction),
-                        resources_.shape_.numerical_policy.norm_eps, layout.query_key_norm,
+                        resources_.shape_.numerical_policy.norm_eps, layout.has_query_key_norm(),
                         lower_cuda_rope_scaling(*rope),
                         stream_.get());
                 } else {
@@ -93,7 +98,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                         layout.query_heads, layout.key_value_heads, layout.head_dim,
                         session_.position_, static_cast<float>(rope->theta),
                         static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
-                        layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                        layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
                 }
             }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
@@ -133,9 +138,16 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
                 }
             }
-            if (query_gate) {
+            if (output_gate) {
+                const __nv_bfloat16* gate = q + layout.query_width();
+                if (!layout.output_gate.packed_with_query) {
+                    linear(workspace_.normed_.data(), *attention->gate,
+                           workspace_.attention_gate_.data(), 1,
+                           layout.query_width(), resources_.shape_.hidden);
+                    gate = workspace_.attention_gate_.data();
+                }
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
-                                        q + layout.query_width(),
+                                        gate,
                                         layout.query_width(), stream_.get());
             }
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
@@ -241,7 +253,8 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
                 1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
+                 resources_.shape_.numerical_policy.logits_multiplier /
+                     resources_.shape_.numerical_policy.logits_divisor, stream_.get());
         if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
             launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
                                 resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());
@@ -269,7 +282,7 @@ void CudaCompiledModel::forward_token_paged_host(
     resources_.weight_layout_->embed_token(
         token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
     launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
-                 resources_.shape_.numerical_policy.embedding_multiplier, stream_.get());
+                 resources_.program_.embedding_transform.multiplier, stream_.get());
     initialize_per_layer_input_host(token);
 
     for (int layer_index = 0; layer_index < resources_.shape_.num_hidden_layers; ++layer_index) {
@@ -288,7 +301,7 @@ void CudaCompiledModel::forward_token_paged_host(
                     throw std::invalid_argument(
                         "CUDA latent attention requires BF16 paged state storage");
                 }
-                if (layout.query_gate || layout.multi_axis_position()) {
+                if (layout.output_gate.enabled() || layout.multi_axis_position()) {
                     throw std::invalid_argument(
                         "CUDA latent attention does not support query gates or M-RoPE yet");
                 }
@@ -373,8 +386,7 @@ void CudaCompiledModel::forward_token_paged_host(
             } else {
             __nv_bfloat16* q = workspace_.qkv_output_.data();
             const int query_projection_width = attention->query->rows;
-            const bool query_gate = layout.query_gate ||
-                query_projection_width == 2 * layout.query_width();
+            const bool output_gate = layout.output_gate.enabled();
             __nv_bfloat16* k = q + query_projection_width;
             __nv_bfloat16* v = k + layout.key_value_width();
             {
@@ -395,7 +407,13 @@ void CudaCompiledModel::forward_token_paged_host(
                     layout.query_heads, layout.key_value_heads, layout.head_dim,
                     session_.position_, static_cast<float>(rope->theta),
                     static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
-                    layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                    layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
+            } else if (layout.has_query_key_norm()) {
+                launch_dynamic_qk_norm_rope(
+                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
+                    layout.query_heads, layout.key_value_heads, layout.head_dim,
+                    session_.position_, 1.0f, 0.0f, layout.query_norm.epsilon, true,
+                    CudaRopeScaling{}, stream_.get());
             }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             const int cache_model_layer = attention->kv_owner_layer >= 0
@@ -504,9 +522,16 @@ void CudaCompiledModel::forward_token_paged_host(
                         stream_.get());
                 }
             }
-            if (query_gate) {
+            if (output_gate) {
+                const __nv_bfloat16* gate = q + layout.query_width();
+                if (!layout.output_gate.packed_with_query) {
+                    linear(workspace_.normed_.data(), *attention->gate,
+                           workspace_.attention_gate_.data(), 1,
+                           layout.query_width(), resources_.shape_.hidden);
+                    gate = workspace_.attention_gate_.data();
+                }
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
-                                        q + layout.query_width(),
+                                        layout.output_gate.packed_with_query ? gate : workspace_.attention_gate_.data(),
                                         layout.query_width(), stream_.get());
             }
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(), 1,
@@ -606,7 +631,8 @@ void CudaCompiledModel::forward_token_paged_host(
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(), 1,
                resources_.shape_.vocab_size, resources_.shape_.hidden);
         launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                     1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
+                     resources_.shape_.numerical_policy.logits_multiplier /
+                         resources_.shape_.numerical_policy.logits_divisor, stream_.get());
         if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
             launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
                                 resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());

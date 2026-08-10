@@ -38,25 +38,41 @@ void append_attention_weight_requirements(ResolvedModel& model,
                {topology.hidden, attention.latent_query_content_width()});
     } else {
         append(TensorRole::AttentionQuery, {query_width, topology.hidden});
-        if (attention.query_key_norm) {
+        if (attention.query_norm.enabled()) {
             append(TensorRole::AttentionQueryNorm, {attention.head_dim});
         }
         if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
             append(TensorRole::AttentionKey, {key_value_width, topology.hidden});
             append(TensorRole::AttentionValue, {key_value_width, topology.hidden});
-            if (attention.query_key_norm) {
+            if (attention.key_norm.enabled()) {
                 append(TensorRole::AttentionKeyNorm, {attention.head_dim});
             }
         }
         append(TensorRole::AttentionOutput, {topology.hidden, query_width});
+    }
+    if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {
+        append(TensorRole::AttentionGate,
+               {attention.query_width(), topology.hidden});
     }
     if (const auto* relative =
             std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
         append(TensorRole::AttentionRelativePositionBias,
                {attention.query_heads * relative->bucket_count});
     }
+    const LayerSpec& layer_spec = model.graph.layers.at(static_cast<size_t>(layer));
     if (topology.has_split_attention_norms) {
-        append(TensorRole::AttentionPostNorm, {topology.hidden});
+        if (layer_spec.post_attention_norm.enabled() &&
+            !layer_spec.post_attention_norm.weightless()) {
+            model.weight_plan.requests.push_back(
+                {TensorRole::AttentionPostNorm, layer, -1, {topology.hidden},
+                 std::nullopt, physical_layer, layer_spec.post_attention_norm.weight_kind});
+        }
+        if (layer_spec.post_feed_forward_norm.enabled() &&
+            !layer_spec.post_feed_forward_norm.weightless()) {
+            model.weight_plan.requests.push_back(
+                {TensorRole::FfnOutputNorm, layer, -1, {topology.hidden},
+                 std::nullopt, physical_layer, layer_spec.post_feed_forward_norm.weight_kind});
+        }
     }
 }
 

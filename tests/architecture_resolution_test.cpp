@@ -180,6 +180,40 @@ celeg::CheckpointMetadata gptx25_metadata() {
     return metadata;
 }
 
+celeg::CheckpointMetadata muse_glimmer_metadata() {
+    celeg::CheckpointMetadata metadata;
+    metadata.repository_hint = "meta-models/Muse-Glimmer-30B";
+    metadata.values["model_type"] = std::string("muse_glimmer");
+    metadata.values["text_config.hidden_size"] = int64_t(6656);
+    metadata.values["text_config.intermediate_size"] = int64_t(19968);
+    metadata.values["text_config.num_hidden_layers"] = int64_t(52);
+    metadata.values["text_config.num_attention_heads"] = int64_t(32);
+    metadata.values["text_config.num_key_value_heads"] = int64_t(2);
+    metadata.values["text_config.head_dim"] = int64_t(128);
+    metadata.values["text_config.vocab_size"] = int64_t(202048);
+    metadata.values["text_config.max_position_embeddings"] = int64_t(131072);
+    metadata.values["text_config.bos_token_id"] = int64_t(200000);
+    metadata.values["text_config.eos_token_id"] = int64_t(200001);
+    metadata.values["text_config.pad_token_id"] = int64_t(0);
+    metadata.values["text_config.rms_norm_eps"] = 1.0e-5;
+    metadata.values["text_config.post_norm_eps"] = 1.0e-8;
+    metadata.values["text_config.qk_scale_factor"] = 3.87;
+    metadata.values["text_config.output_multiplier"] = 0.19611613513818404;
+    metadata.values["text_config.final_logit_softcapping"] = 20.0;
+    metadata.values["text_config.sliding_window"] = int64_t(2048);
+    std::vector<std::string> patterns;
+    std::vector<double> theta;
+    for (int layer = 0; layer < 52; ++layer) {
+        const bool global = layer % 4 == 3;
+        patterns.push_back(global ? "full_attention" : "sliding_attention");
+        theta.push_back(global ? 0.0 : 500000.0);
+    }
+    metadata.values["text_config.layer_types"] = std::move(patterns);
+    metadata.values["text_config.layer_rope_theta"] = std::move(theta);
+    metadata.values["text_config.rope_parameters.rope_theta"] = 500000.0;
+    return metadata;
+}
+
 class GptxRepository final : public celeg::IWeightRepository {
 public:
     GptxRepository() {
@@ -221,7 +255,7 @@ private:
 int main() {
     const auto runtime = celeg::create_builtin_runtime_context();
     const auto& catalog = runtime->architectures();
-    CELEG_TEST_CHECK(catalog.ids().size() == 9);
+    CELEG_TEST_CHECK(catalog.ids().size() == 10);
     const auto metadata = lfm_metadata();
     const auto& architecture = catalog.select(metadata);
     CELEG_TEST_CHECK(architecture.id() == "lfm2");
@@ -253,7 +287,7 @@ int main() {
     CELEG_TEST_CHECK(gptx_attention.query_heads == 9);
     CELEG_TEST_CHECK(gptx_attention.key_value_heads == 3);
     CELEG_TEST_CHECK(gptx_attention.head_dim == 64);
-    CELEG_TEST_CHECK(!gptx_attention.query_key_norm);
+    CELEG_TEST_CHECK(!gptx_attention.has_query_key_norm());
     CELEG_TEST_CHECK(gptx_attention.query_scale == 1.0f);
     CELEG_TEST_CHECK(gptx_attention.rope_position()->pairing ==
                      celeg::RopePairingKind::AdjacentPairs);
@@ -291,6 +325,38 @@ int main() {
         qwen_moe.graph.layers.front().feed_forward);
     CELEG_TEST_CHECK(qwen_moe_spec.has_shared_expert);
     CELEG_TEST_CHECK(qwen_moe_spec.shared_intermediate_size == 512);
+
+    const auto muse_metadata = muse_glimmer_metadata();
+    const auto& muse_architecture = catalog.select(muse_metadata);
+    CELEG_TEST_CHECK(muse_architecture.id() == "muse-glimmer");
+    celeg::CheckpointView muse_checkpoint;
+    muse_checkpoint.metadata = muse_metadata;
+    const auto muse = muse_architecture.resolve(muse_checkpoint);
+    CELEG_TEST_CHECK(muse.topology.num_hidden_layers == 52);
+    CELEG_TEST_CHECK(muse.topology.hidden == 6656);
+    CELEG_TEST_CHECK(muse.topology.attention_layout(0).query_heads == 32);
+    CELEG_TEST_CHECK(muse.topology.attention_layout(0).key_value_heads == 2);
+    CELEG_TEST_CHECK(muse.topology.attention_layout(0).sliding_window_size() == 2048);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
+        muse.topology.attention_layout(0).position));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+        muse.topology.attention_layout(3).position));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
+        muse.topology.attention_layout(3).pattern));
+    const auto& muse_attention = std::get<celeg::AttentionSpec>(
+        muse.graph.layers.front().mixer);
+    CELEG_TEST_CHECK(muse_attention.query_norm.weightless());
+    CELEG_TEST_CHECK(muse_attention.key_norm.weightless());
+    CELEG_TEST_CHECK(muse_attention.output_gate.kind == celeg::AttentionGateKind::Sigmoid);
+    CELEG_TEST_CHECK(muse.graph.embedding_transform.post_norm.has_value());
+    CELEG_TEST_CHECK(muse.graph.embedding_transform.post_norm->weightless());
+    CELEG_TEST_CHECK(muse.graph.layers.front().operator_norm.weight_kind ==
+                     celeg::NormWeightKind::OnePlusScale);
+    bool muse_has_gate = false;
+    for (const auto& request : muse.weight_plan.requests) {
+        if (request.role == celeg::TensorRole::AttentionGate) muse_has_gate = true;
+    }
+    CELEG_TEST_CHECK(muse_has_gate);
 
     const auto nemotron_metadata = nemotron_h_metadata();
     const auto& nemotron_architecture = catalog.select(nemotron_metadata);

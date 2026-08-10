@@ -13,6 +13,15 @@ void add_descriptor_request(ResolvedModel& model, TensorRole role, int layer, in
                                           std::nullopt, physical_layer});
 }
 
+void add_norm_request(ResolvedModel& model, TensorRole role, int layer,
+                      const NormSpec& spec, std::vector<int64_t> shape,
+                      int physical_layer) {
+    if (!spec.enabled() || spec.weightless()) return;
+    model.weight_plan.requests.push_back({role, layer, -1, std::move(shape),
+                                          std::nullopt, physical_layer,
+                                          spec.weight_kind});
+}
+
 } // namespace
 
 void build_weight_plan(ResolvedModel& model, const Descriptor&,
@@ -23,7 +32,8 @@ void build_weight_plan(ResolvedModel& model, const Descriptor&,
                            {topology.vocab_size, topology.hidden});
     add_descriptor_request(model, TensorRole::LanguageModelHead, -1, -1,
                            {topology.vocab_size, topology.hidden});
-    add_descriptor_request(model, TensorRole::FinalNorm, -1, -1, {topology.hidden});
+    add_norm_request(model, TensorRole::FinalNorm, -1, model.graph.final_norm,
+                     {topology.hidden}, -1);
     if (topology.has_per_layer_input) {
         const int width = topology.num_hidden_layers * topology.per_layer_input_size;
         add_descriptor_request(model, TensorRole::PerLayerEmbedding, -1, -1,
@@ -47,8 +57,8 @@ void build_weight_plan(ResolvedModel& model, const Descriptor&,
                 return feed_forward.intermediate_size;
             }
         }, semantic_layer.feed_forward);
-        add_descriptor_request(model, TensorRole::AttentionInputNorm, layer, -1,
-                               {topology.hidden}, physical_layer);
+        add_norm_request(model, TensorRole::AttentionInputNorm, layer,
+                         semantic_layer.operator_norm, {topology.hidden}, physical_layer);
         if (semantic_layer.mixer_kind() == MixerKind::Attention) {
             append_attention_weight_requirements(model, topology, layer, physical_layer);
         } else if (semantic_layer.mixer_kind() == MixerKind::ShortConvolution) {
@@ -62,8 +72,8 @@ void build_weight_plan(ResolvedModel& model, const Descriptor&,
         if (mlp_only) {
             append_mlp_only_weight_requirements(model, topology, layer, physical_layer);
         } else {
-            add_descriptor_request(model, TensorRole::FfnInputNorm, layer, -1,
-                                   {topology.hidden}, physical_layer);
+            add_norm_request(model, TensorRole::FfnInputNorm, layer,
+                             semantic_layer.feed_forward_norm, {topology.hidden}, physical_layer);
         }
         if (!mlp_only && semantic_layer.feed_forward_kind() ==
                 FeedForwardKind::MixtureOfExperts) {

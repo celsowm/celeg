@@ -23,9 +23,13 @@ celeg::RuntimeTopology make_8b_a1b_shape() {
     shape.mixer_kinds.assign(static_cast<size_t>(shape.num_hidden_layers),
                              celeg::MixerKind::ShortConvolution);
     std::fill_n(shape.mixer_kinds.begin(), 6, celeg::MixerKind::Attention);
-    shape.attention_layouts.assign(
-        static_cast<size_t>(shape.num_hidden_layers),
-        celeg::AttentionSpec{32, 8, 64, false, celeg::FullCausalPattern{}, {}});
+    shape.attention_layouts.resize(static_cast<size_t>(shape.num_hidden_layers));
+    for (auto& attention : shape.attention_layouts) {
+        attention.query_heads = 32;
+        attention.key_value_heads = 8;
+        attention.head_dim = 64;
+        attention.pattern = celeg::FullCausalPattern{};
+    }
     for (auto& attention : shape.attention_layouts) {
         attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
     }

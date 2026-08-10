@@ -29,14 +29,21 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     int layer) {
     CommonWeights common;
-    common.operator_norm = load_vector(source, reader, writer,
-        tensor_name(weight_requests, TensorRole::AttentionInputNorm, layer),
-        {shape.hidden});
-    if (shape.numerical_policy.rms_norm_add_one) {
-        for (float& value : common.operator_norm) value += 1.0f;
-    }
     const CompiledLayerProgram& layer_program = program.layers.at(
         static_cast<size_t>(layer));
+    const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
+        if (!spec.enabled() || spec.weightless()) {
+            return std::vector<float>(static_cast<size_t>(shape.hidden), 1.0f);
+        }
+        std::vector<float> values = load_vector(source, reader, writer,
+            tensor_name(weight_requests, role, layer), {shape.hidden});
+        if (spec.weight_kind == NormWeightKind::OnePlusScale) {
+            for (float& value : values) value += 1.0f;
+        }
+        return values;
+    };
+    common.operator_norm = load_norm(TensorRole::AttentionInputNorm,
+                                     layer_program.operator_norm);
     if (!layer_program.execute_feed_forward) {
         common.ffn_norm = common.operator_norm;
         if (layer_program.mixer == CompiledMixer::MlpOnly) {
@@ -51,20 +58,14 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         return common;
     }
     if (shape.has_split_attention_norms) {
-        common.post_attention_norm = load_vector(source, reader, writer,
-            tensor_name(weight_requests, TensorRole::AttentionPostNorm, layer),
-            {shape.hidden});
+        common.post_attention_norm = load_norm(TensorRole::AttentionPostNorm,
+                                               layer_program.post_attention_norm);
     }
-    common.ffn_norm = load_vector(source, reader, writer,
-        tensor_name(weight_requests, TensorRole::FfnInputNorm, layer),
-        {shape.hidden});
-    if (shape.numerical_policy.rms_norm_add_one) {
-        for (float& value : common.ffn_norm) value += 1.0f;
-    }
+    common.ffn_norm = load_norm(TensorRole::FfnInputNorm,
+                                layer_program.feed_forward_norm);
     if (shape.has_split_attention_norms) {
-        common.post_feed_forward_norm = load_vector(source, reader, writer,
-            tensor_name(weight_requests, TensorRole::FfnOutputNorm, layer),
-            {shape.hidden});
+        common.post_feed_forward_norm = load_norm(TensorRole::FfnOutputNorm,
+                                                  layer_program.post_feed_forward_norm);
     }
     const int intermediate = layer_program.feed_forward_intermediate > 0
         ? layer_program.feed_forward_intermediate : shape.intermediate;
@@ -142,8 +143,20 @@ void CpuCompiledModel::Shared::load_weights() {
     weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
         tensor_name(weight_requests, TensorRole::FinalNorm),
         {shape.hidden});
-    if (shape.numerical_policy.rms_norm_add_one) {
+    if (program.final_norm.weight_kind == NormWeightKind::OnePlusScale) {
         for (float& value : weight_store.final_norm) value += 1.0f;
+    }
+    if (program.embedding_transform.post_norm) {
+        const NormSpec& spec = *program.embedding_transform.post_norm;
+        if (spec.weightless()) {
+            weight_store.embedding_norm.assign(static_cast<size_t>(shape.hidden), 1.0f);
+        } else {
+            weight_store.embedding_norm = load_vector(source, reader.get(), writer.get(),
+                tensor_name(weight_requests, TensorRole::FinalNorm), {shape.hidden});
+            if (spec.weight_kind == NormWeightKind::OnePlusScale) {
+                for (float& value : weight_store.embedding_norm) value += 1.0f;
+            }
+        }
     }
     if (shape.has_per_layer_input) {
         weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
@@ -215,25 +228,30 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionOutput, index),
                 {shape.hidden, attention.query_width()});
-            if (!attention.query_key_norm) {
-                layer.q_norm.assign(static_cast<size_t>(attention.head_dim), 1.0f);
-                layer.k_norm.assign(static_cast<size_t>(attention.head_dim), 1.0f);
-            } else {
-                layer.q_norm = load_vector(source, reader.get(), writer.get(),
-                    tensor_name(weight_requests, TensorRole::AttentionQueryNorm, index),
-                    {attention.head_dim});
-                if (shape.numerical_policy.rms_norm_add_one) {
-                    for (float& value : layer.q_norm) value += 1.0f;
-                }
-                if (!attention.uses_external_memory() &&
-                    (!attention.kv_sharing.shared() || attention.kv_sharing.publishes)) {
-                    layer.k_norm = load_vector(source, reader.get(), writer.get(),
+            layer.q_norm = attention.query_norm.enabled()
+                ? (attention.query_norm.weightless()
+                    ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
+                    : load_vector(source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionQueryNorm, index),
+                        {attention.head_dim}))
+                : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
+            layer.k_norm = attention.key_norm.enabled()
+                ? (attention.key_norm.weightless()
+                    ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
+                    : load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
-                        {attention.head_dim});
-                    if (shape.numerical_policy.rms_norm_add_one) {
-                        for (float& value : layer.k_norm) value += 1.0f;
-                    }
-                }
+                        {attention.head_dim}))
+                : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
+            if (attention.query_norm.weight_kind == NormWeightKind::OnePlusScale) {
+                for (float& value : layer.q_norm) value += 1.0f;
+            }
+            if (attention.key_norm.weight_kind == NormWeightKind::OnePlusScale) {
+                for (float& value : layer.k_norm) value += 1.0f;
+            }
+            if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {
+                layer.gate = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::AttentionGate, index),
+                    {attention.query_width(), shape.hidden});
             }
             if (const auto* relative =
                     std::get_if<RelativePositionBiasSpec>(&attention.bias)) {

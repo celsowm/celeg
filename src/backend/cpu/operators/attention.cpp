@@ -18,13 +18,23 @@ void apply_cpu_attention_qk(const RuntimeTopology& shape,
     const bool has_key = key != nullptr && !weights.k.segments.empty();
     const RopePositionSpec* rope = layout.rope_position();
     if (rope == nullptr) {
+        if (layout.has_query_key_norm()) {
+            cpu_qk_norm_only(query, weights.q_norm.data(), layout.query_heads,
+                             layout.head_dim, layout.query_norm.epsilon);
+            if (has_key) {
+                cpu_qk_norm_only(key, weights.k_norm.data(), layout.key_value_heads,
+                                 layout.head_dim, layout.key_norm.epsilon);
+            }
+            for (int i = 0; i < q_width; ++i) query[i] *= layout.query_scale;
+            return;
+        }
         const float ratio = shape.numerical_policy.attention_multiplier /
             (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
         for (int i = 0; i < q_width; ++i) query[i] *= ratio;
         return;
     }
 
-    if (layout.query_key_norm) {
+    if (layout.has_query_key_norm()) {
         if (const auto* multi = layout.multi_axis_position()) {
             cpu_qk_norm_rope_mrope(query, weights.q_norm.data(), layout.query_heads,
                 layout.head_dim, rope_position, multi->sections, multi->interleaved,

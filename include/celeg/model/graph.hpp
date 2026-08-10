@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/model/definition.hpp"
+#include "celeg/model/norm.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <cstdint>
@@ -156,19 +157,30 @@ struct AttentionSourceSpec {
     }
 };
 
-struct NormSpec {
-    float epsilon = 0.0f;
+enum class AttentionGateKind : uint8_t {
+    None,
+    Sigmoid,
+};
+
+struct AttentionOutputGateSpec {
+    AttentionGateKind kind = AttentionGateKind::None;
+    // Physical binding detail only: the semantic gate is still a separate
+    // operation, but some checkpoints store its projection beside Q.
+    bool packed_with_query = false;
+
+    bool enabled() const { return kind != AttentionGateKind::None; }
 };
 
 struct AttentionSpec {
     int query_heads = 0;
     int key_value_heads = 0;
     int head_dim = 0;
-    bool query_key_norm = true;
+    NormSpec query_norm;
+    NormSpec key_norm;
     AttentionPatternSpec pattern = FullCausalPattern{};
     KvSharingSpec kv_sharing;
     float query_scale = 1.0f;
-    bool query_gate = false;
+    AttentionOutputGateSpec output_gate;
     PositionSpec position = RopePositionSpec{};
     AttentionBiasSpec bias = NoAttentionBiasSpec{};
     AttentionStateSpec state = OrdinaryKvStateSpec{};
@@ -177,7 +189,10 @@ struct AttentionSpec {
     AttentionOutputTransformSpec output_transform = NoAttentionOutputTransformSpec{};
 
     int query_width() const { return query_heads * head_dim; }
-    int query_projection_width() const { return query_width() * (query_gate ? 2 : 1); }
+    int query_projection_width() const {
+        return output_gate.enabled() && output_gate.packed_with_query
+            ? query_width() * 2 : query_width();
+    }
     int key_value_width() const { return key_value_heads * head_dim; }
     int projection_width() const {
         if (uses_latent_state()) {
@@ -230,6 +245,9 @@ struct AttentionSpec {
         return std::holds_alternative<LatentAttentionStateSpec>(state);
     }
     bool uses_external_memory() const { return !sources.self_attention(); }
+    bool has_query_key_norm() const {
+        return query_norm.enabled() || key_norm.enabled();
+    }
     bool has_causal_pattern() const {
         return std::holds_alternative<FullCausalPattern>(pattern) ||
                std::holds_alternative<SlidingWindowPattern>(pattern);
@@ -351,7 +369,13 @@ struct ModelGraph {
     // runtime shape may cache a derived copy for allocation, but compilation
     // must consume this graph-owned schedule.
     std::vector<int> norm_after_layers;
-    float embedding_multiplier = 1.0f;
+    struct EmbeddingTransformSpec {
+        std::optional<NormSpec> post_norm;
+        float multiplier = 1.0f;
+
+        void validate() const;
+    };
+    EmbeddingTransformSpec embedding_transform;
     float logits_divisor = 1.0f;
     float final_logit_softcap = 0.0f;
 

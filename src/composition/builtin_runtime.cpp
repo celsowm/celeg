@@ -9,6 +9,7 @@
 #include "celeg/models/nanbeige/chat_template.hpp"
 #include "celeg/models/nemotron_h/chat_template.hpp"
 #include "celeg/models/qwen35/chat_template.hpp"
+#include "celeg/models/muse_glimmer/chat_template.hpp"
 #include "celeg/models/qwen35/vision.hpp"
 #include "celeg/models/smollm3/chat_template.hpp"
 #include "celeg/runtime/context.hpp"
@@ -35,6 +36,7 @@ constexpr BuiltinChatRegistration kDeclarativeChats[] = {
     {"smollm3-chat", &add_smollm3_chat_profile},
     {"nanbeige42-chat", &add_nanbeige42_chat_profile},
     {"qwen35-chat", &add_qwen35_chat_profile},
+    {"muse-glimmer-chat", &add_muse_glimmer_chat_profile},
     {"nemotron-h-chat", &add_nemotron_h_chat_profile},
 };
 

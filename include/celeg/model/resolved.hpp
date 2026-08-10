@@ -23,12 +23,13 @@ struct TokenPolicy {
 
 struct NumericalPolicy {
     float norm_eps = 0.0f;
+    float post_norm_eps = 0.0f;
     float embedding_multiplier = 1.0f;
     float attention_multiplier = 0.0f;
     float residual_multiplier = 1.0f;
+    float logits_multiplier = 1.0f;
     float logits_divisor = 1.0f;
     float final_logit_softcap = 0.0f;
-    bool rms_norm_add_one = false;
 
     void validate() const;
 };

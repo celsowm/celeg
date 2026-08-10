@@ -25,16 +25,20 @@ void execute_cpu_attention_token(
                 model.run_external_attention(layout, *memory_it->second, q,
                                        execution.workspace.op_output.data(),
                                        attention.relative_bias);
-                if (layout.query_gate) {
-                    apply_cpu_query_gate(execution.workspace.op_output.data(), q + q_width,
+                if (layout.output_gate.enabled()) {
+                    execution.shared.linear.gemv(attention.gate,
+                                                 execution.workspace.normed.data(),
+                                                 execution.workspace.attention_gate.data());
+                    apply_cpu_query_gate(execution.workspace.op_output.data(),
+                                         execution.workspace.attention_gate.data(),
                                          static_cast<size_t>(q_width));
                 }
                 execution.shared.linear.gemv(attention.out, execution.workspace.op_output.data(),
                                     execution.workspace.hidden.data());
             } else if (layout.uses_latent_state()) {
                 const auto& latent = *layout.latent_state();
-                if (layout.query_gate) {
-                    throw std::invalid_argument("latent attention query gating is not supported");
+                if (layout.output_gate.enabled()) {
+                    throw std::invalid_argument("latent attention output gating is not supported");
                 }
                 const int content_width = layout.latent_query_content_width();
                 const int rope_width = layout.latent_query_rope_width();
@@ -90,8 +94,18 @@ void execute_cpu_attention_token(
                           execution.session.position_value + 1, attention.relative_bias);
             apply_cpu_attention_output_transform(
                 layout, execution.workspace.op_output.data(), v);
-            if (layout.query_gate) {
-                apply_cpu_query_gate(execution.workspace.op_output.data(), q + q_width,
+            if (layout.output_gate.enabled()) {
+                const float* gate = nullptr;
+                if (layout.output_gate.packed_with_query) {
+                    gate = q + q_width;
+                } else {
+                    execution.shared.linear.gemv(attention.gate,
+                                                 execution.workspace.normed.data(),
+                                                 execution.workspace.attention_gate.data());
+                    gate = execution.workspace.attention_gate.data();
+                }
+                apply_cpu_query_gate(execution.workspace.op_output.data(),
+                                     gate,
                                      static_cast<size_t>(q_width));
             }
             execution.shared.linear.gemv(attention.out, execution.workspace.op_output.data(), execution.workspace.hidden.data());

@@ -71,10 +71,13 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             };
         }
         const int query_heads = model == 0 ? 16 : 32;
-        shape.attention_layouts.assign(
-            static_cast<size_t>(shape.num_hidden_layers),
-            celeg::AttentionSpec{query_heads, 8, 64, false,
-                                 celeg::FullCausalPattern{}, {}});
+        shape.attention_layouts.resize(static_cast<size_t>(shape.num_hidden_layers));
+        for (auto& attention : shape.attention_layouts) {
+            attention.query_heads = query_heads;
+            attention.key_value_heads = 8;
+            attention.head_dim = 64;
+            attention.pattern = celeg::FullCausalPattern{};
+        }
         for (auto& attention : shape.attention_layouts) {
             attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
         }

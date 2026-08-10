@@ -96,6 +96,7 @@ struct CpuWorkspace {
         residual.resize(rows * plan.hidden);
         normed.resize(rows * plan.hidden);
         op_output.resize(rows * plan.attention_output);
+        attention_gate.resize(rows * plan.attention_output);
         qkv.resize(rows * plan.attention_projection);
         latent_key.resize(rows * plan.latent_state);
         latent_value.resize(rows * plan.latent_state);
@@ -145,7 +146,7 @@ struct CpuWorkspace {
         terminal_rows.clear();
     }
 
-    std::vector<float> hidden, residual, normed, op_output, qkv;
+    std::vector<float> hidden, residual, normed, op_output, attention_gate, qkv;
     std::vector<float> latent_key, latent_value, latent_rope, latent_key_rope;
     std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
     std::vector<float> conv_projected, gate_up, activated, mlp_output;
@@ -201,6 +202,7 @@ struct CpuCompiledModel {
         CpuLinearWeight latent_q_rope;
         CpuLinearWeight k;
         CpuLinearWeight v;
+        CpuLinearWeight gate;
         CpuLinearWeight latent_k_rope;
         CpuLinearWeight out;
         std::vector<float> q_norm;
@@ -268,6 +270,7 @@ struct CpuCompiledModel {
         CpuLinearWeight lm_head;
         CpuLinearWeight per_layer_embedding;
         CpuLinearWeight per_layer_context_projection;
+        std::vector<float> embedding_norm;
         std::vector<float> per_layer_projection_norm;
         std::vector<float> final_norm;
         std::vector<WeightLayer> layers;

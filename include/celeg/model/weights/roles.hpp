@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/checkpoint/weight_repository.hpp"
+#include "celeg/model/norm.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -21,6 +22,7 @@ enum class TensorRole : uint8_t {
     AttentionKey,
     AttentionKeyNorm,
     AttentionValue,
+    AttentionGate,
     AttentionRelativePositionBias,
     AttentionLatentQuery,
     AttentionLatentQueryRope,
@@ -86,6 +88,7 @@ struct TensorRequest {
     // Physical checkpoint layer used by architectures that execute a
     // smaller set of blocks more than once.  -1 means the logical layer.
     int physical_layer = -1;
+    NormWeightKind norm_weight_kind = NormWeightKind::Scale;
 };
 
 struct ResolvedTensor {

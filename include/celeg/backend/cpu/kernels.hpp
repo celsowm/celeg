@@ -108,6 +108,8 @@ void cpu_gelu_tanh(float* data, size_t count);
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
                       const RopePositionSpec& rope, float eps);
+void cpu_qk_norm_only(float* data, const float* norm_weight,
+                      int heads, int head_dim, float eps);
 void cpu_rope(float* data, int heads, int head_dim, int position,
               const RopePositionSpec& rope);
 void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,

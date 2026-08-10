@@ -34,7 +34,13 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         workspace_.prefill_tokens_.data(), rows, workspace_.prefill_hidden_.data(),
         resources_.shape_.hidden, stream_.get());
     launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
-                 resources_.shape_.numerical_policy.embedding_multiplier, stream_.get());
+                 resources_.program_.embedding_transform.multiplier, stream_.get());
+    if (resources_.program_.embedding_transform.post_norm) {
+        launch_rmsnorm(workspace_.prefill_hidden_.data(), resources_.embedding_norm_,
+                       workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                       resources_.program_.embedding_transform.post_norm->epsilon,
+                       stream_.get());
+    }
     initialize_per_layer_input_batch(workspace_.prefill_tokens_.data(), rows);
     prof.end(PrefillPhase::Embed, stream_.get());
 
@@ -192,8 +198,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 prof.end(PrefillPhase::AttnOut, stream_.get());
             } else {
             const int query_projection_width = attention->query->rows;
-            const bool query_gate = layout.query_gate ||
-                query_projection_width == 2 * layout.query_width();
+            const bool output_gate = layout.output_gate.enabled();
             prof.begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
@@ -211,20 +216,31 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             }
             }
             prof.end(PrefillPhase::QkvProj, stream_.get());
-            if (query_gate) {
-                launch_extract_query_gate(workspace_.prefill_q_.data(),
-                    workspace_.prefill_attention_gate_.data(), rows,
-                    layout.query_width(), stream_.get());
-            }
-
             prof.begin(stream_.get());
+            if (output_gate) {
+                if (layout.output_gate.packed_with_query) {
+                    launch_extract_query_gate(workspace_.prefill_q_.data(),
+                                              workspace_.prefill_attention_gate_.data(),
+                                              rows, layout.query_width(), stream_.get());
+                } else {
+                    linear(workspace_.prefill_normed_.data(), *attention->gate,
+                           workspace_.prefill_attention_gate_.data(), rows,
+                           layout.query_width(), resources_.shape_.hidden);
+                }
+            }
             if (const auto* rope = layout.rope_position()) {
                 launch_dynamic_qk_norm_rope_prefill(
                     workspace_.prefill_q_.data(), attention->key ? workspace_.prefill_k_.data() : nullptr,
                     attention->q_norm, attention->k_norm, rows, layout.query_heads,
                     layout.key_value_heads, layout.head_dim, static_cast<float>(rope->theta),
                     static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
-                    layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream_.get());
+                    layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
+            } else if (layout.has_query_key_norm()) {
+                launch_dynamic_qk_norm_rope_prefill(
+                    workspace_.prefill_q_.data(), attention->key ? workspace_.prefill_k_.data() : nullptr,
+                    attention->q_norm, attention->k_norm, rows, layout.query_heads,
+                    layout.key_value_heads, layout.head_dim, 1.0f, 0.0f,
+                    layout.query_norm.epsilon, true, CudaRopeScaling{}, stream_.get());
             }
             launch_scale(workspace_.prefill_q_.data(),
                          static_cast<size_t>(rows) * layout.query_width(),
@@ -326,7 +342,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 }
             }
             prof.end(PrefillPhase::Attention, stream_.get());
-            if (query_gate) {
+            if (output_gate) {
                 launch_sigmoid_multiply(workspace_.prefill_op_output_.data(),
                     workspace_.prefill_attention_gate_.data(),
                     rows * layout.query_width(), stream_.get());
@@ -391,7 +407,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
            1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     if (resources_.shape_.numerical_policy.logits_divisor != 1.0f) {
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 1.0f / resources_.shape_.numerical_policy.logits_divisor, stream_.get());
+                 resources_.shape_.numerical_policy.logits_multiplier /
+                     resources_.shape_.numerical_policy.logits_divisor, stream_.get());
     if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
                             resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());

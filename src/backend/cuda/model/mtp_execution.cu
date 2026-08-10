@@ -98,14 +98,14 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             multi->sections[1], multi->sections[2], multi->interleaved,
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction), eps,
-            layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream);
+            layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
     } else {
         launch_dynamic_qk_norm_rope_device(
             q, k, attention->q_norm, attention->k_norm,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
             position_device_.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction), eps,
-            layout.query_key_norm, lower_cuda_rope_scaling(*rope), stream);
+            layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream);
     if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
@@ -159,7 +159,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
                 layout.sliding_window_size(), stream);
         }
     }
-    if (layout.query_gate) {
+    if (layout.output_gate.enabled()) {
         launch_sigmoid_multiply(workspace_.op_output_.data(),
                                 q + layout.query_width(),
                                 layout.query_width(), stream);
@@ -179,7 +179,8 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     linear(workspace_.normed_.data(), *mtp.logits, workspace_.mtp_logits_.data(),
            1, vocab, hidden);
     launch_scale(workspace_.mtp_logits_.data(), vocab,
-                 1.0f / resources_.shape_.numerical_policy.logits_divisor, stream);
+                 resources_.shape_.numerical_policy.logits_multiplier /
+                     resources_.shape_.numerical_policy.logits_divisor, stream);
     if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.mtp_logits_.data(), vocab,
                             resources_.shape_.numerical_policy.final_logit_softcap, stream);

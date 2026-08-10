@@ -172,6 +172,10 @@ struct CompiledLayerProgram {
     std::vector<std::size_t> weight_request_indices;
     std::optional<MoeLayerProgram> moe;
     std::optional<CompiledAttentionStateLayout> state_layout;
+    NormSpec operator_norm;
+    NormSpec post_attention_norm;
+    NormSpec feed_forward_norm;
+    NormSpec post_feed_forward_norm;
 };
 
 struct CompiledModelProgram {
@@ -181,6 +185,8 @@ struct CompiledModelProgram {
     std::vector<int> norm_after_layers;
     std::vector<std::size_t> unlayered_weight_request_indices;
     PerLayerInputPlan per_layer_input;
+    NormSpec final_norm;
+    ModelGraph::EmbeddingTransformSpec embedding_transform;
     std::string semantic_fingerprint;
 
     bool has_moe() const;

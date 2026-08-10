@@ -179,7 +179,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                logits.data(), rows, shape_.vocab_size,
                                shape_.hidden);
         launch_scale(logits.data(), rows * shape_.vocab_size,
-                     1.0f / shape_.numerical_policy.logits_divisor, stream.get());
+                     shape_.numerical_policy.logits_multiplier /
+                         shape_.numerical_policy.logits_divisor, stream.get());
         if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
             launch_tanh_softcap(logits.data(), rows * shape_.vocab_size,
                                 shape_.numerical_policy.final_logit_softcap, stream.get());
@@ -335,7 +336,8 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                    logits.data(), finalized,
                                    shape_.vocab_size, shape_.hidden);
             launch_scale(logits.data(), finalized * shape_.vocab_size,
-                   1.0f / shape_.numerical_policy.logits_divisor, stream.get());
+                   shape_.numerical_policy.logits_multiplier /
+                       shape_.numerical_policy.logits_divisor, stream.get());
             if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
                 launch_tanh_softcap(logits.data(), finalized * shape_.vocab_size,
                                     shape_.numerical_policy.final_logit_softcap, stream.get());

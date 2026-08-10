@@ -61,7 +61,7 @@ public:
         const IWeightRepository& repo,
         const std::string& name,
         std::vector<int64_t> expected,
-        bool add_one);
+        NormWeightKind weight_kind);
 
     // Loads a 2D linear weight, quantizing to Int8/Int4 if the weight mode
     // demands it. Returns a LinearWeight view into the shared arena.

@@ -130,8 +130,16 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     topology.numerical_policy.attention_multiplier = 0.125f;
 
     const auto make_attention = [&]() {
-        AttentionSpec attention{*m.query_heads, *m.key_value_heads, head_dim,
-                                *m.query_key_norm, FullCausalPattern{}, {}, 1.0f, false};
+        AttentionSpec attention;
+        attention.query_heads = *m.query_heads;
+        attention.key_value_heads = *m.key_value_heads;
+        attention.head_dim = head_dim;
+        attention.query_norm = {*m.query_key_norm ? *m.norm_epsilon : 0.0f,
+                                *m.query_key_norm ? NormWeightKind::Scale
+                                                  : NormWeightKind::None};
+        attention.key_norm = attention.query_norm;
+        attention.pattern = FullCausalPattern{};
+        attention.query_scale = 1.0f;
         attention.position = RopePositionSpec{*m.rope_theta, *m.rotary_fraction,
                                               RopeScalingSpec{}};
         std::get<RopePositionSpec>(attention.position).pairing = *m.rope_pairing;

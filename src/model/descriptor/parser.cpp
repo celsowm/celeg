@@ -1,5 +1,6 @@
 #include "detail.hpp"
 
+
 namespace celeg::descriptor_detail {
 
 Descriptor parse_descriptor(const Json& value) {
@@ -36,6 +37,7 @@ Descriptor parse_descriptor(const Json& value) {
         result.rope_pairing = optional_string(position, "pairing", result.rope_pairing);
         result.disable_rope_json = optional_string(position, "disable_rope_key");
         result.disable_rope_gguf = optional_string(position, "disable_rope_gguf_key");
+        result.rope_theta_schedule = optional_field(position, "theta_schedule");
         if (position.contains("alibi_slopes")) {
             result.alibi_slopes = parse_field(position.at("alibi_slopes"));
         }
@@ -123,10 +125,44 @@ Descriptor parse_descriptor(const Json& value) {
         }
         result.final_logit_softcap = optional_field(graph, "final_logit_softcap");
     }
+    if (value.contains("norms")) {
+        const Json& norms = value.at("norms");
+        const auto parse_norm = [&norms](std::string_view key,
+                                         NormWeightKind fallback) {
+            return norms.contains(key)
+                ? parse_norm_weight_kind(norms.at(key).as_string()) : fallback;
+        };
+        result.operator_norm_kind = parse_norm("operator", result.operator_norm_kind);
+        result.feed_forward_norm_kind = parse_norm("feed_forward",
+                                                    result.feed_forward_norm_kind);
+        result.final_norm_kind = parse_norm("final", result.final_norm_kind);
+        result.query_norm_kind = parse_norm("query", result.query_norm_kind);
+        result.key_norm_kind = parse_norm("key", result.key_norm_kind);
+        result.query_norm_enabled = norms.contains("query");
+        result.key_norm_enabled = norms.contains("key");
+        if (norms.contains("post_embedding")) {
+            result.embedding_post_norm_kind = parse_norm_weight_kind(
+                norms.at("post_embedding").as_string());
+        }
+    }
     if (value.contains("attention")) {
         const Json& attention = value.at("attention");
-        result.query_key_norm = optional_bool(attention, "query_key_norm");
-        result.query_gate = optional_bool(attention, "query_gate");
+        if (attention.contains("query_key_norm") &&
+            attention.at("query_key_norm").is_bool() &&
+            attention.at("query_key_norm").as_bool()) {
+            result.query_norm_kind = NormWeightKind::Scale;
+            result.key_norm_kind = NormWeightKind::Scale;
+            result.query_norm_enabled = true;
+            result.key_norm_enabled = true;
+        }
+        if (attention.contains("output_gate")) {
+            const std::string gate = attention.at("output_gate").as_string();
+            if (gate == "none") result.attention_gate_kind = AttentionGateKind::None;
+            else if (gate == "sigmoid") result.attention_gate_kind = AttentionGateKind::Sigmoid;
+            else throw std::invalid_argument("descriptor has unsupported attention output gate: " + gate);
+        }
+        result.attention_gate_packed_with_query = optional_bool(
+            attention, "gate_packed_with_query");
         result.orthogonalize_current_value = optional_field(
             attention, "orthogonalize_current_value");
         result.orthogonalize_current_value_minimum_norm_squared = optional_field(

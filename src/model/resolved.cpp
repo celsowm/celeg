@@ -126,11 +126,12 @@ void ModelGraph::validate() const {
         throw std::runtime_error("resolved model graph has no layers");
     }
     if (!(final_norm.epsilon > 0.0f) || !std::isfinite(final_norm.epsilon) ||
-        !std::isfinite(embedding_multiplier) ||
         !std::isfinite(logits_divisor) || logits_divisor <= 0.0f ||
         !std::isfinite(final_logit_softcap) || final_logit_softcap < 0.0f) {
         throw std::runtime_error("resolved model graph has invalid policies");
     }
+    final_norm.validate();
+    embedding_transform.validate();
     for (size_t index = 0; index < norm_after_layers.size(); ++index) {
         const int layer = norm_after_layers[index];
         if (layer < 0 || layer >= static_cast<int>(layers.size()) - 1 ||
@@ -144,7 +145,23 @@ void ModelGraph::validate() const {
             !std::isfinite(layer.layer_scalar)) {
             throw std::runtime_error("resolved model graph has invalid layer policy");
         }
+        layer.operator_norm.validate();
+        if (layer.feed_forward_norm.enabled()) layer.feed_forward_norm.validate();
+        if (layer.post_attention_norm.enabled()) layer.post_attention_norm.validate();
+        if (layer.pre_feed_forward_norm.enabled()) layer.pre_feed_forward_norm.validate();
+        if (layer.post_feed_forward_norm.enabled()) layer.post_feed_forward_norm.validate();
+        if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
+            if (attention->query_norm.enabled()) attention->query_norm.validate();
+            if (attention->key_norm.enabled()) attention->key_norm.validate();
+        }
     }
+}
+
+void ModelGraph::EmbeddingTransformSpec::validate() const {
+    if (!std::isfinite(multiplier)) {
+        throw std::runtime_error("embedding transform multiplier is invalid");
+    }
+    if (post_norm) post_norm->validate();
 }
 
 void AlibiBiasSpec::validate(int query_heads) const {
@@ -214,10 +231,12 @@ void TokenPolicy::validate() const {
 
 void NumericalPolicy::validate() const {
     if (!(norm_eps > 0.0f) || !std::isfinite(norm_eps) ||
+        (post_norm_eps != 0.0f && (!(post_norm_eps > 0.0f) || !std::isfinite(post_norm_eps))) ||
         !(logits_divisor > 0.0f) || !std::isfinite(logits_divisor) ||
         !std::isfinite(embedding_multiplier) ||
         !std::isfinite(attention_multiplier) ||
         !std::isfinite(residual_multiplier) ||
+        !std::isfinite(logits_multiplier) ||
         final_logit_softcap < 0.0f || !std::isfinite(final_logit_softcap)) {
         throw std::runtime_error("invalid resolved model numerical policy");
     }
@@ -305,12 +324,13 @@ std::string RuntimeTopology::fingerprint() const {
     out << "-tok" << token_policy.bos_token_id << '-' << token_policy.pad_token_id;
     for (int eos : token_policy.eos_token_ids) out << '-' << eos;
     out << "-num" << numerical_policy.norm_eps << '-'
+        << numerical_policy.post_norm_eps << '-'
         << numerical_policy.embedding_multiplier << '-'
         << numerical_policy.attention_multiplier << '-'
         << numerical_policy.residual_multiplier << '-'
+        << numerical_policy.logits_multiplier << '-'
         << numerical_policy.logits_divisor << '-'
-        << numerical_policy.final_logit_softcap << '-'
-        << numerical_policy.rms_norm_add_one;
+        << numerical_policy.final_logit_softcap;
     return out.str();
 }
 
@@ -414,9 +434,7 @@ void RuntimeTopology::validate() const {
             if (layout.query_heads <= 0 || layout.key_value_heads <= 0 ||
                 layout.query_heads % layout.key_value_heads != 0 ||
                 layout.head_dim <= 0 || (layout.head_dim % 2) != 0 ||
-                (layout.rope_position() != nullptr && layout.rotary_pairs() <= 0) ||
-                (std::holds_alternative<NoPositionEncodingSpec>(layout.position) &&
-                 layout.query_key_norm)) {
+                (layout.rope_position() != nullptr && layout.rotary_pairs() <= 0)) {
                 throw std::runtime_error("invalid per-layer attention layout");
             }
             if (const auto* rope = layout.rope_position()) {
@@ -465,7 +483,7 @@ void ResolvedModel::validate() const {
     if (graph.layers.size() != static_cast<size_t>(topology.num_hidden_layers)) {
         throw std::runtime_error("resolved graph/topology layer count mismatch");
     }
-    if (graph.embedding_multiplier != topology.numerical_policy.embedding_multiplier ||
+    if (graph.embedding_transform.multiplier != topology.numerical_policy.embedding_multiplier ||
         graph.logits_divisor != topology.numerical_policy.logits_divisor ||
         graph.final_norm.epsilon != topology.numerical_policy.norm_eps) {
         throw std::runtime_error("resolved graph/topology numerical policy mismatch");
