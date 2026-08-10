@@ -135,6 +135,40 @@ No descriptor, architecture provider, chat profile, tokenizer module, or vision 
 
 No CPU/CUDA executor may inspect `model_type`, repository name, architecture ID, or Hugging Face tensor names to select Muse behavior.
 
+## 2.6 No backward-compatibility constraint
+
+CELEG has **no backward-compatibility requirement** for this work.
+
+Architectural quality, semantic clarity, correctness, SOLID boundaries, and removal of obsolete abstractions take precedence over preserving old internal APIs, descriptor schemas, configuration spellings, class layouts, helper functions, or transitional behavior.
+
+Breaking changes are explicitly allowed when they produce a cleaner architecture.
+
+Required policy:
+
+```text
+new canonical design
+      |
+      +--> migrate current in-tree callers/descriptors/tests directly
+      |
+      +--> delete obsolete API/schema/path
+```
+
+Forbidden direction:
+
+```text
+new design
+   + old design
+   + compatibility adapter
+   + deprecated alias
+   + dual execution path
+```
+
+Do not add compatibility shims, deprecated aliases, duplicate descriptor fields, legacy overloads, fallback branches, or parallel old/new execution paths merely to keep previous CELEG interfaces working.
+
+Current supported models should remain semantically correct by being migrated atomically to the new canonical representation. That is a regression/correctness requirement, **not** a backward-compatibility promise.
+
+If an old abstraction conflicts with the desired semantic model, remove it and update every in-tree caller in the same change.
+
 ---
 
 # 3. What Muse Glimmer exercises
@@ -223,7 +257,7 @@ Do not introduce `bool muse_centered` or infer the norm formula from a tensor na
 - `None` must not require a norm weight tensor;
 - `Scale` and `OnePlusScale` require a correctly shaped weight;
 - CPU and CUDA must implement identical math;
-- existing models must preserve their current norm semantics explicitly or via one validated default during migration.
+- current in-tree models must be migrated to the new explicit norm semantics in the same architectural change; no legacy `NormSpec` compatibility path is required.
 
 ## 5.2 Embedding post-transform must be graph-owned
 
@@ -378,7 +412,7 @@ No implementation phase is considered numerically complete using text-generation
 3. update weight planning so weightless norms do not request tensors;
 4. update CPU norm lowering;
 5. update CUDA norm lowering;
-6. migrate current models without changing their outputs;
+6. migrate every current in-tree model/descriptor/caller directly to the new canonical norm representation and delete the obsolete representation rather than preserving a compatibility layer;
 7. add unit tests for all supported norm weight conventions.
 
 ## Tests
@@ -389,12 +423,16 @@ centered RMSNorm golden
 weightless RMSNorm golden
 CPU == scalar reference
 CUDA == scalar reference
-existing architecture regression suite unchanged
+current supported architecture regression suite semantically correct after migration
 ```
+
+Passing the current architecture suite verifies that the migration preserved intended model semantics. It does not require old CELEG APIs, schemas, descriptor spellings, or binaries to remain compatible.
 
 ## SOLID gate
 
 This phase fails review if the executor must know which model requested the norm.
+
+It also fails review if a legacy compatibility branch survives solely to preserve the previous norm API or representation.
 
 ---
 
@@ -417,7 +455,7 @@ Ordering must be explicit and validated.
 
 ## Tests
 
-- no-transform path remains bit/numerically equivalent where applicable;
+- no-transform semantic path remains correct for migrated current models;
 - weightless RMSNorm embedding fixture;
 - CPU/CUDA parity;
 - invalid transform combinations fail during validation/compilation, not during token execution.
@@ -860,9 +898,11 @@ Use the official reference fixture.
 
 ## Regression tests
 
-Existing Gemma, Qwen, Granite, LFM, MoE, recurrent/hybrid, M-RoPE, packed execution, and other architecture tests must remain green.
+Existing Gemma, Qwen, Granite, LFM, MoE, recurrent/hybrid, M-RoPE, packed execution, and other architecture tests must remain semantically green **after direct migration to the new canonical APIs**.
 
-A new generic primitive is not complete if it fixes Muse by silently changing the meaning of an existing graph.
+This does not require preserving old APIs, old descriptor schemas, old helper signatures, old binaries, deprecated aliases, or compatibility behavior. Tests and in-tree callers are expected to migrate with the architecture.
+
+A new generic primitive is not complete if it fixes Muse by silently changing the intended mathematical meaning of an existing supported model.
 
 ---
 
@@ -997,7 +1037,15 @@ Before accepting each implementation commit, answer all of these:
 - Are tensor-name differences data/binding rules instead of duplicated lookup code?
 - Are shared vision operations extracted only when they are semantically identical?
 
+### No-backcompat companion rule
+
+- Did the change retain an old API, schema, overload, alias, descriptor spelling, or execution path only for compatibility?
+- Can that legacy surface be deleted and all in-tree callers migrated now?
+- Is a compatibility shim obscuring the canonical semantic design?
+
 Any `if (muse_glimmer)` outside an import/registration/chat/vision integration boundary is a design smell requiring explicit justification.
+
+Any compatibility-only branch or deprecated duplicate surface is also a design smell and should normally be removed.
 
 ---
 
@@ -1021,7 +1069,9 @@ The plan is complete only when all relevant items are true:
 - [ ] text reference parity passes;
 - [ ] chat/tokenizer integration passes;
 - [ ] no Muse branch exists in CPU/CUDA execution;
-- [ ] existing architecture regression suite remains green;
+- [ ] current supported architecture regression suite remains semantically green after direct migration;
+- [ ] no compatibility-only shim, deprecated alias, duplicate descriptor field, or parallel old/new execution path remains;
+- [ ] obsolete APIs/representations touched by the refactor are deleted after in-tree callers migrate;
 - [ ] image support has its own provider and parity tests;
 - [ ] video support is isolated from text semantics;
 - [ ] DFlash remains optional and strategy-separated from base correctness;
