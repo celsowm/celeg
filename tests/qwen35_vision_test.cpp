@@ -1,4 +1,4 @@
-#include "celeg/models/qwen35/vision.hpp"
+#include "celeg/runtime/vision/providers.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "support/assertions.hpp"
 
@@ -23,7 +23,7 @@ public:
 int main() {
     bool rejected_empty_repository = false;
     try {
-        (void)celeg::make_qwen35_visual_embedding_provider(
+        (void)celeg::make_safetensor_visual_embedding_provider(
             std::make_shared<EmptyVisionRepository>());
     } catch (const std::invalid_argument&) {
         rejected_empty_repository = true;
@@ -35,7 +35,7 @@ int main() {
         std::cout << "qwen35_vision_test: skipped (CELEG_QWEN35_MODEL is not set)\n";
         return 0;
     }
-    const auto provider = celeg::make_qwen35_visual_embedding_provider(path);
+    const auto provider = celeg::make_safetensor_visual_embedding_provider(path);
     const celeg::VisualEmbedding embedding = provider->encode(
         "data:image/x-portable-pixmap;base64,UDYKMSAxCjI1NQr/AAA=");
     CELEG_TEST_CHECK(embedding.width == 2048);

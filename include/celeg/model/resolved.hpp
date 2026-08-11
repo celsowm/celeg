@@ -185,7 +185,7 @@ struct ModelProvenance {
     std::string source_format;
     CheckpointProfile profile;
     std::string checkpoint_profile_id;
-    std::string chat_profile_id;
+    std::string chat_template_id;
     std::string identity;
 };
 

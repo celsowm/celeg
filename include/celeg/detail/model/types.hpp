@@ -123,7 +123,7 @@ struct LinearWeight {
     void validate_storage() const;
 };
 
-// Packed expert linear weight. For the LFM2 MoE architecture, expert
+// Packed expert linear weight. For recurrent-MoE layouts, expert
 // collections are stored as contiguous 3D tensors
 //   gate_up_proj: [num_experts, 2 * moe_intermediate, hidden]
 //   down_proj:    [num_experts, hidden, moe_intermediate]

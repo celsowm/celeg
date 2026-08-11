@@ -1,13 +1,13 @@
 #include "celeg/text/chat_template.hpp"
-#include "celeg/models/gemma4/chat_template.hpp"
-#include "celeg/models/granite/chat_template.hpp"
-#include "celeg/models/lfm2/chat_template.hpp"
-#include "celeg/models/minicpm5/chat_template.hpp"
-#include "celeg/models/muse_glimmer/chat_template.hpp"
-#include "celeg/models/nanbeige/chat_template.hpp"
-#include "celeg/models/nemotron_h/chat_template.hpp"
-#include "celeg/models/qwen35/chat_template.hpp"
-#include "celeg/models/smollm3/chat_template.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
 #include "support/assertions.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -16,8 +16,8 @@
 #include <vector>
 
 int main() {
-    auto catalog = celeg::make_chat_profile_catalog();
-    const auto& tmpl = catalog.find("lfm2-instruct");
+    auto catalog = celeg::make_chat_template_catalog();
+    const auto& tmpl = catalog.find("chat:delimited");
 
     const std::string user_only = tmpl.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
@@ -63,9 +63,9 @@ int main() {
         unsupported_option_rejected = true;
     }
     CELEG_TEST_CHECK(unsupported_option_rejected);
-    const auto lfm2_capabilities = catalog.capabilities("lfm2-instruct");
+    const auto lfm2_capabilities = catalog.capabilities("chat:delimited");
     CELEG_TEST_CHECK(lfm2_capabilities.native_tool_call_codec);
-    const auto* lfm2_codec = catalog.tool_codec("lfm2-instruct");
+    const auto* lfm2_codec = catalog.tool_codec("chat:delimited");
     CELEG_TEST_CHECK(lfm2_codec != nullptr);
     const auto lfm2_parse = lfm2_codec->parse_generation(
         "<|tool_call_start|>[weather(city='Paris', unit='C')]<|tool_call_end|>");
@@ -82,8 +82,8 @@ int main() {
     CELEG_TEST_CHECK(lfm2_codec->render_tool_definitions(
         std::span<const celeg::ToolDefinition>(&tool_definition, 1), tool_choice).find("weather") != std::string::npos);
 
-    const auto& granite = catalog.find("granite-instruct");
-    const auto& granite_by_id = catalog.find("granite-instruct");
+    const auto& granite = catalog.find("chat:role-envelope");
+    const auto& granite_by_id = catalog.find("chat:role-envelope");
 
     const std::string granite_user_only = granite.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Hello"}}, true);
@@ -105,10 +105,10 @@ int main() {
         "<|start_of_role|>user<|end_of_role|>Hi<|end_of_text|>\n"
         "<|start_of_role|>assistant<|end_of_role|>");
 
-    const auto& gemma = catalog.find("gemma4-instruct");
-    const auto gemma_capabilities = catalog.capabilities("gemma4-instruct");
+    const auto& gemma = catalog.find("chat:turn");
+    const auto gemma_capabilities = catalog.capabilities("chat:turn");
     CELEG_TEST_CHECK(gemma_capabilities.vision);
-    const auto* gemma_codec = catalog.tool_codec("gemma4-instruct");
+    const auto* gemma_codec = catalog.tool_codec("chat:turn");
     CELEG_TEST_CHECK(gemma_codec != nullptr);
     const auto gemma_parse = gemma_codec->parse_generation(
         "<|tool_call>call:weather{\"city\":\"Paris\"}<tool_call|>");
@@ -117,8 +117,8 @@ int main() {
     CELEG_TEST_CHECK(gemma_parse.calls[0].name == "weather");
     CELEG_TEST_CHECK(gemma_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
 
-    const auto& qwen35 = catalog.find("qwen35-instruct");
-    const auto qwen35_capabilities = catalog.capabilities("qwen35-instruct");
+    const auto& qwen35 = catalog.find("chat:vision-role");
+    const auto qwen35_capabilities = catalog.capabilities("chat:vision-role");
     CELEG_TEST_CHECK(qwen35_capabilities.vision);
     CELEG_TEST_CHECK(qwen35_capabilities.image_marker == "<|image_pad|>");
     const std::string qwen35_prompt = qwen35.format(
@@ -127,8 +127,8 @@ int main() {
         "<|im_start|>user\nDescribe <|vision_start|><|image_pad|><|vision_end|>.<|im_end|>\n"
         "<|im_start|>assistant\n");
 
-    const auto& muse = catalog.find("muse-glimmer");
-    const auto muse_capabilities = catalog.capabilities("muse-glimmer");
+    const auto& muse = catalog.find("chat:patch-role");
+    const auto muse_capabilities = catalog.capabilities("chat:patch-role");
     CELEG_TEST_CHECK(muse_capabilities.vision);
     CELEG_TEST_CHECK(!muse_capabilities.video);
     CELEG_TEST_CHECK(muse_capabilities.image_marker == "<|patch|>");
@@ -137,8 +137,8 @@ int main() {
     CELEG_TEST_CHECK(muse_prompt.find("<|patch|>") != std::string::npos);
     CELEG_TEST_CHECK(muse_prompt.ends_with("<|start|>assistant"));
 
-    const auto& nemotron = catalog.find("nemotron-h-instruct");
-    CELEG_TEST_CHECK(!catalog.capabilities("nemotron-h-instruct").native_tool_call_codec);
+    const auto& nemotron = catalog.find("chat:thinking-role");
+    CELEG_TEST_CHECK(!catalog.capabilities("chat:thinking-role").native_tool_call_codec);
     const std::string nemotron_think = nemotron.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);
     CELEG_TEST_CHECK(nemotron_think.ends_with(
@@ -149,12 +149,12 @@ int main() {
     CELEG_TEST_CHECK(nemotron_no_think.ends_with(
         "<|im_start|>assistant\n<think></think>"));
 
-    const auto& minicpm5 = catalog.find("minicpm5-instruct");
-    const auto minicpm5_capabilities = catalog.capabilities("minicpm5-instruct");
+    const auto& minicpm5 = catalog.find("chat:thinking-function");
+    const auto minicpm5_capabilities = catalog.capabilities("chat:thinking-function");
     CELEG_TEST_CHECK(!minicpm5_capabilities.vision);
     CELEG_TEST_CHECK(minicpm5_capabilities.roles.developer);
     CELEG_TEST_CHECK(minicpm5_capabilities.parallel_tool_calls);
-    const auto* minicpm5_codec = catalog.tool_codec("minicpm5-instruct");
+    const auto* minicpm5_codec = catalog.tool_codec("chat:thinking-function");
     CELEG_TEST_CHECK(minicpm5_codec != nullptr);
     const std::string minicpm5_prompt = minicpm5.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "What is the weather?"}}, true);
@@ -175,7 +175,7 @@ int main() {
     CELEG_TEST_CHECK(minicpm5_tools.find("<tools>") != std::string::npos);
     CELEG_TEST_CHECK(minicpm5_tools.find("\"name\":\"weather\"") != std::string::npos);
 
-    const auto& nanbeige = catalog.find("nanbeige42-instruct");
+    const auto& nanbeige = catalog.find("chat:reasoning-xml");
     const std::string nanbeige_think = nanbeige.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);
     CELEG_TEST_CHECK(nanbeige_think.find("<|im_start|>system\n") == 0);
@@ -185,7 +185,7 @@ int main() {
         {}, true, celeg::ChatTemplateOptions{false});
     CELEG_TEST_CHECK(nanbeige_no_think.ends_with(
         "<|im_start|>assistant\n<think>\n\n</think>\n\n"));
-    const auto* nanbeige_codec = catalog.tool_codec("nanbeige42-instruct");
+    const auto* nanbeige_codec = catalog.tool_codec("chat:reasoning-xml");
     CELEG_TEST_CHECK(nanbeige_codec != nullptr);
     const auto nanbeige_parse = nanbeige_codec->parse_generation(
         "answer <tool_call>\n<function=weather>\n<parameter=city>Paris</parameter>\n</function>\n</tool_call>");
@@ -194,9 +194,9 @@ int main() {
     CELEG_TEST_CHECK(nanbeige_parse.calls[0].name == "weather");
     CELEG_TEST_CHECK(nanbeige_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
 
-    const auto& smollm3 = catalog.find("smollm3-instruct");
-    const auto smollm3_capabilities = catalog.capabilities("smollm3-instruct");
-    const auto* smollm3_codec = catalog.tool_codec("smollm3-instruct");
+    const auto& smollm3 = catalog.find("chat:metadata-thinking");
+    const auto smollm3_capabilities = catalog.capabilities("chat:metadata-thinking");
+    const auto* smollm3_codec = catalog.tool_codec("chat:metadata-thinking");
     CELEG_TEST_CHECK(smollm3_codec != nullptr);
     const std::string smollm3_think = smollm3.format(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Solve this"}}, true);

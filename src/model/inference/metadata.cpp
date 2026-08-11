@@ -70,14 +70,16 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
     std::optional<T> result;
     std::string source;
     for (const std::string_view key : keys) {
-        const auto value = scalar<T>(metadata, key);
+        auto value = scalar<T>(metadata, key);
+        const std::string component_key = "text_config." + std::string(key);
+        if (!value.has_value()) value = scalar<T>(metadata, component_key);
         if (!value.has_value()) continue;
         if (result.has_value() && *result != *value) {
             inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
                                    "conflicting metadata aliases for " + std::string(fact));
         }
         result = value;
-        source = std::string(key);
+        source = metadata.contains(key) ? std::string(key) : component_key;
     }
     if (result.has_value()) {
         evidence.push_back({EvidenceKind::AliasMetadata, source,
@@ -87,14 +89,17 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
 }
 
 std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view key) {
-    if (!metadata.contains(key)) return {};
-    const MetadataValue& value = metadata.value(key);
+    std::string resolved_key(key);
+    if (!metadata.contains(resolved_key)) {
+        resolved_key = "text_config." + resolved_key;
+        if (!metadata.contains(resolved_key)) return {};
+    }
+    const MetadataValue& value = metadata.value(resolved_key);
     if (const auto* integer = std::get_if<std::int64_t>(&value)) {
         if (*integer < std::numeric_limits<int>::min() ||
             *integer > std::numeric_limits<int>::max()) {
             inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                   "token ID is outside the supported range: " +
-                                       std::string(key));
+                                   "token ID is outside the supported range: " + resolved_key);
         }
         return {static_cast<int>(*integer)};
     }
@@ -105,15 +110,14 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
             if (item < std::numeric_limits<int>::min() ||
                 item > std::numeric_limits<int>::max()) {
                 inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                       "token ID is outside the supported range: " +
-                                           std::string(key));
+                                           "token ID is outside the supported range: " + resolved_key);
             }
             result.push_back(static_cast<int>(item));
         }
         return result;
     }
     inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                           "token metadata has an incompatible type: " + std::string(key));
+                                   "token metadata has an incompatible type: " + resolved_key);
 }
 
 void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
@@ -124,10 +128,13 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
     };
     for (const auto& [key, value] : metadata.values) {
         (void)value;
-        const bool semantic_name = key.find("xsa") != std::string::npos ||
-            key.find("qk_norm") != std::string::npos ||
-            key.find("rope_pair") != std::string::npos;
-        if (semantic_name && !known.contains(key)) {
+        const std::string_view semantic_key = key.starts_with("text_config.")
+            ? std::string_view(key).substr(std::string_view("text_config.").size())
+            : std::string_view(key);
+        const bool semantic_name = semantic_key.find("xsa") != std::string::npos ||
+            semantic_key.find("qk_norm") != std::string::npos ||
+            semantic_key.find("rope_pair") != std::string::npos;
+        if (semantic_name && !known.contains(std::string(semantic_key))) {
             inference_detail::fail(
                 ResolutionFailureKind::UnsupportedSemanticFeature,
                 "automatic resolution does not know the mathematics of metadata key: " + key);
@@ -182,12 +189,11 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
 
     const std::vector<int> eos = token_list(metadata, "eos_token_id");
     result.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
-    if (!metadata.contains("bos_token_id")) result.bos_token_id = 0;
+    if (!result.bos_token_id.has_value()) result.bos_token_id = 0;
     if (result.eos_token_ids.empty()) result.eos_token_ids = {0};
-    if (!metadata.contains("pad_token_id")) result.pad_token_id = 1;
-    if (!metadata.contains("rms_norm_eps") && !metadata.contains("rms_norm_epsilon") &&
-        !metadata.contains("layer_norm_epsilon")) result.norm_epsilon = 1.0e-6f;
-    if (!metadata.contains("rope_theta")) result.rope_theta = 100000.0;
+    if (!result.pad_token_id.has_value()) result.pad_token_id = 1;
+    if (!result.norm_epsilon.has_value()) result.norm_epsilon = 1.0e-6f;
+    if (!result.rope_theta.has_value()) result.rope_theta = 100000.0;
     if (!result.rotary_fraction.has_value()) result.rotary_fraction = 1.0f;
     if (!result.query_key_norm.has_value()) result.query_key_norm = false;
     if (!result.xsa_projection.has_value()) result.xsa_projection = false;

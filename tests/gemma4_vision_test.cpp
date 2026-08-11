@@ -1,4 +1,4 @@
-#include "celeg/models/gemma4/vision.hpp"
+#include "celeg/runtime/vision/providers.hpp"
 #include "support/assertions.hpp"
 
 #include <cmath>
@@ -14,7 +14,7 @@ int main() {
     }
 
     const celeg::VisualEmbeddingProvider provider =
-        celeg::make_gemma4_visual_embedding_provider(path);
+        celeg::make_gguf_visual_embedding_provider(path);
     const celeg::VisualEmbedding embedding = provider->encode(
         "data:image/x-portable-pixmap;base64,UDYKMSAxCjI1NQr/AAA=");
     CELEG_TEST_CHECK(embedding.width == 2560);

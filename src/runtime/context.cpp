@@ -8,7 +8,7 @@ namespace celeg {
 RuntimeBuilder::RuntimeBuilder()
     : architectures_(std::make_shared<ArchitectureCatalog>()),
       checkpoint_formats_(std::make_shared<CheckpointFormatCatalog>()),
-      chat_profiles_(std::make_shared<ChatProfileCatalog>()),
+      chat_templates_(std::make_shared<ChatTemplateCatalog>()),
       tokenizer_providers_(std::make_shared<TokenizerProviderCatalog>()),
       backends_(std::make_shared<BackendFactoryCatalog>()),
       vision_providers_(std::make_shared<VisionProviderCatalog>()) {}
@@ -56,12 +56,12 @@ RuntimeBuilder& RuntimeBuilder::add_checkpoint_format(
     return *this;
 }
 
-RuntimeBuilder& RuntimeBuilder::add_chat_profile(
-    std::string profile_id,
+RuntimeBuilder& RuntimeBuilder::add_chat_template(
+    std::string template_id,
     std::unique_ptr<IChatTemplate> chat_template,
     std::unique_ptr<IChatToolCallCodec> tool_call_codec,
     ChatCapabilities capabilities) {
-    chat_profiles_->add(std::move(profile_id), std::move(chat_template),
+    chat_templates_->add(std::move(template_id), std::move(chat_template),
                         std::move(tool_call_codec), capabilities);
     return *this;
 }
@@ -87,12 +87,12 @@ RuntimeBuilder& RuntimeBuilder::add_vision_provider(
 RuntimeContext RuntimeBuilder::build() {
     architectures_->freeze();
     checkpoint_formats_->freeze();
-    chat_profiles_->freeze();
+    chat_templates_->freeze();
     tokenizer_providers_->freeze();
     backends_->freeze();
     vision_providers_->freeze();
     return RuntimeContext{std::move(architectures_), std::move(checkpoint_formats_),
-                          std::move(chat_profiles_), std::move(tokenizer_providers_),
+                          std::move(chat_templates_), std::move(tokenizer_providers_),
                           std::move(backends_), std::move(vision_providers_)};
 }
 

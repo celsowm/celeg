@@ -19,9 +19,8 @@ struct ProbeResult {
     std::string reason;
 };
 
-// Family resolution is an ordered composition of neutral stages. Each stage
-// has one responsibility and receives only the checkpoint/model data it
-// needs; a family may still implement the policies in its own directory.
+// Checkpoint resolution is an ordered composition of neutral stages. Each
+// stage has one responsibility and receives only the checkpoint data it needs.
 struct ArchitectureResolutionStages {
     std::function<RuntimeTopology(const CheckpointView&)> topology;
     std::function<void(ResolvedModel&, const CheckpointView&)> graph;

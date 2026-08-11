@@ -194,7 +194,7 @@ int main() {
         CELEG_TEST_CHECK(checkpoint.tokenizer->bos_id == 1);
         CELEG_TEST_CHECK(checkpoint.tokenizer->eos_id == 2);
         CELEG_TEST_CHECK(checkpoint.tokenizer->pad_id == 0);
-        CELEG_TEST_CHECK(checkpoint.tokenizer->pre_tokenizer == "lfm2");
+        CELEG_TEST_CHECK(checkpoint.tokenizer->pre_tokenizer == "numeric_triplets");
     } catch (...) {
         std::filesystem::remove(path);
         throw;

@@ -67,7 +67,7 @@
         "FfnDown": ["model.layers.{layer}.mlp.down_proj.weight"]
       },
       "tied_embeddings": true,
-      "chat_profile": "granite-instruct"
+      "chat_template": "chat:role-envelope"
     },
     {
       "id": "gemma4",
@@ -162,7 +162,7 @@
         "LayerScalar": ["model.language_model.layers.{layer}.layer_scalar"]
       },
       "tied_embeddings": true,
-      "chat_profile": "gemma4-instruct"
+      "chat_template": "chat:turn"
     },
     {
       "id": "lfm2",
@@ -235,7 +235,7 @@
         "MoeExpertDown": ["model.layers.{layer}.feed_forward.experts.{expert}.w2.weight"]
       },
       "tied_embeddings": true,
-      "chat_profile": "lfm2-instruct"
+      "chat_template": "chat:delimited"
     },
     {
       "id": "qwen35",
@@ -323,7 +323,7 @@
         "MoeSharedGateWeight": ["model.language_model.layers.{layer}.mlp.shared_expert_gate.weight"]
       },
       "tied_embeddings": {"json": "tie_word_embeddings", "default": 1},
-      "chat_profile": "qwen35-instruct"
+      "chat_template": "chat:vision-role"
     },
     {
       "id": "nemotron_h",
@@ -386,7 +386,7 @@
         "FfnDown": ["backbone.layers.{layer}.mixer.down_proj.weight"]
       },
       "tied_embeddings": false,
-      "chat_profile": "nemotron-h-instruct"
+      "chat_template": "chat:thinking-role"
     },
     {
       "id": "minicpm5",
@@ -455,7 +455,7 @@
         "FfnDown": ["model.layers.{layer}.mlp.down_proj.weight"]
       },
       "tied_embeddings": false,
-      "chat_profile": "minicpm5-instruct"
+      "chat_template": "chat:thinking-function"
     },
     {
       "id": "smollm3",
@@ -503,7 +503,7 @@
         "FfnDown": ["model.layers.{layer}.mlp.down_proj.weight"]
       },
       "tied_embeddings": true,
-      "chat_profile": "smollm3-instruct"
+      "chat_template": "chat:metadata-thinking"
     },
     {
       "id": "muse-glimmer",
@@ -576,7 +576,7 @@
         "FfnOutputNorm": ["model.language_model.layers.{layer}.post_feedforward_layernorm.weight"]
       },
       "tied_embeddings": false,
-      "chat_profile": "muse-glimmer"
+      "chat_template": "chat:patch-role"
     },
     {
       "id": "nanbeige42",
@@ -633,7 +633,7 @@
         "FfnDown": ["model.layers.{physical_layer}.mlp.down_proj.weight"]
       },
       "tied_embeddings": false,
-      "chat_profile": "nanbeige42-instruct"
+      "chat_template": "chat:reasoning-xml"
     }
   ]
 }

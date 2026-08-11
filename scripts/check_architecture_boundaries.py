@@ -108,10 +108,17 @@ def main() -> int:
     # Model-family implementations are an importer concern.  Keep the
     # dependency direction structural so adding the hundredth family never
     # requires extending a family-name denylist.
+    for relative in ("src/models", "include/celeg/models"):
+        directory = root / relative
+        if directory.exists():
+            errors.append(f"model-family production directory remains: {relative}")
+
     family_include = re.compile(r"#\s*include\s*[<\"]celeg/models/")
     neutral_dependency_roots = (
         "include/celeg/model", "src/model", "include/celeg/runtime", "src/runtime",
         "include/celeg/checkpoint", "src/checkpoint", "include/celeg/backend", "src/backend",
+        "include/celeg/composition", "src/composition", "include/celeg/text", "src/text",
+        "include/celeg/serve", "src/serve",
     )
     for relative in neutral_dependency_roots:
         for path in files(root / relative, "**/*"):
@@ -119,6 +126,22 @@ def main() -> int:
                 continue
             if family_include.search(path.read_text(encoding="utf-8")):
                 errors.append(f"model-family include leaked across neutral boundary: {path}")
+
+    family_factory = re.compile(r"\bmake_(?:gemma|qwen|lfm|granite|minicpm|smollm|"
+                                r"nanbeige|nemotron|muse)[A-Za-z0-9_]*\b", re.IGNORECASE)
+    for relative in ("src/composition", "include/celeg/composition"):
+        for path in files(root / relative, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".cpp", ".cu", ".cuh"}:
+                continue
+            if family_factory.search(path.read_text(encoding="utf-8")):
+                errors.append(f"family-prefixed factory remains in composition: {path}")
+
+    builtin_runtime = root / "src/composition/builtin_runtime.cpp"
+    if builtin_runtime.is_file():
+        text = builtin_runtime.read_text(encoding="utf-8")
+        if re.search(r"kDeclarativeChats|model_type|architecture_id|chat_profile|"
+                     r"vision_family", text):
+            errors.append("builtin_runtime.cpp still contains identity-driven composition")
 
     # Tokenizer providers and neutral serving/runtime consumers depend on the
     # tokenizer contract, not on the built-in BPE implementation.

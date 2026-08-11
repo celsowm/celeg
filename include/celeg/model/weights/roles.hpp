@@ -103,7 +103,7 @@ public:
 };
 
 // Binding data is preferred for descriptor-backed architectures. Transitional
-// family policies may still implement this interface while they migrate; the
+// import policies may implement this interface while they converge; the
 // generic header depends only on the narrow capability and never owns a
 // central tensor-name switch.
 

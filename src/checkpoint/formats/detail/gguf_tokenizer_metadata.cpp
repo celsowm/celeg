@@ -33,7 +33,17 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
         result.pad_id = static_cast<int32_t>(file.i64("tokenizer.ggml.padding_token_id"));
     }
 
-    result.pre_tokenizer = file.str_or("tokenizer.ggml.pre", "");
+    const std::string source = file.str_or("tokenizer.ggml.pre", "");
+    // GGUF stores a tokenizer implementation label rather than the semantic
+    // behavior consumed by the tokenizer engine. Normalize that format
+    // spelling at the import boundary; runtime composition never sees it.
+    if (source == "lfm2" || source == "smaug-bpe") {
+        result.pre_tokenizer = "numeric_triplets";
+    } else if (source == "gpt2" || source == "granite") {
+        result.pre_tokenizer = "numeric_runs";
+    } else {
+        result.pre_tokenizer = source;
+    }
     return result;
 }
 

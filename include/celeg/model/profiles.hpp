@@ -10,8 +10,8 @@
 
 namespace celeg {
 
-// A profile is data: it describes a known checkpoint family without creating
-// a C++ type for every revision or parameter count.
+// A profile is data: it describes a source convention without creating a C++
+// type for every revision or parameter count.
 struct MetadataPatch {
     std::string key;
     MetadataValue value;
@@ -21,7 +21,7 @@ struct CheckpointProfile {
     std::string id;
     std::string repository_contains;
     std::vector<MetadataPatch> patches;
-    std::string chat_profile;
+    std::string chat_template;
 };
 
 class CheckpointProfileResolver {

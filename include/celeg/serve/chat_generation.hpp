@@ -1,7 +1,7 @@
 #pragma once
 
 #include "celeg/serve/types.hpp"
-#include "celeg/text/chat_profile.hpp"
+#include "celeg/text/chat_template.hpp"
 #include "celeg/text/tokenizer.hpp"
 
 #include <cstddef>

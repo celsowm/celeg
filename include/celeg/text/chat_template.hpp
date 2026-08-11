@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/text/chat_profile.hpp"
+#include "celeg/text/chat_contract.hpp"
 
 #include <memory>
 #include <optional>
@@ -55,15 +55,15 @@ std::string render_chat(std::span<const ChatMessage> messages,
                         bool add_generation_prompt,
                         const ChatTemplateOptions& options);
 
-class ChatProfileCatalog {
+class ChatTemplateCatalog {
 public:
-    void add(std::string profile_id, std::unique_ptr<IChatTemplate> chat_template,
+    void add(std::string template_id, std::unique_ptr<IChatTemplate> chat_template,
              std::unique_ptr<IChatToolCallCodec> tool_call_codec = nullptr,
              ChatCapabilities capabilities = {});
     void freeze();
-    const IChatTemplate& find(std::string_view profile_id) const;
-    ChatCapabilities capabilities(std::string_view profile_id) const;
-    const IChatToolCallCodec* tool_codec(std::string_view profile_id) const;
+    const IChatTemplate& find(std::string_view template_id) const;
+    ChatCapabilities capabilities(std::string_view template_id) const;
+    const IChatToolCallCodec* tool_codec(std::string_view template_id) const;
 
 private:
     struct Entry {
@@ -75,6 +75,6 @@ private:
     bool frozen_ = false;
 };
 
-ChatProfileCatalog make_chat_profile_catalog();
+ChatTemplateCatalog make_chat_template_catalog();
 
 } // namespace celeg

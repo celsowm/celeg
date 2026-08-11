@@ -182,10 +182,10 @@ int main(int argc, char** argv) {
         if (args.context > topology.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
-        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto chat_catalog = celeg::make_chat_template_catalog();
         const celeg::IChatTemplate* chat_template = nullptr;
         if (!args.raw_prompt) {
-            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
+            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_template_id);
         }
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, model);

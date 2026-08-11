@@ -30,7 +30,7 @@ std::vector<float> gqa_decode_strict_bf16(
 // state is represented by one latent vector per token; query-side content
 // projections and the optional decoupled rotary component are already
 // resolved by the caller.  This keeps the reference independent of a
-// checkpoint naming convention or a particular latent-attention family.
+// checkpoint naming convention or a particular latent-attention variant.
 struct LatentAttentionReferenceSpec {
     int query_heads = 0;
     int latent_rank = 0;

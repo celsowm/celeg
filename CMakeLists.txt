@@ -437,6 +437,7 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cuda/weights_loader.hpp
     include/celeg/model/runtime_types.hpp
     include/celeg/model/visual_embeddings.hpp
+    include/celeg/runtime/vision/providers.hpp
     include/celeg/model/session.hpp
     include/celeg/model/weights/roles.hpp
     include/celeg/backend/cuda/model.hpp
@@ -468,7 +469,10 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/serve/protocol/openapi.hpp
     include/celeg/serve/types.hpp
     include/celeg/text/chat_template.hpp
-    include/celeg/text/chat_profile.hpp
+    include/celeg/text/chat_contract.hpp
+    include/celeg/text/semantic_chat_templates.hpp
+    include/celeg/text/chat_template_import.hpp
+    include/celeg/text/interaction.hpp
     include/celeg/text/tool_call.hpp
     include/celeg/text/conversation.hpp
     include/celeg/text/tokenizer.hpp)
@@ -504,22 +508,32 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(architecture_resolution_test PRIVATE include)
     target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
     add_test(NAME architecture_resolution_test COMMAND architecture_resolution_test)
+    add_executable(semantic_identity_test tests/semantic_identity_test.cpp)
+    target_include_directories(semantic_identity_test PRIVATE include tests)
+    target_link_libraries(semantic_identity_test PRIVATE celeg_base)
+    add_test(NAME semantic_identity_test COMMAND semantic_identity_test)
     add_executable(automatic_inference_test tests/automatic_inference_test.cpp)
     target_include_directories(automatic_inference_test PRIVATE include tests)
     target_link_libraries(automatic_inference_test PRIVATE celeg_base)
     add_test(NAME automatic_inference_test COMMAND automatic_inference_test)
     set(CELEG_CHAT_TEMPLATE_SOURCES
-        src/composition/builtin_chat_profiles.cpp
-        src/text/chat_template.cpp src/text/chat_template_support.cpp
-        src/models/lfm2/chat_template.cpp src/models/lfm2/tool_call_codec.cpp
-        src/models/granite/chat_template.cpp
-        src/models/gemma4/chat_template.cpp src/models/gemma4/tool_call_codec.cpp
-        src/models/minicpm5/chat_template.cpp src/models/minicpm5/tool_call_codec.cpp
-        src/models/nanbeige/chat_template.cpp src/models/nanbeige/tool_call_codec.cpp
-        src/models/smollm3/chat_template.cpp src/models/smollm3/tool_call_codec.cpp
-        src/models/qwen35/chat_template.cpp
-        src/models/nemotron_h/chat_template.cpp
-        src/models/muse_glimmer/chat_template.cpp)
+        src/composition/builtin_chat_templates.cpp
+        src/text/chat/template.cpp src/text/chat/template_support.cpp
+        src/text/chat/template_import.cpp
+        src/text/semantic_chat/delimited.cpp
+        src/text/semantic_chat/role_envelope.cpp
+        src/text/semantic_chat/turn.cpp
+        src/text/semantic_chat/thinking_function.cpp
+        src/text/semantic_chat/reasoning_xml.cpp
+        src/text/semantic_chat/metadata_thinking.cpp
+        src/text/semantic_chat/vision_role.cpp
+        src/text/semantic_chat/patch_role.cpp
+        src/text/semantic_chat/thinking_role.cpp
+        src/text/tool_codec/delimited.cpp
+        src/text/tool_codec/native_tag.cpp
+        src/text/tool_codec/function_xml.cpp
+        src/text/tool_codec/parameter_xml.cpp
+        src/text/tool_codec/tagged_json.cpp)
     add_executable(chat_template_test tests/chat_template_test.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         )

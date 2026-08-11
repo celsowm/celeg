@@ -1,7 +1,7 @@
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
 #include "celeg/checkpoint/tokenizer.hpp"
-#include "celeg/models/gemma4/chat_template.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
 #include "support/assertions.hpp"
 #include <filesystem>
 #include <fstream>
@@ -134,7 +134,7 @@ int main() {
 
     celeg::BpeTokenizer gemma_tokenizer(
         celeg::load_tokenizer_definition_json(gemma_path.string()));
-    const celeg::Gemma4InstructChatTemplate gemma_template;
+    const celeg::TurnChatTemplate gemma_template;
     CELEG_TEST_CHECK(gemma_tokenizer.bos_id() == 2);
     CELEG_TEST_CHECK(gemma_tokenizer.eos_id() == 1);
     CELEG_TEST_CHECK(gemma_tokenizer.pad_id() == 0);

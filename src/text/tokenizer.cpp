@@ -447,7 +447,7 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
         std::string normalized;
         for (size_t offset = 0; offset < text.size();) {
             const auto [cp, len] = next_cp(text, offset);
-            // Gemma's tokenizer.json uses a Replace normalizer for the ASCII
+            // A SentencePiece-style tokenizer.json uses a Replace normalizer for the ASCII
             // space only. Newlines, tabs, and other whitespace remain bytes
             // and therefore take the configured byte-fallback path.
             if (cp == ' ') append_utf8(normalized, 0x2581);
@@ -482,7 +482,7 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
             for (const std::string& token : bpe_symbols(std::move(symbols))) {
                 const auto it = vocab_.find(token);
                 if (it == vocab_.end()) {
-                    throw std::runtime_error("Gemma BPE produced token absent from vocabulary: " + token);
+                    throw std::runtime_error("SentencePiece BPE produced token absent from vocabulary: " + token);
                 }
                 ids.push_back(it->second);
             }

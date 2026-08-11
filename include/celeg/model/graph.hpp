@@ -90,7 +90,7 @@ using AttentionBiasSpec = std::variant<NoAttentionBiasSpec, AlibiBiasSpec,
                                        RelativePositionBiasSpec>;
 
 // Output transforms are semantic post-attention operations applied before the
-// output projection. They deliberately do not encode a model-family name.
+// output projection. They deliberately do not encode a model identity.
 struct NoAttentionOutputTransformSpec {};
 
 struct OrthogonalizeCurrentValueSpec {

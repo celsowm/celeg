@@ -90,8 +90,7 @@ class ExtensionVisionProvider final : public celeg::IVisionProviderFactory {
 public:
     explicit ExtensionVisionProvider(const char* id) : id_(id) {}
     std::string_view id() const override { return id_; }
-    bool supports(std::string_view,
-                  const std::filesystem::path&) const override { return false; }
+    bool supports(const std::filesystem::path&) const override { return false; }
     std::shared_ptr<const celeg::IVisualEmbeddingProvider> create(
         const std::filesystem::path&) const override {
         throw std::logic_error("test provider cannot create vision embeddings");
@@ -125,7 +124,7 @@ int main() {
 
     CELEG_TEST_CHECK(runtime.architectures().find("test-extension") != nullptr);
     CELEG_TEST_CHECK(runtime.checkpoint_formats().select("model.gguf").id() == "gguf");
-    CELEG_TEST_CHECK(runtime.chat_profiles().find("lfm2-instruct").format({}, false).size() > 0);
+    CELEG_TEST_CHECK(runtime.chat_templates().find("chat:delimited").format({}, false).size() > 0);
     CELEG_TEST_CHECK(runtime.tokenizer_providers().find("test-tokenizer").id() == "test-tokenizer");
     celeg::CheckpointView tokenizer_checkpoint;
     auto tokenizer_data = std::make_shared<celeg::TokenizerData>();

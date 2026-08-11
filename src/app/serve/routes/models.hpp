@@ -1,7 +1,7 @@
 #pragma once
 
 #include "App.h"
-#include "celeg/text/chat_profile.hpp"
+#include "celeg/text/chat_template.hpp"
 
 #include <string>
 

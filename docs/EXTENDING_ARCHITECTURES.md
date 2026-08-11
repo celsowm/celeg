@@ -1,31 +1,50 @@
-# Extending model architectures
+# Extending CELEG semantics
 
-An architecture extension is registered through an `IArchitecture` family
-bundle. The resolution path is composed from the neutral stages declared in
-[`architecture.hpp`](../include/celeg/model/architecture.hpp): probe/metadata
-interpretation, topology, graph, weights, and capabilities/provenance.
+CELEG does not add support by naming a new checkpoint family. A checkpoint is
+normalized into evidence, resolved into canonical semantic facts, and then
+compiled by the backend-neutral graph pipeline:
 
-Family-specific metadata decoders and naming policies belong under
-`src/models/<family>/`. Generic model and backend headers must not include
-family-specific types or checkpoint-format classes. Resolve tensor names and
-expected shapes before invoking a CPU or CUDA compiler.
+```text
+checkpoint -> evidence -> semantic facts -> model graph -> CPU/CUDA
+```
 
-Add focused tests for each stage and a catalog-resolution test. If the family
-has packed execution support, also provide per-layer dimension fixtures and a
-backend-boundary test using a neutral/fake repository.
+If a new checkpoint uses semantics already represented by CELEG, no source
+change should be necessary. Identity strings are useful for provenance and
+diagnostics, but never select runtime behavior.
 
-`ModelGraph` is the semantic owner of executable layer schedules: its
-`LayerSpec` variants, normalization edges, primitive specs, and feed-forward
-choices are what backend compilers consume. `RuntimeTopology` is a derived
-runtime shape for allocation maxima, cache indexing, and compatibility checks;
-new semantic decisions belong in the graph. The
-`derive_runtime_topology_from_graph()` function is the synchronization boundary
-for those derived tables.
+## Adding a reusable capability
 
-When adding a primitive, keep the extension unit centered on the primitive:
-add its graph spec and validation, primitive-owned weight requirements, then
-the CPU/CUDA lowering and only the token, chunk, or packed executors it
-supports. Numerical kernels may remain specialized, but all paths consume the
-same graph-owned semantics and compiled policy. Packed CUDA operators join the
-focused compatibility, metadata/workspace, layer-operator, and decode/prefill
-components rather than adding another decision tree to the executor.
+Choose the narrowest semantic extension that is actually missing:
+
+- add a metadata inference rule when a source convention exposes an existing
+  semantic fact;
+- add a tensor naming grammar when a new spelling maps to an existing tensor
+  role;
+- add a tokenizer behavior when tokenizer graph evidence requires a new
+  pre-tokenization or normalization operation;
+- add a `ChatTemplateProgram` instruction when a supported interaction
+  construct is missing;
+- add a `ToolCallGrammar` primitive for a new wire protocol;
+- add a vision operation or `VisionPipelineSpec` field for a genuinely new
+  image transformation;
+- add a checkpoint/config importer when format-specific normalization is
+  required.
+
+Keep import, solving, execution, and composition separate. Backends consume
+semantic requirements and capabilities; they must not inspect repository
+names, `model_type`, architecture IDs, chat profiles, or vision labels.
+
+## Validation checklist
+
+Every semantic extension should include focused tests for evidence, canonical
+resolution, and the relevant protocol or numerical behavior. Also add:
+
+1. an unknown-identity clone test that changes only provenance strings;
+2. a poisoning test that supplies a misleading identity while preserving
+   structural evidence;
+3. an explainability assertion showing the accepted evidence and fingerprint;
+4. CPU and CUDA parity where the capability is executable by both backends.
+
+Unsupported or ambiguous semantics must fail explicitly at load time. Do not
+add a family registry, a compatibility shim, or a fallback selected by model
+name.

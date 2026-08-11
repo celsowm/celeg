@@ -2,6 +2,7 @@
 
 #include "celeg/model/inference.hpp"
 
+#include <string>
 #include <stdexcept>
 
 namespace celeg {
@@ -12,17 +13,15 @@ public:
     std::string_view id() const override { return "automatic"; }
 
     ProbeResult probe(const CheckpointMetadata& metadata) const override {
-        // Composite text/vision configurations and explicit architecture
-        // descriptors remain owned by their importer. A flat checkpoint can
-        // still be inferred without treating its repository name or model
-        // type as evidence.
-        if (metadata.contains("text_config.model_type")) {
-            return {false, 0, "composite checkpoint requires an explicit importer"};
-        }
-        const bool has_structural_metadata = metadata.contains("hidden_size") &&
-            metadata.contains("num_hidden_layers") &&
-            metadata.contains("num_attention_heads") &&
-            metadata.contains("vocab_size");
+        // Component-prefixed metadata is normalized by the same semantic
+        // resolver as flat metadata. The root may also carry unrelated vision
+        // fields; those do not make text resolution identity-specific.
+        const auto has = [&metadata](std::string_view key) {
+            return metadata.contains(key) ||
+                   metadata.contains("text_config." + std::string(key));
+        };
+        const bool has_structural_metadata = has("hidden_size") &&
+            has("num_hidden_layers") && has("num_attention_heads") && has("vocab_size");
         return {has_structural_metadata, 0,
                 has_structural_metadata ? "generic structural metadata" :
                                            "required structural metadata is absent"};

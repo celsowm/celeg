@@ -273,7 +273,6 @@ d2a1a2dea635c3f19d56dad9cc8f9a9612ea96eaf99d2eb928d1e47e429b34f7  ./src/runtime/
 e7a068305305e7ec53944aca90e7075d1b319dd6f92dee39408ddfad9e32ad88  ./src/serve/protocol/mapping.cpp
 2256300f55f27a280219c1a8d96696ddb6590a9de33c577f7e459c044904899f  ./src/serve/protocol/openapi.cpp
 0d2b9822b11a7af726b65c75eee1359e26beb3236bf21cd289f4f0e8c5b5f246  ./src/serve/protocol/openapi.json
-3e8eb961122283770c3cc3fc30fd7143fb1e256699b048f2f89f464e493f085f  ./src/text/chat_template.cpp
 e225e24ae93bd3b206d1c8eacee7a21d620c82b2c8089ff309e93c12c02bf450  ./src/text/tokenizer.cpp
 21be5dcb6dac39d2ae523d7e6bb9e74631c2b3cc27e052260aee369e16a8e2f9  ./src/tools/compare_logits.cpp
 061f77e7345022b9bfe622ae950b9c3147cd3bb758ce333c40e4fe092d1aaae2  ./src/tools/cpu_compare_reference.cpp
@@ -336,14 +335,11 @@ f2cc7e0e2cb37089ce287001a3dcf27e054c92ef925f822564bd3b90ffa175c7  ./tests/suppor
 ec826f1538bff1781ab891ea04466df9714f50137abc87aa990ff0f365ad69b2  ./tests/tensor_resolver_test.cpp
 3c39304c79bad4fa8e5e03dab6294ec5c19810a41f0466b280065a6637f3f20d  ./tests/tokenizer_test.cpp
 f9da632102e1d23df7604718d9bfbd681b23a990251e936a99dd5a96196a03d0  ./validation/CPU_VNNI_HOST.txt
-b711d1db565bf5b69731f27c83532654fbe7a1c81217f6c819c5b30c5715d7ff  ./src/models/lfm2/tool_call_codec.cpp
-702841c6f2ce3cc1c32ff6121e6572d6dbf2048db0a4fca287c6ada269c17e72  ./src/models/gemma4/tool_call_codec.cpp
 6b060b7a752c93fcac3272bfbd8b252aaee29cebeb1333eb5cbb38388f51a4b5  ./include/celeg/serve/chat_generation.hpp
 05fbcae13cec4887b286722b967ebe033fce76a6dbc191801d44339cb92f2819  ./src/serve/chat_generation.cpp
 7af90ac20c14bdd1aec8befccba6c58df4bfafaf9f7be422d1253544a99822a1  ./include/celeg/backend/cuda/moe/offload.hpp
 10c18d13f8f2e0baf2203824c5ac0d01dc5e6f8a7fee101fe54bb0ed02c0dcf0  ./include/celeg/model/graph.hpp
 59d901b1ae5e959f72790b2fa05cde9d739f4e8b9a39b9b1d7ddcb2aeb365f83  ./include/celeg/model/resolved.hpp
-9794c018eec6b0ad3530a022c66c0b6545d519166ca57b57117ff93d80d75496  ./include/celeg/text/chat_profile.hpp
 e80c8949debee6362e7c571f6e801880b71dc218f951ed78983b25922415116f  ./include/celeg/text/conversation.hpp
 686cf66bd19f650a54dc079e7a56925ad8e0a688f05aed16252c7566a27ab032  ./include/celeg/text/tool_call.hpp
 45d96ef8a61bfa1bc1969142e1b5a0161031b4dc278fad9016154de4a13f1ed1  ./MANIFEST.sha256

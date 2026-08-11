@@ -43,32 +43,30 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/weight_plan.cpp
     src/model/graph_builder.cpp
     src/composition/builtin_runtime.cpp
-    src/composition/builtin_chat_profiles.cpp
-    src/models/lfm2/chat_template.cpp
-    src/models/lfm2/tool_call_codec.cpp
-    src/models/granite/chat_template.cpp
-    src/models/gemma4/chat_template.cpp
-    src/models/gemma4/tool_call_codec.cpp
-    src/models/gemma4/vision.cpp
-    src/models/minicpm5/chat_template.cpp
-    src/models/minicpm5/tool_call_codec.cpp
-    src/models/nanbeige/chat_template.cpp
-    src/models/nanbeige/tool_call_codec.cpp
-    src/models/smollm3/chat_template.cpp
-    src/models/smollm3/tool_call_codec.cpp
-    src/models/qwen35/vision.cpp
-    src/models/qwen35/chat_template.cpp
-    src/models/nemotron_h/chat_template.cpp
-    src/models/muse_glimmer/chat_template.cpp
-    src/models/muse_glimmer/vision.cpp
+    src/composition/builtin_chat_templates.cpp
+    src/text/semantic_chat/delimited.cpp
+    src/text/semantic_chat/role_envelope.cpp
+    src/text/semantic_chat/turn.cpp
+    src/text/semantic_chat/thinking_function.cpp
+    src/text/semantic_chat/reasoning_xml.cpp
+    src/text/semantic_chat/metadata_thinking.cpp
+    src/text/semantic_chat/vision_role.cpp
+    src/text/semantic_chat/patch_role.cpp
+    src/text/semantic_chat/thinking_role.cpp
+    src/text/tool_codec/delimited.cpp
+    src/text/tool_codec/native_tag.cpp
+    src/text/tool_codec/function_xml.cpp
+    src/text/tool_codec/parameter_xml.cpp
+    src/text/tool_codec/tagged_json.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp
     src/model/reference.cpp
     src/text/tokenizer.cpp
     src/text/tokenizer_json_loader.cpp
-    src/text/chat_template_support.cpp
-    src/text/chat_template.cpp
+    src/text/chat/template_support.cpp
+    src/text/chat/template_import.cpp
+    src/text/chat/template.cpp
     src/runtime/cache/host_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp
     src/runtime/cache/prefix_cache_index.cpp
@@ -83,4 +81,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/runtime/context.cpp
     src/runtime/tokenizer_providers.cpp
     src/runtime/vision/image.cpp
+    src/runtime/vision/gguf_projection.cpp
+    src/runtime/vision/safetensor_projection.cpp
+    src/runtime/vision/patch_projection.cpp
 )

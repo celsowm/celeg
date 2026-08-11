@@ -142,8 +142,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
-        const auto& chat_template = runtime->chat_profiles().find(
-            bootstrap.model.provenance.chat_profile_id);
+        const auto& chat_template = runtime->chat_templates().find(
+            bootstrap.model.provenance.chat_template_id);
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
         celeg::VisualEmbeddingProvider visual_embeddings;
         for (const auto& provider_id : runtime->vision_providers().ids()) {
             const auto& provider = runtime->vision_providers().find(provider_id);
-            if (provider.supports(bootstrap.model.provenance.architecture_id, model)) {
+            if (provider.supports(model)) {
                 visual_embeddings = provider.create(model);
                 break;
             }
@@ -224,9 +224,9 @@ int main(int argc, char** argv) {
         }
 
         celeg::ChatCapabilities chat_capabilities =
-            runtime->chat_profiles().capabilities(bootstrap.model.provenance.chat_profile_id);
+            runtime->chat_templates().capabilities(bootstrap.model.provenance.chat_template_id);
         const celeg::IChatToolCallCodec* chat_tool_codec =
-            runtime->chat_profiles().tool_codec(bootstrap.model.provenance.chat_profile_id);
+            runtime->chat_templates().tool_codec(bootstrap.model.provenance.chat_template_id);
         chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());

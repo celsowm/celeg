@@ -146,6 +146,15 @@ TokenizerDefinition resolve_tokenizer_definition(
             break;
         }
     }
+    if (rules.empty()) {
+        if (data.pre_tokenizer == "numeric_triplets") {
+            definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericTriplets;
+        } else if (data.pre_tokenizer == "numeric_runs") {
+            definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericRuns;
+        } else if (data.pre_tokenizer == "raw_utf8") {
+            definition.pre_tokenizer = TokenizerPreTokenizerKind::RawUtf8;
+        }
+    }
     for (size_t id = 0; id < data.token_types.size() && id < data.tokens.size(); ++id) {
         if (data.token_types[id] == 3) {
             definition.special_tokens.push_back({data.tokens[id], static_cast<int32_t>(id)});

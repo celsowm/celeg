@@ -2,7 +2,7 @@
 #include "celeg/serve/protocol/mapping.hpp"
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
-#include "celeg/models/lfm2/chat_template.hpp"
+#include "celeg/text/semantic_chat_templates.hpp"
 #include "support/assertions.hpp"
 
 #include <filesystem>
@@ -125,7 +125,7 @@ int main() {
     // Full request -> GenerateRequest pipeline against a real tokenizer.
     const auto tokenizer_path = std::filesystem::temp_directory_path() / "celeg_chat_protocol_test.json";
     const celeg::BpeTokenizer tokenizer = make_test_tokenizer(tokenizer_path);
-    const celeg::Lfm2InstructChatTemplate chat_template;
+    const celeg::DelimitedChatTemplate chat_template;
     std::filesystem::remove(tokenizer_path);
 
     const std::vector<std::int32_t> eos_token_ids{2, 130073};

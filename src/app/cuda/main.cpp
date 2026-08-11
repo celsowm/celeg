@@ -350,10 +350,10 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        const auto chat_catalog = celeg::make_chat_profile_catalog();
+        const auto chat_catalog = celeg::make_chat_template_catalog();
         const celeg::IChatTemplate* chat_template = nullptr;
         if (!args.raw_prompt) {
-            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_profile_id);
+            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_template_id);
         }
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, is_gguf ? gguf_path : model);

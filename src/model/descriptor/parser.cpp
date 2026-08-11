@@ -235,7 +235,7 @@ Descriptor parse_descriptor(const Json& value) {
     } else {
         result.tied_embeddings = true;
     }
-    result.chat_profile = required(value, "chat_profile").as_string();
+    result.chat_template = required(value, "chat_template").as_string();
     if (result.id.empty() || result.specificity <= 0 || result.probe_alternatives.empty()) {
         throw std::invalid_argument("descriptor has invalid identity or probe");
     }

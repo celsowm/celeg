@@ -13,7 +13,7 @@ struct PromptEmbedding {
     int width = 0;
     std::vector<std::size_t> positions;
     std::vector<float> values;
-    // Optional Qwen-style three-axis positions for the complete prompt.
+    // Optional three-axis positions for the complete prompt.
     // When present this vector has one entry per prompt token, including
     // ordinary text tokens and visual placeholders.
     std::vector<std::array<int32_t, 3>> rope_positions;

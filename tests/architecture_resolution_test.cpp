@@ -468,7 +468,7 @@ int main() {
     CELEG_TEST_CHECK(minicpm5_model.topology.attention_layouts.front().key_value_heads == 2);
     CELEG_TEST_CHECK(minicpm5_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
     CELEG_TEST_CHECK(minicpm5_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
-    CELEG_TEST_CHECK(minicpm5_model.provenance.chat_profile_id == "minicpm5-instruct");
+    CELEG_TEST_CHECK(minicpm5_model.provenance.chat_template_id == "chat:thinking-function");
 
     celeg::CheckpointMetadata minicpm5_gguf;
     minicpm5_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
@@ -612,7 +612,7 @@ int main() {
     const celeg::ResolvedModel granite_gguf_model =
         granite_architecture.resolve(granite_gguf_checkpoint);
     CELEG_TEST_CHECK(granite_gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(granite_gguf_model.provenance.chat_profile_id == "granite-instruct");
+    CELEG_TEST_CHECK(granite_gguf_model.provenance.chat_template_id == "chat:role-envelope");
     CELEG_TEST_CHECK(granite_gguf_model.topology.vocab_size == 32);
     CELEG_TEST_CHECK(granite_gguf_model.graph.layers.size() == 1);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
@@ -661,7 +661,7 @@ int main() {
                          resolved.topology.intermediate * 2);
         CELEG_TEST_CHECK(resolved.capabilities.tied_embeddings);
         CELEG_TEST_CHECK(resolved.graph.final_logit_softcap == 30.0f);
-        CELEG_TEST_CHECK(resolved.provenance.chat_profile_id == "gemma4-instruct");
+        CELEG_TEST_CHECK(resolved.provenance.chat_template_id == "chat:turn");
     }
 
     celeg::CheckpointMetadata gemma_gguf;
@@ -704,17 +704,15 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
         gemma_gguf_model.topology.attention_layouts[6].pattern));
     CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].head_dim == 512);
-    auto malformed_gemma = gemma_metadata(1536, 6144, 35, 1, 20, "bad");
-    malformed_gemma.values["text_config.model_type"] = std::string("gemma4_vision");
-    bool malformed_rejected = false;
-    try { (void)catalog.select(malformed_gemma); }
-    catch (const std::exception&) { malformed_rejected = true; }
-    CELEG_TEST_CHECK(malformed_rejected);
+    auto composite_gemma = gemma_metadata(1536, 6144, 35, 1, 20, "composite");
+    composite_gemma.values["text_config.model_type"] = std::string("gemma4_vision");
+    const auto& composite_gemma_architecture = catalog.select(composite_gemma);
+    CELEG_TEST_CHECK(composite_gemma_architecture.id() == "automatic");
 
     auto malformed_schedule = gemma_metadata(1536, 6144, 35, 1, 20, "bad-schedule");
     malformed_schedule.values["text_config.layer_types"] =
         std::vector<std::string>{"sliding_attention"};
-    malformed_rejected = false;
+    bool malformed_rejected = false;
     try {
         const auto& architecture = catalog.select(malformed_schedule);
         celeg::CheckpointView checkpoint;

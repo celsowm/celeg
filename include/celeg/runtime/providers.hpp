@@ -67,9 +67,8 @@ public:
         const std::filesystem::path& model_path) const = 0;
 };
 
-// A family module is the only unit allowed to contribute a coherent set of
-// family-owned providers. RuntimeBuilder owns the catalogs and freezes them
-// after all modules have registered.
+// A runtime module contributes one cohesive semantic capability. RuntimeBuilder
+// owns the catalogs and freezes them after all modules have registered.
 class IRuntimeModule {
 public:
     virtual ~IRuntimeModule() = default;
@@ -102,8 +101,7 @@ class IVisionProviderFactory {
 public:
     virtual ~IVisionProviderFactory() = default;
     virtual std::string_view id() const = 0;
-    virtual bool supports(std::string_view architecture_id,
-                          const std::filesystem::path& model_path) const = 0;
+    virtual bool supports(const std::filesystem::path& model_path) const = 0;
     virtual std::shared_ptr<const IVisualEmbeddingProvider> create(
         const std::filesystem::path& model_path) const = 0;
 };

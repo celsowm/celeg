@@ -187,6 +187,10 @@ struct CanonicalModelFacts {
 struct ResolutionReport {
     std::string resolution_mode;
     NormalizedModelMetadata metadata;
+    std::string chat_template_source;
+    std::string chat_program_fingerprint;
+    std::string tool_protocol_source;
+    std::string vision_pipeline_source;
     std::vector<EvidenceItem> accepted;
     std::vector<EvidenceItem> rejected;
     std::vector<std::string> ambiguities;
