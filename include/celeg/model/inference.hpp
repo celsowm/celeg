@@ -46,6 +46,33 @@ struct InferenceProposal {
     friend bool operator==(const InferenceProposal&, const InferenceProposal&) = default;
 };
 
+// A checkpoint fact may be global or explicitly scoped to logical layers.
+// The importer preserves the distinction so semantic solving can decide
+// whether a scalar is broadcastable and whether a schedule is complete.
+template <typename T>
+struct LayerScopedValue {
+    std::optional<T> global;
+    std::vector<std::optional<T>> per_layer;
+
+    bool has_value() const noexcept {
+        if (global.has_value()) return true;
+        for (const auto& value : per_layer) {
+            if (value.has_value()) return true;
+        }
+        return false;
+    }
+
+    std::optional<T> value_for(int layer) const {
+        if (layer >= 0 && layer < static_cast<int>(per_layer.size()) &&
+            per_layer[static_cast<size_t>(layer)].has_value()) {
+            return per_layer[static_cast<size_t>(layer)];
+        }
+        return global;
+    }
+
+    friend bool operator==(const LayerScopedValue&, const LayerScopedValue&) = default;
+};
+
 enum class ResolutionFailureKind : std::uint8_t {
     MissingRequiredMetadata,
     ConflictingMetadata,
@@ -100,9 +127,9 @@ struct NormalizedModelMetadata {
     std::optional<int> hidden_size;
     std::optional<int> intermediate_size;
     std::optional<int> layer_count;
-    std::optional<int> query_heads;
-    std::optional<int> key_value_heads;
-    std::optional<int> head_dim;
+    LayerScopedValue<int> query_heads;
+    LayerScopedValue<int> key_value_heads;
+    LayerScopedValue<int> head_dim;
     std::optional<int> vocab_size;
     std::optional<int> context_length;
     std::optional<float> norm_epsilon;

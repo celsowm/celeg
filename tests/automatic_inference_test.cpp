@@ -4,6 +4,7 @@
 #include "support/assertions.hpp"
 
 #include <memory>
+#include <iostream>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -113,15 +114,21 @@ std::shared_ptr<MemoryRepository> gguf_repository() {
 } // namespace
 
 int main() {
+    std::cerr << "auto: start\n";
     celeg::CheckpointView checkpoint;
     checkpoint.metadata = metadata();
+    std::cerr << "auto: metadata built\n";
     checkpoint.repository = repository();
+    std::cerr << "auto: repository built\n";
 
     celeg::ArchitectureCatalog catalog;
     catalog.add(celeg::make_automatic_architecture());
     catalog.freeze();
+    std::cerr << "auto: catalog built\n";
     const auto& architecture = catalog.select(checkpoint.metadata);
+    std::cerr << "auto: architecture selected\n";
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
+    std::cerr << "auto: first resolved\n";
     CELEG_TEST_CHECK(model.provenance.identity.find("automatic") != std::string::npos);
     CELEG_TEST_CHECK(model.topology.hidden == 8);
     CELEG_TEST_CHECK(model.graph.layers.size() == 2);
@@ -129,16 +136,19 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(
         std::get<celeg::AttentionSpec>(model.graph.layers.front().mixer).output_transform));
     CELEG_TEST_CHECK(celeg::explain_resolution(checkpoint).failures.empty());
+    std::cerr << "auto: first explained\n";
 
     celeg::CheckpointView gguf_checkpoint;
     gguf_checkpoint.metadata = gguf_metadata();
     gguf_checkpoint.repository = gguf_repository();
     const auto& gguf_architecture = catalog.select(gguf_checkpoint.metadata);
     const celeg::ResolvedModel gguf_model = gguf_architecture.resolve(gguf_checkpoint);
+    std::cerr << "auto: gguf resolved\n";
     CELEG_TEST_CHECK(gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(gguf_model.topology.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
+    std::cerr << "auto: gguf explained\n";
 
     auto conflicting = metadata();
     conflicting.values["n_embd"] = int64_t(9);
@@ -150,6 +160,7 @@ int main() {
     CELEG_TEST_CHECK(rejected);
 
     celeg::FactSolver solver;
+    std::cerr << "auto: solver\n";
     const auto proposal = solver.solve<int>({
         {{8}, {}, celeg::ProposalStrength::ExplicitMetadata, "a"},
         {{8}, {}, celeg::ProposalStrength::ShapeDerived, "b"}});

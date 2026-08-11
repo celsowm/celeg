@@ -171,6 +171,12 @@ int main() {
         CELEG_TEST_CHECK(embedding.dtype == celeg::TensorDType::F32);
         CELEG_TEST_CHECK(embedding.shape == std::vector<int64_t>{2});
 
+        CELEG_TEST_CHECK(repository.contains("token_embd.weight"));
+        const celeg::HostTensorView native_query =
+            repository.tensor("blk.0.attn_q.weight");
+        CELEG_TEST_CHECK(native_query.rows_rope_permuted);
+        CELEG_TEST_CHECK(native_query.shape == std::vector<int64_t>({2, 4}));
+
         const celeg::HostTensorView query = repository.tensor(
             "model.layers.0.self_attn.q_proj.weight");
         CELEG_TEST_CHECK(query.rows_rope_permuted);

@@ -7,24 +7,40 @@
 
 namespace celeg {
 
+namespace {
+
+bool native_rows_rope_permuted(std::string_view name) {
+    return name.ends_with(".attn_q.weight") ||
+        name.ends_with(".attn_k.weight");
+}
+
+} // namespace
+
 GgufTensorResolver::GgufTensorResolver(std::shared_ptr<GgufFile> file)
     : file_(std::move(file)) {
     if (!file_) throw std::invalid_argument("GGUF tensor resolver requires a file");
 }
 
-bool GgufTensorResolver::contains(std::string_view canonical_name) const {
+bool GgufTensorResolver::contains(std::string_view name) const {
+    if (file_->contains_tensor(name)) return true;
+
     const GgufTensorReference reference =
-        GgufTensorNameMapper::resolve(canonical_name);
+        GgufTensorNameMapper::resolve(name);
     return !reference.native_name.empty() &&
         file_->contains_tensor(reference.native_name);
 }
 
-HostTensorView GgufTensorResolver::tensor(std::string_view canonical_name) const {
+HostTensorView GgufTensorResolver::tensor(std::string_view name) const {
+    if (file_->contains_tensor(name)) {
+        return GgufTensorViewAdapter::adapt(
+            file_->tensor(name), native_rows_rope_permuted(name));
+    }
+
     const GgufTensorReference reference =
-        GgufTensorNameMapper::resolve(canonical_name);
+        GgufTensorNameMapper::resolve(name);
     if (reference.native_name.empty()) {
         throw std::out_of_range("gguf: no mapping for tensor " +
-                                std::string(canonical_name));
+                                std::string(name));
     }
     const GgufTensorView view = file_->tensor(reference.native_name);
     if (reference.is_expert_slice()) {

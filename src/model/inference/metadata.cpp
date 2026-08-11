@@ -2,6 +2,7 @@
 
 #include "support.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <type_traits>
 #include <unordered_set>
@@ -63,6 +64,175 @@ std::optional<T> scalar(const CheckpointMetadata& metadata, std::string_view key
 }
 
 template <typename T>
+std::optional<T> gguf_scalar_or_uniform_schedule(const CheckpointMetadata& metadata,
+                                                 std::string_view key) {
+    if (!metadata.contains(key)) return std::nullopt;
+    const MetadataValue& value = metadata.value(key);
+    if (const auto* values = std::get_if<std::vector<std::int64_t>>(&value)) {
+        if (values->empty() || !std::all_of(values->begin() + 1, values->end(),
+                                             [&](std::int64_t item) {
+                                                 return item == values->front();
+                                             })) {
+            inference_detail::fail(
+                ResolutionFailureKind::UnsupportedSemanticFeature,
+                "GGUF metadata " + std::string(key) +
+                    " varies by layer; automatic dense synthesis requires a uniform value");
+        }
+        if constexpr (std::is_same_v<T, int>) return static_cast<int>(values->front());
+        if constexpr (std::is_same_v<T, float>) return static_cast<float>(values->front());
+        if constexpr (std::is_same_v<T, double>) return static_cast<double>(values->front());
+    }
+    if (const auto* values = std::get_if<std::vector<double>>(&value)) {
+        if (values->empty() || !std::all_of(values->begin() + 1, values->end(),
+                                             [&](double item) {
+                                                 return item == values->front();
+                                             })) {
+            inference_detail::fail(
+                ResolutionFailureKind::UnsupportedSemanticFeature,
+                "GGUF metadata " + std::string(key) +
+                    " varies by layer; automatic dense synthesis requires a uniform value");
+        }
+        if constexpr (std::is_same_v<T, float>) return static_cast<float>(values->front());
+        if constexpr (std::is_same_v<T, double>) return values->front();
+    }
+    return scalar<T>(metadata, key);
+}
+
+template <typename T>
+LayerScopedValue<T> scoped_aliases(const CheckpointMetadata& metadata,
+                                   std::initializer_list<std::string_view> keys,
+                                   std::vector<EvidenceItem>& evidence,
+                                   std::string_view fact,
+                                   std::string_view gguf_suffix = {}) {
+    LayerScopedValue<T> result;
+    std::string source;
+    const auto consider_scalar = [&](std::optional<T> value, std::string_view key) {
+        if (!value.has_value()) return;
+        if (result.global.has_value() && *result.global != *value) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "conflicting metadata aliases for " + std::string(fact));
+        }
+        result.global = value;
+        source = key;
+        if (!result.per_layer.empty()) {
+            for (const auto& layer_value : result.per_layer) {
+                if (layer_value.has_value() && *layer_value != *value) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::ConflictingMetadata,
+                        "conflicting global and layer-scoped metadata for " +
+                            std::string(fact));
+                }
+            }
+        }
+    };
+    const auto consider_vector = [&](const MetadataValue& metadata_value,
+                                     std::string_view key) {
+        std::vector<std::optional<T>> values;
+        if (const auto* integers = std::get_if<std::vector<int64_t>>(&metadata_value)) {
+            values.reserve(integers->size());
+            for (const std::int64_t value : *integers) {
+                if constexpr (std::is_same_v<T, int>) {
+                    if (value < std::numeric_limits<int>::min() ||
+                        value > std::numeric_limits<int>::max()) {
+                        inference_detail::fail(
+                            ResolutionFailureKind::ConflictingMetadata,
+                            "layer-scoped integer is outside the supported range: " +
+                                std::string(key));
+                    }
+                    values.push_back(static_cast<int>(value));
+                } else {
+                    values.push_back(static_cast<T>(value));
+                }
+            }
+        } else if (const auto* numbers = std::get_if<std::vector<double>>(&metadata_value)) {
+            values.reserve(numbers->size());
+            for (const double value : *numbers) {
+                if (!std::isfinite(value)) {
+                    inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                           "layer-scoped number is invalid: " +
+                                               std::string(key));
+                }
+                if constexpr (std::is_same_v<T, int>) {
+                    if (std::floor(value) != value ||
+                        value < std::numeric_limits<int>::min() ||
+                        value > std::numeric_limits<int>::max()) {
+                        inference_detail::fail(
+                            ResolutionFailureKind::ConflictingMetadata,
+                            "layer-scoped integer is invalid: " + std::string(key));
+                    }
+                    values.push_back(static_cast<int>(value));
+                } else {
+                    values.push_back(static_cast<T>(value));
+                }
+            }
+        } else {
+            return;
+        }
+        if (!result.per_layer.empty() && result.per_layer != values) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "conflicting layer-scoped metadata for " +
+                                       std::string(fact));
+        }
+        if (result.global.has_value()) {
+            for (const auto& layer_value : values) {
+                if (layer_value.has_value() && *layer_value != *result.global) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::ConflictingMetadata,
+                        "conflicting global and layer-scoped metadata for " +
+                            std::string(fact));
+                }
+            }
+        }
+        result.per_layer = std::move(values);
+        source = key;
+    };
+    const auto consider = [&](std::string_view key) {
+        if (!metadata.contains(key)) return;
+        const MetadataValue& value = metadata.value(key);
+        if (std::holds_alternative<std::vector<int64_t>>(value) ||
+            std::holds_alternative<std::vector<double>>(value)) {
+            consider_vector(value, key);
+        } else {
+            consider_scalar(scalar<T>(metadata, key), key);
+        }
+    };
+    for (const std::string_view key : keys) {
+        consider(key);
+        consider("text_config." + std::string(key));
+    }
+    if (metadata.is_gguf() && !gguf_suffix.empty()) {
+        consider(metadata.architecture_type() + "." + std::string(gguf_suffix));
+    }
+    if (result.has_value()) {
+        evidence.push_back({EvidenceKind::AliasMetadata, source,
+                            std::string(fact) + (result.per_layer.empty()
+                                ? " = " + std::to_string(*result.global)
+                                : " = layer-scoped schedule")});
+    }
+    return result;
+}
+
+void validate_scoped_alias(const LayerScopedValue<int>& value,
+                           const std::optional<int>& layer_count,
+                           std::string_view fact) {
+    if (value.per_layer.empty()) return;
+    if (!layer_count.has_value() ||
+        value.per_layer.size() != static_cast<size_t>(*layer_count)) {
+        inference_detail::fail(
+            ResolutionFailureKind::IncompleteLayerSchedule,
+            "layer-scoped metadata length does not match layer_count for " +
+                std::string(fact));
+    }
+    for (const auto& layer_value : value.per_layer) {
+        if (!layer_value.has_value()) {
+            inference_detail::fail(
+                ResolutionFailureKind::IncompleteLayerSchedule,
+                "layer-scoped metadata has a missing layer for " + std::string(fact));
+        }
+    }
+}
+
+template <typename T>
 std::optional<T> aliases(const CheckpointMetadata& metadata,
                          std::initializer_list<std::string_view> keys,
                          std::vector<EvidenceItem>& evidence,
@@ -87,7 +257,7 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
     if (metadata.is_gguf() && !gguf_suffix.empty()) {
         const std::string gguf_key = metadata.architecture_type() + "." +
             std::string(gguf_suffix);
-        consider(scalar<T>(metadata, gguf_key), gguf_key);
+        consider(gguf_scalar_or_uniform_schedule<T>(metadata, gguf_key), gguf_key);
     }
     if (result.has_value()) {
         evidence.push_back({EvidenceKind::AliasMetadata, source,
@@ -167,14 +337,14 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.layer_count = aliases<int>(
         metadata, {"num_hidden_layers", "n_layer", "num_layers"}, result.evidence,
         "layer_count", "block_count");
-    result.query_heads = aliases<int>(
+    result.query_heads = scoped_aliases<int>(
         metadata, {"num_attention_heads", "n_head"}, result.evidence, "query_heads",
         "attention.head_count");
-    result.key_value_heads = aliases<int>(
+    result.key_value_heads = scoped_aliases<int>(
         metadata, {"num_key_value_heads", "n_kv_heads"}, result.evidence, "key_value_heads",
         "attention.head_count_kv");
-    result.head_dim = aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
-                                   "attention.key_length");
+    result.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
+                                         "attention.key_length");
     result.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
                                      "vocab_size", "vocab_size");
     result.context_length = aliases<int>(
@@ -203,6 +373,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.tied_embeddings = aliases<bool>(
         metadata, {"tie_word_embeddings", "tied_embeddings"}, result.evidence,
         "tied_embeddings");
+
+    validate_scoped_alias(result.query_heads, result.layer_count, "query_heads");
+    validate_scoped_alias(result.key_value_heads, result.layer_count, "key_value_heads");
+    validate_scoped_alias(result.head_dim, result.layer_count, "head_dim");
 
     const std::vector<int> eos = token_list(metadata, "eos_token_id");
     result.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
