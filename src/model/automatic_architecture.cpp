@@ -30,7 +30,8 @@ public:
         const bool has_structural_metadata =
             (has("hidden_size") || has_gguf("embedding_length")) &&
             (has("num_hidden_layers") || has_gguf("block_count")) &&
-            (has("num_attention_heads") || has_gguf("attention.head_count")) &&
+            (has("num_attention_heads") || has("num_heads") ||
+             has("mamba_num_heads") || has_gguf("attention.head_count")) &&
             (has("vocab_size") || has_gguf("vocab_size"));
         return {has_structural_metadata, 0,
                 has_structural_metadata ? "generic structural metadata" :

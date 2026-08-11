@@ -30,9 +30,6 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
       layout_(page_tokens, shape),
       allocator_(page_count, page_tokens) {
     if (max_context <= 0) throw std::invalid_argument("paged KV max_context must be positive");
-    if (attention_layer_count_ <= 0) {
-        throw std::invalid_argument("paged KV requires at least one attention layer");
-    }
     if (mode_ == KvCacheMode::Int8) {
         for (const auto& layer : layout_.layers) {
             if (layer.latent) {

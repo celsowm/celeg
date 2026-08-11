@@ -306,10 +306,16 @@ std::vector<float> CpuWeightCodec::vector(
     const HostTensorView tensor = source_->tensor(name);
     std::vector<float> result = read_vector(tensor, expected, name);
     if (writer_) {
-        if (tensor.dtype != TensorDType::BF16) {
-            throw std::runtime_error("CPU pack vectors require BF16 source: " + name);
+        if (tensor.dtype == TensorDType::BF16) {
+            writer_->add_bf16_vector(name, tensor.data, result.size());
+        } else {
+            std::vector<uint16_t> bf16(result.size());
+            for (size_t i = 0; i < result.size(); ++i) {
+                bf16[i] = float_to_bf16_bits(result[i]);
+            }
+            writer_->add_bf16_vector(
+                name, reinterpret_cast<const std::byte*>(bf16.data()), bf16.size());
         }
-        writer_->add_bf16_vector(name, tensor.data, result.size());
     }
     return result;
 }

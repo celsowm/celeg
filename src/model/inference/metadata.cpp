@@ -350,13 +350,13 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"mamba_intermediate", "ssm_inner_size"}, result.evidence,
         "mamba_intermediate", "ssm.inner_size");
     result.mamba_state_size = aliases<int>(
-        metadata, {"mamba_state_size", "ssm_state_size"}, result.evidence,
+        metadata, {"mamba_state_size", "ssm_state_size", "state_size"}, result.evidence,
         "mamba_state_size", "ssm.state_size");
     result.mamba_time_step_rank = aliases<int>(
-        metadata, {"mamba_time_step_rank", "ssm_time_step_rank"}, result.evidence,
+        metadata, {"mamba_time_step_rank", "ssm_time_step_rank", "time_step_rank"}, result.evidence,
         "mamba_time_step_rank", "ssm.time_step_rank");
     result.mamba_num_heads = aliases<int>(
-        metadata, {"mamba_num_heads", "mamba_heads"}, result.evidence,
+        metadata, {"mamba_num_heads", "mamba_heads", "num_heads"}, result.evidence,
         "mamba_num_heads", "ssm.time_step_rank");
     result.mamba_head_dim = aliases<int>(
         metadata, {"mamba_head_dim"}, result.evidence, "mamba_head_dim");

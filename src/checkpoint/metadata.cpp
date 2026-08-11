@@ -1,9 +1,34 @@
 #include "celeg/checkpoint/metadata.hpp"
 
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace celeg {
 namespace {
+
+bool special_float(const Json& value, double& result) {
+    if (!value.is_object() || value.as_object().size() != 1 ||
+        !value.contains("__float__")) {
+        return false;
+    }
+    const Json& name = value.as_object().at("__float__");
+    if (!name.is_string()) return false;
+    const std::string& text = name.as_string();
+    if (text == "Infinity" || text == "+Infinity") {
+        result = std::numeric_limits<double>::infinity();
+        return true;
+    }
+    if (text == "-Infinity") {
+        result = -std::numeric_limits<double>::infinity();
+        return true;
+    }
+    if (text == "NaN") {
+        result = std::numeric_limits<double>::quiet_NaN();
+        return true;
+    }
+    return false;
+}
 
 void flatten_json(const Json& value, const std::string& prefix,
                   CheckpointMetadata& metadata) {
@@ -26,14 +51,18 @@ void flatten_json(const Json& value, const std::string& prefix,
         for (const Json& item : value.as_array()) {
             if (!item.is_string()) all_strings = false;
             else strings.push_back(item.as_string());
-            if (!item.is_number()) {
+            double special_number = 0.0;
+            const bool is_special_number = special_float(item, special_number);
+            if (!item.is_number() && !is_special_number) {
                 all_numbers = false;
                 all_integers = false;
             } else {
-                const double number = item.as_number();
+                const double number = is_special_number ? special_number : item.as_number();
                 numbers.push_back(number);
-                if (static_cast<double>(item.as_i64()) != number) all_integers = false;
-                integers.push_back(item.as_i64());
+                if (is_special_number || static_cast<double>(item.as_i64()) != number) {
+                    all_integers = false;
+                }
+                integers.push_back(is_special_number ? 0 : item.as_i64());
             }
         }
         if (all_strings) metadata.values[prefix] = std::move(strings);
@@ -41,6 +70,11 @@ void flatten_json(const Json& value, const std::string& prefix,
         else if (all_numbers) metadata.values[prefix] = std::move(numbers);
         else throw std::runtime_error("unsupported metadata array: " + prefix);
     } else if (value.is_object()) {
+        double special_number = 0.0;
+        if (special_float(value, special_number)) {
+            metadata.values[prefix] = special_number;
+            return;
+        }
         for (const auto& [key, child] : value.as_object()) {
             flatten_json(child, prefix.empty() ? key : prefix + "." + key, metadata);
         }

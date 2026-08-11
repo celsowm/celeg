@@ -45,7 +45,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                     std::string("model.embed_tokens.weight"),
                                     std::string("model.language_model.embed_tokens.weight"),
                                     std::string("tok_embeddings.weight"),
-                                    std::string("token_embd.weight")}) {
+                                    std::string("token_embd.weight"),
+                                    std::string("backbone.embeddings.weight")}) {
         if (const auto* candidate = input.inventory.find(name)) {
             if (embedding != nullptr) {
                 inference_detail::fail(ResolutionFailureKind::AmbiguousTensorBinding,
@@ -64,7 +65,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     }
 
     std::unordered_set<int> layers;
-    const std::regex layer_pattern(R"((?:transformer\.h|model\.language_model\.layers|model\.layers|layers|blk)\.(\d+)\.)");
+    const std::regex layer_pattern(R"((?:transformer\.h|model\.language_model\.layers|model\.layers|backbone\.layers|layers|blk)\.(\d+)\.)");
     for (const auto& entry : input.inventory.entries()) {
         std::smatch match;
         if (std::regex_search(entry.name, match, layer_pattern)) {
@@ -382,7 +383,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 
     const std::vector<std::string> final_norm_names = {
         "transformer.ln_f.weight", "model.norm.weight", "norm.weight", "output_norm.weight",
-        "model.language_model.norm.weight",
+        "model.language_model.norm.weight", "backbone.norm_f.weight",
         "model.embedding_norm.weight",
         "token_embd_norm.weight"};
     const TensorInventoryEntry* final_norm = nullptr;
@@ -422,6 +423,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             "model.layers." + index + ".self_attn_layer_norm.weight",
             "model.language_model.layers." + index + ".input_layernorm.weight",
             "model.layers." + index + ".operator_norm.weight",
+            "backbone.layers." + index + ".norm.weight",
             "blk." + index + ".attn_norm.weight",
         };
         const std::vector<std::string> ffn_norm_candidates = {

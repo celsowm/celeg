@@ -39,9 +39,9 @@ struct PageLayout {
         if (page_tokens <= 0) {
             throw std::invalid_argument("PageLayout page_tokens must be positive");
         }
-        if (attention_layers <= 0) {
-            throw std::invalid_argument("PageLayout requires at least one attention layer");
-        }
+        // A pure recurrent model has no KV layers. Keep an empty layout so
+        // the shared page allocator can still provide request lifetime and
+        // prefix-cache bookkeeping without allocating unused KV storage.
         layers.reserve(static_cast<size_t>(attention_layers));
         size_t vector_offset = 0;
         size_t scale_offset = 0;

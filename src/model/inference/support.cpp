@@ -120,6 +120,7 @@ std::vector<std::string> mamba2_tensor_candidates(int layer,
     return {
         "model.language_model.layers." + index + ".mixer." + std::string(suffix),
         "model.layers." + index + ".mixer." + std::string(suffix),
+        "backbone.layers." + index + ".mixer." + std::string(suffix),
         "layers." + index + ".mixer." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };

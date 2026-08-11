@@ -21,8 +21,23 @@ void CudaCompiledModel::warmup_decode_gemms() {
         if (!attention_layer) attention_layer = as_attention(layer);
         if (!convolution_layer) convolution_layer = as_convolution(layer);
     }
-    if (!attention_layer || resources_.layers_.empty()) {
-        throw std::runtime_error("compiled attention layer map is incomplete");
+    if (resources_.layers_.empty()) {
+        throw std::runtime_error("compiled layer map is empty");
+    }
+    if (!attention_layer) {
+        // Pure recurrent models have no attention GEMM to warm up. Exercise
+        // the first sequential mixer instead so its projections and stateful
+        // kernel are initialized before the first request.
+        launch_rmsnorm(workspace_.hidden_.data(),
+                       common(resources_.layers_.front()).operator_norm,
+                       workspace_.normed_.data(), 1, resources_.shape_.hidden,
+                       resources_.shape_.numerical_policy.norm_eps,
+                       stream_.get());
+        enqueue_decode_non_attention_mixer(resources_.layers_.front());
+        linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
+               1, resources_.shape_.vocab_size, resources_.shape_.hidden);
+        CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
+        return;
     }
     const LayerCommon& first_common = common(resources_.layers_.front());
 
@@ -84,7 +99,7 @@ void CudaCompiledModel::warmup_prefill_attention_gemm() {
     for (const Layer& layer : resources_.layers_) {
         if ((attention = as_attention(layer)) != nullptr) break;
     }
-    if (!attention) throw std::runtime_error("compiled attention layer map is incomplete");
+    if (!attention) return;
     const AttentionSpec& layout = attention->layout;
     if (layout.uses_latent_state()) return;
     DeviceBuffer<__nv_bfloat16> q(static_cast<size_t>(kRows) * layout.query_width());
