@@ -44,7 +44,7 @@ struct CpuInt8Matrix {
 using CpuLinearMatrix = std::variant<Q4GroupMatrix, CpuGgufMatrix, CpuInt8Matrix>;
 
 // A logical [rows, cols] linear weight. Most weights have one segment.
-// GGUF concatenations may retain multiple row-contiguous Q4_K/Q6_K segments
+// GGUF concatenations may retain multiple row-contiguous native segments
 // so no dequantization or requantization is needed.
 struct CpuLinearWeight {
     uint32_t rows = 0;

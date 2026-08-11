@@ -18,6 +18,7 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
     topology.num_hidden_layers = static_cast<int>(layer_count);
     topology.mixer_kinds.resize(layer_count);
     topology.feed_forward_kinds.resize(layer_count);
+    topology.execute_feed_forward.resize(layer_count);
     topology.feed_forward_intermediates.resize(layer_count);
     topology.feed_forward_activations.resize(layer_count);
     topology.attention_layouts.resize(layer_count);
@@ -51,6 +52,7 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
         const LayerSpec& layer = graph.layers[index];
         topology.mixer_kinds[index] = layer.mixer_kind();
         topology.feed_forward_kinds[index] = layer.feed_forward_kind();
+        topology.execute_feed_forward[index] = layer.execute_feed_forward;
         std::visit([&](const auto& mixer) {
             using Mixer = std::decay_t<decltype(mixer)>;
             if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
@@ -321,6 +323,8 @@ std::string RuntimeTopology::fingerprint() const {
     }
     out << "-ff";
     for (int width : feed_forward_intermediates) out << '-' << width;
+    out << "-exec";
+    for (bool execute : execute_feed_forward) out << '-' << execute;
     out << "-tok" << token_policy.bos_token_id << '-' << token_policy.pad_token_id;
     for (int eos : token_policy.eos_token_ids) out << '-' << eos;
     out << "-num" << numerical_policy.norm_eps << '-'
@@ -378,6 +382,10 @@ void RuntimeTopology::validate() const {
     }
     if (static_cast<int>(feed_forward_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved feed-forward schedule length mismatch");
+    }
+    if (!execute_feed_forward.empty() &&
+        static_cast<int>(execute_feed_forward.size()) != num_hidden_layers) {
+        throw std::runtime_error("resolved FFN execution schedule length mismatch");
     }
     if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count +
         mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {

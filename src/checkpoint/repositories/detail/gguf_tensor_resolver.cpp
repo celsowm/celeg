@@ -23,6 +23,14 @@ HostTensorView adapt_native_tensor(const GgufTensorView& view, std::string_view 
     if (name.ends_with(".shortconv.conv.weight") && result.shape.size() == 2) {
         result.shape.insert(result.shape.begin() + 1, 1);
     }
+    if ((name.ends_with(".ssm_a") || name.ends_with(".ssm_d")) &&
+        result.shape.size() == 2 && result.shape[1] == 1) {
+        result.shape.resize(1);
+    } else if (name.ends_with(".ssm_norm.weight") && result.shape.size() == 2) {
+        result.shape = {static_cast<int64_t>(view.element_count)};
+    } else if (name.ends_with(".ssm_conv1d.weight") && result.shape.size() == 2) {
+        result.shape.insert(result.shape.begin() + 1, 1);
+    }
     return result;
 }
 

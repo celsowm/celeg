@@ -4,6 +4,7 @@
 
 namespace celeg {
 
+
 ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const {
     facts.validate();
     ResolvedModel intermediate;

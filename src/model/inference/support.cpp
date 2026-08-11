@@ -1,5 +1,6 @@
 #include "support.hpp"
 
+
 #include <string>
 
 namespace celeg::inference_detail {
@@ -86,6 +87,26 @@ std::vector<std::string> shortconv_tensor_candidates(int layer,
         "model.layers." + index + ".conv." + std::string(suffix),
         "layers." + index + ".conv." + std::string(suffix),
         "blk." + index + ".shortconv." + std::string(suffix),
+    };
+}
+
+std::vector<std::string> mamba2_tensor_candidates(int layer,
+                                                  std::string_view suffix) {
+    const std::string index = std::to_string(layer);
+    std::string gguf_suffix;
+    if (suffix == "in_proj.weight") gguf_suffix = "ssm_in.weight";
+    else if (suffix == "conv1d.weight") gguf_suffix = "ssm_conv1d.weight";
+    else if (suffix == "conv1d.bias") gguf_suffix = "ssm_conv1d.bias";
+    else if (suffix == "dt_bias") gguf_suffix = "ssm_dt.bias";
+    else if (suffix == "A_log") gguf_suffix = "ssm_a";
+    else if (suffix == "D") gguf_suffix = "ssm_d";
+    else if (suffix == "norm.weight") gguf_suffix = "ssm_norm.weight";
+    else if (suffix == "out_proj.weight") gguf_suffix = "ssm_out.weight";
+    else gguf_suffix = std::string(suffix);
+    return {
+        "model.layers." + index + ".mixer." + std::string(suffix),
+        "layers." + index + ".mixer." + std::string(suffix),
+        "blk." + index + "." + gguf_suffix,
     };
 }
 

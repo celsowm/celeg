@@ -2,11 +2,13 @@
 
 #include "support.hpp"
 
+
 #include <algorithm>
 #include <regex>
 #include <unordered_set>
 
 namespace celeg {
+
 
 TensorInventory::TensorInventory(std::vector<TensorInventoryEntry> entries)
     : entries_(std::move(entries)) {

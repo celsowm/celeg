@@ -53,6 +53,7 @@ struct RuntimeTopology {
     NumericalPolicy numerical_policy;
     std::vector<MixerKind> mixer_kinds;
     std::vector<FeedForwardKind> feed_forward_kinds;
+    std::vector<bool> execute_feed_forward;
     std::vector<int> attention_slot_for_layer;
     std::vector<int> layer_for_attention_slot;
     int attention_layer_count = 0;

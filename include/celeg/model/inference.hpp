@@ -125,11 +125,19 @@ public:
 
 struct NormalizedModelMetadata {
     std::optional<int> hidden_size;
-    std::optional<int> intermediate_size;
+    LayerScopedValue<int> intermediate_size;
     std::optional<int> layer_count;
     LayerScopedValue<int> query_heads;
     LayerScopedValue<int> key_value_heads;
     LayerScopedValue<int> head_dim;
+    std::optional<int> mamba_intermediate;
+    std::optional<int> mamba_state_size;
+    std::optional<int> mamba_time_step_rank;
+    std::optional<int> mamba_num_heads;
+    std::optional<int> mamba_head_dim;
+    std::optional<int> mamba_group_count;
+    std::optional<int> mamba_conv_kernel;
+    std::optional<int> mamba_chunk_size;
     std::optional<int> vocab_size;
     std::optional<int> context_length;
     std::optional<float> norm_epsilon;

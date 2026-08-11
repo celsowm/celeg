@@ -94,6 +94,32 @@ std::vector<float> read_vector(const HostTensorView& tensor,
     throw std::runtime_error("CPU vector requires F32, F16 or BF16 source: " + name);
 }
 
+CpuGgufMatrix gguf_matrix(const HostTensorView& tensor,
+                          const std::string& name) {
+    const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
+    if (type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
+        type != GgmlType::Q8_0 && type != GgmlType::Q4_K &&
+        type != GgmlType::Q6_K) {
+        throw std::runtime_error("unsupported CPU GGUF linear quantization: " + name);
+    }
+    CpuGgufMatrix matrix;
+    matrix.type = type;
+    matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
+    matrix.cols = static_cast<uint32_t>(tensor.shape[1]);
+    matrix.data = tensor.data;
+    matrix.bytes = tensor.bytes;
+    matrix.validate();
+    return matrix;
+}
+
+std::vector<float> dequantize_matrix(const CpuGgufMatrix& matrix) {
+    std::vector<float> values(static_cast<size_t>(matrix.rows) * matrix.cols);
+    for (size_t row = 0; row < matrix.rows; ++row) {
+        cpu_gguf_dequantize_row(matrix, row, values.data() + row * matrix.cols);
+    }
+    return values;
+}
+
 } // namespace
 
 CpuWeightCodec::CpuWeightCodec(IWeightRepository* source, CpuPackReader* reader,
@@ -118,16 +144,13 @@ CpuLinearWeight CpuWeightCodec::matrix(
         throw std::runtime_error("unexpected CPU linear tensor: " + name);
     }
     if (tensor.dtype == TensorDType::Quantized) {
-        const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
-        if (type != GgmlType::Q4_K && type != GgmlType::Q6_K) {
-            throw std::runtime_error("CPU GGUF supports only Q4_K/Q6_K linear tensor: " + name);
+        const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
+        if (matrix.type == GgmlType::Q4_0 || matrix.type == GgmlType::Q5_0 ||
+            matrix.type == GgmlType::Q8_0) {
+            const std::vector<float> values = dequantize_matrix(matrix);
+            return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
+                values.data(), matrix.rows, matrix.cols, group_size_));
         }
-        CpuGgufMatrix matrix;
-        matrix.type = type;
-        matrix.rows = static_cast<uint32_t>(expected[0]);
-        matrix.cols = static_cast<uint32_t>(expected[1]);
-        matrix.data = tensor.data;
-        matrix.bytes = tensor.bytes;
         return CpuLinearWeight::from_gguf(matrix);
     }
     if (tensor.dtype != TensorDType::BF16) {
@@ -184,23 +207,33 @@ CpuLinearWeight CpuWeightCodec::concat(
         tensors.push_back(tensor);
     }
     if (quantized) {
+        bool needs_repack = false;
+        std::vector<CpuGgufMatrix> matrices;
+        matrices.reserve(tensors.size());
+        for (size_t i = 0; i < tensors.size(); ++i) {
+            matrices.push_back(gguf_matrix(tensors[i], parts[i].first));
+            needs_repack = needs_repack || matrices.back().type == GgmlType::Q4_0 ||
+                matrices.back().type == GgmlType::Q5_0 ||
+                matrices.back().type == GgmlType::Q8_0;
+        }
+        if (needs_repack) {
+            std::vector<float> joined(total_rows * static_cast<size_t>(cols));
+            size_t row_offset = 0;
+            for (const CpuGgufMatrix& matrix : matrices) {
+                const std::vector<float> values = dequantize_matrix(matrix);
+                std::copy(values.begin(), values.end(), joined.begin() +
+                    static_cast<ptrdiff_t>(row_offset * static_cast<size_t>(cols)));
+                row_offset += matrix.rows;
+            }
+            return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
+                joined.data(), total_rows, static_cast<size_t>(cols), group_size_));
+        }
         CpuLinearWeight result;
         result.rows = static_cast<uint32_t>(total_rows);
         result.cols = static_cast<uint32_t>(cols);
         for (size_t i = 0; i < tensors.size(); ++i) {
             const HostTensorView& tensor = tensors[i];
-            const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
-            if (type != GgmlType::Q4_K && type != GgmlType::Q6_K) {
-                throw std::runtime_error("CPU GGUF concat supports only Q4_K/Q6_K: " + parts[i].first);
-            }
-            CpuGgufMatrix matrix;
-            matrix.type = type;
-            matrix.rows = static_cast<uint32_t>(tensor.shape[0]);
-            matrix.cols = static_cast<uint32_t>(tensor.shape[1]);
-            matrix.data = tensor.data;
-            matrix.bytes = tensor.bytes;
-            matrix.validate();
-            result.segments.emplace_back(matrix);
+            result.segments.emplace_back(matrices[i]);
         }
         result.validate();
         return result;

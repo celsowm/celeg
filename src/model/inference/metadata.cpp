@@ -331,12 +331,13 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     NormalizedModelMetadata result;
     result.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
                                       result.evidence, "hidden_size", "embedding_length");
-    result.intermediate_size = aliases<int>(
+    result.intermediate_size = scoped_aliases<int>(
         metadata, {"intermediate_size", "n_inner", "ffn_dim"}, result.evidence,
         "intermediate_size", "feed_forward_length");
     result.layer_count = aliases<int>(
         metadata, {"num_hidden_layers", "n_layer", "num_layers"}, result.evidence,
         "layer_count", "block_count");
+    validate_scoped_alias(result.intermediate_size, result.layer_count, "intermediate_size");
     result.query_heads = scoped_aliases<int>(
         metadata, {"num_attention_heads", "n_head"}, result.evidence, "query_heads",
         "attention.head_count");
@@ -345,6 +346,29 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "attention.head_count_kv");
     result.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
                                          "attention.key_length");
+    result.mamba_intermediate = aliases<int>(
+        metadata, {"mamba_intermediate", "ssm_inner_size"}, result.evidence,
+        "mamba_intermediate", "ssm.inner_size");
+    result.mamba_state_size = aliases<int>(
+        metadata, {"mamba_state_size", "ssm_state_size"}, result.evidence,
+        "mamba_state_size", "ssm.state_size");
+    result.mamba_time_step_rank = aliases<int>(
+        metadata, {"mamba_time_step_rank", "ssm_time_step_rank"}, result.evidence,
+        "mamba_time_step_rank", "ssm.time_step_rank");
+    result.mamba_num_heads = aliases<int>(
+        metadata, {"mamba_num_heads", "mamba_heads"}, result.evidence,
+        "mamba_num_heads", "ssm.time_step_rank");
+    result.mamba_head_dim = aliases<int>(
+        metadata, {"mamba_head_dim"}, result.evidence, "mamba_head_dim");
+    result.mamba_group_count = aliases<int>(
+        metadata, {"n_groups", "mamba_groups"}, result.evidence,
+        "mamba_group_count", "ssm.group_count");
+    result.mamba_conv_kernel = aliases<int>(
+        metadata, {"conv_kernel", "mamba_conv_kernel"}, result.evidence,
+        "mamba_conv_kernel", "ssm.conv_kernel");
+    result.mamba_chunk_size = aliases<int>(
+        metadata, {"chunk_size", "mamba_chunk_size"}, result.evidence,
+        "mamba_chunk_size", "ssm.chunk_size");
     result.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
                                      "vocab_size", "vocab_size");
     result.context_length = aliases<int>(

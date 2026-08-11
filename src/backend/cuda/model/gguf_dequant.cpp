@@ -17,6 +17,13 @@ struct Q4KHost { __half d; __half dmin; uint8_t scales[12]; uint8_t qs[128]; };
 struct Q6KHost { uint8_t ql[128]; uint8_t qh[64]; int8_t scales[16]; __half d; };
 struct Q5_0Host { __half d; uint8_t qh[4]; uint8_t qs[16]; };
 struct Q8_0Host { __half d; int8_t qs[32]; };
+struct Q4_0Host { __half d; uint8_t qs[16]; };
+
+void q4_0_decode(const Q4_0Host* blk, int col, float& out) {
+    const uint8_t packed = blk->qs[col >> 1];
+    const int q = (col & 1) ? (packed >> 4) : (packed & 0x0f);
+    out = __half2float(blk->d) * static_cast<float>(q - 8);
+}
 
 void q5_0_decode(const Q5_0Host* blk, int col, float& out) {
     const uint8_t packed = blk->qs[col >> 1];
@@ -61,7 +68,7 @@ void q6k_decode(const Q6KHost* blk, int col, float& out) {
 void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
                                   std::vector<__nv_bfloat16>& out) {
     const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-    if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
+    if (ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
         ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
         throw std::runtime_error("unsupported GGUF quantization for CUDA dequantization");
     }
@@ -78,7 +85,9 @@ void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
             const int b = c / trait.block_size;
             const int within = c % trait.block_size;
             float v = 0.0f;
-            if (ggml_type == GgmlType::Q4_K) {
+            if (ggml_type == GgmlType::Q4_0) {
+                q4_0_decode(reinterpret_cast<const Q4_0Host*>(row_blocks) + b, within, v);
+            } else if (ggml_type == GgmlType::Q4_K) {
                 q4k_decode(reinterpret_cast<const Q4KHost*>(row_blocks) + b, within, v);
             } else if (ggml_type == GgmlType::Q5_0) {
                 q5_0_decode(reinterpret_cast<const Q5_0Host*>(row_blocks) + b, within, v);

@@ -2,6 +2,7 @@
 
 namespace celeg {
 
+
 ResolutionReport explain_resolution(const CheckpointView& checkpoint) {
     ResolutionReport report;
     report.resolution_mode = "automatic";

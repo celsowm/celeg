@@ -71,7 +71,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
     // decode token at the cost of scalar dequant inside the kernel.
     if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        if (ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
+        if (ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
             ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
             throw std::runtime_error("unsupported GGUF linear quantization: " + name);
         }
@@ -89,7 +89,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         const size_t row_bytes =
             static_cast<size_t>(cols) / trait.block_size * trait.type_size;
 
-        if (ggml_type == GgmlType::Q5_0 || ggml_type == GgmlType::Q8_0) {
+        if (ggml_type == GgmlType::Q4_0 || ggml_type == GgmlType::Q5_0 || ggml_type == GgmlType::Q8_0) {
             std::vector<__nv_bfloat16> host_bf16;
             dequantize_gguf_to_bf16(tensor, host_bf16);
             weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
@@ -449,12 +449,47 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     // With --weight-mode native, keep each source's raw blocks as a separate
     // GGUF segment so the matmul kernels dequantize on the fly.
     if (views.front().dtype == TensorDType::Quantized) {
+        bool requires_host_dequantization = false;
         for (const auto& v : views) {
             const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
             if (v.dtype != TensorDType::Quantized ||
-                (v_ggml_type != GgmlType::Q4_K && v_ggml_type != GgmlType::Q6_K)) {
+                (v_ggml_type != GgmlType::Q4_0 && v_ggml_type != GgmlType::Q4_K &&
+                 v_ggml_type != GgmlType::Q6_K)) {
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " + synthetic_name);
             }
+            requires_host_dequantization = requires_host_dequantization ||
+                v_ggml_type == GgmlType::Q4_0;
+        }
+
+        // Q4_0 is a standard GGUF primitive, but has no native CUDA matmul
+        // kernel. Decode it at load time so mixed Q4_0/K concatenations retain
+        // their logical row layout without adding a model-specific path.
+        if (requires_host_dequantization) {
+            std::vector<__nv_bfloat16> host_bf16(
+                static_cast<size_t>(total_rows) * common_width);
+            size_t row_offset = 0;
+            for (const auto& v : views) {
+                std::vector<__nv_bfloat16> decoded;
+                dequantize_gguf_to_bf16(v, decoded);
+                std::copy(decoded.begin(), decoded.end(), host_bf16.begin() +
+                    row_offset * static_cast<size_t>(common_width));
+                row_offset += static_cast<size_t>(v.shape[0]);
+            }
+            DeviceWeight weight;
+            weight.shape = {total_rows, common_width};
+            weight.bf16_storage.reset(host_bf16.size());
+            CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host_bf16.data(),
+                                  host_bf16.size() * sizeof(__nv_bfloat16),
+                                  cudaMemcpyHostToDevice));
+            weight.linear.kind = LinearStorageKind::Bf16;
+            weight.linear.bf16 = weight.bf16_storage.data();
+            weight.linear.rows = static_cast<int>(total_rows);
+            weight.linear.cols = static_cast<int>(common_width);
+            weight.linear.validate_storage();
+            auto [it, inserted] =
+                weights_->tensors.emplace(synthetic_name, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate linear weight: " + synthetic_name);
+            return &it->second.linear;
         }
 
         if (weight_mode_ == WeightMode::NativeGguf) {

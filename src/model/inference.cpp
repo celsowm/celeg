@@ -31,7 +31,6 @@ ResolutionError::ResolutionError(ResolutionFailureKind kind, std::string message
 CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     const auto& m = input.metadata;
     require_positive(m.hidden_size, "hidden_size");
-    require_positive(m.intermediate_size, "intermediate_size");
     require_positive(m.layer_count, "layer_count");
     require_positive(m.vocab_size, "vocab_size");
     require_positive(m.context_length, "context_length");
@@ -89,7 +88,31 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     facts.evidence = m.evidence;
     RuntimeTopology& topology = facts.topology;
     topology.hidden = *m.hidden_size;
-    topology.intermediate = *m.intermediate_size;
+    std::vector<int> intermediate_sizes;
+    intermediate_sizes.reserve(static_cast<size_t>(*m.layer_count));
+    for (int layer = 0; layer < *m.layer_count; ++layer) {
+        const std::optional<int> value = m.intermediate_size.value_for(layer);
+        const std::string index = std::to_string(layer);
+        const TensorInventoryEntry* ffn_up = input.inventory.find(
+            "blk." + index + ".ffn_up.weight");
+        if (!ffn_up) {
+            ffn_up = input.inventory.find(
+                "model.layers." + index + ".mlp.up_proj.weight");
+        }
+        if (!value.has_value() || *value <= 0) {
+            if (ffn_up && ffn_up->shape.size() == 2 && ffn_up->shape[0] > 0) {
+                intermediate_sizes.push_back(static_cast<int>(ffn_up->shape[0]));
+            } else {
+                // Mixer-only layers deliberately carry a positive compiled
+                // placeholder; their FFN execution and weight requests are
+                // disabled by the per-layer schedule below.
+                intermediate_sizes.push_back(1);
+            }
+        } else {
+            intermediate_sizes.push_back(*value);
+        }
+    }
+    topology.intermediate = *std::max_element(intermediate_sizes.begin(), intermediate_sizes.end());
     topology.dense_intermediate = topology.intermediate;
     topology.max_feed_forward_intermediate = topology.intermediate;
     topology.num_hidden_layers = *m.layer_count;
@@ -98,11 +121,13 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     topology.mixer_kinds.assign(static_cast<size_t>(*m.layer_count), MixerKind::Attention);
     topology.feed_forward_kinds.assign(static_cast<size_t>(*m.layer_count),
                                         FeedForwardKind::Dense);
-    topology.feed_forward_intermediates.assign(static_cast<size_t>(*m.layer_count),
-                                               topology.intermediate);
+    topology.execute_feed_forward.assign(static_cast<size_t>(*m.layer_count), true);
+    topology.feed_forward_intermediates = intermediate_sizes;
     topology.feed_forward_activations.assign(static_cast<size_t>(*m.layer_count),
                                              ActivationKind::SwiGLU);
     topology.attention_layouts.resize(static_cast<size_t>(*m.layer_count));
+    topology.mamba2_layouts.resize(static_cast<size_t>(*m.layer_count));
+    topology.mlp_only_layouts.resize(static_cast<size_t>(*m.layer_count));
     topology.attention_slot_for_layer.assign(static_cast<size_t>(*m.layer_count), -1);
     topology.layer_for_attention_slot.reserve(static_cast<size_t>(*m.layer_count));
     topology.attention_layer_count = 0;
@@ -140,22 +165,118 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         const auto has_tensor = [&](std::string_view name) {
             return input.inventory.find(name) != nullptr;
         };
+        const auto find_mamba_tensor = [&](std::string_view suffix) {
+            const auto candidates = inference_detail::mamba2_tensor_candidates(layer, suffix);
+            const TensorInventoryEntry* found = nullptr;
+            for (const auto& candidate : candidates) {
+                if (const auto* tensor = input.inventory.find(candidate)) {
+                    if (found != nullptr) {
+                        inference_detail::fail(
+                            ResolutionFailureKind::AmbiguousTensorBinding,
+                            "multiple Mamba-2 tensor spellings are present for layer " +
+                                std::to_string(layer));
+                    }
+                    found = tensor;
+                }
+            }
+            return found;
+        };
         const std::string layer_prefix = "blk." + std::to_string(layer) + ".";
         const bool has_attention =
             has_tensor(layer_prefix + "attn_q.weight") ||
             has_tensor("model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight") ||
             has_tensor("transformer.h." + std::to_string(layer) + ".attn.q_proj.weight");
+        const bool has_mamba = find_mamba_tensor("in_proj.weight") != nullptr;
+        const bool has_shortconv = has_tensor(layer_prefix + "shortconv.in_proj.weight") ||
+            has_tensor("model.layers." + std::to_string(layer) + ".conv.in_proj.weight");
+        const bool has_ffn =
+            find_mamba_tensor("in_proj.weight") == nullptr &&
+            (has_tensor(layer_prefix + "ffn_up.weight") ||
+             has_tensor("model.layers." + std::to_string(layer) + ".mlp.up_proj.weight"));
         const auto query_heads = m.query_heads.value_for(layer);
         const auto key_value_heads = m.key_value_heads.value_for(layer);
         const auto explicit_head_dim = m.head_dim.value_for(layer);
-        if (!has_attention) {
-            if (!m.shortconv_cache.has_value() || *m.shortconv_cache <= 0) {
-                inference_detail::fail(
-                    ResolutionFailureKind::MissingRequiredMetadata,
-                    "short-convolution layer has no positive cache length");
+        if (has_mamba && has_attention) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingInferenceFacts,
+                                   "layer has both attention and Mamba-2 tensor grammars: " +
+                                       std::to_string(layer));
+        }
+        if (has_mamba) {
+            const auto* input_projection = find_mamba_tensor("in_proj.weight");
+            const auto* convolution = find_mamba_tensor("conv1d.weight");
+            const auto* convolution_bias = find_mamba_tensor("conv1d.bias");
+            const auto* dt_bias = find_mamba_tensor("dt_bias");
+            const auto* a_log = find_mamba_tensor("A_log");
+            const auto* d = find_mamba_tensor("D");
+            const auto* norm = find_mamba_tensor("norm.weight");
+            const auto* output_projection = find_mamba_tensor("out_proj.weight");
+            if (!input_projection || !convolution || !convolution_bias || !dt_bias ||
+                !a_log || !d || !norm || !output_projection) {
+                inference_detail::fail(ResolutionFailureKind::MissingTensorRole,
+                                       "Mamba-2 tensor grammar is incomplete for layer " +
+                                           std::to_string(layer));
             }
-            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::ShortConvolution;
-            ++topology.conv_layer_count;
+            const int inner = m.mamba_intermediate.value_or(
+                static_cast<int>(output_projection->shape.at(1)));
+            const int heads = m.mamba_num_heads.value_or(
+                static_cast<int>(dt_bias->shape.at(0)));
+            const int head_dim = m.mamba_head_dim.value_or(
+                heads > 0 && inner % heads == 0 ? inner / heads : 0);
+            const int state_size = m.mamba_state_size.value_or(0);
+            const int group_count = m.mamba_group_count.value_or(0);
+            const int conv_kernel = m.mamba_conv_kernel.value_or(
+                convolution->shape.size() == 3 ? static_cast<int>(convolution->shape.at(2)) : 0);
+            const int time_step_rank = m.mamba_time_step_rank.value_or(heads);
+            const int chunk_size = m.mamba_chunk_size.value_or(0);
+            const int conv_dim = inner + 2 * group_count * state_size;
+            if (inner <= 0 || heads <= 0 || head_dim <= 0 || state_size <= 0 ||
+                group_count <= 0 || heads % group_count != 0 || conv_kernel <= 0 ||
+                conv_dim <= 0 || input_projection->shape !=
+                    std::vector<std::int64_t>{2 * inner + 2 * group_count * state_size + heads,
+                                               *m.hidden_size} ||
+                convolution->shape != std::vector<std::int64_t>{conv_dim, 1, conv_kernel} ||
+                convolution_bias->shape != std::vector<std::int64_t>{conv_dim} ||
+                dt_bias->shape != std::vector<std::int64_t>{heads} ||
+                a_log->shape != std::vector<std::int64_t>{heads} ||
+                d->shape != std::vector<std::int64_t>{heads} ||
+                norm->shape != std::vector<std::int64_t>{inner} ||
+                output_projection->shape != std::vector<std::int64_t>{*m.hidden_size, inner}) {
+                inference_detail::fail(ResolutionFailureKind::ShapeConstraintViolation,
+                                       "Mamba-2 tensor shapes do not agree with recurrent geometry for layer " +
+                                           std::to_string(layer));
+            }
+            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::Mamba2;
+            topology.mamba2_layouts[static_cast<size_t>(layer)] =
+                Mamba2Spec{conv_kernel, inner, state_size, time_step_rank, heads, head_dim,
+                           group_count, chunk_size, true, false};
+            ++topology.mamba2_layer_count;
+            topology.mamba2_intermediate = std::max(topology.mamba2_intermediate, inner);
+            topology.execute_feed_forward[static_cast<size_t>(layer)] = false;
+            continue;
+        }
+        if (!has_attention) {
+            if (has_shortconv) {
+                if (!m.shortconv_cache.has_value() || *m.shortconv_cache <= 0) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::MissingRequiredMetadata,
+                        "short-convolution layer has no positive cache length");
+                }
+                topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::ShortConvolution;
+                ++topology.conv_layer_count;
+                topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
+                continue;
+            }
+            if (!has_ffn) {
+                inference_detail::fail(ResolutionFailureKind::UnsupportedGraphPrimitive,
+                                       "layer has no recognized mixer or FFN tensor grammar: " +
+                                           std::to_string(layer));
+            }
+            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::MlpOnly;
+            topology.mlp_only_layouts[static_cast<size_t>(layer)] =
+                MlpBlockSpec{intermediate_sizes.at(static_cast<size_t>(layer)),
+                             ActivationKind::Relu2};
+            ++topology.mlp_only_layer_count;
+            topology.execute_feed_forward[static_cast<size_t>(layer)] = false;
             continue;
         }
         if (!query_heads.has_value() || !key_value_heads.has_value()) {
@@ -192,6 +313,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         topology.layer_for_attention_slot.push_back(layer);
         topology.attention_layouts[static_cast<size_t>(layer)] =
             make_attention(*query_heads, *key_value_heads, head_dim, has_query_norm);
+        topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
     }
     topology.validate();
 
@@ -266,6 +388,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         const int key_value_head_count = *m.key_value_heads.value_for(layer);
         const int layer_head_dim = m.head_dim.value_for(layer).value_or(
             *m.hidden_size / query_head_count);
+        const int layer_intermediate = intermediate_sizes.at(static_cast<size_t>(layer));
         const std::vector<std::string> norm_candidates = {
             "transformer.h." + index + ".ln_1.weight",
             "model.layers." + index + ".input_layernorm.weight",
@@ -282,7 +405,31 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             {*m.hidden_size}, {});
         inference_detail::add_binding(facts.bindings, TensorRole::AttentionInputNorm, layer,
                                       *attention_norm, {});
-        if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::ShortConvolution) {
+        if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Mamba2) {
+            const auto bind_mamba = [&](TensorRole role, std::string_view suffix,
+                                        std::initializer_list<std::int64_t> shape) {
+                const auto* tensor = inference_detail::find_unique(
+                    input.inventory,
+                    inference_detail::mamba2_tensor_candidates(layer, suffix),
+                    role, layer, shape, {});
+                inference_detail::add_binding(facts.bindings, role, layer, *tensor, {});
+            };
+            const Mamba2Spec& spec = topology.mamba2_layouts.at(static_cast<size_t>(layer));
+            const int conv_dim = spec.intermediate_size +
+                2 * spec.group_count * spec.state_size;
+            bind_mamba(TensorRole::Mamba2Input, "in_proj.weight",
+                       {2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
+                        spec.num_heads, *m.hidden_size});
+            bind_mamba(TensorRole::Mamba2Conv, "conv1d.weight",
+                       {conv_dim, 1, spec.conv_kernel});
+            bind_mamba(TensorRole::Mamba2ConvBias, "conv1d.bias", {conv_dim});
+            bind_mamba(TensorRole::Mamba2DtBias, "dt_bias", {spec.num_heads});
+            bind_mamba(TensorRole::Mamba2ALog, "A_log", {spec.num_heads});
+            bind_mamba(TensorRole::Mamba2D, "D", {spec.num_heads});
+            bind_mamba(TensorRole::Mamba2Norm, "norm.weight", {spec.intermediate_size});
+            bind_mamba(TensorRole::Mamba2Output, "out_proj.weight",
+                       {*m.hidden_size, spec.intermediate_size});
+        } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::ShortConvolution) {
             const auto* input_projection = inference_detail::find_unique(
                 input.inventory,
                 inference_detail::shortconv_tensor_candidates(layer, "in_proj.weight"),
@@ -304,7 +451,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 {*m.hidden_size, *m.hidden_size}, {});
             inference_detail::add_binding(facts.bindings, TensorRole::ShortConvOutput,
                                           layer, *output_projection, {});
-        } else {
+        } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
             const auto* q = inference_detail::find_unique(
                 input.inventory,
                 inference_detail::attention_tensor_candidates(layer, "q_proj.weight"),
@@ -352,26 +499,40 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                               layer, *k_norm, {});
             }
         }
-        const auto* ffn_norm = inference_detail::find_unique(
-            input.inventory, ffn_norm_candidates, TensorRole::FfnInputNorm, layer,
-            {*m.hidden_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::FfnInputNorm, layer,
-                                      *ffn_norm, {});
-        const auto* gate = inference_detail::find_unique(
-            input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
-                "w_gate.weight"), TensorRole::FfnGate, layer,
-            {*m.intermediate_size, *m.hidden_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::FfnGate, layer, *gate, {});
-        const auto* up = inference_detail::find_unique(
-            input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
-                "w_up.weight"), TensorRole::FfnUp, layer,
-            {*m.intermediate_size, *m.hidden_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::FfnUp, layer, *up, {});
-        const auto* down = inference_detail::find_unique(
-            input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
-                "w_down.weight"), TensorRole::FfnDown, layer,
-            {*m.hidden_size, *m.intermediate_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::FfnDown, layer, *down, {});
+        const MixerKind mixer = topology.mixer_kinds[static_cast<size_t>(layer)];
+        if (mixer == MixerKind::MlpOnly) {
+            const auto* up = inference_detail::find_unique(
+                input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
+                    "w_up.weight"), TensorRole::FfnUp, layer,
+                {layer_intermediate, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::FfnUp, layer, *up, {});
+            const auto* down = inference_detail::find_unique(
+                input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
+                    "w_down.weight"), TensorRole::FfnDown, layer,
+                {*m.hidden_size, layer_intermediate}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::FfnDown, layer, *down, {});
+        } else if (topology.execute_feed_forward.at(static_cast<size_t>(layer))) {
+            const auto* ffn_norm = inference_detail::find_unique(
+                input.inventory, ffn_norm_candidates, TensorRole::FfnInputNorm, layer,
+                {*m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::FfnInputNorm, layer,
+                                          *ffn_norm, {});
+            const auto* gate = inference_detail::find_unique(
+                input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
+                    "w_gate.weight"), TensorRole::FfnGate, layer,
+                {layer_intermediate, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::FfnGate, layer, *gate, {});
+            const auto* up = inference_detail::find_unique(
+                input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
+                    "w_up.weight"), TensorRole::FfnUp, layer,
+                {layer_intermediate, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::FfnUp, layer, *up, {});
+            const auto* down = inference_detail::find_unique(
+                input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
+                    "w_down.weight"), TensorRole::FfnDown, layer,
+                {*m.hidden_size, layer_intermediate}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::FfnDown, layer, *down, {});
+        }
     }
     facts.bindings = BindingSolver{}.solve(facts.bindings.values);
     facts.validate();
@@ -417,13 +578,31 @@ void CanonicalModelFacts::validate() const {
             require(TensorRole::ShortConvKernel, layer);
             require(TensorRole::ShortConvOutput, layer);
         } else {
-            inference_detail::fail(ResolutionFailureKind::UnsupportedGraphPrimitive,
-                                   "automatic resolution has no binding contract for mixer");
+            if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Mamba2) {
+                require(TensorRole::Mamba2Input, layer);
+                require(TensorRole::Mamba2Conv, layer);
+                require(TensorRole::Mamba2ConvBias, layer);
+                require(TensorRole::Mamba2DtBias, layer);
+                require(TensorRole::Mamba2ALog, layer);
+                require(TensorRole::Mamba2D, layer);
+                require(TensorRole::Mamba2Norm, layer);
+                require(TensorRole::Mamba2Output, layer);
+            } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::MlpOnly) {
+                require(TensorRole::FfnUp, layer);
+                require(TensorRole::FfnDown, layer);
+            } else {
+                inference_detail::fail(ResolutionFailureKind::UnsupportedGraphPrimitive,
+                                       "automatic resolution has no binding contract for mixer");
+            }
         }
-        require(TensorRole::FfnInputNorm, layer);
-        require(TensorRole::FfnGate, layer);
-        require(TensorRole::FfnUp, layer);
-        require(TensorRole::FfnDown, layer);
+        if (topology.mixer_kinds[static_cast<size_t>(layer)] != MixerKind::MlpOnly &&
+            (topology.execute_feed_forward.empty() ||
+             topology.execute_feed_forward.at(static_cast<size_t>(layer)))) {
+            require(TensorRole::FfnInputNorm, layer);
+            require(TensorRole::FfnGate, layer);
+            require(TensorRole::FfnUp, layer);
+            require(TensorRole::FfnDown, layer);
+        }
     }
 }
 

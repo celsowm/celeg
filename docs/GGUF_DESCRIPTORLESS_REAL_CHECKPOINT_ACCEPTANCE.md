@@ -401,6 +401,8 @@ The order may be adjusted when one correction is a prerequisite for another, but
 | Conventional synthetic/native GGUF coverage | automatic inference / CPU compile | baseline passes | generic path | no failure |
 | Real LFM2 GGUF | generic metadata resolver on CPU + CUDA | per-layer `attention.head_count_kv`; heterogeneous schedule | metadata normalization + per-layer semantic solver | **No** |
 | Real MiniCPM GGUF | GGUF reader on CPU + CUDA | `output.weight` has no canonical loading mapping | GGUF tensor grammar / checkpoint loading boundary | **No** |
+| Real LFM2.5-230M Q4_0 GGUF | CPU inference; CUDA OpenAI-compatible server chat | Q4_0 loading initially rejected in fused feed-forward concatenation | generic GGUF quantization loading | **Resolved**: CPU repacks decoded Q4_0; CUDA loads it as BF16 when native blocks have no kernel |
+| Real Nemotron-3-Nano-4B GGUF | automatic CPU inference | layer 0 has no dense FFN; tensor evidence shows alternating SSM, attention, and dense-FFN blocks | generic mixer/FFN schedule inference and per-layer binding | **No** |
 
 Update this table as each real checkpoint advances. Replace the current gap with the next narrow failure rather than accumulating stale failures.
 

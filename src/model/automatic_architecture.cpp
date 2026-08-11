@@ -1,6 +1,7 @@
 #include "celeg/model/architecture.hpp"
 
 #include "celeg/model/inference.hpp"
+
 #include "celeg/model/interaction.hpp"
 
 #include <string>
@@ -8,6 +9,7 @@
 
 namespace celeg {
 namespace {
+
 
 class AutomaticArchitecture final : public IArchitecture {
 public:

@@ -31,10 +31,29 @@ struct BlockQ6K {
     int8_t scales[16];
     uint16_t d;
 };
+
+struct BlockQ4_0 {
+    uint16_t d;
+    uint8_t qs[16];
+};
+
+struct BlockQ5_0 {
+    uint16_t d;
+    uint8_t qh[4];
+    uint8_t qs[16];
+};
+
+struct BlockQ8_0 {
+    uint16_t d;
+    int8_t qs[32];
+};
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4K) == 144);
 static_assert(sizeof(BlockQ6K) == 210);
+static_assert(sizeof(BlockQ4_0) == 18);
+static_assert(sizeof(BlockQ5_0) == 22);
+static_assert(sizeof(BlockQ8_0) == 34);
 
 float fp16_to_float(uint16_t bits) {
     const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
@@ -125,8 +144,10 @@ size_t CpuGgufMatrix::row_bytes() const {
 }
 
 void CpuGgufMatrix::validate() const {
-    if (type != GgmlType::Q4_K && type != GgmlType::Q6_K) {
-        throw std::invalid_argument("CPU GGUF matrix requires Q4_K or Q6_K");
+    if (type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
+        type != GgmlType::Q8_0 && type != GgmlType::Q4_K &&
+        type != GgmlType::Q6_K) {
+        throw std::invalid_argument("CPU GGUF matrix requires Q4_0, Q5_0, Q8_0, Q4_K or Q6_K");
     }
     if (rows == 0 || cols == 0 || !data || row_bytes() == 0 ||
         bytes != static_cast<size_t>(rows) * row_bytes()) {
@@ -307,6 +328,47 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         throw std::invalid_argument("invalid CPU GGUF embedding row");
     }
     const std::byte* packed = matrix.data + row * matrix.row_bytes();
+    if (matrix.type == GgmlType::Q4_0) {
+        const auto* weights = reinterpret_cast<const BlockQ4_0*>(packed);
+        for (size_t b = 0; b < matrix.cols / 32; ++b) {
+            const BlockQ4_0& weight = weights[b];
+            const float d = fp16_to_float(weight.d);
+            for (int col = 0; col < 32; ++col) {
+                const uint8_t packed_value = weight.qs[col / 2];
+                const int q = (col & 1) ? (packed_value >> 4) : (packed_value & 0x0f);
+                output[b * 32 + static_cast<size_t>(col)] =
+                    d * static_cast<float>(q - 8);
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::Q5_0) {
+        const auto* weights = reinterpret_cast<const BlockQ5_0*>(packed);
+        for (size_t b = 0; b < matrix.cols / 32; ++b) {
+            const BlockQ5_0& weight = weights[b];
+            const float d = fp16_to_float(weight.d);
+            for (int col = 0; col < 32; ++col) {
+                const uint8_t packed_value = weight.qs[col / 2];
+                const int low = (col & 1) ? (packed_value >> 4) : (packed_value & 0x0f);
+                const int high = (weight.qh[col / 8] >> (col & 7)) & 1;
+                output[b * 32 + static_cast<size_t>(col)] =
+                    d * static_cast<float>((low | (high << 4)) - 16);
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::Q8_0) {
+        const auto* weights = reinterpret_cast<const BlockQ8_0*>(packed);
+        for (size_t b = 0; b < matrix.cols / 32; ++b) {
+            const BlockQ8_0& weight = weights[b];
+            const float d = fp16_to_float(weight.d);
+            for (int col = 0; col < 32; ++col) {
+                output[b * 32 + static_cast<size_t>(col)] =
+                    d * static_cast<float>(weight.qs[col]);
+            }
+        }
+        return;
+    }
     const size_t blocks = matrix.cols / 256;
     if (matrix.type == GgmlType::Q4_K) {
         const auto* weights = reinterpret_cast<const BlockQ4K*>(packed);
