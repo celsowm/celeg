@@ -44,6 +44,10 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
     topology.moe_router_softmax = false;
     topology.use_expert_bias = false;
     topology.routed_scaling_factor = 1.0f;
+    topology.moe_routing_group_count = 0;
+    topology.moe_routing_experts_per_group = 0;
+    topology.moe_routing_groups_per_token = 0;
+    topology.moe_routing_group_score_top_k = 0;
     topology.has_per_layer_input = false;
     topology.per_layer_input_size = 0;
     int maximum_conv_cache = 0;

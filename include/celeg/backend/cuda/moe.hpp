@@ -50,6 +50,10 @@ struct MoeRouterConfig {
     bool softmax = false;
     bool use_expert_bias = false;
     float routed_scaling_factor = 1.0f;
+    int group_count = 0;
+    int experts_per_group = 0;
+    int groups_per_token = 0;
+    int group_score_top_k = 0;
 };
 
 // Device pointer trio consumed by the CUDA routing kernel. All pointers are

@@ -70,7 +70,9 @@ void RouterProgram::validate() const {
     }
     if (selection == MoeSelectionKind::GroupedTopK &&
         (group_count <= 0 || experts_per_group <= 0 ||
-         group_count * experts_per_group != expert_count)) {
+         group_count * experts_per_group != expert_count ||
+         groups_per_token <= 0 || groups_per_token > group_count ||
+         group_score_top_k <= 0 || group_score_top_k > experts_per_group)) {
         throw std::invalid_argument("invalid grouped MoE selection program");
     }
     if (selection == MoeSelectionKind::TopK &&
@@ -88,6 +90,8 @@ std::string RouterProgram::fingerprint() const {
     append_field(out, experts_per_token);
     append_field(out, group_count);
     append_field(out, experts_per_group);
+    append_field(out, groups_per_token);
+    append_field(out, group_score_top_k);
     append_field(out, has_expert_bias);
     append_field(out, routed_scaling);
     return fingerprint_text(out.str());
@@ -450,6 +454,8 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                 ? MoeSelectionKind::GroupedTopK : MoeSelectionKind::TopK;
             semantic.router.group_count = moe->routing_group_count;
             semantic.router.experts_per_group = moe->routing_experts_per_group;
+            semantic.router.groups_per_token = moe->routing_groups_per_token;
+            semantic.router.group_score_top_k = moe->routing_group_score_top_k;
             semantic.routed.mlp.hidden_size = model.topology.hidden;
             semantic.routed.mlp.intermediate_size = moe->intermediate_size;
             const std::size_t expert_matrix_elements =

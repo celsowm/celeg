@@ -183,7 +183,8 @@ int main() {
         gdn_qkv.data(), gdn_z.data(), gdn_b.data(), gdn_a.data(), gdn_conv.data(),
         gdn_dt.data(), gdn_alog.data(), gdn_norm.data(), gdn_prefill_state_conv.data(),
         gdn_prefill_state.data(), gdn_prefill_output.data(), conv_rows, gdn_kernel,
-        gdn_key_dim, gdn_value_dim, gdn_key_heads, gdn_value_heads, 1e-6f);
+        gdn_key_dim, gdn_value_dim, gdn_key_heads, gdn_value_heads, 1e-6f,
+        false, false, -5.0f, false);
     for (size_t row = 0; row < conv_rows; ++row) {
         celeg::cpu_gated_delta_net_decode(
             gdn_qkv.data() + row * gdn_qkv_width, gdn_z.data() + row * gdn_value_width,
@@ -191,7 +192,8 @@ int main() {
             gdn_conv.data(), gdn_dt.data(), gdn_alog.data(), gdn_norm.data(),
             gdn_decode_state_conv.data(), gdn_decode_state.data(),
             gdn_decode_output.data() + row * gdn_value_width, gdn_kernel, gdn_key_dim,
-            gdn_value_dim, gdn_key_heads, gdn_value_heads, 1e-6f);
+            gdn_value_dim, gdn_key_heads, gdn_value_heads, 1e-6f,
+            false, false, -5.0f, false);
     }
     for (size_t i = 0; i < gdn_decode_output.size(); ++i) {
         CELEG_TEST_CHECK(std::abs(gdn_decode_output[i] - gdn_prefill_output[i]) < 1e-5f);

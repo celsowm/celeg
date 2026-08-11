@@ -2,7 +2,9 @@
 #include "common.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace celeg {
 
@@ -19,8 +21,19 @@ void execute_cpu_gated_delta_token(
     auto& workspace = model.workspace_;
     auto& shared = *model.shared;
     const GatedDeltaNetSpec& spec = weights.spec;
-    shared.linear.gemv(weights.qkv, workspace.normed.data(),
-                       workspace.gated_delta_qkv.data());
+    if (spec.factorized_projections) {
+        shared.linear.gemv(weights.q, workspace.normed.data(),
+                           workspace.gated_delta_qkv.data());
+        shared.linear.gemv(weights.k, workspace.normed.data(),
+                           workspace.gated_delta_qkv.data() +
+                               spec.key_heads * spec.key_head_dim);
+        shared.linear.gemv(weights.v, workspace.normed.data(),
+                           workspace.gated_delta_qkv.data() +
+                               2 * spec.key_heads * spec.key_head_dim);
+    } else {
+        shared.linear.gemv(weights.qkv, workspace.normed.data(),
+                           workspace.gated_delta_qkv.data());
+    }
     shared.linear.gemv(weights.z, workspace.normed.data(),
                        workspace.gated_delta_z.data());
     shared.linear.gemv(weights.b, workspace.normed.data(),
@@ -35,7 +48,8 @@ void execute_cpu_gated_delta_token(
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
         workspace.gated_delta_output.data(), spec.conv_kernel, spec.key_head_dim,
         spec.value_head_dim, spec.key_heads, spec.value_heads,
-        shared.shape.numerical_policy.norm_eps);
+        shared.shape.numerical_policy.norm_eps, spec.vector_decay, spec.safe_decay,
+        spec.decay_lower_bound, spec.sigmoid_output_gate);
     shared.linear.gemv(weights.out, workspace.gated_delta_output.data(),
                        workspace.hidden.data());
 }
@@ -126,9 +140,29 @@ void execute_cpu_gated_delta_chunk(
     const size_t hidden = static_cast<size_t>(shared.shape.hidden);
 
     auto started = Clock::now();
-    cpu_chunk_layer_gemm(execution, weights.qkv, workspace.chunk_normed.data(),
-                         workspace.chunk_gated_delta_qkv.data(), rows, hidden,
-                         normed_q8_ready);
+    if (spec.factorized_projections) {
+        const size_t key_width = static_cast<size_t>(spec.key_heads * spec.key_head_dim);
+        const size_t value_width = static_cast<size_t>(spec.value_width());
+        std::vector<float> q(rows * key_width), k(rows * key_width), v(rows * value_width);
+        cpu_chunk_layer_gemm(execution, weights.q, workspace.chunk_normed.data(),
+                             q.data(), rows, hidden,
+                             normed_q8_ready);
+        cpu_chunk_layer_gemm(execution, weights.k, workspace.chunk_normed.data(),
+                             k.data(), rows, hidden, normed_q8_ready);
+        cpu_chunk_layer_gemm(execution, weights.v, workspace.chunk_normed.data(),
+                             v.data(), rows, hidden, normed_q8_ready);
+        for (size_t row = 0; row < rows; ++row) {
+            float* dst = workspace.chunk_gated_delta_qkv.data() +
+                row * (2 * key_width + value_width);
+            std::copy_n(q.data() + row * key_width, key_width, dst);
+            std::copy_n(k.data() + row * key_width, key_width, dst + key_width);
+            std::copy_n(v.data() + row * value_width, value_width, dst + 2 * key_width);
+        }
+    } else {
+        cpu_chunk_layer_gemm(execution, weights.qkv, workspace.chunk_normed.data(),
+                             workspace.chunk_gated_delta_qkv.data(), rows, hidden,
+                             normed_q8_ready);
+    }
     cpu_chunk_layer_gemm(execution, weights.z, workspace.chunk_normed.data(),
                          workspace.chunk_gated_delta_z.data(), rows, hidden,
                          normed_q8_ready);
@@ -149,7 +183,8 @@ void execute_cpu_gated_delta_chunk(
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
         workspace.chunk_gated_delta_output.data(), rows, spec.conv_kernel,
         spec.key_head_dim, spec.value_head_dim, spec.key_heads, spec.value_heads,
-        shared.shape.numerical_policy.norm_eps);
+        shared.shape.numerical_policy.norm_eps, spec.vector_decay, spec.safe_decay,
+        spec.decay_lower_bound, spec.sigmoid_output_gate);
     model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();

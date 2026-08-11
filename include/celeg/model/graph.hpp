@@ -278,6 +278,19 @@ struct GatedDeltaNetSpec {
     int value_head_dim = 0;
     int key_heads = 0;
     int value_heads = 0;
+    // The recurrent linear-attention contract can use either one decay value
+    // per head (the original form) or one value per key coordinate.
+    bool vector_decay = false;
+    bool safe_decay = false;
+    float decay_lower_bound = -5.0f;
+    bool sigmoid_output_gate = false;
+    bool factorized_projections = false;
+
+    int qkv_width() const {
+        return 2 * key_heads * key_head_dim + value_heads * value_head_dim;
+    }
+    int value_width() const { return value_heads * value_head_dim; }
+    int decay_width() const { return vector_decay ? key_heads * key_head_dim : value_heads; }
 };
 
 struct Mamba2Spec {
@@ -321,6 +334,8 @@ struct MixtureOfExpertsSpec {
     // defaults; the compiled program still records those defaults explicitly.
     int routing_group_count = 0;
     int routing_experts_per_group = 0;
+    int routing_groups_per_token = 0;
+    int routing_group_score_top_k = 0;
     bool has_shared_expert = false;
     int shared_intermediate_size = 0;
     bool shared_before_routed = false;

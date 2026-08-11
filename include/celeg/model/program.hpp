@@ -47,6 +47,8 @@ struct RouterProgram {
     int experts_per_token = 0;
     int group_count = 0;
     int experts_per_group = 0;
+    int groups_per_token = 0;
+    int group_score_top_k = 0;
     bool has_expert_bias = false;
     float routed_scaling = 1.0f;
 

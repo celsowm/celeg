@@ -45,7 +45,9 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
                       const float* a_log, const float* norm_weight,
                       float* conv_state, float* recurrent_state, float* output,
                       int conv_kernel, int key_head_dim, int value_head_dim,
-                      int key_heads, int value_heads, float eps) {
+                      int key_heads, int value_heads, float eps, bool vector_decay,
+                      bool safe_decay, float decay_lower_bound,
+                      bool sigmoid_output_gate) {
     const int key_width = key_heads * key_head_dim;
     const int value_width = value_heads * value_head_dim;
     const int conv_dim = 2 * key_width + value_width;
@@ -88,14 +90,20 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
 
     for (int value_head = 0; value_head < value_heads; ++value_head) {
         const int key_head = value_head / repeat;
-        const float beta = sigmoid(projected_b[value_head]);
-        const float decay = std::exp(-std::exp(a_log[value_head]) *
-            softplus(projected_a[value_head] + dt_bias[value_head]));
-        float* state = recurrent_state + static_cast<size_t>(value_head) *
-            key_head_dim * value_head_dim;
-        std::vector<float> delta(static_cast<size_t>(value_head_dim));
-        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
-            for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
+            const float beta = sigmoid(projected_b[value_head]);
+            float* state = recurrent_state + static_cast<size_t>(value_head) *
+                key_head_dim * value_head_dim;
+            std::vector<float> delta(static_cast<size_t>(value_head_dim));
+            for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
+                const int decay_index = vector_decay ? key_head * key_head_dim + k_dim
+                                                      : value_head;
+                const float decay = safe_decay
+                    ? std::exp(sigmoid(std::exp(a_log[value_head]) *
+                        (projected_a[decay_index] + dt_bias[decay_index])) *
+                        decay_lower_bound)
+                    : std::exp(-std::exp(a_log[value_head]) *
+                        softplus(projected_a[decay_index] + dt_bias[decay_index]));
+                for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
                 state[k_dim * value_head_dim + v_dim] *= decay;
             }
         }
@@ -130,7 +138,8 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
         cpu_rmsnorm(head_output, norm_weight, normalized_head.data(), value_head_dim, eps);
         const float* gate = projected_z + value_head * value_head_dim;
         for (int d = 0; d < value_head_dim; ++d) {
-            head_output[d] = normalized_head[static_cast<size_t>(d)] * silu(gate[d]);
+            head_output[d] = normalized_head[static_cast<size_t>(d)] *
+                (sigmoid_output_gate ? sigmoid(gate[d]) : silu(gate[d]));
         }
     }
 }
@@ -144,13 +153,15 @@ void cpu_gated_delta_net_decode(const float* projected_qkv, const float* project
                                 float* conv_state, float* recurrent_state,
                                 float* output, int conv_kernel, int key_head_dim,
                                 int value_head_dim, int key_heads, int value_heads,
-                                float eps) {
+                                float eps, bool vector_decay, bool safe_decay,
+                                float decay_lower_bound, bool sigmoid_output_gate) {
     validate_gated_delta_arguments(projected_qkv, projected_z, projected_b, projected_a,
         conv_weight, dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
         conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
     gated_delta_step(projected_qkv, projected_z, projected_b, projected_a, conv_weight,
         dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, conv_kernel,
-        key_head_dim, value_head_dim, key_heads, value_heads, eps);
+        key_head_dim, value_head_dim, key_heads, value_heads, eps, vector_decay,
+        safe_decay, decay_lower_bound, sigmoid_output_gate);
 }
 
 void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projected_z,
@@ -160,7 +171,9 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
                                  float* conv_state, float* recurrent_state,
                                  float* output, size_t rows, int conv_kernel,
                                  int key_head_dim, int value_head_dim, int key_heads,
-                                 int value_heads, float eps) {
+                                 int value_heads, float eps, bool vector_decay,
+                                 bool safe_decay, float decay_lower_bound,
+                                 bool sigmoid_output_gate) {
     if (rows == 0) throw std::invalid_argument("GatedDeltaNet prefill needs rows");
     validate_gated_delta_arguments(projected_qkv, projected_z, projected_b, projected_a,
         conv_weight, dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
@@ -171,10 +184,12 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
         gated_delta_step(projected_qkv + row * static_cast<size_t>(qkv_width),
             projected_z + row * static_cast<size_t>(z_width),
             projected_b + row * static_cast<size_t>(value_heads),
-            projected_a + row * static_cast<size_t>(value_heads), conv_weight, dt_bias,
+            projected_a + row * static_cast<size_t>(vector_decay
+                ? key_heads * key_head_dim : value_heads), conv_weight, dt_bias,
             a_log, norm_weight, conv_state, recurrent_state,
             output + row * static_cast<size_t>(z_width), conv_kernel, key_head_dim,
-            value_head_dim, key_heads, value_heads, eps);
+            value_head_dim, key_heads, value_heads, eps, vector_decay, safe_decay,
+            decay_lower_bound, sigmoid_output_gate);
     }
 }
 

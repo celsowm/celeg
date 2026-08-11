@@ -275,25 +275,60 @@ void CpuCompiledModel::Shared::load_weights() {
             const int key_width = spec.key_heads * spec.key_head_dim;
             const int value_width = spec.value_heads * spec.value_head_dim;
             const int qkv_width = 2 * key_width + value_width;
-            layer.qkv = load_matrix(source, reader.get(), writer.get(),
-                tensor_name(weight_requests, TensorRole::GatedDeltaNetQkv, index),
-                {qkv_width, shape.hidden});
-            layer.z = load_matrix(source, reader.get(), writer.get(),
-                tensor_name(weight_requests, TensorRole::GatedDeltaNetZ, index),
-                {value_width, shape.hidden});
+            if (spec.factorized_projections) {
+                layer.q = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetQuery, index),
+                    {key_width, shape.hidden});
+                layer.k = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetKey, index),
+                    {key_width, shape.hidden});
+                layer.v = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetValue, index),
+                    {value_width, shape.hidden});
+                layer.z = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetOutputGate, index),
+                    {value_width, shape.hidden});
+            } else {
+                layer.qkv = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetQkv, index),
+                    {qkv_width, shape.hidden});
+                layer.z = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetZ, index),
+                    {value_width, shape.hidden});
+            }
             layer.b = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::GatedDeltaNetBeta, index),
                 {spec.value_heads, shape.hidden});
             layer.a = load_matrix(source, reader.get(), writer.get(),
-                tensor_name(weight_requests, TensorRole::GatedDeltaNetAlpha, index),
-                {spec.value_heads, shape.hidden});
+                tensor_name(weight_requests, spec.factorized_projections
+                    ? TensorRole::GatedDeltaNetDecay : TensorRole::GatedDeltaNetAlpha, index),
+                {spec.decay_width(), shape.hidden});
             const int conv_dim = qkv_width;
-            layer.conv_weight = load_vector(source, reader.get(), writer.get(),
-                tensor_name(weight_requests, TensorRole::GatedDeltaNetConv, index),
-                {conv_dim, 1, spec.conv_kernel});
+            if (spec.factorized_projections) {
+                layer.q_conv_weight = load_vector(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetQueryConv, index),
+                    {key_width, 1, spec.conv_kernel});
+                layer.k_conv_weight = load_vector(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetKeyConv, index),
+                    {key_width, 1, spec.conv_kernel});
+                layer.v_conv_weight = load_vector(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetValueConv, index),
+                    {value_width, 1, spec.conv_kernel});
+                layer.conv_weight.reserve(static_cast<size_t>(conv_dim) * spec.conv_kernel);
+                layer.conv_weight.insert(layer.conv_weight.end(), layer.q_conv_weight.begin(),
+                                         layer.q_conv_weight.end());
+                layer.conv_weight.insert(layer.conv_weight.end(), layer.k_conv_weight.begin(),
+                                         layer.k_conv_weight.end());
+                layer.conv_weight.insert(layer.conv_weight.end(), layer.v_conv_weight.begin(),
+                                         layer.v_conv_weight.end());
+            } else {
+                layer.conv_weight = load_vector(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::GatedDeltaNetConv, index),
+                    {conv_dim, 1, spec.conv_kernel});
+            }
             layer.dt_bias = load_vector(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::GatedDeltaNetDtBias, index),
-                {spec.value_heads});
+                {spec.decay_width()});
             layer.a_log = load_vector(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::GatedDeltaNetALog, index),
                 {spec.value_heads});

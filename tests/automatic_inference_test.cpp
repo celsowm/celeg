@@ -250,5 +250,11 @@ int main() {
             error.kind() == celeg::ResolutionFailureKind::ConflictingMetadata;
     }
     CELEG_TEST_CHECK(conflicting_scope_rejected);
+
+    auto ling_alias = metadata();
+    ling_alias.values.erase("qk_norm");
+    ling_alias.values["use_qk_norm"] = true;
+    const auto ling_facts = celeg::normalize_model_metadata(ling_alias);
+    CELEG_TEST_CHECK(ling_facts.query_key_norm == std::optional<bool>{true});
     return 0;
 }

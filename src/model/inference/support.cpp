@@ -61,6 +61,7 @@ std::vector<std::string> attention_tensor_candidates(int layer,
         "transformer.h." + index + ".attn." + std::string(suffix),
         "model.language_model.layers." + index + ".self_attn." + std::string(suffix),
         "model.layers." + index + ".self_attn." + std::string(suffix),
+        "model.layers." + index + ".attention." + std::string(suffix),
         "layers." + index + ".attention." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };

@@ -169,7 +169,9 @@ struct CpuCompiledModel::BatchScratch {
                         workspace_.gated_delta_output.data() + row * value_width,
                         spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                         spec.key_heads, spec.value_heads,
-                        shape.numerical_policy.norm_eps);
+                        shape.numerical_policy.norm_eps, spec.vector_decay,
+                        spec.safe_decay, spec.decay_lower_bound,
+                        spec.sigmoid_output_gate);
                 });
                 layer_gemm(gated_delta->out, workspace_.gated_delta_output.data(),
                            workspace_.hidden.data());

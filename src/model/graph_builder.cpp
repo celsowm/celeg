@@ -40,7 +40,9 @@ void build_dense_transformer_graph(ResolvedModel& model) {
             layer.feed_forward = MixtureOfExpertsSpec{
                 t.moe_intermediate, t.num_experts, t.experts_per_token,
                 t.normalize_topk, t.use_expert_bias, t.routed_scaling_factor,
-                0, 0, t.shared_expert_intermediate > 0,
+                t.moe_routing_group_count, t.moe_routing_experts_per_group,
+                t.moe_routing_groups_per_token, t.moe_routing_group_score_top_k,
+                t.shared_expert_intermediate > 0,
                 t.shared_expert_intermediate, false, t.moe_router_softmax};
         } else {
             layer.feed_forward = DenseFeedForwardSpec{intermediate, ActivationKind::SwiGLU};

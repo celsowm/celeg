@@ -72,7 +72,7 @@ struct CpuWorkspacePlan {
             plan.gated_delta_output = std::max(plan.gated_delta_output,
                 static_cast<size_t>(spec.value_heads * spec.value_head_dim));
             plan.gated_delta_gate = std::max(plan.gated_delta_gate,
-                static_cast<size_t>(spec.value_heads));
+                static_cast<size_t>(spec.decay_width()));
         }
         for (const Mamba2Spec& spec : shape.mamba2_layouts) {
             plan.mamba_projection = std::max(plan.mamba_projection,
@@ -230,10 +230,16 @@ struct CpuCompiledModel {
         CommonWeights common;
         GatedDeltaNetSpec spec;
         CpuLinearWeight qkv;
+        CpuLinearWeight q;
+        CpuLinearWeight k;
+        CpuLinearWeight v;
         CpuLinearWeight z;
         CpuLinearWeight b;
         CpuLinearWeight a;
         std::vector<float> conv_weight;
+        std::vector<float> q_conv_weight;
+        std::vector<float> k_conv_weight;
+        std::vector<float> v_conv_weight;
         std::vector<float> dt_bias;
         std::vector<float> a_log;
         std::vector<float> norm;

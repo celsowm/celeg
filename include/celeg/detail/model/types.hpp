@@ -437,6 +437,10 @@ inline celeg::MoeRouterConfig moe_router_config(const RuntimeTopology& shape) {
     cfg.softmax = shape.moe_router_softmax;
     cfg.use_expert_bias = shape.use_expert_bias;
     cfg.routed_scaling_factor = shape.routed_scaling_factor;
+    cfg.group_count = shape.moe_routing_group_count;
+    cfg.experts_per_group = shape.moe_routing_experts_per_group;
+    cfg.groups_per_token = shape.moe_routing_groups_per_token;
+    cfg.group_score_top_k = shape.moe_routing_group_score_top_k;
     return cfg;
 }
 

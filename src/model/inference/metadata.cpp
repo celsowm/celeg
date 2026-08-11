@@ -304,7 +304,7 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
 
 void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
     static const std::unordered_set<std::string> known = {
-        "qk_norm", "query_key_norm", "xsa_projection",
+        "qk_norm", "query_key_norm", "use_qk_norm", "xsa_projection",
         "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
         "rope_theta", "rotary_fraction", "rope_scaling", "rope_parameters",
         "embedding_multiplier", "attention_multiplier", "residual_multiplier",
@@ -407,10 +407,94 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                        {"pad_token_id", "tokenizer.ggml.padding_token_id"},
                                        result.evidence, "pad_token_id");
     result.query_key_norm = aliases<bool>(
-        metadata, {"qk_norm", "query_key_norm"}, result.evidence, "query_key_norm");
+        metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
+        "query_key_norm");
     result.feed_forward_auto_adjust = aliases<bool>(
         metadata, {"block_auto_adjust_ff_dim"}, result.evidence,
         "feed_forward_auto_adjust");
+    result.first_dense_layer = aliases<int>(
+        metadata, {"first_k_dense_replace", "num_dense_layers"}, result.evidence,
+        "first_dense_layer");
+    result.recurrent_conv_kernel = aliases<int>(
+        metadata, {"short_conv_kernel_size", "recurrent_conv_kernel"}, result.evidence,
+        "recurrent_conv_kernel");
+    result.recurrent_key_heads = aliases<int>(
+        metadata, {"num_attention_heads", "num_heads_for_linear_attn"}, result.evidence,
+        "recurrent_key_heads");
+    result.recurrent_value_heads = aliases<int>(
+        metadata, {"num_attention_heads", "num_heads_for_linear_attn"}, result.evidence,
+        "recurrent_value_heads");
+    result.recurrent_key_dim = aliases<int>(
+        metadata, {"head_dim"}, result.evidence, "recurrent_key_dim");
+    result.recurrent_value_dim = aliases<int>(
+        metadata, {"v_head_dim", "head_dim"}, result.evidence, "recurrent_value_dim");
+    result.recurrent_safe_decay = aliases<bool>(
+        metadata, {"kda_safe_gate", "safe_decay"}, result.evidence,
+        "recurrent_safe_decay");
+    result.recurrent_decay_lower_bound = aliases<float>(
+        metadata, {"kda_lower_bound", "decay_lower_bound"}, result.evidence,
+        "recurrent_decay_lower_bound");
+    result.latent_query_rank = aliases<int>(
+        metadata, {"q_lora_rank"}, result.evidence, "latent_query_rank");
+    result.latent_kv_rank = aliases<int>(
+        metadata, {"kv_lora_rank"}, result.evidence, "latent_kv_rank");
+    result.latent_query_head_dim = aliases<int>(
+        metadata, {"qk_head_dim"}, result.evidence, "latent_query_head_dim");
+    result.latent_query_nope_dim = aliases<int>(
+        metadata, {"qk_nope_head_dim"}, result.evidence, "latent_query_nope_dim");
+    result.latent_query_rope_dim = aliases<int>(
+        metadata, {"qk_rope_head_dim"}, result.evidence, "latent_query_rope_dim");
+    result.latent_value_head_dim = aliases<int>(
+        metadata, {"v_head_dim"}, result.evidence, "latent_value_head_dim");
+    result.moe_experts = aliases<int>(
+        metadata, {"num_experts"}, result.evidence, "moe_experts");
+    result.moe_experts_per_token = aliases<int>(
+        metadata, {"num_experts_per_tok", "experts_per_token"}, result.evidence,
+        "moe_experts_per_token");
+    result.moe_intermediate = aliases<int>(
+        metadata, {"moe_intermediate_size"}, result.evidence, "moe_intermediate");
+    result.moe_shared_intermediate = aliases<int>(
+        metadata, {"moe_shared_expert_intermediate_size"}, result.evidence,
+        "moe_shared_intermediate");
+    result.moe_routing_groups = aliases<int>(
+        metadata, {"topk_group"}, result.evidence, "moe_routing_groups");
+    result.moe_total_routing_groups = aliases<int>(
+        metadata, {"n_group", "num_routing_groups"}, result.evidence,
+        "moe_total_routing_groups");
+    result.moe_group_score_top_k = aliases<int>(
+        metadata, {"routing_group_score_top_k"}, result.evidence,
+        "moe_group_score_top_k");
+    result.moe_normalize_topk = aliases<bool>(
+        metadata, {"norm_topk_prob"}, result.evidence, "moe_normalize_topk");
+    result.moe_expert_bias = aliases<bool>(
+        metadata, {"moe_router_enable_expert_bias"}, result.evidence, "moe_expert_bias");
+    result.moe_routed_scaling = aliases<float>(
+        metadata, {"routed_scaling_factor"}, result.evidence, "moe_routed_scaling");
+    if (metadata.contains("score_function") || metadata.contains("scoring_func")) {
+        const std::string primary = metadata.contains("score_function")
+            ? "score_function" : "scoring_func";
+        const std::string score = metadata.string(primary);
+        if (score != "sigmoid" && score != "softmax") {
+            inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                                   "unsupported MoE router score function: " + score);
+        }
+    result.moe_score_function = score;
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, primary,
+                                   "moe_score_function"});
+    }
+    if (metadata.contains("topk_method")) {
+        const std::string method = metadata.string("topk_method");
+        if (method != "noaux_tc" && method != "greedy" && method != "topk") {
+            inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                                   "unsupported MoE selection method: " + method);
+        }
+        result.moe_selection_method = method;
+        if (method == "noaux_tc" && !result.moe_group_score_top_k.has_value()) {
+            result.moe_group_score_top_k = 2;
+        }
+        result.evidence.push_back({EvidenceKind::ExplicitMetadata, "topk_method",
+                                   "moe_selection_method"});
+    }
     result.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,
                                           "xsa_projection");
     result.xsa_minimum_norm_squared = aliases<float>(

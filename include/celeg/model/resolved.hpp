@@ -75,6 +75,10 @@ struct RuntimeTopology {
     bool moe_router_softmax = false;
     bool use_expert_bias = false;
     float routed_scaling_factor = 1.0f;
+    int moe_routing_group_count = 0;
+    int moe_routing_experts_per_group = 0;
+    int moe_routing_groups_per_token = 0;
+    int moe_routing_group_score_top_k = 0;
     std::vector<AttentionSpec> attention_layouts;
     std::vector<int> feed_forward_intermediates;
     std::vector<ActivationKind> feed_forward_activations;

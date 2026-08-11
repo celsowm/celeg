@@ -159,6 +159,34 @@ struct NormalizedModelMetadata {
     std::optional<RopePairingKind> rope_pairing;
     std::vector<EvidenceItem> evidence;
     std::optional<bool> feed_forward_auto_adjust;
+    // Optional semantic facts used by hybrid routed checkpoints. These are
+    // deliberately named by capability, not by a checkpoint family.
+    std::optional<int> first_dense_layer;
+    std::optional<int> recurrent_conv_kernel;
+    std::optional<int> recurrent_key_heads;
+    std::optional<int> recurrent_value_heads;
+    std::optional<int> recurrent_key_dim;
+    std::optional<int> recurrent_value_dim;
+    std::optional<bool> recurrent_safe_decay;
+    std::optional<float> recurrent_decay_lower_bound;
+    std::optional<int> latent_query_rank;
+    std::optional<int> latent_kv_rank;
+    std::optional<int> latent_query_head_dim;
+    std::optional<int> latent_query_nope_dim;
+    std::optional<int> latent_query_rope_dim;
+    std::optional<int> latent_value_head_dim;
+    std::optional<int> moe_experts;
+    std::optional<int> moe_experts_per_token;
+    std::optional<int> moe_intermediate;
+    std::optional<int> moe_shared_intermediate;
+    std::optional<int> moe_routing_groups;
+    std::optional<int> moe_total_routing_groups;
+    std::optional<int> moe_group_score_top_k;
+    std::optional<bool> moe_normalize_topk;
+    std::optional<bool> moe_expert_bias;
+    std::optional<float> moe_routed_scaling;
+    std::optional<std::string> moe_score_function;
+    std::optional<std::string> moe_selection_method;
 };
 
 struct TensorInventoryEntry {

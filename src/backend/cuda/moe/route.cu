@@ -26,6 +26,10 @@ __global__ void moe_router_kernel(const float* expert_bias,
                                   bool softmax,
                                   bool normalize_topk,
                                   float routed_scaling_factor,
+                                  int group_count,
+                                  int experts_per_group,
+                                  int groups_per_token,
+                                  int group_score_top_k,
                                   float* scratch) {
     const int row = blockIdx.x;
     if (row >= rows) return;
@@ -34,6 +38,8 @@ __global__ void moe_router_kernel(const float* expert_bias,
     float* logits = &scratch[static_cast<size_t>(row) * E];
     float* probs = shared;
     float* scores = shared + E;
+    __shared__ float group_scores[128];
+    __shared__ int selected_groups[128];
 
     if (softmax) {
         if (threadIdx.x == 0) {
@@ -57,6 +63,51 @@ __global__ void moe_router_kernel(const float* expert_bias,
     }
     __syncthreads();
 
+    if (group_count > 0) {
+        if (group_count > 128 || experts_per_group <= 0 ||
+            groups_per_token <= 0 || groups_per_token > group_count ||
+            group_score_top_k <= 0 || group_score_top_k > experts_per_group) {
+            return;
+        }
+        if (threadIdx.x < group_count) {
+            const int group = threadIdx.x;
+            float best[128];
+            for (int i = 0; i < group_score_top_k; ++i) best[i] = -1e30f;
+            for (int offset = 0; offset < experts_per_group; ++offset) {
+                const float value = probs[group * experts_per_group + offset];
+                for (int slot = 0; slot < group_score_top_k; ++slot) {
+                    if (value > best[slot]) {
+                        for (int move = group_score_top_k - 1;
+                             move > slot; --move) best[move] = best[move - 1];
+                        best[slot] = value;
+                        break;
+                    }
+                }
+            }
+            float total = 0.0f;
+            for (int slot = 0; slot < group_score_top_k; ++slot) total += best[slot];
+            group_scores[group] = total;
+            selected_groups[group] = 0;
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            for (int selected = 0; selected < groups_per_token; ++selected) {
+                int best_group = -1;
+                float best_score = -1e30f;
+                for (int group = 0; group < group_count; ++group) {
+                    if (selected_groups[group]) continue;
+                    if (group_scores[group] > best_score ||
+                        (group_scores[group] == best_score && group < best_group)) {
+                        best_group = group;
+                        best_score = group_scores[group];
+                    }
+                }
+                if (best_group >= 0) selected_groups[best_group] = 1;
+            }
+        }
+        __syncthreads();
+    }
+
     // Deterministic top-K over the shared scores array. Slot k (0..K-1) is
     // filled in order: thread k picks the highest-scoring expert not yet taken
     // (ties broken by smaller expert id) and publishes it; a sync after each
@@ -76,6 +127,8 @@ __global__ void moe_router_kernel(const float* expert_bias,
                     if (taken[previous] == e) already_taken = true;
                 }
                 if (already_taken) continue;
+                if (group_count > 0 &&
+                    !selected_groups[e / experts_per_group]) continue;
                 const float s = scores[e];
                 bool better = false;
                 if (s != best_s) better = s > best_s;
@@ -142,8 +195,10 @@ void launch_moe_router(const MoeRouterDevice& device,
     moe_router_kernel<<<device.rows, block, shared_bytes, stream>>>(
         device.expert_bias,
         device.selected_experts, device.routing_weights,
-        device.rows, E, cfg.experts_per_token,
+                       device.rows, E, cfg.experts_per_token,
         cfg.use_expert_bias, cfg.softmax, cfg.normalize_topk, cfg.routed_scaling_factor,
+        cfg.group_count, cfg.experts_per_group, cfg.groups_per_token,
+        cfg.group_score_top_k,
         scratch_logits);
     CELEG_KERNEL_CHECK();
 }

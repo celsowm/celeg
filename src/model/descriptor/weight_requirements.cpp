@@ -99,12 +99,31 @@ void append_gated_delta_net_weight_requirements(ResolvedModel& model,
         model.weight_plan.requests.push_back(
             {role, layer, -1, std::move(shape), std::nullopt, physical_layer});
     };
-    append(TensorRole::GatedDeltaNetQkv, {qkv, topology.hidden});
-    append(TensorRole::GatedDeltaNetZ,
-           {recurrent.value_heads * recurrent.value_head_dim, topology.hidden});
-    append(TensorRole::GatedDeltaNetAlpha, {recurrent.value_heads, topology.hidden});
+    if (recurrent.factorized_projections) {
+        append(TensorRole::GatedDeltaNetQuery,
+               {recurrent.key_heads * recurrent.key_head_dim, topology.hidden});
+        append(TensorRole::GatedDeltaNetKey,
+               {recurrent.key_heads * recurrent.key_head_dim, topology.hidden});
+        append(TensorRole::GatedDeltaNetValue,
+               {recurrent.value_heads * recurrent.value_head_dim, topology.hidden});
+        append(TensorRole::GatedDeltaNetDecay,
+               {recurrent.decay_width(), topology.hidden});
+        append(TensorRole::GatedDeltaNetOutputGate,
+               {recurrent.value_heads * recurrent.value_head_dim, topology.hidden});
+        append(TensorRole::GatedDeltaNetQueryConv,
+               {recurrent.key_heads * recurrent.key_head_dim, 1, recurrent.conv_kernel});
+        append(TensorRole::GatedDeltaNetKeyConv,
+               {recurrent.key_heads * recurrent.key_head_dim, 1, recurrent.conv_kernel});
+        append(TensorRole::GatedDeltaNetValueConv,
+               {recurrent.value_heads * recurrent.value_head_dim, 1, recurrent.conv_kernel});
+    } else {
+        append(TensorRole::GatedDeltaNetQkv, {qkv, topology.hidden});
+        append(TensorRole::GatedDeltaNetZ,
+               {recurrent.value_heads * recurrent.value_head_dim, topology.hidden});
+        append(TensorRole::GatedDeltaNetAlpha, {recurrent.value_heads, topology.hidden});
+    }
     append(TensorRole::GatedDeltaNetBeta, {recurrent.value_heads, topology.hidden});
-    append(TensorRole::GatedDeltaNetDtBias, {recurrent.value_heads});
+    append(TensorRole::GatedDeltaNetDtBias, {recurrent.decay_width()});
     append(TensorRole::GatedDeltaNetALog, {recurrent.value_heads});
     append(TensorRole::GatedDeltaNetConv, {qkv, 1, recurrent.conv_kernel});
     append(TensorRole::GatedDeltaNetNorm, {recurrent.value_head_dim});
