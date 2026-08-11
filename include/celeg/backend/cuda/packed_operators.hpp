@@ -46,6 +46,17 @@ public:
                     const std::vector<PackedPrefillRow>* row_descriptors);
 };
 
+class PackedMamba2Executor {
+public:
+    static void run(PackedOperatorContext& context,
+                    const PackedSessionContext& reference,
+                    const Mamba2Layer& mamba,
+                    int rows,
+                    int layer_index,
+                    const std::vector<PackedSessionContext>* batch_models,
+                    const std::vector<PackedPrefillRow>* row_descriptors);
+};
+
 class PackedAttentionExecutor {
 public:
     static void run(PackedOperatorContext& context,

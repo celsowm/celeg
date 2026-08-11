@@ -153,6 +153,7 @@ struct NormalizedModelMetadata {
     std::optional<bool> tied_embeddings;
     std::optional<RopePairingKind> rope_pairing;
     std::vector<EvidenceItem> evidence;
+    std::optional<bool> feed_forward_auto_adjust;
 };
 
 struct TensorInventoryEntry {

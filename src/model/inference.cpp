@@ -43,6 +43,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     const TensorInventoryEntry* embedding = nullptr;
     for (const std::string& name : {std::string("transformer.wte.weight"),
                                     std::string("model.embed_tokens.weight"),
+                                    std::string("model.language_model.embed_tokens.weight"),
                                     std::string("tok_embeddings.weight"),
                                     std::string("token_embd.weight")}) {
         if (const auto* candidate = input.inventory.find(name)) {
@@ -63,7 +64,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     }
 
     std::unordered_set<int> layers;
-    const std::regex layer_pattern(R"((?:transformer\.h|model\.layers|layers|blk)\.(\d+)\.)");
+    const std::regex layer_pattern(R"((?:transformer\.h|model\.language_model\.layers|model\.layers|layers|blk)\.(\d+)\.)");
     for (const auto& entry : input.inventory.entries()) {
         std::smatch match;
         if (std::regex_search(entry.name, match, layer_pattern)) {
@@ -99,7 +100,22 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".mlp.up_proj.weight");
         }
-        if (!value.has_value() || *value <= 0) {
+        if (!ffn_up) {
+            ffn_up = input.inventory.find(
+                "model.language_model.layers." + index + ".mlp.up_proj.weight");
+        }
+        if (!ffn_up) {
+            ffn_up = input.inventory.find(
+                "transformer.h." + index + ".mlp.w_up.weight");
+        }
+        if (!ffn_up) {
+            ffn_up = input.inventory.find(
+                "model.layers." + index + ".feed_forward.w1.weight");
+        }
+        const bool tensor_defines_intermediate =
+            ffn_up && ffn_up->shape.size() == 2 && ffn_up->shape[0] > 0 &&
+            m.feed_forward_auto_adjust.value_or(false);
+        if (!value.has_value() || *value <= 0 || tensor_defines_intermediate) {
             if (ffn_up && ffn_up->shape.size() == 2 && ffn_up->shape[0] > 0) {
                 intermediate_sizes.push_back(static_cast<int>(ffn_up->shape[0]));
             } else {
@@ -185,14 +201,19 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         const bool has_attention =
             has_tensor(layer_prefix + "attn_q.weight") ||
             has_tensor("model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight") ||
+            has_tensor("model.language_model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight") ||
             has_tensor("transformer.h." + std::to_string(layer) + ".attn.q_proj.weight");
         const bool has_mamba = find_mamba_tensor("in_proj.weight") != nullptr;
         const bool has_shortconv = has_tensor(layer_prefix + "shortconv.in_proj.weight") ||
-            has_tensor("model.layers." + std::to_string(layer) + ".conv.in_proj.weight");
+            has_tensor("model.layers." + std::to_string(layer) + ".conv.in_proj.weight") ||
+            has_tensor("model.language_model.layers." + std::to_string(layer) + ".conv.in_proj.weight");
         const bool has_ffn =
             find_mamba_tensor("in_proj.weight") == nullptr &&
             (has_tensor(layer_prefix + "ffn_up.weight") ||
-             has_tensor("model.layers." + std::to_string(layer) + ".mlp.up_proj.weight"));
+             has_tensor("model.layers." + std::to_string(layer) + ".mlp.up_proj.weight") ||
+             has_tensor("model.language_model.layers." + std::to_string(layer) + ".mlp.up_proj.weight") ||
+             has_tensor("transformer.h." + std::to_string(layer) + ".mlp.w_up.weight") ||
+             has_tensor("model.layers." + std::to_string(layer) + ".feed_forward.w1.weight"));
         const auto query_heads = m.query_heads.value_for(layer);
         const auto key_value_heads = m.key_value_heads.value_for(layer);
         const auto explicit_head_dim = m.head_dim.value_for(layer);
@@ -300,9 +321,13 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     std::to_string(layer));
         }
         const bool has_query_norm =
-            *m.query_key_norm || has_tensor(layer_prefix + "attn_q_norm.weight");
+            *m.query_key_norm || has_tensor(layer_prefix + "attn_q_norm.weight") ||
+            has_tensor("model.layers." + std::to_string(layer) +
+                       ".self_attn.q_layernorm.weight");
         const bool has_key_norm =
-            *m.query_key_norm || has_tensor(layer_prefix + "attn_k_norm.weight");
+            *m.query_key_norm || has_tensor(layer_prefix + "attn_k_norm.weight") ||
+            has_tensor("model.layers." + std::to_string(layer) +
+                       ".self_attn.k_layernorm.weight");
         if (has_query_norm != has_key_norm) {
             inference_detail::fail(ResolutionFailureKind::ConflictingInferenceFacts,
                                    "query/key normalization evidence is incomplete for layer " +
@@ -357,6 +382,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 
     const std::vector<std::string> final_norm_names = {
         "transformer.ln_f.weight", "model.norm.weight", "norm.weight", "output_norm.weight",
+        "model.language_model.norm.weight",
+        "model.embedding_norm.weight",
         "token_embd_norm.weight"};
     const TensorInventoryEntry* final_norm = nullptr;
     for (const auto& name : final_norm_names) {
@@ -393,11 +420,15 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             "transformer.h." + index + ".ln_1.weight",
             "model.layers." + index + ".input_layernorm.weight",
             "model.layers." + index + ".self_attn_layer_norm.weight",
+            "model.language_model.layers." + index + ".input_layernorm.weight",
+            "model.layers." + index + ".operator_norm.weight",
             "blk." + index + ".attn_norm.weight",
         };
         const std::vector<std::string> ffn_norm_candidates = {
             "transformer.h." + index + ".ln_2.weight",
             "model.layers." + index + ".post_attention_layernorm.weight",
+            "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+            "model.layers." + index + ".ffn_norm.weight",
             "blk." + index + ".ffn_norm.weight",
         };
         const auto* attention_norm = inference_detail::find_unique(
@@ -488,11 +519,27 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     {layer_head_dim}, {});
                 inference_detail::add_binding(facts.bindings, TensorRole::AttentionQueryNorm,
                                               layer, *q_norm, {});
+            } else if (has_tensor("model.layers." + index + ".self_attn.q_layernorm.weight")) {
+                const auto* q_norm = inference_detail::find_unique(
+                    input.inventory,
+                    {"model.layers." + index + ".self_attn.q_layernorm.weight"},
+                    TensorRole::AttentionQueryNorm, layer,
+                    {layer_head_dim}, {});
+                inference_detail::add_binding(facts.bindings, TensorRole::AttentionQueryNorm,
+                                              layer, *q_norm, {});
             }
             if (has_tensor(layer_prefix + "attn_k_norm.weight")) {
                 const auto* k_norm = inference_detail::find_unique(
                     input.inventory,
                     {layer_prefix + "attn_k_norm.weight"},
+                    TensorRole::AttentionKeyNorm, layer,
+                    {layer_head_dim}, {});
+                inference_detail::add_binding(facts.bindings, TensorRole::AttentionKeyNorm,
+                                              layer, *k_norm, {});
+            } else if (has_tensor("model.layers." + index + ".self_attn.k_layernorm.weight")) {
+                const auto* k_norm = inference_detail::find_unique(
+                    input.inventory,
+                    {"model.layers." + index + ".self_attn.k_layernorm.weight"},
                     TensorRole::AttentionKeyNorm, layer,
                     {layer_head_dim}, {});
                 inference_detail::add_binding(facts.bindings, TensorRole::AttentionKeyNorm,

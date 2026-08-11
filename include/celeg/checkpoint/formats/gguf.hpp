@@ -22,6 +22,8 @@ enum class GgmlType : int32_t {
     Q4_1 = 3,
     Q5_0 = 6,
     Q8_0 = 8,
+    Q2_K = 10,
+    Q3_K = 11,
     Q4_K = 12,
     Q6_K = 14,
     BF16 = 30,

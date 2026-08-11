@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Safely remove CELEG build artifacts and temporary CELEG logs.
+"""Safely remove CELEG build artifacts, logs, or one explicit HF model cache.
 
-The targets are deliberately closed: this tool never touches Hugging Face
-caches, model checkpoints, source files, or arbitrary directories below out/.
-Preview is the default; destructive work requires --apply.
+The targets are deliberately closed: build cleanup only touches the two known
+build directories, and model cleanup only touches the exact Hugging Face cache
+directory derived from ``owner/repo``. Preview is the default; destructive
+work requires --apply.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
+import re
 import shutil
 import tempfile
 
@@ -20,6 +23,7 @@ BUILD_DIRECTORIES = (
     ROOT / "out" / "windows-cuda-release",
 )
 LOG_PATTERNS = ("celeg-*.log",)
+HF_REPO_PATTERN = re.compile(r"^[^/\\:]+/[^/\\:]+$")
 
 
 def bytes_in(path: pathlib.Path) -> int:
@@ -49,17 +53,38 @@ def targets(include_builds: bool, include_logs: bool) -> list[pathlib.Path]:
     return sorted(set(result))
 
 
+def model_cache_path(repo: str) -> pathlib.Path:
+    if not HF_REPO_PATTERN.fullmatch(repo):
+        raise ValueError("--repo must have the exact owner/repo form")
+    owner, name = repo.split("/", 1)
+    cache_root = os.environ.get("HF_HUB_CACHE")
+    if cache_root is None:
+        hf_home = os.environ.get("HF_HOME")
+        cache_root = str(pathlib.Path(hf_home) / "hub") if hf_home else str(
+            pathlib.Path.home() / ".cache" / "huggingface" / "hub"
+        )
+    return pathlib.Path(cache_root).expanduser().resolve() / f"models--{owner}--{name}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--builds", action="store_true", help="remove only known build directories")
     group.add_argument("--logs", action="store_true", help="remove only temporary celeg-*.log files")
     group.add_argument("--all", action="store_true", help="remove both known build directories and logs")
+    group.add_argument("--model-cache", action="store_true", help="remove one exact Hugging Face model cache")
+    parser.add_argument("--repo", help="exact Hugging Face owner/repo; required with --model-cache")
     parser.add_argument("--apply", action="store_true", help="perform deletion; otherwise print a preview")
     parser.add_argument("--verbose", action="store_true", help="list every exact target")
     args = parser.parse_args()
 
-    paths = targets(args.builds or args.all, args.logs or args.all)
+    if args.model_cache and not args.repo:
+        parser.error("--repo is required with --model-cache")
+    if not args.model_cache and args.repo:
+        parser.error("--repo is only valid with --model-cache")
+    paths = ([path for path in (model_cache_path(args.repo),) if path.exists()]
+             if args.model_cache else
+             targets(args.builds or args.all, args.logs or args.all))
     total = sum(bytes_in(path) for path in paths)
     action = "REMOVE" if args.apply else "PREVIEW"
     print(f"{action}: {len(paths)} CELEG artifact target(s), {format_bytes(total)}")

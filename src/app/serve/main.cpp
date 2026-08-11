@@ -212,6 +212,13 @@ int main(int argc, char** argv) {
                 static_cast<std::size_t>(args.expert_host_cache_mib) * 1024 * 1024;
             celeg::ConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
+            // GatedDeltaNet and MlpOnly still require tokenwise scheduling;
+            // Mamba2 has a packed state-preserving path.
+            if (topology.gated_delta_net_layer_count > 0 ||
+                topology.mlp_only_layer_count > 0) {
+                engine_options.packed_decode = false;
+                engine_options.ragged_packed_prefill = false;
+            }
             service = std::make_unique<celeg::serve::ServiceBundle>(
                 std::make_unique<celeg::serve::CudaInferenceService>(
                     model.string(), args.context, model_options, engine_options,

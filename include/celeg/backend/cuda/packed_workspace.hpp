@@ -45,6 +45,8 @@ struct PackedWorkspace {
     DeviceBuffer<__nv_bfloat16> normed;
     DeviceBuffer<__nv_bfloat16> op_output;
     DeviceBuffer<__nv_bfloat16> qkv_output;
+    DeviceBuffer<__nv_bfloat16> mamba_projected;
+    DeviceBuffer<__nv_bfloat16> mamba_inner;
     DeviceBuffer<__nv_bfloat16> q;
     DeviceBuffer<__nv_bfloat16> k;
     DeviceBuffer<__nv_bfloat16> v;

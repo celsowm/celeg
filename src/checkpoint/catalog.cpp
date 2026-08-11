@@ -7,6 +7,7 @@
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <string>
 #include <stdexcept>
 
@@ -63,6 +64,19 @@ public:
         CheckpointView result;
         result.path = path;
         result.metadata = CheckpointMetadata::from_json(Json::parse_file(config.string()));
+        const auto root = std::filesystem::is_directory(path) ? path : path.parent_path();
+        const auto chat_template = root / "chat_template.jinja";
+        if (std::filesystem::is_regular_file(chat_template) &&
+            !result.metadata.contains("chat_template")) {
+            std::ifstream stream(chat_template, std::ios::binary);
+            if (!stream) {
+                throw std::runtime_error(
+                    "cannot read chat template alongside checkpoint: " +
+                    chat_template.string());
+            }
+            result.metadata.values["chat_template"] = std::string(
+                std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+        }
         result.repository = std::make_shared<SafeTensorRepository>(path);
         return result;
     }

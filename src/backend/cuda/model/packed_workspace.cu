@@ -34,6 +34,10 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
       normed(maximum_prefill_token_capacity * shape_.hidden),
       op_output(maximum_prefill_token_capacity * shape_.hidden),
       qkv_output(maximum_prefill_token_capacity * requirements_.maximum_projection_width),
+      mamba_projected(maximum_prefill_token_capacity *
+                      requirements_.maximum_mamba_projection_width),
+      mamba_inner(maximum_prefill_token_capacity *
+                  requirements_.maximum_mamba_intermediate),
       q(maximum_prefill_token_capacity * requirements_.maximum_projection_width),
       k(maximum_prefill_token_capacity * requirements_.maximum_projection_width),
       v(maximum_prefill_token_capacity * requirements_.maximum_projection_width),

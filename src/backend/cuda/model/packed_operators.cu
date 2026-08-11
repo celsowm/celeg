@@ -2,6 +2,7 @@
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/kernels/gated_delta.hpp"
+#include "celeg/backend/cuda/kernels/mamba2.hpp"
 #include "celeg/backend/cuda/kernels/attention_output.hpp"
 #include "celeg/backend/cuda/kernels/rope_pairing.hpp"
 #include "celeg/backend/cuda/moe.hpp"
@@ -294,6 +295,62 @@ void PackedGatedDeltaNetExecutor::run(
     }
     context.linear(w.gated_delta_output.data(), *gated_delta.out, w.hidden.data(),
                    rows, context.shape.hidden, value_width,
+                   reference.options().fused_residuals ? 1.0f : 0.0f);
+}
+
+void PackedMamba2Executor::run(
+    PackedOperatorContext& context,
+    const PackedSessionContext& reference,
+    const Mamba2Layer& mamba,
+    int rows,
+    int layer_index,
+    const std::vector<PackedSessionContext>* batch_models,
+    const std::vector<PackedPrefillRow>* row_descriptors) {
+    if (!batch_models || batch_models->empty()) {
+        throw std::invalid_argument("packed Mamba2 execution needs session rows");
+    }
+    PackedWorkspace& w = context.workspace;
+    const Mamba2Spec& spec = mamba.spec;
+    const int projection_width = 2 * spec.intermediate_size +
+        2 * spec.group_count * spec.state_size + spec.num_heads;
+    context.linear(w.normed.data(), *mamba.in, w.mamba_projected.data(), rows,
+                   projection_width, context.shape.hidden);
+
+    size_t flat = 0;
+    for (size_t request = 0; request < batch_models->size(); ++request) {
+        const PackedSessionContext& session = batch_models->at(request);
+        Layer& layer = session.layers().at(static_cast<size_t>(layer_index));
+        Mamba2Layer* state_layer = as_mamba2(layer);
+        if (!state_layer) {
+            throw std::logic_error("packed Mamba2 state binding mismatch");
+        }
+        const size_t count = row_descriptors
+            ? row_descriptors->at(request).token_count : 1;
+        for (size_t token = 0; token < count; ++token, ++flat) {
+            if (flat >= static_cast<size_t>(rows)) {
+                throw std::invalid_argument("packed Mamba2 row mapping exceeds input");
+            }
+            launch_mamba2_step(
+                w.mamba_projected.data() + flat * projection_width,
+                mamba.conv_weight, mamba.conv_bias, mamba.dt_bias,
+                mamba.a_log, mamba.d, state_layer->conv_state.data(),
+                state_layer->ssm_state.data(),
+                w.mamba_inner.data() + flat * spec.intermediate_size,
+                spec.intermediate_size, spec.state_size, spec.num_heads,
+                spec.head_dim, spec.group_count, spec.conv_kernel,
+                w.stream.get());
+        }
+    }
+    if (flat != static_cast<size_t>(rows)) {
+        throw std::invalid_argument("packed Mamba2 row mapping is incomplete");
+    }
+    launch_rmsnorm(w.mamba_inner.data(), mamba.norm, w.mamba_inner.data(), rows,
+                   spec.intermediate_size, context.shape.numerical_policy.norm_eps,
+                   w.stream.get());
+    launch_multiply(w.mamba_inner.data(), w.mamba_projected.data(),
+                    rows * spec.intermediate_size, w.stream.get());
+    context.linear(w.mamba_inner.data(), *mamba.out, w.hidden.data(), rows,
+                   context.shape.hidden, spec.intermediate_size,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
 }
 

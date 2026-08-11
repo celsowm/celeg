@@ -26,9 +26,9 @@ void stage_packed_persistent_metadata(
             const size_t index = static_cast<size_t>(layer_index) *
                                  workspace.maximum_batch + row;
             Layer& layer = model.layers()[layer_index];
-            if (as_mamba2(layer) || as_mlp_only(layer)) {
+            if (as_mlp_only(layer)) {
                 throw std::runtime_error(
-                    "packed CUDA metadata does not support recurrent mixer layers");
+                    "packed CUDA metadata does not support MlpOnly layers");
             }
             if (auto* attention = as_attention(layer)) {
                 workspace.h_key_bf16.data()[index] = attention->key_cache.data();
@@ -39,6 +39,16 @@ void stage_packed_persistent_metadata(
                 workspace.h_value_scales.data()[index] = attention->value_cache_scales.data();
                 workspace.h_conv_states.data()[index] = nullptr;
             } else {
+                if (auto* mamba = as_mamba2(layer)) {
+                    workspace.h_key_bf16.data()[index] = nullptr;
+                    workspace.h_value_bf16.data()[index] = nullptr;
+                    workspace.h_key_int8.data()[index] = nullptr;
+                    workspace.h_value_int8.data()[index] = nullptr;
+                    workspace.h_key_scales.data()[index] = nullptr;
+                    workspace.h_value_scales.data()[index] = nullptr;
+                    workspace.h_conv_states.data()[index] = mamba->conv_state.data();
+                    continue;
+                }
                 auto* convolution = as_convolution(layer);
                 workspace.h_key_bf16.data()[index] = nullptr;
                 workspace.h_value_bf16.data()[index] = nullptr;

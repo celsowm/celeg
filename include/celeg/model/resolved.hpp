@@ -108,6 +108,15 @@ struct RuntimeTopology {
         }
         return maximum;
     }
+
+    int maximum_mamba_projection_width() const {
+        int maximum = 0;
+        for (const Mamba2Spec& spec : mamba2_layouts) {
+            maximum = std::max(maximum, 2 * spec.intermediate_size +
+                2 * spec.group_count * spec.state_size + spec.num_heads);
+        }
+        return maximum;
+    }
     int maximum_attention_output_width() const {
         int maximum = 0;
         for (const AttentionSpec& layout : attention_layouts) {

@@ -15,13 +15,13 @@
 
 namespace celeg {
 
-// Dequantizes one two-dimensional GGUF Q4_K/Q6_K view into row-major BF16.
+// Dequantizes one two-dimensional supported GGUF view into row-major BF16.
 // Kept at the weight-loader boundary so the resident and host-offloaded MoE
 // paths use the same format conversion.
 void dequantize_gguf_to_bf16(const HostTensorView& tensor,
                              std::vector<__nv_bfloat16>& out);
 
-// Loads SafeTensor weights (and preserves native GGUF Q4_K/Q6_K blocks) into
+// Loads SafeTensor weights (and preserves supported native GGUF blocks) into
 // device memory, with a
 // process-wide shared-weight cache keyed by (device, checkpoint path,
 // weight mode). Multiple CudaModel sessions on the same device + checkpoint

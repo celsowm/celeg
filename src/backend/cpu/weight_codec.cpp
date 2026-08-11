@@ -97,7 +97,8 @@ std::vector<float> read_vector(const HostTensorView& tensor,
 CpuGgufMatrix gguf_matrix(const HostTensorView& tensor,
                           const std::string& name) {
     const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
-    if (type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
+    if (type != GgmlType::Q2_K && type != GgmlType::Q3_K &&
+        type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
         type != GgmlType::Q8_0 && type != GgmlType::Q4_K &&
         type != GgmlType::Q6_K) {
         throw std::runtime_error("unsupported CPU GGUF linear quantization: " + name);
@@ -145,7 +146,8 @@ CpuLinearWeight CpuWeightCodec::matrix(
     }
     if (tensor.dtype == TensorDType::Quantized) {
         const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
-        if (matrix.type == GgmlType::Q4_0 || matrix.type == GgmlType::Q5_0 ||
+        if (matrix.type == GgmlType::Q2_K || matrix.type == GgmlType::Q3_K ||
+            matrix.type == GgmlType::Q4_0 || matrix.type == GgmlType::Q5_0 ||
             matrix.type == GgmlType::Q8_0) {
             const std::vector<float> values = dequantize_matrix(matrix);
             return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
@@ -153,8 +155,20 @@ CpuLinearWeight CpuWeightCodec::matrix(
         }
         return CpuLinearWeight::from_gguf(matrix);
     }
+    if (tensor.dtype == TensorDType::F32) {
+        const std::vector<float> values = read_vector(tensor, expected, name);
+        Q4GroupMatrix packed = quantize_float_groupwise_q4(
+            values.data(), static_cast<size_t>(expected[0]),
+            static_cast<size_t>(expected[1]), group_size_);
+        try {
+            if (writer_) writer_->add_q4_matrix(name, packed);
+            return CpuLinearWeight::from_q4(std::move(packed));
+        } catch (const std::exception& error) {
+            throw std::runtime_error("invalid CPU linear weight '" + name + "': " + error.what());
+        }
+    }
     if (tensor.dtype != TensorDType::BF16) {
-        throw std::runtime_error("Safetensors CPU linear tensor must be BF16: " + name);
+        throw std::runtime_error("Safetensors CPU linear tensor must be BF16 or F32: " + name);
     }
     Q4GroupMatrix packed = quantize_bf16_groupwise_q4(
         tensor.data, static_cast<size_t>(expected[0]),
@@ -247,8 +261,8 @@ CpuLinearWeight CpuWeightCodec::concat(
     size_t row_offset = 0;
     for (size_t i = 0; i < parts.size(); ++i) {
         const auto& [name, expected] = parts[i];
-        if (tensors[i].dtype != TensorDType::BF16) {
-            throw std::runtime_error("Safetensors CPU concat tensor must be BF16: " + name);
+        if (tensors[i].dtype != TensorDType::BF16 && tensors[i].dtype != TensorDType::F32) {
+            throw std::runtime_error("Safetensors CPU concat tensor must be BF16 or F32: " + name);
         }
         const std::vector<float> values = read_vector(tensors[i], expected, name);
         std::copy(values.begin(), values.end(), joined.begin() +

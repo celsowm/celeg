@@ -24,6 +24,8 @@ struct PackedWorkspaceRequirements {
     size_t maximum_batch = 0;
     size_t maximum_prefill_tokens = 0;
     size_t maximum_projection_width = 0;
+    size_t maximum_mamba_projection_width = 0;
+    size_t maximum_mamba_intermediate = 0;
     size_t maximum_ffn_intermediate = 0;
     size_t moe_intermediate = 0;
     size_t layer_slots = 0;

@@ -57,12 +57,17 @@ std::vector<std::string> attention_tensor_candidates(int layer,
     if (suffix == "k_proj.weight") gguf_suffix = "attn_k.weight";
     if (suffix == "v_proj.weight") gguf_suffix = "attn_v.weight";
     if (suffix == "o_proj.weight") gguf_suffix = "attn_output.weight";
-    return {
+    std::vector<std::string> result = {
         "transformer.h." + index + ".attn." + std::string(suffix),
+        "model.language_model.layers." + index + ".self_attn." + std::string(suffix),
         "model.layers." + index + ".self_attn." + std::string(suffix),
         "layers." + index + ".attention." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };
+    if (suffix == "o_proj.weight") {
+        result.push_back("model.layers." + index + ".self_attn.out_proj.weight");
+    }
+    return result;
 }
 
 std::vector<std::string> feed_forward_tensor_candidates(int layer,
@@ -72,12 +77,21 @@ std::vector<std::string> feed_forward_tensor_candidates(int layer,
     if (suffix == "w_gate.weight") gguf_suffix = "ffn_gate.weight";
     if (suffix == "w_up.weight") gguf_suffix = "ffn_up.weight";
     if (suffix == "w_down.weight") gguf_suffix = "ffn_down.weight";
-    return {
+    std::vector<std::string> result = {
         "transformer.h." + index + ".mlp." + std::string(suffix),
+        "model.language_model.layers." + index + ".mlp." + std::string(suffix),
         "model.layers." + index + ".mlp." + std::string(suffix),
         "layers." + index + ".feed_forward." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };
+    if (suffix == "w_gate.weight") {
+        result.push_back("model.layers." + index + ".feed_forward.w1.weight");
+    } else if (suffix == "w_up.weight") {
+        result.push_back("model.layers." + index + ".feed_forward.w3.weight");
+    } else if (suffix == "w_down.weight") {
+        result.push_back("model.layers." + index + ".feed_forward.w2.weight");
+    }
+    return result;
 }
 
 std::vector<std::string> shortconv_tensor_candidates(int layer,
@@ -104,6 +118,7 @@ std::vector<std::string> mamba2_tensor_candidates(int layer,
     else if (suffix == "out_proj.weight") gguf_suffix = "ssm_out.weight";
     else gguf_suffix = std::string(suffix);
     return {
+        "model.language_model.layers." + index + ".mixer." + std::string(suffix),
         "model.layers." + index + ".mixer." + std::string(suffix),
         "layers." + index + ".mixer." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,

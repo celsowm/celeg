@@ -90,10 +90,12 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
     } else if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
         if (tensor.shape.size() != 2 ||
-            (ggml_type != GgmlType::Q4_K &&
+            (ggml_type != GgmlType::Q2_K &&
+             ggml_type != GgmlType::Q3_K &&
+             ggml_type != GgmlType::Q4_K &&
              ggml_type != GgmlType::Q6_K)) {
             throw std::runtime_error(
-                "router BF16 materialization supports only 2D GGUF Q4_K/Q6_K: " + name);
+                "router BF16 materialization supports only 2D GGUF Q2_K/Q3_K/Q4_K/Q6_K: " + name);
         }
         std::vector<__nv_bfloat16> dequantized;
         dequantize_gguf_to_bf16(tensor, dequantized);

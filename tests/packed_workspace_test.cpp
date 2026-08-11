@@ -27,7 +27,12 @@ int main() {
             requirements.maximum_ffn_intermediate != 192 ||
             requirements.layer_slots != 8 ||
             requirements.page_table_entries != 128) {
-            throw std::runtime_error("packed workspace maxima were derived incorrectly");
+            throw std::runtime_error(
+                "packed workspace maxima were derived incorrectly: projection=" +
+                std::to_string(requirements.maximum_projection_width) +
+                " ffn=" + std::to_string(requirements.maximum_ffn_intermediate) +
+                " slots=" + std::to_string(requirements.layer_slots) +
+                " pages=" + std::to_string(requirements.page_table_entries));
         }
 
         shape.feed_forward_intermediates[1] = 256;

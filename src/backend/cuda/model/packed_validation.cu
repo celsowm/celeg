@@ -111,7 +111,9 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
         throw std::invalid_argument("packed capacities must be positive");
     }
     if (shape.hidden <= 0 || shape.vocab_size <= 0 ||
-        shape.num_hidden_layers <= 0 || shape.maximum_attention_projection_width() <= 0 ||
+        shape.num_hidden_layers <= 0 ||
+        std::max(shape.maximum_attention_projection_width(),
+                 shape.maximum_mamba_projection_width()) <= 0 ||
         shape.max_feed_forward_intermediate <= 0) {
         throw std::invalid_argument("packed topology has invalid workspace dimensions");
     }
@@ -127,8 +129,13 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     PackedWorkspaceRequirements result;
     result.maximum_batch = maximum_batch;
     result.maximum_prefill_tokens = maximum_prefill_tokens;
-    result.maximum_projection_width =
-        static_cast<size_t>(shape.maximum_attention_projection_width());
+    result.maximum_projection_width = static_cast<size_t>(std::max(
+        shape.maximum_attention_projection_width(),
+        shape.maximum_mamba_projection_width()));
+    result.maximum_mamba_projection_width = static_cast<size_t>(std::max(
+        1, shape.maximum_mamba_projection_width()));
+    result.maximum_mamba_intermediate = static_cast<size_t>(std::max(
+        1, shape.mamba2_intermediate));
     result.maximum_ffn_intermediate =
         static_cast<size_t>(shape.max_feed_forward_intermediate);
     result.moe_intermediate = static_cast<size_t>(std::max(0, shape.moe_intermediate));

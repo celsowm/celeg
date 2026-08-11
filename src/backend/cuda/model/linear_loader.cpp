@@ -71,7 +71,8 @@ const LinearWeight* WeightLoader::load_linear_weight(
     // decode token at the cost of scalar dequant inside the kernel.
     if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        if (ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
+        if (ggml_type != GgmlType::Q2_K && ggml_type != GgmlType::Q3_K &&
+            ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
             ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
             throw std::runtime_error("unsupported GGUF linear quantization: " + name);
         }
@@ -89,7 +90,8 @@ const LinearWeight* WeightLoader::load_linear_weight(
         const size_t row_bytes =
             static_cast<size_t>(cols) / trait.block_size * trait.type_size;
 
-        if (ggml_type == GgmlType::Q4_0 || ggml_type == GgmlType::Q5_0 || ggml_type == GgmlType::Q8_0) {
+        if (ggml_type == GgmlType::Q2_K || ggml_type == GgmlType::Q3_K ||
+            ggml_type == GgmlType::Q4_0 || ggml_type == GgmlType::Q5_0 || ggml_type == GgmlType::Q8_0) {
             std::vector<__nv_bfloat16> host_bf16;
             dequantize_gguf_to_bf16(tensor, host_bf16);
             weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
@@ -453,11 +455,13 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         for (const auto& v : views) {
             const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
             if (v.dtype != TensorDType::Quantized ||
-                (v_ggml_type != GgmlType::Q4_0 && v_ggml_type != GgmlType::Q4_K &&
+                (v_ggml_type != GgmlType::Q2_K && v_ggml_type != GgmlType::Q3_K &&
+                 v_ggml_type != GgmlType::Q4_0 && v_ggml_type != GgmlType::Q4_K &&
                  v_ggml_type != GgmlType::Q6_K)) {
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " + synthetic_name);
             }
             requires_host_dequantization = requires_host_dequantization ||
+                v_ggml_type == GgmlType::Q2_K || v_ggml_type == GgmlType::Q3_K ||
                 v_ggml_type == GgmlType::Q4_0;
         }
 

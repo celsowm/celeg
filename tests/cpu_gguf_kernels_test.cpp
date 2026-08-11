@@ -29,10 +29,26 @@ struct BlockQ6K {
     int8_t scales[16]{};
     uint16_t d = 0x3c00;
 };
+
+struct BlockQ2K {
+    uint8_t scales[16]{};
+    uint8_t qs[64]{};
+    uint16_t d = 0x3c00;
+    uint16_t dmin = 0;
+};
+
+struct BlockQ3K {
+    uint8_t hmask[32]{};
+    uint8_t qs[64]{};
+    uint8_t scales[12]{};
+    uint16_t d = 0x3c00;
+};
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4K) == 144);
 static_assert(sizeof(BlockQ6K) == 210);
+static_assert(sizeof(BlockQ2K) == 84);
+static_assert(sizeof(BlockQ3K) == 110);
 
 BlockQ4K unit_q4k() {
     BlockQ4K block;
@@ -68,8 +84,19 @@ int main() {
     celeg::CpuGgufMatrix q6{
         celeg::GgmlType::Q6_K, 2, 256, bytes(q6_rows),
         q6_rows.size() * sizeof(BlockQ6K)};
+    BlockQ2K q2_block;
+    for (uint8_t& value : q2_block.scales) value = 1;
+    BlockQ3K q3_block;
+    celeg::CpuGgufMatrix q2{
+        celeg::GgmlType::Q2_K, 1, 256,
+        reinterpret_cast<const std::byte*>(&q2_block), sizeof(q2_block)};
+    celeg::CpuGgufMatrix q3{
+        celeg::GgmlType::Q3_K, 1, 256,
+        reinterpret_cast<const std::byte*>(&q3_block), sizeof(q3_block)};
     q4.validate();
     q6.validate();
+    q2.validate();
+    q3.validate();
 
     std::vector<float> row(256);
     celeg::cpu_gguf_dequantize_row(q4, 1, row.data());
@@ -78,6 +105,10 @@ int main() {
     for (float value : row) CELEG_TEST_CHECK(std::abs(value - 1.0f) < 1e-6f);
     celeg::cpu_gguf_dequantize_row(q6, 1, row.data());
     for (float value : row) CELEG_TEST_CHECK(std::abs(value - 2.0f) < 1e-6f);
+    celeg::cpu_gguf_dequantize_row(q2, 0, row.data());
+    for (float value : row) CELEG_TEST_CHECK(std::abs(value) < 1e-6f);
+    celeg::cpu_gguf_dequantize_row(q3, 0, row.data());
+    for (float value : row) CELEG_TEST_CHECK(std::abs(value - 128.0f) < 1e-6f);
 
     std::vector<float> input(256);
     for (size_t i = 0; i < input.size(); ++i) {

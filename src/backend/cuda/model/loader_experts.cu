@@ -37,6 +37,10 @@ size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
         trait.type_size;
 }
 
+bool is_host_decoded_moe_type(GgmlType type) {
+    return type == GgmlType::Q2_K || type == GgmlType::Q3_K;
+}
+
 std::string named_expert_name(const std::string& prefix, int expert,
                               const std::string& projection) {
     return prefix + "." + std::to_string(expert) + "." + projection + ".weight";
@@ -77,6 +81,44 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
             first_w1_ggml_type != first_w3_ggml_type ||
             first_w1.shape != shape || first_w3.shape != shape) {
             throw std::runtime_error("incompatible quantized MoE gate/up tensors");
+        }
+        if (is_host_decoded_moe_type(first_w1_ggml_type)) {
+            const size_t per_expert = rows * static_cast<size_t>(hidden);
+            DeviceWeight weight;
+            weight.shape = {num_experts, static_cast<int>(rows), hidden};
+            weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
+            for (int e = 0; e < num_experts; ++e) {
+                const HostTensorView w1 = repo.tensor(expert_name(layer, e, "w1"));
+                const HostTensorView w3 = repo.tensor(expert_name(layer, e, "w3"));
+                if (w1.dtype != TensorDType::Quantized ||
+                    w3.dtype != TensorDType::Quantized ||
+                    ggml_type_from_block_encoding(w1.block_encoding) != first_w1_ggml_type ||
+                    ggml_type_from_block_encoding(w3.block_encoding) != first_w1_ggml_type ||
+                    w1.shape != shape || w3.shape != shape) {
+                    throw std::runtime_error("inconsistent quantized MoE gate/up tensor");
+                }
+                std::vector<__nv_bfloat16> gate;
+                std::vector<__nv_bfloat16> up;
+                dequantize_gguf_to_bf16(w1, gate);
+                dequantize_gguf_to_bf16(w3, up);
+                __nv_bfloat16* dst = weight.bf16_storage.data() +
+                    static_cast<size_t>(e) * per_expert;
+                CELEG_CUDA(cudaMemcpy(dst, gate.data(), gate.size() * sizeof(__nv_bfloat16),
+                                       cudaMemcpyHostToDevice));
+                CELEG_CUDA(cudaMemcpy(dst + static_cast<size_t>(moe_intermediate) * hidden,
+                                      up.data(), up.size() * sizeof(__nv_bfloat16),
+                                      cudaMemcpyHostToDevice));
+            }
+            ExpertLinearWeight view;
+            view.kind = LinearStorageKind::Bf16;
+            view.bf16 = weight.bf16_storage.data();
+            view.experts = num_experts;
+            view.rows_per_expert = static_cast<int>(rows);
+            view.cols = hidden;
+            auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate expert weight: " + cache_key);
+            expert_cache_.emplace(cache_key, view);
+            return &expert_cache_.find(cache_key)->second;
         }
         const size_t row_bytes = gguf_row_bytes(hidden, first_w1_ggml_type, first_w1_name);
         const size_t source_bytes = static_cast<size_t>(moe_intermediate) * row_bytes;
@@ -165,6 +207,36 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
 
     if (first.dtype == TensorDType::Quantized) {
         const GgmlType first_ggml_type = ggml_type_from_block_encoding(first.block_encoding);
+        if (is_host_decoded_moe_type(first_ggml_type)) {
+            const size_t per_expert = static_cast<size_t>(hidden) * moe_intermediate;
+            DeviceWeight weight;
+            weight.shape = {num_experts, hidden, moe_intermediate};
+            weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
+            for (int e = 0; e < num_experts; ++e) {
+                const HostTensorView tensor = repo.tensor(expert_name(layer, e, "w2"));
+                if (tensor.dtype != TensorDType::Quantized ||
+                    ggml_type_from_block_encoding(tensor.block_encoding) != first_ggml_type ||
+                    tensor.shape != shape) {
+                    throw std::runtime_error("inconsistent quantized MoE down tensor");
+                }
+                std::vector<__nv_bfloat16> decoded;
+                dequantize_gguf_to_bf16(tensor, decoded);
+                CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data() +
+                                      static_cast<size_t>(e) * per_expert,
+                                      decoded.data(), decoded.size() * sizeof(__nv_bfloat16),
+                                      cudaMemcpyHostToDevice));
+            }
+            ExpertLinearWeight view;
+            view.kind = LinearStorageKind::Bf16;
+            view.bf16 = weight.bf16_storage.data();
+            view.experts = num_experts;
+            view.rows_per_expert = hidden;
+            view.cols = moe_intermediate;
+            auto [it, inserted] = weights_->tensors.emplace(cache_key, std::move(weight));
+            if (!inserted) throw std::runtime_error("duplicate expert weight: " + cache_key);
+            expert_cache_.emplace(cache_key, view);
+            return &expert_cache_.find(cache_key)->second;
+        }
         const size_t row_bytes = gguf_row_bytes(moe_intermediate, first_ggml_type,
                                                 first_name);
         const size_t expert_bytes = static_cast<size_t>(hidden) * row_bytes;

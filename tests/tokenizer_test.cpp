@@ -15,13 +15,15 @@ int main() {
     out << R"({
       "model": {
         "type": "BPE",
-        "vocab": {"<|startoftext|>":0,"h":1,"i":2,"hi":3,"Ġ":4,"x":5,"'":6,"S":7,"'S":8},
+        "vocab": {"<|startoftext|>":0,"h":1,"i":2,"hi":3,"Ġ":4,"x":5,"'":6,"S":7,"'S":8,"<|endoftext|>":9,"<|im_end|>":10},
         "merges": ["h i", "' S"]
       },
       "added_tokens": [
         {"id":0,"content":"<|startoftext|>","special":true},
         {"id":99,"content":"<|image_pad|>","special":true},
-        {"id":100,"content":"<think>","special":false}
+        {"id":100,"content":"<think>","special":false},
+        {"id":9,"content":"<|endoftext|>","special":true},
+        {"id":10,"content":"<|im_end|>","special":true}
       ]
     })";
     out.close();
@@ -30,6 +32,7 @@ int main() {
     const auto ids = tokenizer.encode("hi", false);
     CELEG_TEST_CHECK(ids.size() == 1 && ids[0] == 3);
     CELEG_TEST_CHECK(tokenizer.decode(ids, false) == "hi");
+    CELEG_TEST_CHECK(tokenizer.bos_id() == 0 && tokenizer.eos_id() == 10);
     CELEG_TEST_CHECK(tokenizer.token_id("<|image_pad|>") == 99);
     CELEG_TEST_CHECK(tokenizer.encode("<think>", false) == std::vector<int32_t>{100});
     CELEG_TEST_CHECK(tokenizer.decode({100}, true) == "<think>");

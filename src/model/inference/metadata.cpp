@@ -391,13 +391,16 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                        result.evidence, "pad_token_id");
     result.query_key_norm = aliases<bool>(
         metadata, {"qk_norm", "query_key_norm"}, result.evidence, "query_key_norm");
+    result.feed_forward_auto_adjust = aliases<bool>(
+        metadata, {"block_auto_adjust_ff_dim"}, result.evidence,
+        "feed_forward_auto_adjust");
     result.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,
                                           "xsa_projection");
     result.xsa_minimum_norm_squared = aliases<float>(
         metadata, {"xsa_projection_minimum_norm_squared"}, result.evidence,
         "xsa_minimum_norm_squared");
     result.tied_embeddings = aliases<bool>(
-        metadata, {"tie_word_embeddings", "tied_embeddings"}, result.evidence,
+        metadata, {"tie_word_embeddings", "tied_embeddings", "tie_embedding"}, result.evidence,
         "tied_embeddings");
 
     validate_scoped_alias(result.query_heads, result.layer_count, "query_heads");

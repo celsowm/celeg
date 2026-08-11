@@ -114,8 +114,7 @@ void PackedLayerExecutor::run_transformer_layers(
                        workspace_.stream.get());
         PackedOperatorContext context{
             workspace_, gemm_.dispatcher(), plan_, workspace_.shape_};
-        if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2 ||
-            layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
+        if (layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
             throw std::runtime_error(
                 "packed CUDA execution requires tokenwise scheduling for sequential mixers");
         }
@@ -136,6 +135,15 @@ void PackedLayerExecutor::run_transformer_layers(
             PackedGatedDeltaNetExecutor::run(
                 context, reference, *gated_delta, rows,
                 static_cast<int>(layer_index), batch_models, row_descriptors);
+        } else if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2) {
+            const auto* mamba = as_mamba2(layer);
+            if (!mamba) {
+                throw std::logic_error(
+                    "packed layer program disagrees with Mamba2 binding");
+            }
+            PackedMamba2Executor::run(
+                context, reference, *mamba, rows,
+                static_cast<int>(layer_index), batch_models, row_descriptors);
         } else {
             const auto* convolution = as_convolution(layer);
             if (!convolution) {
@@ -149,8 +157,10 @@ void PackedLayerExecutor::run_transformer_layers(
                                 rows * workspace_.shape_.hidden,
                                 workspace_.stream.get());
         }
-        run_mlp_layer(reference, common_layer, rows, batch_models,
-                      static_cast<int>(layer_index));
+        if (layer_program_.kind(layer_index) != PackedLayerKind::Mamba2) {
+            run_mlp_layer(reference, common_layer, rows, batch_models,
+                          static_cast<int>(layer_index));
+        }
         if (std::binary_search(reference.program().norm_after_layers.begin(),
                                reference.program().norm_after_layers.end(),
                                static_cast<int>(layer_index))) {
