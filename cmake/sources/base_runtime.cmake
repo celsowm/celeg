@@ -31,6 +31,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/descriptor/weight_plan.cpp
     src/model/architecture.cpp
     src/model/automatic_architecture.cpp
+    src/model/interaction.cpp
     src/model/inference.cpp
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp

@@ -3,6 +3,7 @@
 #include "inference/support.hpp"
 
 #include <regex>
+#include <iostream>
 #include <sstream>
 #include <unordered_set>
 
@@ -35,6 +36,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     require_positive(m.layer_count, "layer_count");
     require_positive(m.vocab_size, "vocab_size");
     require_positive(m.context_length, "context_length");
+    std::cerr << "infer: metadata\n";
     if (!m.bos_token_id.has_value() || !m.pad_token_id.has_value() ||
         *m.bos_token_id < 0 || *m.pad_token_id < 0 || m.eos_token_ids.empty()) {
         inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
@@ -62,6 +64,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         inference_detail::fail(ResolutionFailureKind::ShapeConstraintViolation,
                                "token embedding shape does not agree with normalized metadata");
     }
+    std::cerr << "infer: embedding\n";
 
     std::unordered_set<int> layers;
     const std::regex layer_pattern(R"((?:transformer\.h|model\.layers|layers|blk)\.(\d+)\.)");
@@ -103,23 +106,26 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     topology.feed_forward_activations.assign(static_cast<size_t>(*m.layer_count),
                                              ActivationKind::SwiGLU);
     topology.attention_layouts.resize(static_cast<size_t>(*m.layer_count));
-    topology.attention_slot_for_layer.resize(static_cast<size_t>(*m.layer_count));
+    topology.attention_slot_for_layer.assign(static_cast<size_t>(*m.layer_count), -1);
     topology.layer_for_attention_slot.reserve(static_cast<size_t>(*m.layer_count));
-    topology.attention_layer_count = *m.layer_count;
+    topology.attention_layer_count = 0;
+    topology.conv_cache = m.shortconv_cache.value_or(0);
+    topology.conv_dim = *m.hidden_size;
     topology.num_dense_layers = *m.layer_count;
     topology.shared_kv_group_count = 0;
     topology.token_policy = {*m.bos_token_id, m.eos_token_ids, *m.pad_token_id};
     topology.numerical_policy.norm_eps = *m.norm_epsilon;
     topology.numerical_policy.attention_multiplier = 0.125f;
 
-    const auto make_attention = [&](int query_heads, int key_value_heads, int head_dim) {
+    const auto make_attention = [&](int query_heads, int key_value_heads, int head_dim,
+                                    bool query_key_norm) {
         AttentionSpec attention;
         attention.query_heads = query_heads;
         attention.key_value_heads = key_value_heads;
         attention.head_dim = head_dim;
-        attention.query_norm = {*m.query_key_norm ? *m.norm_epsilon : 0.0f,
-                                *m.query_key_norm ? NormWeightKind::Scale
-                                                  : NormWeightKind::None};
+        attention.query_norm = {query_key_norm ? *m.norm_epsilon : 0.0f,
+                                query_key_norm ? NormWeightKind::Scale
+                                                : NormWeightKind::None};
         attention.key_norm = attention.query_norm;
         attention.pattern = FullCausalPattern{};
         attention.query_scale = 1.0f;
@@ -134,9 +140,26 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         return attention;
     };
     for (int layer = 0; layer < *m.layer_count; ++layer) {
+        const auto has_tensor = [&](std::string_view name) {
+            return input.inventory.find(name) != nullptr;
+        };
+        const std::string layer_prefix = "blk." + std::to_string(layer) + ".";
+        const bool has_attention =
+            has_tensor(layer_prefix + "attn_q.weight") ||
+            has_tensor("model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight");
         const auto query_heads = m.query_heads.value_for(layer);
         const auto key_value_heads = m.key_value_heads.value_for(layer);
         const auto explicit_head_dim = m.head_dim.value_for(layer);
+        if (!has_attention) {
+            if (!m.shortconv_cache.has_value() || *m.shortconv_cache <= 0) {
+                inference_detail::fail(
+                    ResolutionFailureKind::MissingRequiredMetadata,
+                    "short-convolution layer has no positive cache length");
+            }
+            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::ShortConvolution;
+            ++topology.conv_layer_count;
+            continue;
+        }
         if (!query_heads.has_value() || !key_value_heads.has_value()) {
             inference_detail::fail(
                 ResolutionFailureKind::MissingRequiredMetadata,
@@ -157,12 +180,24 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 "attention head geometry is not a valid GQA layout for layer " +
                     std::to_string(layer));
         }
-        topology.attention_slot_for_layer[static_cast<size_t>(layer)] = layer;
+        const bool has_query_norm =
+            *m.query_key_norm || has_tensor(layer_prefix + "attn_q_norm.weight");
+        const bool has_key_norm =
+            *m.query_key_norm || has_tensor(layer_prefix + "attn_k_norm.weight");
+        if (has_query_norm != has_key_norm) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingInferenceFacts,
+                                   "query/key normalization evidence is incomplete for layer " +
+                                       std::to_string(layer));
+        }
+        topology.attention_slot_for_layer[static_cast<size_t>(layer)] =
+            topology.attention_layer_count++;
         topology.layer_for_attention_slot.push_back(layer);
         topology.attention_layouts[static_cast<size_t>(layer)] =
-            make_attention(*query_heads, *key_value_heads, head_dim);
+            make_attention(*query_heads, *key_value_heads, head_dim, has_query_norm);
     }
+    std::cerr << "infer: schedule\n";
     topology.validate();
+    std::cerr << "infer: topology\n";
 
     const auto add_global = [&](TensorRole role, const TensorInventoryEntry& tensor) {
         inference_detail::add_binding(
@@ -221,6 +256,10 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 
     for (int layer = 0; layer < *m.layer_count; ++layer) {
         const std::string index = std::to_string(layer);
+        const std::string layer_prefix = "blk." + index + ".";
+        const auto has_tensor = [&](std::string_view name) {
+            return input.inventory.find(name) != nullptr;
+        };
         const int query_head_count = *m.query_heads.value_for(layer);
         const int key_value_head_count = *m.key_value_heads.value_for(layer);
         const int layer_head_dim = m.head_dim.value_for(layer).value_or(
@@ -241,26 +280,76 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             {*m.hidden_size}, {});
         inference_detail::add_binding(facts.bindings, TensorRole::AttentionInputNorm, layer,
                                       *attention_norm, {});
-        const auto* q = inference_detail::find_unique(
-            input.inventory, inference_detail::attention_tensor_candidates(layer, "q_proj.weight"),
-            TensorRole::AttentionQuery, layer,
-            {query_head_count * layer_head_dim, *m.hidden_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::AttentionQuery, layer, *q, {});
-        const auto* k = inference_detail::find_unique(
-            input.inventory, inference_detail::attention_tensor_candidates(layer, "k_proj.weight"),
-            TensorRole::AttentionKey, layer,
-            {key_value_head_count * layer_head_dim, *m.hidden_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::AttentionKey, layer, *k, {});
-        const auto* v = inference_detail::find_unique(
-            input.inventory, inference_detail::attention_tensor_candidates(layer, "v_proj.weight"),
-            TensorRole::AttentionValue, layer,
-            {key_value_head_count * layer_head_dim, *m.hidden_size}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::AttentionValue, layer, *v, {});
-        const auto* o = inference_detail::find_unique(
-            input.inventory, inference_detail::attention_tensor_candidates(layer, "o_proj.weight"),
-            TensorRole::AttentionOutput, layer,
-            {*m.hidden_size, query_head_count * layer_head_dim}, {});
-        inference_detail::add_binding(facts.bindings, TensorRole::AttentionOutput, layer, *o, {});
+        if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::ShortConvolution) {
+            const auto* input_projection = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::shortconv_tensor_candidates(layer, "in_proj.weight"),
+                TensorRole::ShortConvInput, layer,
+                {3 * *m.hidden_size, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::ShortConvInput,
+                                          layer, *input_projection, {});
+            const auto* kernel = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::shortconv_tensor_candidates(layer, "conv.weight"),
+                TensorRole::ShortConvKernel, layer,
+                {*m.hidden_size, 1, topology.conv_cache}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::ShortConvKernel,
+                                          layer, *kernel, {});
+            const auto* output_projection = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::shortconv_tensor_candidates(layer, "out_proj.weight"),
+                TensorRole::ShortConvOutput, layer,
+                {*m.hidden_size, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::ShortConvOutput,
+                                          layer, *output_projection, {});
+        } else {
+            const auto* q = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::attention_tensor_candidates(layer, "q_proj.weight"),
+                TensorRole::AttentionQuery, layer,
+                {query_head_count * layer_head_dim, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::AttentionQuery,
+                                          layer, *q, {});
+            const auto* k = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::attention_tensor_candidates(layer, "k_proj.weight"),
+                TensorRole::AttentionKey, layer,
+                {key_value_head_count * layer_head_dim, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::AttentionKey,
+                                          layer, *k, {});
+            const auto* v = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::attention_tensor_candidates(layer, "v_proj.weight"),
+                TensorRole::AttentionValue, layer,
+                {key_value_head_count * layer_head_dim, *m.hidden_size}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::AttentionValue,
+                                          layer, *v, {});
+            const auto* o = inference_detail::find_unique(
+                input.inventory,
+                inference_detail::attention_tensor_candidates(layer, "o_proj.weight"),
+                TensorRole::AttentionOutput, layer,
+                {*m.hidden_size, query_head_count * layer_head_dim}, {});
+            inference_detail::add_binding(facts.bindings, TensorRole::AttentionOutput,
+                                          layer, *o, {});
+            if (has_tensor(layer_prefix + "attn_q_norm.weight")) {
+                const auto* q_norm = inference_detail::find_unique(
+                    input.inventory,
+                    {layer_prefix + "attn_q_norm.weight"},
+                    TensorRole::AttentionQueryNorm, layer,
+                    {query_head_count * layer_head_dim}, {});
+                inference_detail::add_binding(facts.bindings, TensorRole::AttentionQueryNorm,
+                                              layer, *q_norm, {});
+            }
+            if (has_tensor(layer_prefix + "attn_k_norm.weight")) {
+                const auto* k_norm = inference_detail::find_unique(
+                    input.inventory,
+                    {layer_prefix + "attn_k_norm.weight"},
+                    TensorRole::AttentionKeyNorm, layer,
+                    {key_value_head_count * layer_head_dim}, {});
+                inference_detail::add_binding(facts.bindings, TensorRole::AttentionKeyNorm,
+                                              layer, *k_norm, {});
+            }
+        }
         const auto* ffn_norm = inference_detail::find_unique(
             input.inventory, ffn_norm_candidates, TensorRole::FfnInputNorm, layer,
             {*m.hidden_size}, {});

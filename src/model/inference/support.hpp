@@ -25,6 +25,8 @@ std::vector<std::string> attention_tensor_candidates(int layer,
                                                       std::string_view suffix);
 std::vector<std::string> feed_forward_tensor_candidates(int layer,
                                                         std::string_view suffix);
+std::vector<std::string> shortconv_tensor_candidates(int layer,
+                                                     std::string_view suffix);
 
 void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,
                  const TensorInventoryEntry& tensor,

@@ -4,7 +4,6 @@
 #include "support/assertions.hpp"
 
 #include <memory>
-#include <iostream>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -88,6 +87,8 @@ celeg::CheckpointMetadata gguf_metadata() {
     result.values["tokenizer.ggml.bos_token_id"] = int64_t(1);
     result.values["tokenizer.ggml.eos_token_id"] = int64_t(2);
     result.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
+    result.values["tokenizer.chat_template"] = std::string(
+        "<|im_start|>{{ tools }}<|im_end|>{{ function }}");
     return result;
 }
 
@@ -114,21 +115,15 @@ std::shared_ptr<MemoryRepository> gguf_repository() {
 } // namespace
 
 int main() {
-    std::cerr << "auto: start\n";
     celeg::CheckpointView checkpoint;
     checkpoint.metadata = metadata();
-    std::cerr << "auto: metadata built\n";
     checkpoint.repository = repository();
-    std::cerr << "auto: repository built\n";
 
     celeg::ArchitectureCatalog catalog;
     catalog.add(celeg::make_automatic_architecture());
     catalog.freeze();
-    std::cerr << "auto: catalog built\n";
     const auto& architecture = catalog.select(checkpoint.metadata);
-    std::cerr << "auto: architecture selected\n";
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
-    std::cerr << "auto: first resolved\n";
     CELEG_TEST_CHECK(model.provenance.identity.find("automatic") != std::string::npos);
     CELEG_TEST_CHECK(model.topology.hidden == 8);
     CELEG_TEST_CHECK(model.graph.layers.size() == 2);
@@ -136,19 +131,18 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(
         std::get<celeg::AttentionSpec>(model.graph.layers.front().mixer).output_transform));
     CELEG_TEST_CHECK(celeg::explain_resolution(checkpoint).failures.empty());
-    std::cerr << "auto: first explained\n";
 
     celeg::CheckpointView gguf_checkpoint;
     gguf_checkpoint.metadata = gguf_metadata();
     gguf_checkpoint.repository = gguf_repository();
     const auto& gguf_architecture = catalog.select(gguf_checkpoint.metadata);
     const celeg::ResolvedModel gguf_model = gguf_architecture.resolve(gguf_checkpoint);
-    std::cerr << "auto: gguf resolved\n";
     CELEG_TEST_CHECK(gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(gguf_model.topology.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
+    CELEG_TEST_CHECK(gguf_model.provenance.chat_template_id ==
+                     "chat:thinking-function");
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
-    std::cerr << "auto: gguf explained\n";
 
     auto conflicting = metadata();
     conflicting.values["n_embd"] = int64_t(9);
@@ -160,10 +154,38 @@ int main() {
     CELEG_TEST_CHECK(rejected);
 
     celeg::FactSolver solver;
-    std::cerr << "auto: solver\n";
     const auto proposal = solver.solve<int>({
         {{8}, {}, celeg::ProposalStrength::ExplicitMetadata, "a"},
         {{8}, {}, celeg::ProposalStrength::ShapeDerived, "b"}});
     CELEG_TEST_CHECK(proposal.value == 8);
+
+    auto scoped = gguf_metadata();
+    scoped.values["conventional.attention.head_count_kv"] =
+        std::vector<int64_t>{2, 1};
+    const auto scoped_facts = celeg::normalize_model_metadata(scoped);
+    CELEG_TEST_CHECK(scoped_facts.key_value_heads.global == std::nullopt);
+    CELEG_TEST_CHECK(scoped_facts.key_value_heads.value_for(0) == std::optional<int>{2});
+    CELEG_TEST_CHECK(scoped_facts.key_value_heads.value_for(1) == std::optional<int>{1});
+
+    auto invalid_length = scoped;
+    invalid_length.values["conventional.attention.head_count_kv"] =
+        std::vector<int64_t>{2};
+    bool invalid_length_rejected = false;
+    try { (void)celeg::normalize_model_metadata(invalid_length); }
+    catch (const celeg::ResolutionError& error) {
+        invalid_length_rejected =
+            error.kind() == celeg::ResolutionFailureKind::IncompleteLayerSchedule;
+    }
+    CELEG_TEST_CHECK(invalid_length_rejected);
+
+    auto conflicting_scope = scoped;
+    conflicting_scope.values["num_key_value_heads"] = int64_t(2);
+    bool conflicting_scope_rejected = false;
+    try { (void)celeg::normalize_model_metadata(conflicting_scope); }
+    catch (const celeg::ResolutionError& error) {
+        conflicting_scope_rejected =
+            error.kind() == celeg::ResolutionFailureKind::ConflictingMetadata;
+    }
+    CELEG_TEST_CHECK(conflicting_scope_rejected);
     return 0;
 }

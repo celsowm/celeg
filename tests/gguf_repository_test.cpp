@@ -56,6 +56,7 @@ struct TensorSpec {
 std::filesystem::path write_fixture() {
     const std::vector<TensorSpec> tensors = {
         {"token_embd.weight", {2}, {1.0f, 2.0f}},
+        {"output.weight", {2}, {3.0f, 4.0f}},
         {"blk.0.attn_q.weight", {4, 2}, {10.0f, 11.0f, 12.0f, 13.0f,
                                            14.0f, 15.0f, 16.0f, 17.0f}},
         {"blk.0.ffn_gate_exps.weight", {2, 2, 2}, {100.0f, 101.0f, 102.0f, 103.0f,
@@ -172,6 +173,9 @@ int main() {
         CELEG_TEST_CHECK(embedding.shape == std::vector<int64_t>{2});
 
         CELEG_TEST_CHECK(repository.contains("token_embd.weight"));
+        CELEG_TEST_CHECK(repository.contains("output.weight"));
+        const celeg::HostTensorView native_head = repository.tensor("output.weight");
+        CELEG_TEST_CHECK(native_head.shape == std::vector<int64_t>{2});
         const celeg::HostTensorView native_query =
             repository.tensor("blk.0.attn_q.weight");
         CELEG_TEST_CHECK(native_query.rows_rope_permuted);

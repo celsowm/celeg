@@ -79,6 +79,16 @@ std::vector<std::string> feed_forward_tensor_candidates(int layer,
     };
 }
 
+std::vector<std::string> shortconv_tensor_candidates(int layer,
+                                                     std::string_view suffix) {
+    const std::string index = std::to_string(layer);
+    return {
+        "model.layers." + index + ".conv." + std::string(suffix),
+        "layers." + index + ".conv." + std::string(suffix),
+        "blk." + index + ".shortconv." + std::string(suffix),
+    };
+}
+
 void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,
                  const TensorInventoryEntry& tensor,
                  std::vector<EvidenceItem> evidence, int physical_layer) {

@@ -353,6 +353,8 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.norm_epsilon = aliases<float>(
         metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
+    result.shortconv_cache = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
+                                          "shortconv_cache", "shortconv.l_cache");
     result.rope_theta = aliases<double>(metadata, {"rope_theta"}, result.evidence,
                                          "rope_theta", "rope.freq_base");
     result.rotary_fraction = aliases<float>(metadata, {"rotary_fraction"}, result.evidence,

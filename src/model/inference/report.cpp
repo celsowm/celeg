@@ -8,7 +8,8 @@ ResolutionReport explain_resolution(const CheckpointView& checkpoint) {
     try {
         const InferenceInput input = build_inference_input(checkpoint);
         report.metadata = input.metadata;
-        report.chat_template_source = checkpoint.metadata.string_or("chat_template", {});
+        report.chat_template_source = checkpoint.metadata.string_or(
+            "chat_template", checkpoint.metadata.string_or("tokenizer.chat_template", {}));
         report.chat_program_fingerprint = report.chat_template_source;
         report.tool_protocol_source = checkpoint.metadata.string_or("tool_protocol", {});
         report.vision_pipeline_source = checkpoint.metadata.string_or("vision_pipeline", {});
