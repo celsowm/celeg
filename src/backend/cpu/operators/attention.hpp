@@ -27,6 +27,10 @@ void apply_cpu_attention_output_transform(const AttentionSpec& layout,
                                           const float* current_value);
 
 void apply_cpu_attention_output_gate(float* output, const float* gate, size_t width);
+void apply_cpu_attention_output_gate(float* output, const float* gate,
+                                     size_t width,
+                                     AttentionGateGranularity granularity,
+                                     int heads, int head_dim);
 
 void execute_cpu_attention_token(
     CpuExecutionContext& execution,

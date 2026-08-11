@@ -19,8 +19,8 @@ namespace celeg {
 namespace {
 
 std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role,
-                        int layer = -1) {
-    return resolved_tensor_name(requests, role, layer);
+                        int layer = -1, int expert = -1) {
+    return resolved_tensor_name(requests, role, layer, expert);
 }
 
 } // namespace
@@ -183,6 +183,41 @@ void CpuCompiledModel::Shared::load_weights() {
             const AttentionSpec& attention = layer_program.attention.value();
             if (attention.uses_latent_state()) {
                 const auto& latent = *attention.latent_state();
+                if (latent.factorized) {
+                    layer.latent_q_projection = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentQueryProjection, index),
+                        {latent.query_rank, shape.hidden});
+                    layer.latent_q_expansion = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentQueryExpansion, index),
+                        {attention.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
+                         latent.query_rank});
+                    layer.latent_q_norm = load_vector(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentQueryNorm, index),
+                        {latent.query_rank});
+                    layer.latent_k_projection = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentKeyProjection, index),
+                        {latent.latent_rank + latent.rope_head_dim, shape.hidden});
+                    layer.latent_k_norm = load_vector(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentKeyNorm, index),
+                        {latent.latent_rank});
+                    layer.latent_expansion = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentExpansion, index),
+                        {attention.query_heads * (latent.nope_head_dim + latent.value_head_dim),
+                         latent.latent_rank});
+                    layer.out = load_matrix(source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionLatentOutput, index),
+                        {shape.hidden, attention.latent_output_width()});
+                    layer.gate = load_matrix(source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::AttentionGate, index),
+                        {attention.output_gate_width(), shape.hidden});
+                    return layer;
+                }
                 layer.q = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentQuery, index),
                     {attention.latent_query_content_width(), shape.hidden});
@@ -409,13 +444,23 @@ void CpuCompiledModel::Shared::load_weights() {
             }
 
             MoeWeights layer;
-            const bool packed_expert_model = shape.shared_expert_intermediate > 0;
+            const auto has_request = [&](TensorRole role, int expert = -1) {
+                return std::any_of(weight_requests.begin(), weight_requests.end(),
+                    [&](const TensorRequest& request) {
+                        return request.role == role && request.layer == index &&
+                               request.expert == expert;
+                    });
+            };
+            const bool individual_expert_model =
+                has_request(TensorRole::MoeExpertGate, 0);
+            const bool packed_expert_model = !individual_expert_model &&
+                shape.shared_expert_intermediate > 0;
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
-                packed_expert_model
+                has_request(TensorRole::AttentionInputNorm)
                     ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
                     : layer_name(index, "operator_norm.weight"), {shape.hidden});
             layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
-                packed_expert_model
+                has_request(TensorRole::FfnInputNorm)
                     ? tensor_name(weight_requests, TensorRole::FfnInputNorm, index)
                     : layer_name(index, "ffn_norm.weight"), {shape.hidden});
             if (packed_expert_model) {
@@ -429,7 +474,7 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.use_expert_bias = shape.use_expert_bias;
             layer.routed_scaling_factor = shape.routed_scaling_factor;
             layer.router = load_vector(source, reader.get(), writer.get(),
-                packed_expert_model
+                has_request(TensorRole::MoeRouter)
                     ? tensor_name(weight_requests, TensorRole::MoeRouter, index)
                     : layer_name(index, "feed_forward.gate.weight"),
                 {shape.num_experts, shape.hidden});
@@ -449,6 +494,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 layer.shared_gate = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::MoeSharedGateWeight, index),
                     {1, shape.hidden});
+                layer.has_shared_gate = true;
                 layer.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedGateUp, index),
@@ -457,10 +503,23 @@ void CpuCompiledModel::Shared::load_weights() {
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedDown, index),
                         {shape.num_experts, shape.hidden, shape.moe_intermediate});
+            } else if (individual_expert_model && shape.shared_expert_intermediate > 0) {
+                const int shared_intermediate = shape.shared_expert_intermediate;
+                layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
+                    layer_name(index, "mlp.shared_experts.w13.weight"), {
+                        {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
+                         {shared_intermediate, shape.hidden}},
+                        {tensor_name(weight_requests, TensorRole::MoeSharedUp, index),
+                         {shared_intermediate, shape.hidden}},
+                    });
+                layer.shared_w2 = load_matrix(source, reader.get(), writer.get(),
+                    tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
+                    {shape.hidden, shared_intermediate});
             }
 
-            const std::string bias_name =
-                layer_name(index, "feed_forward.expert_bias.weight");
+            const std::string bias_name = has_request(TensorRole::MoeRouterBias)
+                ? tensor_name(weight_requests, TensorRole::MoeRouterBias, index)
+                : layer_name(index, "feed_forward.expert_bias.weight");
             if ((source && source->contains(bias_name)) ||
                 (reader && reader->contains(bias_name))) {
                 layer.router_bias = load_vector(source, reader.get(), writer.get(),
@@ -475,6 +534,22 @@ void CpuCompiledModel::Shared::load_weights() {
                 const int moe_inter = shape.moe_intermediate > 0
                     ? shape.moe_intermediate : shape.intermediate;
                 if (packed_expert_model) {
+                    continue;
+                }
+                if (individual_expert_model) {
+                    const std::string w13_name = layer_name(index,
+                        "mlp.experts." + std::to_string(expert) + ".w13.weight");
+                    layer.expert_w13[static_cast<size_t>(expert)] = load_concat(
+                        source, reader.get(), writer.get(), w13_name,
+                        {{tensor_name(weight_requests, TensorRole::MoeExpertGate,
+                                      index, expert), {moe_inter, shape.hidden}},
+                         {tensor_name(weight_requests, TensorRole::MoeExpertUp,
+                                      index, expert), {moe_inter, shape.hidden}}});
+                    layer.expert_w2[static_cast<size_t>(expert)] = load_matrix(
+                        source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::MoeExpertDown,
+                                    index, expert),
+                        {shape.hidden, moe_inter});
                     continue;
                 }
                 const std::string prefix =
@@ -527,6 +602,69 @@ void CpuCompiledModel::Shared::load_weights() {
                 weight_store.layers.emplace_back(std::move(value));
             }, layer);
         }
+    }
+    const auto require_matrix = [](const CpuLinearWeight& weight,
+                                   const std::string& label) {
+        if (weight.rows == 0 || weight.cols == 0 || weight.segments.empty()) {
+            throw std::runtime_error("CPU loaded linear weight is empty: " + label);
+        }
+    };
+    const auto check_attention = [&](const AttentionWeights& attention,
+                                     const AttentionSpec& semantics,
+                                     const std::string& label) {
+        require_matrix(attention.out, label + ".out");
+        if (const auto* latent = semantics.latent_state(); latent && latent->factorized) {
+            require_matrix(attention.latent_q_projection, label + ".latent_q_projection");
+            require_matrix(attention.latent_q_expansion, label + ".latent_q_expansion");
+            require_matrix(attention.latent_k_projection, label + ".latent_k_projection");
+            require_matrix(attention.latent_expansion, label + ".latent_expansion");
+            require_matrix(attention.gate, label + ".gate");
+        } else {
+            require_matrix(attention.q, label + ".q");
+            require_matrix(attention.k, label + ".k");
+            require_matrix(attention.v, label + ".v");
+            if (semantics.output_gate.enabled() && !semantics.output_gate.packed_with_query) {
+                require_matrix(attention.gate, label + ".gate");
+            }
+        }
+    };
+    for (size_t layer = 0; layer < weight_store.layers.size(); ++layer) {
+        std::visit([&](const auto& value) {
+            using Value = std::decay_t<decltype(value)>;
+            const auto check_common = [&](const CommonWeights& common) {
+                require_matrix(common.w13, "layer " + std::to_string(layer) + ".w13");
+                require_matrix(common.w2, "layer " + std::to_string(layer) + ".w2");
+            };
+            if constexpr (std::is_same_v<Value, MoeWeights>) {
+                for (size_t expert = 0; expert < value.expert_w13.size(); ++expert) {
+                    require_matrix(value.expert_w13[expert], "layer " +
+                        std::to_string(layer) + ".expert_w13." + std::to_string(expert));
+                    require_matrix(value.expert_w2[expert], "layer " +
+                        std::to_string(layer) + ".expert_w2." + std::to_string(expert));
+                }
+                if (value.shared_w13.rows != 0) require_matrix(value.shared_w13, "shared_w13");
+                if (value.shared_w2.rows != 0) require_matrix(value.shared_w2, "shared_w2");
+                if (const auto* attention = std::get_if<AttentionWeights>(&value.operator_layer)) {
+                    check_attention(*attention, program.layers[layer].attention.value(),
+                                    "layer " + std::to_string(layer) + ".attention");
+                }
+            } else if constexpr (std::is_same_v<Value, AttentionWeights>) {
+                check_common(value.common);
+                check_attention(value, program.layers[layer].attention.value(),
+                                "layer " + std::to_string(layer) + ".attention");
+            } else if constexpr (std::is_same_v<Value, ConvolutionWeights>) {
+                check_common(value.common);
+                require_matrix(value.in, "layer " + std::to_string(layer) + ".conv.in");
+                require_matrix(value.out, "layer " + std::to_string(layer) + ".conv.out");
+            } else if constexpr (std::is_same_v<Value, GatedDeltaNetWeights>) {
+                check_common(value.common);
+                require_matrix(value.out, "layer " + std::to_string(layer) + ".kda.out");
+            } else if constexpr (std::is_same_v<Value, Mamba2Weights>) {
+                check_common(value.common);
+                require_matrix(value.in, "layer " + std::to_string(layer) + ".mamba.in");
+                require_matrix(value.out, "layer " + std::to_string(layer) + ".mamba.out");
+            }
+        }, weight_store.layers[layer]);
     }
     if (writer) writer->commit();
 }

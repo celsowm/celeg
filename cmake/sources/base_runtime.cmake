@@ -3,6 +3,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp
     src/checkpoint/packed_int8.cpp
+    src/checkpoint/packed_int4.cpp
     src/checkpoint/formats/gguf.cpp
     src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp
@@ -54,11 +55,13 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/text/semantic_chat/vision_role.cpp
     src/text/semantic_chat/patch_role.cpp
     src/text/semantic_chat/thinking_role.cpp
+    src/text/semantic_chat/tagged_role.cpp
     src/text/tool_codec/delimited.cpp
     src/text/tool_codec/native_tag.cpp
     src/text/tool_codec/function_xml.cpp
     src/text/tool_codec/parameter_xml.cpp
     src/text/tool_codec/tagged_json.cpp
+    src/text/tool_codec/tagged_role.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp

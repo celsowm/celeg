@@ -264,7 +264,9 @@ bool CpuLinearWeight::gguf_native() const {
 
 void CpuLinearWeight::validate() const {
     if (rows == 0 || cols == 0 || segments.empty()) {
-        throw std::invalid_argument("invalid CPU linear weight");
+        throw std::invalid_argument("invalid CPU linear weight rows=" +
+            std::to_string(rows) + " cols=" + std::to_string(cols) +
+            " segments=" + std::to_string(segments.size()));
     }
     size_t segment_rows = 0;
     for (const CpuLinearMatrix& segment : segments) {

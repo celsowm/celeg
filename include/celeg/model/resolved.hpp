@@ -173,7 +173,8 @@ struct RuntimeTopology {
     int max_gated_delta_net_gate_width() const {
         int maximum = 0;
         for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
-            maximum = std::max(maximum, layout.value_heads);
+            maximum = std::max(maximum, std::max(layout.value_heads,
+                layout.decay_width()));
         }
         return maximum;
     }

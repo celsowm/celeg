@@ -50,10 +50,19 @@ void PackedInt8Matrix::validate() const {
 bool has_packed_int8_matrix(const IWeightRepository& repository,
                             std::string_view name) {
     const std::string prefix(name);
-    return !repository.contains(prefix) &&
-           repository.contains(prefix + "_packed") &&
-           repository.contains(prefix + "_scale") &&
-           repository.contains(prefix + "_shape");
+    if (repository.contains(prefix) || !repository.contains(prefix + "_packed") ||
+        !repository.contains(prefix + "_scale") || !repository.contains(prefix + "_shape")) {
+        return false;
+    }
+    const HostTensorView packed = repository.tensor(prefix + "_packed");
+    const HostTensorView scale = repository.tensor(prefix + "_scale");
+    const HostTensorView shape = repository.tensor(prefix + "_shape");
+    if (packed.shape.size() != 2 || scale.shape != std::vector<int64_t>{packed.shape[0], 1} ||
+        shape.dtype != TensorDType::I64 || shape.bytes != 2 * sizeof(int64_t)) return false;
+    int64_t dimensions[2] = {};
+    std::memcpy(dimensions, shape.data, sizeof(dimensions));
+    return dimensions[0] > 0 && dimensions[1] > 0 &&
+        packed.shape[1] == (dimensions[1] + 3) / 4;
 }
 
 PackedInt8Matrix load_packed_int8_matrix(

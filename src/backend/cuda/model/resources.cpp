@@ -27,6 +27,10 @@ void CudaCompiledModel::allocate_celeg_resources() {
         resources_.shape_.maximum_attention_latent_rank()));
     workspace_.latent_key_rope_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_latent_rope_width()));
+    workspace_.latent_projection_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_projection_width()));
+    workspace_.latent_decompressed_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_attention_output_width()));
     workspace_.conv_projected_.reset(static_cast<size_t>(3 * resources_.shape_.hidden));
     size_t mamba_projection_width = 0;
     for (const Mamba2Spec& spec : resources_.shape_.mamba2_layouts) {

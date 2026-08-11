@@ -32,6 +32,8 @@ struct CpuWorkspacePlan {
     size_t latent_state = 0;
     size_t latent_rotary = 0;
     size_t latent_key_rotary = 0;
+    size_t latent_projection = 0;
+    size_t latent_output = 0;
     size_t gated_delta_qkv = 0;
     size_t gated_delta_output = 0;
     size_t gated_delta_gate = 0;
@@ -56,6 +58,16 @@ struct CpuWorkspacePlan {
                 static_cast<size_t>(attention.latent_query_width()));
             plan.attention_output = std::max(plan.attention_output,
                 static_cast<size_t>(attention.latent_query_content_width()));
+            plan.latent_output = std::max(plan.latent_output,
+                static_cast<size_t>(attention.latent_output_width()));
+            plan.latent_projection = std::max(plan.latent_projection,
+                static_cast<size_t>(attention.latent_query_projection_width()));
+            plan.latent_projection = std::max(plan.latent_projection,
+                static_cast<size_t>(attention.latent_query_content_width()));
+            if (const auto* latent = attention.latent_state(); latent && latent->factorized) {
+                plan.latent_projection = std::max(plan.latent_projection,
+                    static_cast<size_t>(latent->query_rank));
+            }
             if (const auto* latent = attention.latent_state()) {
                 plan.latent_state = std::max(plan.latent_state,
                     static_cast<size_t>(latent->latent_rank));
@@ -102,6 +114,8 @@ struct CpuWorkspace {
         latent_value.resize(rows * plan.latent_state);
         latent_rope.resize(rows * plan.latent_rotary);
         latent_key_rope.resize(rows * plan.latent_key_rotary);
+        latent_decompressed.resize(rows * plan.latent_output);
+        latent_projection.resize(rows * plan.latent_projection);
         gated_delta_qkv.resize(rows * plan.gated_delta_qkv);
         gated_delta_z.resize(rows * plan.gated_delta_output);
         gated_delta_b.resize(rows * plan.gated_delta_gate);
@@ -129,6 +143,8 @@ struct CpuWorkspace {
         chunk_latent_value.resize(rows * plan.latent_state);
         chunk_latent_rope.resize(rows * plan.latent_rotary);
         chunk_latent_key_rope.resize(rows * plan.latent_key_rotary);
+        chunk_latent_decompressed.resize(rows * plan.latent_output);
+        chunk_latent_projection.resize(rows * plan.latent_projection);
         chunk_attention_gate.resize(rows * plan.attention_output);
         chunk_gated_delta_qkv.resize(rows * plan.gated_delta_qkv);
         chunk_gated_delta_z.resize(rows * plan.gated_delta_output);
@@ -148,6 +164,8 @@ struct CpuWorkspace {
 
     std::vector<float> hidden, residual, normed, op_output, attention_gate, qkv;
     std::vector<float> latent_key, latent_value, latent_rope, latent_key_rope;
+    std::vector<float> latent_decompressed;
+    std::vector<float> latent_projection;
     std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
     std::vector<float> conv_projected, gate_up, activated, mlp_output;
     std::vector<float> shared_output, shared_gate;
@@ -159,6 +177,8 @@ struct CpuWorkspace {
     std::vector<float> chunk_qkv, chunk_conv, chunk_gate_up;
     std::vector<float> chunk_latent_key, chunk_latent_value, chunk_latent_rope;
     std::vector<float> chunk_latent_key_rope;
+    std::vector<float> chunk_latent_decompressed;
+    std::vector<float> chunk_latent_projection;
     std::vector<float> chunk_attention_gate;
     std::vector<float> chunk_gated_delta_qkv, chunk_gated_delta_z;
     std::vector<float> chunk_gated_delta_b, chunk_gated_delta_a, chunk_gated_delta_output;
@@ -200,6 +220,10 @@ struct CpuCompiledModel {
         CommonWeights common;
         CpuLinearWeight q;
         CpuLinearWeight latent_q_rope;
+        CpuLinearWeight latent_q_projection;
+        CpuLinearWeight latent_q_expansion;
+        CpuLinearWeight latent_k_projection;
+        CpuLinearWeight latent_expansion;
         CpuLinearWeight k;
         CpuLinearWeight v;
         CpuLinearWeight gate;
@@ -207,6 +231,8 @@ struct CpuCompiledModel {
         CpuLinearWeight out;
         std::vector<float> q_norm;
         std::vector<float> k_norm;
+        std::vector<float> latent_q_norm;
+        std::vector<float> latent_k_norm;
         std::vector<float> relative_bias;
     };
     struct ConvolutionWeights {
@@ -259,6 +285,7 @@ struct CpuCompiledModel {
         CpuLinearWeight shared_w13;
         CpuLinearWeight shared_w2;
         CpuLinearWeight shared_gate;
+        bool has_shared_gate = false;
         int layer_index = -1;
         int num_experts = 0;
         int experts_per_token = 0;

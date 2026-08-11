@@ -21,6 +21,23 @@ void append_attention_weight_requirements(ResolvedModel& model,
         append(TensorRole::AttentionOutput,
                {topology.hidden, attention.query_width()});
     } else if (attention.uses_latent_state()) {
+        const auto& latent = *attention.latent_state();
+        if (latent.factorized) {
+            append(TensorRole::AttentionLatentQueryProjection,
+                   {latent.query_rank, topology.hidden});
+            append(TensorRole::AttentionLatentQueryExpansion,
+                   {attention.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
+                    latent.query_rank});
+            append(TensorRole::AttentionLatentQueryNorm, {latent.query_rank});
+            append(TensorRole::AttentionLatentKeyProjection,
+                   {latent.latent_rank + latent.rope_head_dim, topology.hidden});
+            append(TensorRole::AttentionLatentKeyNorm, {latent.latent_rank});
+            append(TensorRole::AttentionLatentExpansion,
+                   {attention.query_heads * (latent.nope_head_dim + latent.value_head_dim),
+                    latent.latent_rank});
+            append(TensorRole::AttentionLatentOutput,
+                   {topology.hidden, attention.latent_output_width()});
+        } else {
         append(TensorRole::AttentionLatentQuery,
                {attention.latent_query_content_width(), topology.hidden});
         if (attention.latent_query_rope_width() != 0) {
@@ -36,6 +53,7 @@ void append_attention_weight_requirements(ResolvedModel& model,
         }
         append(TensorRole::AttentionLatentOutput,
                {topology.hidden, attention.latent_query_content_width()});
+        }
     } else {
         append(TensorRole::AttentionQuery, {query_width, topology.hidden});
         if (attention.query_norm.enabled()) {
@@ -52,7 +70,7 @@ void append_attention_weight_requirements(ResolvedModel& model,
     }
     if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {
         append(TensorRole::AttentionGate,
-               {attention.query_width(), topology.hidden});
+               {attention.output_gate_width(), topology.hidden});
     }
     if (const auto* relative =
             std::get_if<RelativePositionBiasSpec>(&attention.bias)) {

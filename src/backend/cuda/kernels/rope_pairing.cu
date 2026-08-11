@@ -114,7 +114,7 @@ __global__ void paired_qk_norm_rope_kernel(
     }
     __syncthreads();
 
-    const int position = positions[row];
+    const int position = positions ? positions[row] : row;
     for (int pair = static_cast<int>(threadIdx.x);
          pair < rotary_pairs; pair += static_cast<int>(blockDim.x)) {
         const int first = adjacent_pairs ? 2 * pair : pair;
@@ -175,7 +175,7 @@ void launch_qk_norm_rope_positions(
     RopePairingKind pairing,
     CudaRopeScaling scaling,
     cudaStream_t stream) {
-    if (!query || !positions || rows <= 0 || query_heads <= 0 ||
+    if (!query || rows <= 0 || query_heads <= 0 ||
         key_value_heads <= 0 || head_dim <= 0 || (head_dim % 2) != 0 ||
         !(rope_theta > 0.0f) || !(rotary_fraction > 0.0f) ||
         rotary_fraction > 1.0f || (normalize && !query_norm)) {

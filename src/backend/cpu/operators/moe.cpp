@@ -190,9 +190,12 @@ void execute_cpu_moe_token(CpuCompiledModel& model, size_t layer,
                    shared_intermediate);
         shared.linear.gemv(weights.shared_w2, workspace.activated.data(),
                            workspace.shared_output.data());
-        shared.linear.gemv(weights.shared_gate, workspace.normed.data(),
-                           workspace.shared_gate.data());
-        const float gate = cpu_moe_sigmoid(workspace.shared_gate.front());
+        float gate = 1.0f;
+        if (weights.has_shared_gate) {
+            shared.linear.gemv(weights.shared_gate, workspace.normed.data(),
+                               workspace.shared_gate.data());
+            gate = cpu_moe_sigmoid(workspace.shared_gate.front());
+        }
         for (size_t d = 0; d < hidden; ++d) {
             workspace.mlp_output[d] += gate * workspace.shared_output[d];
         }
@@ -284,6 +287,10 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
         } else {
             w13 = &weights.expert_w13[static_cast<size_t>(expert)];
         }
+        if (!w13 || w13->rows == 0) {
+            throw std::runtime_error("CPU MoE expert gate/up weight is empty at layer " +
+                std::to_string(layer) + ", expert " + std::to_string(expert));
+        }
         workspace.moe_gemm_jobs.push_back({w13, begin, end - begin});
     }
     for (size_t packed_route = 0; packed_route < routes; ++packed_route) {
@@ -309,6 +316,10 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
         const CpuLinearWeight* w2 = weights.disk_cached
             ? &workspace.moe_cached_experts[static_cast<size_t>(expert)]->w2
             : &weights.expert_w2[static_cast<size_t>(expert)];
+        if (!w2 || w2->rows == 0) {
+            throw std::runtime_error("CPU MoE expert down weight is empty at layer " +
+                std::to_string(layer) + ", expert " + std::to_string(expert));
+        }
         workspace.moe_gemm_jobs.push_back({w2, begin, end - begin});
     }
     shared.linear.gemm_grouped(workspace.moe_gemm_jobs,
@@ -338,11 +349,14 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
         cpu_layer_gemm(shared, workspace, weights.shared_w2,
                        workspace.chunk_activated.data(), workspace.shared_output.data(),
                        rows, hidden, normed_q8_ready);
-        cpu_layer_gemm(shared, workspace, weights.shared_gate,
-                       workspace.chunk_normed.data(), workspace.shared_gate.data(),
-                       rows, hidden, normed_q8_ready);
+        if (weights.has_shared_gate) {
+            cpu_layer_gemm(shared, workspace, weights.shared_gate,
+                           workspace.chunk_normed.data(), workspace.shared_gate.data(),
+                           rows, hidden, normed_q8_ready);
+        }
         cpu_parallel_rows(shared.pool, rows, [&](size_t row) {
-            const float gate = cpu_moe_sigmoid(workspace.shared_gate[row]);
+            const float gate = weights.has_shared_gate
+                ? cpu_moe_sigmoid(workspace.shared_gate[row]) : 1.0f;
             float* destination = workspace.chunk_mlp.data() + row * hidden;
             const float* source = workspace.shared_output.data() + row * hidden;
             for (size_t d = 0; d < hidden; ++d) destination[d] += gate * source[d];

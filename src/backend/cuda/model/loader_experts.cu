@@ -1,6 +1,7 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
+#include "celeg/checkpoint/packed_int4.hpp"
 
 #include <cuda_runtime.h>
 
@@ -53,6 +54,26 @@ void validate_named_bf16(const HostTensorView& tensor,
         tensor.bytes != bytes) {
         throw std::runtime_error("inconsistent BF16 named MoE tensor: " + name);
     }
+}
+
+std::vector<__nv_bfloat16> load_named_bf16(
+    const IWeightRepository& repo, const std::string& name,
+    const std::vector<int64_t>& shape) {
+    if (has_packed_int4_matrix(repo, name)) {
+        const PackedInt4Matrix packed = load_packed_int4_matrix(repo, name, shape);
+        const std::vector<float> values = dequantize_packed_int4(packed);
+        std::vector<__nv_bfloat16> result(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            result[i] = __float2bfloat16(values[i]);
+        }
+        return result;
+    }
+    const HostTensorView tensor = repo.tensor(name);
+    const size_t bytes = static_cast<size_t>(shape[0]) * static_cast<size_t>(shape[1]) *
+        sizeof(__nv_bfloat16);
+    validate_named_bf16(tensor, shape, bytes, name);
+    const auto* source = reinterpret_cast<const __nv_bfloat16*>(tensor.data);
+    return std::vector<__nv_bfloat16>(source, source + bytes / sizeof(__nv_bfloat16));
 }
 
 } // namespace
@@ -319,17 +340,15 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up_named(
     for (int expert = 0; expert < num_experts; ++expert) {
         const std::string gate = named_expert_name(experts_prefix, expert, gate_name);
         const std::string up = named_expert_name(experts_prefix, expert, up_name);
-        const HostTensorView gate_tensor = repo.tensor(gate);
-        const HostTensorView up_tensor = repo.tensor(up);
-        validate_named_bf16(gate_tensor, {moe_intermediate, hidden},
-                            projection_bytes, gate);
-        validate_named_bf16(up_tensor, {moe_intermediate, hidden},
-                            projection_bytes, up);
+        const std::vector<__nv_bfloat16> gate_tensor = load_named_bf16(
+            repo, gate, {moe_intermediate, hidden});
+        const std::vector<__nv_bfloat16> up_tensor = load_named_bf16(
+            repo, up, {moe_intermediate, hidden});
         __nv_bfloat16* destination = weight.bf16_storage.data() +
             static_cast<size_t>(expert) * per_expert;
-        CELEG_CUDA(cudaMemcpy(destination, gate_tensor.data, projection_bytes,
+        CELEG_CUDA(cudaMemcpy(destination, gate_tensor.data(), projection_bytes,
                               cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(destination + per_projection, up_tensor.data,
+        CELEG_CUDA(cudaMemcpy(destination + per_projection, up_tensor.data(),
                               projection_bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
@@ -360,11 +379,11 @@ const ExpertLinearWeight* WeightLoader::load_moe_down_named(
     weight.bf16_storage.reset(static_cast<size_t>(num_experts) * per_expert);
     for (int expert = 0; expert < num_experts; ++expert) {
         const std::string name = named_expert_name(experts_prefix, expert, down_name);
-        const HostTensorView tensor = repo.tensor(name);
-        validate_named_bf16(tensor, {hidden, moe_intermediate}, bytes, name);
+        const std::vector<__nv_bfloat16> tensor = load_named_bf16(
+            repo, name, {hidden, moe_intermediate});
         CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data() +
                               static_cast<size_t>(expert) * per_expert,
-                              tensor.data, bytes, cudaMemcpyHostToDevice));
+                              tensor.data(), bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
     view.kind = LinearStorageKind::Bf16;

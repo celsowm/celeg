@@ -171,7 +171,7 @@ int main() {
     celeg::MoeLayerProgram grouped;
     grouped.router = {celeg::MoeRouterScoreKind::SoftmaxLogits,
                       celeg::MoeSelectionKind::GroupedTopK,
-                      celeg::MoeNormalizationKind::None, 8, 2, 2, 4, false, 1.0f};
+                      celeg::MoeNormalizationKind::None, 8, 2, 2, 4, 1, 2, false, 1.0f};
     grouped.routed.mlp = {celeg::MoeActivation::SwiGLU, 8, 16};
     grouped.routed.payload.regions = {{celeg::TensorRole::MoeExpertGate, 32},
                                       {celeg::TensorRole::MoeExpertUp, 32}};

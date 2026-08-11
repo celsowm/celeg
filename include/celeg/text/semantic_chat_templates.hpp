@@ -120,11 +120,19 @@ public:
                        bool, const ChatTemplateOptions&) const override;
 };
 
+class TaggedRoleChatTemplate final : public IChatTemplate {
+public:
+    using IChatTemplate::format;
+    std::string format(std::span<const ChatMessage>, std::span<const ChatToolDefinition>,
+                       bool, const ChatTemplateOptions&) const override;
+};
+
 std::unique_ptr<IChatToolCallCodec> make_delimited_tool_codec();
 std::unique_ptr<IChatToolCallCodec> make_native_tag_tool_codec();
 std::unique_ptr<IChatToolCallCodec> make_function_xml_tool_codec();
 std::unique_ptr<IChatToolCallCodec> make_parameter_xml_tool_codec();
 std::unique_ptr<IChatToolCallCodec> make_tagged_json_tool_codec();
+std::unique_ptr<IChatToolCallCodec> make_tagged_role_tool_codec();
 
 void add_delimited_chat_template(ChatTemplateCatalog&);
 void add_role_envelope_chat_template(ChatTemplateCatalog&);
@@ -135,5 +143,6 @@ void add_metadata_thinking_chat_template(ChatTemplateCatalog&);
 void add_vision_role_chat_template(ChatTemplateCatalog&);
 void add_patch_role_chat_template(ChatTemplateCatalog&);
 void add_thinking_role_chat_template(ChatTemplateCatalog&);
+void add_tagged_role_chat_template(ChatTemplateCatalog&);
 
 } // namespace celeg

@@ -135,6 +135,25 @@ void apply_cpu_attention_output_gate(float* output, const float* gate, size_t wi
     }
 }
 
+void apply_cpu_attention_output_gate(float* output, const float* gate,
+                                     size_t width,
+                                     AttentionGateGranularity granularity,
+                                     int heads, int head_dim) {
+    if (granularity != AttentionGateGranularity::HeadWise) {
+        apply_cpu_attention_output_gate(output, gate, width);
+        return;
+    }
+    if (heads <= 0 || head_dim <= 0 || width != static_cast<size_t>(heads * head_dim)) {
+        throw std::invalid_argument("invalid head-wise attention gate geometry");
+    }
+    for (int head = 0; head < heads; ++head) {
+        const float scale = 1.0f / (1.0f + std::exp(-gate[head]));
+        for (int d = 0; d < head_dim; ++d) {
+            output[static_cast<size_t>(head * head_dim + d)] *= scale;
+        }
+    }
+}
+
 void apply_cpu_latent_attention_positions(
     const RuntimeTopology& shape, const AttentionSpec& layout,
     float* query_rope, float* key_rope, int scalar_position,

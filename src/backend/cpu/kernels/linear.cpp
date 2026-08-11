@@ -262,6 +262,51 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
     }
 }
 
+void CpuLinearEngine::gemv_transpose(const CpuLinearWeight& weight,
+                                     const float* input, float* output,
+                                     size_t row_offset, size_t row_count) const {
+    weight.validate();
+    if (!input || !output || row_offset > weight.rows) {
+        throw std::invalid_argument("invalid CPU transposed GEMV buffer");
+    }
+    if (row_count == 0) row_count = weight.rows - row_offset;
+    if (row_offset + row_count > weight.rows) {
+        throw std::invalid_argument("CPU transposed GEMV row range is invalid");
+    }
+    std::fill(output, output + weight.cols, 0.0f);
+    size_t base = 0;
+    for (const CpuLinearMatrix& segment : weight.segments) {
+        const size_t begin = std::max(row_offset, base);
+        const size_t end = std::min(row_offset + row_count, base +
+                                    static_cast<size_t>(std::visit([](const auto& m) {
+                                        return m.rows;
+                                    }, segment)));
+        if (begin < end) {
+            const size_t local_begin = begin - base;
+            const size_t local_end = end - base;
+            std::vector<float> row(weight.cols);
+            for (size_t r = local_begin; r < local_end; ++r) {
+                std::visit([&](const auto& matrix) {
+                    using Matrix = std::remove_cvref_t<decltype(matrix)>;
+                    if constexpr (std::is_same_v<Matrix, Q4GroupMatrix>) {
+                        dequantize_q4_row(matrix, r, row.data());
+                    } else if constexpr (std::is_same_v<Matrix, CpuInt8Matrix>) {
+                        for (size_t c = 0; c < weight.cols; ++c) {
+                            row[c] = static_cast<float>(matrix.data()[r * weight.cols + c]) *
+                                matrix.scales->at(r);
+                        }
+                    } else {
+                        cpu_gguf_dequantize_row(matrix, r, row.data());
+                    }
+                }, segment);
+                const float scale = input[base + r - row_offset];
+                for (size_t c = 0; c < weight.cols; ++c) output[c] += scale * row[c];
+            }
+        }
+        base += std::visit([](const auto& m) { return static_cast<size_t>(m.rows); }, segment);
+    }
+}
+
 void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
                            float* output, size_t rows, float beta) const {
     weight.validate();

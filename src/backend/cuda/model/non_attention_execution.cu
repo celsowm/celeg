@@ -12,9 +12,25 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer) {
         const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
             spec.value_heads * spec.value_head_dim;
         const int value_width = spec.value_heads * spec.value_head_dim;
-        linear(workspace_.normed_.data(), *gated_delta->qkv,
-               workspace_.gated_delta_qkv_.data(), 1, qkv_width,
-               resources_.shape_.hidden);
+        if (spec.factorized_projections) {
+            linear(workspace_.normed_.data(), *gated_delta->q,
+                   workspace_.gated_delta_qkv_.data(), 1, spec.key_heads * spec.key_head_dim,
+                   resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), *gated_delta->k,
+                   workspace_.qkv_output_.data(), 1, spec.key_heads * spec.key_head_dim,
+                   resources_.shape_.hidden);
+            linear(workspace_.normed_.data(), *gated_delta->v,
+                   workspace_.gated_delta_output_.data(), 1, value_width,
+                   resources_.shape_.hidden);
+            launch_interleave_gated_delta_qkv(
+                workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
+                workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
+                1, spec.key_heads * spec.key_head_dim, value_width, stream_.get());
+        } else {
+            linear(workspace_.normed_.data(), *gated_delta->qkv,
+                   workspace_.gated_delta_qkv_.data(), 1, qkv_width,
+                   resources_.shape_.hidden);
+        }
         linear(workspace_.normed_.data(), *gated_delta->z,
                workspace_.gated_delta_z_.data(), 1, value_width,
                resources_.shape_.hidden);
@@ -22,7 +38,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer) {
                workspace_.gated_delta_b_.data(), 1, spec.value_heads,
                resources_.shape_.hidden);
         linear(workspace_.normed_.data(), *gated_delta->a,
-               workspace_.gated_delta_a_.data(), 1, spec.value_heads,
+               workspace_.gated_delta_a_.data(), 1, spec.decay_width(),
                resources_.shape_.hidden);
         launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
             workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
@@ -32,7 +48,8 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer) {
             workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
             spec.key_head_dim, spec.value_head_dim, spec.key_heads,
             spec.value_heads, resources_.shape_.numerical_policy.norm_eps,
-            stream_.get());
+            spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
+            spec.sigmoid_output_gate, stream_.get());
         linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
                workspace_.hidden_.data(), 1, resources_.shape_.hidden,
                value_width);

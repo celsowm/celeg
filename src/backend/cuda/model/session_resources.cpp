@@ -135,6 +135,10 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
         r * static_cast<size_t>(resources_.shape_.maximum_attention_latent_rank()));
     workspace_.prefill_latent_key_rope_.reserve(
         r * static_cast<size_t>(resources_.shape_.maximum_attention_latent_rope_width()));
+    workspace_.prefill_latent_projection_.reserve(r * static_cast<size_t>(
+        resources_.shape_.maximum_attention_projection_width()));
+    workspace_.prefill_latent_decompressed_.reserve(
+        r * static_cast<size_t>(resources_.shape_.maximum_attention_output_width()));
     workspace_.prefill_attention_gate_.reserve(r * resources_.shape_.maximum_attention_query_heads() *
                                                resources_.shape_.maximum_attention_head_dim());
     workspace_.prefill_k_.reserve(r * projection_width);

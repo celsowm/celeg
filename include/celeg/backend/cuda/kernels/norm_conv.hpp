@@ -38,6 +38,9 @@ void launch_sigmoid_scale_by_scalar(__nv_bfloat16* x, const __nv_bfloat16* scala
                                     int count, cudaStream_t stream);
 void launch_sigmoid_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* gate,
                                      int rows, int width, cudaStream_t stream);
+void launch_sigmoid_multiply_headwise(__nv_bfloat16* x, const __nv_bfloat16* gate,
+                                      int rows, int heads, int head_dim,
+                                      cudaStream_t stream);
 
 void launch_conv_decode(const __nv_bfloat16* projected_bcx,
                        const __nv_bfloat16* conv_weight,

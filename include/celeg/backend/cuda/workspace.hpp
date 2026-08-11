@@ -27,6 +27,8 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> latent_key_;
     DeviceBuffer<__nv_bfloat16> latent_value_;
     DeviceBuffer<__nv_bfloat16> latent_key_rope_;
+    DeviceBuffer<__nv_bfloat16> latent_projection_;
+    DeviceBuffer<__nv_bfloat16> latent_decompressed_;
     DeviceBuffer<__nv_bfloat16> conv_projected_;
     DeviceBuffer<__nv_bfloat16> mamba_projected_;
     DeviceBuffer<__nv_bfloat16> mamba_inner_;
@@ -70,6 +72,8 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> prefill_latent_key_;
     DeviceBuffer<__nv_bfloat16> prefill_latent_value_;
     DeviceBuffer<__nv_bfloat16> prefill_latent_key_rope_;
+    DeviceBuffer<__nv_bfloat16> prefill_latent_projection_;
+    DeviceBuffer<__nv_bfloat16> prefill_latent_decompressed_;
     DeviceBuffer<__nv_bfloat16> prefill_attention_gate_;
     DeviceBuffer<__nv_bfloat16> prefill_k_;
     DeviceBuffer<__nv_bfloat16> prefill_v_;

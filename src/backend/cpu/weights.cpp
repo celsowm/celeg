@@ -143,20 +143,25 @@ void CpuCompiledModel::Shared::prepare_pack_path() {
 CpuLinearWeight CpuCompiledModel::Shared::load_matrix(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
-    if (compressed_checkpoint) {
-        if (const auto cached = compressed_linear_cache.find(name);
-            cached != compressed_linear_cache.end()) return cached->second;
-        CpuLinearWeight loaded = CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
-        auto [it, inserted] = compressed_linear_cache.emplace(name, std::move(loaded));
-        return it->second;
+    try {
+        if (compressed_checkpoint) {
+            if (const auto cached = compressed_linear_cache.find(name);
+                cached != compressed_linear_cache.end()) return cached->second;
+            CpuLinearWeight loaded = CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
+            auto [it, inserted] = compressed_linear_cache.emplace(name, std::move(loaded));
+            return it->second;
+        }
+        return CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
+    } catch (const std::exception& error) {
+        throw std::runtime_error("CPU load_matrix '" + name + "': " + error.what());
     }
-    return CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
 }
 
 CpuLinearWeight CpuCompiledModel::Shared::load_concat(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& synthetic,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
+    try {
     if (compressed_checkpoint) {
         if (const auto cached = compressed_linear_cache.find(synthetic);
             cached != compressed_linear_cache.end()) return cached->second;
@@ -174,6 +179,9 @@ CpuLinearWeight CpuCompiledModel::Shared::load_concat(
         return it->second;
     }
     return CpuWeightCodec(source, reader, writer, group_size).concat(synthetic, parts);
+    } catch (const std::exception& error) {
+        throw std::runtime_error("CPU load_concat '" + synthetic + "': " + error.what());
+    }
 }
 
 std::vector<float> CpuCompiledModel::Shared::load_vector(

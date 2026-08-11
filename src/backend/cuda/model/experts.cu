@@ -1,11 +1,37 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
+#include "celeg/checkpoint/packed_int4.hpp"
 #include <cstring>
 #include <stdexcept>
 #include <vector>
 
 namespace celeg {
+
+namespace {
+
+std::vector<__nv_bfloat16> load_named_expert_matrix(
+    const IWeightRepository& repo, const std::string& name,
+    const std::vector<int64_t>& shape) {
+    if (has_packed_int4_matrix(repo, name)) {
+        const PackedInt4Matrix packed = load_packed_int4_matrix(repo, name, shape);
+        const std::vector<float> values = dequantize_packed_int4(packed);
+        std::vector<__nv_bfloat16> result(values.size());
+        for (size_t i = 0; i < values.size(); ++i) result[i] = __float2bfloat16(values[i]);
+        return result;
+    }
+    const HostTensorView tensor = repo.tensor(name);
+    const size_t count = static_cast<size_t>(shape[0]) * static_cast<size_t>(shape[1]);
+    if (tensor.dtype != TensorDType::BF16 || tensor.shape != shape ||
+        tensor.bytes != count * sizeof(__nv_bfloat16)) {
+        throw std::runtime_error("invalid named MoE expert tensor: " + name);
+    }
+    const auto* source = reinterpret_cast<const __nv_bfloat16*>(tensor.data);
+    return std::vector<__nv_bfloat16>(source, source + count);
+}
+
+} // namespace
+
 WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     const IWeightRepository& repo, int layer,
     int num_experts, int moe_intermediate, int hidden,
@@ -217,22 +243,17 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host_named(
             "." + up_name + ".weight";
         const std::string down = experts_prefix + "." + std::to_string(expert) +
             "." + down_name + ".weight";
-        const HostTensorView gate_tensor = repo.tensor(gate);
-        const HostTensorView up_tensor = repo.tensor(up);
-        const HostTensorView down_tensor = repo.tensor(down);
         const std::vector<int64_t> projection_shape{moe_intermediate, hidden};
-        if (gate_tensor.dtype != TensorDType::BF16 || up_tensor.dtype != TensorDType::BF16 ||
-            down_tensor.dtype != TensorDType::BF16 ||
-            gate_tensor.shape != projection_shape || up_tensor.shape != projection_shape ||
-            down_tensor.shape != std::vector<int64_t>{hidden, moe_intermediate} ||
-            gate_tensor.bytes != projection_bytes || up_tensor.bytes != projection_bytes ||
-            down_tensor.bytes != down_bytes) {
-            throw std::runtime_error("invalid BF16 named MoE expert: " + gate);
-        }
-        std::memcpy(gate_up_stage.data(), gate_tensor.data, projection_bytes);
+        const std::vector<__nv_bfloat16> gate_tensor = load_named_expert_matrix(
+            repo, gate, projection_shape);
+        const std::vector<__nv_bfloat16> up_tensor = load_named_expert_matrix(
+            repo, up, projection_shape);
+        const std::vector<__nv_bfloat16> down_tensor = load_named_expert_matrix(
+            repo, down, {hidden, moe_intermediate});
+        std::memcpy(gate_up_stage.data(), gate_tensor.data(), projection_bytes);
         std::memcpy(gate_up_stage.data() + inter * hidden_count,
-                    up_tensor.data, projection_bytes);
-        std::memcpy(down_stage.data(), down_tensor.data, down_bytes);
+                    up_tensor.data(), projection_bytes);
+        std::memcpy(down_stage.data(), down_tensor.data(), down_bytes);
         if (host_mode == ExpertHostMode::Mapped) {
             std::memcpy(gate_up_base + static_cast<size_t>(expert) * gate_up_elems,
                         gate_up_stage.data(), gate_up_bytes);

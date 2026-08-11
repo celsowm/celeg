@@ -160,6 +160,105 @@ std::shared_ptr<MemoryRepository> hybrid_gguf_repository() {
     return result;
 }
 
+celeg::CheckpointMetadata ling_metadata() {
+    celeg::CheckpointMetadata result;
+    result.values["model_type"] = std::string("bailing_hybrid");
+    result.values["hidden_size"] = int64_t(1536);
+    result.values["intermediate_size"] = int64_t(4608);
+    result.values["num_hidden_layers"] = int64_t(24);
+    result.values["num_attention_heads"] = int64_t(16);
+    result.values["num_key_value_heads"] = int64_t(16);
+    result.values["head_dim"] = int64_t(128);
+    result.values["vocab_size"] = int64_t(157184);
+    result.values["max_position_embeddings"] = int64_t(131072);
+    result.values["rms_norm_eps"] = 1.0e-6;
+    result.values["rope_theta"] = 6000000.0;
+    result.values["partial_rotary_factor"] = 0.5;
+    result.values["eos_token_id"] = int64_t(156895);
+    result.values["pad_token_id"] = int64_t(156892);
+    result.values["bos_token_id"] = int64_t(156892);
+    result.values["tie_word_embeddings"] = false;
+    result.values["first_k_dense_replace"] = int64_t(1);
+    result.values["short_conv_kernel_size"] = int64_t(4);
+    result.values["q_lora_rank"] = int64_t(256);
+    result.values["kv_lora_rank"] = int64_t(512);
+    result.values["qk_head_dim"] = int64_t(192);
+    result.values["qk_nope_head_dim"] = int64_t(128);
+    result.values["qk_rope_head_dim"] = int64_t(64);
+    result.values["v_head_dim"] = int64_t(128);
+    result.values["kda_safe_gate"] = true;
+    result.values["kda_lower_bound"] = -5.0;
+    result.values["num_experts"] = int64_t(128);
+    result.values["num_experts_per_tok"] = int64_t(8);
+    result.values["moe_intermediate_size"] = int64_t(512);
+    result.values["moe_shared_expert_intermediate_size"] = int64_t(512);
+    result.values["topk_group"] = int64_t(4);
+    result.values["n_group"] = int64_t(8);
+    result.values["routing_group_score_top_k"] = int64_t(2);
+    result.values["norm_topk_prob"] = true;
+    result.values["moe_router_enable_expert_bias"] = true;
+    result.values["routed_scaling_factor"] = 2.5;
+    result.values["scoring_func"] = std::string("sigmoid");
+    result.values["tokenizer.chat_template"] = std::string(
+        "<role>SYSTEM</role>{{ messages }}<|role_end|><arg_key>{{ key }}</arg_key><arg_value>{{ value }}</arg_value>");
+    return result;
+}
+
+std::shared_ptr<MemoryRepository> ling_repository() {
+    auto result = std::make_shared<MemoryRepository>();
+    result->add("model.word_embeddings.weight", {157184, 1536});
+    result->add("model.norm.weight", {1536});
+    result->add("lm_head.weight", {157184, 1536});
+    for (int layer = 0; layer < 24; ++layer) {
+        const std::string prefix = "model.layers." + std::to_string(layer);
+        result->add(prefix + ".input_layernorm.weight", {1536});
+        result->add(prefix + ".post_attention_layernorm.weight", {1536});
+        if (layer % 4 == 3) {
+            result->add(prefix + ".attention.q_a_proj.weight", {256, 1536});
+            result->add(prefix + ".attention.q_a_layernorm.weight", {256});
+            result->add(prefix + ".attention.q_b_proj.weight", {3072, 256});
+            result->add(prefix + ".attention.kv_a_proj_with_mqa.weight", {576, 1536});
+            result->add(prefix + ".attention.kv_a_layernorm.weight", {512});
+            result->add(prefix + ".attention.kv_b_proj.weight", {4096, 512});
+            result->add(prefix + ".attention.g_proj.weight", {2048, 1536});
+            result->add(prefix + ".attention.o_proj.weight", {1536, 2048});
+        } else {
+            result->add(prefix + ".attention.q_proj.weight", {2048, 1536});
+            result->add(prefix + ".attention.k_proj.weight", {2048, 1536});
+            result->add(prefix + ".attention.v_proj.weight", {2048, 1536});
+            result->add(prefix + ".attention.f_proj.weight", {2048, 1536});
+            result->add(prefix + ".attention.b_proj.weight", {16, 1536});
+            result->add(prefix + ".attention.g_proj.weight", {2048, 1536});
+            result->add(prefix + ".attention.q_conv1d.weight", {2048, 1, 4});
+            result->add(prefix + ".attention.k_conv1d.weight", {2048, 1, 4});
+            result->add(prefix + ".attention.v_conv1d.weight", {2048, 1, 4});
+            result->add(prefix + ".attention.dt_bias", {2048});
+            result->add(prefix + ".attention.A_log", {16});
+            result->add(prefix + ".attention.o_norm.weight", {128});
+            result->add(prefix + ".attention.o_proj.weight", {1536, 2048});
+        }
+        if (layer == 0) {
+            result->add(prefix + ".mlp.gate_proj.weight", {4608, 1536});
+            result->add(prefix + ".mlp.up_proj.weight", {4608, 1536});
+            result->add(prefix + ".mlp.down_proj.weight", {1536, 4608});
+        } else {
+            result->add(prefix + ".mlp.gate.weight", {128, 1536});
+            result->add(prefix + ".mlp.gate.expert_bias", {128});
+            result->add(prefix + ".mlp.shared_experts.gate_proj.weight", {512, 1536});
+            result->add(prefix + ".mlp.shared_experts.up_proj.weight", {512, 1536});
+            result->add(prefix + ".mlp.shared_experts.down_proj.weight", {1536, 512});
+            for (int expert = 0; expert < 128; ++expert) {
+                const std::string expert_prefix = prefix + ".mlp.experts." +
+                    std::to_string(expert);
+                result->add(expert_prefix + ".gate_proj.weight", {512, 1536});
+                result->add(expert_prefix + ".up_proj.weight", {512, 1536});
+                result->add(expert_prefix + ".down_proj.weight", {1536, 512});
+            }
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 int main() {
@@ -256,5 +355,22 @@ int main() {
     ling_alias.values["use_qk_norm"] = true;
     const auto ling_facts = celeg::normalize_model_metadata(ling_alias);
     CELEG_TEST_CHECK(ling_facts.query_key_norm == std::optional<bool>{true});
+
+    celeg::CheckpointView ling_checkpoint;
+    ling_checkpoint.metadata = ling_metadata();
+    ling_checkpoint.repository = ling_repository();
+    celeg::ResolvedModel ling_model;
+    try {
+        ling_model = catalog.select(ling_checkpoint.metadata).resolve(ling_checkpoint);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "ling failure: %s\n", error.what());
+        return 1;
+    }
+    CELEG_TEST_CHECK(ling_model.topology.mixer_kinds[0] == celeg::MixerKind::GatedDeltaNet);
+    CELEG_TEST_CHECK(ling_model.topology.mixer_kinds[3] == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(ling_model.topology.attention_layout(3).latent_state()->factorized);
+    CELEG_TEST_CHECK(ling_model.topology.feed_forward_kinds[0] == celeg::FeedForwardKind::Dense);
+    CELEG_TEST_CHECK(ling_model.topology.feed_forward_kinds[1] == celeg::FeedForwardKind::MixtureOfExperts);
+    CELEG_TEST_CHECK(celeg::explain_resolution(ling_checkpoint).failures.empty());
     return 0;
 }

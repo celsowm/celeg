@@ -293,5 +293,19 @@ void launch_latent_attention_batch_ptrs(
     const int32_t* positions, const float* alibi_slopes, int rows,
     int query_heads, int latent_rank, int rotary_width, float score_scale,
     int sliding_window, cudaStream_t stream);
+void launch_factorized_latent_query(const __nv_bfloat16* query_projection,
+                                    const __nv_bfloat16* expansion,
+                                    __nv_bfloat16* query_content, int rows,
+                                    int query_heads, int query_nope, int query_rope_dim,
+                                    int latent_rank, cudaStream_t stream);
+void launch_factorized_latent_value(const __nv_bfloat16* latent_output,
+                                    const __nv_bfloat16* expansion,
+                                    __nv_bfloat16* value_output, int rows,
+                                    int query_heads, int query_nope, int value_dim,
+                                    int latent_rank, cudaStream_t stream);
+void launch_factorized_latent_rope(const __nv_bfloat16* query_projection,
+                                   __nv_bfloat16* query_rope, int rows,
+                                   int query_heads, int query_nope, int query_rope_dim,
+                                   cudaStream_t stream);
 
 } // namespace celeg

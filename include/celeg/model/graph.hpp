@@ -108,6 +108,14 @@ struct LatentAttentionStateSpec {
     int rope_head_dim = 0;
     int nope_head_dim = 0;
     bool decoupled_rope = false;
+    // A factorized latent projection publishes the same semantic latent
+    // state as ordinary compressed attention, but derives Q/K/V through
+    // low-rank projections and per-head expansion matrices.
+    bool factorized = false;
+    int query_rank = 0;
+    int value_head_dim = 0;
+    NormSpec query_latent_norm;
+    NormSpec key_latent_norm;
 };
 
 using AttentionStateSpec = std::variant<OrdinaryKvStateSpec,
@@ -162,11 +170,22 @@ enum class AttentionGateKind : uint8_t {
     Sigmoid,
 };
 
+// The gate projection is a semantic operation over attention heads.  Its
+// physical width is deliberately kept out of the execution backends so a
+// checkpoint can publish either one value per head or one value per output
+// element without creating an architecture-specific path.
+enum class AttentionGateGranularity : uint8_t {
+    OutputWise,
+    HeadWise,
+    ElementWise,
+};
+
 struct AttentionOutputGateSpec {
     AttentionGateKind kind = AttentionGateKind::None;
     // Physical binding detail only: the semantic gate is still a separate
     // operation, but some checkpoints store its projection beside Q.
     bool packed_with_query = false;
+    AttentionGateGranularity granularity = AttentionGateGranularity::OutputWise;
 
     bool enabled() const { return kind != AttentionGateKind::None; }
 };
@@ -189,6 +208,11 @@ struct AttentionSpec {
     AttentionOutputTransformSpec output_transform = NoAttentionOutputTransformSpec{};
 
     int query_width() const { return query_heads * head_dim; }
+    int output_gate_width() const {
+        if (!output_gate.enabled() || output_gate.packed_with_query) return 0;
+        return output_gate.granularity == AttentionGateGranularity::HeadWise
+            ? query_heads : query_width();
+    }
     int query_projection_width() const {
         return output_gate.enabled() && output_gate.packed_with_query
             ? query_width() * 2 : query_width();
@@ -247,6 +271,17 @@ struct AttentionSpec {
     bool uses_external_memory() const { return !sources.self_attention(); }
     bool has_query_key_norm() const {
         return query_norm.enabled() || key_norm.enabled();
+    }
+    int latent_query_projection_width() const {
+        const auto* latent = latent_state();
+        return latent && latent->factorized
+            ? query_heads * (latent->nope_head_dim + latent->rope_head_dim)
+            : latent_query_width();
+    }
+    int latent_output_width() const {
+        const auto* latent = latent_state();
+        return latent && latent->factorized
+            ? query_heads * latent->value_head_dim : latent_query_content_width();
     }
     bool has_causal_pattern() const {
         return std::holds_alternative<FullCausalPattern>(pattern) ||

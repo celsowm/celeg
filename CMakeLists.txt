@@ -504,6 +504,10 @@ if(CELEG_BUILD_TESTS)
         src/checkpoint/packed_int8.cpp)
     target_include_directories(packed_int8_test PRIVATE include tests)
     add_test(NAME packed_int8_test COMMAND packed_int8_test)
+    add_executable(packed_int4_test tests/packed_int4_test.cpp
+        src/checkpoint/packed_int4.cpp src/model/weights/quantization.cpp)
+    target_include_directories(packed_int4_test PRIVATE include tests)
+    add_test(NAME packed_int4_test COMMAND packed_int4_test)
     add_executable(architecture_resolution_test tests/architecture_resolution_test.cpp)
     target_include_directories(architecture_resolution_test PRIVATE include)
     target_link_libraries(architecture_resolution_test PRIVATE celeg_base)
@@ -529,11 +533,12 @@ if(CELEG_BUILD_TESTS)
         src/text/semantic_chat/vision_role.cpp
         src/text/semantic_chat/patch_role.cpp
         src/text/semantic_chat/thinking_role.cpp
+        src/text/semantic_chat/tagged_role.cpp
         src/text/tool_codec/delimited.cpp
         src/text/tool_codec/native_tag.cpp
         src/text/tool_codec/function_xml.cpp
         src/text/tool_codec/parameter_xml.cpp
-        src/text/tool_codec/tagged_json.cpp)
+        src/text/tool_codec/tagged_json.cpp src/text/tool_codec/tagged_role.cpp)
     add_executable(chat_template_test tests/chat_template_test.cpp
         ${CELEG_CHAT_TEMPLATE_SOURCES}
         )

@@ -15,6 +15,9 @@ std::string_view tensor_role_name(TensorRole role) {
         "attention_latent_query", "attention_latent_query_rope",
         "attention_latent_key", "attention_latent_value",
         "attention_latent_key_rope", "attention_latent_output",
+        "attention_latent_query_projection", "attention_latent_query_expansion",
+        "attention_latent_query_norm", "attention_latent_key_projection",
+        "attention_latent_key_norm", "attention_latent_expansion",
         "attention_output", "attention_value_norm", "attention_post_norm",
         "ffn_input_norm", "ffn_output_norm", "ffn_gate", "ffn_up", "ffn_down",
         "short_conv_input", "short_conv_kernel", "short_conv_output",
@@ -29,7 +32,7 @@ std::string_view tensor_role_name(TensorRole role) {
         "mamba2_a_log", "mamba2_d", "mamba2_norm", "mamba2_output",
         "per_layer_embedding", "per_layer_context_projection", "per_layer_projection",
         "per_layer_projection_norm", "per_layer_input_gate", "per_layer_input_norm",
-        "layer_scalar", "moe_router", "moe_expert_gate", "moe_expert_up", "moe_expert_down",
+        "layer_scalar", "moe_router", "moe_router_bias", "moe_expert_gate", "moe_expert_up", "moe_expert_down",
         "moe_packed_gate_up", "moe_packed_down", "moe_shared_gate",
         "moe_shared_up", "moe_shared_down", "moe_shared_gate_weight"
     };

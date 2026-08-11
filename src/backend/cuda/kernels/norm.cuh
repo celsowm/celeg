@@ -263,3 +263,26 @@ void launch_sigmoid_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* gate
         x, gate, rows, width);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
+
+__global__ void sigmoid_multiply_headwise_kernel(__nv_bfloat16* x,
+                                                 const __nv_bfloat16* gate,
+                                                 int rows, int heads, int head_dim) {
+    const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t width = static_cast<size_t>(heads) * head_dim;
+    const size_t total = static_cast<size_t>(rows) * width;
+    if (index >= total) return;
+    const int row = static_cast<int>(index / width);
+    const int head = static_cast<int>((index / static_cast<size_t>(head_dim)) % heads);
+    const float value = bf16_float(x[index]);
+    const float g = bf16_float(gate[static_cast<size_t>(row) * heads + head]);
+    x[index] = __float2bfloat16(value / (1.0f + expf(-g)));
+}
+
+void launch_sigmoid_multiply_headwise(__nv_bfloat16* x, const __nv_bfloat16* gate,
+                                      int rows, int heads, int head_dim,
+                                      cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * heads * head_dim;
+    sigmoid_multiply_headwise_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
+        x, gate, rows, heads, head_dim);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}

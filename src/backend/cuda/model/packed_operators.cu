@@ -255,14 +255,26 @@ void PackedGatedDeltaNetExecutor::run(
     const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
         spec.value_heads * spec.value_head_dim;
     const int value_width = spec.value_heads * spec.value_head_dim;
-    context.linear(w.normed.data(), *gated_delta.qkv, w.gated_delta_qkv.data(),
-                   rows, qkv_width, context.shape.hidden);
+    if (spec.factorized_projections) {
+        context.linear(w.normed.data(), *gated_delta.q, w.q.data(),
+                       rows, spec.key_heads * spec.key_head_dim, context.shape.hidden);
+        context.linear(w.normed.data(), *gated_delta.k, w.k.data(),
+                       rows, spec.key_heads * spec.key_head_dim, context.shape.hidden);
+        context.linear(w.normed.data(), *gated_delta.v, w.v.data(),
+                       rows, value_width, context.shape.hidden);
+        launch_interleave_gated_delta_qkv(
+            w.q.data(), w.k.data(), w.v.data(), w.gated_delta_qkv.data(), rows,
+            spec.key_heads * spec.key_head_dim, value_width, w.stream.get());
+    } else {
+        context.linear(w.normed.data(), *gated_delta.qkv, w.gated_delta_qkv.data(),
+                       rows, qkv_width, context.shape.hidden);
+    }
     context.linear(w.normed.data(), *gated_delta.z, w.gated_delta_z.data(),
                    rows, value_width, context.shape.hidden);
     context.linear(w.normed.data(), *gated_delta.b, w.gated_delta_b.data(),
                    rows, spec.value_heads, context.shape.hidden);
     context.linear(w.normed.data(), *gated_delta.a, w.gated_delta_a.data(),
-                   rows, spec.value_heads, context.shape.hidden);
+                   rows, spec.decay_width(), context.shape.hidden);
 
     size_t flat = 0;
     for (size_t request = 0; request < batch_models->size(); ++request) {
@@ -280,14 +292,16 @@ void PackedGatedDeltaNetExecutor::run(
                 w.gated_delta_qkv.data() + static_cast<size_t>(flat) * qkv_width,
                 w.gated_delta_z.data() + static_cast<size_t>(flat) * value_width,
                 w.gated_delta_b.data() + static_cast<size_t>(flat) * spec.value_heads,
-                w.gated_delta_a.data() + static_cast<size_t>(flat) * spec.value_heads,
+                w.gated_delta_a.data() + static_cast<size_t>(flat) * spec.decay_width(),
                 gated_delta.conv_weight, gated_delta.dt_bias, gated_delta.a_log,
                 gated_delta.norm, state_layer->conv_state.data(),
                 state_layer->recurrent_state.data(),
                 w.gated_delta_output.data() + static_cast<size_t>(flat) * value_width,
                 1, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                 spec.key_heads, spec.value_heads,
-                context.shape.numerical_policy.norm_eps, w.stream.get());
+                context.shape.numerical_policy.norm_eps, spec.vector_decay,
+                spec.safe_decay, spec.decay_lower_bound, spec.sigmoid_output_gate,
+                w.stream.get());
         }
     }
     if (flat != static_cast<size_t>(rows)) {

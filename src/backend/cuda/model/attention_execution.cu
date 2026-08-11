@@ -30,6 +30,88 @@ void CudaCompiledModel::enqueue_decode_attention(
                         "CUDA latent attention requires BF16 state storage");
                 }
                 const auto& latent = *layout.latent_state();
+                if (latent.factorized) {
+                    decode_phase_profile().begin(stream_.get());
+                    linear(workspace_.normed_.data(), *attention->latent_query_projection,
+                           workspace_.latent_projection_.data(), 1, latent.query_rank,
+                           resources_.shape_.hidden);
+                    launch_rmsnorm(workspace_.latent_projection_.data(), attention->latent_query_norm,
+                                   workspace_.latent_projection_.data(), 1, latent.query_rank,
+                                   latent.query_latent_norm.epsilon, stream_.get());
+                    linear(workspace_.latent_projection_.data(), *attention->latent_query_expansion,
+                           workspace_.qkv_output_.data(), 1,
+                           layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
+                           latent.query_rank);
+                    launch_factorized_latent_query(
+                        workspace_.qkv_output_.data(), attention->latent_expansion->bf16,
+                        workspace_.latent_query_content_.data(), 1, layout.query_heads,
+                        latent.nope_head_dim, latent.rope_head_dim, latent.latent_rank,
+                        stream_.get());
+                    launch_factorized_latent_rope(
+                        workspace_.qkv_output_.data(), workspace_.latent_query_rope_.data(),
+                        1, layout.query_heads, latent.nope_head_dim, latent.rope_head_dim,
+                        stream_.get());
+                    linear(workspace_.normed_.data(), *attention->latent_key_projection,
+                           workspace_.qkv_output_.data(), 1,
+                           latent.latent_rank + latent.rope_head_dim, resources_.shape_.hidden);
+                    launch_rmsnorm(workspace_.qkv_output_.data(), attention->latent_key_norm,
+                                   workspace_.latent_key_.data(), 1, latent.latent_rank,
+                                   latent.key_latent_norm.epsilon, stream_.get());
+                    CELEG_CUDA(cudaMemcpyAsync(workspace_.latent_value_.data(),
+                        workspace_.latent_key_.data(),
+                        static_cast<size_t>(latent.latent_rank) * sizeof(__nv_bfloat16),
+                        cudaMemcpyDeviceToDevice, stream_.get()));
+                    CELEG_CUDA(cudaMemcpyAsync(workspace_.latent_key_rope_.data(),
+                        workspace_.qkv_output_.data() + latent.latent_rank,
+                        static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
+                        cudaMemcpyDeviceToDevice, stream_.get()));
+                    decode_phase_profile().end(DecodePhase::Projection, stream_.get());
+                    launch_qk_norm_rope_positions(
+                        workspace_.latent_query_rope_.data(), workspace_.latent_key_rope_.data(),
+                        nullptr, nullptr, 1, layout.query_heads, 1, latent.rope_head_dim,
+                        position_device_.data(), static_cast<float>(layout.rope_position()->theta),
+                        1.0f, resources_.shape_.numerical_policy.norm_eps, false,
+                        layout.rope_position()->pairing,
+                        lower_cuda_rope_scaling(*layout.rope_position()), stream_.get());
+                    launch_store_latent_device(
+                        workspace_.latent_key_.data(), workspace_.latent_value_.data(),
+                        workspace_.latent_key_rope_.data(), owner->latent_key_cache.data(),
+                        owner->latent_value_cache.data(), owner->latent_key_rope_cache.data(),
+                        position_device_.data(), latent.latent_rank, latent.rope_head_dim,
+                        stream_.get());
+                    launch_latent_attention_device(
+                        workspace_.latent_query_content_.data(), workspace_.latent_query_rope_.data(),
+                        owner->latent_key_cache.data(), owner->latent_value_cache.data(),
+                        owner->latent_key_rope_cache.data(), workspace_.op_output_.data(),
+                        position_device_.data(), attention->alibi_slopes.data(), layout.query_heads,
+                        latent.latent_rank, latent.rope_head_dim,
+                        layout.query_scale * resources_.shape_.numerical_policy.attention_multiplier,
+                        layout.sliding_window_size(), stream_.get());
+                    launch_factorized_latent_value(
+                        workspace_.op_output_.data(), attention->latent_expansion->bf16,
+                        workspace_.latent_decompressed_.data(), 1, layout.query_heads,
+                        latent.nope_head_dim, latent.value_head_dim, latent.latent_rank,
+                        stream_.get());
+                    linear(workspace_.normed_.data(), *attention->gate,
+                           workspace_.attention_gate_.data(), 1, layout.output_gate_width(),
+                           resources_.shape_.hidden);
+                    if (layout.output_gate.granularity == AttentionGateGranularity::HeadWise) {
+                        launch_sigmoid_multiply_headwise(workspace_.latent_decompressed_.data(),
+                            workspace_.attention_gate_.data(), 1, layout.query_heads,
+                            latent.value_head_dim, stream_.get());
+                    } else {
+                        launch_sigmoid_multiply(workspace_.latent_decompressed_.data(),
+                            workspace_.attention_gate_.data(), layout.latent_output_width(),
+                            stream_.get());
+                    }
+                    linear(workspace_.latent_decompressed_.data(), *attention->out,
+                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           layout.latent_output_width(),
+                           resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
+                    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+                                 resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
+                    return;
+                }
                 if (layout.output_gate.enabled() || layout.multi_axis_position()) {
                     throw std::invalid_argument(
                         "CUDA latent attention does not support query gates or M-RoPE yet");

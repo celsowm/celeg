@@ -403,6 +403,25 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                 compiled.feed_forward_intermediate = feed_forward.intermediate_size;
             }
         }, layer.feed_forward);
+        if (compiled.attention && compiled.attention->output_gate.enabled() &&
+            !compiled.attention->output_gate.packed_with_query) {
+            for (const TensorRequest& request : model.weight_plan.requests) {
+                if (request.role != TensorRole::AttentionGate ||
+                    request.layer != static_cast<int>(layer_index) ||
+                    request.expected_shape.size() != 2) continue;
+                if (request.expected_shape[0] == compiled.attention->query_heads) {
+                    compiled.attention->output_gate.granularity =
+                        AttentionGateGranularity::HeadWise;
+                } else if (request.expected_shape[0] == compiled.attention->query_width()) {
+                    compiled.attention->output_gate.granularity =
+                        AttentionGateGranularity::ElementWise;
+                } else {
+                    throw std::invalid_argument(
+                        "attention gate request width does not match compiled geometry");
+                }
+                break;
+            }
+        }
         for (std::size_t request_index = 0;
              request_index < model.weight_plan.requests.size(); ++request_index) {
             if (model.weight_plan.requests[request_index].layer == static_cast<int>(layer_index)) {

@@ -5,6 +5,89 @@
 
 constexpr int kMaxLatentValuesPerLane = 16;
 
+__global__ void factorized_latent_query_kernel(
+    const __nv_bfloat16* query, const __nv_bfloat16* expansion,
+    __nv_bfloat16* output, int rows, int heads, int nope, int rope, int rank) {
+    const size_t element = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * heads * rank;
+    if (element >= total) return;
+    const int r = static_cast<int>(element % rank);
+    const int head = static_cast<int>((element / rank) % heads);
+    const int row = static_cast<int>(element / (static_cast<size_t>(heads) * rank));
+    const int q_stride = heads * (nope + rope);
+    float sum = 0.0f;
+    for (int d = 0; d < nope; ++d) {
+        sum += __bfloat162float(query[static_cast<size_t>(row) * q_stride + head * (nope + rope) + d]) *
+               __bfloat162float(expansion[static_cast<size_t>(head * nope + d) * rank + r]);
+    }
+    output[element] = __float2bfloat16(sum);
+}
+
+__global__ void factorized_latent_value_kernel(
+    const __nv_bfloat16* latent, const __nv_bfloat16* expansion,
+    __nv_bfloat16* output, int rows, int heads, int nope, int value_dim, int rank) {
+    const size_t element = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * heads * value_dim;
+    if (element >= total) return;
+    const int v = static_cast<int>(element % value_dim);
+    const int head = static_cast<int>((element / value_dim) % heads);
+    const int row = static_cast<int>(element / (static_cast<size_t>(heads) * value_dim));
+    const int stride = nope + value_dim;
+    float sum = 0.0f;
+    for (int r = 0; r < rank; ++r) {
+        sum += __bfloat162float(latent[static_cast<size_t>(row) * heads * rank + head * rank + r]) *
+               __bfloat162float(expansion[static_cast<size_t>(head * stride + nope + v) * rank + r]);
+    }
+    output[element] = __float2bfloat16(sum);
+}
+
+__global__ void factorized_latent_rope_kernel(
+    const __nv_bfloat16* query, __nv_bfloat16* output, int rows, int heads,
+    int nope, int rope) {
+    const size_t element = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(rows) * heads * rope;
+    if (element >= total) return;
+    const int d = static_cast<int>(element % rope);
+    const int head = static_cast<int>((element / rope) % heads);
+    const int row = static_cast<int>(element / (static_cast<size_t>(heads) * rope));
+    output[element] = query[static_cast<size_t>(row) * heads * (nope + rope) +
+                            head * (nope + rope) + nope + d];
+}
+
+void launch_factorized_latent_query(const __nv_bfloat16* query_projection,
+                                    const __nv_bfloat16* expansion,
+                                    __nv_bfloat16* query_content, int rows,
+                                    int query_heads, int query_nope, int query_rope,
+                                    int latent_rank, cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * query_heads * latent_rank;
+    factorized_latent_query_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
+        query_projection, expansion, query_content, rows, query_heads,
+        query_nope, query_rope, latent_rank);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_factorized_latent_value(const __nv_bfloat16* latent_output,
+                                    const __nv_bfloat16* expansion,
+                                    __nv_bfloat16* value_output, int rows,
+                                    int query_heads, int query_nope, int value_dim,
+                                    int latent_rank, cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * query_heads * value_dim;
+    factorized_latent_value_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
+        latent_output, expansion, value_output, rows, query_heads,
+        query_nope, value_dim, latent_rank);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+void launch_factorized_latent_rope(const __nv_bfloat16* query_projection,
+                                   __nv_bfloat16* query_rope, int rows,
+                                   int query_heads, int query_nope, int query_rope_dim,
+                                   cudaStream_t stream) {
+    const size_t total = static_cast<size_t>(rows) * query_heads * query_rope_dim;
+    factorized_latent_rope_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
+        query_projection, query_rope, rows, query_heads, query_nope, query_rope_dim);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
 __device__ __forceinline__ float latent_score(
     float dot, const float* slopes, int head, int query_position,
     int key_position, float scale) {

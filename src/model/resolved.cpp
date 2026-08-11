@@ -226,6 +226,12 @@ void AttentionStateStorageSpec::validate(const AttentionStateSpec& state) const 
             latent_state->rope_head_dim + latent_state->nope_head_dim <= 0) {
             throw std::runtime_error("invalid latent attention state dimensions");
         }
+        if (latent_state->factorized &&
+            (latent_state->query_rank <= 0 || latent_state->value_head_dim <= 0 ||
+             !latent_state->query_latent_norm.enabled() ||
+             !latent_state->key_latent_norm.enabled())) {
+            throw std::runtime_error("invalid factorized latent attention projections");
+        }
     }
 }
 

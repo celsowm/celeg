@@ -2,6 +2,7 @@
 
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/packed_int8.hpp"
+#include "celeg/checkpoint/packed_int4.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
@@ -140,9 +141,20 @@ CpuLinearWeight CpuWeightCodec::matrix(
         *matrix.scales = packed.scales;
         return CpuLinearWeight::from_int8(std::move(matrix));
     }
+    if (has_packed_int4_matrix(*source_, name)) {
+        const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
+        const std::vector<float> values = dequantize_packed_int4(packed);
+        return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
+            values.data(), static_cast<size_t>(packed.rows),
+            static_cast<size_t>(packed.cols), group_size_));
+    }
     const HostTensorView tensor = source_->tensor(name);
     if (tensor.shape != expected || expected.size() != 2) {
-        throw std::runtime_error("unexpected CPU linear tensor: " + name);
+        throw std::runtime_error("unexpected CPU linear tensor: " + name +
+            " expected=" + std::to_string(expected.size() > 0 ? expected[0] : 0) +
+            "x" + std::to_string(expected.size() > 1 ? expected[1] : 0) +
+            " actual=" + std::to_string(tensor.shape.size() > 0 ? tensor.shape[0] : 0) +
+            "x" + std::to_string(tensor.shape.size() > 1 ? tensor.shape[1] : 0));
     }
     if (tensor.dtype == TensorDType::Quantized) {
         const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
@@ -205,6 +217,22 @@ CpuLinearWeight CpuWeightCodec::concat(
         }
         result.validate();
         return result;
+    }
+    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
+            return has_packed_int4_matrix(*source_, part.first);
+        })) {
+        const int64_t cols = parts.front().second.at(1);
+        size_t total_rows = 0;
+        std::vector<float> joined;
+        for (const auto& [name, expected] : parts) {
+            const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed INT4 concat width mismatch");
+            const std::vector<float> values = dequantize_packed_int4(packed);
+            joined.insert(joined.end(), values.begin(), values.end());
+            total_rows += static_cast<size_t>(packed.rows);
+        }
+        return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
+            joined.data(), total_rows, static_cast<size_t>(cols), group_size_));
     }
     const int64_t cols = parts.front().second[1];
     size_t total_rows = 0;

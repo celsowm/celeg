@@ -68,6 +68,9 @@ public:
     void embedding(const Q4GroupMatrix& table, int32_t token, float* output) const;
     void gemv(const CpuLinearWeight& weight, const float* input, float* output,
               float beta = 0.0f) const;
+    void gemv_transpose(const CpuLinearWeight& weight, const float* input,
+                        float* output, size_t row_offset = 0,
+                        size_t row_count = 0) const;
     void gemm(const CpuLinearWeight& weight, const float* input, float* output,
               size_t rows, float beta = 0.0f) const;
     void prepare_gguf_activation(const float* input, size_t rows, size_t cols,

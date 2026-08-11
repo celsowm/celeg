@@ -25,6 +25,12 @@ std::string resolve_chat_template_id(const CheckpointMetadata& metadata) {
         source.find("<|user|>") != std::string::npos) {
         return "chat:turn";
     }
+    if (source.find("<role>") != std::string::npos &&
+        source.find("<|role_end|>") != std::string::npos &&
+        source.find("<arg_key>") != std::string::npos &&
+        source.find("<arg_value>") != std::string::npos) {
+        return "chat:tagged-role";
+    }
     throw std::invalid_argument(
         "UnsupportedChatTemplateConstruct: no registered interaction protocol matches "
         "the checkpoint template evidence");

@@ -302,6 +302,12 @@ struct AttentionLayer {
     const LinearWeight* latent_key = nullptr;
     const LinearWeight* latent_value = nullptr;
     const LinearWeight* latent_key_rope = nullptr;
+    const LinearWeight* latent_query_projection = nullptr;
+    const LinearWeight* latent_query_expansion = nullptr;
+    const LinearWeight* latent_key_projection = nullptr;
+    const LinearWeight* latent_expansion = nullptr;
+    const __nv_bfloat16* latent_query_norm = nullptr;
+    const __nv_bfloat16* latent_key_norm = nullptr;
     const __nv_bfloat16* q_norm = nullptr;
     const __nv_bfloat16* k_norm = nullptr;
     DeviceBuffer<__nv_bfloat16> key_cache;
@@ -344,10 +350,14 @@ struct GatedDeltaNetLayer {
     LayerCommon common;
     GatedDeltaNetSpec spec;
     const LinearWeight* qkv = nullptr;
+    const LinearWeight* q = nullptr;
+    const LinearWeight* k = nullptr;
+    const LinearWeight* v = nullptr;
     const LinearWeight* z = nullptr;
     const LinearWeight* b = nullptr;
     const LinearWeight* a = nullptr;
     const __nv_bfloat16* conv_weight = nullptr;
+    DeviceBuffer<__nv_bfloat16> factorized_conv_weight;
     const __nv_bfloat16* dt_bias = nullptr;
     const __nv_bfloat16* a_log = nullptr;
     const __nv_bfloat16* norm = nullptr;

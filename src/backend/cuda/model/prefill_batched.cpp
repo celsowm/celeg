@@ -4,6 +4,7 @@
 #include "celeg/backend/cuda/phase_profile.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/backend/cuda/moe.hpp"
+#include "celeg/backend/cuda/kernels/rope_pairing.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -69,9 +70,25 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             {
             auto native_fanout = native_fanout_scope(
                 workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
-            linear(workspace_.prefill_normed_.data(), *gated_delta->qkv,
-                   workspace_.prefill_gated_delta_qkv_.data(), rows, qkv_width,
-                   resources_.shape_.hidden);
+            if (spec.factorized_projections) {
+                linear(workspace_.prefill_normed_.data(), *gated_delta->q,
+                       workspace_.prefill_gated_delta_qkv_.data(), rows,
+                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                linear(workspace_.prefill_normed_.data(), *gated_delta->k,
+                       workspace_.prefill_k_.data(), rows,
+                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                linear(workspace_.prefill_normed_.data(), *gated_delta->v,
+                       workspace_.prefill_v_.data(), rows, value_width,
+                       resources_.shape_.hidden);
+                launch_interleave_gated_delta_qkv(
+                    workspace_.prefill_gated_delta_qkv_.data(), workspace_.prefill_k_.data(),
+                    workspace_.prefill_v_.data(), workspace_.prefill_gated_delta_qkv_.data(),
+                    rows, spec.key_heads * spec.key_head_dim, value_width, stream_.get());
+            } else {
+                linear(workspace_.prefill_normed_.data(), *gated_delta->qkv,
+                       workspace_.prefill_gated_delta_qkv_.data(), rows, qkv_width,
+                       resources_.shape_.hidden);
+            }
             linear(workspace_.prefill_normed_.data(), *gated_delta->z,
                    workspace_.prefill_gated_delta_z_.data(), rows, value_width,
                    resources_.shape_.hidden);
@@ -79,7 +96,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                    workspace_.prefill_gated_delta_b_.data(), rows, spec.value_heads,
                    resources_.shape_.hidden);
             linear(workspace_.prefill_normed_.data(), *gated_delta->a,
-                   workspace_.prefill_gated_delta_a_.data(), rows, spec.value_heads,
+                   workspace_.prefill_gated_delta_a_.data(), rows, spec.decay_width(),
                    resources_.shape_.hidden);
             }
             prof.end(PrefillPhase::QkvProj, stream_.get());
@@ -93,7 +110,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 workspace_.prefill_gated_delta_output_.data(), rows, spec.conv_kernel,
                 spec.key_head_dim, spec.value_head_dim, spec.key_heads,
                 spec.value_heads, resources_.shape_.numerical_policy.norm_eps,
-                stream_.get());
+                spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
+                spec.sigmoid_output_gate, stream_.get());
             prof.end(PrefillPhase::Conv, stream_.get());
             prof.begin(stream_.get());
             linear(workspace_.prefill_gated_delta_output_.data(), *gated_delta->out,
@@ -116,11 +134,123 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     throw std::invalid_argument(
                         "CUDA latent attention requires BF16 state storage");
                 }
-                if (layout.output_gate.enabled() || layout.multi_axis_position()) {
+                const auto& latent = *layout.latent_state();
+                if (latent.factorized) {
+                    prof.begin(stream_.get());
+                    {
+                    auto native_fanout = native_fanout_scope(
+                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
+                    linear(workspace_.prefill_normed_.data(), *attention->latent_query_projection,
+                           workspace_.prefill_latent_projection_.data(), rows,
+                           latent.query_rank, resources_.shape_.hidden);
+                    launch_rmsnorm(workspace_.prefill_latent_projection_.data(),
+                                   attention->latent_query_norm,
+                                   workspace_.prefill_latent_projection_.data(), rows,
+                                   latent.query_rank, latent.query_latent_norm.epsilon,
+                                   stream_.get());
+                    linear(workspace_.prefill_latent_projection_.data(),
+                           *attention->latent_query_expansion,
+                           workspace_.prefill_qkv_.data(), rows,
+                           layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
+                           latent.query_rank);
+                    launch_factorized_latent_query(
+                        workspace_.prefill_qkv_.data(), attention->latent_expansion->bf16,
+                        workspace_.prefill_latent_query_content_.data(), rows,
+                        layout.query_heads, latent.nope_head_dim, latent.rope_head_dim,
+                        latent.latent_rank, stream_.get());
+                    launch_factorized_latent_rope(
+                        workspace_.prefill_qkv_.data(),
+                        workspace_.prefill_latent_query_rope_.data(), rows,
+                        layout.query_heads, latent.nope_head_dim, latent.rope_head_dim,
+                        stream_.get());
+                    linear(workspace_.prefill_normed_.data(), *attention->latent_key_projection,
+                           workspace_.prefill_qkv_.data(), rows,
+                           latent.latent_rank + latent.rope_head_dim,
+                           resources_.shape_.hidden);
+                    launch_rmsnorm(workspace_.prefill_qkv_.data(), attention->latent_key_norm,
+                                   workspace_.prefill_latent_key_.data(), rows,
+                                   latent.latent_rank, latent.key_latent_norm.epsilon,
+                                   stream_.get());
+                    CELEG_CUDA(cudaMemcpyAsync(
+                        workspace_.prefill_latent_value_.data(),
+                        workspace_.prefill_latent_key_.data(),
+                        static_cast<size_t>(rows) * latent.latent_rank *
+                            sizeof(__nv_bfloat16), cudaMemcpyDeviceToDevice, stream_.get()));
+                    CELEG_CUDA(cudaMemcpy2DAsync(
+                        workspace_.prefill_latent_key_rope_.data(),
+                        static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
+                        workspace_.prefill_qkv_.data() + latent.latent_rank,
+                        static_cast<size_t>(latent.latent_rank + latent.rope_head_dim) *
+                            sizeof(__nv_bfloat16),
+                        static_cast<size_t>(latent.rope_head_dim) * sizeof(__nv_bfloat16),
+                        static_cast<size_t>(rows), cudaMemcpyDeviceToDevice, stream_.get()));
+                    }
+                    prof.end(PrefillPhase::QkvProj, stream_.get());
+                    prof.begin(stream_.get());
+                    if (const auto* rope = layout.rope_position()) {
+                        launch_qk_norm_rope_positions(
+                            workspace_.prefill_latent_query_rope_.data(),
+                            workspace_.prefill_latent_key_rope_.data(), nullptr, nullptr,
+                            rows, layout.query_heads, 1, latent.rope_head_dim, nullptr,
+                            static_cast<float>(rope->theta), 1.0f,
+                            resources_.shape_.numerical_policy.norm_eps, false,
+                            rope->pairing, lower_cuda_rope_scaling(*rope), stream_.get());
+                    }
+                    prof.end(PrefillPhase::RopeKv, stream_.get());
+                    prof.begin(stream_.get());
+                    launch_store_latent_prefill(
+                        workspace_.prefill_latent_key_.data(),
+                        workspace_.prefill_latent_value_.data(),
+                        workspace_.prefill_latent_key_rope_.data(),
+                        owner->latent_key_cache.data(), owner->latent_value_cache.data(),
+                        owner->latent_key_rope_cache.data(), rows, latent.latent_rank,
+                        latent.rope_head_dim, stream_.get());
+                    const float score_scale = layout.query_scale *
+                        resources_.shape_.numerical_policy.attention_multiplier;
+                    launch_latent_attention_prefill(
+                        workspace_.prefill_latent_query_content_.data(),
+                        workspace_.prefill_latent_query_rope_.data(),
+                        owner->latent_key_cache.data(), owner->latent_value_cache.data(),
+                        owner->latent_key_rope_cache.data(),
+                        workspace_.prefill_op_output_.data(), rows,
+                        attention->alibi_slopes.data(), layout.query_heads,
+                        latent.latent_rank, latent.rope_head_dim, score_scale,
+                        layout.sliding_window_size(), stream_.get());
+                    prof.end(PrefillPhase::Attention, stream_.get());
+                    prof.begin(stream_.get());
+                    launch_factorized_latent_value(
+                        workspace_.prefill_op_output_.data(), attention->latent_expansion->bf16,
+                        workspace_.prefill_latent_decompressed_.data(), rows,
+                        layout.query_heads, latent.nope_head_dim, latent.value_head_dim,
+                        latent.latent_rank, stream_.get());
+                    linear(workspace_.prefill_normed_.data(), *attention->gate,
+                           workspace_.prefill_attention_gate_.data(), rows,
+                           layout.output_gate_width(), resources_.shape_.hidden);
+                    if (layout.output_gate.granularity == AttentionGateGranularity::HeadWise) {
+                        launch_sigmoid_multiply_headwise(
+                            workspace_.prefill_latent_decompressed_.data(),
+                            workspace_.prefill_attention_gate_.data(),
+                            rows, layout.query_heads, latent.value_head_dim, stream_.get());
+                    } else {
+                        launch_sigmoid_multiply(
+                            workspace_.prefill_latent_decompressed_.data(),
+                            workspace_.prefill_attention_gate_.data(),
+                            rows * layout.latent_output_width(), stream_.get());
+                    }
+                    linear(workspace_.prefill_latent_decompressed_.data(), *attention->out,
+                           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                           layout.latent_output_width(),
+                           resources_.options_.fused_residuals && !common_layer.post_attention_norm
+                               ? 1.0f : 0.0f);
+                    launch_scale(workspace_.prefill_hidden_.data(),
+                                 rows * resources_.shape_.hidden,
+                                 resources_.shape_.numerical_policy.residual_multiplier,
+                                 stream_.get());
+                    prof.end(PrefillPhase::AttnOut, stream_.get());
+                } else if (layout.output_gate.enabled() || layout.multi_axis_position()) {
                     throw std::invalid_argument(
                         "CUDA latent attention does not support query gates or M-RoPE yet");
                 }
-                const auto& latent = *layout.latent_state();
                 prof.begin(stream_.get());
                 {
                 auto native_fanout = native_fanout_scope(
