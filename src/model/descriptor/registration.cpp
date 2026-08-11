@@ -13,9 +13,10 @@ namespace celeg {
 
 void register_descriptor_architectures(ArchitectureCatalog& catalog,
                                        const std::filesystem::path& directory) {
-    if (!std::filesystem::is_directory(directory)) {
-        throw std::runtime_error("descriptor directory is missing: " + directory.string());
-    }
+    // Descriptor files are an optional extension layer.  The built-in
+    // automatic architecture is registered independently, so a descriptorless
+    // installation must remain usable after all declarative stores are removed.
+    if (!std::filesystem::is_directory(directory)) return;
 
     std::vector<std::filesystem::path> stores;
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
@@ -24,10 +25,7 @@ void register_descriptor_architectures(ArchitectureCatalog& catalog,
         }
     }
     std::sort(stores.begin(), stores.end());
-    if (stores.empty()) {
-        throw std::runtime_error("descriptor directory contains no JSON stores: " +
-                                 directory.string());
-    }
+    if (stores.empty()) return;
 
     for (const std::filesystem::path& file : stores) {
         const Json root = Json::parse_file(file.string());

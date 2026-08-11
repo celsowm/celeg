@@ -66,20 +66,28 @@ template <typename T>
 std::optional<T> aliases(const CheckpointMetadata& metadata,
                          std::initializer_list<std::string_view> keys,
                          std::vector<EvidenceItem>& evidence,
-                         std::string_view fact) {
+                         std::string_view fact,
+                         std::string_view gguf_suffix = {}) {
     std::optional<T> result;
     std::string source;
-    for (const std::string_view key : keys) {
-        auto value = scalar<T>(metadata, key);
-        const std::string component_key = "text_config." + std::string(key);
-        if (!value.has_value()) value = scalar<T>(metadata, component_key);
-        if (!value.has_value()) continue;
+    const auto consider = [&](std::optional<T> value, std::string_view key) {
+        if (!value.has_value()) return;
         if (result.has_value() && *result != *value) {
             inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
                                    "conflicting metadata aliases for " + std::string(fact));
         }
         result = value;
-        source = metadata.contains(key) ? std::string(key) : component_key;
+        source = key;
+    };
+    for (const std::string_view key : keys) {
+        consider(scalar<T>(metadata, key), key);
+        const std::string component_key = "text_config." + std::string(key);
+        consider(scalar<T>(metadata, component_key), component_key);
+    }
+    if (metadata.is_gguf() && !gguf_suffix.empty()) {
+        const std::string gguf_key = metadata.architecture_type() + "." +
+            std::string(gguf_suffix);
+        consider(scalar<T>(metadata, gguf_key), gguf_key);
     }
     if (result.has_value()) {
         evidence.push_back({EvidenceKind::AliasMetadata, source,
@@ -92,7 +100,11 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
     std::string resolved_key(key);
     if (!metadata.contains(resolved_key)) {
         resolved_key = "text_config." + resolved_key;
-        if (!metadata.contains(resolved_key)) return {};
+        if (!metadata.contains(resolved_key)) {
+            if (!metadata.is_gguf()) return {};
+            resolved_key = "tokenizer.ggml." + std::string(key);
+            if (!metadata.contains(resolved_key)) return {};
+        }
     }
     const MetadataValue& value = metadata.value(resolved_key);
     if (const auto* integer = std::get_if<std::int64_t>(&value)) {
@@ -148,34 +160,39 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     reject_unknown_semantic_metadata(metadata);
     NormalizedModelMetadata result;
     result.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
-                                      result.evidence, "hidden_size");
+                                      result.evidence, "hidden_size", "embedding_length");
     result.intermediate_size = aliases<int>(
         metadata, {"intermediate_size", "n_inner", "ffn_dim"}, result.evidence,
-        "intermediate_size");
+        "intermediate_size", "feed_forward_length");
     result.layer_count = aliases<int>(
         metadata, {"num_hidden_layers", "n_layer", "num_layers"}, result.evidence,
-        "layer_count");
+        "layer_count", "block_count");
     result.query_heads = aliases<int>(
-        metadata, {"num_attention_heads", "n_head"}, result.evidence, "query_heads");
+        metadata, {"num_attention_heads", "n_head"}, result.evidence, "query_heads",
+        "attention.head_count");
     result.key_value_heads = aliases<int>(
-        metadata, {"num_key_value_heads", "n_kv_heads"}, result.evidence, "key_value_heads");
-    result.head_dim = aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim");
+        metadata, {"num_key_value_heads", "n_kv_heads"}, result.evidence, "key_value_heads",
+        "attention.head_count_kv");
+    result.head_dim = aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
+                                   "attention.key_length");
     result.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
-                                     "vocab_size");
+                                     "vocab_size", "vocab_size");
     result.context_length = aliases<int>(
         metadata, {"max_position_embeddings", "max_seq_len", "context_length"},
-        result.evidence, "context_length");
+        result.evidence, "context_length", "context_length");
     result.norm_epsilon = aliases<float>(
         metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
-        result.evidence, "norm_epsilon");
+        result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
     result.rope_theta = aliases<double>(metadata, {"rope_theta"}, result.evidence,
-                                         "rope_theta");
+                                         "rope_theta", "rope.freq_base");
     result.rotary_fraction = aliases<float>(metadata, {"rotary_fraction"}, result.evidence,
                                             "rotary_fraction");
-    result.bos_token_id = aliases<int>(metadata, {"bos_token_id"}, result.evidence,
-                                       "bos_token_id");
-    result.pad_token_id = aliases<int>(metadata, {"pad_token_id"}, result.evidence,
-                                       "pad_token_id");
+    result.bos_token_id = aliases<int>(metadata,
+                                       {"bos_token_id", "tokenizer.ggml.bos_token_id"},
+                                       result.evidence, "bos_token_id");
+    result.pad_token_id = aliases<int>(metadata,
+                                       {"pad_token_id", "tokenizer.ggml.padding_token_id"},
+                                       result.evidence, "pad_token_id");
     result.query_key_norm = aliases<bool>(
         metadata, {"qk_norm", "query_key_norm"}, result.evidence, "query_key_norm");
     result.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,

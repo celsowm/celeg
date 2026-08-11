@@ -70,6 +70,46 @@ std::shared_ptr<MemoryRepository> repository() {
     return result;
 }
 
+celeg::CheckpointMetadata gguf_metadata() {
+    celeg::CheckpointMetadata result;
+    result.source_format = celeg::CheckpointSourceFormat::Gguf;
+    result.values["general.architecture"] = std::string("conventional");
+    result.values["conventional.embedding_length"] = int64_t(8);
+    result.values["conventional.feed_forward_length"] = int64_t(16);
+    result.values["conventional.block_count"] = int64_t(2);
+    result.values["conventional.attention.head_count"] = int64_t(4);
+    result.values["conventional.attention.head_count_kv"] = int64_t(2);
+    result.values["conventional.attention.key_length"] = int64_t(2);
+    result.values["conventional.vocab_size"] = int64_t(32);
+    result.values["conventional.context_length"] = int64_t(64);
+    result.values["conventional.attention.layer_norm_rms_epsilon"] = 1.0e-5;
+    result.values["conventional.rope.freq_base"] = 10000.0;
+    result.values["tokenizer.ggml.bos_token_id"] = int64_t(1);
+    result.values["tokenizer.ggml.eos_token_id"] = int64_t(2);
+    result.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
+    return result;
+}
+
+std::shared_ptr<MemoryRepository> gguf_repository() {
+    auto result = std::make_shared<MemoryRepository>();
+    result->add("token_embd.weight", {32, 8});
+    result->add("output.weight", {32, 8});
+    result->add("output_norm.weight", {8});
+    for (int layer = 0; layer < 2; ++layer) {
+        const std::string prefix = "blk." + std::to_string(layer);
+        result->add(prefix + ".attn_norm.weight", {8});
+        result->add(prefix + ".attn_q.weight", {8, 8});
+        result->add(prefix + ".attn_k.weight", {4, 8});
+        result->add(prefix + ".attn_v.weight", {4, 8});
+        result->add(prefix + ".attn_output.weight", {8, 8});
+        result->add(prefix + ".ffn_norm.weight", {8});
+        result->add(prefix + ".ffn_gate.weight", {16, 8});
+        result->add(prefix + ".ffn_up.weight", {16, 8});
+        result->add(prefix + ".ffn_down.weight", {8, 16});
+    }
+    return result;
+}
+
 } // namespace
 
 int main() {
@@ -89,6 +129,16 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(
         std::get<celeg::AttentionSpec>(model.graph.layers.front().mixer).output_transform));
     CELEG_TEST_CHECK(celeg::explain_resolution(checkpoint).failures.empty());
+
+    celeg::CheckpointView gguf_checkpoint;
+    gguf_checkpoint.metadata = gguf_metadata();
+    gguf_checkpoint.repository = gguf_repository();
+    const auto& gguf_architecture = catalog.select(gguf_checkpoint.metadata);
+    const celeg::ResolvedModel gguf_model = gguf_architecture.resolve(gguf_checkpoint);
+    CELEG_TEST_CHECK(gguf_model.provenance.source_format == "gguf");
+    CELEG_TEST_CHECK(gguf_model.topology.hidden == 8);
+    CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
+    CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
 
     auto conflicting = metadata();
     conflicting.values["n_embd"] = int64_t(9);

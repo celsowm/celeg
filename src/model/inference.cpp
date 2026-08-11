@@ -62,7 +62,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     const TensorInventoryEntry* embedding = nullptr;
     for (const std::string& name : {std::string("transformer.wte.weight"),
                                     std::string("model.embed_tokens.weight"),
-                                    std::string("tok_embeddings.weight")}) {
+                                    std::string("tok_embeddings.weight"),
+                                    std::string("token_embd.weight")}) {
         if (const auto* candidate = input.inventory.find(name)) {
             if (embedding != nullptr) {
                 inference_detail::fail(ResolutionFailureKind::AmbiguousTensorBinding,
@@ -81,7 +82,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     }
 
     std::unordered_set<int> layers;
-    const std::regex layer_pattern(R"((?:transformer\.h|model\.layers|layers)\.(\d+)\.)");
+    const std::regex layer_pattern(R"((?:transformer\.h|model\.layers|layers|blk)\.(\d+)\.)");
     for (const auto& entry : input.inventory.entries()) {
         std::smatch match;
         if (std::regex_search(entry.name, match, layer_pattern)) {
@@ -165,7 +166,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     add_global(TensorRole::TokenEmbedding, *embedding);
 
     const std::vector<std::string> head_names = {
-        "lm_head.weight", "transformer.lm_head.weight"};
+        "lm_head.weight", "transformer.lm_head.weight", "output.weight"};
     const TensorInventoryEntry* head = nullptr;
     for (const std::string& name : head_names) {
         if (const auto* candidate = input.inventory.find(name)) {
@@ -191,7 +192,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     add_global(TensorRole::LanguageModelHead, *head);
 
     const std::vector<std::string> final_norm_names = {
-        "transformer.ln_f.weight", "model.norm.weight", "norm.weight"};
+        "transformer.ln_f.weight", "model.norm.weight", "norm.weight", "output_norm.weight"};
     const TensorInventoryEntry* final_norm = nullptr;
     for (const auto& name : final_norm_names) {
         if (const auto* candidate = input.inventory.find(name)) {
@@ -218,10 +219,12 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             "transformer.h." + index + ".ln_1.weight",
             "model.layers." + index + ".input_layernorm.weight",
             "model.layers." + index + ".self_attn_layer_norm.weight",
+            "blk." + index + ".attn_norm.weight",
         };
         const std::vector<std::string> ffn_norm_candidates = {
             "transformer.h." + index + ".ln_2.weight",
             "model.layers." + index + ".post_attention_layernorm.weight",
+            "blk." + index + ".ffn_norm.weight",
         };
         const auto* attention_norm = inference_detail::find_unique(
             input.inventory, norm_candidates, TensorRole::AttentionInputNorm, layer,

@@ -20,8 +20,15 @@ public:
             return metadata.contains(key) ||
                    metadata.contains("text_config." + std::string(key));
         };
-        const bool has_structural_metadata = has("hidden_size") &&
-            has("num_hidden_layers") && has("num_attention_heads") && has("vocab_size");
+        const auto has_gguf = [&metadata](std::string_view suffix) {
+            return metadata.is_gguf() && metadata.contains(
+                metadata.architecture_type() + "." + std::string(suffix));
+        };
+        const bool has_structural_metadata =
+            (has("hidden_size") || has_gguf("embedding_length")) &&
+            (has("num_hidden_layers") || has_gguf("block_count")) &&
+            (has("num_attention_heads") || has_gguf("attention.head_count")) &&
+            (has("vocab_size") || has_gguf("vocab_size"));
         return {has_structural_metadata, 0,
                 has_structural_metadata ? "generic structural metadata" :
                                            "required structural metadata is absent"};

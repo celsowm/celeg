@@ -51,20 +51,31 @@ const TensorInventoryEntry* find_unique(const TensorInventory& inventory,
 std::vector<std::string> attention_tensor_candidates(int layer,
                                                       std::string_view suffix) {
     const std::string index = std::to_string(layer);
+    std::string gguf_suffix;
+    if (suffix == "q_proj.weight") gguf_suffix = "attn_q.weight";
+    if (suffix == "k_proj.weight") gguf_suffix = "attn_k.weight";
+    if (suffix == "v_proj.weight") gguf_suffix = "attn_v.weight";
+    if (suffix == "o_proj.weight") gguf_suffix = "attn_output.weight";
     return {
         "transformer.h." + index + ".attn." + std::string(suffix),
         "model.layers." + index + ".self_attn." + std::string(suffix),
         "layers." + index + ".attention." + std::string(suffix),
+        "blk." + index + "." + gguf_suffix,
     };
 }
 
 std::vector<std::string> feed_forward_tensor_candidates(int layer,
                                                         std::string_view suffix) {
     const std::string index = std::to_string(layer);
+    std::string gguf_suffix;
+    if (suffix == "w_gate.weight") gguf_suffix = "ffn_gate.weight";
+    if (suffix == "w_up.weight") gguf_suffix = "ffn_up.weight";
+    if (suffix == "w_down.weight") gguf_suffix = "ffn_down.weight";
     return {
         "transformer.h." + index + ".mlp." + std::string(suffix),
         "model.layers." + index + ".mlp." + std::string(suffix),
         "layers." + index + ".feed_forward." + std::string(suffix),
+        "blk." + index + "." + gguf_suffix,
     };
 }
 
