@@ -3,6 +3,7 @@
 #include "celeg/model/inference.hpp"
 #include "support/assertions.hpp"
 
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -48,6 +49,10 @@ celeg::CheckpointMetadata metadata() {
     result.values["max_position_embeddings"] = int64_t(64);
     result.values["xsa_projection"] = true;
     result.values["tie_word_embeddings"] = true;
+    result.values["embedding_multiplier"] = 2.0;
+    result.values["attention_multiplier"] = 0.3535533906;
+    result.values["residual_multiplier"] = 0.5;
+    result.values["logits_scaling"] = 2.0;
     return result;
 }
 
@@ -169,6 +174,11 @@ int main() {
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
     CELEG_TEST_CHECK(model.provenance.identity.find("automatic") != std::string::npos);
     CELEG_TEST_CHECK(model.topology.hidden == 8);
+    CELEG_TEST_CHECK(model.topology.numerical_policy.embedding_multiplier == 2.0f);
+    CELEG_TEST_CHECK(std::abs(model.topology.numerical_policy.attention_multiplier -
+                              0.3535533906f) < 1.0e-6f);
+    CELEG_TEST_CHECK(model.topology.numerical_policy.residual_multiplier == 0.5f);
+    CELEG_TEST_CHECK(model.topology.numerical_policy.logits_divisor == 2.0f);
     CELEG_TEST_CHECK(model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(model.graph.layers.front().mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(

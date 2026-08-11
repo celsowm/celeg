@@ -2,6 +2,7 @@
 
 #include "inference/support.hpp"
 
+#include <cmath>
 #include <regex>
 #include <sstream>
 #include <unordered_set>
@@ -154,7 +155,10 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     topology.shared_kv_group_count = 0;
     topology.token_policy = {*m.bos_token_id, m.eos_token_ids, *m.pad_token_id};
     topology.numerical_policy.norm_eps = *m.norm_epsilon;
-    topology.numerical_policy.attention_multiplier = 0.125f;
+    topology.numerical_policy.embedding_multiplier = m.embedding_multiplier.value_or(1.0f);
+    topology.numerical_policy.residual_multiplier = m.residual_multiplier.value_or(1.0f);
+    topology.numerical_policy.logits_multiplier = m.logits_multiplier.value_or(1.0f);
+    topology.numerical_policy.logits_divisor = m.logits_divisor.value_or(1.0f);
 
     const auto make_attention = [&](int query_heads, int key_value_heads, int head_dim,
                                     bool query_key_norm) {
@@ -340,6 +344,19 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         topology.attention_layouts[static_cast<size_t>(layer)] =
             make_attention(*query_heads, *key_value_heads, head_dim, has_query_norm);
         topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
+    }
+    if (m.attention_multiplier.has_value()) {
+        topology.numerical_policy.attention_multiplier = *m.attention_multiplier;
+    } else {
+        int attention_head_dim = 0;
+        for (int layer = 0; layer < *m.layer_count; ++layer) {
+            if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
+                attention_head_dim = topology.attention_layouts[static_cast<size_t>(layer)].head_dim;
+                break;
+            }
+        }
+        topology.numerical_policy.attention_multiplier = attention_head_dim > 0
+            ? 1.0f / std::sqrt(static_cast<float>(attention_head_dim)) : 1.0f;
     }
     topology.validate();
 

@@ -141,6 +141,11 @@ struct NormalizedModelMetadata {
     std::optional<int> vocab_size;
     std::optional<int> context_length;
     std::optional<float> norm_epsilon;
+    std::optional<float> embedding_multiplier;
+    std::optional<float> attention_multiplier;
+    std::optional<float> residual_multiplier;
+    std::optional<float> logits_multiplier;
+    std::optional<float> logits_divisor;
     std::optional<int> shortconv_cache;
     std::optional<double> rope_theta;
     std::optional<float> rotary_fraction;

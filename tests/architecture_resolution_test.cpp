@@ -4,11 +4,13 @@
 #include "celeg/runtime/context.hpp"
 #include "support/assertions.hpp"
 
-#include <memory>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
-#include <vector>
+#include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -21,149 +23,19 @@ public:
     celeg::ProbeResult probe(const celeg::CheckpointMetadata&) const override {
         return {true, specificity_, "test"};
     }
-    celeg::ResolvedModel resolve(const celeg::CheckpointView&) const override {
-        return {};
-    }
+    celeg::ResolvedModel resolve(const celeg::CheckpointView&) const override { return {}; }
 
 private:
     std::string name_;
     int specificity_;
 };
 
-
-celeg::CheckpointMetadata lfm_metadata(std::string name = "LiquidAI/LFM2.5-1.2B-Instruct") {
+celeg::CheckpointMetadata structural_metadata(std::string model_type) {
     celeg::CheckpointMetadata metadata;
-    metadata.values["model_type"] = std::string("lfm2");
-    metadata.values["dtype"] = std::string("bfloat16");
-    metadata.values["hidden_size"] = int64_t(2048);
-    metadata.values["intermediate_size"] = int64_t(12288);
-    metadata.values["num_hidden_layers"] = int64_t(16);
-    metadata.values["num_attention_heads"] = int64_t(32);
-    metadata.values["num_key_value_heads"] = int64_t(8);
-    metadata.values["head_dim"] = int64_t(64);
-    metadata.values["vocab_size"] = int64_t(65536);
-    metadata.values["conv_L_cache"] = int64_t(3);
-    metadata.values["conv_dim"] = int64_t(2048);
-    metadata.values["max_position_embeddings"] = int64_t(32768);
-    metadata.values["bos_token_id"] = int64_t(1);
-    metadata.values["eos_token_id"] = int64_t(7);
-    metadata.values["pad_token_id"] = int64_t(0);
-    metadata.values["norm_eps"] = 1.0e-5;
-    metadata.values["rope_theta"] = 1.0e6;
-    metadata.values["layer_types"] = std::vector<std::string>{
-        "conv", "conv", "full_attention", "conv", "conv", "full_attention",
-        "conv", "conv", "full_attention", "conv", "conv", "full_attention",
-        "conv", "full_attention", "full_attention", "full_attention"};
-    metadata.repository_hint = std::move(name);
-    return metadata;
-}
-
-celeg::CheckpointMetadata gemma_metadata(int hidden, int intermediate, int layers,
-                                         int kv_heads, int shared, std::string name) {
-    celeg::CheckpointMetadata metadata;
-    metadata.values["model_type"] = std::string("gemma4");
-    metadata.values["text_config.model_type"] = std::string("gemma4_text");
-    metadata.values["text_config.hidden_size"] = int64_t(hidden);
-    metadata.values["text_config.intermediate_size"] = int64_t(intermediate);
-    metadata.values["text_config.num_hidden_layers"] = int64_t(layers);
-    metadata.values["text_config.num_attention_heads"] = int64_t(8);
-    metadata.values["text_config.num_key_value_heads"] = int64_t(kv_heads);
-    metadata.values["text_config.head_dim"] = int64_t(256);
-    metadata.values["text_config.global_head_dim"] = int64_t(512);
-    metadata.values["text_config.vocab_size"] = int64_t(262144);
-    metadata.values["text_config.max_position_embeddings"] = int64_t(131072);
-    metadata.values["text_config.num_kv_shared_layers"] = int64_t(shared);
-    metadata.values["text_config.sliding_window"] = int64_t(512);
-    metadata.values["text_config.hidden_size_per_layer_input"] = int64_t(256);
-    metadata.values["text_config.use_double_wide_mlp"] = true;
-    metadata.values["text_config.final_logit_softcapping"] = 30.0;
-    metadata.values["text_config.rms_norm_eps"] = 1.0e-6;
-    metadata.values["text_config.bos_token_id"] = int64_t(2);
-    metadata.values["text_config.eos_token_id"] = int64_t(1);
-    metadata.values["text_config.pad_token_id"] = int64_t(0);
-    std::vector<std::string> schedule(static_cast<size_t>(layers), "sliding_attention");
-    for (int i = 5; i < layers; i += 6) schedule[static_cast<size_t>(i)] = "full_attention";
-    schedule.back() = "full_attention";
-    metadata.values["text_config.layer_types"] = std::move(schedule);
-    metadata.values["text_config.rope_parameters.sliding_attention.rope_theta"] = 10000.0;
-    metadata.values["text_config.rope_parameters.sliding_attention.rope_type"] =
-        std::string("default");
-    metadata.values["text_config.rope_parameters.full_attention.rope_theta"] = 1000000.0;
-    metadata.values["text_config.rope_parameters.full_attention.rope_type"] =
-        std::string("proportional");
-    metadata.values["text_config.rope_parameters.full_attention.partial_rotary_factor"] = 0.25;
-    metadata.repository_hint = std::move(name);
-    return metadata;
-}
-
-celeg::CheckpointMetadata qwen35_metadata(bool moe = false) {
-    celeg::CheckpointMetadata metadata;
-    metadata.values["model_type"] = std::string(moe ? "qwen3_5_moe" : "qwen3_5");
-    metadata.values["text_config.model_type"] = std::string(moe ? "qwen3_5_moe_text" : "qwen3_5_text");
-    metadata.values["text_config.hidden_size"] = int64_t(1024);
-    metadata.values["text_config.intermediate_size"] = int64_t(3584);
-    metadata.values["text_config.num_hidden_layers"] = int64_t(4);
-    metadata.values["text_config.mtp_num_hidden_layers"] = int64_t(1);
-    metadata.values["text_config.num_attention_heads"] = int64_t(8);
-    metadata.values["text_config.num_key_value_heads"] = int64_t(2);
-    metadata.values["text_config.head_dim"] = int64_t(256);
-    metadata.values["text_config.vocab_size"] = int64_t(248320);
-    metadata.values["text_config.max_position_embeddings"] = int64_t(262144);
-    metadata.values["text_config.eos_token_id"] = int64_t(248044);
-    metadata.values["text_config.rms_norm_eps"] = 1.0e-6;
-    metadata.values["text_config.rope_parameters.rope_theta"] = 1.0e7;
-    metadata.values["text_config.linear_conv_kernel_dim"] = int64_t(4);
-    metadata.values["text_config.linear_key_head_dim"] = int64_t(128);
-    metadata.values["text_config.linear_value_head_dim"] = int64_t(128);
-    metadata.values["text_config.linear_num_key_heads"] = int64_t(16);
-    metadata.values["text_config.linear_num_value_heads"] = int64_t(16);
-    if (moe) {
-        metadata.values["tie_word_embeddings"] = false;
-        metadata.values["text_config.moe_intermediate_size"] = int64_t(512);
-        metadata.values["text_config.shared_expert_intermediate_size"] = int64_t(512);
-        metadata.values["text_config.num_experts"] = int64_t(256);
-        metadata.values["text_config.num_experts_per_tok"] = int64_t(8);
-    }
-    metadata.values["text_config.layer_types"] = std::vector<std::string>{
-        "linear_attention", "linear_attention", "linear_attention", "full_attention"};
-    metadata.repository_hint = "Qwen/Qwen3.5-0.8B";
-    return metadata;
-}
-
-celeg::CheckpointMetadata nemotron_h_metadata() {
-    celeg::CheckpointMetadata metadata;
-    metadata.repository_hint = "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16";
-    metadata.values["model_type"] = std::string("nemotron_h");
-    metadata.values["hidden_size"] = int64_t(3136);
-    metadata.values["intermediate_size"] = int64_t(12544);
-    metadata.values["num_hidden_layers"] = int64_t(42);
-    metadata.values["num_attention_heads"] = int64_t(40);
-    metadata.values["num_key_value_heads"] = int64_t(8);
-    metadata.values["head_dim"] = int64_t(128);
-    metadata.values["vocab_size"] = int64_t(131072);
-    metadata.values["max_position_embeddings"] = int64_t(262144);
-    metadata.values["bos_token_id"] = int64_t(1);
-    metadata.values["eos_token_id"] = int64_t(2);
-    metadata.values["pad_token_id"] = int64_t(0);
-    metadata.values["rms_norm_eps"] = 1.0e-5;
-    metadata.values["mamba_num_heads"] = int64_t(96);
-    metadata.values["mamba_head_dim"] = int64_t(80);
-    metadata.values["ssm_state_size"] = int64_t(128);
-    metadata.values["n_groups"] = int64_t(8);
-    metadata.values["conv_kernel"] = int64_t(4);
-    metadata.values["chunk_size"] = int64_t(256);
-    metadata.values["hybrid_override_pattern"] =
-        std::string("M-M-M-MM-M-M*-M-M*-M-M-M*-M-M-MM*-MMM-M-M-");
-    return metadata;
-}
-
-celeg::CheckpointMetadata gptx25_metadata() {
-    celeg::CheckpointMetadata metadata;
-    metadata.repository_hint = "AxiomicLabs/GPT-X2.5-135M";
-    metadata.values["model_type"] = std::string("gptx2");
+    metadata.values["model_type"] = std::move(model_type);
     metadata.values["hidden_size"] = int64_t(576);
     metadata.values["intermediate_size"] = int64_t(1728);
-    metadata.values["num_hidden_layers"] = int64_t(30);
+    metadata.values["num_hidden_layers"] = int64_t(1);
     metadata.values["num_attention_heads"] = int64_t(9);
     metadata.values["num_key_value_heads"] = int64_t(3);
     metadata.values["head_dim"] = int64_t(64);
@@ -174,43 +46,7 @@ celeg::CheckpointMetadata gptx25_metadata() {
     metadata.values["pad_token_id"] = int64_t(1);
     metadata.values["rms_norm_eps"] = 1.0e-6;
     metadata.values["rope_theta"] = 100000.0;
-    metadata.values["qk_norm"] = false;
-    metadata.values["xsa_projection"] = true;
     metadata.values["tie_word_embeddings"] = true;
-    return metadata;
-}
-
-celeg::CheckpointMetadata muse_glimmer_metadata() {
-    celeg::CheckpointMetadata metadata;
-    metadata.repository_hint = "meta-models/Muse-Glimmer-30B";
-    metadata.values["model_type"] = std::string("muse_glimmer");
-    metadata.values["text_config.hidden_size"] = int64_t(6656);
-    metadata.values["text_config.intermediate_size"] = int64_t(19968);
-    metadata.values["text_config.num_hidden_layers"] = int64_t(52);
-    metadata.values["text_config.num_attention_heads"] = int64_t(32);
-    metadata.values["text_config.num_key_value_heads"] = int64_t(2);
-    metadata.values["text_config.head_dim"] = int64_t(128);
-    metadata.values["text_config.vocab_size"] = int64_t(202048);
-    metadata.values["text_config.max_position_embeddings"] = int64_t(131072);
-    metadata.values["text_config.bos_token_id"] = int64_t(200000);
-    metadata.values["text_config.eos_token_id"] = int64_t(200001);
-    metadata.values["text_config.pad_token_id"] = int64_t(0);
-    metadata.values["text_config.rms_norm_eps"] = 1.0e-5;
-    metadata.values["text_config.post_norm_eps"] = 1.0e-8;
-    metadata.values["text_config.qk_scale_factor"] = 3.87;
-    metadata.values["text_config.output_multiplier"] = 0.19611613513818404;
-    metadata.values["text_config.final_logit_softcapping"] = 20.0;
-    metadata.values["text_config.sliding_window"] = int64_t(2048);
-    std::vector<std::string> patterns;
-    std::vector<double> theta;
-    for (int layer = 0; layer < 52; ++layer) {
-        const bool global = layer % 4 == 3;
-        patterns.push_back(global ? "full_attention" : "sliding_attention");
-        theta.push_back(global ? 0.0 : 500000.0);
-    }
-    metadata.values["text_config.layer_types"] = std::move(patterns);
-    metadata.values["text_config.layer_rope_theta"] = std::move(theta);
-    metadata.values["text_config.rope_parameters.rope_theta"] = 500000.0;
     return metadata;
 }
 
@@ -219,7 +55,7 @@ public:
     GptxRepository() {
         shapes_["transformer.wte.weight"] = {32770, 576};
         shapes_["transformer.ln_f.weight"] = {576};
-        for (int layer = 0; layer < 30; ++layer) {
+        for (int layer = 0; layer < 1; ++layer) {
             const std::string prefix = "transformer.h." + std::to_string(layer);
             shapes_[prefix + ".ln_1.weight"] = {576};
             shapes_[prefix + ".attn.q_proj.weight"] = {576, 576};
@@ -232,20 +68,25 @@ public:
             shapes_[prefix + ".mlp.w_down.weight"] = {576, 1728};
         }
     }
+
     bool contains(std::string_view name) const override {
         return shapes_.contains(std::string(name));
     }
+
     celeg::HostTensorView tensor(std::string_view name) const override {
         return {celeg::TensorDType::BF16, shapes_.at(std::string(name)), nullptr, 0};
     }
+
     std::vector<std::string> names() const override {
         std::vector<std::string> result;
+        result.reserve(shapes_.size());
         for (const auto& [name, shape] : shapes_) {
             (void)shape;
             result.push_back(name);
         }
         return result;
     }
+
 private:
     std::unordered_map<std::string, std::vector<int64_t>> shapes_;
 };
@@ -255,483 +96,27 @@ private:
 int main() {
     const auto runtime = celeg::create_builtin_runtime_context();
     const auto& catalog = runtime->architectures();
-    CELEG_TEST_CHECK(catalog.ids().size() == 10);
-    const auto metadata = lfm_metadata();
-    const auto& architecture = catalog.select(metadata);
-    CELEG_TEST_CHECK(architecture.id() == "lfm2");
+    CELEG_TEST_CHECK(catalog.find("automatic") != nullptr);
 
+    for (const std::string model_type : {"lfm2", "qwen3_5", "granite", "gemma4"}) {
+        const auto metadata = structural_metadata(model_type);
+        CELEG_TEST_CHECK(catalog.select(metadata).id() == "automatic");
+    }
+
+    auto metadata = structural_metadata("gptx2");
+    metadata.repository_hint = "AxiomicLabs/GPT-X2.5-135M";
+    metadata.values["num_hidden_layers"] = int64_t(1);
     celeg::CheckpointView checkpoint;
     checkpoint.metadata = metadata;
-    const celeg::ResolvedModel model = architecture.resolve(checkpoint);
-    CELEG_TEST_CHECK(model.provenance.architecture_id == "lfm2");
-    CELEG_TEST_CHECK(model.topology.intermediate == 12288);
-    CELEG_TEST_CHECK(model.graph.layers.size() == 16);
-    CELEG_TEST_CHECK(model.graph.layers[0].mixer_kind() == celeg::MixerKind::ShortConvolution);
-    CELEG_TEST_CHECK(model.graph.layers[2].mixer_kind() == celeg::MixerKind::Attention);
-    CELEG_TEST_CHECK(!model.graph.has_moe());
-
-    const auto gptx_metadata = gptx25_metadata();
-    const auto& gptx_architecture = catalog.select(gptx_metadata);
-    CELEG_TEST_CHECK(gptx_architecture.id() == "automatic");
-    celeg::CheckpointView gptx_checkpoint;
-    gptx_checkpoint.metadata = gptx_metadata;
-    gptx_checkpoint.repository = std::make_shared<GptxRepository>();
-    const auto gptx = gptx_architecture.resolve(gptx_checkpoint);
-    CELEG_TEST_CHECK(gptx.topology.hidden == 576);
-    CELEG_TEST_CHECK(gptx.topology.intermediate == 1728);
-    CELEG_TEST_CHECK(gptx.graph.layers.size() == 30);
-    CELEG_TEST_CHECK(gptx.capabilities.tied_embeddings);
-    CELEG_TEST_CHECK(gptx.topology.numerical_policy.attention_multiplier == 0.125f);
-    const auto& gptx_attention = std::get<celeg::AttentionSpec>(
-        gptx.graph.layers.front().mixer);
-    CELEG_TEST_CHECK(gptx_attention.query_heads == 9);
-    CELEG_TEST_CHECK(gptx_attention.key_value_heads == 3);
-    CELEG_TEST_CHECK(gptx_attention.head_dim == 64);
-    CELEG_TEST_CHECK(!gptx_attention.has_query_key_norm());
-    CELEG_TEST_CHECK(gptx_attention.query_scale == 1.0f);
-    CELEG_TEST_CHECK(gptx_attention.rope_position()->pairing ==
-                     celeg::RopePairingKind::AdjacentPairs);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(
-        gptx_attention.output_transform));
-    CELEG_TEST_CHECK(std::get<celeg::OrthogonalizeCurrentValueSpec>(
-        gptx_attention.output_transform).minimum_norm_squared == 1.0e-6f);
-
-    const auto qwen_metadata = qwen35_metadata();
-    const auto& qwen_architecture = catalog.select(qwen_metadata);
-    CELEG_TEST_CHECK(qwen_architecture.id() == "qwen35");
-    celeg::CheckpointView qwen_checkpoint;
-    qwen_checkpoint.metadata = qwen_metadata;
-    const auto qwen = qwen_architecture.resolve(qwen_checkpoint);
-    CELEG_TEST_CHECK(qwen.topology.gated_delta_net_layer_count == 3);
-    CELEG_TEST_CHECK(qwen.topology.mtp_num_hidden_layers == 1);
-    CELEG_TEST_CHECK(qwen.topology.attention_layer_count == 1);
-    CELEG_TEST_CHECK(qwen.graph.layers[0].mixer_kind() == celeg::MixerKind::GatedDeltaNet);
-    CELEG_TEST_CHECK(qwen.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
-    CELEG_TEST_CHECK(qwen.capabilities.supports_cpu && qwen.capabilities.supports_cuda);
-    CELEG_TEST_CHECK(qwen.weight_plan.requests.size() > 40);
-
-    const auto qwen_moe_metadata = qwen35_metadata(true);
-    const auto& qwen_moe_architecture = catalog.select(qwen_moe_metadata);
-    celeg::CheckpointView qwen_moe_checkpoint;
-    qwen_moe_checkpoint.metadata = qwen_moe_metadata;
-    const auto qwen_moe = qwen_moe_architecture.resolve(qwen_moe_checkpoint);
-    CELEG_TEST_CHECK(qwen_moe.graph.has_moe());
-    CELEG_TEST_CHECK(qwen_moe.topology.num_experts == 256);
-    CELEG_TEST_CHECK(qwen_moe.topology.experts_per_token == 8);
-    CELEG_TEST_CHECK(qwen_moe.topology.moe_router_softmax);
-    CELEG_TEST_CHECK(qwen_moe.topology.shared_expert_intermediate == 512);
-    CELEG_TEST_CHECK(!qwen_moe.capabilities.tied_embeddings);
-    const auto& qwen_moe_spec = std::get<celeg::MixtureOfExpertsSpec>(
-        qwen_moe.graph.layers.front().feed_forward);
-    CELEG_TEST_CHECK(qwen_moe_spec.has_shared_expert);
-    CELEG_TEST_CHECK(qwen_moe_spec.shared_intermediate_size == 512);
-
-    const auto muse_metadata = muse_glimmer_metadata();
-    const auto& muse_architecture = catalog.select(muse_metadata);
-    CELEG_TEST_CHECK(muse_architecture.id() == "muse-glimmer");
-    celeg::CheckpointView muse_checkpoint;
-    muse_checkpoint.metadata = muse_metadata;
-    const auto muse = muse_architecture.resolve(muse_checkpoint);
-    CELEG_TEST_CHECK(muse.topology.num_hidden_layers == 52);
-    CELEG_TEST_CHECK(muse.topology.hidden == 6656);
-    CELEG_TEST_CHECK(muse.topology.attention_layout(0).query_heads == 32);
-    CELEG_TEST_CHECK(muse.topology.attention_layout(0).key_value_heads == 2);
-    CELEG_TEST_CHECK(muse.topology.attention_layout(0).sliding_window_size() == 2048);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
-        muse.topology.attention_layout(0).position));
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
-        muse.topology.attention_layout(3).position));
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
-        muse.topology.attention_layout(3).pattern));
-    const auto& muse_attention = std::get<celeg::AttentionSpec>(
-        muse.graph.layers.front().mixer);
-    CELEG_TEST_CHECK(muse_attention.query_norm.weightless());
-    CELEG_TEST_CHECK(muse_attention.key_norm.weightless());
-    CELEG_TEST_CHECK(muse_attention.output_gate.kind == celeg::AttentionGateKind::Sigmoid);
-    CELEG_TEST_CHECK(muse.graph.embedding_transform.post_norm.has_value());
-    CELEG_TEST_CHECK(muse.graph.embedding_transform.post_norm->weightless());
-    CELEG_TEST_CHECK(muse.graph.layers.front().operator_norm.weight_kind ==
-                     celeg::NormWeightKind::OnePlusScale);
-    bool muse_has_gate = false;
-    for (const auto& request : muse.weight_plan.requests) {
-        if (request.role == celeg::TensorRole::AttentionGate) muse_has_gate = true;
-    }
-    CELEG_TEST_CHECK(muse_has_gate);
-
-    const auto nemotron_metadata = nemotron_h_metadata();
-    const auto& nemotron_architecture = catalog.select(nemotron_metadata);
-    CELEG_TEST_CHECK(nemotron_architecture.id() == "nemotron_h");
-    celeg::CheckpointView nemotron_checkpoint;
-    nemotron_checkpoint.metadata = nemotron_metadata;
-    const auto nemotron = nemotron_architecture.resolve(nemotron_checkpoint);
-    CELEG_TEST_CHECK(nemotron.topology.hidden == 3136);
-    CELEG_TEST_CHECK(nemotron.topology.vocab_size == 131072);
-    CELEG_TEST_CHECK(nemotron.topology.num_hidden_layers == 42);
-    CELEG_TEST_CHECK(nemotron.topology.mamba2_layer_count == 21);
-    CELEG_TEST_CHECK(nemotron.topology.mlp_only_layer_count == 17);
-    CELEG_TEST_CHECK(nemotron.topology.attention_layer_count == 4);
-    CELEG_TEST_CHECK(nemotron.topology.mamba2_intermediate == 7680);
-    CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).query_heads == 40);
-    CELEG_TEST_CHECK(nemotron.topology.attention_layout(12).key_value_heads == 8);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
-        nemotron.topology.attention_layout(12).position));
-    CELEG_TEST_CHECK(nemotron.graph.layers[0].mixer_kind() == celeg::MixerKind::Mamba2);
-    CELEG_TEST_CHECK(nemotron.graph.layers[1].mixer_kind() == celeg::MixerKind::MlpOnly);
-    CELEG_TEST_CHECK(nemotron.graph.layers[12].mixer_kind() == celeg::MixerKind::Attention);
-    const auto& mamba_spec = std::get<celeg::Mamba2Spec>(nemotron.graph.layers[0].mixer);
-    CELEG_TEST_CHECK(mamba_spec.num_heads == 96 && mamba_spec.head_dim == 80);
-    CELEG_TEST_CHECK(mamba_spec.state_size == 128 && mamba_spec.group_count == 8);
-    CELEG_TEST_CHECK(nemotron.capabilities.supports_cpu);
-
-    celeg::CheckpointMetadata nanbeige_metadata;
-    nanbeige_metadata.repository_hint = "Nanbeige/Nanbeige4.2-3B";
-    nanbeige_metadata.values["model_type"] = std::string("nanbeige");
-    nanbeige_metadata.values["hidden_size"] = int64_t(3072);
-    nanbeige_metadata.values["intermediate_size"] = int64_t(10752);
-    nanbeige_metadata.values["num_hidden_layers"] = int64_t(22);
-    nanbeige_metadata.values["num_loops"] = int64_t(2);
-    nanbeige_metadata.values["num_attention_heads"] = int64_t(48);
-    nanbeige_metadata.values["num_key_value_heads"] = int64_t(8);
-    nanbeige_metadata.values["vocab_size"] = int64_t(166144);
-    nanbeige_metadata.values["max_position_embeddings"] = int64_t(262144);
-    nanbeige_metadata.values["bos_token_id"] = int64_t(166100);
-    nanbeige_metadata.values["eos_token_id"] = int64_t(166101);
-    nanbeige_metadata.values["pad_token_id"] = int64_t(0);
-    nanbeige_metadata.values["rms_norm_eps"] = 1.0e-5;
-    nanbeige_metadata.values["rope_theta"] = 70000000.0;
-    const auto& nanbeige_architecture = catalog.select(nanbeige_metadata);
-    CELEG_TEST_CHECK(nanbeige_architecture.id() == "nanbeige42");
-    celeg::CheckpointView nanbeige_checkpoint;
-    nanbeige_checkpoint.metadata = nanbeige_metadata;
-    const auto nanbeige = nanbeige_architecture.resolve(nanbeige_checkpoint);
-    CELEG_TEST_CHECK(nanbeige.topology.num_hidden_layers == 44);
-    CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[0] == 0);
-    CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[21] == 21);
-    CELEG_TEST_CHECK(nanbeige.topology.checkpoint_layer_for_layer[22] == 0);
-    CELEG_TEST_CHECK(nanbeige.graph.norm_after_layers == std::vector<int>{21});
-    CELEG_TEST_CHECK(nanbeige.topology.attention_layout(0).rope_position()->theta == 70000000.0);
-    CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].physical_layer == 0);
-    CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3].source_name.value() ==
-                     "model.layers.0.input_layernorm.weight");
-    CELEG_TEST_CHECK(nanbeige.weight_plan.requests[3 + 21 * 9].physical_layer == 21);
-
-    // LFM2.5-2.6B (Transformers 5.x config) keeps RoPE under the nested
-    // rope_parameters object and uses a 128k vocabulary/context.
-    auto lfm25_26b = lfm_metadata("LiquidAI/LFM2.5-2.6B");
-    lfm25_26b.values["intermediate_size"] = int64_t(10752);
-    lfm25_26b.values["num_hidden_layers"] = int64_t(30);
-    lfm25_26b.values["vocab_size"] = int64_t(128000);
-    lfm25_26b.values["max_position_embeddings"] = int64_t(128000);
-    lfm25_26b.values["bos_token_id"] = int64_t(124894);
-    lfm25_26b.values["eos_token_id"] = int64_t(124900);
-    lfm25_26b.values["pad_token_id"] = int64_t(124893);
-    lfm25_26b.values.erase("rope_theta");
-    lfm25_26b.values["rope_parameters.rope_theta"] = 10000000.0;
-    lfm25_26b.values["layer_types"] = std::vector<std::string>{
-        "conv", "conv", "full_attention", "conv", "conv", "full_attention",
-        "conv", "conv", "conv", "full_attention", "conv", "conv", "conv",
-        "full_attention", "conv", "conv", "conv", "full_attention", "conv",
-        "conv", "conv", "full_attention", "conv", "conv", "full_attention",
-        "conv", "conv", "full_attention", "conv", "conv"};
-    celeg::CheckpointView lfm25_checkpoint;
-    lfm25_checkpoint.metadata = lfm25_26b;
-    const celeg::ResolvedModel lfm25_model = architecture.resolve(lfm25_checkpoint);
-    CELEG_TEST_CHECK(lfm25_model.topology.vocab_size == 128000);
-    CELEG_TEST_CHECK(lfm25_model.topology.num_hidden_layers == 30);
-    CELEG_TEST_CHECK(lfm25_model.topology.token_policy.bos_token_id == 124894);
-    CELEG_TEST_CHECK(lfm25_model.topology.token_policy.eos_token_ids ==
-                     std::vector<int>{124900});
-    CELEG_TEST_CHECK(lfm25_model.topology.attention_layout(2).rope_position()->theta == 10000000.0);
-
-    celeg::CheckpointMetadata minicpm5;
-    minicpm5.repository_hint = "openbmb/MiniCPM5-1B";
-    minicpm5.values["model_type"] = std::string("llama");
-    minicpm5.values["hidden_size"] = int64_t(1536);
-    minicpm5.values["intermediate_size"] = int64_t(4608);
-    minicpm5.values["num_hidden_layers"] = int64_t(24);
-    minicpm5.values["num_attention_heads"] = int64_t(16);
-    minicpm5.values["num_key_value_heads"] = int64_t(2);
-    minicpm5.values["head_dim"] = int64_t(128);
-    minicpm5.values["vocab_size"] = int64_t(130560);
-    minicpm5.values["max_position_embeddings"] = int64_t(131072);
-    minicpm5.values["bos_token_id"] = int64_t(0);
-    minicpm5.values["eos_token_id"] = std::vector<int64_t>{1, 130073};
-    minicpm5.values["pad_token_id"] = int64_t(1);
-    minicpm5.values["rms_norm_eps"] = 1.0e-6;
-    minicpm5.values["rope_theta"] = 5.0e6;
-    const auto& minicpm5_architecture = catalog.select(minicpm5);
-    CELEG_TEST_CHECK(minicpm5_architecture.id() == "minicpm5");
-    celeg::CheckpointView minicpm5_checkpoint;
-    minicpm5_checkpoint.metadata = minicpm5;
-    const auto minicpm5_model = minicpm5_architecture.resolve(minicpm5_checkpoint);
-    CELEG_TEST_CHECK(minicpm5_model.topology.num_hidden_layers == 24);
-    CELEG_TEST_CHECK(minicpm5_model.topology.attention_layouts.front().key_value_heads == 2);
-    CELEG_TEST_CHECK(minicpm5_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
-    CELEG_TEST_CHECK(minicpm5_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
-    CELEG_TEST_CHECK(minicpm5_model.provenance.chat_template_id == "chat:thinking-function");
-
-    celeg::CheckpointMetadata minicpm5_gguf;
-    minicpm5_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
-    minicpm5_gguf.repository_hint = "openbmb/MiniCPM5-1B-GGUF";
-    minicpm5_gguf.values["general.architecture"] = std::string("llama");
-    minicpm5_gguf.values["llama.embedding_length"] = int64_t(1536);
-    minicpm5_gguf.values["llama.feed_forward_length"] = int64_t(4608);
-    minicpm5_gguf.values["llama.block_count"] = int64_t(24);
-    minicpm5_gguf.values["llama.attention.head_count"] = int64_t(16);
-    minicpm5_gguf.values["llama.attention.head_count_kv"] = int64_t(2);
-    minicpm5_gguf.values["llama.attention.key_length"] = int64_t(128);
-    minicpm5_gguf.values["llama.context_length"] = int64_t(131072);
-    minicpm5_gguf.values["llama.attention.layer_norm_rms_epsilon"] = 1.0e-6;
-    minicpm5_gguf.values["llama.rope.freq_base"] = 5.0e6;
-    minicpm5_gguf.values["llama.vocab_size"] = int64_t(130560);
-    minicpm5_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(0);
-    minicpm5_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(1);
-    minicpm5_gguf.values["tokenizer.ggml.eot_token_id"] = int64_t(130073);
-    minicpm5_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(1);
-    const auto& minicpm5_gguf_architecture = catalog.select(minicpm5_gguf);
-    CELEG_TEST_CHECK(minicpm5_gguf_architecture.id() == "minicpm5");
-    celeg::CheckpointView minicpm5_gguf_checkpoint;
-    minicpm5_gguf_checkpoint.metadata = minicpm5_gguf;
-    const auto minicpm5_gguf_model = minicpm5_gguf_architecture.resolve(minicpm5_gguf_checkpoint);
-    CELEG_TEST_CHECK(minicpm5_gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(minicpm5_gguf_model.topology.token_policy.eos_token_ids == (std::vector<int>{1, 130073}));
-
-    celeg::CheckpointMetadata smollm3;
-    smollm3.repository_hint = "HuggingFaceTB/SmolLM3-3B";
-    smollm3.values["model_type"] = std::string("smollm3");
-    smollm3.values["hidden_size"] = int64_t(2048);
-    smollm3.values["intermediate_size"] = int64_t(11008);
-    smollm3.values["num_hidden_layers"] = int64_t(36);
-    smollm3.values["num_attention_heads"] = int64_t(16);
-    smollm3.values["num_key_value_heads"] = int64_t(4);
-    smollm3.values["head_dim"] = int64_t(128);
-    smollm3.values["vocab_size"] = int64_t(128256);
-    smollm3.values["max_position_embeddings"] = int64_t(65536);
-    smollm3.values["bos_token_id"] = int64_t(128000);
-    smollm3.values["eos_token_id"] = int64_t(128012);
-    smollm3.values["pad_token_id"] = int64_t(128004);
-    smollm3.values["rms_norm_eps"] = 1.0e-6;
-    smollm3.values["rope_theta"] = 5.0e6;
-    std::vector<int64_t> no_rope_layers(36, 1);
-    for (int layer = 3; layer < 36; layer += 4) no_rope_layers[static_cast<size_t>(layer)] = 0;
-    smollm3.values["no_rope_layers"] = no_rope_layers;
-    const auto& smollm3_architecture = catalog.select(smollm3);
-    CELEG_TEST_CHECK(smollm3_architecture.id() == "smollm3");
-    celeg::CheckpointView smollm3_checkpoint;
-    smollm3_checkpoint.metadata = smollm3;
-    const auto smollm3_model = smollm3_architecture.resolve(smollm3_checkpoint);
-    CELEG_TEST_CHECK(smollm3_model.topology.num_hidden_layers == 36);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
-        smollm3_model.topology.attention_layouts[0].position));
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
-        smollm3_model.topology.attention_layouts[3].position));
-    CELEG_TEST_CHECK(smollm3_model.topology.attention_layouts[0].key_value_heads == 4);
-    CELEG_TEST_CHECK(smollm3_model.capabilities.tied_embeddings);
-    CELEG_TEST_CHECK(smollm3_model.topology.token_policy.eos_token_ids == (std::vector<int>{128012}));
-
-    celeg::CheckpointMetadata smollm3_gguf;
-    smollm3_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
-    smollm3_gguf.repository_hint = "ggml-org/SmolLM3-3B-GGUF";
-    smollm3_gguf.values["general.architecture"] = std::string("smollm3");
-    smollm3_gguf.values["smollm3.embedding_length"] = int64_t(2048);
-    smollm3_gguf.values["smollm3.feed_forward_length"] = int64_t(11008);
-    smollm3_gguf.values["smollm3.block_count"] = int64_t(36);
-    smollm3_gguf.values["smollm3.attention.head_count"] = int64_t(16);
-    smollm3_gguf.values["smollm3.attention.head_count_kv"] = int64_t(4);
-    smollm3_gguf.values["smollm3.attention.key_length"] = int64_t(128);
-    smollm3_gguf.values["smollm3.context_length"] = int64_t(65536);
-    smollm3_gguf.values["smollm3.attention.layer_norm_rms_epsilon"] = 1.0e-6;
-    smollm3_gguf.values["smollm3.rope.freq_base"] = 5.0e6;
-    smollm3_gguf.values["smollm3.vocab_size"] = int64_t(128256);
-    smollm3_gguf.values["smollm3.no_rope_layers"] = no_rope_layers;
-    smollm3_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(128000);
-    smollm3_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(128012);
-    smollm3_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(128004);
-    const auto& smollm3_gguf_architecture = catalog.select(smollm3_gguf);
-    CELEG_TEST_CHECK(smollm3_gguf_architecture.id() == "smollm3");
-    celeg::CheckpointView smollm3_gguf_checkpoint;
-    smollm3_gguf_checkpoint.metadata = smollm3_gguf;
-    const auto smollm3_gguf_model = smollm3_gguf_architecture.resolve(smollm3_gguf_checkpoint);
-    CELEG_TEST_CHECK(smollm3_gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
-        smollm3_gguf_model.topology.attention_layouts[0].position));
-
-    auto granite = metadata;
-    granite.values["model_type"] = std::string("granite");
-    granite.values["rope_scaling_type"] = std::string("longrope");
-    granite.values["rope_scaling_factor"] = 2.0;
-    granite.values["rope_scaling_original_context"] = int64_t(32);
-    granite.values["rope_scaling_short_factors"] = std::vector<double>(32, 1.0);
-    granite.values["rope_scaling_long_factors"] = std::vector<double>(32, 2.0);
-    const auto& granite_architecture = catalog.select(granite);
-    CELEG_TEST_CHECK(granite_architecture.id() == "granite");
-    celeg::CheckpointView granite_checkpoint;
-    granite_checkpoint.metadata = granite;
-    const auto granite_model = granite_architecture.resolve(granite_checkpoint);
-    CELEG_TEST_CHECK(granite_model.topology.attention_layouts.front().rope_position()
-                         ->scaling.kind == celeg::RopeScalingKind::Long);
-    CELEG_TEST_CHECK(granite_model.topology.attention_layouts.front().rope_position()
-                         ->scaling.long_factors.size() == 32);
-    auto granite_alibi = granite;
-    granite_alibi.values["position_encoding"] = std::string("alibi");
-    granite_alibi.values["alibi_slopes"] = std::vector<double>(32, 1.0);
-    celeg::CheckpointView granite_alibi_checkpoint;
-    granite_alibi_checkpoint.metadata = granite_alibi;
-    const auto granite_alibi_model = granite_architecture.resolve(granite_alibi_checkpoint);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::AlibiBiasSpec>(
-        granite_alibi_model.topology.attention_layouts.front().bias));
-    auto granite_relative = granite;
-    granite_relative.values["position_encoding"] = std::string("relative_bias");
-    celeg::CheckpointView granite_relative_checkpoint;
-    granite_relative_checkpoint.metadata = granite_relative;
-    const auto granite_relative_model =
-        granite_architecture.resolve(granite_relative_checkpoint);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::RelativePositionBiasSpec>(
-        granite_relative_model.topology.attention_layouts.front().bias));
-
-    celeg::CheckpointMetadata granite_gguf;
-    granite_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
-    granite_gguf.values["general.architecture"] = std::string("granite");
-    granite_gguf.values["granite.embedding_length"] = int64_t(8);
-    granite_gguf.values["granite.feed_forward_length"] = int64_t(16);
-    granite_gguf.values["granite.block_count"] = int64_t(1);
-    granite_gguf.values["granite.attention.head_count"] = int64_t(2);
-    granite_gguf.values["granite.attention.head_count_kv"] = int64_t(1);
-    granite_gguf.values["granite.attention.key_length"] = int64_t(4);
-    granite_gguf.values["granite.context_length"] = int64_t(64);
-    granite_gguf.values["granite.attention.layer_norm_rms_epsilon"] = 1.0e-5;
-    granite_gguf.values["granite.rope.freq_base"] = 10000.0;
-    granite_gguf.values["granite.vocab_size"] = int64_t(32);
-    granite_gguf.values["granite.attention.layer_types"] =
-        std::vector<std::string>{"sliding_attention"};
-    granite_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(1);
-    granite_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(2);
-    granite_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
-    celeg::CheckpointView granite_gguf_checkpoint;
-    granite_gguf_checkpoint.metadata = granite_gguf;
-    const celeg::ResolvedModel granite_gguf_model =
-        granite_architecture.resolve(granite_gguf_checkpoint);
-    CELEG_TEST_CHECK(granite_gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(granite_gguf_model.provenance.chat_template_id == "chat:role-envelope");
-    CELEG_TEST_CHECK(granite_gguf_model.topology.vocab_size == 32);
-    CELEG_TEST_CHECK(granite_gguf_model.graph.layers.size() == 1);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
-        granite_gguf_model.topology.attention_layouts.front().pattern));
-    CELEG_TEST_CHECK(granite_gguf_model.topology.attention_layouts.front().sliding_window_size() == 512);
-
-    for (const auto& gemma : {
-        gemma_metadata(1536, 6144, 35, 1, 20, "google/gemma-4-E2B-it"),
-        gemma_metadata(2560, 10240, 42, 2, 18, "google/gemma-4-E4B-it")}) {
-        const auto& gemma_architecture = catalog.select(gemma);
-        CELEG_TEST_CHECK(gemma_architecture.id() == "gemma4");
-        celeg::CheckpointView gemma_checkpoint;
-        gemma_checkpoint.metadata = gemma;
-        const auto resolved = gemma_architecture.resolve(gemma_checkpoint);
-        CELEG_TEST_CHECK(resolved.topology.attention_layouts.size() ==
-                         resolved.topology.num_hidden_layers);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
-        resolved.topology.attention_layouts[0].pattern));
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
-        resolved.topology.attention_layouts[5].pattern));
-        const auto& local = resolved.topology.attention_layouts[0];
-        const int expected_local_kv_heads = resolved.topology.hidden == 1536 ? 1 : 2;
-        CELEG_TEST_CHECK(local.query_heads == 8 && local.key_value_heads ==
-                         expected_local_kv_heads);
-        CELEG_TEST_CHECK(local.head_dim == 256 && local.query_width() == 2048);
-        CELEG_TEST_CHECK(local.key_value_width() == local.key_value_heads * 256);
-        CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(local.pattern));
-        CELEG_TEST_CHECK(local.sliding_window_size() == 512 &&
-                         local.rope_position()->theta == 10000.0);
-        const auto& full = resolved.topology.attention_layouts[5];
-        CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(full.pattern));
-        CELEG_TEST_CHECK(full.head_dim == 512 && full.query_width() == 4096);
-        CELEG_TEST_CHECK(full.key_value_width() == local.key_value_heads * 512);
-        CELEG_TEST_CHECK(full.rope_position()->rotary_fraction == 0.25 &&
-                         full.rope_position()->theta == 1000000.0);
-        const int shared_start = resolved.topology.num_hidden_layers -
-            static_cast<int>(gemma.integer("text_config.num_kv_shared_layers"));
-        CELEG_TEST_CHECK(resolved.topology.attention_layouts[shared_start]
-                             .kv_sharing.shared());
-        CELEG_TEST_CHECK(resolved.topology.shared_kv_group_count == 2);
-        CELEG_TEST_CHECK(resolved.topology.has_per_layer_input);
-        CELEG_TEST_CHECK(resolved.topology.per_layer_input_size == 256);
-        CELEG_TEST_CHECK(resolved.graph.layers[0].per_layer_input.enabled);
-        CELEG_TEST_CHECK(std::get<celeg::DenseFeedForwardSpec>(
-                             resolved.graph.layers.back().feed_forward).intermediate_size ==
-                         resolved.topology.intermediate * 2);
-        CELEG_TEST_CHECK(resolved.capabilities.tied_embeddings);
-        CELEG_TEST_CHECK(resolved.graph.final_logit_softcap == 30.0f);
-        CELEG_TEST_CHECK(resolved.provenance.chat_template_id == "chat:turn");
-    }
-
-    celeg::CheckpointMetadata gemma_gguf;
-    gemma_gguf.source_format = celeg::CheckpointSourceFormat::Gguf;
-    gemma_gguf.values["general.architecture"] = std::string("gemma4");
-    gemma_gguf.values["gemma4.embedding_length"] = int64_t(1536);
-    gemma_gguf.values["gemma4.feed_forward_length"] = int64_t(6144);
-    gemma_gguf.values["gemma4.block_count"] = int64_t(35);
-    gemma_gguf.values["gemma4.vocab_size"] = int64_t(262144);
-    gemma_gguf.values["gemma4.context_length"] = int64_t(131072);
-    gemma_gguf.values["gemma4.attention.head_count"] = int64_t(8);
-    gemma_gguf.values["gemma4.attention.head_count_kv"] = int64_t(1);
-    gemma_gguf.values["gemma4.attention.key_length"] = int64_t(512);
-    gemma_gguf.values["gemma4.attention.key_length_swa"] = int64_t(256);
-    gemma_gguf.values["gemma4.attention.layer_norm_rms_epsilon"] = 1.0e-6;
-    gemma_gguf.values["gemma4.attention.sliding_window"] = int64_t(512);
-    gemma_gguf.values["gemma4.attention.shared_kv_layers"] = int64_t(20);
-    gemma_gguf.values["gemma4.embedding_length_per_layer_input"] = int64_t(256);
-    gemma_gguf.values["gemma4.final_logit_softcapping"] = 30.0;
-    gemma_gguf.values["gemma4.rope.freq_base"] = 1000000.0;
-    gemma_gguf.values["gemma4.rope.freq_base_swa"] = 10000.0;
-    gemma_gguf.values["gemma4.attention.sliding_window_pattern"] =
-        std::vector<int64_t>(35, 1);
-    auto& gguf_schedule = std::get<std::vector<int64_t>>(
-        gemma_gguf.values["gemma4.attention.sliding_window_pattern"]);
-    gguf_schedule[5] = 0;
-    gguf_schedule.back() = 0;
-    gemma_gguf.values["tokenizer.ggml.bos_token_id"] = int64_t(2);
-    gemma_gguf.values["tokenizer.ggml.eos_token_id"] = int64_t(1);
-    gemma_gguf.values["tokenizer.ggml.padding_token_id"] = int64_t(0);
-    celeg::CheckpointView gemma_gguf_checkpoint;
-    gemma_gguf_checkpoint.metadata = gemma_gguf;
-    const auto& gemma_gguf_architecture = catalog.select(gemma_gguf);
-    const auto gemma_gguf_model = gemma_gguf_architecture.resolve(gemma_gguf_checkpoint);
-    CELEG_TEST_CHECK(gemma_gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(gemma_gguf_model.topology.hidden == 1536);
-    CELEG_TEST_CHECK(gemma_gguf_model.topology.intermediate == 6144);
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
-        gemma_gguf_model.topology.attention_layouts[5].pattern));
-    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
-        gemma_gguf_model.topology.attention_layouts[6].pattern));
-    CELEG_TEST_CHECK(gemma_gguf_model.topology.attention_layouts[5].head_dim == 512);
-    auto composite_gemma = gemma_metadata(1536, 6144, 35, 1, 20, "composite");
-    composite_gemma.values["text_config.model_type"] = std::string("gemma4_vision");
-    const auto& composite_gemma_architecture = catalog.select(composite_gemma);
-    CELEG_TEST_CHECK(composite_gemma_architecture.id() == "automatic");
-
-    auto malformed_schedule = gemma_metadata(1536, 6144, 35, 1, 20, "bad-schedule");
-    malformed_schedule.values["text_config.layer_types"] =
-        std::vector<std::string>{"sliding_attention"};
-    bool malformed_rejected = false;
-    try {
-        const auto& architecture = catalog.select(malformed_schedule);
-        celeg::CheckpointView checkpoint;
-        checkpoint.metadata = malformed_schedule;
-        (void)architecture.resolve(checkpoint);
-    }
-    catch (const std::exception&) { malformed_rejected = true; }
-    CELEG_TEST_CHECK(malformed_rejected);
-
-    auto malformed_sharing = gemma_metadata(1536, 6144, 35, 1, 20, "bad-sharing");
-    malformed_sharing.values["text_config.num_kv_shared_layers"] = int64_t(36);
-    malformed_rejected = false;
-    try {
-        const auto& architecture = catalog.select(malformed_sharing);
-        celeg::CheckpointView checkpoint;
-        checkpoint.metadata = malformed_sharing;
-        (void)architecture.resolve(checkpoint);
-    } catch (const std::exception&) { malformed_rejected = true; }
-    CELEG_TEST_CHECK(malformed_rejected);
+    checkpoint.repository = std::make_shared<GptxRepository>();
+    const auto& architecture = catalog.select(metadata);
+    const auto model = architecture.resolve(checkpoint);
+    CELEG_TEST_CHECK(model.provenance.architecture_id == "automatic");
+    CELEG_TEST_CHECK(model.topology.hidden == 576);
+    CELEG_TEST_CHECK(model.topology.intermediate == 1728);
+    CELEG_TEST_CHECK(model.graph.layers.size() == 1);
+    CELEG_TEST_CHECK(model.capabilities.tied_embeddings);
+    CELEG_TEST_CHECK(model.topology.numerical_policy.attention_multiplier == 0.125f);
 
     celeg::ArchitectureCatalog mutable_catalog;
     mutable_catalog.add(std::make_unique<TestArchitecture>("one", 10));

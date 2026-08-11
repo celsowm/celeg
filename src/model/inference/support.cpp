@@ -85,10 +85,16 @@ std::vector<std::string> feed_forward_tensor_candidates(int layer,
         "blk." + index + "." + gguf_suffix,
     };
     if (suffix == "w_gate.weight") {
+        result.push_back("model.language_model.layers." + index + ".mlp.gate_proj.weight");
+        result.push_back("model.layers." + index + ".mlp.gate_proj.weight");
         result.push_back("model.layers." + index + ".feed_forward.w1.weight");
     } else if (suffix == "w_up.weight") {
+        result.push_back("model.language_model.layers." + index + ".mlp.up_proj.weight");
+        result.push_back("model.layers." + index + ".mlp.up_proj.weight");
         result.push_back("model.layers." + index + ".feed_forward.w3.weight");
     } else if (suffix == "w_down.weight") {
+        result.push_back("model.language_model.layers." + index + ".mlp.down_proj.weight");
+        result.push_back("model.layers." + index + ".mlp.down_proj.weight");
         result.push_back("model.layers." + index + ".feed_forward.w2.weight");
     }
     return result;

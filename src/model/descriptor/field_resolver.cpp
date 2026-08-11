@@ -1,5 +1,7 @@
 #include "detail.hpp"
 
+#include <cmath>
+
 namespace celeg::descriptor_detail {
 
 std::string selected_key(const CheckpointMetadata& metadata, const Field& field) {

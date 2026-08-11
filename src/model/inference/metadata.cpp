@@ -307,6 +307,8 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
         "qk_norm", "query_key_norm", "xsa_projection",
         "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
         "rope_theta", "rotary_fraction", "rope_scaling", "rope_parameters",
+        "embedding_multiplier", "attention_multiplier", "residual_multiplier",
+        "logits_multiplier", "logits_divisor", "logits_scaling",
     };
     for (const auto& [key, value] : metadata.values) {
         (void)value;
@@ -377,6 +379,21 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.norm_epsilon = aliases<float>(
         metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
+    result.embedding_multiplier = aliases<float>(
+        metadata, {"embedding_multiplier"}, result.evidence,
+        "embedding_multiplier");
+    result.attention_multiplier = aliases<float>(
+        metadata, {"attention_multiplier"}, result.evidence,
+        "attention_multiplier");
+    result.residual_multiplier = aliases<float>(
+        metadata, {"residual_multiplier"}, result.evidence,
+        "residual_multiplier");
+    result.logits_multiplier = aliases<float>(
+        metadata, {"logits_multiplier"}, result.evidence,
+        "logits_multiplier");
+    result.logits_divisor = aliases<float>(
+        metadata, {"logits_divisor", "logits_scaling"}, result.evidence,
+        "logits_divisor");
     result.shortconv_cache = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                           "shortconv_cache", "shortconv.l_cache");
     result.rope_theta = aliases<double>(metadata, {"rope_theta"}, result.evidence,
@@ -413,6 +430,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     if (result.eos_token_ids.empty()) result.eos_token_ids = {0};
     if (!result.pad_token_id.has_value()) result.pad_token_id = 1;
     if (!result.norm_epsilon.has_value()) result.norm_epsilon = 1.0e-6f;
+    if (!result.embedding_multiplier.has_value()) result.embedding_multiplier = 1.0f;
+    if (!result.residual_multiplier.has_value()) result.residual_multiplier = 1.0f;
+    if (!result.logits_multiplier.has_value()) result.logits_multiplier = 1.0f;
+    if (!result.logits_divisor.has_value()) result.logits_divisor = 1.0f;
     if (!result.rope_theta.has_value()) result.rope_theta = 100000.0;
     if (!result.rotary_fraction.has_value()) result.rotary_fraction = 1.0f;
     if (!result.query_key_norm.has_value()) result.query_key_norm = false;
