@@ -14,6 +14,18 @@ bool native_rows_rope_permuted(std::string_view name) {
         name.ends_with(".attn_k.weight");
 }
 
+HostTensorView adapt_native_tensor(const GgufTensorView& view, std::string_view name,
+                                   bool rows_rope_permuted) {
+    HostTensorView result = GgufTensorViewAdapter::adapt(view, rows_rope_permuted);
+    // GGUF stores depthwise short-convolution kernels compactly as
+    // [channels, taps]. The neutral semantic contract retains the explicit
+    // singleton input-channel dimension used by CPU and CUDA operators.
+    if (name.ends_with(".shortconv.conv.weight") && result.shape.size() == 2) {
+        result.shape.insert(result.shape.begin() + 1, 1);
+    }
+    return result;
+}
+
 } // namespace
 
 GgufTensorResolver::GgufTensorResolver(std::shared_ptr<GgufFile> file)
@@ -32,8 +44,8 @@ bool GgufTensorResolver::contains(std::string_view name) const {
 
 HostTensorView GgufTensorResolver::tensor(std::string_view name) const {
     if (file_->contains_tensor(name)) {
-        return GgufTensorViewAdapter::adapt(
-            file_->tensor(name), native_rows_rope_permuted(name));
+        return adapt_native_tensor(file_->tensor(name), name,
+                                   native_rows_rope_permuted(name));
     }
 
     const GgufTensorReference reference =
@@ -46,7 +58,7 @@ HostTensorView GgufTensorResolver::tensor(std::string_view name) const {
     if (reference.is_expert_slice()) {
         return GgufTensorViewAdapter::adapt_expert(view, reference);
     }
-    return GgufTensorViewAdapter::adapt(view, reference.rows_rope_permuted);
+    return adapt_native_tensor(view, reference.native_name, reference.rows_rope_permuted);
 }
 
 std::vector<std::string> GgufTensorResolver::names() const {

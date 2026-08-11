@@ -31,6 +31,17 @@ to `out/<platform>-<backend>-<build-type>`. Use `--backend cuda` when CUDA is
 required or `--backend cpu` for a CPU-only check. All 45 configured CTest tests
 must pass for a CUDA build.
 
+To reclaim generated build artifacts without touching checkpoint caches, use:
+
+```text
+python scripts/clean_artifacts.py --all          # preview only
+python scripts/clean_artifacts.py --all --apply  # delete only known CELEG builds and temp logs
+```
+
+The utility is intentionally limited to `out/windows-cpu-release`,
+`out/windows-cuda-release`, and `%TEMP%/celeg-*.log`; it never deletes Hugging
+Face caches or arbitrary `out/` subdirectories.
+
 ## Model checkpoints (HuggingFace cache)
 
 Checkpoints are normally resolved from the local HuggingFace cache, not from a

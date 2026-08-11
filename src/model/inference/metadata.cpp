@@ -391,7 +391,6 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     if (!result.query_key_norm.has_value()) result.query_key_norm = false;
     if (!result.xsa_projection.has_value()) result.xsa_projection = false;
     if (!result.xsa_minimum_norm_squared.has_value()) result.xsa_minimum_norm_squared = 1.0e-6f;
-    if (!result.tied_embeddings.has_value()) result.tied_embeddings = false;
 
     if (metadata.contains("rope_pairing")) {
         const std::string pairing = metadata.string("rope_pairing");

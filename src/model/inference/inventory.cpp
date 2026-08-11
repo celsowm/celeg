@@ -56,7 +56,7 @@ InferenceInput build_inference_input(const CheckpointView& checkpoint) {
                                "automatic checkpoint resolution requires a tensor repository");
     }
     return {normalize_model_metadata(checkpoint.metadata),
-            build_tensor_inventory(*checkpoint.repository)};
+            build_tensor_inventory(*checkpoint.repository), checkpoint.metadata.source_format};
 }
 
 } // namespace celeg

@@ -194,6 +194,7 @@ public:
 struct InferenceInput {
     NormalizedModelMetadata metadata;
     TensorInventory inventory;
+    CheckpointSourceFormat source_format = CheckpointSourceFormat::Safetensors;
 };
 
 // Canonical facts are the only input accepted by automatic semantic

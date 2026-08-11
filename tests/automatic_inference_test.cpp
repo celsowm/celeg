@@ -112,6 +112,49 @@ std::shared_ptr<MemoryRepository> gguf_repository() {
     return result;
 }
 
+celeg::CheckpointMetadata hybrid_gguf_metadata() {
+    celeg::CheckpointMetadata result = gguf_metadata();
+    result.values["general.architecture"] = std::string("hybrid");
+    result.values.erase("conventional.attention.head_count_kv");
+    result.values["hybrid.attention.head_count_kv"] = std::vector<int64_t>{0, 2};
+    result.values["hybrid.shortconv.l_cache"] = int64_t(3);
+    for (const std::string_view suffix : {"embedding_length", "feed_forward_length",
+                                          "block_count", "attention.head_count",
+                                          "attention.key_length", "vocab_size",
+                                          "context_length", "attention.layer_norm_rms_epsilon",
+                                          "rope.freq_base"}) {
+        const std::string old_key = "conventional." + std::string(suffix);
+        const std::string new_key = "hybrid." + std::string(suffix);
+        result.values[new_key] = result.values.at(old_key);
+        result.values.erase(old_key);
+    }
+    return result;
+}
+
+std::shared_ptr<MemoryRepository> hybrid_gguf_repository() {
+    auto result = std::make_shared<MemoryRepository>();
+    result->add("token_embd.weight", {32, 8});
+    result->add("token_embd_norm.weight", {8});
+    for (int layer = 0; layer < 2; ++layer) {
+        const std::string prefix = "blk." + std::to_string(layer);
+        result->add(prefix + ".attn_norm.weight", {8});
+        result->add(prefix + ".ffn_norm.weight", {8});
+        result->add(prefix + ".ffn_gate.weight", {16, 8});
+        result->add(prefix + ".ffn_up.weight", {16, 8});
+        result->add(prefix + ".ffn_down.weight", {8, 16});
+    }
+    result->add("blk.0.shortconv.in_proj.weight", {24, 8});
+    result->add("blk.0.shortconv.conv.weight", {8, 1, 3});
+    result->add("blk.0.shortconv.out_proj.weight", {8, 8});
+    result->add("blk.1.attn_q.weight", {8, 8});
+    result->add("blk.1.attn_k.weight", {4, 8});
+    result->add("blk.1.attn_v.weight", {4, 8});
+    result->add("blk.1.attn_output.weight", {8, 8});
+    result->add("blk.1.attn_q_norm.weight", {2});
+    result->add("blk.1.attn_k_norm.weight", {2});
+    return result;
+}
+
 } // namespace
 
 int main() {
@@ -143,6 +186,16 @@ int main() {
     CELEG_TEST_CHECK(gguf_model.provenance.chat_template_id ==
                      "chat:thinking-function");
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
+
+    celeg::CheckpointView hybrid_checkpoint;
+    hybrid_checkpoint.metadata = hybrid_gguf_metadata();
+    hybrid_checkpoint.repository = hybrid_gguf_repository();
+    const celeg::ResolvedModel hybrid_model =
+        catalog.select(hybrid_checkpoint.metadata).resolve(hybrid_checkpoint);
+    CELEG_TEST_CHECK(hybrid_model.topology.mixer_kinds[0] ==
+                     celeg::MixerKind::ShortConvolution);
+    CELEG_TEST_CHECK(hybrid_model.topology.mixer_kinds[1] == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(hybrid_model.capabilities.tied_embeddings);
 
     auto conflicting = metadata();
     conflicting.values["n_embd"] = int64_t(9);

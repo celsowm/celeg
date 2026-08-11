@@ -3,7 +3,6 @@
 #include "inference/support.hpp"
 
 #include <regex>
-#include <iostream>
 #include <sstream>
 #include <unordered_set>
 
@@ -36,7 +35,6 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     require_positive(m.layer_count, "layer_count");
     require_positive(m.vocab_size, "vocab_size");
     require_positive(m.context_length, "context_length");
-    std::cerr << "infer: metadata\n";
     if (!m.bos_token_id.has_value() || !m.pad_token_id.has_value() ||
         *m.bos_token_id < 0 || *m.pad_token_id < 0 || m.eos_token_ids.empty()) {
         inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
@@ -64,7 +62,6 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         inference_detail::fail(ResolutionFailureKind::ShapeConstraintViolation,
                                "token embedding shape does not agree with normalized metadata");
     }
-    std::cerr << "infer: embedding\n";
 
     std::unordered_set<int> layers;
     const std::regex layer_pattern(R"((?:transformer\.h|model\.layers|layers|blk)\.(\d+)\.)");
@@ -88,7 +85,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 
     CanonicalModelFacts facts;
     facts.resolution_mode = "automatic";
-    facts.tied_embeddings = *m.tied_embeddings;
+    facts.tied_embeddings = m.tied_embeddings.value_or(false);
     facts.evidence = m.evidence;
     RuntimeTopology& topology = facts.topology;
     topology.hidden = *m.hidden_size;
@@ -146,7 +143,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         const std::string layer_prefix = "blk." + std::to_string(layer) + ".";
         const bool has_attention =
             has_tensor(layer_prefix + "attn_q.weight") ||
-            has_tensor("model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight");
+            has_tensor("model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight") ||
+            has_tensor("transformer.h." + std::to_string(layer) + ".attn.q_proj.weight");
         const auto query_heads = m.query_heads.value_for(layer);
         const auto key_value_heads = m.key_value_heads.value_for(layer);
         const auto explicit_head_dim = m.head_dim.value_for(layer);
@@ -195,9 +193,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         topology.attention_layouts[static_cast<size_t>(layer)] =
             make_attention(*query_heads, *key_value_heads, head_dim, has_query_norm);
     }
-    std::cerr << "infer: schedule\n";
     topology.validate();
-    std::cerr << "infer: topology\n";
 
     const auto add_global = [&](TensorRole role, const TensorInventoryEntry& tensor) {
         inference_detail::add_binding(
@@ -219,7 +215,12 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         }
     }
     if (head == nullptr) {
-        if (!facts.tied_embeddings) {
+        if (input.source_format == CheckpointSourceFormat::Gguf &&
+            !m.tied_embeddings.has_value()) {
+            facts.tied_embeddings = true;
+            facts.evidence.push_back({EvidenceKind::FormatGuarantee, "output.weight",
+                                      "GGUF omits an independent language-model head"});
+        } else if (!facts.tied_embeddings) {
             inference_detail::fail(ResolutionFailureKind::MissingTensorRole,
                                    "untied checkpoint has no language-model head");
         }
@@ -233,7 +234,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     add_global(TensorRole::LanguageModelHead, *head);
 
     const std::vector<std::string> final_norm_names = {
-        "transformer.ln_f.weight", "model.norm.weight", "norm.weight", "output_norm.weight"};
+        "transformer.ln_f.weight", "model.norm.weight", "norm.weight", "output_norm.weight",
+        "token_embd_norm.weight"};
     const TensorInventoryEntry* final_norm = nullptr;
     for (const auto& name : final_norm_names) {
         if (const auto* candidate = input.inventory.find(name)) {
@@ -336,7 +338,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     input.inventory,
                     {layer_prefix + "attn_q_norm.weight"},
                     TensorRole::AttentionQueryNorm, layer,
-                    {query_head_count * layer_head_dim}, {});
+                    {layer_head_dim}, {});
                 inference_detail::add_binding(facts.bindings, TensorRole::AttentionQueryNorm,
                                               layer, *q_norm, {});
             }
@@ -345,7 +347,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     input.inventory,
                     {layer_prefix + "attn_k_norm.weight"},
                     TensorRole::AttentionKeyNorm, layer,
-                    {key_value_head_count * layer_head_dim}, {});
+                    {layer_head_dim}, {});
                 inference_detail::add_binding(facts.bindings, TensorRole::AttentionKeyNorm,
                                               layer, *k_norm, {});
             }
@@ -404,10 +406,20 @@ void CanonicalModelFacts::validate() const {
     require(TensorRole::FinalNorm, -1);
     for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
         require(TensorRole::AttentionInputNorm, layer);
-        require(TensorRole::AttentionQuery, layer);
-        require(TensorRole::AttentionKey, layer);
-        require(TensorRole::AttentionValue, layer);
-        require(TensorRole::AttentionOutput, layer);
+        if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
+            require(TensorRole::AttentionQuery, layer);
+            require(TensorRole::AttentionKey, layer);
+            require(TensorRole::AttentionValue, layer);
+            require(TensorRole::AttentionOutput, layer);
+        } else if (topology.mixer_kinds[static_cast<size_t>(layer)] ==
+                   MixerKind::ShortConvolution) {
+            require(TensorRole::ShortConvInput, layer);
+            require(TensorRole::ShortConvKernel, layer);
+            require(TensorRole::ShortConvOutput, layer);
+        } else {
+            inference_detail::fail(ResolutionFailureKind::UnsupportedGraphPrimitive,
+                                   "automatic resolution has no binding contract for mixer");
+        }
         require(TensorRole::FfnInputNorm, layer);
         require(TensorRole::FfnGate, layer);
         require(TensorRole::FfnUp, layer);

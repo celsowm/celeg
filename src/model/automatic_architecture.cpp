@@ -4,7 +4,6 @@
 #include "celeg/model/interaction.hpp"
 
 #include <string>
-#include <iostream>
 #include <stdexcept>
 
 namespace celeg {
@@ -41,12 +40,9 @@ public:
             throw std::runtime_error("automatic resolution is not applicable to this checkpoint");
         }
         const InferenceInput input = build_inference_input(checkpoint);
-        std::cerr << "automatic: input\n";
         CanonicalModelFacts facts = infer_canonical_model_facts(input);
-        std::cerr << "automatic: facts\n";
         facts.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
         ResolvedModel result = ResolutionAssembler{}.assemble(facts);
-        std::cerr << "automatic: assembled\n";
         result.provenance.chat_template_id = resolve_chat_template_id(checkpoint.metadata);
         return result;
     }
