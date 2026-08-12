@@ -122,7 +122,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
                 : request.prompt.size() + static_cast<size_t>(engine_options_.page_tokens);
         const bool forced_lane = request.options.generation.forced_prefix != nullptr;
         PrefixAcquireResult prefix;
-        if (!forced_lane && request.options.prompt_embedding.empty()) {
+        if (!forced_lane && request.options.prompt_embedding.empty() && prefix_cache_) {
             prefix = prefix_cache_->acquire(request.prompt, reserved_tokens);
         } else {
             prefix.status = PrefixAcquireStatus::Miss;
@@ -134,9 +134,11 @@ bool CudaSchedulerDriver::admit_requests_locked() {
         if (prefix_hit) {
             pages = std::move(prefix.pages);
         } else {
-            auto allocated = prefix_cache_->allocate_request_pages(reserved_tokens);
-            if (!allocated) break;
-            pages = std::move(*allocated);
+            if (prefix_cache_) {
+                auto allocated = prefix_cache_->allocate_request_pages(reserved_tokens);
+                if (!allocated) break;
+                pages = std::move(*allocated);
+            }
         }
 
         try {
@@ -151,7 +153,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
                 lane->model->session().set_generation_config(request.options.generation);
             }
         } catch (const std::exception& error) {
-            paged_kv_->release(pages);
+            if (paged_kv_) paged_kv_->release(pages);
             registry_.erase_queued(id);
             finish_request_locked(request, RequestStatus::Failed, error.what());
             did_work = true;
@@ -191,7 +193,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
     for (const auto& lane : lanes_) {
         if (lane->request_id != 0) ++metrics_.active_requests;
     }
-    metrics_.logical_pages_used = paged_kv_->used_pages();
+        metrics_.logical_pages_used = paged_kv_ ? paged_kv_->used_pages() : 0;
     return did_work;
 }
 
@@ -204,7 +206,7 @@ void CudaSchedulerDriver::finish_request_locked(Request& request,
         request.lane_index = -1;
     }
     if (!request.pages.empty()) {
-        paged_kv_->release(request.pages);
+        if (paged_kv_) paged_kv_->release(request.pages);
         request.pages.clear();
     }
     request.status = status_value;
@@ -212,7 +214,7 @@ void CudaSchedulerDriver::finish_request_locked(Request& request,
     if (status_value == RequestStatus::Finished) ++metrics_.completed;
     if (status_value == RequestStatus::Cancelled) ++metrics_.cancelled;
     if (status_value == RequestStatus::Failed) ++metrics_.failed;
-    metrics_.logical_pages_used = paged_kv_->used_pages();
+    metrics_.logical_pages_used = paged_kv_ ? paged_kv_->used_pages() : 0;
 }
 
 

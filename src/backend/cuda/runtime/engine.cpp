@@ -66,20 +66,24 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
     // executor can size per-attention-layer storage from the resolved topology.
     shape_ = detail::load_model_bootstrap(
         std::filesystem::path(model_path_), *runtime_).model.topology;
-    paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
-        total_pages, engine_options_.page_tokens, max_context_,
-        model_options_.kv_cache_mode, shape_);
-    prefix_cache_ = std::make_unique<PrefixCacheManager>(
-        *paged_kv_, engine_options_.prefix_cache,
-        engine_options_.prefix_cache_entries);
+    if (engine_options_.packed_decode) {
+        paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
+            total_pages, engine_options_.page_tokens, max_context_,
+            model_options_.kv_cache_mode, shape_);
+    }
+    if (paged_kv_) {
+        prefix_cache_ = std::make_unique<PrefixCacheManager>(
+            *paged_kv_, engine_options_.prefix_cache,
+            engine_options_.prefix_cache_entries);
+    }
     lanes_.reserve(static_cast<size_t>(engine_options_.max_active_requests));
     for (int i = 0; i < engine_options_.max_active_requests; ++i) {
         auto lane = std::make_unique<Lane>();
         lane->index = i;
         lanes_.push_back(std::move(lane));
     }
-    metrics_.logical_pages_total = total_pages;
-    metrics_.physical_kv_bytes = paged_kv_->memory_bytes();
+    metrics_.logical_pages_total = paged_kv_ ? total_pages : 0;
+    metrics_.physical_kv_bytes = paged_kv_ ? paged_kv_->memory_bytes() : 0;
     if (engine_options_.packed_decode) {
         packed_decode_output_.resize(active);
         CudaModelOptions packed_options = model_options_;
