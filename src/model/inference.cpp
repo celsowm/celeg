@@ -90,13 +90,55 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     facts.resolution_mode = "automatic";
     facts.tied_embeddings = m.tied_embeddings.value_or(false);
     facts.evidence = m.evidence;
-    RuntimeTopology& import_topology = facts.topology;
-    ExecutionTopology& topology = import_topology;
+    CheckpointDimensions& checkpoint = facts.checkpoint;
     NumericalPolicy& numerical_policy = facts.numerical_policy;
-    topology.hidden = *m.hidden_size;
+    const int layer_count = *m.layer_count;
+    const int dense_start = m.first_dense_layer.value_or(layer_count);
+    if (dense_start < 0 || dense_start > layer_count) {
+        inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                               "first dense layer is outside the layer schedule");
+    }
+    const int num_experts = m.moe_experts.value_or(0);
+    const int experts_per_token = m.moe_experts_per_token.value_or(0);
+    const bool has_moe = num_experts > 0 && experts_per_token > 0 &&
+        dense_start < layer_count;
+    const int moe_intermediate = m.moe_intermediate.value_or(0);
+    const int shared_expert_intermediate = m.moe_shared_intermediate.value_or(0);
+    const bool normalize_topk = m.moe_normalize_topk.value_or(false);
+    const bool use_expert_bias = m.moe_expert_bias.value_or(false);
+    const float routed_scaling_factor = m.moe_routed_scaling.value_or(1.0f);
+    const bool moe_router_softmax = m.moe_score_function.value_or("sigmoid") == "softmax";
+    const int routing_groups = m.moe_routing_groups.value_or(0);
+    const int total_routing_groups = m.moe_total_routing_groups.value_or(routing_groups);
+    const int groups_per_token = routing_groups;
+    const int group_score_top_k = m.moe_group_score_top_k.value_or(0);
+    int experts_per_group = 0;
+    if (has_moe && total_routing_groups > 0) {
+        if (num_experts % total_routing_groups != 0) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "MoE expert count is not divisible by routing group count");
+        }
+        experts_per_group = num_experts / total_routing_groups;
+        if (groups_per_token <= 0 || groups_per_token > total_routing_groups) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "invalid number of selected MoE routing groups");
+        }
+        if (group_score_top_k <= 0 || group_score_top_k > experts_per_group) {
+            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                   "invalid MoE routing group score width");
+        }
+    }
+    checkpoint.vocab_size = *m.vocab_size;
+    checkpoint.max_position_embeddings = *m.context_length;
+    checkpoint.token_policy = {*m.bos_token_id, m.eos_token_ids, *m.pad_token_id};
+    numerical_policy.norm_eps = *m.norm_epsilon;
+    numerical_policy.embedding_multiplier = m.embedding_multiplier.value_or(1.0f);
+    numerical_policy.residual_multiplier = m.residual_multiplier.value_or(1.0f);
+    numerical_policy.logits_multiplier = m.logits_multiplier.value_or(1.0f);
+    numerical_policy.logits_divisor = m.logits_divisor.value_or(1.0f);
     std::vector<int> intermediate_sizes;
-    intermediate_sizes.reserve(static_cast<size_t>(*m.layer_count));
-    for (int layer = 0; layer < *m.layer_count; ++layer) {
+    intermediate_sizes.reserve(static_cast<size_t>(layer_count));
+    for (int layer = 0; layer < layer_count; ++layer) {
         const std::optional<int> value = m.intermediate_size.value_for(layer);
         const std::string index = std::to_string(layer);
         const TensorInventoryEntry* ffn_up = input.inventory.find(
@@ -117,13 +159,11 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".feed_forward.w1.weight");
         }
-        if (!ffn_up && topology.num_experts > 0 &&
-            layer >= topology.num_dense_layers) {
+        if (!ffn_up && has_moe && layer >= dense_start) {
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".mlp.experts.0.gate_proj.weight");
         }
-        if (!ffn_up && topology.num_experts > 0 &&
-            layer >= topology.num_dense_layers) {
+        if (!ffn_up && has_moe && layer >= dense_start) {
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".mlp.experts.0.gate_proj.weight_packed");
         }
@@ -143,83 +183,6 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             intermediate_sizes.push_back(*value);
         }
     }
-    topology.intermediate = *std::max_element(intermediate_sizes.begin(), intermediate_sizes.end());
-    topology.dense_intermediate = topology.intermediate;
-    topology.max_feed_forward_intermediate = topology.intermediate;
-    topology.num_hidden_layers = *m.layer_count;
-    import_topology.checkpoint.vocab_size = *m.vocab_size;
-    import_topology.checkpoint.max_position_embeddings = *m.context_length;
-    topology.mixer_kinds.assign(static_cast<size_t>(*m.layer_count), MixerKind::Attention);
-    topology.feed_forward_kinds.assign(static_cast<size_t>(*m.layer_count),
-                                        FeedForwardKind::Dense);
-    topology.execute_feed_forward.assign(static_cast<size_t>(*m.layer_count), true);
-    topology.feed_forward_intermediates = intermediate_sizes;
-    topology.feed_forward_activations.assign(static_cast<size_t>(*m.layer_count),
-                                             ActivationKind::SwiGLU);
-    if (topology.num_experts > 0 && topology.experts_per_token > 0) {
-        for (int layer = topology.num_dense_layers; layer < *m.layer_count; ++layer) {
-            topology.feed_forward_kinds[static_cast<size_t>(layer)] =
-                FeedForwardKind::MixtureOfExperts;
-        }
-    }
-    topology.attention_layouts.resize(static_cast<size_t>(*m.layer_count));
-    topology.gated_delta_net_layouts.resize(static_cast<size_t>(*m.layer_count));
-    topology.mamba2_layouts.resize(static_cast<size_t>(*m.layer_count));
-    topology.mlp_only_layouts.resize(static_cast<size_t>(*m.layer_count));
-    topology.attention_slot_for_layer.assign(static_cast<size_t>(*m.layer_count), -1);
-    topology.layer_for_attention_slot.reserve(static_cast<size_t>(*m.layer_count));
-    topology.attention_layer_count = 0;
-    topology.conv_cache = m.shortconv_cache.value_or(0);
-    topology.conv_dim = *m.hidden_size;
-    topology.num_dense_layers = m.first_dense_layer.value_or(*m.layer_count);
-    if (topology.num_dense_layers < 0 || topology.num_dense_layers > *m.layer_count) {
-        inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                               "first dense layer is outside the layer schedule");
-    }
-    topology.num_experts = m.moe_experts.value_or(0);
-    topology.experts_per_token = m.moe_experts_per_token.value_or(0);
-    if (topology.num_experts > 0 && topology.experts_per_token > 0) {
-        for (int layer = 0; layer < *m.layer_count; ++layer) {
-            topology.feed_forward_kinds[static_cast<size_t>(layer)] =
-                layer >= topology.num_dense_layers
-                    ? FeedForwardKind::MixtureOfExperts : FeedForwardKind::Dense;
-        }
-    }
-    topology.moe_intermediate = m.moe_intermediate.value_or(0);
-    topology.shared_expert_intermediate = m.moe_shared_intermediate.value_or(0);
-    topology.normalize_topk = m.moe_normalize_topk.value_or(false);
-    topology.use_expert_bias = m.moe_expert_bias.value_or(false);
-    topology.routed_scaling_factor = m.moe_routed_scaling.value_or(1.0f);
-    topology.moe_router_softmax = m.moe_score_function.value_or("sigmoid") == "softmax";
-    topology.moe_routing_group_count = m.moe_routing_groups.value_or(0);
-    topology.moe_routing_groups_per_token = m.moe_routing_groups.value_or(0);
-    topology.moe_routing_group_count = m.moe_total_routing_groups.value_or(
-        topology.moe_routing_group_count);
-    topology.moe_routing_group_score_top_k = m.moe_group_score_top_k.value_or(0);
-    if (topology.num_experts > 0 && topology.moe_routing_group_count > 0) {
-        if (topology.num_experts % topology.moe_routing_group_count != 0) {
-            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                   "MoE expert count is not divisible by routing group count");
-        }
-        topology.moe_routing_experts_per_group =
-            topology.num_experts / topology.moe_routing_group_count;
-        if (topology.moe_routing_groups_per_token <= 0 ||
-            topology.moe_routing_groups_per_token > topology.moe_routing_group_count) {
-            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                   "invalid number of selected MoE routing groups");
-        }
-        if (topology.moe_routing_group_score_top_k <= 0 ||
-            topology.moe_routing_group_score_top_k > topology.moe_routing_experts_per_group) {
-            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                   "invalid MoE routing group score width");
-        }
-    }
-    import_topology.checkpoint.token_policy = {*m.bos_token_id, m.eos_token_ids, *m.pad_token_id};
-    numerical_policy.norm_eps = *m.norm_epsilon;
-    numerical_policy.embedding_multiplier = m.embedding_multiplier.value_or(1.0f);
-    numerical_policy.residual_multiplier = m.residual_multiplier.value_or(1.0f);
-    numerical_policy.logits_multiplier = m.logits_multiplier.value_or(1.0f);
-    numerical_policy.logits_divisor = m.logits_divisor.value_or(1.0f);
 
     ModelGraph& graph = facts.graph;
     graph.hidden = *m.hidden_size;
@@ -227,30 +190,29 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     graph.embedding_transform.multiplier = numerical_policy.embedding_multiplier;
     graph.logits_multiplier = numerical_policy.logits_multiplier;
     graph.logits_divisor = numerical_policy.logits_divisor;
-    graph.layers.resize(static_cast<size_t>(*m.layer_count));
-    for (int layer = 0; layer < *m.layer_count; ++layer) {
+    graph.layers.resize(static_cast<size_t>(layer_count));
+    for (int layer = 0; layer < layer_count; ++layer) {
         LayerSpec& semantic_layer = graph.layers[static_cast<size_t>(layer)];
         semantic_layer.operator_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
         semantic_layer.feed_forward_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
         semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
-        semantic_layer.execute_feed_forward = topology.execute_feed_forward.at(
-            static_cast<size_t>(layer));
-        if (topology.feed_forward_kinds.at(static_cast<size_t>(layer)) ==
-            FeedForwardKind::MixtureOfExperts) {
+        semantic_layer.mixer = AttentionSpec{};
+        semantic_layer.execute_feed_forward = true;
+        if (has_moe && layer >= dense_start) {
             semantic_layer.feed_forward = MixtureOfExpertsSpec{
-                .intermediate_size = topology.moe_intermediate,
-                .num_experts = topology.num_experts,
-                .experts_per_token = topology.experts_per_token,
-                .normalize_topk = topology.normalize_topk,
-                .use_expert_bias = topology.use_expert_bias,
-                .routed_scaling_factor = topology.routed_scaling_factor,
-                .routing_group_count = topology.moe_routing_group_count,
-                .routing_experts_per_group = topology.moe_routing_experts_per_group,
-                .routing_groups_per_token = topology.moe_routing_groups_per_token,
-                .routing_group_score_top_k = topology.moe_routing_group_score_top_k,
-                .has_shared_expert = topology.shared_expert_intermediate > 0,
-                .shared_intermediate_size = topology.shared_expert_intermediate,
-                .router_softmax = topology.moe_router_softmax};
+                .intermediate_size = moe_intermediate,
+                .num_experts = num_experts,
+                .experts_per_token = experts_per_token,
+                .normalize_topk = normalize_topk,
+                .use_expert_bias = use_expert_bias,
+                .routed_scaling_factor = routed_scaling_factor,
+                .routing_group_count = total_routing_groups,
+                .routing_experts_per_group = experts_per_group,
+                .routing_groups_per_token = groups_per_token,
+                .routing_group_score_top_k = group_score_top_k,
+                .has_shared_expert = shared_expert_intermediate > 0,
+                .shared_intermediate_size = shared_expert_intermediate,
+                .router_softmax = moe_router_softmax};
         } else {
             semantic_layer.feed_forward = DenseFeedForwardSpec{
                 intermediate_sizes.at(static_cast<size_t>(layer)), ActivationKind::SwiGLU};
@@ -325,7 +287,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
              has_tensor("model.language_model.layers." + std::to_string(layer) + ".mlp.up_proj.weight") ||
              has_tensor("transformer.h." + std::to_string(layer) + ".mlp.w_up.weight") ||
              has_tensor("model.layers." + std::to_string(layer) + ".feed_forward.w1.weight") ||
-             (m.moe_experts.value_or(0) > 0 &&
+             (has_moe &&
               has_tensor(model_layer_prefix + "mlp.experts.0.gate_proj.weight")));
         const auto query_heads = m.query_heads.value_for(layer);
         const auto key_value_heads = m.key_value_heads.value_for(layer);
@@ -374,14 +336,11 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     "recurrent linear-attention tensor shapes do not agree with geometry for layer " +
                     std::to_string(layer));
             }
-            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::GatedDeltaNet;
-            topology.gated_delta_net_layouts[static_cast<size_t>(layer)] = GatedDeltaNetSpec{
+            semantic_layer.mixer = GatedDeltaNetSpec{
                 conv_kernel, key_dim, value_dim, heads, heads, true,
                 m.recurrent_safe_decay.value_or(false),
                 m.recurrent_decay_lower_bound.value_or(-5.0f), true, true};
-            semantic_layer.mixer = topology.gated_delta_net_layouts[static_cast<size_t>(layer)];
-            ++topology.gated_delta_net_layer_count;
-            topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
+            semantic_layer.execute_feed_forward = has_ffn;
             continue;
         }
         if (has_mla) {
@@ -421,7 +380,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     "factorized latent-attention tensor shapes do not agree with geometry for layer " +
                     std::to_string(layer));
             }
-            AttentionSpec& attention = topology.attention_layouts[static_cast<size_t>(layer)];
+            AttentionSpec& attention = std::get<AttentionSpec>(semantic_layer.mixer);
             attention = make_attention(heads, 1, value_dim, false);
             attention.query_heads = heads;
             attention.key_value_heads = 1;
@@ -442,11 +401,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             attention.query_scale = std::sqrt(static_cast<float>(value_dim) /
                                               static_cast<float>(nope + rope));
             semantic_layer.mixer = attention;
-            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::Attention;
-            topology.attention_slot_for_layer[static_cast<size_t>(layer)] =
-                topology.attention_layer_count++;
-            topology.layer_for_attention_slot.push_back(layer);
-            topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
+            semantic_layer.execute_feed_forward = has_ffn;
             continue;
         }
         if (has_mamba) {
@@ -493,14 +448,10 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                        "Mamba-2 tensor shapes do not agree with recurrent geometry for layer " +
                                            std::to_string(layer));
             }
-            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::Mamba2;
-            topology.mamba2_layouts[static_cast<size_t>(layer)] =
-                Mamba2Spec{conv_kernel, inner, state_size, time_step_rank, heads, head_dim,
-                           group_count, chunk_size, true, false};
-            semantic_layer.mixer = topology.mamba2_layouts[static_cast<size_t>(layer)];
-            ++topology.mamba2_layer_count;
-            topology.mamba2_intermediate = std::max(topology.mamba2_intermediate, inner);
-            topology.execute_feed_forward[static_cast<size_t>(layer)] = false;
+            semantic_layer.mixer = Mamba2Spec{
+                conv_kernel, inner, state_size, time_step_rank, heads, head_dim,
+                group_count, chunk_size, true, false};
+            semantic_layer.execute_feed_forward = false;
             continue;
         }
         if (!has_attention) {
@@ -510,10 +461,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                         ResolutionFailureKind::MissingRequiredMetadata,
                         "short-convolution layer has no positive cache length");
                 }
-                topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::ShortConvolution;
                 semantic_layer.mixer = ShortConvolutionSpec{*m.shortconv_cache, *m.hidden_size, false};
-                ++topology.conv_layer_count;
-                topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
+                semantic_layer.execute_feed_forward = has_ffn;
                 continue;
             }
             if (!has_ffn) {
@@ -521,13 +470,9 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                        "layer has no recognized mixer or FFN tensor grammar: " +
                                            std::to_string(layer));
             }
-            topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::MlpOnly;
-            topology.mlp_only_layouts[static_cast<size_t>(layer)] =
-                MlpBlockSpec{intermediate_sizes.at(static_cast<size_t>(layer)),
-                             ActivationKind::Relu2};
-            semantic_layer.mixer = topology.mlp_only_layouts[static_cast<size_t>(layer)];
-            ++topology.mlp_only_layer_count;
-            topology.execute_feed_forward[static_cast<size_t>(layer)] = false;
+            semantic_layer.mixer = MlpBlockSpec{
+                intermediate_sizes.at(static_cast<size_t>(layer)), ActivationKind::Relu2};
+            semantic_layer.execute_feed_forward = false;
             continue;
         }
         if (!query_heads.has_value() || !key_value_heads.has_value()) {
@@ -563,21 +508,18 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                    "query/key normalization evidence is incomplete for layer " +
                                        std::to_string(layer));
         }
-        topology.attention_slot_for_layer[static_cast<size_t>(layer)] =
-            topology.attention_layer_count++;
-        topology.layer_for_attention_slot.push_back(layer);
-        topology.attention_layouts[static_cast<size_t>(layer)] =
-            make_attention(*query_heads, *key_value_heads, head_dim, has_query_norm);
-        semantic_layer.mixer = topology.attention_layouts[static_cast<size_t>(layer)];
-        topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
+        semantic_layer.mixer = make_attention(*query_heads, *key_value_heads,
+                                              head_dim, has_query_norm);
+        semantic_layer.execute_feed_forward = has_ffn;
     }
     if (m.attention_multiplier.has_value()) {
         numerical_policy.attention_multiplier = *m.attention_multiplier;
     } else {
         int attention_head_dim = 0;
         for (int layer = 0; layer < *m.layer_count; ++layer) {
-            if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
-                attention_head_dim = topology.attention_layouts[static_cast<size_t>(layer)].head_dim;
+            if (graph.layers[static_cast<size_t>(layer)].mixer_kind() == MixerKind::Attention) {
+                attention_head_dim = std::get<AttentionSpec>(
+                    graph.layers[static_cast<size_t>(layer)].mixer).head_dim;
                 break;
             }
         }
@@ -590,7 +532,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             attention->query_scale *= numerical_policy.attention_multiplier;
         }
     }
-    topology.validate();
+    graph.validate();
 
     const auto add_global = [&](TensorRole role, const TensorInventoryEntry& tensor) {
         inference_detail::add_binding(
@@ -687,7 +629,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             {*m.hidden_size}, {});
         inference_detail::add_binding(facts.bindings, TensorRole::AttentionInputNorm, layer,
                                       *attention_norm, {});
-        if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Mamba2) {
+        if (graph.layers[static_cast<size_t>(layer)].mixer_kind() == MixerKind::Mamba2) {
             const auto bind_mamba = [&](TensorRole role, std::string_view suffix,
                                         std::initializer_list<std::int64_t> shape) {
                 const auto* tensor = inference_detail::find_unique(
@@ -696,7 +638,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     role, layer, shape, {});
                 inference_detail::add_binding(facts.bindings, role, layer, *tensor, {});
             };
-            const Mamba2Spec& spec = topology.mamba2_layouts.at(static_cast<size_t>(layer));
+            const Mamba2Spec& spec = std::get<Mamba2Spec>(
+                graph.layers[static_cast<size_t>(layer)].mixer);
             const int conv_dim = spec.intermediate_size +
                 2 * spec.group_count * spec.state_size;
             bind_mamba(TensorRole::Mamba2Input, "in_proj.weight",
@@ -711,10 +654,12 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             bind_mamba(TensorRole::Mamba2Norm, "norm.weight", {spec.intermediate_size});
             bind_mamba(TensorRole::Mamba2Output, "out_proj.weight",
                        {*m.hidden_size, spec.intermediate_size});
-        } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::GatedDeltaNet &&
-                   topology.gated_delta_net_layouts.at(static_cast<size_t>(layer)).factorized_projections) {
-            const GatedDeltaNetSpec& spec = topology.gated_delta_net_layouts.at(
-                static_cast<size_t>(layer));
+        } else if (graph.layers[static_cast<size_t>(layer)].mixer_kind() ==
+                       MixerKind::GatedDeltaNet &&
+                   std::get<GatedDeltaNetSpec>(
+                       graph.layers[static_cast<size_t>(layer)].mixer).factorized_projections) {
+            const GatedDeltaNetSpec& spec = std::get<GatedDeltaNetSpec>(
+                graph.layers[static_cast<size_t>(layer)].mixer);
             const std::string prefix = "model.layers." + index + ".attention.";
             const auto bind = [&](TensorRole role, std::string_view suffix,
                                   std::initializer_list<std::int64_t> shape) {
@@ -745,7 +690,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             bind(TensorRole::GatedDeltaNetNorm, "o_norm.weight", {spec.value_head_dim});
             bind(TensorRole::GatedDeltaNetOutput, "o_proj.weight",
                  {*m.hidden_size, spec.value_width()});
-        } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::ShortConvolution) {
+        } else if (graph.layers[static_cast<size_t>(layer)].mixer_kind() ==
+                   MixerKind::ShortConvolution) {
             const auto* input_projection = inference_detail::find_unique(
                 input.inventory,
                 inference_detail::shortconv_tensor_candidates(layer, "in_proj.weight"),
@@ -757,7 +703,9 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 input.inventory,
                 inference_detail::shortconv_tensor_candidates(layer, "conv.weight"),
                 TensorRole::ShortConvKernel, layer,
-                {*m.hidden_size, 1, topology.conv_cache}, {});
+                 {*m.hidden_size, 1,
+                  std::get<ShortConvolutionSpec>(
+                      graph.layers[static_cast<size_t>(layer)].mixer).cache_length}, {});
             inference_detail::add_binding(facts.bindings, TensorRole::ShortConvKernel,
                                           layer, *kernel, {});
             const auto* output_projection = inference_detail::find_unique(
@@ -767,9 +715,9 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 {*m.hidden_size, *m.hidden_size}, {});
             inference_detail::add_binding(facts.bindings, TensorRole::ShortConvOutput,
                                           layer, *output_projection, {});
-        } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
-            const AttentionSpec& attention = topology.attention_layouts.at(
-                static_cast<size_t>(layer));
+        } else if (graph.layers[static_cast<size_t>(layer)].mixer_kind() == MixerKind::Attention) {
+            const AttentionSpec& attention = std::get<AttentionSpec>(
+                graph.layers[static_cast<size_t>(layer)].mixer);
             if (attention.uses_latent_state() && attention.latent_state()->factorized) {
                 const auto& latent = *attention.latent_state();
                 const std::string prefix = "model.layers." + index + ".attention.";
@@ -868,7 +816,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             }
             }
         }
-        const MixerKind mixer = topology.mixer_kinds[static_cast<size_t>(layer)];
+        const MixerKind mixer = graph.layers[static_cast<size_t>(layer)].mixer_kind();
         if (mixer == MixerKind::MlpOnly) {
             const auto* up = inference_detail::find_unique(
                 input.inventory, inference_detail::feed_forward_tensor_candidates(layer,
@@ -880,13 +828,13 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     "w_down.weight"), TensorRole::FfnDown, layer,
                 {*m.hidden_size, layer_intermediate}, {});
             inference_detail::add_binding(facts.bindings, TensorRole::FfnDown, layer, *down, {});
-        } else if (topology.execute_feed_forward.at(static_cast<size_t>(layer))) {
+        } else if (graph.layers[static_cast<size_t>(layer)].execute_feed_forward) {
             const auto* ffn_norm = inference_detail::find_unique(
                 input.inventory, ffn_norm_candidates, TensorRole::FfnInputNorm, layer,
                 {*m.hidden_size}, {});
             inference_detail::add_binding(facts.bindings, TensorRole::FfnInputNorm, layer,
                                           *ffn_norm, {});
-            if (topology.feed_forward_kinds[static_cast<size_t>(layer)] ==
+            if (graph.layers[static_cast<size_t>(layer)].feed_forward_kind() ==
                 FeedForwardKind::MixtureOfExperts) {
                 const std::string prefix = "model.layers." + index + ".mlp.";
                 const auto bind = [&](TensorRole role, std::string name,
@@ -898,10 +846,10 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                                      tensor->name, tensor->shape, {}});
                 };
                 bind(TensorRole::MoeRouter, prefix + "gate.weight",
-                     {*m.moe_experts, *m.hidden_size});
+                     {num_experts, *m.hidden_size});
                 const std::string bias_name = prefix + "gate.expert_bias";
                 if (has_tensor(bias_name)) {
-                    bind(TensorRole::MoeRouterBias, bias_name, {*m.moe_experts});
+                    bind(TensorRole::MoeRouterBias, bias_name, {num_experts});
                 }
                 const auto* moe = std::get_if<MixtureOfExpertsSpec>(
                     &graph.layers[static_cast<size_t>(layer)].feed_forward);
@@ -912,7 +860,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                             std::to_string(layer));
                 }
                 const int expert_intermediate = moe->intermediate_size;
-                for (int expert = 0; expert < *m.moe_experts; ++expert) {
+                for (int expert = 0; expert < num_experts; ++expert) {
                     const std::string expert_prefix = prefix + "experts." +
                         std::to_string(expert) + ".";
                     bind(TensorRole::MoeExpertGate, expert_prefix + "gate_proj.weight",
@@ -922,14 +870,14 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                     bind(TensorRole::MoeExpertDown, expert_prefix + "down_proj.weight",
                          {*m.hidden_size, expert_intermediate}, expert);
                 }
-                if (topology.shared_expert_intermediate > 0) {
+                if (moe->shared_intermediate_size > 0) {
                     const std::string shared = prefix + "shared_experts.";
                     bind(TensorRole::MoeSharedGate, shared + "gate_proj.weight",
-                         {topology.shared_expert_intermediate, *m.hidden_size});
+                         {moe->shared_intermediate_size, *m.hidden_size});
                     bind(TensorRole::MoeSharedUp, shared + "up_proj.weight",
-                         {topology.shared_expert_intermediate, *m.hidden_size});
+                         {moe->shared_intermediate_size, *m.hidden_size});
                     bind(TensorRole::MoeSharedDown, shared + "down_proj.weight",
-                         {*m.hidden_size, topology.shared_expert_intermediate});
+                         {*m.hidden_size, moe->shared_intermediate_size});
                 }
             } else {
             const auto* gate = inference_detail::find_unique(
@@ -957,7 +905,9 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 
 std::string CanonicalModelFacts::fingerprint() const {
     std::ostringstream out;
-    out << resolution_mode << ':' << source_format << ':' << topology.fingerprint()
+    out << resolution_mode << ':' << source_format << ":hidden=" << graph.hidden
+        << ":layers=" << graph.layers.size()
+        << ":vocab=" << checkpoint.vocab_size
         << ":num=" << numerical_policy.norm_eps << ':'
         << numerical_policy.post_norm_eps << ':'
         << numerical_policy.embedding_multiplier << ':'
@@ -976,7 +926,7 @@ std::string CanonicalModelFacts::fingerprint() const {
 }
 
 void CanonicalModelFacts::validate() const {
-    topology.validate();
+    checkpoint.validate();
     numerical_policy.validate();
     graph.validate();
     bindings.validate();
@@ -991,12 +941,12 @@ void CanonicalModelFacts::validate() const {
     require(TensorRole::TokenEmbedding, -1);
     require(TensorRole::LanguageModelHead, -1);
     require(TensorRole::FinalNorm, -1);
-    const ExecutionTopology& execution = topology;
-    for (int layer = 0; layer < execution.num_hidden_layers; ++layer) {
+    for (int layer = 0; layer < static_cast<int>(graph.layers.size()); ++layer) {
+        const LayerSpec& semantic_layer = graph.layers[static_cast<size_t>(layer)];
+        const MixerKind mixer = semantic_layer.mixer_kind();
         require(TensorRole::AttentionInputNorm, layer);
-        if (execution.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
-            const AttentionSpec& attention = execution.attention_layouts.at(
-                static_cast<size_t>(layer));
+        if (mixer == MixerKind::Attention) {
+            const AttentionSpec& attention = std::get<AttentionSpec>(semantic_layer.mixer);
             if (attention.uses_latent_state()) {
                 if (attention.latent_state()->factorized) {
                     require(TensorRole::AttentionLatentQueryProjection, layer);
@@ -1019,13 +969,12 @@ void CanonicalModelFacts::validate() const {
                         ? TensorRole::AttentionLatentOutput
                         : TensorRole::AttentionOutput,
                     layer);
-        } else if (execution.mixer_kinds[static_cast<size_t>(layer)] ==
-                   MixerKind::ShortConvolution) {
+        } else if (mixer == MixerKind::ShortConvolution) {
             require(TensorRole::ShortConvInput, layer);
             require(TensorRole::ShortConvKernel, layer);
             require(TensorRole::ShortConvOutput, layer);
         } else {
-            if (execution.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Mamba2) {
+            if (mixer == MixerKind::Mamba2) {
                 require(TensorRole::Mamba2Input, layer);
                 require(TensorRole::Mamba2Conv, layer);
                 require(TensorRole::Mamba2ConvBias, layer);
@@ -1034,10 +983,8 @@ void CanonicalModelFacts::validate() const {
                 require(TensorRole::Mamba2D, layer);
                 require(TensorRole::Mamba2Norm, layer);
                 require(TensorRole::Mamba2Output, layer);
-            } else if (execution.mixer_kinds[static_cast<size_t>(layer)] ==
-                       MixerKind::GatedDeltaNet) {
-                const GatedDeltaNetSpec& spec = execution.gated_delta_net_layouts.at(
-                    static_cast<size_t>(layer));
+            } else if (mixer == MixerKind::GatedDeltaNet) {
+                const GatedDeltaNetSpec& spec = std::get<GatedDeltaNetSpec>(semantic_layer.mixer);
                 if (spec.factorized_projections) {
                     require(TensorRole::GatedDeltaNetQuery, layer);
                     require(TensorRole::GatedDeltaNetKey, layer);
@@ -1057,7 +1004,7 @@ void CanonicalModelFacts::validate() const {
                 require(TensorRole::GatedDeltaNetALog, layer);
                 require(TensorRole::GatedDeltaNetNorm, layer);
                 require(TensorRole::GatedDeltaNetOutput, layer);
-            } else if (execution.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::MlpOnly) {
+            } else if (mixer == MixerKind::MlpOnly) {
                 require(TensorRole::FfnUp, layer);
                 require(TensorRole::FfnDown, layer);
             } else {
@@ -1065,14 +1012,12 @@ void CanonicalModelFacts::validate() const {
                                        "automatic resolution has no binding contract for mixer");
             }
         }
-        if (execution.mixer_kinds[static_cast<size_t>(layer)] != MixerKind::MlpOnly &&
-            (execution.execute_feed_forward.empty() ||
-             execution.execute_feed_forward.at(static_cast<size_t>(layer)))) {
+        if (mixer != MixerKind::MlpOnly && semantic_layer.execute_feed_forward) {
             require(TensorRole::FfnInputNorm, layer);
-            if (execution.feed_forward_kinds[static_cast<size_t>(layer)] ==
-                FeedForwardKind::MixtureOfExperts) {
+            if (semantic_layer.feed_forward_kind() == FeedForwardKind::MixtureOfExperts) {
                 require(TensorRole::MoeRouter, layer);
-                for (int expert = 0; expert < execution.num_experts; ++expert) {
+                const auto& moe = std::get<MixtureOfExpertsSpec>(semantic_layer.feed_forward);
+                for (int expert = 0; expert < moe.num_experts; ++expert) {
                     if (bindings.find(TensorRole::MoeExpertGate, layer, expert) == nullptr ||
                         bindings.find(TensorRole::MoeExpertUp, layer, expert) == nullptr ||
                         bindings.find(TensorRole::MoeExpertDown, layer, expert) == nullptr) {

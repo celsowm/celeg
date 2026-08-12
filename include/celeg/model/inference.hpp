@@ -244,7 +244,7 @@ struct InferenceInput {
 // aliases. Tensor spelling is retained only at this checkpoint boundary so
 // the weight plan can address the source repository.
 struct CanonicalModelFacts {
-    RuntimeTopology topology;
+    CheckpointDimensions checkpoint;
     NumericalPolicy numerical_policy;
     ModelGraph graph;
     TensorRoleBindings bindings;

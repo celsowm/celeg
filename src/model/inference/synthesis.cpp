@@ -35,7 +35,7 @@ ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const 
 ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) const {
     facts.validate();
     ResolvedModel result;
-    result.topology.checkpoint = facts.topology.checkpoint;
+    result.topology.checkpoint = facts.checkpoint;
     result.graph = GraphSynthesizer{}.synthesize(facts);
     result.capabilities = {true, true, false, facts.tied_embeddings};
     result.provenance.architecture_id = facts.resolution_mode;

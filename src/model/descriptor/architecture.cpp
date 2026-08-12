@@ -34,38 +34,36 @@ public:
         const CheckpointMetadata& metadata = checkpoint.metadata;
         const int hidden = integer_value(metadata, descriptor_.dimensions.at("hidden"));
         const int query_heads = integer_value(metadata, descriptor_.dimensions.at("query_heads"));
-        RuntimeTopology import_topology;
-        ExecutionTopology& topology = import_topology;
+        CheckpointDimensions checkpoint_dimensions;
+        ModelGraph graph;
         NumericalPolicy numerical_policy;
-        topology.hidden = hidden;
-        topology.intermediate = integer_value(metadata, descriptor_.dimensions.at("intermediate"));
-        topology.dense_intermediate = topology.intermediate;
-        topology.max_feed_forward_intermediate = topology.intermediate;
+        const int intermediate = integer_value(
+            metadata, descriptor_.dimensions.at("intermediate"));
         const int physical_layer_count = integer_value(metadata, descriptor_.dimensions.at("layers"));
         const int repeat_count = descriptor_.repeated_layers
             ? integer_value(metadata, descriptor_.repeat_count) : 1;
         if (physical_layer_count <= 0 || repeat_count <= 0) {
             throw std::invalid_argument("descriptor has invalid layer schedule");
         }
-        topology.num_hidden_layers = physical_layer_count * repeat_count;
+        const int layer_count = physical_layer_count * repeat_count;
         if (const auto mtp = descriptor_.dimensions.find("mtp_layers");
             mtp != descriptor_.dimensions.end()) {
-            import_topology.checkpoint.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
+            checkpoint_dimensions.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
         }
-        import_topology.checkpoint.vocab_size = integer_value(metadata, descriptor_.dimensions.at("vocab"));
-        if (import_topology.checkpoint.vocab_size == 0 && metadata.is_gguf() && metadata.contains("tokenizer.ggml.tokens")) {
-            import_topology.checkpoint.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
+        checkpoint_dimensions.vocab_size = integer_value(metadata, descriptor_.dimensions.at("vocab"));
+        if (checkpoint_dimensions.vocab_size == 0 && metadata.is_gguf() && metadata.contains("tokenizer.ggml.tokens")) {
+            checkpoint_dimensions.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
         }
-        import_topology.checkpoint.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
-        topology.conv_cache = descriptor_.convolution_cache.has_value()
+        checkpoint_dimensions.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
+        const int conv_cache = descriptor_.convolution_cache.has_value()
             ? integer_value(metadata, *descriptor_.convolution_cache) : 0;
-        topology.conv_dim = descriptor_.convolution_channels.has_value()
+        const int conv_dim = descriptor_.convolution_channels.has_value()
             ? integer_value(metadata, *descriptor_.convolution_channels, hidden) : 0;
         const int kv_heads = integer_value(metadata, descriptor_.dimensions.at("kv_heads"));
         const int head_dim = integer_value(metadata, descriptor_.dimensions.at("head_dim"), hidden, query_heads);
-        import_topology.checkpoint.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
-        import_topology.checkpoint.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
-        import_topology.checkpoint.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
+        checkpoint_dimensions.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
+        checkpoint_dimensions.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
+        checkpoint_dimensions.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
         const auto& numbers = descriptor_.numbers;
         numerical_policy.norm_eps = static_cast<float>(number_value(metadata, numbers.at("norm_eps")));
         numerical_policy.post_norm_eps = numbers.contains("post_norm_eps")
@@ -75,7 +73,7 @@ public:
         const std::vector<float> scheduled_rope_theta = scaling_factor_values(
             metadata, descriptor_.rope_theta_schedule);
         if (!scheduled_rope_theta.empty() && scheduled_rope_theta.size() !=
-            static_cast<size_t>(topology.num_hidden_layers)) {
+            static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor RoPE schedule length does not match layer schedule");
         }
         RopeScalingSpec scaling;
@@ -104,77 +102,119 @@ public:
         numerical_policy.attention_multiplier = static_cast<float>(number_value(metadata, numbers.at("attention_multiplier")));
         numerical_policy.residual_multiplier = static_cast<float>(number_value(metadata, numbers.at("residual_multiplier")));
         numerical_policy.logits_divisor = static_cast<float>(number_value(metadata, numbers.at("logits_divisor")));
+        graph.hidden = hidden;
+        graph.embedding_transform.multiplier = numerical_policy.embedding_multiplier;
+        if (descriptor_.embedding_post_norm_kind) {
+            graph.embedding_transform.post_norm = NormSpec{
+                numerical_policy.norm_eps, *descriptor_.embedding_post_norm_kind};
+        }
+        graph.logits_divisor = numerical_policy.logits_divisor;
+        graph.logits_multiplier = numerical_policy.logits_multiplier;
+        graph.final_norm = {numerical_policy.norm_eps, descriptor_.final_norm_kind};
+        graph.final_logit_softcap = descriptor_.final_logit_softcap.has_value()
+            ? static_cast<float>(number_value(metadata, *descriptor_.final_logit_softcap)) : 0.0f;
+        if (descriptor_.norm_after_physical_block) {
+            graph.norm_after_layers = {physical_layer_count - 1};
+        }
+        graph.layers.resize(static_cast<size_t>(layer_count));
+        for (int layer = 0; layer < layer_count; ++layer) {
+            LayerSpec& semantic_layer = graph.layers[static_cast<size_t>(layer)];
+            semantic_layer.mixer = AttentionSpec{};
+            semantic_layer.feed_forward = DenseFeedForwardSpec{
+                intermediate, descriptor_.feed_forward_activation};
+            semantic_layer.operator_norm = {numerical_policy.norm_eps,
+                                             descriptor_.operator_norm_kind};
+            semantic_layer.feed_forward_norm = {numerical_policy.norm_eps,
+                                                 descriptor_.feed_forward_norm_kind};
+            semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
+            semantic_layer.execute_feed_forward = true;
+        }
         const std::vector<std::string> scheduled_mixer = mixer_schedule_values(metadata, descriptor_);
         if (!scheduled_mixer.empty() && scheduled_mixer.size() !=
-            static_cast<size_t>(topology.num_hidden_layers)) {
+            static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor mixer schedule length does not match layer schedule");
         }
         const std::vector<int> scheduled_kv_heads = field_integer_values(
             metadata, descriptor_.kv_heads_schedule);
         if (!scheduled_kv_heads.empty() && scheduled_kv_heads.size() !=
-            static_cast<size_t>(topology.num_hidden_layers)) {
+            static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor KV-head schedule length does not match layer schedule");
         }
-        topology.mixer_kinds.assign(static_cast<size_t>(topology.num_hidden_layers),
-                                    MixerKind::Attention);
-        for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
+        for (int layer = 0; layer < layer_count; ++layer) {
             if (!scheduled_mixer.empty()) {
                 const std::string& kind = scheduled_mixer[static_cast<size_t>(layer)];
                 if (kind == descriptor_.convolution_value || kind == "conv" ||
                     kind == "short_convolution") {
-                    topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::ShortConvolution;
+                    graph.layers[static_cast<size_t>(layer)].mixer =
+                        ShortConvolutionSpec{conv_cache, conv_dim, false};
                 } else if (kind == "linear_attention" || kind == "gated_delta_net") {
-                    topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::GatedDeltaNet;
+                    graph.layers[static_cast<size_t>(layer)].mixer = GatedDeltaNetSpec{};
                 } else if (kind == "mamba" || kind == "mamba2" || kind == "M") {
-                    topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::Mamba2;
+                    graph.layers[static_cast<size_t>(layer)].mixer = Mamba2Spec{};
                 } else if (kind == "mlp_only" || kind == "MlpOnly" || kind == "-") {
-                    topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::MlpOnly;
+                    graph.layers[static_cast<size_t>(layer)].mixer = MlpBlockSpec{
+                        intermediate, descriptor_.feed_forward_activation};
                 } else if (kind != "full_attention" && kind != "attention" && kind != "*") {
                     throw std::invalid_argument("descriptor has unsupported mixer kind: " + kind);
                 }
             }
         }
-        topology.feed_forward_kinds.assign(static_cast<size_t>(topology.num_hidden_layers), FeedForwardKind::Dense);
-        topology.feed_forward_intermediates.assign(static_cast<size_t>(topology.num_hidden_layers), topology.intermediate);
-        topology.feed_forward_activations.assign(static_cast<size_t>(topology.num_hidden_layers),
-                                                 descriptor_.feed_forward_activation);
         const int dense_layers = descriptor_.moe_dense_layers.has_value()
-            ? integer_value(metadata, *descriptor_.moe_dense_layers) : topology.num_hidden_layers;
+            ? integer_value(metadata, *descriptor_.moe_dense_layers) : layer_count;
         const int moe_experts = descriptor_.moe_experts.has_value()
             ? integer_value(metadata, *descriptor_.moe_experts) : 0;
-        const bool has_moe = moe_experts > 0 && dense_layers < topology.num_hidden_layers;
+        const bool has_moe = moe_experts > 0 && dense_layers < layer_count;
+        int moe_intermediate = 0;
+        int experts_per_token = 0;
+        int shared_expert_intermediate = 0;
+        bool normalize_topk = false;
+        bool use_expert_bias = false;
+        float routed_scaling_factor = 1.0f;
+        int routing_group_count = 0;
+        int routing_experts_per_group = 0;
+        int routing_groups_per_token = 0;
+        int routing_group_score_top_k = 0;
+        bool router_softmax = false;
         if (has_moe) {
-            topology.num_dense_layers = dense_layers;
-            topology.num_experts = moe_experts;
-            topology.moe_intermediate = integer_value(metadata, *descriptor_.moe_intermediate);
-            topology.experts_per_token = integer_value(metadata, *descriptor_.moe_experts_per_token);
-            topology.shared_expert_intermediate = descriptor_.moe_shared_intermediate.has_value()
+            moe_intermediate = integer_value(metadata, *descriptor_.moe_intermediate);
+            experts_per_token = integer_value(metadata, *descriptor_.moe_experts_per_token);
+            shared_expert_intermediate = descriptor_.moe_shared_intermediate.has_value()
                 ? integer_value(metadata, *descriptor_.moe_shared_intermediate) : 0;
-            topology.normalize_topk = boolean_value(metadata, descriptor_.moe_normalize_topk, true);
-            topology.moe_router_softmax = topology.normalize_topk;
-            topology.use_expert_bias = boolean_value(metadata, descriptor_.moe_expert_bias, false);
-            topology.routed_scaling_factor = static_cast<float>(
+            normalize_topk = boolean_value(metadata, descriptor_.moe_normalize_topk, true);
+            router_softmax = normalize_topk;
+            use_expert_bias = boolean_value(metadata, descriptor_.moe_expert_bias, false);
+            routed_scaling_factor = static_cast<float>(
                 descriptor_.moe_routed_scaling.has_value()
                     ? number_value(metadata, *descriptor_.moe_routed_scaling) : 1.0);
-            topology.moe_routing_group_count = descriptor_.moe_routing_group_count.has_value()
+            routing_group_count = descriptor_.moe_routing_group_count.has_value()
                 ? integer_value(metadata, *descriptor_.moe_routing_group_count) : 0;
-            topology.moe_routing_experts_per_group =
+            routing_experts_per_group =
                 descriptor_.moe_routing_experts_per_group.has_value()
                     ? integer_value(metadata, *descriptor_.moe_routing_experts_per_group) : 0;
-            topology.moe_routing_groups_per_token =
+            routing_groups_per_token =
                 descriptor_.moe_routing_groups_per_token.has_value()
                     ? integer_value(metadata, *descriptor_.moe_routing_groups_per_token) : 0;
-            topology.moe_routing_group_score_top_k =
+            routing_group_score_top_k =
                 descriptor_.moe_routing_group_score_top_k.has_value()
                     ? integer_value(metadata, *descriptor_.moe_routing_group_score_top_k) : 0;
-            for (int layer = dense_layers; layer < topology.num_hidden_layers; ++layer) {
-                topology.feed_forward_kinds[static_cast<size_t>(layer)] =
-                    FeedForwardKind::MixtureOfExperts;
+            for (int layer = dense_layers; layer < layer_count; ++layer) {
+                graph.layers[static_cast<size_t>(layer)].feed_forward = MixtureOfExpertsSpec{
+                    .intermediate_size = moe_intermediate,
+                    .num_experts = moe_experts,
+                    .experts_per_token = experts_per_token,
+                    .normalize_topk = normalize_topk,
+                    .use_expert_bias = use_expert_bias,
+                    .routed_scaling_factor = routed_scaling_factor,
+                    .routing_group_count = routing_group_count,
+                    .routing_experts_per_group = routing_experts_per_group,
+                    .routing_groups_per_token = routing_groups_per_token,
+                    .routing_group_score_top_k = routing_group_score_top_k,
+                    .has_shared_expert = shared_expert_intermediate > 0,
+                    .shared_intermediate_size = shared_expert_intermediate,
+                    .shared_before_routed = false,
+                    .router_softmax = router_softmax};
             }
         }
-        topology.gated_delta_net_layouts.resize(static_cast<size_t>(topology.num_hidden_layers));
-        topology.mamba2_layouts.resize(static_cast<size_t>(topology.num_hidden_layers));
-        topology.mlp_only_layouts.resize(static_cast<size_t>(topology.num_hidden_layers));
         const int gated_key_heads = descriptor_.recurrent_key_heads.has_value()
             ? integer_value(metadata, *descriptor_.recurrent_key_heads) : 0;
         const int gated_value_heads = descriptor_.recurrent_value_heads.has_value()
@@ -202,52 +242,26 @@ public:
         if (mamba_intermediate == 0 && mamba_heads > 0 && mamba_head_dim > 0) {
             mamba_intermediate = mamba_heads * mamba_head_dim;
         }
-        topology.mamba2_intermediate = mamba_intermediate;
-        for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-            const MixerKind kind = topology.mixer_kinds[static_cast<size_t>(layer)];
+        for (int layer = 0; layer < layer_count; ++layer) {
+            const MixerKind kind = graph.layers[static_cast<size_t>(layer)].mixer_kind();
             if (kind == MixerKind::GatedDeltaNet) {
-                topology.gated_delta_net_layouts[static_cast<size_t>(layer)] =
+                graph.layers[static_cast<size_t>(layer)].mixer =
                     GatedDeltaNetSpec{gated_conv_kernel, gated_key_dim, gated_value_dim,
                                       gated_key_heads, gated_value_heads};
             } else if (kind == MixerKind::Mamba2) {
-                topology.mamba2_layouts[static_cast<size_t>(layer)] =
+                graph.layers[static_cast<size_t>(layer)].mixer =
                     Mamba2Spec{gated_conv_kernel, mamba_intermediate, mamba_state_size,
                                mamba_time_step_rank, mamba_heads, mamba_head_dim,
                                mamba_groups, mamba_chunk_size, false, false};
-            } else if (kind == MixerKind::MlpOnly) {
-                topology.mlp_only_layouts[static_cast<size_t>(layer)] =
-                    MlpBlockSpec{topology.intermediate, descriptor_.feed_forward_activation};
-            }
-        }
-        topology.attention_layer_count = 0;
-        topology.conv_layer_count = 0;
-        topology.attention_slot_for_layer.assign(static_cast<size_t>(topology.num_hidden_layers), -1);
-        topology.layer_for_attention_slot.clear();
-        for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-            if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Attention) {
-                topology.attention_slot_for_layer[static_cast<size_t>(layer)] =
-                    topology.attention_layer_count++;
-                topology.layer_for_attention_slot.push_back(layer);
-            } else if (topology.mixer_kinds[static_cast<size_t>(layer)] ==
-                       MixerKind::ShortConvolution) {
-                ++topology.conv_layer_count;
-            } else if (topology.mixer_kinds[static_cast<size_t>(layer)] ==
-                       MixerKind::GatedDeltaNet) {
-                ++topology.gated_delta_net_layer_count;
-            } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::Mamba2) {
-                ++topology.mamba2_layer_count;
-            } else if (topology.mixer_kinds[static_cast<size_t>(layer)] == MixerKind::MlpOnly) {
-                ++topology.mlp_only_layer_count;
             }
         }
         if (descriptor_.map_physical_layers) {
-            import_topology.checkpoint.checkpoint_layer_for_layer.resize(static_cast<size_t>(topology.num_hidden_layers));
-            for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-                import_topology.checkpoint.checkpoint_layer_for_layer[static_cast<size_t>(layer)] =
+            checkpoint_dimensions.checkpoint_layer_for_layer.resize(static_cast<size_t>(layer_count));
+            for (int layer = 0; layer < layer_count; ++layer) {
+                checkpoint_dimensions.checkpoint_layer_for_layer[static_cast<size_t>(layer)] =
                     layer % physical_layer_count;
             }
         }
-        topology.attention_layouts.resize(static_cast<size_t>(topology.num_hidden_layers));
         const std::string disable_key = metadata.is_gguf() ? descriptor_.disable_rope_gguf
                                                             : descriptor_.disable_rope_json;
         const std::vector<int> disabled = integer_values(metadata, disable_key);
@@ -269,7 +283,7 @@ public:
         if (descriptor_.attention_pattern.has_value()) {
             const std::string pattern_key = selected_key(metadata, *descriptor_.attention_pattern);
             if (!pattern_key.empty() && metadata.contains(pattern_key) &&
-                scheduled_sliding.size() == 1 && topology.num_hidden_layers > 1) {
+                scheduled_sliding.size() == 1 && layer_count > 1) {
                 const MetadataValue& pattern_value = metadata.value(pattern_key);
                 if (std::holds_alternative<std::vector<std::string>>(pattern_value) ||
                     std::holds_alternative<std::vector<int64_t>>(pattern_value)) {
@@ -280,7 +294,7 @@ public:
         }
         if (!scheduled_sliding.empty() && scheduled_sliding.size() != 1 &&
             scheduled_sliding.size() != static_cast<size_t>(physical_layer_count) &&
-            scheduled_sliding.size() != static_cast<size_t>(topology.num_hidden_layers)) {
+            scheduled_sliding.size() != static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor attention pattern length does not match layer schedule");
         }
         const int sliding_window = descriptor_.sliding_window.has_value()
@@ -289,10 +303,10 @@ public:
             descriptor_.sliding_attention_variant.has_value();
         const int shared_layers = descriptor_.shared_kv_suffix_layers.has_value()
             ? integer_value(metadata, *descriptor_.shared_kv_suffix_layers) : 0;
-        if (shared_layers < 0 || shared_layers > topology.num_hidden_layers) {
+        if (shared_layers < 0 || shared_layers > layer_count) {
             throw std::invalid_argument("descriptor shared KV suffix is out of range");
         }
-        const int shared_start = topology.num_hidden_layers - shared_layers;
+        const int shared_start = layer_count - shared_layers;
         const auto scheduled_is_sliding = [&](int layer) {
             if (scheduled_sliding.empty()) return false;
             const size_t index = scheduled_sliding.size() == 1 ? 0 :
@@ -301,7 +315,10 @@ public:
                     : static_cast<size_t>(layer);
             return scheduled_sliding[index];
         };
-        for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
+        for (int layer = 0; layer < layer_count; ++layer) {
+            if (graph.layers[static_cast<size_t>(layer)].mixer_kind() != MixerKind::Attention) {
+                continue;
+            }
             const bool is_sliding = scheduled_is_sliding(layer);
             const AttentionVariant* variant = is_sliding
                 ? (descriptor_.sliding_attention_variant.has_value()
@@ -428,29 +445,26 @@ public:
             } else {
                 throw std::invalid_argument("descriptor has unsupported position kind: " + position_kind);
             }
-            topology.attention_layouts[static_cast<size_t>(layer)] = std::move(attention);
+            graph.layers[static_cast<size_t>(layer)].mixer = std::move(attention);
         }
-        topology.has_per_layer_input = descriptor_.per_layer_input_size.has_value();
-        topology.per_layer_input_size = topology.has_per_layer_input
+        const bool has_per_layer_input = descriptor_.per_layer_input_size.has_value();
+        const int per_layer_input_size = has_per_layer_input
             ? integer_value(metadata, *descriptor_.per_layer_input_size) : 0;
-        if (topology.has_per_layer_input && topology.per_layer_input_size <= 0) {
+        if (has_per_layer_input && per_layer_input_size <= 0) {
             throw std::invalid_argument("descriptor per-layer input size is invalid");
         }
-        topology.feed_forward_activations.assign(
-            static_cast<size_t>(topology.num_hidden_layers), descriptor_.feed_forward_activation);
-        topology.validate();
         ArchitectureResolutionStages stages;
-        stages.checkpoint_dimensions = [import_topology](const CheckpointView&) {
-            return import_topology.checkpoint;
+        stages.checkpoint_dimensions = [checkpoint_dimensions](const CheckpointView&) {
+            return checkpoint_dimensions;
         };
         stages.numerical_policy = [numerical_policy](const CheckpointView&) {
             return numerical_policy;
         };
-        stages.graph = [this, import_topology](const CheckpointDimensions&,
-                              const NumericalPolicy& numerical_policy,
-                              const CheckpointView& view) {
-            return build_descriptor_graph(descriptor_, import_topology, numerical_policy,
-                                          view.metadata);
+        stages.graph = [this, graph](const CheckpointDimensions&,
+                                     const NumericalPolicy& numerical_policy,
+                                     const CheckpointView& view) {
+            return finalize_descriptor_graph(graph, descriptor_, numerical_policy,
+                                             view.metadata);
         };
         stages.weights = [this](ResolvedModel& model, const CheckpointView&) {
             auto policy = descriptor_detail::create_naming_policy(descriptor_);

@@ -200,10 +200,9 @@ int token_value(const CheckpointMetadata& metadata, const Field& field,
                 std::string_view gguf_override);
 std::vector<int> eos_values(const CheckpointMetadata& metadata, const Descriptor& descriptor);
 bool probe_condition(const CheckpointMetadata& metadata, const ProbeCondition& condition);
-ModelGraph build_descriptor_graph(const Descriptor& descriptor,
-                                  const ExecutionTopology& topology,
-                                  const NumericalPolicy& numerical_policy,
-                                  const CheckpointMetadata& metadata);
+ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descriptor,
+                                     const NumericalPolicy& numerical_policy,
+                                     const CheckpointMetadata& metadata);
 std::unique_ptr<IArchitecture> make_descriptor_architecture(Descriptor descriptor);
 std::optional<Field> optional_field(const Json& object, std::string_view key);
 std::string optional_string(const Json& object, std::string_view key,
