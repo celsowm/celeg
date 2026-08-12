@@ -76,9 +76,15 @@ void CudaCompiledModel::allocate_celeg_resources() {
     // MoE scratch (decode path: one token). Sized from the MoE topology when
     // present; harmless (tiny) for dense-only models.
     {
-        const int E = resources_.shape_.num_experts > 0 ? resources_.shape_.num_experts : 1;
-        const int K = resources_.shape_.experts_per_token > 0 ? resources_.shape_.experts_per_token : 1;
-        const int inter = resources_.shape_.moe_intermediate > 0 ? resources_.shape_.moe_intermediate : 1;
+        int E = 1;
+        int K = 1;
+        int inter = 1;
+        for (const CompiledLayerProgram& layer : resources_.program_.layers) {
+            if (!layer.moe) continue;
+            E = std::max(E, layer.moe->router.expert_count);
+            K = std::max(K, layer.moe->router.experts_per_token);
+            inter = std::max(inter, layer.moe->routed.mlp.intermediate_size);
+        }
         workspace_.moe_hidden_float_.reset(static_cast<size_t>(resources_.shape_.hidden));
         workspace_.moe_sel_.reset(static_cast<size_t>(K));
         workspace_.moe_routing_w_.reset(static_cast<size_t>(K));
