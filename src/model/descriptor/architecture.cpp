@@ -34,7 +34,8 @@ public:
         const CheckpointMetadata& metadata = checkpoint.metadata;
         const int hidden = integer_value(metadata, descriptor_.dimensions.at("hidden"));
         const int query_heads = integer_value(metadata, descriptor_.dimensions.at("query_heads"));
-        RuntimeTopology topology;
+        RuntimeTopology import_topology;
+        ExecutionTopology& topology = import_topology;
         NumericalPolicy numerical_policy;
         topology.hidden = hidden;
         topology.intermediate = integer_value(metadata, descriptor_.dimensions.at("intermediate"));
@@ -49,22 +50,22 @@ public:
         topology.num_hidden_layers = physical_layer_count * repeat_count;
         if (const auto mtp = descriptor_.dimensions.find("mtp_layers");
             mtp != descriptor_.dimensions.end()) {
-            topology.checkpoint.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
+            import_topology.checkpoint.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
         }
-        topology.checkpoint.vocab_size = integer_value(metadata, descriptor_.dimensions.at("vocab"));
-        if (topology.checkpoint.vocab_size == 0 && metadata.is_gguf() && metadata.contains("tokenizer.ggml.tokens")) {
-            topology.checkpoint.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
+        import_topology.checkpoint.vocab_size = integer_value(metadata, descriptor_.dimensions.at("vocab"));
+        if (import_topology.checkpoint.vocab_size == 0 && metadata.is_gguf() && metadata.contains("tokenizer.ggml.tokens")) {
+            import_topology.checkpoint.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
         }
-        topology.checkpoint.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
+        import_topology.checkpoint.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
         topology.conv_cache = descriptor_.convolution_cache.has_value()
             ? integer_value(metadata, *descriptor_.convolution_cache) : 0;
         topology.conv_dim = descriptor_.convolution_channels.has_value()
             ? integer_value(metadata, *descriptor_.convolution_channels, hidden) : 0;
         const int kv_heads = integer_value(metadata, descriptor_.dimensions.at("kv_heads"));
         const int head_dim = integer_value(metadata, descriptor_.dimensions.at("head_dim"), hidden, query_heads);
-        topology.checkpoint.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
-        topology.checkpoint.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
-        topology.checkpoint.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
+        import_topology.checkpoint.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
+        import_topology.checkpoint.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
+        import_topology.checkpoint.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
         const auto& numbers = descriptor_.numbers;
         numerical_policy.norm_eps = static_cast<float>(number_value(metadata, numbers.at("norm_eps")));
         numerical_policy.post_norm_eps = numbers.contains("post_norm_eps")
@@ -240,9 +241,9 @@ public:
             }
         }
         if (descriptor_.map_physical_layers) {
-            topology.checkpoint.checkpoint_layer_for_layer.resize(static_cast<size_t>(topology.num_hidden_layers));
+            import_topology.checkpoint.checkpoint_layer_for_layer.resize(static_cast<size_t>(topology.num_hidden_layers));
             for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-                topology.checkpoint.checkpoint_layer_for_layer[static_cast<size_t>(layer)] =
+                import_topology.checkpoint.checkpoint_layer_for_layer[static_cast<size_t>(layer)] =
                     layer % physical_layer_count;
             }
         }
@@ -439,14 +440,16 @@ public:
             static_cast<size_t>(topology.num_hidden_layers), descriptor_.feed_forward_activation);
         topology.validate();
         ArchitectureResolutionStages stages;
-        stages.topology = [topology](const CheckpointView&) { return topology; };
+        stages.checkpoint_dimensions = [import_topology](const CheckpointView&) {
+            return import_topology.checkpoint;
+        };
         stages.numerical_policy = [numerical_policy](const CheckpointView&) {
             return numerical_policy;
         };
-        stages.graph = [this](const RuntimeTopology& topology,
+        stages.graph = [this, import_topology](const CheckpointDimensions&,
                               const NumericalPolicy& numerical_policy,
                               const CheckpointView& view) {
-            return build_descriptor_graph(descriptor_, topology, numerical_policy,
+            return build_descriptor_graph(descriptor_, import_topology, numerical_policy,
                                           view.metadata);
         };
         stages.weights = [this](ResolvedModel& model, const CheckpointView&) {

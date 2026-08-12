@@ -27,7 +27,7 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
 } // namespace
 
 ModelGraph build_descriptor_graph(const Descriptor& descriptor,
-                                  const RuntimeTopology& topology,
+                                  const ExecutionTopology& topology,
                                   const NumericalPolicy& numerical_policy,
                                   const CheckpointMetadata& metadata) {
     ModelGraph graph;

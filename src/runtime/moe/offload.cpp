@@ -64,7 +64,7 @@ const char* policy_name(ExpertCachePolicy policy) {
 
 } // namespace
 
-std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape) {
+std::size_t bytes_per_expert_bf16(const ExecutionTopology& shape) {
     const std::size_t gate_up = static_cast<std::size_t>(2) *
         static_cast<std::size_t>(shape.moe_intermediate) *
         static_cast<std::size_t>(shape.hidden);
@@ -73,7 +73,7 @@ std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape) {
     return (gate_up + down) * kBf16Bytes;
 }
 
-int moe_layer_count(const RuntimeTopology& shape) {
+int moe_layer_count(const ExecutionTopology& shape) {
     if (shape.num_experts <= 0) return 0;
     int count = 0;
     for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
@@ -82,7 +82,7 @@ int moe_layer_count(const RuntimeTopology& shape) {
     return count;
 }
 
-std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens) {
+std::size_t kv_cache_bytes(const ExecutionTopology& shape, int context_tokens) {
     if (context_tokens <= 0) return 0;
     std::size_t bytes = 0;
     for (size_t layer = 0; layer < shape.attention_layouts.size(); ++layer) {
@@ -97,7 +97,7 @@ std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens) {
 }
 
 ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
-    const RuntimeTopology& shape = inputs.shape;
+    const ExecutionTopology& shape = inputs.shape;
     const ExpertOffloadOptions& options = inputs.options;
 
     ExpertOffloadPlan plan;

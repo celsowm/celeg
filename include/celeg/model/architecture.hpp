@@ -22,9 +22,9 @@ struct ProbeResult {
 // Checkpoint resolution is an ordered composition of neutral stages. Each
 // stage has one responsibility and receives only the checkpoint data it needs.
 struct ArchitectureResolutionStages {
-    std::function<RuntimeTopology(const CheckpointView&)> topology;
+    std::function<CheckpointDimensions(const CheckpointView&)> checkpoint_dimensions;
     std::function<NumericalPolicy(const CheckpointView&)> numerical_policy;
-    std::function<ModelGraph(const RuntimeTopology&, const NumericalPolicy&,
+    std::function<ModelGraph(const CheckpointDimensions&, const NumericalPolicy&,
                              const CheckpointView&)> graph;
     std::function<void(ResolvedModel&, const CheckpointView&)> weights;
     ModelCapabilities capabilities;

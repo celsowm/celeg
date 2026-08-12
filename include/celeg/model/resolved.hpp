@@ -194,14 +194,15 @@ void validate() const;
     static ExecutionTopology derive(const ModelGraph& graph);
 
 private:
+    friend struct RuntimeTopology;
     ExecutionTopology() = default;
 };
 
 // Checkpoint/import dimensions are kept separate from the derived execution
 // cache. Runtime code must explicitly choose the boundary it consumes.
-struct RuntimeTopology {
+struct RuntimeTopology : public ExecutionTopology {
+    RuntimeTopology() : ExecutionTopology() {}
     CheckpointDimensions checkpoint;
-    ExecutionTopology exec;
 
     std::string fingerprint() const;
     std::string summary() const;
@@ -230,7 +231,7 @@ struct ResolvedModel {
 
 // Compose import facts with the allocation cache derived from the final graph.
 // The only construction path for the derived cache is ExecutionTopology::derive.
-RuntimeTopology compose_runtime_topology(RuntimeTopology import_topology,
+RuntimeTopology compose_runtime_topology(CheckpointDimensions checkpoint,
                                          const ModelGraph& graph);
 
 } // namespace celeg

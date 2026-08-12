@@ -169,7 +169,7 @@ std::string MoeLayerProgram::fingerprint() const {
 
 PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     PerLayerInputPlan result;
-    const RuntimeTopology& topology = model.topology;
+    const ExecutionTopology& topology = model.topology;
     if (!topology.has_per_layer_input) {
         return result;
     }
@@ -371,14 +371,37 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                     "model program does not implement this position policy");
             }
         }
+        const CompiledMixer compiled_mixer = std::visit([](const auto& mixer) {
+            using Mixer = std::decay_t<decltype(mixer)>;
+            if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
+                return CompiledMixer::Attention;
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+                return CompiledMixer::ShortConvolution;
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                return CompiledMixer::GatedDeltaNet;
+            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                return CompiledMixer::Mamba2;
+            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                return CompiledMixer::MlpOnly;
+            } else {
+                static_assert(always_false_v<Mixer>, "unhandled mixer compilation variant");
+            }
+        }, layer.mixer);
+        const CompiledFeedForward compiled_feed_forward =
+            std::visit([](const auto& feed_forward) {
+                using FeedForward = std::decay_t<decltype(feed_forward)>;
+                if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+                    return CompiledFeedForward::Dense;
+                } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+                    return CompiledFeedForward::MixtureOfExperts;
+                } else {
+                    static_assert(always_false_v<FeedForward>,
+                                  "unhandled feed-forward compilation variant");
+                }
+            }, layer.feed_forward);
         CompiledLayerProgram compiled{
-            layer.mixer_kind() == MixerKind::Attention ? CompiledMixer::Attention :
-            layer.mixer_kind() == MixerKind::ShortConvolution ? CompiledMixer::ShortConvolution :
-            layer.mixer_kind() == MixerKind::GatedDeltaNet ? CompiledMixer::GatedDeltaNet :
-            layer.mixer_kind() == MixerKind::Mamba2 ? CompiledMixer::Mamba2 :
-            CompiledMixer::MlpOnly,
-            layer.feed_forward_kind() == FeedForwardKind::Dense
-                ? CompiledFeedForward::Dense : CompiledFeedForward::MixtureOfExperts,
+            compiled_mixer,
+            compiled_feed_forward,
             layer.execute_feed_forward,
             CompiledChunkCapability::Native,
             {}, {}, {}, {},
@@ -410,9 +433,6 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         std::visit([&](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
             if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-                compiled.feed_forward_intermediate = feed_forward.intermediate_size;
-                compiled.feed_forward_activation = feed_forward.activation;
-            } else if constexpr (std::is_same_v<FeedForward, MlpBlockSpec>) {
                 compiled.feed_forward_intermediate = feed_forward.intermediate_size;
                 compiled.feed_forward_activation = feed_forward.activation;
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
@@ -475,10 +495,10 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             semantic.router.experts_per_group = moe->routing_experts_per_group;
             semantic.router.groups_per_token = moe->routing_groups_per_token;
             semantic.router.group_score_top_k = moe->routing_group_score_top_k;
-            semantic.routed.mlp.hidden_size = model.topology.hidden;
+            semantic.routed.mlp.hidden_size = model.graph.hidden;
             semantic.routed.mlp.intermediate_size = moe->intermediate_size;
             const std::size_t expert_matrix_elements =
-                static_cast<std::size_t>(model.topology.hidden) *
+                static_cast<std::size_t>(model.graph.hidden) *
                 static_cast<std::size_t>(moe->intermediate_size);
             semantic.routed.payload.regions = {
                 {TensorRole::MoeExpertGate, expert_matrix_elements},
@@ -489,7 +509,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                 ? MoeCombineOrder::SharedThenRouted : MoeCombineOrder::RoutedThenShared;
             if (moe->has_shared_expert) {
                 semantic.shared = SharedExpertProgram{
-                    ExpertMlpProgram{MoeActivation::SwiGLU, model.topology.hidden,
+                    ExpertMlpProgram{MoeActivation::SwiGLU, model.graph.hidden,
                                      moe->shared_intermediate_size > 0
                                          ? moe->shared_intermediate_size
                                          : moe->intermediate_size}};

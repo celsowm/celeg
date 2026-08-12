@@ -213,14 +213,14 @@ struct ExpertOffloadOptions {
 //   gate_up : 2 * moe_intermediate * hidden
 //   down    :     hidden * moe_intermediate
 // times sizeof(__nv_bfloat16) == 2.
-std::size_t bytes_per_expert_bf16(const RuntimeTopology& shape);
+std::size_t bytes_per_expert_bf16(const ExecutionTopology& shape);
 
 // Number of layers whose feed-forward node is a mixture of experts.
-int moe_layer_count(const RuntimeTopology& shape);
+int moe_layer_count(const ExecutionTopology& shape);
 
 // BF16 KV-cache bytes required for `context_tokens` tokens across all
 // attention layers.
-std::size_t kv_cache_bytes(const RuntimeTopology& shape, int context_tokens);
+std::size_t kv_cache_bytes(const ExecutionTopology& shape, int context_tokens);
 
 // The resolved offload layout. All byte fields are exact multiples of the
 // per-expert / per-layer sizes so the caller can allocate directly.

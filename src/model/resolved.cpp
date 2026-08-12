@@ -147,11 +147,11 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
     return result;
 }
 
-RuntimeTopology compose_runtime_topology(RuntimeTopology import_topology,
+RuntimeTopology compose_runtime_topology(CheckpointDimensions checkpoint,
                                          const ModelGraph& graph) {
-    RuntimeTopology topology = ExecutionTopology::derive(graph);
-    topology.checkpoint = std::move(import_topology.checkpoint);
-    topology.checkpoint.mtp_num_hidden_layers = import_topology.checkpoint.mtp_num_hidden_layers;
+    RuntimeTopology topology;
+    topology.checkpoint = std::move(checkpoint);
+    static_cast<ExecutionTopology&>(topology) = ExecutionTopology::derive(graph);
     return topology;
 }
 
@@ -358,17 +358,14 @@ void CheckpointDimensions::validate() const {
     for (int token : token_policy.eos_token_ids) validate_token_id(token, "EOS");
 }
 
-std::string RuntimeTopology::fingerprint() const {
+std::string ExecutionTopology::fingerprint() const {
     std::ostringstream out;
     out << "h" << hidden << "-l" << num_hidden_layers
-        << "-mtp" << checkpoint.mtp_num_hidden_layers
-        << "-voc" << checkpoint.vocab_size
         << "-int" << intermediate << "-cc" << conv_cache
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
     out << "-m2i" << mamba2_intermediate;
     out << "-map";
-    for (int layer : checkpoint.checkpoint_layer_for_layer) out << '-' << layer;
     for (const AttentionSpec& attention : attention_layouts) {
         if (const auto* rope = attention.rope_position()) {
             out << "-r" << rope->theta << '-' << rope->rotary_fraction
@@ -442,26 +439,18 @@ std::string RuntimeTopology::fingerprint() const {
     return out.str();
 }
 
-std::string RuntimeTopology::summary() const {
+std::string ExecutionTopology::summary() const {
     std::ostringstream out;
     out << "hidden=" << hidden << " intermediate=" << intermediate
         << " layers=" << num_hidden_layers
-        << " mtp_layers=" << checkpoint.mtp_num_hidden_layers
         << " attention_layers=" << attention_layer_count
-        << " conv_layers=" << conv_layer_count
-        << " vocab=" << checkpoint.vocab_size;
+        << " conv_layers=" << conv_layer_count;
     return out.str();
 }
 
-void RuntimeTopology::validate() const {
+void ExecutionTopology::validate() const {
     if (hidden <= 0 || intermediate <= 0 || num_hidden_layers <= 0) {
         throw std::runtime_error("invalid resolved model topology");
-    }
-    checkpoint.validate();
-    if (!checkpoint.checkpoint_layer_for_layer.empty()) {
-        if (static_cast<int>(checkpoint.checkpoint_layer_for_layer.size()) != num_hidden_layers) {
-            throw std::runtime_error("checkpoint layer mapping length mismatch");
-        }
     }
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
@@ -584,6 +573,34 @@ void ResolvedModel::validate() const {
             graph.layers[layer].feed_forward_kind() != topology.feed_forward_kinds[layer]) {
             throw std::runtime_error("resolved graph/topology operator schedule mismatch");
         }
+    }
+}
+
+std::string RuntimeTopology::fingerprint() const {
+    std::ostringstream out;
+    out << static_cast<const ExecutionTopology&>(*this).fingerprint()
+        << "-mtp" << checkpoint.mtp_num_hidden_layers
+        << "-voc" << checkpoint.vocab_size;
+    out << "-map";
+    for (int layer : checkpoint.checkpoint_layer_for_layer) out << '-' << layer;
+    return out.str();
+}
+
+std::string RuntimeTopology::summary() const {
+    std::ostringstream out;
+    out << static_cast<const ExecutionTopology&>(*this).summary()
+        << " mtp_layers=" << checkpoint.mtp_num_hidden_layers
+        << " vocab=" << checkpoint.vocab_size;
+    return out.str();
+}
+
+void RuntimeTopology::validate() const {
+    checkpoint.validate();
+    static_cast<const ExecutionTopology&>(*this).validate();
+    if (!checkpoint.checkpoint_layer_for_layer.empty() &&
+        static_cast<int>(checkpoint.checkpoint_layer_for_layer.size()) !=
+            num_hidden_layers) {
+        throw std::runtime_error("checkpoint layer mapping length mismatch");
     }
 }
 

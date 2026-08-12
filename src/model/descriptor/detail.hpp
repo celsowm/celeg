@@ -201,7 +201,7 @@ int token_value(const CheckpointMetadata& metadata, const Field& field,
 std::vector<int> eos_values(const CheckpointMetadata& metadata, const Descriptor& descriptor);
 bool probe_condition(const CheckpointMetadata& metadata, const ProbeCondition& condition);
 ModelGraph build_descriptor_graph(const Descriptor& descriptor,
-                                  const RuntimeTopology& topology,
+                                  const ExecutionTopology& topology,
                                   const NumericalPolicy& numerical_policy,
                                   const CheckpointMetadata& metadata);
 std::unique_ptr<IArchitecture> make_descriptor_architecture(Descriptor descriptor);
