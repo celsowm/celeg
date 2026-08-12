@@ -204,6 +204,17 @@ struct ModelProvenance {
     std::string identity;
 };
 
+// Allocation/index cache derived solely from final graph semantics.  The
+// private constructor prevents front-ends from manufacturing an execution
+// cache independently of graph synthesis.
+class ExecutionTopology final : public RuntimeTopology {
+public:
+    static ExecutionTopology derive(const ModelGraph& graph);
+
+private:
+    ExecutionTopology() = default;
+};
+
 struct ResolvedModel {
     ModelGraph graph;
     RuntimeTopology topology;

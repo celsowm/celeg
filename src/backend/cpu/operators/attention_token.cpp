@@ -17,7 +17,7 @@ void execute_cpu_attention_token(
                 const int q_width = layout.query_width();
                 execution.shared.linear.gemv(attention.q, execution.workspace.normed.data(), execution.workspace.qkv.data());
                 float* q = execution.workspace.qkv.data();
-                apply_cpu_attention_qk(execution.shared.shape, layout, attention, q, nullptr,
+                apply_cpu_attention_qk(layout, attention, q, nullptr,
                                        execution.session.position_value, rope_position);
                 const auto memory_it = execution.shared.external_attention_memory.find(
                     layout.sources.memory_slot);
@@ -158,7 +158,7 @@ void execute_cpu_attention_token(
                 execution.shared.linear.gemv(attention.k, execution.workspace.normed.data(), k);
                 execution.shared.linear.gemv(attention.v, execution.workspace.normed.data(), v);
             }
-            apply_cpu_attention_qk(execution.shared.shape, layout, attention, q, k,
+            apply_cpu_attention_qk(layout, attention, q, k,
                                    execution.session.position_value, rope_position);
             const int owner = execution.shared.layer_to_kv_owner.at(index);
             CpuCompiledModel::AttentionState& state = model.attention_state(static_cast<size_t>(owner));

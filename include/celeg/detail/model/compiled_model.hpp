@@ -216,8 +216,9 @@ struct CudaCompiledModel {
 
     void enqueue_sampling();
     void enqueue_decode_forward();
-    void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer);
-    void enqueue_decode_non_attention_mixer(Layer& layer);
+    void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer,
+                                   int layer_index);
+    void enqueue_decode_non_attention_mixer(Layer& layer, int layer_index);
     void enqueue_decode_step();
     void capture_decode_graph(bool segmented);
     bool use_segmented_attention(int host_position) const;

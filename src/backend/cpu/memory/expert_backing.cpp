@@ -2,6 +2,7 @@
 
 #include "celeg/checkpoint/tensor_names.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -70,11 +71,16 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
             shared.pack_file.string());
     }
 
-    const int intermediate = shared.shape.moe_intermediate > 0
-        ? shared.shape.moe_intermediate : shared.shape.intermediate;
+    const auto moe_program = std::find_if(shared.program.layers.begin(),
+                                           shared.program.layers.end(),
+        [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
+    if (moe_program == shared.program.layers.end()) {
+        throw std::runtime_error("cannot create expert backing without MoE semantics");
+    }
+    const int intermediate = moe_program->moe->routed.mlp.intermediate_size;
     shared.expert_backing_store = std::make_unique<CpuExpertBackingStore>(
         shared.pack_file, shared.options.expert_cache_bytes,
-        shared.shape.hidden, intermediate);
+        shared.program.hidden, intermediate);
 
     for (std::size_t index = 0; index < shared.weight_store.layers.size(); ++index) {
         auto* moe = std::get_if<CpuCompiledModel::MoeWeights>(

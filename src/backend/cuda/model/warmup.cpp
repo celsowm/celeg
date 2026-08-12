@@ -31,9 +31,9 @@ void CudaCompiledModel::warmup_decode_gemms() {
         launch_rmsnorm(workspace_.hidden_.data(),
                        common(resources_.layers_.front()).operator_norm,
                        workspace_.normed_.data(), 1, resources_.shape_.hidden,
-                       resources_.shape_.numerical_policy.norm_eps,
+                       resources_.program_.layers.front().operator_norm.epsilon,
                        stream_.get());
-        enqueue_decode_non_attention_mixer(resources_.layers_.front());
+        enqueue_decode_non_attention_mixer(resources_.layers_.front(), 0);
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
                1, resources_.shape_.vocab_size, resources_.shape_.hidden);
         CELEG_CUDA(cudaStreamSynchronize(stream_.get()));

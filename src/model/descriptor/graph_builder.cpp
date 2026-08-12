@@ -29,6 +29,7 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
                             const CheckpointMetadata& metadata) {
     const RuntimeTopology& topology = model.topology;
+    model.graph.hidden = topology.hidden;
     model.graph.embedding_transform.multiplier =
         topology.numerical_policy.embedding_multiplier;
     if (descriptor.embedding_post_norm_kind) {
@@ -36,6 +37,7 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
             topology.numerical_policy.norm_eps, *descriptor.embedding_post_norm_kind};
     }
     model.graph.logits_divisor = topology.numerical_policy.logits_divisor;
+    model.graph.logits_multiplier = topology.numerical_policy.logits_multiplier;
     model.graph.final_norm = {topology.numerical_policy.norm_eps,
                               descriptor.final_norm_kind};
     model.graph.final_logit_softcap = descriptor.final_logit_softcap.has_value()
@@ -59,6 +61,9 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
     const float explicit_query_scale = has_explicit_query_scale
         ? static_cast<float>(number_value(metadata, query_scale_field->second)) : 1.0f;
     const RopePairingKind rope_pairing = rope_pairing_kind(descriptor.rope_pairing);
+    const int shared_layers = descriptor.shared_kv_suffix_layers.has_value()
+        ? integer_value(metadata, *descriptor.shared_kv_suffix_layers) : 0;
+    const int shared_start = topology.num_hidden_layers - shared_layers;
 
     model.graph.layers.clear();
     model.graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
@@ -97,21 +102,34 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
         } else {
             throw std::invalid_argument("descriptor has unsupported hybrid mixer kind");
         }
-        const int intermediate = topology.feed_forward_intermediates.empty()
-            ? topology.intermediate
-            : topology.feed_forward_intermediates.at(static_cast<size_t>(layer_index));
+        int intermediate = topology.feed_forward_intermediates.at(
+            static_cast<size_t>(layer_index));
+        if (descriptor.double_wide_shared_suffix && layer_index >= shared_start &&
+            topology.feed_forward_kinds[static_cast<size_t>(layer_index)] ==
+                FeedForwardKind::Dense) {
+            intermediate *= 2;
+        }
         if (topology.feed_forward_kinds[static_cast<size_t>(layer_index)] ==
             FeedForwardKind::MixtureOfExperts) {
             layer.feed_forward = MixtureOfExpertsSpec{
-                topology.moe_intermediate, topology.num_experts, topology.experts_per_token,
-                topology.normalize_topk, topology.use_expert_bias, topology.routed_scaling_factor,
-                0, 0, topology.shared_expert_intermediate > 0,
-                topology.shared_expert_intermediate, false, topology.moe_router_softmax};
+                .intermediate_size = topology.moe_intermediate,
+                .num_experts = topology.num_experts,
+                .experts_per_token = topology.experts_per_token,
+                .normalize_topk = topology.normalize_topk,
+                .use_expert_bias = topology.use_expert_bias,
+                .routed_scaling_factor = topology.routed_scaling_factor,
+                .routing_group_count = topology.moe_routing_group_count,
+                .routing_experts_per_group = topology.moe_routing_experts_per_group,
+                .routing_groups_per_token = topology.moe_routing_groups_per_token,
+                .routing_group_score_top_k = topology.moe_routing_group_score_top_k,
+                .has_shared_expert = topology.shared_expert_intermediate > 0,
+                .shared_intermediate_size = topology.shared_expert_intermediate,
+                .shared_before_routed = false,
+                .router_softmax = topology.moe_router_softmax};
         } else {
             layer.feed_forward = DenseFeedForwardSpec{
-                intermediate, topology.feed_forward_activations.empty()
-                    ? descriptor.feed_forward_activation
-                    : topology.feed_forward_activations.at(static_cast<size_t>(layer_index))};
+                intermediate, topology.feed_forward_activations.at(
+                    static_cast<size_t>(layer_index))};
         }
         layer.residual.multiplier = topology.numerical_policy.residual_multiplier;
         layer.execute_feed_forward = topology.mixer_kinds[static_cast<size_t>(layer_index)] !=

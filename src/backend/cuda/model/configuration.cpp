@@ -4,6 +4,7 @@
 #include "celeg/backend/cuda/weight_policy.hpp"
 #include "celeg/checkpoint/packed_int8.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 namespace celeg {
 
@@ -22,12 +23,16 @@ void CudaCompiledModel::configure_model(
     }
     resources_.program_ = CudaModelCompiler{}.compile(resources_.model_);
     resources_.shape_ = resources_.model_.topology;
+    const bool non_default_residual = std::any_of(
+        resources_.program_.layers.begin(), resources_.program_.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return layer.residual.multiplier != 1.0f;
+        });
     if (resources_.shape_.conv_layer_count == 0 &&
         (resources_.program_.embedding_transform.multiplier != 1.0f ||
-         resources_.shape_.numerical_policy.attention_multiplier != 0.0f ||
-         resources_.shape_.numerical_policy.residual_multiplier != 1.0f ||
-         resources_.shape_.numerical_policy.logits_multiplier != 1.0f ||
-         resources_.shape_.numerical_policy.logits_divisor != 1.0f)) {
+         non_default_residual ||
+         resources_.program_.logits_multiplier != 1.0f ||
+         resources_.program_.logits_divisor != 1.0f)) {
         resources_.options_.fused_residuals = false;
     }
     resources_.model_identity_ = resources_.model_.provenance.identity;

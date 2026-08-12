@@ -24,9 +24,7 @@ void build_dense_weight_plan(ResolvedModel& model,
     for (int layer = 0; layer < t.num_hidden_layers; ++layer) {
         const int physical_layer = t.checkpoint_layer_for_layer.empty()
             ? layer : t.checkpoint_layer_for_layer.at(static_cast<size_t>(layer));
-        const int intermediate = t.feed_forward_intermediates.empty()
-                                     ? t.intermediate
-                                     : t.feed_forward_intermediates.at(layer);
+        const int intermediate = t.feed_forward_intermediates.at(layer);
         add_request(model, {TensorRole::AttentionInputNorm, layer, -1,
                             {t.hidden}, std::nullopt, physical_layer});
         const AttentionSpec& attention = t.attention_layout(layer);

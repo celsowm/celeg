@@ -234,7 +234,7 @@ public:
                     layer % physical_layer_count;
             }
         }
-        topology.attention_layouts.reserve(static_cast<size_t>(topology.num_hidden_layers));
+        topology.attention_layouts.resize(static_cast<size_t>(topology.num_hidden_layers));
         const std::string disable_key = metadata.is_gguf() ? descriptor_.disable_rope_gguf
                                                             : descriptor_.disable_rope_json;
         const std::vector<int> disabled = integer_values(metadata, disable_key);
@@ -415,7 +415,7 @@ public:
             } else {
                 throw std::invalid_argument("descriptor has unsupported position kind: " + position_kind);
             }
-            topology.attention_layouts.push_back(attention);
+            topology.attention_layouts[static_cast<size_t>(layer)] = std::move(attention);
         }
         topology.shared_kv_group_count = shared_layers > 0
             ? (has_attention_variants ? 2 : 1) : 0;
@@ -428,12 +428,6 @@ public:
         }
         topology.feed_forward_activations.assign(
             static_cast<size_t>(topology.num_hidden_layers), descriptor_.feed_forward_activation);
-        if (descriptor_.double_wide_shared_suffix && shared_layers > 0) {
-            for (int layer = shared_start; layer < topology.num_hidden_layers; ++layer) {
-                topology.feed_forward_intermediates[static_cast<size_t>(layer)] *= 2;
-            }
-            topology.max_feed_forward_intermediate = topology.intermediate * 2;
-        }
         topology.validate();
         ArchitectureResolutionStages stages;
         stages.topology = [topology](const CheckpointView&) { return topology; };

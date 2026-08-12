@@ -46,7 +46,7 @@ struct CpuCompiledModel::BatchScratch {
         SharedWeights& shared = *sessions.front()->shared;
         const size_t rows = sessions.size();
         const RuntimeTopology& shape = shared.shape;
-        const size_t hidden = static_cast<size_t>(shape.hidden);
+        const size_t hidden = static_cast<size_t>(shared.program.hidden);
         workspace_.ensure(rows, shared.workspace_plan);
         auto parallel_for = [&](size_t count, const auto& body) {
             const size_t grain = std::max<size_t>(1, count / std::max<size_t>(1, shared.pool.size() * 4));
@@ -59,14 +59,14 @@ struct CpuCompiledModel::BatchScratch {
                                 float* output, size_t width) {
             rows_for([&](size_t row) {
                 cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
-                            width, shape.numerical_policy.norm_eps);
+                            width, shared.program.final_norm.epsilon);
             });
         };
         auto rmsnorm_rows_inplace = [&](float* values, const std::vector<float>& weight,
                                         size_t width) {
             rows_for([&](size_t row) {
                 cpu_rmsnorm_inplace(values + row * width, weight.data(), width,
-                                    shape.numerical_policy.norm_eps);
+                                    shared.program.final_norm.epsilon);
             });
         };
         auto residual_rows = [&](float* values, const float* residual, size_t width) {
@@ -122,6 +122,7 @@ struct CpuCompiledModel::BatchScratch {
         for (size_t index = 0; index < shared.weight_store.layers.size(); ++index) {
             const LayerWeights& layer_program = shared.weight_store.layers[index];
             const CommonWeights& common = sessions.front()->common_weights(index);
+            const CompiledLayerProgram& layer_semantics = shared.program.layers.at(index);
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
             rmsnorm_rows(workspace_.hidden.data(), common.operator_norm,
                          workspace_.normed.data(), hidden);
@@ -169,14 +170,14 @@ struct CpuCompiledModel::BatchScratch {
                         workspace_.gated_delta_output.data() + row * value_width,
                         spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                         spec.key_heads, spec.value_heads,
-                        shape.numerical_policy.norm_eps, spec.vector_decay,
+                        layer_semantics.operator_norm.epsilon, spec.vector_decay,
                         spec.safe_decay, spec.decay_lower_bound,
                         spec.sigmoid_output_gate);
                 });
                 layer_gemm(gated_delta->out, workspace_.gated_delta_output.data(),
                            workspace_.hidden.data());
             } else if (const AttentionWeights* attention = State::attention_operator(layer_program)) {
-                const AttentionSpec& layout = shape.attention_layout(static_cast<int>(index));
+                const AttentionSpec& layout = layer_semantics.attention.value();
                 if (layout.uses_external_memory()) {
                     const size_t q_width = static_cast<size_t>(layout.query_width());
                     const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
@@ -186,7 +187,7 @@ struct CpuCompiledModel::BatchScratch {
                         const std::array<int32_t, 3> rope_position = {
                             position, position, position};
                         apply_cpu_attention_qk(
-                            shape, layout, *attention,
+                            layout, *attention,
                             workspace_.qkv.data() + row * q_projection_width,
                             nullptr, position, rope_position);
                     });
@@ -276,7 +277,7 @@ struct CpuCompiledModel::BatchScratch {
                     const int position = sessions[row]->session_.position_value;
                     const std::array<int32_t, 3> rope_position = {
                         position, position, position};
-                    apply_cpu_attention_qk(shape, layout, *attention, q, k,
+                    apply_cpu_attention_qk(layout, *attention, q, k,
                                            position, rope_position);
                 });
                 for (size_t row = 0; row < rows; ++row) {
@@ -315,13 +316,13 @@ struct CpuCompiledModel::BatchScratch {
                 layer_gemm(convolution->out, workspace_.op_output.data(),
                            workspace_.hidden.data());
             }
-            if (shape.numerical_policy.residual_multiplier != 1.0f) {
+            if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.hidden.data() + row * hidden;
-                    for (size_t d = 0; d < hidden; ++d) values[d] *= shape.numerical_policy.residual_multiplier;
+                    for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (shape.has_split_attention_norms) {
+            if (layer_semantics.post_attention_norm.enabled()) {
                 rmsnorm_rows_inplace(workspace_.hidden.data(), common.post_attention_norm, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
@@ -463,14 +464,12 @@ struct CpuCompiledModel::BatchScratch {
                     });
                 }
             } else {
-                const int intermediate = shape.feed_forward_intermediates.empty()
-                    ? shape.intermediate : shape.feed_forward_intermediates.at(index);
+                const int intermediate = layer_semantics.feed_forward_intermediate;
                 layer_gemm(common.w13, workspace_.normed.data(), workspace_.gate_up.data());
                 rows_for([&](size_t row) {
                     const float* gate_up = workspace_.gate_up.data() + row * 2ULL * intermediate;
                     float* activated = workspace_.activated.data() + row * intermediate;
-                    if (!shape.feed_forward_activations.empty() &&
-                        shape.feed_forward_activations.at(index) == ActivationKind::GeluTanh) {
+                    if (layer_semantics.feed_forward_activation == ActivationKind::GeluTanh) {
                         cpu_gated_gelu_tanh(gate_up, activated, intermediate);
                     } else {
                         cpu_swiglu(gate_up, activated, intermediate);
@@ -478,13 +477,13 @@ struct CpuCompiledModel::BatchScratch {
                 });
                 layer_gemm(common.w2, workspace_.activated.data(), workspace_.mlp_output.data());
             }
-            if (shape.numerical_policy.residual_multiplier != 1.0f) {
+            if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.mlp_output.data() + row * hidden;
-                    for (size_t d = 0; d < hidden; ++d) values[d] *= shape.numerical_policy.residual_multiplier;
+                    for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (shape.has_split_attention_norms) {
+            if (layer_semantics.post_feed_forward_norm.enabled()) {
                 rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);
@@ -525,13 +524,16 @@ struct CpuCompiledModel::BatchScratch {
             if (compute_logits[row]) {
                 cpu_rmsnorm(workspace_.hidden.data() + row * hidden,
                             shared.weight_store.final_norm.data(), workspace_.normed.data() + row * hidden,
-                            hidden, shape.numerical_policy.norm_eps);
+                            hidden, shared.program.final_norm.epsilon);
                 shared.linear.gemv(shared.tie_word_embeddings ? shared.weight_store.embedding :
                                     shared.weight_store.lm_head,
                                     workspace_.normed.data() + row * hidden,
                                     session.workspace_.logits.data());
-                if (shape.numerical_policy.logits_divisor != 1.0f) {
-                    for (float& value : session.workspace_.logits) value /= shape.numerical_policy.logits_divisor;
+                if (shared.program.logits_multiplier != 1.0f) {
+                    for (float& value : session.workspace_.logits) value *= shared.program.logits_multiplier;
+                }
+                if (shared.program.logits_divisor != 1.0f) {
+                    for (float& value : session.workspace_.logits) value /= shared.program.logits_divisor;
                 }
                 if (shared.final_logit_softcap > 0.0f) {
                     for (float& value : session.workspace_.logits) {

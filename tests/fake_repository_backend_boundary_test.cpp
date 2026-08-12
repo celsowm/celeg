@@ -55,11 +55,14 @@ int main() {
     model.capabilities.supports_cpu = true;
     model.capabilities.supports_cuda = true;
     celeg::LayerSpec layer;
+    model.graph.hidden = 4;
+    model.graph.final_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
     celeg::AttentionSpec attention;
     attention.query_heads = 1;
     attention.key_value_heads = 1;
     attention.head_dim = 4;
     attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
+    layer.operator_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
     layer.mixer = attention;
     layer.feed_forward = celeg::DenseFeedForwardSpec{8, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);

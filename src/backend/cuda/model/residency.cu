@@ -229,12 +229,16 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
 void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
+    const CompiledLayerProgram& layer_semantics = resources_.program_.layers.at(
+        static_cast<size_t>(layer));
+    const MoeLayerProgram& semantics = resources_.program_.layers.at(
+        static_cast<size_t>(layer)).moe.value();
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                    1, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps, stream_.get());
+                    1, resources_.shape_.hidden, layer_semantics.feed_forward_norm.epsilon, stream_.get());
     // Router: BF16 normed hidden -> float -> top-K experts.
     launch_cast_bf16_to_float(workspace_.normed_.data(), workspace_.moe_hidden_float_.data(),
                                resources_.shape_.hidden, stream_.get());
-    const celeg::MoeRouterConfig cfg = moe_router_config(resources_.shape_);
+    const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
     celeg::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
     rdev.expert_bias = moe.expert_bias;
@@ -255,14 +259,14 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     // Expert FFN: accumulate the routing-weighted expert outputs into the
     // FP32 output accumulator and then cast into the BF16 workspace_.moe_output_.
     workspace_.moe_output_accum_.zero_async(stream_.get());
-    const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, resources_.shape_);
+    const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, semantics);
     launch_moe_ffn(fdev, workspace_.moe_sel_.data(), workspace_.moe_routing_w_.data(),
                     workspace_.normed_.data(), workspace_.moe_output_accum_.data(), 1, resources_.shape_.experts_per_token,
                     workspace_.moe_gu_scratch_.data(), workspace_.moe_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_output_accum_.data(), workspace_.moe_output_.data(),
                                 resources_.shape_.hidden, stream_.get());
     if (moe.shared_w13 != nullptr) {
-        const int shared_inter = resources_.shape_.shared_expert_intermediate;
+        const int shared_inter = semantics.shared->mlp.intermediate_size;
         linear(workspace_.normed_.data(), *moe.shared_w13, workspace_.gate_up_.data(),
                1, 2 * shared_inter, resources_.shape_.hidden);
         launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
@@ -290,6 +294,10 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
 void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
                                          int layer) {
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
+    const CompiledLayerProgram& layer_semantics = resources_.program_.layers.at(
+        static_cast<size_t>(layer));
+    const MoeLayerProgram& semantics = resources_.program_.layers.at(
+        static_cast<size_t>(layer)).moe.value();
     // Size the prefill scratch to the requested row count.
     workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
     workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * resources_.shape_.experts_per_token);
@@ -303,11 +311,11 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         static_cast<size_t>(rows) * resources_.shape_.experts_per_token * resources_.shape_.moe_intermediate);
 
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
-                   workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden, resources_.shape_.numerical_policy.norm_eps,
+                   workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden, layer_semantics.feed_forward_norm.epsilon,
                    stream_.get());
     launch_cast_bf16_to_float(workspace_.prefill_normed_.data(), workspace_.moe_pf_hidden_float_.data(),
                               rows * resources_.shape_.hidden, stream_.get());
-    const celeg::MoeRouterConfig cfg = moe_router_config(resources_.shape_);
+    const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
     celeg::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
     rdev.expert_bias = moe.expert_bias;
@@ -328,7 +336,7 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         &workspace_.residency_workspace_});
 
     workspace_.moe_pf_output_accum_.zero_async(stream_.get());
-    const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, resources_.shape_);
+    const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, semantics);
     launch_moe_ffn(fdev, workspace_.moe_pf_sel_.data(), workspace_.moe_pf_routing_w_.data(),
                     workspace_.prefill_normed_.data(), workspace_.moe_pf_output_accum_.data(), rows,
                     resources_.shape_.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
@@ -336,7 +344,7 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
                                 rows * resources_.shape_.hidden, stream_.get());
     if (moe.shared_w13 != nullptr) {
-        const int shared_inter = resources_.shape_.shared_expert_intermediate;
+        const int shared_inter = semantics.shared->mlp.intermediate_size;
         linear(workspace_.prefill_normed_.data(), *moe.shared_w13,
                workspace_.prefill_gate_up_.data(), rows, 2 * shared_inter,
                resources_.shape_.hidden);

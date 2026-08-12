@@ -178,9 +178,11 @@ struct CompiledLayerProgram {
     NormSpec post_attention_norm;
     NormSpec feed_forward_norm;
     NormSpec post_feed_forward_norm;
+    ResidualSpec residual;
 };
 
 struct CompiledModelProgram {
+    int hidden = 0;
     std::string identity;
     std::size_t weight_request_count = 0;
     std::vector<CompiledLayerProgram> layers;
@@ -189,6 +191,9 @@ struct CompiledModelProgram {
     PerLayerInputPlan per_layer_input;
     NormSpec final_norm;
     ModelGraph::EmbeddingTransformSpec embedding_transform;
+    float logits_multiplier = 1.0f;
+    float logits_divisor = 1.0f;
+    float final_logit_softcap = 0.0f;
     std::string semantic_fingerprint;
 
     bool has_moe() const;

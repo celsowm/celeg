@@ -237,6 +237,11 @@ bool CompiledModelProgram::has_moe() const {
 }
 
 void CompiledModelProgram::validate() const {
+    if (hidden <= 0 || !std::isfinite(logits_multiplier) ||
+        !std::isfinite(logits_divisor) || logits_divisor <= 0.0f ||
+        !std::isfinite(final_logit_softcap) || final_logit_softcap < 0.0f) {
+        throw std::invalid_argument("compiled model has invalid residual/output policy");
+    }
     per_layer_input.validate();
     for (size_t index = 0; index < norm_after_layers.size(); ++index) {
         const int layer = norm_after_layers[index];
@@ -294,6 +299,9 @@ void CompiledModelProgram::validate() const {
         if (layer.feed_forward_intermediate <= 0) {
             throw std::invalid_argument("compiled layer has no FFN width");
         }
+        if (!std::isfinite(layer.residual.multiplier)) {
+            throw std::invalid_argument("compiled layer has invalid residual multiplier");
+        }
         if (layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
             if (!layer.moe) {
                 throw std::invalid_argument("compiled MoE layer has no semantics");
@@ -336,11 +344,15 @@ void validate_moe_backend_capabilities(const CompiledModelProgram& program,
 CompiledModelProgram build_model_program(const ResolvedModel& model) {
     if (model.graph.layers.empty()) throw std::invalid_argument("model has no layers");
     CompiledModelProgram program;
+    program.hidden = model.graph.hidden;
     program.identity = model.provenance.identity;
     program.norm_after_layers = model.graph.norm_after_layers;
     program.per_layer_input = PerLayerInputPlan::derive(model);
     program.final_norm = model.graph.final_norm;
     program.embedding_transform = model.graph.embedding_transform;
+    program.logits_multiplier = model.graph.logits_multiplier;
+    program.logits_divisor = model.graph.logits_divisor;
+    program.final_logit_softcap = model.graph.final_logit_softcap;
     program.layers.reserve(model.graph.layers.size());
 
     program.weight_request_count = model.weight_plan.requests.size();
@@ -375,6 +387,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             {}, std::nullopt,
             {}, layer.operator_norm, layer.post_attention_norm,
             layer.feed_forward_norm, layer.post_feed_forward_norm};
+        compiled.residual = layer.residual;
         if (layer.mixer_kind() == MixerKind::Mamba2 ||
             layer.mixer_kind() == MixerKind::MlpOnly) {
             compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;
@@ -389,6 +402,10 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                 compiled.gated_delta_net = mixer;
             } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
                 compiled.mamba2 = mixer;
+            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                // MLP-only layers intentionally have no mixer payload.
+            } else {
+                static_assert(always_false_v<Mixer>, "unhandled mixer lowering variant");
             }
         }, layer.mixer);
         std::visit([&](const auto& feed_forward) {
@@ -401,27 +418,11 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                 compiled.feed_forward_activation = feed_forward.activation;
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
                 compiled.feed_forward_intermediate = feed_forward.intermediate_size;
+            } else {
+                static_assert(always_false_v<FeedForward>,
+                              "unhandled feed-forward lowering variant");
             }
         }, layer.feed_forward);
-        if (compiled.attention && compiled.attention->output_gate.enabled() &&
-            !compiled.attention->output_gate.packed_with_query) {
-            for (const TensorRequest& request : model.weight_plan.requests) {
-                if (request.role != TensorRole::AttentionGate ||
-                    request.layer != static_cast<int>(layer_index) ||
-                    request.expected_shape.size() != 2) continue;
-                if (request.expected_shape[0] == compiled.attention->query_heads) {
-                    compiled.attention->output_gate.granularity =
-                        AttentionGateGranularity::HeadWise;
-                } else if (request.expected_shape[0] == compiled.attention->query_width()) {
-                    compiled.attention->output_gate.granularity =
-                        AttentionGateGranularity::ElementWise;
-                } else {
-                    throw std::invalid_argument(
-                        "attention gate request width does not match compiled geometry");
-                }
-                break;
-            }
-        }
         for (std::size_t request_index = 0;
              request_index < model.weight_plan.requests.size(); ++request_index) {
             if (model.weight_plan.requests[request_index].layer == static_cast<int>(layer_index)) {

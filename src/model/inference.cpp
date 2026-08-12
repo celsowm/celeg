@@ -537,8 +537,13 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 break;
             }
         }
-        topology.numerical_policy.attention_multiplier = attention_head_dim > 0
+    topology.numerical_policy.attention_multiplier = attention_head_dim > 0
             ? 1.0f / std::sqrt(static_cast<float>(attention_head_dim)) : 1.0f;
+    }
+    for (AttentionSpec& attention : topology.attention_layouts) {
+        if (attention.query_heads > 0) {
+            attention.query_scale *= topology.numerical_policy.attention_multiplier;
+        }
     }
     topology.validate();
 

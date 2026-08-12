@@ -9,12 +9,19 @@
 
 namespace celeg {
 
+ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
+    ExecutionTopology result;
+    derive_runtime_topology_from_graph(result, graph);
+    return result;
+}
+
 void derive_runtime_topology_from_graph(RuntimeTopology& topology,
                                         const ModelGraph& graph) {
     if (graph.layers.empty()) {
         throw std::invalid_argument("cannot derive runtime shape from an empty graph");
     }
     const std::size_t layer_count = graph.layers.size();
+    topology.hidden = graph.hidden;
     topology.num_hidden_layers = static_cast<int>(layer_count);
     topology.mixer_kinds.resize(layer_count);
     topology.feed_forward_kinds.resize(layer_count);
@@ -77,9 +84,11 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
                 topology.mamba2_intermediate = std::max(
                     topology.mamba2_intermediate, mixer.intermediate_size);
                 ++topology.mamba2_layer_count;
-            } else {
+            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
                 topology.mlp_only_layouts[index] = mixer;
                 ++topology.mlp_only_layer_count;
+            } else {
+                static_assert(always_false_v<Mixer>, "unhandled mixer derivation variant");
             }
         }, layer.mixer);
         std::visit([&](const auto& feed_forward) {
@@ -96,7 +105,7 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
                 ++topology.num_dense_layers;
                 topology.dense_intermediate = std::max(
                     topology.dense_intermediate, feed_forward.intermediate_size);
-            } else {
+            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
                 topology.feed_forward_intermediates[index] = feed_forward.intermediate_size;
                 topology.feed_forward_activations[index] = ActivationKind::SwiGLU;
                 topology.moe_intermediate = std::max(
@@ -110,8 +119,22 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
                 topology.use_expert_bias = topology.use_expert_bias ||
                     feed_forward.use_expert_bias;
                 topology.routed_scaling_factor = feed_forward.routed_scaling_factor;
+                topology.moe_routing_group_count = std::max(
+                    topology.moe_routing_group_count, feed_forward.routing_group_count);
+                topology.moe_routing_experts_per_group = std::max(
+                    topology.moe_routing_experts_per_group,
+                    feed_forward.routing_experts_per_group);
+                topology.moe_routing_groups_per_token = std::max(
+                    topology.moe_routing_groups_per_token,
+                    feed_forward.routing_groups_per_token);
+                topology.moe_routing_group_score_top_k = std::max(
+                    topology.moe_routing_group_score_top_k,
+                    feed_forward.routing_group_score_top_k);
                 topology.shared_expert_intermediate = std::max(
                     topology.shared_expert_intermediate, feed_forward.shared_intermediate_size);
+            } else {
+                static_assert(always_false_v<FeedForward>,
+                              "unhandled feed-forward derivation variant");
             }
         }, layer.feed_forward);
         if (layer.per_layer_input.enabled) {
@@ -125,14 +148,16 @@ void derive_runtime_topology_from_graph(RuntimeTopology& topology,
         topology.max_feed_forward_intermediate = std::max(
             topology.max_feed_forward_intermediate, width);
     }
+    topology.intermediate = topology.max_feed_forward_intermediate;
 }
 
 void ModelGraph::validate() const {
     if (layers.empty()) {
         throw std::runtime_error("resolved model graph has no layers");
     }
-    if (!(final_norm.epsilon > 0.0f) || !std::isfinite(final_norm.epsilon) ||
+    if (hidden <= 0 || !(final_norm.epsilon > 0.0f) || !std::isfinite(final_norm.epsilon) ||
         !std::isfinite(logits_divisor) || logits_divisor <= 0.0f ||
+        !std::isfinite(logits_multiplier) ||
         !std::isfinite(final_logit_softcap) || final_logit_softcap < 0.0f) {
         throw std::runtime_error("resolved model graph has invalid policies");
     }
@@ -156,9 +181,48 @@ void ModelGraph::validate() const {
         if (layer.post_attention_norm.enabled()) layer.post_attention_norm.validate();
         if (layer.pre_feed_forward_norm.enabled()) layer.pre_feed_forward_norm.validate();
         if (layer.post_feed_forward_norm.enabled()) layer.post_feed_forward_norm.validate();
+        if (layer.per_layer_input.enabled && layer.per_layer_input.input_size <= 0) {
+            throw std::runtime_error("enabled per-layer input has invalid width");
+        }
+        std::visit([](const auto& feed_forward) {
+            using FeedForward = std::decay_t<decltype(feed_forward)>;
+            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec> ||
+                          std::is_same_v<FeedForward, MlpBlockSpec>) {
+                if (feed_forward.intermediate_size <= 0) {
+                    throw std::runtime_error("dense layer has no positive FFN width");
+                }
+            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+                if (feed_forward.intermediate_size <= 0 || feed_forward.num_experts <= 0 ||
+                    feed_forward.experts_per_token <= 0 ||
+                    feed_forward.experts_per_token > feed_forward.num_experts) {
+                    throw std::runtime_error("MoE layer has invalid routed dimensions");
+                }
+                const bool grouped = feed_forward.routing_group_count > 0;
+                if (grouped != (feed_forward.routing_experts_per_group > 0 &&
+                                feed_forward.routing_groups_per_token > 0 &&
+                                feed_forward.routing_group_score_top_k > 0)) {
+                    throw std::runtime_error("MoE grouped routing fields are incomplete");
+                }
+                if (feed_forward.has_shared_expert &&
+                    feed_forward.shared_intermediate_size <= 0) {
+                    throw std::runtime_error("MoE shared expert has no positive width");
+                }
+            } else {
+                static_assert(always_false_v<FeedForward>,
+                              "unhandled feed-forward semantic validation variant");
+            }
+        }, layer.feed_forward);
         if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
             if (attention->query_norm.enabled()) attention->query_norm.validate();
             if (attention->key_norm.enabled()) attention->key_norm.validate();
+            switch (attention->output_gate.granularity) {
+            case AttentionGateGranularity::OutputWise:
+            case AttentionGateGranularity::HeadWise:
+            case AttentionGateGranularity::ElementWise:
+                break;
+            default:
+                throw std::runtime_error("invalid attention gate granularity");
+            }
         }
     }
 }

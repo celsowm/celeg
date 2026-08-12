@@ -5,18 +5,17 @@
 namespace celeg {
 
 void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int layer) {
+    const CompiledLayerProgram& semantics = resources_.program_.layers.at(
+        static_cast<size_t>(layer));
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
         run_mlp_moe_decode(common_layer, layer);
     } else {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
                        1, resources_.shape_.hidden,
-                       resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward_norm.epsilon,
+                       semantics.feed_forward_norm.epsilon,
                        stream_.get());
-        const int intermediate = layer >= 0 &&
-                layer < static_cast<int>(resources_.shape_.feed_forward_intermediates.size())
-            ? resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer))
-            : resources_.shape_.intermediate;
+        const int intermediate = semantics.feed_forward_intermediate;
         if (resources_.options_.fused_projections) {
             linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.gate_up_.data(),
                    1, 2 * intermediate, resources_.shape_.hidden);
@@ -30,9 +29,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + intermediate,
                    1, intermediate, resources_.shape_.hidden);
         }
-        const bool gelu_tanh = layer >= 0 &&
-            layer < static_cast<int>(resources_.shape_.feed_forward_activations.size()) &&
-            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh;
+        const bool gelu_tanh = semantics.feed_forward_activation == ActivationKind::GeluTanh;
         if (gelu_tanh) {
             launch_gated_gelu_tanh(workspace_.gate_up_.data(), workspace_.activated_.data(),
                                    intermediate, stream_.get());
@@ -50,10 +47,11 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             if (split_output) {
                 launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
                                workspace_.mlp_output_.data(), 1, resources_.shape_.hidden,
-                               resources_.program_.layers.at(static_cast<size_t>(layer)).post_feed_forward_norm.epsilon,
+                               semantics.post_feed_forward_norm.epsilon,
                                stream_.get());
             }
-            launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden, resources_.shape_.numerical_policy.residual_multiplier,
+            launch_scale(workspace_.mlp_output_.data(), resources_.shape_.hidden,
+                         semantics.residual.multiplier,
                          stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.mlp_output_.data(),
                                 resources_.shape_.hidden, stream_.get());
@@ -64,23 +62,22 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
 
 void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int rows,
                                      int layer) {
+    const CompiledLayerProgram& semantics = resources_.program_.layers.at(
+        static_cast<size_t>(layer));
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
         run_mlp_moe_prefill(common_layer, rows, layer);
     } else {
-        const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
-            ? resources_.shape_.intermediate
-            : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(layer));
+        const int intermediate = semantics.feed_forward_intermediate;
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
-                       resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward_norm.epsilon,
+                       semantics.feed_forward_norm.epsilon,
                        stream_.get());
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
                rows, 2 * intermediate, resources_.shape_.hidden);
-        if (!resources_.shape_.feed_forward_activations.empty() &&
-            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh) {
+        if (semantics.feed_forward_activation == ActivationKind::GeluTanh) {
             launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(),
                                    workspace_.prefill_activated_.data(),
                                    static_cast<int>(matrix_elements), stream_.get());
@@ -99,8 +96,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         linear(workspace_.prefill_normed_.data(), w3,
                workspace_.prefill_gate_up_.data() + matrix_elements,
                rows, intermediate, resources_.shape_.hidden);
-        if (!resources_.shape_.feed_forward_activations.empty() &&
-            resources_.shape_.feed_forward_activations.at(static_cast<size_t>(layer)) == ActivationKind::GeluTanh) {
+        if (semantics.feed_forward_activation == ActivationKind::GeluTanh) {
             launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
                                    static_cast<int>(matrix_elements), stream_.get());
         } else {
@@ -118,11 +114,11 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         if (split_output) {
             launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
                            workspace_.prefill_mlp_output_.data(), rows, resources_.shape_.hidden,
-                           resources_.program_.layers.at(static_cast<size_t>(layer)).post_feed_forward_norm.epsilon,
+                           semantics.post_feed_forward_norm.epsilon,
                            stream_.get());
         }
         launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.shape_.hidden,
-                     resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
+                     semantics.residual.multiplier, stream_.get());
         launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_mlp_output_.data(),
                             rows * resources_.shape_.hidden, stream_.get());
         }

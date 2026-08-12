@@ -439,26 +439,27 @@ inline bool is_moe_ffn(const FeedForwardWeights& ff) {
 // packed executor (packed.cu) so both stay in lock-step with the checkpoint
 // topology. Defined inline here (where MoeFfnWeights is complete) to avoid
 // duplicating the descriptor construction across translation units.
-inline celeg::MoeRouterConfig moe_router_config(const RuntimeTopology& shape) {
+inline celeg::MoeRouterConfig moe_router_config(const MoeLayerProgram& semantics) {
     celeg::MoeRouterConfig cfg;
-    cfg.num_experts = shape.num_experts;
-    cfg.experts_per_token = shape.experts_per_token;
-    cfg.normalize_topk = shape.normalize_topk;
-    cfg.softmax = shape.moe_router_softmax;
-    cfg.use_expert_bias = shape.use_expert_bias;
-    cfg.routed_scaling_factor = shape.routed_scaling_factor;
-    cfg.group_count = shape.moe_routing_group_count;
-    cfg.experts_per_group = shape.moe_routing_experts_per_group;
-    cfg.groups_per_token = shape.moe_routing_groups_per_token;
-    cfg.group_score_top_k = shape.moe_routing_group_score_top_k;
+    cfg.num_experts = semantics.router.expert_count;
+    cfg.experts_per_token = semantics.router.experts_per_token;
+    cfg.normalize_topk = semantics.router.normalization == MoeNormalizationKind::SumSelected;
+    cfg.softmax = semantics.router.score == MoeRouterScoreKind::SoftmaxLogits;
+    cfg.use_expert_bias = semantics.router.has_expert_bias;
+    cfg.routed_scaling_factor = semantics.router.routed_scaling;
+    cfg.group_count = semantics.router.group_count;
+    cfg.experts_per_group = semantics.router.experts_per_group;
+    cfg.groups_per_token = semantics.router.groups_per_token;
+    cfg.group_score_top_k = semantics.router.group_score_top_k;
     return cfg;
 }
 
-inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const RuntimeTopology& shape) {
+inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe,
+                                          const MoeLayerProgram& semantics) {
     celeg::MoeFfnDevice fdev;
-    fdev.num_experts = shape.num_experts;
-    fdev.inter = shape.moe_intermediate;
-    fdev.hidden_dim = shape.hidden;
+    fdev.num_experts = semantics.router.expert_count;
+    fdev.inter = semantics.routed.mlp.intermediate_size;
+    fdev.hidden_dim = semantics.routed.mlp.hidden_size;
     if (moe.offloaded()) {
         // Host-backed experts with a GPU cache: resolve through the per-expert
         // pointer tables. Strides are unused in indirect mode.
@@ -479,9 +480,11 @@ inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe, const Runtim
             fdev.gate_up = moe.gate_up->bf16;
             fdev.down = moe.down->bf16;
             fdev.expert_gate_up_stride =
-                static_cast<size_t>(2) * shape.moe_intermediate * shape.hidden;
+                static_cast<size_t>(2) * semantics.routed.mlp.intermediate_size *
+                    semantics.routed.mlp.hidden_size;
             fdev.expert_down_stride =
-                static_cast<size_t>(shape.hidden) * shape.moe_intermediate;
+                static_cast<size_t>(semantics.routed.mlp.hidden_size) *
+                    semantics.routed.mlp.intermediate_size;
         }
     }
     return fdev;

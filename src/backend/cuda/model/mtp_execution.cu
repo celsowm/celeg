@@ -44,7 +44,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     const cudaStream_t stream = stream_.get();
     const int hidden = resources_.shape_.hidden;
     const int vocab = resources_.shape_.vocab_size;
-    const float eps = resources_.shape_.numerical_policy.norm_eps;
+    const float eps = resources_.program_.final_norm.epsilon;
     CudaMtpResources& mtp = resources_.mtp_;
 
     // The target hidden state is an input to the predictor, not a mutable
@@ -179,11 +179,11 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     linear(workspace_.normed_.data(), *mtp.logits, workspace_.mtp_logits_.data(),
            1, vocab, hidden);
     launch_scale(workspace_.mtp_logits_.data(), vocab,
-                 resources_.shape_.numerical_policy.logits_multiplier /
-                     resources_.shape_.numerical_policy.logits_divisor, stream);
-    if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
+                 resources_.program_.logits_multiplier /
+                     resources_.program_.logits_divisor, stream);
+    if (resources_.program_.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.mtp_logits_.data(), vocab,
-                            resources_.shape_.numerical_policy.final_logit_softcap, stream);
+                            resources_.program_.final_logit_softcap, stream);
     }
     copy_async(workspace_.hidden_.data(), workspace_.mtp_base_hidden_.data(),
                workspace_.hidden_.bytes(), stream);

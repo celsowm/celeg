@@ -173,17 +173,17 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                                 attention.segmented,
                                                 attention.chunks, &models);
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
-                               rows, shape_.hidden, shape_.numerical_policy.norm_eps,
+                               rows, shape_.hidden, reference.program().final_norm.epsilon,
                        stream.get());
         layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                logits.data(), rows, shape_.vocab_size,
                                shape_.hidden);
         launch_scale(logits.data(), rows * shape_.vocab_size,
-                     shape_.numerical_policy.logits_multiplier /
-                         shape_.numerical_policy.logits_divisor, stream.get());
-        if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
+                     reference.program().logits_multiplier /
+                         reference.program().logits_divisor, stream.get());
+        if (reference.program().final_logit_softcap > 0.0f) {
             launch_tanh_softcap(logits.data(), rows * shape_.vocab_size,
-                                shape_.numerical_policy.final_logit_softcap, stream.get());
+                                reference.program().final_logit_softcap, stream.get());
         }
         launch_scatter_bf16_rows(
             logits.data(), d_logits.data(), rows, shape_.vocab_size,
@@ -331,16 +331,16 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             launch_gather_bf16_rows(hidden.data(), d_selected_final_rows.data(),
                                     normed.data(), finalized, shape_.hidden, stream.get());
             launch_rmsnorm(normed.data(), reference.final_norm(), normed.data(),
-                           finalized, shape_.hidden, shape_.numerical_policy.norm_eps, stream.get());
+                           finalized, shape_.hidden, reference.program().final_norm.epsilon, stream.get());
             layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                    logits.data(), finalized,
                                    shape_.vocab_size, shape_.hidden);
             launch_scale(logits.data(), finalized * shape_.vocab_size,
-                   shape_.numerical_policy.logits_multiplier /
-                       shape_.numerical_policy.logits_divisor, stream.get());
-            if (shape_.numerical_policy.final_logit_softcap > 0.0f) {
+                   reference.program().logits_multiplier /
+                       reference.program().logits_divisor, stream.get());
+            if (reference.program().final_logit_softcap > 0.0f) {
                 launch_tanh_softcap(logits.data(), finalized * shape_.vocab_size,
-                                    shape_.numerical_policy.final_logit_softcap, stream.get());
+                                    reference.program().final_logit_softcap, stream.get());
             }
             launch_scatter_bf16_selected_rows(logits.data(), d_selected_final_rows.data(),
                                                d_selected_logits.data(), finalized,

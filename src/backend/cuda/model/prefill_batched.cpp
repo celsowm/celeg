@@ -109,7 +109,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
                 workspace_.prefill_gated_delta_output_.data(), rows, spec.conv_kernel,
                 spec.key_head_dim, spec.value_head_dim, spec.key_heads,
-                spec.value_heads, resources_.shape_.numerical_policy.norm_eps,
+                spec.value_heads, semantics.operator_norm.epsilon,
                 spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
                 spec.sigmoid_output_gate, stream_.get());
             prof.end(PrefillPhase::Conv, stream_.get());
@@ -118,7 +118,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                    workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
                    value_width);
             launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
-                         resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
+                         semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
         } else if (AttentionLayer* attention = as_attention(layer)) {
             const AttentionSpec& layout = attention->layout;
@@ -193,7 +193,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                             workspace_.prefill_latent_key_rope_.data(), nullptr, nullptr,
                             rows, layout.query_heads, 1, latent.rope_head_dim, nullptr,
                             static_cast<float>(rope->theta), 1.0f,
-                            resources_.shape_.numerical_policy.norm_eps, false,
+                            layout.query_norm.epsilon, false,
                             rope->pairing, lower_cuda_rope_scaling(*rope), stream_.get());
                     }
                     prof.end(PrefillPhase::RopeKv, stream_.get());
@@ -205,8 +205,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         owner->latent_key_cache.data(), owner->latent_value_cache.data(),
                         owner->latent_key_rope_cache.data(), rows, latent.latent_rank,
                         latent.rope_head_dim, stream_.get());
-                    const float score_scale = layout.query_scale *
-                        resources_.shape_.numerical_policy.attention_multiplier;
+                    const float score_scale = layout.query_scale;
                     launch_latent_attention_prefill(
                         workspace_.prefill_latent_query_content_.data(),
                         workspace_.prefill_latent_query_rope_.data(),
@@ -244,7 +243,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                                ? 1.0f : 0.0f);
                     launch_scale(workspace_.prefill_hidden_.data(),
                                  rows * resources_.shape_.hidden,
-                                 resources_.shape_.numerical_policy.residual_multiplier,
+                                 semantics.residual.multiplier,
                                  stream_.get());
                     prof.end(PrefillPhase::AttnOut, stream_.get());
                 } else if (layout.output_gate.enabled() || layout.multi_axis_position()) {
@@ -288,7 +287,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         attention->latent_key ? workspace_.prefill_latent_key_rope_.data() : nullptr,
                         nullptr, nullptr, rows, layout.query_heads, 1,
                         latent.rope_head_dim, static_cast<float>(rope->theta), 1.0f,
-                        resources_.shape_.numerical_policy.norm_eps, false,
+                        layout.query_norm.epsilon, false,
                         lower_cuda_rope_scaling(*rope), stream_.get());
                 }
                 prof.end(PrefillPhase::RopeKv, stream_.get());
@@ -304,8 +303,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         owner->latent_key_rope_cache.data(), rows, latent.latent_rank,
                         latent.decoupled_rope ? latent.rope_head_dim : 0, stream_.get());
                 }
-                const float score_scale = layout.query_scale *
-                    resources_.shape_.numerical_policy.attention_multiplier;
+                const float score_scale = layout.query_scale;
                 launch_latent_attention_prefill(
                     workspace_.prefill_latent_query_content_.data(),
                     layout.latent_query_rope_width() != 0
@@ -324,7 +322,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                            ? 1.0f : 0.0f);
                 launch_scale(workspace_.prefill_hidden_.data(),
                              rows * resources_.shape_.hidden,
-                             resources_.shape_.numerical_policy.residual_multiplier,
+                             semantics.residual.multiplier,
                              stream_.get());
                 prof.end(PrefillPhase::AttnOut, stream_.get());
             } else {
@@ -364,7 +362,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     workspace_.prefill_q_.data(), attention->key ? workspace_.prefill_k_.data() : nullptr,
                     attention->q_norm, attention->k_norm, rows, layout.query_heads,
                     layout.key_value_heads, layout.head_dim, static_cast<float>(rope->theta),
-                    static_cast<float>(rope->rotary_fraction), resources_.shape_.numerical_policy.norm_eps,
+                    static_cast<float>(rope->rotary_fraction), layout.query_norm.epsilon,
                     layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
             } else if (layout.has_query_key_norm()) {
                 launch_dynamic_qk_norm_rope_prefill(
@@ -485,7 +483,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                    layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
             launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
-                         resources_.shape_.numerical_policy.residual_multiplier, stream_.get());
+                         semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
             }
         } else {
@@ -536,13 +534,14 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                    stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
            1, resources_.shape_.vocab_size, resources_.shape_.hidden);
-    if (resources_.shape_.numerical_policy.logits_divisor != 1.0f) {
+    if (resources_.program_.logits_divisor != 1.0f ||
+        resources_.program_.logits_multiplier != 1.0f) {
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 resources_.shape_.numerical_policy.logits_multiplier /
-                     resources_.shape_.numerical_policy.logits_divisor, stream_.get());
-    if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
+                 resources_.program_.logits_multiplier /
+                     resources_.program_.logits_divisor, stream_.get());
+    if (resources_.program_.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                            resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());
+                            resources_.program_.final_logit_softcap, stream_.get());
     }
     }
     prof.end(PrefillPhase::Logits, stream_.get());

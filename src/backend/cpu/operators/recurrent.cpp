@@ -48,7 +48,8 @@ void execute_cpu_gated_delta_token(
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
         workspace.gated_delta_output.data(), spec.conv_kernel, spec.key_head_dim,
         spec.value_head_dim, spec.key_heads, spec.value_heads,
-        shared.shape.numerical_policy.norm_eps, spec.vector_decay, spec.safe_decay,
+        shared.program.layers.at(layer).operator_norm.epsilon,
+        spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate);
     shared.linear.gemv(weights.out, workspace.gated_delta_output.data(),
                        workspace.hidden.data());
@@ -59,7 +60,7 @@ void execute_cpu_mamba2_token(
     const CpuCompiledModel::Mamba2Weights& weights) {
     auto& workspace = model.workspace_;
     auto& shared = *model.shared;
-    const auto& spec = shared.shape.mamba2_layouts.at(layer);
+    const auto& spec = shared.program.layers.at(layer).mamba2.value();
     const int inner = spec.intermediate_size;
     const int conv_dim = inner + 2 * spec.group_count * spec.state_size;
     shared.linear.gemv(weights.in, workspace.normed.data(),
@@ -103,7 +104,7 @@ void execute_cpu_mamba2_token(
     }
     cpu_rmsnorm(workspace.mamba_inner.data(), weights.norm.data(),
                 workspace.op_output.data(), inner,
-                shared.shape.numerical_policy.norm_eps);
+                shared.program.layers.at(layer).operator_norm.epsilon);
     for (int i = 0; i < inner; ++i) {
         const float gate = z[i];
         workspace.op_output[i] *= gate / (1.0f + std::exp(-gate));
@@ -183,7 +184,8 @@ void execute_cpu_gated_delta_chunk(
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
         workspace.chunk_gated_delta_output.data(), rows, spec.conv_kernel,
         spec.key_head_dim, spec.value_head_dim, spec.key_heads, spec.value_heads,
-        shared.shape.numerical_policy.norm_eps, spec.vector_decay, spec.safe_decay,
+        shared.program.layers.at(layer).operator_norm.epsilon,
+        spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate);
     model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
 

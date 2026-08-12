@@ -31,12 +31,13 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     CommonWeights common;
     const CompiledLayerProgram& layer_program = program.layers.at(
         static_cast<size_t>(layer));
+    const int hidden = program.hidden;
     const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
         if (!spec.enabled() || spec.weightless()) {
-            return std::vector<float>(static_cast<size_t>(shape.hidden), 1.0f);
+            return std::vector<float>(static_cast<size_t>(hidden), 1.0f);
         }
         std::vector<float> values = load_vector(source, reader, writer,
-            tensor_name(weight_requests, role, layer), {shape.hidden});
+            tensor_name(weight_requests, role, layer), {hidden});
         if (spec.weight_kind == NormWeightKind::OnePlusScale) {
             for (float& value : values) value += 1.0f;
         }
@@ -57,18 +58,20 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         }
         return common;
     }
-    if (shape.has_split_attention_norms) {
+    if (layer_program.post_attention_norm.enabled()) {
         common.post_attention_norm = load_norm(TensorRole::AttentionPostNorm,
                                                layer_program.post_attention_norm);
     }
     common.ffn_norm = load_norm(TensorRole::FfnInputNorm,
                                 layer_program.feed_forward_norm);
-    if (shape.has_split_attention_norms) {
+    if (layer_program.post_feed_forward_norm.enabled()) {
         common.post_feed_forward_norm = load_norm(TensorRole::FfnOutputNorm,
                                                   layer_program.post_feed_forward_norm);
     }
-    const int intermediate = layer_program.feed_forward_intermediate > 0
-        ? layer_program.feed_forward_intermediate : shape.intermediate;
+    const int intermediate = layer_program.feed_forward_intermediate;
+    if (intermediate <= 0) {
+        throw std::runtime_error("compiled dense layer has no FFN width");
+    }
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {tensor_name(weight_requests, TensorRole::FfnGate, layer),
@@ -79,7 +82,7 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     common.w2 = load_matrix(source, reader, writer,
         tensor_name(weight_requests, TensorRole::FfnDown, layer),
         {shape.hidden, intermediate});
-    if (shape.has_per_layer_input) {
+    if (program.per_layer_input.enabled) {
         common.per_layer_input_gate = load_matrix(source, reader, writer,
             tensor_name(weight_requests, TensorRole::PerLayerInputGate, layer),
             {shape.per_layer_input_size, shape.hidden});
@@ -162,7 +165,7 @@ void CpuCompiledModel::Shared::load_weights() {
             }
         }
     }
-    if (shape.has_per_layer_input) {
+    if (program.per_layer_input.enabled) {
         weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerEmbedding),
                             {shape.vocab_size, shape.num_hidden_layers * shape.per_layer_input_size});
@@ -453,8 +456,10 @@ void CpuCompiledModel::Shared::load_weights() {
             };
             const bool individual_expert_model =
                 has_request(TensorRole::MoeExpertGate, 0);
+            const MoeLayerProgram& moe_semantics =
+                program.layers.at(static_cast<size_t>(index)).moe.value();
             const bool packed_expert_model = !individual_expert_model &&
-                shape.shared_expert_intermediate > 0;
+                moe_semantics.shared.has_value();
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::AttentionInputNorm)
                     ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
@@ -480,7 +485,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 {shape.num_experts, shape.hidden});
 
             if (packed_expert_model) {
-                const int shared_intermediate = shape.shared_expert_intermediate;
+                const int shared_intermediate = moe_semantics.shared->mlp.intermediate_size;
                 layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
                     layer_name(index, "shared_expert.w13.weight"), {
                         {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
@@ -498,13 +503,15 @@ void CpuCompiledModel::Shared::load_weights() {
                 layer.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedGateUp, index),
-                        {shape.num_experts, 2 * shape.moe_intermediate, shape.hidden});
+                        {moe_semantics.router.expert_count,
+                         2 * moe_semantics.routed.mlp.intermediate_size, program.hidden});
                 layer.expert_w2 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedDown, index),
-                        {shape.num_experts, shape.hidden, shape.moe_intermediate});
-            } else if (individual_expert_model && shape.shared_expert_intermediate > 0) {
-                const int shared_intermediate = shape.shared_expert_intermediate;
+                        {moe_semantics.router.expert_count, program.hidden,
+                         moe_semantics.routed.mlp.intermediate_size});
+            } else if (individual_expert_model && moe_semantics.shared.has_value()) {
+                const int shared_intermediate = moe_semantics.shared->mlp.intermediate_size;
                 layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
                     layer_name(index, "mlp.shared_experts.w13.weight"), {
                         {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
@@ -531,8 +538,11 @@ void CpuCompiledModel::Shared::load_weights() {
                 layer.expert_w2.resize(static_cast<size_t>(shape.num_experts));
             }
             for (int expert = 0; expert < shape.num_experts; ++expert) {
-                const int moe_inter = shape.moe_intermediate > 0
-                    ? shape.moe_intermediate : shape.intermediate;
+                const int moe_inter = program.layers.at(static_cast<size_t>(index))
+                    .moe->routed.mlp.intermediate_size;
+                if (moe_inter <= 0) {
+                    throw std::runtime_error("compiled MoE layer has no expert width");
+                }
                 if (packed_expert_model) {
                     continue;
                 }

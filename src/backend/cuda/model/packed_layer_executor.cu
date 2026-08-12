@@ -41,7 +41,7 @@ void PackedLayerExecutor::launch_embedding_rows(
             workspace_.stream.get());
     }
     launch_scale(workspace_.hidden.data(), rows * workspace_.shape_.hidden,
-                 workspace_.shape_.numerical_policy.embedding_multiplier,
+                 reference.program().embedding_transform.multiplier,
                  workspace_.stream.get());
 }
 
@@ -99,6 +99,7 @@ void PackedLayerExecutor::run_transformer_layers(
     const std::vector<PackedPrefillRow>* row_descriptors) {
     for (size_t layer_index = 0; layer_index < layer_program_.size();
          ++layer_index) {
+        const CompiledLayerProgram& semantics = reference.program().layers.at(layer_index);
         const auto& layer = reference.layers()[layer_index];
         const auto& common_layer = common(layer);
         if (!reference.options().fused_residuals) {
@@ -110,7 +111,7 @@ void PackedLayerExecutor::run_transformer_layers(
         }
         launch_rmsnorm(workspace_.hidden.data(), common_layer.operator_norm,
                        workspace_.normed.data(), rows, workspace_.shape_.hidden,
-                       workspace_.shape_.numerical_policy.norm_eps,
+                       semantics.operator_norm.epsilon,
                        workspace_.stream.get());
         PackedOperatorContext context{
             workspace_, gemm_.dispatcher(), plan_, workspace_.shape_};
@@ -167,7 +168,7 @@ void PackedLayerExecutor::run_transformer_layers(
             launch_rmsnorm(workspace_.hidden.data(), reference.final_norm(),
                            workspace_.hidden.data(), rows,
                            workspace_.shape_.hidden,
-                           workspace_.shape_.numerical_policy.norm_eps,
+                           reference.program().final_norm.epsilon,
                            workspace_.stream.get());
         }
     }

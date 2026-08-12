@@ -94,10 +94,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             if (!convolution) throw std::logic_error("CPU layer has no operator");
             execute_cpu_short_convolution_token(*this, index, *convolution);
         }
-        if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
-            for (float& value : workspace_.hidden) value *= shared->shape.numerical_policy.residual_multiplier;
+        if (semantics.residual.multiplier != 1.0f) {
+            for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
-        if (shared->shape.has_split_attention_norms) {
+        if (semantics.post_attention_norm.enabled()) {
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
                                 shared->shape.hidden, semantics.post_attention_norm.epsilon);
         }
@@ -113,20 +113,20 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
             const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
             execute_cpu_moe_token(*this, index, *moe, moe_semantics);
-            if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
-                for (float& value : workspace_.mlp_output) value *= shared->shape.numerical_policy.residual_multiplier;
+            if (semantics.residual.multiplier != 1.0f) {
+                for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
-            if (shared->shape.has_split_attention_norms) {
+            if (semantics.post_feed_forward_norm.enabled()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
                                     shared->shape.hidden, semantics.post_feed_forward_norm.epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
         } else {
             execute_cpu_dense_feed_forward_token(execution, index, common);
-            if (shared->shape.numerical_policy.residual_multiplier != 1.0f) {
-                for (float& value : workspace_.mlp_output) value *= shared->shape.numerical_policy.residual_multiplier;
+            if (semantics.residual.multiplier != 1.0f) {
+                for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
-            if (shared->shape.has_split_attention_norms) {
+            if (semantics.post_feed_forward_norm.enabled()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
                                     shared->shape.hidden, semantics.post_feed_forward_norm.epsilon);
             }
@@ -147,7 +147,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             shared->linear.gemv(common.per_layer_projection, workspace_.per_layer_gate.data(),
                                 workspace_.hidden.data());
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
-                                shared->shape.hidden, shared->shape.numerical_policy.norm_eps);
+                                shared->program.hidden, shared->program.per_layer_input.norm_epsilon);
             if (common.layer_scalar != 1.0f) {
                 for (float& value : workspace_.hidden) value *= common.layer_scalar;
             }
@@ -165,11 +165,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     shared->shape.hidden, shared->program.final_norm.epsilon);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
-        if (shared->shape.numerical_policy.logits_multiplier != 1.0f) {
-            for (float& value : workspace_.logits) value *= shared->shape.numerical_policy.logits_multiplier;
+        if (shared->program.logits_multiplier != 1.0f) {
+            for (float& value : workspace_.logits) value *= shared->program.logits_multiplier;
         }
-        if (shared->shape.numerical_policy.logits_divisor != 1.0f) {
-            for (float& value : workspace_.logits) value /= shared->shape.numerical_policy.logits_divisor;
+        if (shared->program.logits_divisor != 1.0f) {
+            for (float& value : workspace_.logits) value /= shared->program.logits_divisor;
         }
         if (shared->final_logit_softcap > 0.0f) {
             for (float& value : workspace_.logits) {

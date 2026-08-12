@@ -205,13 +205,13 @@ std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
     moe.gate_up_ptrs = cache.gate_up_ptrs();
     moe.down_ptrs = cache.down_ptrs();
 
-    celeg::RuntimeTopology shape;
-    shape.num_experts = p.experts;
-    shape.experts_per_token = p.K;
-    shape.moe_intermediate = p.inter;
-    shape.hidden = p.hidden;
+    celeg::MoeLayerProgram semantics;
+    semantics.router.expert_count = p.experts;
+    semantics.router.experts_per_token = p.K;
+    semantics.routed.mlp.hidden_size = p.hidden;
+    semantics.routed.mlp.intermediate_size = p.inter;
 
-    celeg::MoeFfnDevice fdev = celeg::moe_ffn_device(moe, shape);
+    celeg::MoeFfnDevice fdev = celeg::moe_ffn_device(moe, semantics);
     check(fdev.gate_up_ptrs == cache.gate_up_ptrs(),
           "moe_ffn_device indirect gate_up_ptrs");
     check(fdev.down_ptrs == cache.down_ptrs(),

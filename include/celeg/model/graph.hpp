@@ -14,6 +14,9 @@
 
 namespace celeg {
 
+template <typename T>
+inline constexpr bool always_false_v = false;
+
 enum class MixerKind : uint8_t {
     Attention,
     ShortConvolution,
@@ -400,19 +403,43 @@ struct LayerSpec {
     bool execute_feed_forward = true;
 
     MixerKind mixer_kind() const {
-        if (std::holds_alternative<AttentionSpec>(mixer)) return MixerKind::Attention;
-        if (std::holds_alternative<ShortConvolutionSpec>(mixer)) return MixerKind::ShortConvolution;
-        if (std::holds_alternative<GatedDeltaNetSpec>(mixer)) return MixerKind::GatedDeltaNet;
-        if (std::holds_alternative<Mamba2Spec>(mixer)) return MixerKind::Mamba2;
-        return MixerKind::MlpOnly;
+        return std::visit([](const auto& value) {
+            using Mixer = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
+                return MixerKind::Attention;
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+                return MixerKind::ShortConvolution;
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                return MixerKind::GatedDeltaNet;
+            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                return MixerKind::Mamba2;
+            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                return MixerKind::MlpOnly;
+            } else {
+                static_assert(always_false_v<Mixer>, "unhandled mixer semantic variant");
+            }
+        }, mixer);
     }
     FeedForwardKind feed_forward_kind() const {
-        return std::holds_alternative<DenseFeedForwardSpec>(feed_forward)
-            ? FeedForwardKind::Dense : FeedForwardKind::MixtureOfExperts;
+        return std::visit([](const auto& value) {
+            using FeedForward = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+                return FeedForwardKind::Dense;
+            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+                return FeedForwardKind::MixtureOfExperts;
+            } else {
+                static_assert(always_false_v<FeedForward>,
+                              "unhandled feed-forward semantic variant");
+            }
+        }, feed_forward);
     }
 };
 
 struct ModelGraph {
+    // Residual-stream width is semantic graph state.  It originates in
+    // checkpoint geometry, but all executable shapes must derive from this
+    // value after graph synthesis.
+    int hidden = 0;
     std::vector<LayerSpec> layers;
     NormSpec final_norm;
     // Intermediate normalization boundaries are semantic graph edges.  The
@@ -427,6 +454,7 @@ struct ModelGraph {
     };
     EmbeddingTransformSpec embedding_transform;
     float logits_divisor = 1.0f;
+    float logits_multiplier = 1.0f;
     float final_logit_softcap = 0.0f;
 
     void validate() const;

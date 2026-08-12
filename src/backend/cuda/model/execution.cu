@@ -76,9 +76,9 @@ void CudaCompiledModel::enqueue_decode_forward() {
                        stream_.get());
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (as_attention(layer)) {
-            enqueue_decode_attention(layer, common_layer);
+            enqueue_decode_attention(layer, common_layer, layer_idx);
         } else {
-            enqueue_decode_non_attention_mixer(layer);
+            enqueue_decode_non_attention_mixer(layer, layer_idx);
         }
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
@@ -113,11 +113,11 @@ void CudaCompiledModel::enqueue_decode_forward() {
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
             1, resources_.shape_.vocab_size, resources_.shape_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                 resources_.shape_.numerical_policy.logits_multiplier /
-                     resources_.shape_.numerical_policy.logits_divisor, stream_.get());
-    if (resources_.shape_.numerical_policy.final_logit_softcap > 0.0f) {
+                 resources_.program_.logits_multiplier /
+                     resources_.program_.logits_divisor, stream_.get());
+    if (resources_.program_.final_logit_softcap > 0.0f) {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
-                            resources_.shape_.numerical_policy.final_logit_softcap, stream_.get());
+                            resources_.program_.final_logit_softcap, stream_.get());
     }
     finalize_mtp_verification();
     decode_phase_profile().end(DecodePhase::Logits, stream_.get());

@@ -7,8 +7,7 @@
 
 namespace celeg {
 
-void apply_cpu_attention_qk(const RuntimeTopology& shape,
-                            const AttentionSpec& layout,
+void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const CpuCompiledModel::AttentionWeights& weights,
                             float* query,
                             float* key,
@@ -28,7 +27,7 @@ void apply_cpu_attention_qk(const RuntimeTopology& shape,
             for (int i = 0; i < q_width; ++i) query[i] *= layout.query_scale;
             return;
         }
-        const float ratio = shape.numerical_policy.attention_multiplier /
+        const float ratio = layout.query_scale /
             (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
         for (int i = 0; i < q_width; ++i) query[i] *= ratio;
         return;
@@ -38,20 +37,20 @@ void apply_cpu_attention_qk(const RuntimeTopology& shape,
         if (const auto* multi = layout.multi_axis_position()) {
             cpu_qk_norm_rope_mrope(query, weights.q_norm.data(), layout.query_heads,
                 layout.head_dim, rope_position, multi->sections, multi->interleaved,
-                *rope, shape.numerical_policy.norm_eps);
+                *rope, layout.query_norm.epsilon);
             if (has_key) {
                 cpu_qk_norm_rope_mrope(key, weights.k_norm.data(), layout.key_value_heads,
                     layout.head_dim, rope_position, multi->sections, multi->interleaved,
-                    *rope, shape.numerical_policy.norm_eps);
+                    *rope, layout.key_norm.epsilon);
             }
         } else {
             cpu_qk_norm_rope(query, weights.q_norm.data(), layout.query_heads,
                              layout.head_dim, scalar_position,
-                             *rope, shape.numerical_policy.norm_eps);
+                             *rope, layout.query_norm.epsilon);
             if (has_key) {
                 cpu_qk_norm_rope(key, weights.k_norm.data(), layout.key_value_heads,
                                  layout.head_dim, scalar_position,
-                                 *rope, shape.numerical_policy.norm_eps);
+                                 *rope, layout.key_norm.epsilon);
             }
         }
         const float query_scale = layout.query_scale * rope_attention_scale(*rope, scalar_position);
@@ -76,7 +75,7 @@ void apply_cpu_attention_qk(const RuntimeTopology& shape,
                      *rope);
         }
     }
-    const float ratio = shape.numerical_policy.attention_multiplier /
+    const float ratio = layout.query_scale /
         (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
     const float query_scale = ratio * rope_attention_scale(*rope, scalar_position);
     for (int i = 0; i < q_width; ++i) query[i] *= query_scale;

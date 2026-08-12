@@ -67,7 +67,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     };
     auto rmsnorm_rows = [&](const float* input, const std::vector<float>& weight,
                             float* output, size_t width, float epsilon = -1.0f) {
-        if (epsilon < 0.0f) epsilon = shape.numerical_policy.norm_eps;
+        if (epsilon < 0.0f) epsilon = shared->program.final_norm.epsilon;
         parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
                         width, epsilon);
@@ -75,7 +75,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     };
     auto rmsnorm_rows_inplace = [&](float* data, const std::vector<float>& weight,
                                     size_t width, float epsilon = -1.0f) {
-        if (epsilon < 0.0f) epsilon = shape.numerical_policy.norm_eps;
+        if (epsilon < 0.0f) epsilon = shared->program.final_norm.epsilon;
         parallel_rows(shared->pool, rows, [&](size_t row) {
             cpu_rmsnorm_inplace(data + row * width, weight.data(), width,
                                 epsilon);
@@ -202,7 +202,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         position, position, position};
                     const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
                     apply_cpu_attention_qk(
-                        shape, layout, *attention,
+                        layout, *attention,
                         workspace_.chunk_qkv.data() + row * layout.query_projection_width(),
                         nullptr, position, rope_position);
                 });
@@ -432,7 +432,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 const std::array<int32_t, 3> scalar_rope = {
                     position, position, position};
                 const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
-                apply_cpu_attention_qk(shape, layout, *attention, q, k, position,
+                apply_cpu_attention_qk(layout, *attention, q, k, position,
                                        rope_position);
                 (void)projected_q;
             });
@@ -480,11 +480,11 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                                 normed_q8_ready);
         }
 
-        if (shape.numerical_policy.residual_multiplier != 1.0f) {
+        if (semantics.residual.multiplier != 1.0f) {
             scale(workspace_.chunk_hidden, rows * hidden,
-                  shape.numerical_policy.residual_multiplier);
+                  semantics.residual.multiplier);
         }
-        if (shape.has_split_attention_norms) {
+        if (semantics.post_attention_norm.enabled()) {
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.post_attention_norm, hidden,
                                  semantics.post_attention_norm.epsilon);
         }
@@ -502,11 +502,11 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             execute_cpu_dense_feed_forward_chunk(execution, index, common, rows,
                                                  normed_q8_ready);
         }
-        if (shape.numerical_policy.residual_multiplier != 1.0f) {
+        if (semantics.residual.multiplier != 1.0f) {
             scale(workspace_.chunk_mlp, rows * hidden,
-                  shape.numerical_policy.residual_multiplier);
+                  semantics.residual.multiplier);
         }
-        if (shape.has_split_attention_norms) {
+        if (semantics.post_feed_forward_norm.enabled()) {
             rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.post_feed_forward_norm, hidden,
                                  semantics.post_feed_forward_norm.epsilon);
         }
@@ -553,11 +553,11 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.final_normed.data(),
                             workspace_.logits.data());
-        if (shape.numerical_policy.logits_multiplier != 1.0f) {
-            for (float& value : workspace_.logits) value *= shape.numerical_policy.logits_multiplier;
+        if (shared->program.logits_multiplier != 1.0f) {
+            for (float& value : workspace_.logits) value *= shared->program.logits_multiplier;
         }
-        if (shape.numerical_policy.logits_divisor != 1.0f) {
-            for (float& value : workspace_.logits) value /= shape.numerical_policy.logits_divisor;
+        if (shared->program.logits_divisor != 1.0f) {
+            for (float& value : workspace_.logits) value /= shared->program.logits_divisor;
         }
         if (shared->final_logit_softcap > 0.0f) {
             for (float& value : workspace_.logits) {

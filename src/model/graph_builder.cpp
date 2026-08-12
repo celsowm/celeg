@@ -7,8 +7,10 @@ namespace celeg {
 
 void build_dense_transformer_graph(ResolvedModel& model) {
     const RuntimeTopology& t = model.topology;
+    model.graph.hidden = t.hidden;
     model.graph.embedding_transform.multiplier = t.numerical_policy.embedding_multiplier;
     model.graph.logits_divisor = t.numerical_policy.logits_divisor;
+    model.graph.logits_multiplier = t.numerical_policy.logits_multiplier;
     model.graph.final_norm = {t.numerical_policy.norm_eps, NormWeightKind::Scale};
     model.graph.final_logit_softcap = 0.0f;
     model.graph.norm_after_layers.clear();
@@ -34,16 +36,23 @@ void build_dense_transformer_graph(ResolvedModel& model) {
         } else {
             throw std::runtime_error("unknown automatic mixer kind");
         }
-        const int intermediate = t.feed_forward_intermediates.empty()
-            ? t.intermediate : t.feed_forward_intermediates.at(static_cast<size_t>(i));
+        const int intermediate = t.feed_forward_intermediates.at(static_cast<size_t>(i));
         if (t.feed_forward_kinds[static_cast<size_t>(i)] == FeedForwardKind::MixtureOfExperts) {
             layer.feed_forward = MixtureOfExpertsSpec{
-                t.moe_intermediate, t.num_experts, t.experts_per_token,
-                t.normalize_topk, t.use_expert_bias, t.routed_scaling_factor,
-                t.moe_routing_group_count, t.moe_routing_experts_per_group,
-                t.moe_routing_groups_per_token, t.moe_routing_group_score_top_k,
-                t.shared_expert_intermediate > 0,
-                t.shared_expert_intermediate, false, t.moe_router_softmax};
+                .intermediate_size = t.moe_intermediate,
+                .num_experts = t.num_experts,
+                .experts_per_token = t.experts_per_token,
+                .normalize_topk = t.normalize_topk,
+                .use_expert_bias = t.use_expert_bias,
+                .routed_scaling_factor = t.routed_scaling_factor,
+                .routing_group_count = t.moe_routing_group_count,
+                .routing_experts_per_group = t.moe_routing_experts_per_group,
+                .routing_groups_per_token = t.moe_routing_groups_per_token,
+                .routing_group_score_top_k = t.moe_routing_group_score_top_k,
+                .has_shared_expert = t.shared_expert_intermediate > 0,
+                .shared_intermediate_size = t.shared_expert_intermediate,
+                .shared_before_routed = false,
+                .router_softmax = t.moe_router_softmax};
         } else {
             layer.feed_forward = DenseFeedForwardSpec{intermediate, ActivationKind::SwiGLU};
         }

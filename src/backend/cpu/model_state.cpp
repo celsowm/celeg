@@ -255,7 +255,7 @@ void CpuCompiledModel::run_latent_attention(
     cpu_latent_attention_decode_paged(
         query_content, query_rope, pool, state.pages, output, sequence_length,
         attention.query_heads, latent.latent_rank, rotary_width,
-        attention.query_scale * shared->shape.numerical_policy.attention_multiplier,
+        attention.query_scale,
         CpuAttentionPattern::lower(attention.pattern),
         CpuAttentionBias::lower(attention.bias, relative_bias, attention.query_heads), query_position);
 }

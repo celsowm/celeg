@@ -77,7 +77,7 @@ void project_attention_qkv(PackedOperatorContext& context,
             attention.k_norm, rows, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            context.shape.numerical_policy.norm_eps, layout.has_query_key_norm(),
+            layout.query_norm.epsilon, layout.has_query_key_norm(),
             rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
@@ -251,6 +251,8 @@ void PackedGatedDeltaNetExecutor::run(
         throw std::invalid_argument("packed GatedDeltaNet execution needs session rows");
     }
     PackedWorkspace& w = context.workspace;
+    const CompiledLayerProgram& semantics = reference.program().layers.at(
+        static_cast<size_t>(layer_index));
     const GatedDeltaNetSpec& spec = gated_delta.spec;
     const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
         spec.value_heads * spec.value_head_dim;
@@ -299,7 +301,7 @@ void PackedGatedDeltaNetExecutor::run(
                 w.gated_delta_output.data() + static_cast<size_t>(flat) * value_width,
                 1, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                 spec.key_heads, spec.value_heads,
-                context.shape.numerical_policy.norm_eps, spec.vector_decay,
+                semantics.operator_norm.epsilon, spec.vector_decay,
                 spec.safe_decay, spec.decay_lower_bound, spec.sigmoid_output_gate,
                 w.stream.get());
         }
@@ -324,6 +326,8 @@ void PackedMamba2Executor::run(
         throw std::invalid_argument("packed Mamba2 execution needs session rows");
     }
     PackedWorkspace& w = context.workspace;
+    const CompiledLayerProgram& semantics = reference.program().layers.at(
+        static_cast<size_t>(layer_index));
     const Mamba2Spec& spec = mamba.spec;
     const int projection_width = 2 * spec.intermediate_size +
         2 * spec.group_count * spec.state_size + spec.num_heads;
@@ -359,7 +363,7 @@ void PackedMamba2Executor::run(
         throw std::invalid_argument("packed Mamba2 row mapping is incomplete");
     }
     launch_rmsnorm(w.mamba_inner.data(), mamba.norm, w.mamba_inner.data(), rows,
-                   spec.intermediate_size, context.shape.numerical_policy.norm_eps,
+                   spec.intermediate_size, semantics.operator_norm.epsilon,
                    w.stream.get());
     launch_multiply(w.mamba_inner.data(), w.mamba_projected.data(),
                     rows * spec.intermediate_size, w.stream.get());
@@ -377,6 +381,8 @@ void PackedAttentionExecutor::run(
     bool segmented_attention,
     int segmented_chunks) {
     PackedWorkspace& w = context.workspace;
+    const CompiledLayerProgram& semantics = reference.program().layers.at(
+        static_cast<size_t>(layer_index));
     project_attention_qkv(context, reference, attention, rows);
     if (w.paged_kv) {
         run_paged_attention_cache(context, reference, rows, layer_index,
@@ -397,7 +403,7 @@ void PackedAttentionExecutor::run(
                    context.shape.hidden, query_width,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
     launch_scale(w.hidden.data(), rows * context.shape.hidden,
-                 context.shape.numerical_policy.residual_multiplier, w.stream.get());
+                 semantics.residual.multiplier, w.stream.get());
 }
 
 void PackedDenseFfnExecutor::run(
@@ -407,12 +413,11 @@ void PackedDenseFfnExecutor::run(
     int rows,
     int layer_index) {
     PackedWorkspace& w = context.workspace;
+    const CompiledLayerProgram& semantics = reference.program().layers.at(
+        static_cast<size_t>(layer_index));
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.shape.hidden, context.shape.numerical_policy.norm_eps, w.stream.get());
-    const auto& widths = context.shape.feed_forward_intermediates;
-    const int intermediate = widths.empty()
-        ? context.shape.intermediate
-        : widths.at(static_cast<size_t>(layer_index));
+                   rows, context.shape.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
+    const int intermediate = semantics.feed_forward_intermediate;
     if (intermediate <= 0 || intermediate > context.shape.max_feed_forward_intermediate) {
         throw std::runtime_error("invalid packed dense FFN width at layer " +
                                  std::to_string(layer_index));
@@ -442,7 +447,7 @@ void PackedDenseFfnExecutor::run(
         context.linear(w.activated.data(), *dense->w2, w.mlp_output.data(), rows,
                        context.shape.hidden, intermediate);
         launch_scale(w.mlp_output.data(), rows * context.shape.hidden,
-                     context.shape.numerical_policy.residual_multiplier, w.stream.get());
+                     semantics.residual.multiplier, w.stream.get());
         launch_residual_add(w.hidden.data(), w.mlp_output.data(),
                             rows * context.shape.hidden, w.stream.get());
     }
@@ -456,14 +461,16 @@ void PackedMoeExecutor::run(
     const std::vector<PackedSessionContext>* batch_models,
     int layer_index) {
     PackedWorkspace& w = context.workspace;
+    const CompiledLayerProgram& semantics = reference.program().layers.at(
+        static_cast<size_t>(layer_index));
     const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward);
     if (!moe) throw std::logic_error("packed MoE layer has no MoE FFN binding");
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.shape.hidden, context.shape.numerical_policy.norm_eps, w.stream.get());
+                   rows, context.shape.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
                               rows * context.shape.hidden, w.stream.get());
 
-    const MoeRouterConfig cfg = moe_router_config(context.shape);
+    const MoeRouterConfig cfg = moe_router_config(semantics.moe.value());
     MoeRouterDevice router;
     router.router_weight = moe->router_float;
     router.expert_bias = moe->expert_bias;
@@ -484,7 +491,7 @@ void PackedMoeExecutor::run(
     }
 
     w.moe_output_accum.zero_async(w.stream.get());
-    const MoeFfnDevice device = moe_ffn_device(*moe, context.shape);
+    const MoeFfnDevice device = moe_ffn_device(*moe, semantics.moe.value());
     launch_moe_ffn(device, w.moe_sel.data(), w.moe_routing_w.data(),
                    w.normed.data(), w.moe_output_accum.data(), rows,
                    context.shape.experts_per_token, w.moe_gu_scratch.data(),
