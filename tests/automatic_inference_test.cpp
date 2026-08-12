@@ -272,7 +272,7 @@ int main() {
     const auto& architecture = catalog.select(checkpoint.metadata);
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
     CELEG_TEST_CHECK(model.provenance.identity.find("automatic") != std::string::npos);
-    CELEG_TEST_CHECK(model.topology.exec.hidden == 8);
+    CELEG_TEST_CHECK(model.graph.hidden == 8);
     CELEG_TEST_CHECK(model.graph.embedding_transform.multiplier == 2.0f);
     CELEG_TEST_CHECK(std::abs(std::get<celeg::AttentionSpec>(model.graph.layers[0].mixer).query_scale -
                               0.3535533906f) < 1.0e-6f);
@@ -290,7 +290,7 @@ int main() {
     const auto& gguf_architecture = catalog.select(gguf_checkpoint.metadata);
     const celeg::ResolvedModel gguf_model = gguf_architecture.resolve(gguf_checkpoint);
     CELEG_TEST_CHECK(gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(gguf_model.topology.exec.hidden == 8);
+    CELEG_TEST_CHECK(gguf_model.graph.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(gguf_model.provenance.chat_template_id ==
                      "chat:thinking-function");

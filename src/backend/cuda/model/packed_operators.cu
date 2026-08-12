@@ -35,22 +35,22 @@ void PackedConvolutionExecutor::run(
     int ragged_requests) {
     PackedWorkspace& w = context.workspace;
     context.linear(w.normed.data(), *convolution.conv_in, w.conv_projected.data(),
-                   rows, 3 * context.shape.hidden, context.shape.hidden);
+                   rows, 3 * context.program.hidden, context.program.hidden);
     const size_t offset = static_cast<size_t>(layer_index) * w.maximum_batch;
     if (ragged_requests != 0) {
         launch_conv_ragged_prefill(
             w.conv_projected.data(), convolution.conv_weight,
             w.d_conv_states.data() + offset, w.op_output.data(), w.positions.data(),
             w.d_span_offsets.data(), w.d_span_counts.data(), ragged_requests,
-            context.shape.hidden, context.shape.conv_cache, w.stream.get());
+            context.program.hidden, context.shape.conv_cache, w.stream.get());
     } else {
         launch_conv_decode_batch_ptrs(
             w.conv_projected.data(), convolution.conv_weight,
             w.d_conv_states.data() + offset, w.op_output.data(), w.positions.data(),
-            rows, context.shape.hidden, context.shape.conv_cache, w.stream.get());
+            rows, context.program.hidden, context.shape.conv_cache, w.stream.get());
     }
     context.linear(w.op_output.data(), *convolution.conv_out, w.hidden.data(), rows,
-                   context.shape.hidden, context.shape.hidden,
+                   context.program.hidden, context.program.hidden,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
 }
 
@@ -64,12 +64,12 @@ void project_attention_qkv(PackedOperatorContext& context,
     PackedWorkspace& w = context.workspace;
     const AttentionSpec& layout = attention.layout;
     context.linear(w.normed.data(), *attention.query, w.q.data(), rows,
-                   layout.query_width(), context.shape.hidden);
+                   layout.query_width(), context.program.hidden);
     if (attention.key && attention.value) {
         context.linear(w.normed.data(), *attention.key, w.k.data(), rows,
-                       layout.key_value_width(), context.shape.hidden);
+                       layout.key_value_width(), context.program.hidden);
         context.linear(w.normed.data(), *attention.value, w.v.data(), rows,
-                       layout.key_value_width(), context.shape.hidden);
+                       layout.key_value_width(), context.program.hidden);
     }
     if (const auto* rope = layout.rope_position()) {
         launch_qk_norm_rope_positions(
@@ -259,24 +259,24 @@ void PackedGatedDeltaNetExecutor::run(
     const int value_width = spec.value_heads * spec.value_head_dim;
     if (spec.factorized_projections) {
         context.linear(w.normed.data(), *gated_delta.q, w.q.data(),
-                       rows, spec.key_heads * spec.key_head_dim, context.shape.hidden);
+                       rows, spec.key_heads * spec.key_head_dim, context.program.hidden);
         context.linear(w.normed.data(), *gated_delta.k, w.k.data(),
-                       rows, spec.key_heads * spec.key_head_dim, context.shape.hidden);
+                       rows, spec.key_heads * spec.key_head_dim, context.program.hidden);
         context.linear(w.normed.data(), *gated_delta.v, w.v.data(),
-                       rows, value_width, context.shape.hidden);
+                       rows, value_width, context.program.hidden);
         launch_interleave_gated_delta_qkv(
             w.q.data(), w.k.data(), w.v.data(), w.gated_delta_qkv.data(), rows,
             spec.key_heads * spec.key_head_dim, value_width, w.stream.get());
     } else {
         context.linear(w.normed.data(), *gated_delta.qkv, w.gated_delta_qkv.data(),
-                       rows, qkv_width, context.shape.hidden);
+                       rows, qkv_width, context.program.hidden);
     }
     context.linear(w.normed.data(), *gated_delta.z, w.gated_delta_z.data(),
-                   rows, value_width, context.shape.hidden);
+                   rows, value_width, context.program.hidden);
     context.linear(w.normed.data(), *gated_delta.b, w.gated_delta_b.data(),
-                   rows, spec.value_heads, context.shape.hidden);
+                   rows, spec.value_heads, context.program.hidden);
     context.linear(w.normed.data(), *gated_delta.a, w.gated_delta_a.data(),
-                   rows, spec.decay_width(), context.shape.hidden);
+                   rows, spec.decay_width(), context.program.hidden);
 
     size_t flat = 0;
     for (size_t request = 0; request < batch_models->size(); ++request) {
@@ -310,7 +310,7 @@ void PackedGatedDeltaNetExecutor::run(
         throw std::invalid_argument("packed GatedDeltaNet row mapping is incomplete");
     }
     context.linear(w.gated_delta_output.data(), *gated_delta.out, w.hidden.data(),
-                   rows, context.shape.hidden, value_width,
+                   rows, context.program.hidden, value_width,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
 }
 
@@ -332,7 +332,7 @@ void PackedMamba2Executor::run(
     const int projection_width = 2 * spec.intermediate_size +
         2 * spec.group_count * spec.state_size + spec.num_heads;
     context.linear(w.normed.data(), *mamba.in, w.mamba_projected.data(), rows,
-                   projection_width, context.shape.hidden);
+                   projection_width, context.program.hidden);
 
     size_t flat = 0;
     for (size_t request = 0; request < batch_models->size(); ++request) {
@@ -368,7 +368,7 @@ void PackedMamba2Executor::run(
     launch_multiply(w.mamba_inner.data(), w.mamba_projected.data(),
                     rows * spec.intermediate_size, w.stream.get());
     context.linear(w.mamba_inner.data(), *mamba.out, w.hidden.data(), rows,
-                   context.shape.hidden, spec.intermediate_size,
+                   context.program.hidden, spec.intermediate_size,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
 }
 
@@ -400,9 +400,9 @@ void PackedAttentionExecutor::run(
     }
     const int query_width = layout.query_width();
     context.linear(w.op_output.data(), *attention.out, w.hidden.data(), rows,
-                   context.shape.hidden, query_width,
+                   context.program.hidden, query_width,
                    reference.options().fused_residuals ? 1.0f : 0.0f);
-    launch_scale(w.hidden.data(), rows * context.shape.hidden,
+    launch_scale(w.hidden.data(), rows * context.program.hidden,
                  semantics.residual.multiplier, w.stream.get());
 }
 
@@ -416,7 +416,7 @@ void PackedDenseFfnExecutor::run(
     const CompiledLayerProgram& semantics = reference.program().layers.at(
         static_cast<size_t>(layer_index));
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.shape.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
+                   rows, context.program.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
     const int intermediate = semantics.feed_forward_intermediate;
     if (intermediate <= 0 || intermediate > context.shape.max_feed_forward_intermediate) {
         throw std::runtime_error("invalid packed dense FFN width at layer " +
@@ -426,7 +426,7 @@ void PackedDenseFfnExecutor::run(
     if (!dense) throw std::logic_error("packed dense layer has no dense FFN binding");
     if (reference.options().fused_projections) {
         context.linear(w.normed.data(), *dense->w13, w.gate_up.data(), rows,
-                       2 * intermediate, context.shape.hidden);
+                       2 * intermediate, context.program.hidden);
         launch_swiglu_interleaved(w.gate_up.data(), w.activated.data(), rows,
                                   intermediate, w.stream.get());
     } else {
@@ -434,22 +434,22 @@ void PackedDenseFfnExecutor::run(
         const auto w3 = slice_rows(*dense->w13, intermediate, intermediate);
         const size_t plane = static_cast<size_t>(rows) * intermediate;
         context.linear(w.normed.data(), w1, w.gate_up.data(), rows,
-                       intermediate, context.shape.hidden);
+                       intermediate, context.program.hidden);
         context.linear(w.normed.data(), w3, w.gate_up.data() + plane, rows,
-                       intermediate, context.shape.hidden);
+                       intermediate, context.program.hidden);
         launch_swiglu_fused(w.gate_up.data(), w.activated.data(),
                             static_cast<int>(plane), w.stream.get());
     }
     if (reference.options().fused_residuals) {
         context.linear(w.activated.data(), *dense->w2, w.hidden.data(), rows,
-                       context.shape.hidden, intermediate, 1.0f);
+                       context.program.hidden, intermediate, 1.0f);
     } else {
         context.linear(w.activated.data(), *dense->w2, w.mlp_output.data(), rows,
-                       context.shape.hidden, intermediate);
-        launch_scale(w.mlp_output.data(), rows * context.shape.hidden,
+                       context.program.hidden, intermediate);
+        launch_scale(w.mlp_output.data(), rows * context.program.hidden,
                      semantics.residual.multiplier, w.stream.get());
         launch_residual_add(w.hidden.data(), w.mlp_output.data(),
-                            rows * context.shape.hidden, w.stream.get());
+                            rows * context.program.hidden, w.stream.get());
     }
 }
 
@@ -466,9 +466,9 @@ void PackedMoeExecutor::run(
     const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward);
     if (!moe) throw std::logic_error("packed MoE layer has no MoE FFN binding");
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.shape.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
+                   rows, context.program.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
-                              rows * context.shape.hidden, w.stream.get());
+                              rows * context.program.hidden, w.stream.get());
 
     const MoeRouterConfig cfg = moe_router_config(semantics.moe.value());
     MoeRouterDevice router;
@@ -478,7 +478,7 @@ void PackedMoeExecutor::run(
     router.selected_experts = w.moe_sel.data();
     router.routing_weights = w.moe_routing_w.data();
     router.rows = rows;
-    router.hidden_dim = context.shape.hidden;
+    router.hidden_dim = context.program.hidden;
     launch_moe_router(router, cfg, w.moe_router_scratch.data(), w.stream.get());
 
     if (batch_models && !batch_models->empty() && layer_index >= 0) {
@@ -497,9 +497,9 @@ void PackedMoeExecutor::run(
                    semantics.moe->router.experts_per_token, w.moe_gu_scratch.data(),
                    w.moe_act_scratch.data(), w.stream.get());
     launch_finalize_moe_output(w.moe_output_accum.data(), w.moe_output.data(),
-                               rows * context.shape.hidden, w.stream.get());
+                               rows * context.program.hidden, w.stream.get());
     launch_residual_add(w.hidden.data(), w.moe_output.data(),
-                        rows * context.shape.hidden, w.stream.get());
+                        rows * context.program.hidden, w.stream.get());
 }
 
 } // namespace celeg

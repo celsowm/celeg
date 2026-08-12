@@ -268,7 +268,8 @@ struct ExpertOffloadPlanInputs {
 };
 
 // Computes the offload layout. When offload is disabled the returned plan has
-// enabled == false and experts_per_layer == shape.num_experts (all resident).
+// enabled == false and experts_per_layer covers every compiled expert layer
+// (all experts remain resident).
 // Throws std::runtime_error if even minimum_experts_per_layer cannot fit.
 ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs);
 

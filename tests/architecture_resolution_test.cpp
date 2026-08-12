@@ -113,8 +113,7 @@ int main() {
     const auto& architecture = catalog.select(metadata);
     const auto model = architecture.resolve(checkpoint);
     CELEG_TEST_CHECK(model.provenance.architecture_id == "automatic");
-    CELEG_TEST_CHECK(model.topology.exec.hidden == 576);
-    CELEG_TEST_CHECK(model.topology.exec.intermediate == 1728);
+    CELEG_TEST_CHECK(model.graph.hidden == 576);
     CELEG_TEST_CHECK(model.graph.layers.size() == 1);
     CELEG_TEST_CHECK(model.capabilities.tied_embeddings);
     CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(model.graph.layers[0].mixer).query_scale ==

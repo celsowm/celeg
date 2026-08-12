@@ -38,7 +38,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                     decode_phase_profile().begin(stream_.get());
                     linear(workspace_.normed_.data(), *attention->latent_query_projection,
                            workspace_.latent_projection_.data(), 1, latent.query_rank,
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     launch_rmsnorm(workspace_.latent_projection_.data(), attention->latent_query_norm,
                                    workspace_.latent_projection_.data(), 1, latent.query_rank,
                                    latent.query_latent_norm.epsilon, stream_.get());
@@ -57,7 +57,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         stream_.get());
                     linear(workspace_.normed_.data(), *attention->latent_key_projection,
                            workspace_.qkv_output_.data(), 1,
-                           latent.latent_rank + latent.rope_head_dim, resources_.shape_.hidden);
+                           latent.latent_rank + latent.rope_head_dim, resources_.program_.hidden);
                     launch_rmsnorm(workspace_.qkv_output_.data(), attention->latent_key_norm,
                                    workspace_.latent_key_.data(), 1, latent.latent_rank,
                                    latent.key_latent_norm.epsilon, stream_.get());
@@ -98,7 +98,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         stream_.get());
                     linear(workspace_.normed_.data(), *attention->gate,
                            workspace_.attention_gate_.data(), 1, layout.output_gate_width(),
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     if (layout.output_gate.granularity == AttentionGateGranularity::HeadWise) {
                         launch_sigmoid_multiply_headwise(workspace_.latent_decompressed_.data(),
                             workspace_.attention_gate_.data(), 1, layout.query_heads,
@@ -109,10 +109,10 @@ void CudaCompiledModel::enqueue_decode_attention(
                             stream_.get());
                     }
                     linear(workspace_.latent_decompressed_.data(), *attention->out,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            layout.latent_output_width(),
                            resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
-                    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+                    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                                  semantics.residual.multiplier, stream_.get());
                     return;
                 }
@@ -123,24 +123,24 @@ void CudaCompiledModel::enqueue_decode_attention(
                 decode_phase_profile().begin(stream_.get());
                 linear(workspace_.normed_.data(), *attention->latent_query,
                        workspace_.latent_query_content_.data(), 1,
-                       layout.latent_query_content_width(), resources_.shape_.hidden);
+                       layout.latent_query_content_width(), resources_.program_.hidden);
                 if (layout.latent_query_rope_width() != 0) {
                     linear(workspace_.normed_.data(), *attention->latent_query_rope,
                            workspace_.latent_query_rope_.data(), 1,
-                           layout.latent_query_rope_width(), resources_.shape_.hidden);
+                           layout.latent_query_rope_width(), resources_.program_.hidden);
                 }
                 if (attention->latent_key && attention->latent_value) {
                     linear(workspace_.normed_.data(), *attention->latent_key,
                            workspace_.latent_key_.data(), 1, latent.latent_rank,
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     linear(workspace_.normed_.data(), *attention->latent_value,
                            workspace_.latent_value_.data(), 1, latent.latent_rank,
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     if (attention->latent_key_rope && latent.decoupled_rope &&
                         latent.rope_head_dim != 0) {
                         linear(workspace_.normed_.data(), *attention->latent_key_rope,
                                workspace_.latent_key_rope_.data(), 1,
-                               latent.rope_head_dim, resources_.shape_.hidden);
+                               latent.rope_head_dim, resources_.program_.hidden);
                     }
                 }
                 decode_phase_profile().end(DecodePhase::Projection, stream_.get());
@@ -189,11 +189,11 @@ void CudaCompiledModel::enqueue_decode_attention(
                 decode_phase_profile().end(DecodePhase::Attention, stream_.get());
                 decode_phase_profile().begin(stream_.get());
                 linear(workspace_.op_output_.data(), *attention->out,
-                       workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                       workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        layout.latent_query_content_width(),
                        resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
                            resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
-                launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+                launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                              semantics.residual.multiplier,
                              stream_.get());
                 decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());
@@ -206,14 +206,14 @@ void CudaCompiledModel::enqueue_decode_attention(
             decode_phase_profile().begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
-                workspace_.normed_.data(), 1, resources_.shape_.hidden);
+                workspace_.normed_.data(), 1, resources_.program_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q,
-                   1, query_projection_width, resources_.shape_.hidden);
+                   1, query_projection_width, resources_.program_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.normed_.data(), *attention->key, k,
-                       1, layout.key_value_width(), resources_.shape_.hidden);
+                       1, layout.key_value_width(), resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *attention->value, v,
-                       1, layout.key_value_width(), resources_.shape_.hidden);
+                       1, layout.key_value_width(), resources_.program_.hidden);
             }
             }
             decode_phase_profile().end(DecodePhase::Projection, stream_.get());
@@ -326,7 +326,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                 if (!layout.output_gate.packed_with_query) {
                     linear(workspace_.normed_.data(), *attention->gate,
                            workspace_.attention_gate_.data(), 1,
-                           layout.query_width(), resources_.shape_.hidden);
+                           layout.query_width(), resources_.program_.hidden);
                     gate = workspace_.attention_gate_.data();
                 }
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
@@ -336,10 +336,10 @@ void CudaCompiledModel::enqueue_decode_attention(
             decode_phase_profile().end(DecodePhase::Attention, stream_.get());
             decode_phase_profile().begin(stream_.get());
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
-                   1, resources_.shape_.hidden, layout.query_width(),
+                   1, resources_.program_.hidden, layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
                        resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
-            launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                          semantics.residual.multiplier,
                          stream_.get());
             decode_phase_profile().end(DecodePhase::AttnOut, stream_.get());

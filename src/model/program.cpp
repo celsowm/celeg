@@ -532,7 +532,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         program.layers.push_back(std::move(compiled));
     }
     std::ostringstream semantic;
-    semantic << "norms";
+    semantic << "hidden:" << program.hidden << ";norms";
     for (const int boundary : program.norm_after_layers) semantic << boundary << ';';
     for (const auto& layer : program.layers) {
         if (layer.attention) {

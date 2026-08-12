@@ -43,9 +43,10 @@ struct CpuWorkspacePlan {
     size_t feed_forward = 0;
     size_t q8_blocks = 0;
 
-    static CpuWorkspacePlan from_topology(const ExecutionTopology& shape) {
+    static CpuWorkspacePlan from_topology(const ExecutionTopology& shape,
+                                          const CompiledModelProgram& program) {
         CpuWorkspacePlan plan;
-        plan.hidden = static_cast<size_t>(shape.hidden);
+        plan.hidden = static_cast<size_t>(program.hidden);
         plan.attention_output = static_cast<size_t>(shape.maximum_attention_query_heads()) *
             static_cast<size_t>(shape.maximum_attention_head_dim());
         plan.attention_output = std::max(plan.attention_output,
@@ -74,7 +75,7 @@ struct CpuWorkspacePlan {
         plan.mamba_conv = static_cast<size_t>(shape.maximum_mamba_conv_width());
         plan.mamba_inner = static_cast<size_t>(shape.mamba2_intermediate);
         plan.feed_forward = static_cast<size_t>(shape.max_feed_forward_intermediate);
-        plan.q8_blocks = static_cast<size_t>(shape.hidden) / 256;
+        plan.q8_blocks = static_cast<size_t>(program.hidden) / 256;
         return plan;
     }
 };

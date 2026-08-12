@@ -60,15 +60,15 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     mtp.layer_count = resources.dims_.mtp_num_hidden_layers;
     mtp.fc = resources.weight_loader_->load_linear_weight(
         repo, "mtp.fc.weight",
-        {resources.shape_.hidden, 2 * resources.shape_.hidden});
+        {resources.program_.hidden, 2 * resources.program_.hidden});
     mtp.pre_fc_norm_embedding = resources.weight_loader_->load_rms_norm_weight(
-        repo, "mtp.pre_fc_norm_embedding.weight", {resources.shape_.hidden},
+        repo, "mtp.pre_fc_norm_embedding.weight", {resources.program_.hidden},
         NormWeightKind::Scale);
     mtp.pre_fc_norm_hidden = resources.weight_loader_->load_rms_norm_weight(
-        repo, "mtp.pre_fc_norm_hidden.weight", {resources.shape_.hidden},
+        repo, "mtp.pre_fc_norm_hidden.weight", {resources.program_.hidden},
         NormWeightKind::Scale);
     mtp.norm = resources.weight_loader_->load_rms_norm_weight(
-        repo, "mtp.norm.weight", {resources.shape_.hidden},
+        repo, "mtp.norm.weight", {resources.program_.hidden},
         NormWeightKind::Scale);
     mtp.logits = resources.lm_head_ ? resources.lm_head_ : resources.embedding_;
     mtp.layers.reserve(static_cast<size_t>(mtp.layer_count));
@@ -76,15 +76,19 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
             return layer.moe.has_value();
         });
+    const auto dense_program = std::find_if(resources.program_.layers.begin(),
+        resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
+            return layer.feed_forward == CompiledFeedForward::Dense;
+        });
 
     for (int index = 0; index < mtp.layer_count; ++index) {
         const std::string prefix = "mtp.layers." + std::to_string(index);
         LayerCommon common_layer;
         common_layer.operator_norm = resources.weight_loader_->load_rms_norm_weight(
-            repo, prefix + ".input_layernorm.weight", {resources.shape_.hidden},
+            repo, prefix + ".input_layernorm.weight", {resources.program_.hidden},
             NormWeightKind::Scale);
         common_layer.ffn_norm = resources.weight_loader_->load_rms_norm_weight(
-            repo, prefix + ".post_attention_layernorm.weight", {resources.shape_.hidden},
+            repo, prefix + ".post_attention_layernorm.weight", {resources.program_.hidden},
             NormWeightKind::Scale);
 
         if (moe_program != resources.program_.layers.end()) {
@@ -92,13 +96,13 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             const int inter = moe_program->moe->routed.mlp.intermediate_size;
             MoeFfnWeights moe{};
             moe.router = resources.weight_loader_->load_router_weight_named(
-                repo, prefix + ".mlp.gate.weight", E, resources.shape_.hidden);
+                repo, prefix + ".mlp.gate.weight", E, resources.program_.hidden);
             const int resource_layer = resources.shape_.num_hidden_layers + index;
             DeviceBuffer<float>& router_float =
                 model.workspace_.moe_router_float_[static_cast<size_t>(resource_layer)];
-            router_float.reset(static_cast<size_t>(E) * resources.shape_.hidden);
+            router_float.reset(static_cast<size_t>(E) * resources.program_.hidden);
             launch_cast_bf16_to_float(moe.router->bf16, router_float.data(),
-                                      E * resources.shape_.hidden, model.stream_.get());
+                                      E * resources.program_.hidden, model.stream_.get());
             moe.router_float = router_float.data();
 
             if (moe_program->moe->shared) {
@@ -106,15 +110,15 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                 moe.shared_w13 = resources.weight_loader_->load_concat_linear_weight(
                     repo, prefix + ".mlp.shared_expert.w13.weight",
                     {{prefix + ".mlp.shared_expert.gate_proj.weight",
-                      {shared, resources.shape_.hidden}},
+                      {shared, resources.program_.hidden}},
                      {prefix + ".mlp.shared_expert.up_proj.weight",
-                      {shared, resources.shape_.hidden}}});
+                      {shared, resources.program_.hidden}}});
                 moe.shared_w2 = resources.weight_loader_->load_linear_weight(
                     repo, prefix + ".mlp.shared_expert.down_proj.weight",
-                    {resources.shape_.hidden, shared});
+                    {resources.program_.hidden, shared});
                 moe.shared_gate = resources.weight_loader_->load_linear_weight(
                     repo, prefix + ".mlp.shared_expert_gate.weight",
-                    {1, resources.shape_.hidden});
+                    {1, resources.program_.hidden});
             }
 
             const std::string experts_prefix = prefix + ".mlp.experts";
@@ -122,14 +126,14 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                 std::vector<ExpertLocation> catalog =
                     resources.weight_loader_->build_expert_catalog_named(
                         repo, experts_prefix, "gate_proj", "up_proj", "down_proj",
-                        E, inter, resources.shape_.hidden);
+                        E, inter, resources.program_.hidden);
                 model.workspace_.expert_catalog_[static_cast<size_t>(resource_layer)] = catalog;
                 if (resources.weights_->expert_catalog[static_cast<size_t>(resource_layer)].empty()) {
                     resources.weights_->expert_catalog[static_cast<size_t>(resource_layer)] = catalog;
                 }
                 const size_t gate_up_bytes = 2ull * static_cast<size_t>(inter) *
-                    resources.shape_.hidden * sizeof(__nv_bfloat16);
-                const size_t down_bytes = static_cast<size_t>(resources.shape_.hidden) *
+                    resources.program_.hidden * sizeof(__nv_bfloat16);
+                const size_t down_bytes = static_cast<size_t>(resources.program_.hidden) *
                     inter * sizeof(__nv_bfloat16);
                 auto cache = std::make_unique<ExpertLayerCache>(
                     E, model.workspace_.expert_offload_plan_.experts_per_layer,
@@ -166,7 +170,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                     WeightLoader::HostExpertLayer host_layer =
                         resources.weight_loader_->load_moe_experts_host_named(
                             repo, experts_prefix, "gate_proj", "up_proj", "down_proj",
-                            E, inter, resources.shape_.hidden,
+                            E, inter, resources.program_.hidden,
                             model.workspace_.host_expert_store_,
                             resources.options_.expert_offload.host_mode);
                     controller->cache->set_host_sources(host_layer.gate_up_host_dev,
@@ -188,20 +192,24 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             } else {
                 moe.gate_up = resources.weight_loader_->load_moe_gate_up_named(
                     repo, experts_prefix, "gate_proj", "up_proj", E, inter,
-                    resources.shape_.hidden);
+                    resources.program_.hidden);
                 moe.down = resources.weight_loader_->load_moe_down_named(
-                    repo, experts_prefix, "down_proj", E, inter, resources.shape_.hidden);
+                    repo, experts_prefix, "down_proj", E, inter, resources.program_.hidden);
             }
             common_layer.feed_forward = moe;
         } else {
-            const int inter = resources.shape_.intermediate;
+            if (dense_program == resources.program_.layers.end() ||
+                dense_program->feed_forward_intermediate <= 0) {
+                throw std::runtime_error("MTP requires a compiled dense FFN width");
+            }
+            const int inter = dense_program->feed_forward_intermediate;
             const LinearWeight* w13 = resources.weight_loader_->load_concat_linear_weight(
                 repo, prefix + ".mlp.w13.weight",
-                {{prefix + ".mlp.gate_proj.weight", {inter, resources.shape_.hidden}},
-                 {prefix + ".mlp.up_proj.weight", {inter, resources.shape_.hidden}}});
+                {{prefix + ".mlp.gate_proj.weight", {inter, resources.program_.hidden}},
+                 {prefix + ".mlp.up_proj.weight", {inter, resources.program_.hidden}}});
             const LinearWeight* w2 = resources.weight_loader_->load_linear_weight(
                 repo, prefix + ".mlp.down_proj.weight",
-                {resources.shape_.hidden, inter});
+                {resources.program_.hidden, inter});
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
@@ -210,16 +218,16 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         attention.layout = mtp_layout;
         attention.query = resources.weight_loader_->load_linear_weight(
             repo, prefix + ".self_attn.q_proj.weight",
-            {mtp_layout.query_projection_width(), resources.shape_.hidden});
+            {mtp_layout.query_projection_width(), resources.program_.hidden});
         attention.key = resources.weight_loader_->load_linear_weight(
             repo, prefix + ".self_attn.k_proj.weight",
-            {mtp_layout.key_value_width(), resources.shape_.hidden});
+            {mtp_layout.key_value_width(), resources.program_.hidden});
         attention.value = resources.weight_loader_->load_linear_weight(
             repo, prefix + ".self_attn.v_proj.weight",
-            {mtp_layout.key_value_width(), resources.shape_.hidden});
+            {mtp_layout.key_value_width(), resources.program_.hidden});
         attention.out = resources.weight_loader_->load_linear_weight(
             repo, prefix + ".self_attn.o_proj.weight",
-            {resources.shape_.hidden, mtp_layout.query_width()});
+            {resources.program_.hidden, mtp_layout.query_width()});
         attention.q_norm = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".self_attn.q_norm.weight", {mtp_layout.head_dim},
             NormWeightKind::Scale);

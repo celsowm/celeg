@@ -116,11 +116,11 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
 void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     const size_t r = static_cast<size_t>(rows);
     workspace_.prefill_tokens_.reserve(r);
-    workspace_.prefill_hidden_.reserve(r * resources_.shape_.hidden);
-    workspace_.prefill_residual_.reserve(r * resources_.shape_.hidden);
-    workspace_.prefill_normed_.reserve(r * resources_.shape_.hidden);
+    workspace_.prefill_hidden_.reserve(r * resources_.program_.hidden);
+    workspace_.prefill_residual_.reserve(r * resources_.program_.hidden);
+    workspace_.prefill_normed_.reserve(r * resources_.program_.hidden);
     workspace_.prefill_op_output_.reserve(r * static_cast<size_t>(std::max(
-        resources_.shape_.hidden,
+        resources_.program_.hidden,
         resources_.shape_.maximum_attention_output_width())));
     workspace_.prefill_qkv_.reserve(r * resources_.shape_.maximum_attention_projection_width());
     const size_t projection_width = resources_.shape_.maximum_attention_projection_width();
@@ -143,7 +143,7 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
                                                resources_.shape_.maximum_attention_head_dim());
     workspace_.prefill_k_.reserve(r * projection_width);
     workspace_.prefill_v_.reserve(r * projection_width);
-    workspace_.prefill_conv_projected_.reserve(r * 3 * resources_.shape_.hidden);
+    workspace_.prefill_conv_projected_.reserve(r * 3 * resources_.program_.hidden);
     workspace_.prefill_gated_delta_qkv_.reserve(r * resources_.shape_.max_gated_delta_net_qkv_width());
     workspace_.prefill_gated_delta_z_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
     workspace_.prefill_gated_delta_b_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
@@ -151,7 +151,7 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     workspace_.prefill_gated_delta_output_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
     workspace_.prefill_gate_up_.reserve(r * 2 * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_activated_.reserve(r * resources_.shape_.max_feed_forward_intermediate);
-    workspace_.prefill_mlp_output_.reserve(r * resources_.shape_.hidden);
+    workspace_.prefill_mlp_output_.reserve(r * resources_.program_.hidden);
     workspace_.moe_pf_shared_gate_.reserve(r);
     if (resources_.program_.per_layer_input.enabled) {
         const size_t packed = resources_.program_.per_layer_input.checked_elements(r);

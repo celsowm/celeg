@@ -54,9 +54,9 @@ void CudaCompiledModel::enqueue_sampling() {
 void CudaCompiledModel::enqueue_decode_forward() {
     decode_phase_profile().begin(stream_.get());
     resources_.weight_layout_->embed_token_device(
-        sampling_.sampled_device.data(), workspace_.hidden_.data(), resources_.shape_.hidden,
+        sampling_.sampled_device.data(), workspace_.hidden_.data(), resources_.program_.hidden,
         stream_.get());
-        launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, resources_.program_.embedding_transform.multiplier,
+        launch_scale(workspace_.hidden_.data(), resources_.program_.hidden, resources_.program_.embedding_transform.multiplier,
                  stream_.get());
     initialize_per_layer_input_device(sampling_.sampled_device.data());
     decode_phase_profile().end(DecodePhase::Embed, stream_.get());
@@ -72,7 +72,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         }
         decode_phase_profile().begin(stream_.get());
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
-                       1, resources_.shape_.hidden, semantics.operator_norm.epsilon,
+                       1, resources_.program_.hidden, semantics.operator_norm.epsilon,
                        stream_.get());
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (as_attention(layer)) {
@@ -82,14 +82,14 @@ void CudaCompiledModel::enqueue_decode_forward() {
         }
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
             resources_.shape_.mamba2_layer_count > 0) {
             decode_phase_profile().begin(stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                                resources_.shape_.hidden, stream_.get());
+                                resources_.program_.hidden, stream_.get());
             decode_phase_profile().end(DecodePhase::Other, stream_.get());
         }
         decode_phase_profile().begin(stream_.get());
@@ -97,7 +97,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            resources_.program_.final_norm.epsilon, stream_.get());
         }
         decode_phase_profile().end(DecodePhase::Mlp, stream_.get());
@@ -108,10 +108,10 @@ void CudaCompiledModel::enqueue_decode_forward() {
     }
     decode_phase_profile().begin(stream_.get());
     launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
-                    1, resources_.shape_.hidden, resources_.program_.final_norm.epsilon,
+                    1, resources_.program_.hidden, resources_.program_.final_norm.epsilon,
                     stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-            1, resources_.dims_.vocab_size, resources_.shape_.hidden);
+            1, resources_.dims_.vocab_size, resources_.program_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
                  resources_.program_.logits_multiplier /
                      resources_.program_.logits_divisor, stream_.get());

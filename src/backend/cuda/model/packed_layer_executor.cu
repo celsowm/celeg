@@ -28,19 +28,19 @@ void PackedLayerExecutor::launch_embedding_rows(
         launch_embedding_int4_batch(
             workspace_.sampled.data(), rows, reference.embedding()->int4,
             reference.embedding()->scales, workspace_.hidden.data(),
-            workspace_.shape_.hidden, workspace_.stream.get());
+            workspace_.program_.hidden, workspace_.stream.get());
     } else if (reference.embedding()->int8_quantized()) {
         launch_embedding_int8_batch(
             workspace_.sampled.data(), rows, reference.embedding()->int8,
             reference.embedding()->scales, workspace_.hidden.data(),
-            workspace_.shape_.hidden, workspace_.stream.get());
+            workspace_.program_.hidden, workspace_.stream.get());
     } else {
         launch_embedding_batch(
             workspace_.sampled.data(), rows, reference.embedding()->bf16,
-            workspace_.hidden.data(), workspace_.shape_.hidden,
+            workspace_.hidden.data(), workspace_.program_.hidden,
             workspace_.stream.get());
     }
-    launch_scale(workspace_.hidden.data(), rows * workspace_.shape_.hidden,
+    launch_scale(workspace_.hidden.data(), rows * workspace_.program_.hidden,
                  reference.program().embedding_transform.multiplier,
                  workspace_.stream.get());
 }
@@ -105,12 +105,12 @@ void PackedLayerExecutor::run_transformer_layers(
         if (!reference.options().fused_residuals) {
             CELEG_CUDA(cudaMemcpyAsync(
                 workspace_.residual.data(), workspace_.hidden.data(),
-                static_cast<size_t>(rows) * workspace_.shape_.hidden *
+                static_cast<size_t>(rows) * workspace_.program_.hidden *
                     sizeof(__nv_bfloat16),
                 cudaMemcpyDeviceToDevice, workspace_.stream.get()));
         }
         launch_rmsnorm(workspace_.hidden.data(), common_layer.operator_norm,
-                       workspace_.normed.data(), rows, workspace_.shape_.hidden,
+                       workspace_.normed.data(), rows, workspace_.program_.hidden,
                        semantics.operator_norm.epsilon,
                        workspace_.stream.get());
         PackedOperatorContext context{
@@ -155,7 +155,7 @@ void PackedLayerExecutor::run_transformer_layers(
         }
         if (!reference.options().fused_residuals) {
             launch_residual_add(workspace_.hidden.data(), workspace_.residual.data(),
-                                rows * workspace_.shape_.hidden,
+                                rows * workspace_.program_.hidden,
                                 workspace_.stream.get());
         }
         if (layer_program_.kind(layer_index) != PackedLayerKind::Mamba2) {
@@ -167,7 +167,7 @@ void PackedLayerExecutor::run_transformer_layers(
                                static_cast<int>(layer_index))) {
             launch_rmsnorm(workspace_.hidden.data(), reference.final_norm(),
                            workspace_.hidden.data(), rows,
-                           workspace_.shape_.hidden,
+                           workspace_.program_.hidden,
                            reference.program().final_norm.epsilon,
                            workspace_.stream.get());
         }

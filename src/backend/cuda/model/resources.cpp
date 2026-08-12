@@ -7,11 +7,11 @@ namespace celeg {
 void CudaCompiledModel::allocate_celeg_resources() {
     // Size all per-session device buffers from the runtime shape.
     sampling_.reset_vocabulary(static_cast<size_t>(resources_.dims_.vocab_size));
-    workspace_.hidden_.reset(static_cast<size_t>(resources_.shape_.hidden));
-    workspace_.residual_.reset(static_cast<size_t>(resources_.shape_.hidden));
-    workspace_.normed_.reset(static_cast<size_t>(resources_.shape_.hidden));
+    workspace_.hidden_.reset(static_cast<size_t>(resources_.program_.hidden));
+    workspace_.residual_.reset(static_cast<size_t>(resources_.program_.hidden));
+    workspace_.normed_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.op_output_.reset(static_cast<size_t>(std::max(
-        resources_.shape_.hidden,
+        resources_.program_.hidden,
         resources_.shape_.maximum_attention_output_width())));
     workspace_.qkv_output_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_projection_width()));
@@ -31,7 +31,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
         resources_.shape_.maximum_attention_projection_width()));
     workspace_.latent_decompressed_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_output_width()));
-    workspace_.conv_projected_.reset(static_cast<size_t>(3 * resources_.shape_.hidden));
+    workspace_.conv_projected_.reset(static_cast<size_t>(3 * resources_.program_.hidden));
     workspace_.mamba_projected_.reset(static_cast<size_t>(
         resources_.shape_.maximum_mamba_projection_width()));
     workspace_.mamba_inner_.reset(static_cast<size_t>(resources_.shape_.mamba2_intermediate));
@@ -42,13 +42,13 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.gated_delta_output_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_output_width()));
     workspace_.gate_up_.reset(static_cast<size_t>(2 * resources_.shape_.max_feed_forward_intermediate));
     workspace_.activated_.reset(static_cast<size_t>(resources_.shape_.max_feed_forward_intermediate));
-    workspace_.mlp_output_.reset(static_cast<size_t>(resources_.shape_.hidden));
+    workspace_.mlp_output_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.logits_.reset(static_cast<size_t>(resources_.dims_.vocab_size));
     if (resources_.options_.enable_mtp && resources_.dims_.mtp_num_hidden_layers > 0) {
-        workspace_.mtp_embedding_.reset(static_cast<size_t>(resources_.shape_.hidden));
-        workspace_.mtp_hidden_norm_.reset(static_cast<size_t>(resources_.shape_.hidden));
-        workspace_.mtp_fused_.reset(static_cast<size_t>(2 * resources_.shape_.hidden));
-        workspace_.mtp_base_hidden_.reset(static_cast<size_t>(resources_.shape_.hidden));
+        workspace_.mtp_embedding_.reset(static_cast<size_t>(resources_.program_.hidden));
+        workspace_.mtp_hidden_norm_.reset(static_cast<size_t>(resources_.program_.hidden));
+        workspace_.mtp_fused_.reset(static_cast<size_t>(2 * resources_.program_.hidden));
+        workspace_.mtp_base_hidden_.reset(static_cast<size_t>(resources_.program_.hidden));
         workspace_.mtp_logits_.reset(static_cast<size_t>(resources_.dims_.vocab_size));
         workspace_.mtp_token_.reset(1);
         workspace_.mtp_candidate_.reset(1);
@@ -79,12 +79,12 @@ void CudaCompiledModel::allocate_celeg_resources() {
             K = std::max(K, layer.moe->router.experts_per_token);
             inter = std::max(inter, layer.moe->routed.mlp.intermediate_size);
         }
-        workspace_.moe_hidden_float_.reset(static_cast<size_t>(resources_.shape_.hidden));
+        workspace_.moe_hidden_float_.reset(static_cast<size_t>(resources_.program_.hidden));
         workspace_.moe_sel_.reset(static_cast<size_t>(K));
         workspace_.moe_routing_w_.reset(static_cast<size_t>(K));
         workspace_.moe_router_scratch_.reset(static_cast<size_t>(E));
-        workspace_.moe_output_accum_.reset(static_cast<size_t>(resources_.shape_.hidden));
-        workspace_.moe_output_.reset(static_cast<size_t>(resources_.shape_.hidden));
+        workspace_.moe_output_accum_.reset(static_cast<size_t>(resources_.program_.hidden));
+        workspace_.moe_output_.reset(static_cast<size_t>(resources_.program_.hidden));
         workspace_.moe_shared_gate_.reset(1);
         workspace_.moe_gu_scratch_.reset(static_cast<size_t>(K) * 2 * inter);
         workspace_.moe_act_scratch_.reset(static_cast<size_t>(K) * inter);

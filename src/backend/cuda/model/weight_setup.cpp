@@ -72,12 +72,12 @@ void CudaCompiledModel::load_checkpoint_weights(
             const std::string name = spec.weightless()
                 ? std::string{} : tensor_name(resources_.model_.weight_plan.requests, role, i);
             return resources_.weight_loader_->load_rms_norm_weight(
-                repo, name, {resources_.shape_.hidden}, spec.weight_kind);
+                repo, name, {resources_.program_.hidden}, spec.weight_kind);
         };
         common_layer.operator_norm = resources_.weight_loader_->load_rms_norm_weight(
             repo, semantic_layer.operator_norm.weightless() ? std::string{} :
                 tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
-            {resources_.shape_.hidden}, semantic_layer.operator_norm.weight_kind);
+            {resources_.program_.hidden}, semantic_layer.operator_norm.weight_kind);
         if (!sequential_mixer_model) {
             common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
                                               semantic_layer.feed_forward_norm);
@@ -99,7 +99,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                 {resources_.program_.hidden, resources_.program_.per_layer_input.input_size});
             common_layer.per_layer_input_norm = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerInputNorm, i),
-                {resources_.shape_.hidden});
+                {resources_.program_.hidden});
             common_layer.layer_scalar = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
@@ -129,16 +129,16 @@ void CudaCompiledModel::load_checkpoint_weights(
                     repo, bias_name, {static_cast<int64_t>(E)});
             }
             const LinearWeight* router = resources_.weight_loader_->load_router_weight(
-                repo, i, E, resources_.shape_.hidden);
+                repo, i, E, resources_.program_.hidden);
 
             // Cache a device float copy of the router weight for the CUDA
             // router kernel (it consumes float, the loaded weight is BF16 —
             // always non-null after Phase 1.1's load_router_weight contract).
             DeviceBuffer<float>& router_float = workspace_.moe_router_float_[static_cast<size_t>(i)];
-            router_float.reset(static_cast<size_t>(E) * resources_.shape_.hidden);
+            router_float.reset(static_cast<size_t>(E) * resources_.program_.hidden);
             launch_cast_bf16_to_float(
                 router->bf16, router_float.data(),
-                static_cast<int>(E) * resources_.shape_.hidden, stream_.get());
+                static_cast<int>(E) * resources_.program_.hidden, stream_.get());
 
             MoeFfnWeights moe_weights{};
             moe_weights.router = router;
@@ -152,15 +152,15 @@ void CudaCompiledModel::load_checkpoint_weights(
                     {
                         {tensor_name(resources_.model_.weight_plan.requests,
                                      TensorRole::MoeSharedGate, i),
-                         {shared_inter, resources_.shape_.hidden}},
+                         {shared_inter, resources_.program_.hidden}},
                         {tensor_name(resources_.model_.weight_plan.requests,
                                      TensorRole::MoeSharedUp, i),
-                         {shared_inter, resources_.shape_.hidden}},
+                         {shared_inter, resources_.program_.hidden}},
                     });
                 moe_weights.shared_w2 = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::MoeSharedDown, i),
-                    {resources_.shape_.hidden, shared_inter});
+                    {resources_.program_.hidden, shared_inter});
                 const auto gate_request = std::find_if(
                     resources_.model_.weight_plan.requests.begin(),
                     resources_.model_.weight_plan.requests.end(),
@@ -172,7 +172,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                     moe_weights.shared_gate = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::MoeSharedGateWeight, i),
-                        {1, resources_.shape_.hidden});
+                        {1, resources_.program_.hidden});
                 }
             }
 
@@ -207,16 +207,16 @@ void CudaCompiledModel::load_checkpoint_weights(
                     std::vector<ExpertLocation> catalog = named_expert_model
                         ? resources_.weight_loader_->build_expert_catalog_named(
                             repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                            "down_proj", E, inter, resources_.shape_.hidden)
+                            "down_proj", E, inter, resources_.program_.hidden)
                         : resources_.weight_loader_->build_expert_catalog(
-                            repo, i, E, inter, resources_.shape_.hidden);
+                            repo, i, E, inter, resources_.program_.hidden);
                     workspace_.expert_catalog_[static_cast<size_t>(i)] = catalog;
                     if (resources_.weights_->expert_catalog[static_cast<size_t>(i)].empty()) {
                         resources_.weights_->expert_catalog[static_cast<size_t>(i)] = catalog;
                     }
 
-                    size_t gate_up_bytes = 2 * inter * resources_.shape_.hidden * sizeof(__nv_bfloat16);
-                    size_t down_bytes = resources_.shape_.hidden * inter * sizeof(__nv_bfloat16);
+                    size_t gate_up_bytes = 2 * inter * resources_.program_.hidden * sizeof(__nv_bfloat16);
+                    size_t down_bytes = resources_.program_.hidden * inter * sizeof(__nv_bfloat16);
                     auto cache = std::make_unique<ExpertLayerCache>(
                         E, workspace_.expert_offload_plan_.experts_per_layer,
                         gate_up_bytes, down_bytes);
@@ -265,10 +265,10 @@ void CudaCompiledModel::load_checkpoint_weights(
                     WeightLoader::HostExpertLayer host_layer = named_expert_model
                         ? resources_.weight_loader_->load_moe_experts_host_named(
                             repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                            "down_proj", E, inter, resources_.shape_.hidden,
+                            "down_proj", E, inter, resources_.program_.hidden,
                             workspace_.host_expert_store_, resources_.options_.expert_offload.host_mode)
                         : resources_.weight_loader_->load_moe_experts_host(
-                            repo, i, E, inter, resources_.shape_.hidden,
+                            repo, i, E, inter, resources_.program_.hidden,
                             workspace_.host_expert_store_, resources_.options_.expert_offload.host_mode);
                     auto cache = std::make_unique<ExpertLayerCache>(
                         E, workspace_.expert_offload_plan_.experts_per_layer,
@@ -305,24 +305,24 @@ void CudaCompiledModel::load_checkpoint_weights(
                     moe_weights.gate_up = resources_.weight_loader_->load_expert_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::MoePackedGateUp, i),
-                        E, 2 * inter, resources_.shape_.hidden);
+                        E, 2 * inter, resources_.program_.hidden);
                     moe_weights.down = resources_.weight_loader_->load_expert_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::MoePackedDown, i),
-                        E, resources_.shape_.hidden, inter);
+                        E, resources_.program_.hidden, inter);
                 } else if (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
                            repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed"))) {
                     moe_weights.gate_up = resources_.weight_loader_->load_moe_gate_up_named(
                         repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                        E, inter, resources_.shape_.hidden);
+                        E, inter, resources_.program_.hidden);
                     moe_weights.down = resources_.weight_loader_->load_moe_down_named(
                         repo, layer_name(i, "mlp.experts"), "down_proj", E, inter,
-                        resources_.shape_.hidden);
+                        resources_.program_.hidden);
                 } else {
                     moe_weights.gate_up = resources_.weight_loader_->load_moe_gate_up(
-                        repo, i, E, inter, resources_.shape_.hidden);
+                        repo, i, E, inter, resources_.program_.hidden);
                     moe_weights.down = resources_.weight_loader_->load_moe_down(
-                        repo, i, E, inter, resources_.shape_.hidden);
+                        repo, i, E, inter, resources_.program_.hidden);
                 }
             }
 
@@ -336,13 +336,13 @@ void CudaCompiledModel::load_checkpoint_weights(
                 repo, layer_name(i, "feed_forward.w13.weight"),
                 {
                     {tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnGate, i),
-                     {intermediate, resources_.shape_.hidden}},
+                     {intermediate, resources_.program_.hidden}},
                     {tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
-                     {intermediate, resources_.shape_.hidden}},
+                     {intermediate, resources_.program_.hidden}},
                 });
             const LinearWeight* w2 = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnDown, i),
-                {resources_.shape_.hidden, intermediate});
+                {resources_.program_.hidden, intermediate});
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
@@ -377,7 +377,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.latent_query_projection = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentQueryProjection, i),
-                        {latent.query_rank, resources_.shape_.hidden});
+                        {latent.query_rank, resources_.program_.hidden});
                     attention_layer.latent_query_expansion = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentQueryExpansion, i),
@@ -390,7 +390,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.latent_key_projection = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentKeyProjection, i),
-                        {latent.latent_rank + latent.rope_head_dim, resources_.shape_.hidden});
+                        {latent.latent_rank + latent.rope_head_dim, resources_.program_.hidden});
                     attention_layer.latent_key_norm = resources_.weight_loader_->load_rms_norm_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentKeyNorm, i),
@@ -403,11 +403,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.gate = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionGate, i),
-                        {layout.output_gate_width(), resources_.shape_.hidden});
+                        {layout.output_gate_width(), resources_.program_.hidden});
                     attention_layer.out = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentOutput, i),
-                        {resources_.shape_.hidden, layout.latent_output_width()});
+                        {resources_.program_.hidden, layout.latent_output_width()});
                     if (attention_layer.latent_query_expansion->kind != LinearStorageKind::Bf16 ||
                         attention_layer.latent_expansion->kind != LinearStorageKind::Bf16) {
                         throw std::invalid_argument(
@@ -417,33 +417,33 @@ void CudaCompiledModel::load_checkpoint_weights(
                 attention_layer.latent_query = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::AttentionLatentQuery, i),
-                    {layout.latent_query_content_width(), resources_.shape_.hidden});
+                    {layout.latent_query_content_width(), resources_.program_.hidden});
                 if (layout.latent_query_rope_width() != 0) {
                     attention_layer.latent_query_rope = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentQueryRope, i),
-                        {layout.latent_query_rope_width(), resources_.shape_.hidden});
+                        {layout.latent_query_rope_width(), resources_.program_.hidden});
                 }
                 if (owns_latent_state) {
                     attention_layer.latent_key = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentKey, i),
-                        {latent.latent_rank, resources_.shape_.hidden});
+                        {latent.latent_rank, resources_.program_.hidden});
                     attention_layer.latent_value = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentValue, i),
-                        {latent.latent_rank, resources_.shape_.hidden});
+                        {latent.latent_rank, resources_.program_.hidden});
                     if (latent.decoupled_rope && latent.rope_head_dim != 0) {
                         attention_layer.latent_key_rope = resources_.weight_loader_->load_linear_weight(
                             repo, tensor_name(resources_.model_.weight_plan.requests,
                                               TensorRole::AttentionLatentKeyRope, i),
-                            {latent.rope_head_dim, resources_.shape_.hidden});
+                            {latent.rope_head_dim, resources_.program_.hidden});
                     }
                 }
                 attention_layer.out = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::AttentionLatentOutput, i),
-                    {resources_.shape_.hidden, layout.latent_query_content_width()});
+                    {resources_.program_.hidden, layout.latent_query_content_width()});
                 }
                 if (resources_.options_.allocate_local_kv_cache && owns_latent_state) {
                     attention_layer.latent_key_cache.reset(
@@ -467,20 +467,20 @@ void CudaCompiledModel::load_checkpoint_weights(
                                      TensorRole::AttentionQuery, i);
             attention_layer.query = resources_.weight_loader_->load_linear_weight(
                 repo, query_name,
-                {layout.query_projection_width(), resources_.shape_.hidden});
+                {layout.query_projection_width(), resources_.program_.hidden});
             if (layout.output_gate.enabled() && !layout.output_gate.packed_with_query) {
                 attention_layer.gate = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::AttentionGate, i),
-                    {layout.query_width(), resources_.shape_.hidden});
+                    {layout.query_width(), resources_.program_.hidden});
             }
             if (!layout.kv_sharing.shared() || layout.kv_sharing.publishes) {
                 attention_layer.key = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKey, i),
-                    {layout.key_value_width(), resources_.shape_.hidden});
+                    {layout.key_value_width(), resources_.program_.hidden});
                 attention_layer.value = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionValue, i),
-                    {layout.key_value_width(), resources_.shape_.hidden});
+                    {layout.key_value_width(), resources_.program_.hidden});
             } else {
                 if (layout.kv_sharing.group < 0 ||
                     layout.kv_sharing.group >= static_cast<int>(shared_owner.size()) ||
@@ -492,7 +492,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
             attention_layer.out = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionOutput, i),
-                {resources_.shape_.hidden, layout.query_width()});
+                {resources_.program_.hidden, layout.query_width()});
             if (layout.has_query_key_norm()) {
                 attention_layer.q_norm = resources_.weight_loader_->load_rms_norm_weight(
                     repo, layout.query_norm.weightless() ? std::string{} :
@@ -543,39 +543,39 @@ void CudaCompiledModel::load_checkpoint_weights(
                 gated_delta_layer.q = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::GatedDeltaNetQuery, i),
-                    {key_width, resources_.shape_.hidden});
+                    {key_width, resources_.program_.hidden});
                 gated_delta_layer.k = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::GatedDeltaNetKey, i),
-                    {key_width, resources_.shape_.hidden});
+                    {key_width, resources_.program_.hidden});
                 gated_delta_layer.v = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::GatedDeltaNetValue, i),
-                    {value_width, resources_.shape_.hidden});
+                    {value_width, resources_.program_.hidden});
                 gated_delta_layer.z = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::GatedDeltaNetOutputGate, i),
-                    {value_width, resources_.shape_.hidden});
+                    {value_width, resources_.program_.hidden});
             } else {
                 gated_delta_layer.qkv = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::GatedDeltaNetQkv, i),
-                    {qkv_width, resources_.shape_.hidden});
+                    {qkv_width, resources_.program_.hidden});
                 gated_delta_layer.z = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::GatedDeltaNetZ, i),
-                    {value_width, resources_.shape_.hidden});
+                    {value_width, resources_.program_.hidden});
             }
             gated_delta_layer.b = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests,
                                   TensorRole::GatedDeltaNetBeta, i),
-                {spec.value_heads, resources_.shape_.hidden});
+                {spec.value_heads, resources_.program_.hidden});
             gated_delta_layer.a = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests,
                                   spec.factorized_projections
                                       ? TensorRole::GatedDeltaNetDecay
                                       : TensorRole::GatedDeltaNetAlpha, i),
-                {spec.decay_width(), resources_.shape_.hidden});
+                {spec.decay_width(), resources_.program_.hidden});
             if (spec.factorized_projections) {
                 const auto* q_conv = resources_.weight_loader_->load_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
@@ -625,7 +625,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             gated_delta_layer.out = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests,
                                   TensorRole::GatedDeltaNetOutput, i),
-                {resources_.shape_.hidden, value_width});
+                {resources_.program_.hidden, value_width});
             const int conv_dim = qkv_width;
             gated_delta_layer.conv_state.reset(static_cast<size_t>(conv_dim) * spec.conv_kernel);
             gated_delta_layer.recurrent_state.reset(static_cast<size_t>(spec.value_heads) *
@@ -644,7 +644,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             mamba_layer.in = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Input, i),
                 {2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
-                 spec.num_heads, resources_.shape_.hidden});
+                 spec.num_heads, resources_.program_.hidden});
             mamba_layer.conv_weight = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Conv, i),
                 {conv_dim, 1, spec.conv_kernel});
@@ -665,7 +665,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                 {spec.intermediate_size});
             mamba_layer.out = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::Mamba2Output, i),
-                {resources_.shape_.hidden, spec.intermediate_size});
+                {resources_.program_.hidden, spec.intermediate_size});
             mamba_layer.conv_state.reset(static_cast<size_t>(conv_dim) * spec.conv_kernel);
             mamba_layer.ssm_state.reset(static_cast<size_t>(spec.intermediate_size) * spec.state_size);
             resources_.layers_.emplace_back(std::move(mamba_layer));
@@ -677,25 +677,25 @@ void CudaCompiledModel::load_checkpoint_weights(
                 semantic_layer.feed_forward_activation};
             mlp_layer.up = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
-                {mlp_layer.spec.intermediate_size, resources_.shape_.hidden});
+                {mlp_layer.spec.intermediate_size, resources_.program_.hidden});
             mlp_layer.down = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnDown, i),
-                {resources_.shape_.hidden, mlp_layer.spec.intermediate_size});
+                {resources_.program_.hidden, mlp_layer.spec.intermediate_size});
             resources_.layers_.emplace_back(std::move(mlp_layer));
         } else {
             ConvolutionLayer convolution_layer;
             convolution_layer.common = common_layer;
             convolution_layer.conv_in = resources_.weight_loader_->load_linear_weight(
                 repo, layer_name(i, "conv.in_proj.weight"),
-                {3 * resources_.shape_.hidden, resources_.shape_.hidden});
+                {3 * resources_.program_.hidden, resources_.program_.hidden});
             convolution_layer.conv_weight = resources_.weight_loader_->load_weight(
                 repo, layer_name(i, "conv.conv.weight"),
-                {resources_.shape_.hidden, 1, resources_.shape_.conv_cache});
+                {resources_.program_.hidden, 1, resources_.shape_.conv_cache});
             convolution_layer.conv_out = resources_.weight_loader_->load_linear_weight(
                 repo, layer_name(i, "conv.out_proj.weight"),
-                {resources_.shape_.hidden, resources_.shape_.hidden});
+                {resources_.program_.hidden, resources_.program_.hidden});
             convolution_layer.conv_state.reset(
-                static_cast<size_t>(resources_.shape_.conv_cache) * resources_.shape_.hidden);
+                static_cast<size_t>(resources_.shape_.conv_cache) * resources_.program_.hidden);
             resources_.layers_.emplace_back(std::move(convolution_layer));
         }
     }

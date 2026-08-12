@@ -19,8 +19,8 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         throw std::runtime_error("context limit reached");
     }
     if (raw_embedding) {
-        std::vector<__nv_bfloat16> converted(static_cast<size_t>(resources_.shape_.hidden));
-        for (int index = 0; index < resources_.shape_.hidden; ++index) {
+        std::vector<__nv_bfloat16> converted(static_cast<size_t>(resources_.program_.hidden));
+        for (int index = 0; index < resources_.program_.hidden; ++index) {
             converted[static_cast<size_t>(index)] = __float2bfloat16(raw_embedding[index]);
         }
         CELEG_CUDA(cudaMemcpyAsync(workspace_.hidden_.data(), converted.data(),
@@ -29,12 +29,12 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         initialize_per_layer_input_host(resources_.dims_.token_policy.pad_token_id);
     } else {
         resources_.weight_layout_->embed_token(
-            token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
-        launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+            token, workspace_.hidden_.data(), resources_.program_.hidden, stream_.get());
+        launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                      resources_.program_.embedding_transform.multiplier, stream_.get());
         if (resources_.program_.embedding_transform.post_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.embedding_norm_,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            resources_.program_.embedding_transform.post_norm->epsilon,
                            stream_.get());
         }
@@ -51,7 +51,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                 cudaMemcpyDeviceToDevice, stream_.get()));
         }
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
-                       1, resources_.shape_.hidden, semantics.operator_norm.epsilon,
+                       1, resources_.program_.hidden, semantics.operator_norm.epsilon,
                        stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
             const AttentionSpec& layout = attention->layout;
@@ -68,14 +68,14 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             __nv_bfloat16* v = k + layout.key_value_width();
             {
             auto native_fanout = native_fanout_scope(
-                workspace_.normed_.data(), 1, resources_.shape_.hidden);
+                workspace_.normed_.data(), 1, resources_.program_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q,
-                   1, query_projection_width, resources_.shape_.hidden);
+                   1, query_projection_width, resources_.program_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.normed_.data(), *attention->key, k,
-                       1, layout.key_value_width(), resources_.shape_.hidden);
+                       1, layout.key_value_width(), resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *attention->value, v,
-                       1, layout.key_value_width(), resources_.shape_.hidden);
+                       1, layout.key_value_width(), resources_.program_.hidden);
             }
             }
             if (const auto* rope = layout.rope_position()) {
@@ -144,7 +144,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                 if (!layout.output_gate.packed_with_query) {
                     linear(workspace_.normed_.data(), *attention->gate,
                            workspace_.attention_gate_.data(), 1,
-                           layout.query_width(), resources_.shape_.hidden);
+                           layout.query_width(), resources_.program_.hidden);
                     gate = workspace_.attention_gate_.data();
                 }
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
@@ -152,10 +152,10 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                                         layout.query_width(), stream_.get());
             }
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
-                   1, resources_.shape_.hidden, layout.query_width(),
+                   1, resources_.program_.hidden, layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
                        resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
-            launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden, semantics.residual.multiplier,
+            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden, semantics.residual.multiplier,
                          stream_.get());
         } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
             const GatedDeltaNetSpec& spec = gated_delta->spec;
@@ -165,13 +165,13 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             if (spec.factorized_projections) {
                 linear(workspace_.normed_.data(), *gated_delta->q,
                        workspace_.gated_delta_qkv_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *gated_delta->k,
                        workspace_.qkv_output_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *gated_delta->v,
                        workspace_.gated_delta_output_.data(), 1, value_width,
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
                 launch_interleave_gated_delta_qkv(
                     workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
                     workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
@@ -179,17 +179,17 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             } else {
                 linear(workspace_.normed_.data(), *gated_delta->qkv,
                        workspace_.gated_delta_qkv_.data(), 1, qkv_width,
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
             }
             linear(workspace_.normed_.data(), *gated_delta->z,
                    workspace_.gated_delta_z_.data(), 1, value_width,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             linear(workspace_.normed_.data(), *gated_delta->b,
                    workspace_.gated_delta_b_.data(), 1, spec.value_heads,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             linear(workspace_.normed_.data(), *gated_delta->a,
                    workspace_.gated_delta_a_.data(), 1, spec.decay_width(),
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
                 workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
                 workspace_.gated_delta_a_.data(), gated_delta->conv_weight,
@@ -201,14 +201,14 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                 spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
                 spec.sigmoid_output_gate, stream_.get());
             linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
-                   workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    value_width);
         } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
             const Mamba2Spec& spec = mamba->spec;
             linear(workspace_.normed_.data(), *mamba->in,
                    workspace_.mamba_projected_.data(), 1,
                    2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
-                       spec.num_heads, resources_.shape_.hidden);
+                       spec.num_heads, resources_.program_.hidden);
             launch_mamba2_step(workspace_.mamba_projected_.data(), mamba->conv_weight,
                                 mamba->conv_bias, mamba->dt_bias, mamba->a_log, mamba->d,
                                 mamba->conv_state.data(), mamba->ssm_state.data(),
@@ -221,42 +221,42 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
                             spec.intermediate_size, stream_.get());
             linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),
-                   1, resources_.shape_.hidden, spec.intermediate_size);
+                   1, resources_.program_.hidden, spec.intermediate_size);
         } else if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
             linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(),
-                   1, mlp->spec.intermediate_size, resources_.shape_.hidden);
+                   1, mlp->spec.intermediate_size, resources_.program_.hidden);
             launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
                          mlp->spec.intermediate_size, stream_.get());
             linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(),
-                   1, resources_.shape_.hidden, mlp->spec.intermediate_size);
+                   1, resources_.program_.hidden, mlp->spec.intermediate_size);
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
             linear(workspace_.normed_.data(), *convolution.conv_in, workspace_.conv_projected_.data(),
-                   1, 3 * resources_.shape_.hidden, resources_.shape_.hidden);
+                   1, 3 * resources_.program_.hidden, resources_.program_.hidden);
             launch_conv_decode(
                 workspace_.conv_projected_.data(), convolution.conv_weight,
                 convolution.conv_state.data(), workspace_.op_output_.data(),
-                resources_.shape_.hidden, resources_.shape_.conv_cache, session_.position_,
+                resources_.program_.hidden, resources_.shape_.conv_cache, session_.position_,
                 stream_.get());
             linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(),
-                   1, resources_.shape_.hidden, resources_.shape_.hidden,
+                   1, resources_.program_.hidden, resources_.program_.hidden,
                    resources_.options_.fused_residuals ? 1.0f : 0.0f);
         }
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
             resources_.shape_.mamba2_layer_count > 0) {
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                                resources_.shape_.hidden, stream_.get());
+                                resources_.program_.hidden, stream_.get());
         }
         if (resources_.shape_.mamba2_layer_count == 0) run_mlp_decode(common_layer, layer_idx);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            resources_.program_.final_norm.epsilon, stream_.get());
         }
         ++layer_idx;
@@ -266,10 +266,10 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
     }
     if (compute_logits) {
         launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
-                        1, resources_.shape_.hidden, resources_.program_.final_norm.epsilon,
+                        1, resources_.program_.hidden, resources_.program_.final_norm.epsilon,
                         stream_.get());
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-                1, resources_.dims_.vocab_size, resources_.shape_.hidden);
+                1, resources_.dims_.vocab_size, resources_.program_.hidden);
     launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
                  resources_.program_.logits_multiplier /
                      resources_.program_.logits_divisor, stream_.get());
@@ -298,8 +298,8 @@ void CudaCompiledModel::forward_token_paged_host(
         throw std::runtime_error("MTP is incompatible with paged KV execution");
     }
     resources_.weight_layout_->embed_token(
-        token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
-    launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+        token, workspace_.hidden_.data(), resources_.program_.hidden, stream_.get());
+    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  resources_.program_.embedding_transform.multiplier, stream_.get());
     initialize_per_layer_input_host(token);
 
@@ -312,7 +312,7 @@ void CudaCompiledModel::forward_token_paged_host(
                                      cudaMemcpyDeviceToDevice, stream_.get()));
         }
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
-                       1, resources_.shape_.hidden, semantics.operator_norm.epsilon, stream_.get());
+                       1, resources_.program_.hidden, semantics.operator_norm.epsilon, stream_.get());
         if (AttentionLayer* attention = as_attention(layer)) {
             const AttentionSpec& layout = attention->layout;
             if (layout.uses_latent_state()) {
@@ -326,27 +326,27 @@ void CudaCompiledModel::forward_token_paged_host(
                 }
                 const auto& latent = *layout.latent_state();
                 auto native_fanout = native_fanout_scope(
-                    workspace_.normed_.data(), 1, resources_.shape_.hidden);
+                    workspace_.normed_.data(), 1, resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *attention->latent_query,
                        workspace_.latent_query_content_.data(), 1,
-                       layout.latent_query_content_width(), resources_.shape_.hidden);
+                       layout.latent_query_content_width(), resources_.program_.hidden);
                 if (layout.latent_query_rope_width() != 0) {
                     linear(workspace_.normed_.data(), *attention->latent_query_rope,
                            workspace_.latent_query_rope_.data(), 1,
-                           layout.latent_query_rope_width(), resources_.shape_.hidden);
+                           layout.latent_query_rope_width(), resources_.program_.hidden);
                 }
                 if (attention->latent_key && attention->latent_value) {
                     linear(workspace_.normed_.data(), *attention->latent_key,
                            workspace_.latent_key_.data(), 1, latent.latent_rank,
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     linear(workspace_.normed_.data(), *attention->latent_value,
                            workspace_.latent_value_.data(), 1, latent.latent_rank,
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     if (attention->latent_key_rope && latent.decoupled_rope &&
                         latent.rope_head_dim != 0) {
                         linear(workspace_.normed_.data(), *attention->latent_key_rope,
                                workspace_.latent_key_rope_.data(), 1,
-                               latent.rope_head_dim, resources_.shape_.hidden);
+                               latent.rope_head_dim, resources_.program_.hidden);
                     }
                 }
                 if (const auto* rope = layout.rope_position();
@@ -394,11 +394,11 @@ void CudaCompiledModel::forward_token_paged_host(
                     latent.decoupled_rope ? latent.rope_head_dim : 0,
                     score_scale, layout.sliding_window_size(), stream_.get());
                 linear(workspace_.op_output_.data(), *attention->out,
-                       workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                       workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        layout.latent_query_content_width(),
                        resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
                            resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
-                launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+                launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                              semantics.residual.multiplier,
                              stream_.get());
             } else {
@@ -409,14 +409,14 @@ void CudaCompiledModel::forward_token_paged_host(
             __nv_bfloat16* v = k + layout.key_value_width();
             {
             auto native_fanout = native_fanout_scope(
-                workspace_.normed_.data(), 1, resources_.shape_.hidden);
+                workspace_.normed_.data(), 1, resources_.program_.hidden);
             linear(workspace_.normed_.data(), *attention->query, q, 1,
-                   query_projection_width, resources_.shape_.hidden);
+                   query_projection_width, resources_.program_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.normed_.data(), *attention->key, k, 1,
-                       layout.key_value_width(), resources_.shape_.hidden);
+                       layout.key_value_width(), resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *attention->value, v, 1,
-                       layout.key_value_width(), resources_.shape_.hidden);
+                       layout.key_value_width(), resources_.program_.hidden);
             }
             }
             if (const auto* rope = layout.rope_position()) {
@@ -545,7 +545,7 @@ void CudaCompiledModel::forward_token_paged_host(
                 if (!layout.output_gate.packed_with_query) {
                     linear(workspace_.normed_.data(), *attention->gate,
                            workspace_.attention_gate_.data(), 1,
-                           layout.query_width(), resources_.shape_.hidden);
+                           layout.query_width(), resources_.program_.hidden);
                     gate = workspace_.attention_gate_.data();
                 }
                 launch_sigmoid_multiply(workspace_.op_output_.data(),
@@ -553,10 +553,10 @@ void CudaCompiledModel::forward_token_paged_host(
                                         layout.query_width(), stream_.get());
             }
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(), 1,
-                   resources_.shape_.hidden, layout.query_width(),
+                   resources_.program_.hidden, layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
                        resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
-            launch_scale(workspace_.hidden_.data(), resources_.shape_.hidden,
+            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             }
         } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
@@ -567,13 +567,13 @@ void CudaCompiledModel::forward_token_paged_host(
             if (spec.factorized_projections) {
                 linear(workspace_.normed_.data(), *gated_delta->q,
                        workspace_.gated_delta_qkv_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *gated_delta->k,
                        workspace_.qkv_output_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
                 linear(workspace_.normed_.data(), *gated_delta->v,
                        workspace_.gated_delta_output_.data(), 1, value_width,
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
                 launch_interleave_gated_delta_qkv(
                     workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
                     workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
@@ -581,17 +581,17 @@ void CudaCompiledModel::forward_token_paged_host(
             } else {
                 linear(workspace_.normed_.data(), *gated_delta->qkv,
                        workspace_.gated_delta_qkv_.data(), 1, qkv_width,
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
             }
             linear(workspace_.normed_.data(), *gated_delta->z,
                    workspace_.gated_delta_z_.data(), 1, value_width,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             linear(workspace_.normed_.data(), *gated_delta->b,
                    workspace_.gated_delta_b_.data(), 1, spec.value_heads,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             linear(workspace_.normed_.data(), *gated_delta->a,
                    workspace_.gated_delta_a_.data(), 1, spec.decay_width(),
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
                 workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
                 workspace_.gated_delta_a_.data(), gated_delta->conv_weight,
@@ -603,13 +603,13 @@ void CudaCompiledModel::forward_token_paged_host(
                 spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
                 spec.sigmoid_output_gate, stream_.get());
             linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
-                   workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    value_width);
         } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
             const Mamba2Spec& spec = mamba->spec;
             linear(workspace_.normed_.data(), *mamba->in, workspace_.mamba_projected_.data(), 1,
                    2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
-                       spec.num_heads, resources_.shape_.hidden);
+                       spec.num_heads, resources_.program_.hidden);
             launch_mamba2_step(workspace_.mamba_projected_.data(), mamba->conv_weight,
                                mamba->conv_bias, mamba->dt_bias, mamba->a_log, mamba->d,
                                mamba->conv_state.data(), mamba->ssm_state.data(),
@@ -622,49 +622,49 @@ void CudaCompiledModel::forward_token_paged_host(
             launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
                             spec.intermediate_size, stream_.get());
             linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(), 1,
-                   resources_.shape_.hidden, spec.intermediate_size);
+                   resources_.program_.hidden, spec.intermediate_size);
         } else if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
             linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(), 1,
-                   mlp->spec.intermediate_size, resources_.shape_.hidden);
+                   mlp->spec.intermediate_size, resources_.program_.hidden);
             launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
                          mlp->spec.intermediate_size, stream_.get());
             linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(), 1,
-                   resources_.shape_.hidden, mlp->spec.intermediate_size);
+                   resources_.program_.hidden, mlp->spec.intermediate_size);
         } else {
             ConvolutionLayer& convolution = *as_convolution(layer);
             linear(workspace_.normed_.data(), *convolution.conv_in, workspace_.conv_projected_.data(), 1,
-                   3 * resources_.shape_.hidden, resources_.shape_.hidden);
+                   3 * resources_.program_.hidden, resources_.program_.hidden);
             launch_conv_decode(workspace_.conv_projected_.data(), convolution.conv_weight,
                                convolution.conv_state.data(), workspace_.op_output_.data(),
-                               resources_.shape_.hidden, resources_.shape_.conv_cache,
+                               resources_.program_.hidden, resources_.shape_.conv_cache,
                                session_.position_, stream_.get());
             linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(), 1,
-                   resources_.shape_.hidden, resources_.shape_.hidden,
+                   resources_.program_.hidden, resources_.program_.hidden,
                    resources_.options_.fused_residuals ? 1.0f : 0.0f);
         }
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
             resources_.shape_.mamba2_layer_count > 0) {
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                                resources_.shape_.hidden, stream_.get());
+                                resources_.program_.hidden, stream_.get());
         }
         if (resources_.shape_.mamba2_layer_count == 0) run_mlp_decode(common_layer, layer_index);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_index)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
-                           workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            resources_.program_.final_norm.epsilon, stream_.get());
         }
     }
     if (compute_logits) {
         launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(), 1,
-                       resources_.shape_.hidden, resources_.program_.final_norm.epsilon, stream_.get());
+                       resources_.program_.hidden, resources_.program_.final_norm.epsilon, stream_.get());
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(), 1,
-               resources_.dims_.vocab_size, resources_.shape_.hidden);
+               resources_.dims_.vocab_size, resources_.program_.hidden);
         launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
                      resources_.program_.logits_multiplier /
                          resources_.program_.logits_divisor, stream_.get());

@@ -175,11 +175,11 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                                 attention.segmented,
                                                 attention.chunks, &models);
         launch_rmsnorm(hidden.data(), reference.final_norm(), normed.data(),
-                               rows, shape_.hidden, reference.program().final_norm.epsilon,
+                               rows, program_.hidden, reference.program().final_norm.epsilon,
                        stream.get());
         layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                logits.data(), rows, vocab_size_,
-                               shape_.hidden);
+                               program_.hidden);
         launch_scale(logits.data(), rows * vocab_size_,
                      reference.program().logits_multiplier /
                          reference.program().logits_divisor, stream.get());
@@ -331,12 +331,12 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                        static_cast<size_t>(finalized) * sizeof(__nv_bfloat16*),
                                        cudaMemcpyHostToDevice, stream.get()));
             launch_gather_bf16_rows(hidden.data(), d_selected_final_rows.data(),
-                                    normed.data(), finalized, shape_.hidden, stream.get());
+                                    normed.data(), finalized, program_.hidden, stream.get());
             launch_rmsnorm(normed.data(), reference.final_norm(), normed.data(),
-                           finalized, shape_.hidden, reference.program().final_norm.epsilon, stream.get());
+                           finalized, program_.hidden, reference.program().final_norm.epsilon, stream.get());
             layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                    logits.data(), finalized,
-                                   vocab_size_, shape_.hidden);
+                                   vocab_size_, program_.hidden);
         launch_scale(logits.data(), finalized * vocab_size_,
                    reference.program().logits_multiplier /
                        reference.program().logits_divisor, stream.get());

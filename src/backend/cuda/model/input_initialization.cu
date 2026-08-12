@@ -14,7 +14,7 @@ void CudaCompiledModel::initialize_per_layer_input_device(const int32_t* token) 
                  plan.token_scale, stream_.get());
     linear(workspace_.hidden_.data(), *per_layer.context_projection,
            workspace_.per_layer_context_.data(), 1, static_cast<int>(plan.packed_width),
-           resources_.shape_.hidden);
+           resources_.program_.hidden);
     launch_scale(workspace_.per_layer_context_.data(), static_cast<int>(plan.packed_width),
                  plan.context_scale, stream_.get());
     launch_rmsnorm(workspace_.per_layer_context_.data(), per_layer.projection_norm,
@@ -37,7 +37,7 @@ void CudaCompiledModel::initialize_per_layer_input_host(int32_t token) {
                  plan.token_scale, stream_.get());
     linear(workspace_.hidden_.data(), *per_layer.context_projection,
            workspace_.per_layer_context_.data(), 1,
-           static_cast<int>(plan.packed_width), resources_.shape_.hidden);
+           static_cast<int>(plan.packed_width), resources_.program_.hidden);
     launch_scale(workspace_.per_layer_context_.data(), static_cast<int>(plan.packed_width),
                  plan.context_scale, stream_.get());
     launch_rmsnorm(workspace_.per_layer_context_.data(), per_layer.projection_norm,
@@ -61,7 +61,7 @@ void CudaCompiledModel::initialize_per_layer_input_batch(const int32_t* tokens, 
                  plan.token_scale, stream_.get());
     linear(workspace_.prefill_hidden_.data(), *per_layer.context_projection,
            workspace_.prefill_per_layer_context_.data(), rows,
-           static_cast<int>(plan.packed_width), resources_.shape_.hidden);
+           static_cast<int>(plan.packed_width), resources_.program_.hidden);
     launch_scale(workspace_.prefill_per_layer_context_.data(), static_cast<int>(elements),
                  plan.context_scale, stream_.get());
     launch_rmsnorm(workspace_.prefill_per_layer_context_.data(), per_layer.projection_norm,

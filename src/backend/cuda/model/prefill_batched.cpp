@@ -33,12 +33,12 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                            resources_.dims_.vocab_size, stream_.get());
     resources_.weight_layout_->embed_batch(
         workspace_.prefill_tokens_.data(), rows, workspace_.prefill_hidden_.data(),
-        resources_.shape_.hidden, stream_.get());
-    launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
+        resources_.program_.hidden, stream_.get());
+    launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.program_.hidden,
                  resources_.program_.embedding_transform.multiplier, stream_.get());
     if (resources_.program_.embedding_transform.post_norm) {
         launch_rmsnorm(workspace_.prefill_hidden_.data(), resources_.embedding_norm_,
-                       workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                       workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                        resources_.program_.embedding_transform.post_norm->epsilon,
                        stream_.get());
     }
@@ -57,7 +57,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         }
         prof.begin(stream_.get());
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.operator_norm,
-                       workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden,
+                       workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
                        semantics.operator_norm.epsilon, stream_.get());
         prof.end(PrefillPhase::Norm, stream_.get());
 
@@ -69,17 +69,17 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
-                workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
+                workspace_.prefill_normed_.data(), rows, resources_.program_.hidden);
             if (spec.factorized_projections) {
                 linear(workspace_.prefill_normed_.data(), *gated_delta->q,
                        workspace_.prefill_gated_delta_qkv_.data(), rows,
-                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
                 linear(workspace_.prefill_normed_.data(), *gated_delta->k,
                        workspace_.prefill_k_.data(), rows,
-                       spec.key_heads * spec.key_head_dim, resources_.shape_.hidden);
+                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
                 linear(workspace_.prefill_normed_.data(), *gated_delta->v,
                        workspace_.prefill_v_.data(), rows, value_width,
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
                 launch_interleave_gated_delta_qkv(
                     workspace_.prefill_gated_delta_qkv_.data(), workspace_.prefill_k_.data(),
                     workspace_.prefill_v_.data(), workspace_.prefill_gated_delta_qkv_.data(),
@@ -87,17 +87,17 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             } else {
                 linear(workspace_.prefill_normed_.data(), *gated_delta->qkv,
                        workspace_.prefill_gated_delta_qkv_.data(), rows, qkv_width,
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
             }
             linear(workspace_.prefill_normed_.data(), *gated_delta->z,
                    workspace_.prefill_gated_delta_z_.data(), rows, value_width,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             linear(workspace_.prefill_normed_.data(), *gated_delta->b,
                    workspace_.prefill_gated_delta_b_.data(), rows, spec.value_heads,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             linear(workspace_.prefill_normed_.data(), *gated_delta->a,
                    workspace_.prefill_gated_delta_a_.data(), rows, spec.decay_width(),
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             }
             prof.end(PrefillPhase::QkvProj, stream_.get());
             prof.begin(stream_.get());
@@ -115,9 +115,9 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.end(PrefillPhase::Conv, stream_.get());
             prof.begin(stream_.get());
             linear(workspace_.prefill_gated_delta_output_.data(), *gated_delta->out,
-                   workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                   workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    value_width);
-            launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
+            launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
         } else if (AttentionLayer* attention = as_attention(layer)) {
@@ -139,10 +139,10 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     prof.begin(stream_.get());
                     {
                     auto native_fanout = native_fanout_scope(
-                        workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
+                        workspace_.prefill_normed_.data(), rows, resources_.program_.hidden);
                     linear(workspace_.prefill_normed_.data(), *attention->latent_query_projection,
                            workspace_.prefill_latent_projection_.data(), rows,
-                           latent.query_rank, resources_.shape_.hidden);
+                           latent.query_rank, resources_.program_.hidden);
                     launch_rmsnorm(workspace_.prefill_latent_projection_.data(),
                                    attention->latent_query_norm,
                                    workspace_.prefill_latent_projection_.data(), rows,
@@ -166,7 +166,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     linear(workspace_.prefill_normed_.data(), *attention->latent_key_projection,
                            workspace_.prefill_qkv_.data(), rows,
                            latent.latent_rank + latent.rope_head_dim,
-                           resources_.shape_.hidden);
+                           resources_.program_.hidden);
                     launch_rmsnorm(workspace_.prefill_qkv_.data(), attention->latent_key_norm,
                                    workspace_.prefill_latent_key_.data(), rows,
                                    latent.latent_rank, latent.key_latent_norm.epsilon,
@@ -224,7 +224,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         latent.latent_rank, stream_.get());
                     linear(workspace_.prefill_normed_.data(), *attention->gate,
                            workspace_.prefill_attention_gate_.data(), rows,
-                           layout.output_gate_width(), resources_.shape_.hidden);
+                           layout.output_gate_width(), resources_.program_.hidden);
                     if (layout.output_gate.granularity == AttentionGateGranularity::HeadWise) {
                         launch_sigmoid_multiply_headwise(
                             workspace_.prefill_latent_decompressed_.data(),
@@ -237,12 +237,12 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                             rows * layout.latent_output_width(), stream_.get());
                     }
                     linear(workspace_.prefill_latent_decompressed_.data(), *attention->out,
-                           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                           workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                            layout.latent_output_width(),
                            resources_.options_.fused_residuals && !common_layer.post_attention_norm
                                ? 1.0f : 0.0f);
                     launch_scale(workspace_.prefill_hidden_.data(),
-                                 rows * resources_.shape_.hidden,
+                                 rows * resources_.program_.hidden,
                                  semantics.residual.multiplier,
                                  stream_.get());
                     prof.end(PrefillPhase::AttnOut, stream_.get());
@@ -253,27 +253,27 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 prof.begin(stream_.get());
                 {
                 auto native_fanout = native_fanout_scope(
-                    workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
+                    workspace_.prefill_normed_.data(), rows, resources_.program_.hidden);
                 linear(workspace_.prefill_normed_.data(), *attention->latent_query,
                        workspace_.prefill_latent_query_content_.data(), rows,
-                       layout.latent_query_content_width(), resources_.shape_.hidden);
+                       layout.latent_query_content_width(), resources_.program_.hidden);
                 if (layout.latent_query_rope_width() != 0) {
                     linear(workspace_.prefill_normed_.data(), *attention->latent_query_rope,
                            workspace_.prefill_latent_query_rope_.data(), rows,
-                           layout.latent_query_rope_width(), resources_.shape_.hidden);
+                           layout.latent_query_rope_width(), resources_.program_.hidden);
                 }
                 if (attention->latent_key && attention->latent_value) {
                     linear(workspace_.prefill_normed_.data(), *attention->latent_key,
                            workspace_.prefill_latent_key_.data(), rows,
-                           latent.latent_rank, resources_.shape_.hidden);
+                           latent.latent_rank, resources_.program_.hidden);
                     linear(workspace_.prefill_normed_.data(), *attention->latent_value,
                            workspace_.prefill_latent_value_.data(), rows,
-                           latent.latent_rank, resources_.shape_.hidden);
+                           latent.latent_rank, resources_.program_.hidden);
                     if (attention->latent_key_rope && latent.decoupled_rope &&
                         latent.rope_head_dim != 0) {
                         linear(workspace_.prefill_normed_.data(), *attention->latent_key_rope,
                                workspace_.prefill_latent_key_rope_.data(), rows,
-                               latent.rope_head_dim, resources_.shape_.hidden);
+                               latent.rope_head_dim, resources_.program_.hidden);
                     }
                 }
                 }
@@ -316,12 +316,12 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 prof.end(PrefillPhase::Attention, stream_.get());
                 prof.begin(stream_.get());
                 linear(workspace_.prefill_op_output_.data(), *attention->out,
-                       workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                       workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                        layout.latent_query_content_width(),
                        resources_.options_.fused_residuals && !common_layer.post_attention_norm
                            ? 1.0f : 0.0f);
                 launch_scale(workspace_.prefill_hidden_.data(),
-                             rows * resources_.shape_.hidden,
+                             rows * resources_.program_.hidden,
                              semantics.residual.multiplier,
                              stream_.get());
                 prof.end(PrefillPhase::AttnOut, stream_.get());
@@ -331,17 +331,17 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
-                workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden);
+                workspace_.prefill_normed_.data(), rows, resources_.program_.hidden);
             linear(workspace_.prefill_normed_.data(), *attention->query,
                    workspace_.prefill_q_.data(), rows, query_projection_width,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.prefill_normed_.data(), *attention->key,
                        workspace_.prefill_k_.data(), rows, layout.key_value_width(),
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
                 linear(workspace_.prefill_normed_.data(), *attention->value,
                        workspace_.prefill_v_.data(), rows, layout.key_value_width(),
-                       resources_.shape_.hidden);
+                       resources_.program_.hidden);
             }
             }
             prof.end(PrefillPhase::QkvProj, stream_.get());
@@ -354,7 +354,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                 } else {
                     linear(workspace_.prefill_normed_.data(), *attention->gate,
                            workspace_.prefill_attention_gate_.data(), rows,
-                           layout.query_width(), resources_.shape_.hidden);
+                           layout.query_width(), resources_.program_.hidden);
                 }
             }
             if (const auto* rope = layout.rope_position()) {
@@ -479,10 +479,10 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
 
             prof.begin(stream_.get());
             linear(workspace_.prefill_op_output_.data(), *attention->out,
-                   workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                   workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
-            launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.shape_.hidden,
+            launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
             }
@@ -491,27 +491,27 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.begin(stream_.get());
             linear(workspace_.prefill_normed_.data(), *convolution.conv_in,
                    workspace_.prefill_conv_projected_.data(), rows,
-                   3 * resources_.shape_.hidden, resources_.shape_.hidden);
+                   3 * resources_.program_.hidden, resources_.program_.hidden);
             launch_conv_prefill(
                 workspace_.prefill_conv_projected_.data(), convolution.conv_weight,
                 convolution.conv_state.data(), workspace_.prefill_op_output_.data(),
-                rows, resources_.shape_.hidden, resources_.shape_.conv_cache,
+                rows, resources_.program_.hidden, resources_.shape_.conv_cache,
                 stream_.get());
             linear(workspace_.prefill_op_output_.data(), *convolution.conv_out,
-                   workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
-                   resources_.shape_.hidden, resources_.options_.fused_residuals ? 1.0f : 0.0f);
+                   workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
+                   resources_.program_.hidden, resources_.options_.fused_residuals ? 1.0f : 0.0f);
             prof.end(PrefillPhase::Conv, stream_.get());
         }
 
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.post_attention_norm,
-                           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                           workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
             prof.begin(stream_.get());
             launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_residual_.data(),
-                                rows * resources_.shape_.hidden, stream_.get());
+                                rows * resources_.program_.hidden, stream_.get());
             prof.end(PrefillPhase::Other, stream_.get());
         }
         prof.begin(stream_.get());
@@ -519,7 +519,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), resources_.final_norm_,
-                           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                           workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                            resources_.program_.final_norm.epsilon, stream_.get());
         }
         prof.end(PrefillPhase::Mlp, stream_.get());
@@ -528,12 +528,12 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
 
     prof.begin(stream_.get());
     const __nv_bfloat16* last_hidden = workspace_.prefill_hidden_.data() +
-        static_cast<size_t>(rows - 1) * resources_.shape_.hidden;
+        static_cast<size_t>(rows - 1) * resources_.program_.hidden;
     launch_rmsnorm(last_hidden, resources_.final_norm_, workspace_.normed_.data(),
-                   1, resources_.shape_.hidden, resources_.program_.final_norm.epsilon,
+                   1, resources_.program_.hidden, resources_.program_.final_norm.epsilon,
                    stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-           1, resources_.dims_.vocab_size, resources_.shape_.hidden);
+           1, resources_.dims_.vocab_size, resources_.program_.hidden);
     if (resources_.program_.logits_divisor != 1.0f ||
         resources_.program_.logits_multiplier != 1.0f) {
     launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,

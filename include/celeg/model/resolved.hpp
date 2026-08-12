@@ -48,8 +48,6 @@ struct CheckpointDimensions {
 // no checkpoint/import ownership and cannot be constructed by a frontend.
 class ExecutionTopology {
 public:
-    int hidden = 0;
-    int intermediate = 0;
     int max_feed_forward_intermediate = 0;
     int num_hidden_layers = 0;
     int conv_cache = 0;

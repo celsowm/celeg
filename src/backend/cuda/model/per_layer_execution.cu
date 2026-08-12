@@ -17,14 +17,14 @@ void CudaCompiledModel::run_per_layer_input_decode(const LayerCommon& common_lay
                                workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice,
                                stream_.get()));
     linear(workspace_.per_layer_gate_.data(), *common_layer.per_layer_projection,
-           workspace_.hidden_.data(), 1, resources_.shape_.hidden, ple);
+           workspace_.hidden_.data(), 1, resources_.program_.hidden, ple);
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.per_layer_input_norm,
-                   workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    plan.norm_epsilon, stream_.get());
     launch_scale_by_scalar(workspace_.hidden_.data(), common_layer.layer_scalar,
-                           resources_.shape_.hidden, stream_.get());
+                           resources_.program_.hidden, stream_.get());
     launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                        resources_.shape_.hidden, stream_.get());
+                        resources_.program_.hidden, stream_.get());
 }
 
 void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_layer,
@@ -39,7 +39,7 @@ void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_la
                                                static_cast<std::size_t>(layers));
     linear(workspace_.prefill_hidden_.data(), *common_layer.per_layer_input_gate,
            workspace_.prefill_per_layer_gate_.data(), rows, ple,
-           resources_.shape_.hidden);
+           resources_.program_.hidden);
     launch_gelu_tanh(workspace_.prefill_per_layer_gate_.data(),
                      workspace_.prefill_per_layer_gate_.data(), row_elements,
                      stream_.get());
@@ -51,14 +51,14 @@ void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_la
                                workspace_.prefill_hidden_.bytes(),
                                cudaMemcpyDeviceToDevice, stream_.get()));
     linear(workspace_.prefill_per_layer_gate_.data(), *common_layer.per_layer_projection,
-           workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden, ple);
+           workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden, ple);
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.per_layer_input_norm,
-                   workspace_.prefill_hidden_.data(), rows, resources_.shape_.hidden,
+                   workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    plan.norm_epsilon, stream_.get());
     launch_scale_by_scalar(workspace_.prefill_hidden_.data(), common_layer.layer_scalar,
-                           rows * resources_.shape_.hidden, stream_.get());
+                           rows * resources_.program_.hidden, stream_.get());
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_residual_.data(),
-                        rows * resources_.shape_.hidden, stream_.get());
+                        rows * resources_.program_.hidden, stream_.get());
 }
 
 } // namespace celeg

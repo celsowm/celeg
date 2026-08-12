@@ -15,35 +15,34 @@ std::size_t bf16_bytes(std::size_t elements) {
     return elements * sizeof(__nv_bfloat16);
 }
 
-std::size_t estimate_non_expert_weights(const ExecutionTopology& shape,
-                                        const CheckpointDimensions& dims,
+std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
                                         const CompiledModelProgram& program,
                                         bool tied_embeddings) {
     std::size_t bytes = bf16_bytes(static_cast<std::size_t>(dims.vocab_size) *
-                                   static_cast<std::size_t>(shape.hidden));
+                                   static_cast<std::size_t>(program.hidden));
     if (!tied_embeddings) bytes += bytes;
-    bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
+    bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
 
     for (int layer = 0; layer < static_cast<int>(program.layers.size()); ++layer) {
         // input_layernorm and the FFN input norm are present in all normal
         // decoder blocks. Split-norm families add two more vectors below.
-        bytes += bf16_bytes(2ull * static_cast<std::size_t>(shape.hidden));
+        bytes += bf16_bytes(2ull * static_cast<std::size_t>(program.hidden));
         const CompiledLayerProgram& layer_program = program.layers.at(
             static_cast<size_t>(layer));
         if (layer_program.post_attention_norm.enabled()) {
-            bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
         if (layer_program.post_feed_forward_norm.enabled()) {
-            bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
 
         if (layer_program.mixer == CompiledMixer::Attention) {
             const AttentionSpec& attention = layer_program.attention.value();
-            bytes += bf16_bytes(static_cast<std::size_t>(attention.query_projection_width()) * shape.hidden);
+            bytes += bf16_bytes(static_cast<std::size_t>(attention.query_projection_width()) * program.hidden);
             if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
-                bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.key_value_width()) * shape.hidden);
+                bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.key_value_width()) * program.hidden);
             }
-            bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden) * attention.query_width());
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) * attention.query_width());
             if (attention.has_query_key_norm()) {
                 bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.head_dim));
             }
@@ -52,10 +51,10 @@ std::size_t estimate_non_expert_weights(const ExecutionTopology& shape,
             const std::size_t key_width = static_cast<std::size_t>(spec.key_heads) * spec.key_head_dim;
             const std::size_t value_width = static_cast<std::size_t>(spec.value_heads) * spec.value_head_dim;
             const std::size_t qkv_width = 2ull * key_width + value_width;
-            bytes += bf16_bytes(qkv_width * shape.hidden);
-            bytes += bf16_bytes(value_width * shape.hidden);
-            bytes += bf16_bytes(2ull * static_cast<std::size_t>(spec.value_heads) * shape.hidden);
-            bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden) * value_width);
+            bytes += bf16_bytes(qkv_width * program.hidden);
+            bytes += bf16_bytes(value_width * program.hidden);
+            bytes += bf16_bytes(2ull * static_cast<std::size_t>(spec.value_heads) * program.hidden);
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) * value_width);
             bytes += bf16_bytes(qkv_width * spec.conv_kernel +
                                 2ull * static_cast<std::size_t>(spec.value_heads) +
                                 static_cast<std::size_t>(spec.value_head_dim));
@@ -63,26 +62,25 @@ std::size_t estimate_non_expert_weights(const ExecutionTopology& shape,
 
         if (layer_program.moe) {
             const std::size_t router_elements = static_cast<std::size_t>(
-                layer_program.moe->router.expert_count) * shape.hidden;
+                layer_program.moe->router.expert_count) * program.hidden;
             bytes += bf16_bytes(router_elements) + router_elements * sizeof(float);
             if (layer_program.moe->shared) {
                 const std::size_t shared = static_cast<std::size_t>(
                     layer_program.moe->shared->mlp.intermediate_size);
-                bytes += bf16_bytes(3ull * shared * shape.hidden + shape.hidden);
+                bytes += bf16_bytes(3ull * shared * program.hidden + program.hidden);
             }
         } else {
             const int intermediate = layer_program.feed_forward_intermediate;
             if (intermediate <= 0) {
                 throw std::runtime_error("compiled layer has no FFN width for weight estimate");
             }
-            bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) * shape.hidden);
+            bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) * program.hidden);
         }
     }
     return bytes;
 }
 
-std::size_t estimate_mtp_non_expert_weights(const ExecutionTopology& shape,
-                                            const CheckpointDimensions& dims,
+std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
                                             const CompiledModelProgram& program) {
     if (dims.mtp_num_hidden_layers <= 0) return 0;
     const auto bf16_bytes = [](std::size_t elements) {
@@ -103,25 +101,34 @@ std::size_t estimate_mtp_non_expert_weights(const ExecutionTopology& shape,
         static_cast<size_t>(full_attention_layer)).attention.value();
     const auto moe_layer = std::find_if(program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
-    std::size_t bytes = bf16_bytes(2ull * shape.hidden * shape.hidden);
-    bytes += bf16_bytes(3ull * shape.hidden); // two pre-fc norms and final norm
+    const auto dense_layer = std::find_if(program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return layer.feed_forward == CompiledFeedForward::Dense;
+        });
+    std::size_t bytes = bf16_bytes(2ull * program.hidden * program.hidden);
+    bytes += bf16_bytes(3ull * program.hidden); // two pre-fc norms and final norm
     for (int layer = 0; layer < dims.mtp_num_hidden_layers; ++layer) {
-        bytes += bf16_bytes(2ull * shape.hidden); // input and post-attention norms
-        bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * shape.hidden);
-        bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * shape.hidden);
-        bytes += bf16_bytes(static_cast<size_t>(shape.hidden) * attention.query_width());
+        bytes += bf16_bytes(2ull * program.hidden); // input and post-attention norms
+        bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * program.hidden);
+        bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * program.hidden);
+        bytes += bf16_bytes(static_cast<size_t>(program.hidden) * attention.query_width());
         if (attention.has_query_key_norm()) bytes += bf16_bytes(2ull * attention.head_dim);
         if (moe_layer != program.layers.end()) {
             const int experts = moe_layer->moe->router.expert_count;
-            bytes += bf16_bytes(static_cast<size_t>(experts) * shape.hidden);
-            bytes += static_cast<size_t>(experts) * shape.hidden * sizeof(float);
+            bytes += bf16_bytes(static_cast<size_t>(experts) * program.hidden);
+            bytes += static_cast<size_t>(experts) * program.hidden * sizeof(float);
             if (moe_layer->moe->shared) {
                 const size_t shared = static_cast<size_t>(
                     moe_layer->moe->shared->mlp.intermediate_size);
-                bytes += bf16_bytes(3ull * shared * shape.hidden + shape.hidden);
+                bytes += bf16_bytes(3ull * shared * program.hidden + program.hidden);
             }
         } else {
-            bytes += bf16_bytes(3ull * static_cast<size_t>(shape.intermediate) * shape.hidden);
+            if (dense_layer == program.layers.end() ||
+                dense_layer->feed_forward_intermediate <= 0) {
+                throw std::runtime_error("MTP requires a compiled dense FFN width");
+            }
+            bytes += bf16_bytes(3ull * static_cast<size_t>(
+                dense_layer->feed_forward_intermediate) * program.hidden);
         }
     }
     return bytes;
@@ -165,10 +172,9 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     inputs.options = resources.options_.expert_offload;
     inputs.gpu_free_bytes = free_bytes;
     inputs.non_expert_weight_bytes = estimate_non_expert_weights(
-        resources.shape_, resources.dims_, resources.program_, resources.model_.capabilities.tied_embeddings) +
+        resources.dims_, resources.program_, resources.model_.capabilities.tied_embeddings) +
         (resources.options_.enable_mtp
-            ? estimate_mtp_non_expert_weights(resources.shape_, resources.dims_,
-                                              resources.program_) : 0) +
+            ? estimate_mtp_non_expert_weights(resources.dims_, resources.program_) : 0) +
         (64ull << 20);
     inputs.workspace_bytes = resources.options_.lt_workspace_bytes + (256ull << 20);
     inputs.context_tokens = model.max_context_;
@@ -215,7 +221,7 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
         auto sidecar = std::make_unique<ExpertSidecar>();
         if (sidecar->load(resources.options_.expert_offload.expert_sidecar_path,
                           moe_layers, maximum_experts,
-                          maximum_moe_intermediate, resources.shape_.hidden)) {
+                          maximum_moe_intermediate, resources.program_.hidden)) {
             resources.weights_->expert_sidecar = std::move(sidecar);
             std::fprintf(stderr, "Loaded compatible expert sidecar from %s\n",
                          resources.options_.expert_offload.expert_sidecar_path.c_str());

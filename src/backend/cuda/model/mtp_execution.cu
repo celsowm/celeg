@@ -42,7 +42,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             "Qwen MTP currently requires exactly one auxiliary decoder layer");
     }
     const cudaStream_t stream = stream_.get();
-    const int hidden = resources_.shape_.hidden;
+    const int hidden = resources_.program_.hidden;
     const int vocab = resources_.dims_.vocab_size;
     const float eps = resources_.program_.final_norm.epsilon;
     CudaMtpResources& mtp = resources_.mtp_;

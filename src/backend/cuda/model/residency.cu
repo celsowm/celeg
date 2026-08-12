@@ -234,10 +234,10 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     const MoeLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer)).moe.value();
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                    1, resources_.shape_.hidden, layer_semantics.feed_forward_norm.epsilon, stream_.get());
+                    1, resources_.program_.hidden, layer_semantics.feed_forward_norm.epsilon, stream_.get());
     // Router: BF16 normed hidden -> float -> top-K experts.
     launch_cast_bf16_to_float(workspace_.normed_.data(), workspace_.moe_hidden_float_.data(),
-                               resources_.shape_.hidden, stream_.get());
+                               resources_.program_.hidden, stream_.get());
     const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
     celeg::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
@@ -246,7 +246,7 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     rdev.selected_experts = workspace_.moe_sel_.data();
     rdev.routing_weights = workspace_.moe_routing_w_.data();
     rdev.rows = 1;
-    rdev.hidden_dim = resources_.shape_.hidden;
+    rdev.hidden_dim = resources_.program_.hidden;
     launch_moe_router(rdev, cfg, workspace_.moe_router_scratch_.data(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
@@ -265,31 +265,31 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
                     semantics.router.experts_per_token,
                     workspace_.moe_gu_scratch_.data(), workspace_.moe_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_output_accum_.data(), workspace_.moe_output_.data(),
-                                resources_.shape_.hidden, stream_.get());
+                                resources_.program_.hidden, stream_.get());
     if (moe.shared_w13 != nullptr) {
         const int shared_inter = semantics.shared->mlp.intermediate_size;
         linear(workspace_.normed_.data(), *moe.shared_w13, workspace_.gate_up_.data(),
-               1, 2 * shared_inter, resources_.shape_.hidden);
+               1, 2 * shared_inter, resources_.program_.hidden);
         launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
                             shared_inter, stream_.get());
         linear(workspace_.activated_.data(), *moe.shared_w2, workspace_.mlp_output_.data(),
-               1, resources_.shape_.hidden, shared_inter);
+               1, resources_.program_.hidden, shared_inter);
         if (moe.shared_gate != nullptr) {
             linear(workspace_.normed_.data(), *moe.shared_gate,
                    workspace_.moe_shared_gate_.data(), 1, 1,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             launch_sigmoid_scale_by_scalar(workspace_.mlp_output_.data(),
                                            workspace_.moe_shared_gate_.data(),
-                                           resources_.shape_.hidden, stream_.get());
+                                           resources_.program_.hidden, stream_.get());
         }
         launch_residual_add(workspace_.moe_output_.data(), workspace_.mlp_output_.data(),
-                            resources_.shape_.hidden, stream_.get());
+                            resources_.program_.hidden, stream_.get());
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
     // Residual add into the hidden state.
     launch_residual_add(workspace_.hidden_.data(), workspace_.moe_output_.data(),
-                         resources_.shape_.hidden, stream_.get());
+                         resources_.program_.hidden, stream_.get());
 }
 
 void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
@@ -300,12 +300,12 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     const MoeLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer)).moe.value();
     // Size the prefill scratch to the requested row count.
-    workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
+    workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.program_.hidden);
     workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);
     workspace_.moe_pf_routing_w_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);
     workspace_.moe_pf_router_scratch_.reserve(static_cast<size_t>(rows) * semantics.router.expert_count);
-    workspace_.moe_pf_output_accum_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
-    workspace_.moe_pf_output_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
+    workspace_.moe_pf_output_accum_.reserve(static_cast<size_t>(rows) * resources_.program_.hidden);
+    workspace_.moe_pf_output_.reserve(static_cast<size_t>(rows) * resources_.program_.hidden);
     workspace_.moe_pf_gu_scratch_.reserve(
         static_cast<size_t>(rows) * semantics.router.experts_per_token * 2 *
         semantics.routed.mlp.intermediate_size);
@@ -314,10 +314,10 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         semantics.routed.mlp.intermediate_size);
 
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
-                   workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden, layer_semantics.feed_forward_norm.epsilon,
+                   workspace_.prefill_normed_.data(), rows, resources_.program_.hidden, layer_semantics.feed_forward_norm.epsilon,
                    stream_.get());
     launch_cast_bf16_to_float(workspace_.prefill_normed_.data(), workspace_.moe_pf_hidden_float_.data(),
-                              rows * resources_.shape_.hidden, stream_.get());
+                              rows * resources_.program_.hidden, stream_.get());
     const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
     celeg::MoeRouterDevice rdev;
     rdev.router_weight = moe.router_float;
@@ -326,7 +326,7 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     rdev.selected_experts = workspace_.moe_pf_sel_.data();
     rdev.routing_weights = workspace_.moe_pf_routing_w_.data();
     rdev.rows = rows;
-    rdev.hidden_dim = resources_.shape_.hidden;
+    rdev.hidden_dim = resources_.program_.hidden;
     launch_moe_router(rdev, cfg, workspace_.moe_pf_router_scratch_.data(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
@@ -345,34 +345,34 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
                     semantics.router.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
                     workspace_.moe_pf_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
-                                rows * resources_.shape_.hidden, stream_.get());
+                                rows * resources_.program_.hidden, stream_.get());
     if (moe.shared_w13 != nullptr) {
         const int shared_inter = semantics.shared->mlp.intermediate_size;
         linear(workspace_.prefill_normed_.data(), *moe.shared_w13,
                workspace_.prefill_gate_up_.data(), rows, 2 * shared_inter,
-               resources_.shape_.hidden);
+               resources_.program_.hidden);
         launch_swiglu_interleaved(workspace_.prefill_gate_up_.data(),
                                   workspace_.prefill_activated_.data(), rows,
                                   shared_inter, stream_.get());
         linear(workspace_.prefill_activated_.data(), *moe.shared_w2,
                workspace_.prefill_mlp_output_.data(), rows,
-               resources_.shape_.hidden, shared_inter);
+               resources_.program_.hidden, shared_inter);
         if (moe.shared_gate != nullptr) {
             linear(workspace_.prefill_normed_.data(), *moe.shared_gate,
                    workspace_.moe_pf_shared_gate_.data(), rows, 1,
-                   resources_.shape_.hidden);
+                   resources_.program_.hidden);
             launch_sigmoid_multiply_strided(workspace_.prefill_mlp_output_.data(),
                                             workspace_.moe_pf_shared_gate_.data(),
-                                            rows, resources_.shape_.hidden, stream_.get());
+                                            rows, resources_.program_.hidden, stream_.get());
         }
         launch_residual_add(workspace_.moe_pf_output_.data(),
                             workspace_.prefill_mlp_output_.data(),
-                            rows * resources_.shape_.hidden, stream_.get());
+                            rows * resources_.program_.hidden, stream_.get());
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),
-                        rows * resources_.shape_.hidden, stream_.get());
+                        rows * resources_.program_.hidden, stream_.get());
 }
 
 } // namespace celeg

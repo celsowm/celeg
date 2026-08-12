@@ -30,12 +30,12 @@ void CudaCompiledModel::warmup_decode_gemms() {
         // kernel are initialized before the first request.
         launch_rmsnorm(workspace_.hidden_.data(),
                        common(resources_.layers_.front()).operator_norm,
-                       workspace_.normed_.data(), 1, resources_.shape_.hidden,
+                       workspace_.normed_.data(), 1, resources_.program_.hidden,
                        resources_.program_.layers.front().operator_norm.epsilon,
                        stream_.get());
         enqueue_decode_non_attention_mixer(resources_.layers_.front(), 0);
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-               1, resources_.dims_.vocab_size, resources_.shape_.hidden);
+               1, resources_.dims_.vocab_size, resources_.program_.hidden);
         CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
         return;
     }
@@ -45,51 +45,51 @@ void CudaCompiledModel::warmup_decode_gemms() {
     if (layout.uses_latent_state()) {
         linear(workspace_.normed_.data(), *attention_layer->latent_query,
                workspace_.latent_query_content_.data(), 1,
-               layout.latent_query_content_width(), resources_.shape_.hidden);
+               layout.latent_query_content_width(), resources_.program_.hidden);
         if (layout.latent_query_rope_width() != 0) {
             linear(workspace_.normed_.data(), *attention_layer->latent_query_rope,
                    workspace_.latent_query_rope_.data(), 1,
-                   layout.latent_query_rope_width(), resources_.shape_.hidden);
+                   layout.latent_query_rope_width(), resources_.program_.hidden);
         }
         linear(workspace_.op_output_.data(), *attention_layer->out,
-               workspace_.hidden_.data(), 1, resources_.shape_.hidden,
+               workspace_.hidden_.data(), 1, resources_.program_.hidden,
                layout.latent_query_content_width(),
                resources_.options_.fused_residuals ? 1.0f : 0.0f);
     } else {
     const int query_projection_width = attention_layer->query->rows;
     linear(workspace_.normed_.data(), *attention_layer->query, workspace_.qkv_output_.data(),
-           1, query_projection_width, resources_.shape_.hidden);
+           1, query_projection_width, resources_.program_.hidden);
     if (attention_layer->key && attention_layer->value) {
         linear(workspace_.normed_.data(), *attention_layer->key,
                workspace_.qkv_output_.data() + layout.query_width(),
-               1, layout.key_value_width(), resources_.shape_.hidden);
+               1, layout.key_value_width(), resources_.program_.hidden);
         linear(workspace_.normed_.data(), *attention_layer->value,
                workspace_.qkv_output_.data() + layout.query_width() + layout.key_value_width(),
-               1, layout.key_value_width(), resources_.shape_.hidden);
+               1, layout.key_value_width(), resources_.program_.hidden);
     }
     if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward);
         dense && dense->w13 && dense->w2) {
         const int intermediate = dense->w2->cols;
         linear(workspace_.normed_.data(), *dense->w13, workspace_.gate_up_.data(),
-               1, 2 * intermediate, resources_.shape_.hidden);
+               1, 2 * intermediate, resources_.program_.hidden);
     }
 
     linear(workspace_.op_output_.data(), *attention_layer->out, workspace_.hidden_.data(),
-           1, resources_.shape_.hidden, layout.query_width(),
+           1, resources_.program_.hidden, layout.query_width(),
            resources_.options_.fused_residuals ? 1.0f : 0.0f);
     }
     if (convolution_layer) {
         linear(workspace_.normed_.data(), *convolution_layer->conv_in, workspace_.conv_projected_.data(),
-               1, 3 * resources_.shape_.hidden, resources_.shape_.hidden);
+               1, 3 * resources_.program_.hidden, resources_.program_.hidden);
     }
     if (const DenseFfnWeights* dense = as_dense_ffn(first_common.feed_forward);
         dense && dense->w2) {
         linear(workspace_.activated_.data(), *dense->w2, workspace_.hidden_.data(),
-               1, resources_.shape_.hidden, dense->w2->cols,
+               1, resources_.program_.hidden, dense->w2->cols,
                resources_.options_.fused_residuals ? 1.0f : 0.0f);
     }
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-           1, resources_.dims_.vocab_size, resources_.shape_.hidden);
+           1, resources_.dims_.vocab_size, resources_.program_.hidden);
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 

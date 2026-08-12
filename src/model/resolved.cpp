@@ -225,7 +225,6 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
     if (layer_count == 0) {
         throw std::invalid_argument("cannot derive runtime shape from an empty graph");
     }
-    result.hidden = graph.hidden;
     result.num_hidden_layers = static_cast<int>(layer_count);
     result.attention_slot_for_layer.assign(layer_count, -1);
     result.layer_for_attention_slot.clear();
@@ -319,7 +318,6 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
     }
     result.conv_cache = maximum_conv_cache;
     result.conv_dim = maximum_conv_dim;
-    result.intermediate = result.max_feed_forward_intermediate;
     return result;
 }
 
@@ -536,8 +534,8 @@ void CheckpointDimensions::validate() const {
 
 std::string ExecutionTopology::fingerprint() const {
     std::ostringstream out;
-    out << "h" << hidden << "-l" << num_hidden_layers
-        << "-int" << intermediate << "-cc" << conv_cache
+    out << "-l" << num_hidden_layers
+        << "-cc" << conv_cache
         << "-ac" << attention_layer_count << "-conv" << conv_layer_count
         << "-gdn" << gated_delta_net_layer_count << "-m2" << mamba2_layer_count
         << "-mlp" << mlp_only_layer_count << "-m2i" << mamba2_intermediate
@@ -554,15 +552,14 @@ std::string ExecutionTopology::fingerprint() const {
 
 std::string ExecutionTopology::summary() const {
     std::ostringstream out;
-    out << "hidden=" << hidden << " intermediate=" << intermediate
-        << " layers=" << num_hidden_layers
+    out << "layers=" << num_hidden_layers
         << " attention_layers=" << attention_layer_count
         << " conv_layers=" << conv_layer_count;
     return out.str();
 }
 
 void ExecutionTopology::validate() const {
-    if (hidden <= 0 || intermediate <= 0 || num_hidden_layers <= 0) {
+    if (num_hidden_layers <= 0) {
         throw std::runtime_error("invalid resolved model topology");
     }
     if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count +

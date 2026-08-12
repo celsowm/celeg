@@ -31,51 +31,6 @@ std::vector<TestShape> registered_model_shapes() {
     for (int model = 0; model < 2; ++model) {
         TestShape result;
         auto& shape = result.topology;
-        #if 0
-        if (model == 0) {
-            shape.exec.hidden = 1024;
-            shape.exec.intermediate = 2560;
-            shape.exec.num_hidden_layers = 14;
-            shape.dims.vocab_size = 65536;
-            shape.exec.conv_cache = 3;
-            shape.exec.conv_dim = 1024;
-            shape.dims.max_position_embeddings = 128000;
-            shape.dims.token_policy.bos_token_id = 1;
-            shape.dims.token_policy.eos_token_ids = {7};
-            shape.dims.token_policy.pad_token_id = 0;
-            const std::vector<celeg::CompiledMixer> mixers = {
-                celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-            };
-        } else {
-            // The Thinking and Instruct profiles share the same topology.
-            shape.exec.hidden = 2048;
-            shape.exec.intermediate = 12288;
-            shape.exec.num_hidden_layers = 16;
-            shape.dims.vocab_size = 65536;
-            shape.exec.conv_cache = 3;
-            shape.exec.conv_dim = 2048;
-            shape.dims.max_position_embeddings = 128000;
-            shape.dims.token_policy.bos_token_id = 1;
-            shape.dims.token_policy.eos_token_ids = {7};
-            shape.dims.token_policy.pad_token_id = 0;
-            const std::vector<celeg::CompiledMixer> mixers = {
-                celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::ShortConvolution, celeg::MixerKind::Attention,
-                celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-                celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
-            };
-        }
-        #endif
         const int query_heads = model == 0 ? 16 : 32;
         const std::vector<celeg::CompiledMixer> mixers = model == 0
             ? std::vector<celeg::CompiledMixer>{
@@ -130,29 +85,6 @@ std::vector<TestShape> registered_model_shapes() {
         }
         shapes.push_back(std::move(result));
         continue;
-        /*
-        for (auto& attention : shape.exec.attention_layouts) {
-            attention.query_heads = query_heads;
-            attention.key_value_heads = 8;
-            attention.head_dim = 64;
-            attention.pattern = celeg::FullCausalPattern{};
-        }
-        for (auto& attention : shape.exec.attention_layouts) {
-            attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
-        }
-        shape.exec.attention_layer_count = 0;
-        shape.exec.conv_layer_count = 0;
-        for (int i = 0; i < shape.exec.num_hidden_layers; ++i) {
-            if (shape.exec.mixer_kinds[static_cast<size_t>(i)] == celeg::MixerKind::Attention) {
-                shape.exec.attention_slot_for_layer.push_back(shape.exec.attention_layer_count++);
-                shape.exec.layer_for_attention_slot.push_back(i);
-            } else {
-                shape.exec.attention_slot_for_layer.push_back(-1);
-                ++shape.exec.conv_layer_count;
-            }
-        }
-        shapes.push_back(shape);
-        */
     }
     if (shapes.empty()) {
         std::cerr << "registered_model_shapes: no model shapes registered\n";
