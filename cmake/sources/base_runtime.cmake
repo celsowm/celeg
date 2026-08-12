@@ -28,8 +28,6 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/descriptor/naming_policy.cpp
     src/model/descriptor/probe.cpp
     src/model/descriptor/role_codec.cpp
-    src/model/descriptor/weight_requirements.cpp
-    src/model/descriptor/weight_plan.cpp
     src/model/architecture.cpp
     src/model/automatic_architecture.cpp
     src/model/interaction.cpp

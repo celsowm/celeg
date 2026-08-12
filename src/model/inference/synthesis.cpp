@@ -1,32 +1,39 @@
 #include "celeg/model/inference.hpp"
 
 #include "celeg/model/graph_builder.hpp"
+#include "celeg/model/weight_plan.hpp"
 
 #include <stdexcept>
 #include <utility>
 
 namespace celeg {
+namespace {
+
+class CanonicalBindingNamingPolicy final : public ITensorNamingPolicy {
+public:
+    explicit CanonicalBindingNamingPolicy(const TensorRoleBindings& bindings)
+        : bindings_(bindings) {}
+
+    std::vector<std::string> candidates(const TensorRequest& request) const override {
+        const TensorRoleBinding* binding = bindings_.find(
+            request.role, request.layer, request.expert);
+        return binding == nullptr ? std::vector<std::string>{}
+                                  : std::vector<std::string>{binding->source_name};
+    }
+
+private:
+    const TensorRoleBindings& bindings_;
+};
+
+} // namespace
 
 
 ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const {
     facts.validate();
     ResolvedModel intermediate;
-    intermediate.topology = facts.topology;
-    build_dense_transformer_graph(intermediate);
+    build_dense_transformer_graph(intermediate, facts.topology);
     intermediate.graph.validate();
     return intermediate.graph;
-}
-
-WeightPlan WeightPlanSynthesizer::synthesize(const CanonicalModelFacts& facts) const {
-    facts.validate();
-    WeightPlan result;
-    result.requests.reserve(facts.bindings.values.size());
-    for (const auto& binding : facts.bindings.values) {
-        result.requests.push_back({binding.role, binding.layer, binding.expert,
-                                   binding.shape, binding.source_name,
-                                   binding.physical_layer});
-    }
-    return result;
 }
 
 ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) const {
@@ -34,24 +41,14 @@ ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) co
     ResolvedModel result;
     result.topology = facts.topology;
     result.graph = GraphSynthesizer{}.synthesize(facts);
-    result.weight_plan = WeightPlanSynthesizer{}.synthesize(facts);
     result.capabilities = {true, true, false, facts.tied_embeddings};
     result.provenance.architecture_id = facts.resolution_mode;
     result.provenance.source_format = facts.source_format;
     result.provenance.checkpoint_profile_id = facts.resolution_mode;
-    RuntimeTopology derived = ExecutionTopology::derive(result.graph);
-    // Preserve importer facts while replacing every graph-derived cache with
-    // the value-derived result.  The eventual CheckpointDimensions split will
-    // make this separation structural; keeping the copy explicit here avoids
-    // silently dropping token/source mapping facts during the transition.
-    derived.vocab_size = result.topology.vocab_size;
-    derived.max_position_embeddings = result.topology.max_position_embeddings;
-    derived.checkpoint_layer_for_layer = result.topology.checkpoint_layer_for_layer;
-    derived.token_policy = result.topology.token_policy;
-    derived.numerical_policy = result.topology.numerical_policy;
-    derived.mtp_num_hidden_layers = result.topology.mtp_num_hidden_layers;
-    result.topology = std::move(derived);
+    result.topology = compose_runtime_topology(std::move(result.topology), result.graph);
     result.topology.validate();
+    CanonicalBindingNamingPolicy naming(facts.bindings);
+    build_weight_plan_from_graph(result, naming);
     result.provenance.identity = facts.fingerprint();
     result.validate();
     return result;

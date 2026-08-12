@@ -27,8 +27,8 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
 } // namespace
 
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
+                            const RuntimeTopology& topology,
                             const CheckpointMetadata& metadata) {
-    const RuntimeTopology& topology = model.topology;
     model.graph.hidden = topology.hidden;
     model.graph.embedding_transform.multiplier =
         topology.numerical_policy.embedding_multiplier;

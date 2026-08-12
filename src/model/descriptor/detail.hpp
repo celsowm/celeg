@@ -105,6 +105,10 @@ struct Descriptor {
     std::optional<Field> moe_expert_bias;
     std::optional<Field> moe_routed_scaling;
     std::optional<Field> moe_shared_intermediate;
+    std::optional<Field> moe_routing_group_count;
+    std::optional<Field> moe_routing_experts_per_group;
+    std::optional<Field> moe_routing_groups_per_token;
+    std::optional<Field> moe_routing_group_score_top_k;
     std::optional<Field> recurrent_key_heads;
     std::optional<Field> recurrent_value_heads;
     std::optional<Field> recurrent_key_dim;
@@ -198,6 +202,7 @@ int token_value(const CheckpointMetadata& metadata, const Field& field,
 std::vector<int> eos_values(const CheckpointMetadata& metadata, const Descriptor& descriptor);
 bool probe_condition(const CheckpointMetadata& metadata, const ProbeCondition& condition);
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
+                            const RuntimeTopology& topology,
                             const CheckpointMetadata& metadata);
 std::unique_ptr<IArchitecture> make_descriptor_architecture(Descriptor descriptor);
 std::optional<Field> optional_field(const Json& object, std::string_view key);
@@ -208,7 +213,5 @@ AttentionVariant parse_attention_variant(const Json& value);
 ActivationKind parse_activation_kind(std::string_view value);
 NormWeightKind parse_norm_weight_kind(std::string_view value);
 std::unique_ptr<ITensorNamingPolicy> create_naming_policy(const Descriptor& descriptor);
-void build_weight_plan(ResolvedModel& model, const Descriptor& descriptor,
-                       const ITensorNamingPolicy& naming_policy);
 
 } // namespace celeg::descriptor_detail

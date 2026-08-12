@@ -154,6 +154,17 @@ public:
             topology.routed_scaling_factor = static_cast<float>(
                 descriptor_.moe_routed_scaling.has_value()
                     ? number_value(metadata, *descriptor_.moe_routed_scaling) : 1.0);
+            topology.moe_routing_group_count = descriptor_.moe_routing_group_count.has_value()
+                ? integer_value(metadata, *descriptor_.moe_routing_group_count) : 0;
+            topology.moe_routing_experts_per_group =
+                descriptor_.moe_routing_experts_per_group.has_value()
+                    ? integer_value(metadata, *descriptor_.moe_routing_experts_per_group) : 0;
+            topology.moe_routing_groups_per_token =
+                descriptor_.moe_routing_groups_per_token.has_value()
+                    ? integer_value(metadata, *descriptor_.moe_routing_groups_per_token) : 0;
+            topology.moe_routing_group_score_top_k =
+                descriptor_.moe_routing_group_score_top_k.has_value()
+                    ? integer_value(metadata, *descriptor_.moe_routing_group_score_top_k) : 0;
             for (int layer = dense_layers; layer < topology.num_hidden_layers; ++layer) {
                 topology.feed_forward_kinds[static_cast<size_t>(layer)] =
                     FeedForwardKind::MixtureOfExperts;
@@ -431,12 +442,13 @@ public:
         topology.validate();
         ArchitectureResolutionStages stages;
         stages.topology = [topology](const CheckpointView&) { return topology; };
-        stages.graph = [this](ResolvedModel& model, const CheckpointView& view) {
-            build_descriptor_graph(model, descriptor_, view.metadata);
+        stages.graph = [this](ResolvedModel& model, const RuntimeTopology& topology,
+                              const CheckpointView& view) {
+            build_descriptor_graph(model, descriptor_, topology, view.metadata);
         };
         stages.weights = [this](ResolvedModel& model, const CheckpointView&) {
             auto policy = descriptor_detail::create_naming_policy(descriptor_);
-            descriptor_detail::build_weight_plan(model, descriptor_, *policy);
+            build_weight_plan_from_graph(model, *policy);
         };
         const bool tied_embeddings = descriptor_.tied_embeddings_field.has_value()
             ? boolean_value(metadata, descriptor_.tied_embeddings_field, descriptor_.tied_embeddings)

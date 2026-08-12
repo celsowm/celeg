@@ -14,10 +14,10 @@ ResolvedModel resolve_architecture_stages(
     ResolvedModel model;
     model.provenance = std::move(stages.provenance);
     model.capabilities = stages.capabilities;
-    model.topology = stages.topology(checkpoint);
-    model.topology.validate();
-    stages.graph(model, checkpoint);
-    derive_runtime_topology_from_graph(model.topology, model.graph);
+    RuntimeTopology import_topology = stages.topology(checkpoint);
+    import_topology.validate();
+    stages.graph(model, import_topology, checkpoint);
+    model.topology = compose_runtime_topology(std::move(import_topology), model.graph);
     model.topology.validate();
     stages.weights(model, checkpoint);
     model.validate();

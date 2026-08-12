@@ -212,6 +212,13 @@ Descriptor parse_descriptor(const Json& value) {
         result.moe_expert_bias = optional_field(hybrid, "expert_bias");
         result.moe_routed_scaling = optional_field(hybrid, "routed_scaling");
         result.moe_shared_intermediate = optional_field(hybrid, "shared_expert_intermediate");
+        result.moe_routing_group_count = optional_field(hybrid, "routing_group_count");
+        result.moe_routing_experts_per_group = optional_field(
+            hybrid, "routing_experts_per_group");
+        result.moe_routing_groups_per_token = optional_field(
+            hybrid, "routing_groups_per_token");
+        result.moe_routing_group_score_top_k = optional_field(
+            hybrid, "routing_group_score_top_k");
         result.recurrent_key_heads = optional_field(hybrid, "linear_key_heads");
         result.recurrent_value_heads = optional_field(hybrid, "linear_value_heads");
         result.recurrent_key_dim = optional_field(hybrid, "linear_key_dim");

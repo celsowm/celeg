@@ -226,10 +226,9 @@ struct ResolvedModel {
     void validate() const;
 };
 
-// Rebuild allocation-oriented shape tables from the canonical graph after
-// import.  Importers may use an initial shape while constructing the graph,
-// but execution-facing schedules have one semantic owner: ModelGraph.
-void derive_runtime_topology_from_graph(RuntimeTopology& topology,
-                                        const ModelGraph& graph);
+// Compose import facts with the allocation cache derived from the final graph.
+// The only construction path for the derived cache is ExecutionTopology::derive.
+RuntimeTopology compose_runtime_topology(RuntimeTopology import_topology,
+                                         const ModelGraph& graph);
 
 } // namespace celeg

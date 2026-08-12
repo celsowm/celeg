@@ -20,6 +20,7 @@ int main() {
         celeg::ResolvedModel model;
         model.topology.hidden = 8;
         model.topology.intermediate = 16;
+        model.topology.vocab_size = 32;
         model.topology.num_hidden_layers = 2;
         model.topology.feed_forward_intermediates = {12, 20};
         model.topology.attention_layouts.resize(2);
@@ -28,9 +29,20 @@ int main() {
             attention.key_value_heads = 1;
             attention.head_dim = 8;
         }
+        model.graph.hidden = 8;
+        model.graph.final_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+        for (const int intermediate : {12, 20}) {
+            celeg::LayerSpec layer;
+            layer.operator_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+            layer.feed_forward_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+            layer.mixer = model.topology.attention_layouts[model.graph.layers.size()];
+            layer.feed_forward = celeg::DenseFeedForwardSpec{
+                intermediate, celeg::ActivationKind::SwiGLU};
+            model.graph.layers.push_back(std::move(layer));
+        }
 
         Naming naming;
-        celeg::build_dense_weight_plan(model, naming);
+        celeg::build_weight_plan_from_graph(model, naming);
         const auto find = [&](celeg::TensorRole role, int layer) -> const celeg::TensorRequest& {
             for (const auto& request : model.weight_plan.requests) {
                 if (request.role == role && request.layer == layer) return request;

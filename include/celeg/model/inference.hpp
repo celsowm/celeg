@@ -281,11 +281,6 @@ public:
     ModelGraph synthesize(const CanonicalModelFacts& facts) const;
 };
 
-class WeightPlanSynthesizer {
-public:
-    WeightPlan synthesize(const CanonicalModelFacts& facts) const;
-};
-
 class ResolutionAssembler {
 public:
     ResolvedModel assemble(const CanonicalModelFacts& facts) const;

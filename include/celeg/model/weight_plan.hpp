@@ -4,11 +4,11 @@
 
 namespace celeg {
 
-// Builds the canonical tensor requests for a dense transformer. Architecture
-// providers retain ownership of naming policies and non-dense variants; this
-// helper only consumes the already-resolved topology.
-void build_dense_weight_plan(ResolvedModel& model,
-                             const ITensorNamingPolicy& naming_policy);
+// Builds canonical tensor requests for every supported semantic layer variant.
+// Per-layer shapes come from the final graph; topology contributes only
+// checkpoint-layer mapping and import vocabulary facts.
+void build_weight_plan_from_graph(ResolvedModel& model,
+                                  const ITensorNamingPolicy& naming_policy);
 void resolve_weight_plan(ResolvedModel& model,
                          const ITensorNamingPolicy& naming_policy);
 

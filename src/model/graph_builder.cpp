@@ -5,8 +5,8 @@
 
 namespace celeg {
 
-void build_dense_transformer_graph(ResolvedModel& model) {
-    const RuntimeTopology& t = model.topology;
+void build_dense_transformer_graph(ResolvedModel& model,
+                                  const RuntimeTopology& t) {
     model.graph.hidden = t.hidden;
     model.graph.embedding_transform.multiplier = t.numerical_policy.embedding_multiplier;
     model.graph.logits_divisor = t.numerical_policy.logits_divisor;

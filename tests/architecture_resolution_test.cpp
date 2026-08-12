@@ -1,6 +1,7 @@
 #include "celeg/checkpoint/metadata.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/model/architecture.hpp"
+#include "celeg/model/program.hpp"
 #include "celeg/runtime/context.hpp"
 #include "support/assertions.hpp"
 
@@ -117,6 +118,36 @@ int main() {
     CELEG_TEST_CHECK(model.graph.layers.size() == 1);
     CELEG_TEST_CHECK(model.capabilities.tied_embeddings);
     CELEG_TEST_CHECK(model.topology.numerical_policy.attention_multiplier == 0.125f);
+
+    for (const auto& [model_type, architecture_id] : {
+             std::pair<std::string, std::string>{
+                 "celeg_topology_fixture_dense", "topology_fixture_dense"},
+             std::pair<std::string, std::string>{
+                 "celeg_topology_fixture_grouped_moe", "topology_fixture_grouped_moe"}}) {
+        auto fixture_metadata = structural_metadata(model_type);
+        celeg::CheckpointView fixture_checkpoint;
+        fixture_checkpoint.metadata = std::move(fixture_metadata);
+        const auto& fixture_architecture = catalog.select(fixture_checkpoint.metadata);
+        CELEG_TEST_CHECK(fixture_architecture.id() == architecture_id);
+        const auto fixture_model = fixture_architecture.resolve(fixture_checkpoint);
+        const auto compiled = celeg::build_model_program(fixture_model);
+        CELEG_TEST_CHECK(compiled.layers.size() == 4);
+        if (architecture_id == "topology_fixture_dense") {
+            CELEG_TEST_CHECK(std::get<celeg::DenseFeedForwardSpec>(
+                                 fixture_model.graph.layers[2].feed_forward).intermediate_size == 8);
+            CELEG_TEST_CHECK(fixture_model.graph.layers[2].post_attention_norm.enabled());
+            CELEG_TEST_CHECK(compiled.layers[2].feed_forward_intermediate == 8);
+        } else {
+            const auto& moe = std::get<celeg::MixtureOfExpertsSpec>(
+                fixture_model.graph.layers[2].feed_forward);
+            CELEG_TEST_CHECK(moe.routing_group_count == 2);
+            CELEG_TEST_CHECK(moe.routing_experts_per_group == 2);
+            CELEG_TEST_CHECK(moe.routing_groups_per_token == 1);
+            CELEG_TEST_CHECK(compiled.layers[2].moe.has_value());
+            CELEG_TEST_CHECK(compiled.layers[2].moe->router.selection ==
+                             celeg::MoeSelectionKind::GroupedTopK);
+        }
+    }
 
     celeg::ArchitectureCatalog mutable_catalog;
     mutable_catalog.add(std::make_unique<TestArchitecture>("one", 10));

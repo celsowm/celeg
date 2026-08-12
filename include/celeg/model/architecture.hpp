@@ -23,7 +23,7 @@ struct ProbeResult {
 // stage has one responsibility and receives only the checkpoint data it needs.
 struct ArchitectureResolutionStages {
     std::function<RuntimeTopology(const CheckpointView&)> topology;
-    std::function<void(ResolvedModel&, const CheckpointView&)> graph;
+    std::function<void(ResolvedModel&, const RuntimeTopology&, const CheckpointView&)> graph;
     std::function<void(ResolvedModel&, const CheckpointView&)> weights;
     ModelCapabilities capabilities;
     ModelProvenance provenance;
