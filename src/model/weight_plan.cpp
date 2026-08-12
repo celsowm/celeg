@@ -205,11 +205,11 @@ void build_weight_plan_from_graph(ResolvedModel& model,
     }
     model.weight_plan.requests.clear();
     add_request(model, TensorRole::TokenEmbedding, -1, -1,
-                {topology.vocab_size, graph.hidden});
+                {model.topology.checkpoint.vocab_size, graph.hidden});
     add_norm_request(model, TensorRole::FinalNorm, -1, graph.final_norm,
                      {graph.hidden}, -1);
     add_request(model, TensorRole::LanguageModelHead, -1, -1,
-                {topology.vocab_size, graph.hidden});
+                {model.topology.checkpoint.vocab_size, graph.hidden});
     const auto per_layer = std::find_if(
         graph.layers.begin(), graph.layers.end(),
         [](const LayerSpec& layer) { return layer.per_layer_input.enabled; });
@@ -217,7 +217,7 @@ void build_weight_plan_from_graph(ResolvedModel& model,
         const int layer_count = static_cast<int>(graph.layers.size());
         const int input_size = per_layer->per_layer_input.input_size;
         add_request(model, TensorRole::PerLayerEmbedding, -1, -1,
-                    {topology.vocab_size, layer_count * input_size});
+                    {model.topology.checkpoint.vocab_size, layer_count * input_size});
         add_request(model, TensorRole::PerLayerContextProjection, -1, -1,
                     {layer_count * input_size, graph.hidden});
         add_request(model, TensorRole::PerLayerProjectionNorm, -1, -1,
@@ -226,9 +226,9 @@ void build_weight_plan_from_graph(ResolvedModel& model,
     for (int layer_index = 0;
          layer_index < static_cast<int>(graph.layers.size()); ++layer_index) {
         const LayerSpec& layer = graph.layers[static_cast<size_t>(layer_index)];
-        const int physical_layer = topology.checkpoint_layer_for_layer.empty()
+        const int physical_layer = topology.checkpoint.checkpoint_layer_for_layer.empty()
             ? layer_index
-            : topology.checkpoint_layer_for_layer.at(static_cast<size_t>(layer_index));
+            : topology.checkpoint.checkpoint_layer_for_layer.at(static_cast<size_t>(layer_index));
         add_norm_request(model, TensorRole::AttentionInputNorm, layer_index,
                          layer.operator_norm, {graph.hidden}, physical_layer);
         append_mixer(model, layer, layer_index, physical_layer);

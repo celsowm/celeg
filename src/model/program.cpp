@@ -191,12 +191,11 @@ PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     result.token_scale = std::sqrt(static_cast<float>(result.input_size));
     result.context_scale = 1.0f / std::sqrt(static_cast<float>(topology.hidden));
     result.residual_scale = kPerLayerResidualScale;
-    result.norm_epsilon = topology.numerical_policy.norm_eps;
-
     if (model.graph.layers.empty()) {
         throw std::invalid_argument("per-layer input requires resolved layer specifications");
     }
     result.activation = model.graph.layers.front().per_layer_input.activation;
+    result.norm_epsilon = model.graph.layers.front().per_layer_input_norm.epsilon;
     for (const LayerSpec& layer : model.graph.layers) {
         if (!layer.per_layer_input.enabled ||
             layer.per_layer_input.input_size != result.input_size ||

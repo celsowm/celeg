@@ -29,14 +29,13 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.hidden = 1024;
             shape.intermediate = 2560;
             shape.num_hidden_layers = 14;
-            shape.vocab_size = 65536;
+            shape.checkpoint.vocab_size = 65536;
             shape.conv_cache = 3;
             shape.conv_dim = 1024;
-            shape.max_position_embeddings = 128000;
-            shape.token_policy.bos_token_id = 1;
-            shape.token_policy.eos_token_ids = {7};
-            shape.token_policy.pad_token_id = 0;
-            shape.numerical_policy.norm_eps = 1e-5f;
+            shape.checkpoint.max_position_embeddings = 128000;
+            shape.checkpoint.token_policy.bos_token_id = 1;
+            shape.checkpoint.token_policy.eos_token_ids = {7};
+            shape.checkpoint.token_policy.pad_token_id = 0;
             shape.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
@@ -51,14 +50,13 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.hidden = 2048;
             shape.intermediate = 12288;
             shape.num_hidden_layers = 16;
-            shape.vocab_size = 65536;
+            shape.checkpoint.vocab_size = 65536;
             shape.conv_cache = 3;
             shape.conv_dim = 2048;
-            shape.max_position_embeddings = 128000;
-            shape.token_policy.bos_token_id = 1;
-            shape.token_policy.eos_token_ids = {7};
-            shape.token_policy.pad_token_id = 0;
-            shape.numerical_policy.norm_eps = 1e-5f;
+            shape.checkpoint.max_position_embeddings = 128000;
+            shape.checkpoint.token_policy.bos_token_id = 1;
+            shape.checkpoint.token_policy.eos_token_ids = {7};
+            shape.checkpoint.token_policy.pad_token_id = 0;
             shape.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,

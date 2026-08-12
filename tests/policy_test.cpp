@@ -40,7 +40,7 @@ int main() {
     celeg::ResolvedModel resolved;
     resolved.topology.hidden = 8;
     resolved.topology.intermediate = 16;
-    resolved.topology.vocab_size = 32;
+    resolved.topology.checkpoint.vocab_size = 32;
     resolved.topology.num_hidden_layers = 2;
     resolved.topology.mixer_kinds = {
         celeg::MixerKind::Attention, celeg::MixerKind::Attention};
@@ -51,7 +51,6 @@ int main() {
     resolved.topology.attention_layouts.resize(2);
     resolved.topology.has_per_layer_input = true;
     resolved.topology.per_layer_input_size = 4;
-    resolved.topology.numerical_policy.norm_eps = 1.0e-5f;
     resolved.graph.layers.resize(2);
     for (auto& layer : resolved.graph.layers) {
         layer.per_layer_input = {4, celeg::ActivationKind::GeluTanh, true};
@@ -74,13 +73,13 @@ int main() {
     celeg::RuntimeTopology token_topology;
     token_topology.hidden = 8;
     token_topology.intermediate = 16;
-    token_topology.vocab_size = 32;
+    token_topology.checkpoint.vocab_size = 32;
     token_topology.num_hidden_layers = 1;
     token_topology.mixer_kinds = {celeg::MixerKind::Attention};
     token_topology.feed_forward_kinds = {celeg::FeedForwardKind::Dense};
     token_topology.attention_layer_count = 1;
     token_topology.attention_layouts.resize(1);
-    token_topology.token_policy = {1, {2}, 32};
+    token_topology.checkpoint.token_policy = {1, {2}, 32};
     bool rejected_token_range = false;
     try {
         token_topology.validate();

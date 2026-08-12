@@ -48,7 +48,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         workspace_.per_layer_context.resize(packed);
         workspace_.per_layer_gate.resize(static_cast<size_t>(plan.input_size));
         shared->linear.embedding(shared->weight_store.per_layer_embedding,
-                                 raw_embedding ? shared->shape.token_policy.pad_token_id : token,
+                                 raw_embedding ? shared->shape.checkpoint.token_policy.pad_token_id : token,
                                  workspace_.per_layer_input.data());
         for (float& value : workspace_.per_layer_input) value *= plan.token_scale;
         shared->linear.gemv(shared->weight_store.per_layer_context_projection,

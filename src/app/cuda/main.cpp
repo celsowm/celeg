@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model, *runtime);
         const auto& topology = bootstrap.model.topology;
-        if (args.context > topology.max_position_embeddings) {
+        if (args.context > topology.checkpoint.max_position_embeddings) {
             throw std::runtime_error("--context exceeds max_position_embeddings");
         }
         if (args.print_config) {
@@ -364,12 +364,12 @@ int main(int argc, char** argv) {
         // still names a non-zero BOS token.  BOS is not injected when the
         // chat template requests add_bos=false, so the unresolved zero is not
         // a runtime disagreement; EOS remains a hard generation boundary.
-        if ((topology.token_policy.bos_token_id != 0 &&
-             tokenizer.bos_id() != topology.token_policy.bos_token_id) ||
-            !celeg::is_stop_token(topology.token_policy.eos_token_ids, tokenizer.eos_id())) {
+        if ((topology.checkpoint.token_policy.bos_token_id != 0 &&
+             tokenizer.bos_id() != topology.checkpoint.token_policy.bos_token_id) ||
+            !celeg::is_stop_token(topology.checkpoint.token_policy.eos_token_ids, tokenizer.eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +
                 std::to_string(tokenizer.bos_id()) + "/" +
-                std::to_string(topology.token_policy.bos_token_id) + " eos=" +
+                std::to_string(topology.checkpoint.token_policy.bos_token_id) + " eos=" +
                 std::to_string(tokenizer.eos_id()));
         }
 
@@ -591,7 +591,7 @@ int main(int argc, char** argv) {
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t next = engine.session().decode();
-            if (celeg::is_stop_token(topology.token_policy.eos_token_ids, next)) break;
+            if (celeg::is_stop_token(topology.checkpoint.token_policy.eos_token_ids, next)) break;
             generated.push_back(next);
             std::cout << tokenizer.decode({next}, true) << std::flush;
         }

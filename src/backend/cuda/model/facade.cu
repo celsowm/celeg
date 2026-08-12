@@ -1,6 +1,7 @@
 #include "celeg/detail/model/compiled_model.hpp"
 
 #include <functional>
+#include <stdexcept>
 
 namespace celeg {
 
@@ -28,9 +29,14 @@ void CudaCompiledModel::packed_expert_residency_callback(
     cudaStream_t stream, const float* route_scores_dev) {
     CudaCompiledModel& model = *static_cast<CudaCompiledModel*>(owner);
     if (!model.resources_.weights_) return;
+    const CompiledLayerProgram& layer_program = model.resources_.program_.layers.at(
+        static_cast<size_t>(layer));
+    if (!layer_program.moe) {
+        throw std::invalid_argument("packed residency requested for a non-MoE layer");
+    }
     model.resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
-        layer, sel_dev, rows, model.resources_.shape_.experts_per_token,
-        model.resources_.shape_.num_experts, stream, route_scores_dev,
+        layer, sel_dev, rows, layer_program.moe->router.experts_per_token,
+        layer_program.moe->router.expert_count, stream, route_scores_dev,
         &model.workspace_.residency_workspace_});
 }
 
@@ -126,7 +132,7 @@ bool CudaInferenceSession::decode_pending() const { return owner_->state_->decod
 int CudaInferenceSession::position() const { return owner_->state_->position(); }
 
 std::vector<float> CudaModelDiagnostics::copy_logits() const { return owner_->state_->copy_logits(); }
-int CudaModelDiagnostics::vocab_size() const { return owner_->state_->resources_.shape_.vocab_size; }
+int CudaModelDiagnostics::vocab_size() const { return owner_->state_->resources_.shape_.checkpoint.vocab_size; }
 DecodeBenchmark CudaModelDiagnostics::benchmark_decode(int warmup_steps, int measured_steps) {
     return owner_->state_->benchmark_decode(warmup_steps, measured_steps);
 }

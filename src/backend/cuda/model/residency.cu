@@ -252,8 +252,8 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
 
     // Promote any cold experts selected by the router before the FFN reads them.
     resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
-        layer, workspace_.moe_sel_.data(), 1, resources_.shape_.experts_per_token,
-        resources_.shape_.num_experts, stream_.get(),
+        layer, workspace_.moe_sel_.data(), 1, semantics.router.experts_per_token,
+        semantics.router.expert_count, stream_.get(),
         workspace_.moe_router_scratch_.data(), &workspace_.residency_workspace_});
 
     // Expert FFN: accumulate the routing-weighted expert outputs into the
@@ -261,7 +261,8 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     workspace_.moe_output_accum_.zero_async(stream_.get());
     const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, semantics);
     launch_moe_ffn(fdev, workspace_.moe_sel_.data(), workspace_.moe_routing_w_.data(),
-                    workspace_.normed_.data(), workspace_.moe_output_accum_.data(), 1, resources_.shape_.experts_per_token,
+                    workspace_.normed_.data(), workspace_.moe_output_accum_.data(), 1,
+                    semantics.router.experts_per_token,
                     workspace_.moe_gu_scratch_.data(), workspace_.moe_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_output_accum_.data(), workspace_.moe_output_.data(),
                                 resources_.shape_.hidden, stream_.get());
@@ -300,15 +301,17 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         static_cast<size_t>(layer)).moe.value();
     // Size the prefill scratch to the requested row count.
     workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
-    workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * resources_.shape_.experts_per_token);
-    workspace_.moe_pf_routing_w_.reserve(static_cast<size_t>(rows) * resources_.shape_.experts_per_token);
-    workspace_.moe_pf_router_scratch_.reserve(static_cast<size_t>(rows) * resources_.shape_.num_experts);
+    workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);
+    workspace_.moe_pf_routing_w_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);
+    workspace_.moe_pf_router_scratch_.reserve(static_cast<size_t>(rows) * semantics.router.expert_count);
     workspace_.moe_pf_output_accum_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
     workspace_.moe_pf_output_.reserve(static_cast<size_t>(rows) * resources_.shape_.hidden);
     workspace_.moe_pf_gu_scratch_.reserve(
-        static_cast<size_t>(rows) * resources_.shape_.experts_per_token * 2 * resources_.shape_.moe_intermediate);
+        static_cast<size_t>(rows) * semantics.router.experts_per_token * 2 *
+        semantics.routed.mlp.intermediate_size);
     workspace_.moe_pf_act_scratch_.reserve(
-        static_cast<size_t>(rows) * resources_.shape_.experts_per_token * resources_.shape_.moe_intermediate);
+        static_cast<size_t>(rows) * semantics.router.experts_per_token *
+        semantics.routed.mlp.intermediate_size);
 
     launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
                    workspace_.prefill_normed_.data(), rows, resources_.shape_.hidden, layer_semantics.feed_forward_norm.epsilon,
@@ -331,15 +334,15 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     // coordinator owns source reads, bounded admission, publication, and
     // completion ordering; the FFN sees one stable pointer table.
     resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
-        layer, workspace_.moe_pf_sel_.data(), rows, resources_.shape_.experts_per_token,
-        resources_.shape_.num_experts, stream_.get(), nullptr,
+        layer, workspace_.moe_pf_sel_.data(), rows, semantics.router.experts_per_token,
+        semantics.router.expert_count, stream_.get(), nullptr,
         &workspace_.residency_workspace_});
 
     workspace_.moe_pf_output_accum_.zero_async(stream_.get());
     const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, semantics);
     launch_moe_ffn(fdev, workspace_.moe_pf_sel_.data(), workspace_.moe_pf_routing_w_.data(),
                     workspace_.prefill_normed_.data(), workspace_.moe_pf_output_accum_.data(), rows,
-                    resources_.shape_.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
+                    semantics.router.experts_per_token, workspace_.moe_pf_gu_scratch_.data(),
                     workspace_.moe_pf_act_scratch_.data(), stream_.get());
     launch_finalize_moe_output(workspace_.moe_pf_output_accum_.data(), workspace_.moe_pf_output_.data(),
                                 rows * resources_.shape_.hidden, stream_.get());

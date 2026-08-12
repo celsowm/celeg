@@ -30,7 +30,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                              cudaMemcpyHostToDevice, stream_.get()));
     prof.begin(stream_.get());
     launch_mark_seen_batch(workspace_.prefill_tokens_.data(), rows, sampling_.seen_tokens.data(),
-                           resources_.shape_.vocab_size, stream_.get());
+                           resources_.shape_.checkpoint.vocab_size, stream_.get());
     resources_.weight_layout_->embed_batch(
         workspace_.prefill_tokens_.data(), rows, workspace_.prefill_hidden_.data(),
         resources_.shape_.hidden, stream_.get());
@@ -533,14 +533,14 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                    1, resources_.shape_.hidden, resources_.program_.final_norm.epsilon,
                    stream_.get());
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-           1, resources_.shape_.vocab_size, resources_.shape_.hidden);
+           1, resources_.shape_.checkpoint.vocab_size, resources_.shape_.hidden);
     if (resources_.program_.logits_divisor != 1.0f ||
         resources_.program_.logits_multiplier != 1.0f) {
-    launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
+    launch_scale(workspace_.logits_.data(), resources_.shape_.checkpoint.vocab_size,
                  resources_.program_.logits_multiplier /
                      resources_.program_.logits_divisor, stream_.get());
     if (resources_.program_.final_logit_softcap > 0.0f) {
-        launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
+        launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.checkpoint.vocab_size,
                             resources_.program_.final_logit_softcap, stream_.get());
     }
     }

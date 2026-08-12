@@ -203,6 +203,7 @@ std::vector<int> eos_values(const CheckpointMetadata& metadata, const Descriptor
 bool probe_condition(const CheckpointMetadata& metadata, const ProbeCondition& condition);
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
                             const RuntimeTopology& topology,
+                            const NumericalPolicy& numerical_policy,
                             const CheckpointMetadata& metadata);
 std::unique_ptr<IArchitecture> make_descriptor_architecture(Descriptor descriptor);
 std::optional<Field> optional_field(const Json& object, std::string_view key);

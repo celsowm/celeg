@@ -6,20 +6,21 @@
 namespace celeg {
 
 void build_dense_transformer_graph(ResolvedModel& model,
-                                  const RuntimeTopology& t) {
+                                   const RuntimeTopology& t,
+                                   const NumericalPolicy& numerical_policy) {
     model.graph.hidden = t.hidden;
-    model.graph.embedding_transform.multiplier = t.numerical_policy.embedding_multiplier;
-    model.graph.logits_divisor = t.numerical_policy.logits_divisor;
-    model.graph.logits_multiplier = t.numerical_policy.logits_multiplier;
-    model.graph.final_norm = {t.numerical_policy.norm_eps, NormWeightKind::Scale};
+    model.graph.embedding_transform.multiplier = numerical_policy.embedding_multiplier;
+    model.graph.logits_divisor = numerical_policy.logits_divisor;
+    model.graph.logits_multiplier = numerical_policy.logits_multiplier;
+    model.graph.final_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
     model.graph.final_logit_softcap = 0.0f;
     model.graph.norm_after_layers.clear();
     model.graph.layers.clear();
     model.graph.layers.reserve(static_cast<size_t>(t.num_hidden_layers));
     for (int i = 0; i < t.num_hidden_layers; ++i) {
         LayerSpec layer;
-        layer.operator_norm = {t.numerical_policy.norm_eps, NormWeightKind::Scale};
-        layer.feed_forward_norm = {t.numerical_policy.norm_eps, NormWeightKind::Scale};
+        layer.operator_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
+        layer.feed_forward_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
         if (t.mixer_kinds[static_cast<size_t>(i)] == MixerKind::Attention) {
             if (i >= static_cast<int>(t.attention_layouts.size())) {
                 throw std::runtime_error("attention layer has no resolved layout");
@@ -56,7 +57,7 @@ void build_dense_transformer_graph(ResolvedModel& model,
         } else {
             layer.feed_forward = DenseFeedForwardSpec{intermediate, ActivationKind::SwiGLU};
         }
-        layer.residual.multiplier = t.numerical_policy.residual_multiplier;
+        layer.residual.multiplier = numerical_policy.residual_multiplier;
         if (!t.execute_feed_forward.empty()) {
             layer.execute_feed_forward = t.execute_feed_forward.at(static_cast<size_t>(i));
         }

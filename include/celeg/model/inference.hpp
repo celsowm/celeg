@@ -245,6 +245,7 @@ struct InferenceInput {
 // the weight plan can address the source repository.
 struct CanonicalModelFacts {
     RuntimeTopology topology;
+    NumericalPolicy numerical_policy;
     TensorRoleBindings bindings;
     bool tied_embeddings = false;
     std::string resolution_mode;

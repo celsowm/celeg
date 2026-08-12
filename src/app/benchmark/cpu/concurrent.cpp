@@ -59,13 +59,13 @@ int main(int argc, char** argv) {
 
         celeg::CpuConcurrentEngine engine(
             (model_dir / "model.safetensors").string(),
-            std::min(topology.max_position_embeddings,
+            std::min(topology.checkpoint.max_position_embeddings,
                      static_cast<int>(tokens.size()) + max_new + 8),
             model_options, engine_options);
 
         celeg::ConcurrentRequestOptions request_options;
         request_options.max_new_tokens = static_cast<size_t>(max_new);
-        request_options.eos_tokens = bootstrap.model.topology.token_policy.eos_token_ids;
+        request_options.eos_tokens = bootstrap.model.topology.checkpoint.token_policy.eos_token_ids;
         request_options.generation.temperature = 0.0f;
         request_options.generation.top_k = 1;
 

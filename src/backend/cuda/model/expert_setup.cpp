@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <stdexcept>
 
 namespace celeg {
 namespace {
@@ -14,8 +15,9 @@ std::size_t bf16_bytes(std::size_t elements) {
 }
 
 std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
+                                        const CompiledModelProgram& program,
                                         bool tied_embeddings) {
-    std::size_t bytes = bf16_bytes(static_cast<std::size_t>(shape.vocab_size) *
+    std::size_t bytes = bf16_bytes(static_cast<std::size_t>(shape.checkpoint.vocab_size) *
                                    static_cast<std::size_t>(shape.hidden));
     if (!tied_embeddings) bytes += bytes;
     bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
@@ -24,8 +26,13 @@ std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
         // input_layernorm and the FFN input norm are present in all normal
         // decoder blocks. Split-norm families add two more vectors below.
         bytes += bf16_bytes(2ull * static_cast<std::size_t>(shape.hidden));
-        if (shape.has_split_attention_norms) {
-            bytes += bf16_bytes(2ull * static_cast<std::size_t>(shape.hidden));
+        const CompiledLayerProgram& layer_program = program.layers.at(
+            static_cast<size_t>(layer));
+        if (layer_program.post_attention_norm.enabled()) {
+            bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
+        }
+        if (layer_program.post_feed_forward_norm.enabled()) {
+            bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
         }
 
         const MixerKind mixer = shape.mixer_kinds.at(static_cast<size_t>(layer));
@@ -62,9 +69,10 @@ std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
                 bytes += bf16_bytes(3ull * shared * shape.hidden + shape.hidden);
             }
         } else {
-            const int intermediate = shape.feed_forward_intermediates.empty()
-                ? shape.intermediate
-                : shape.feed_forward_intermediates.at(static_cast<size_t>(layer));
+            const int intermediate = layer_program.feed_forward_intermediate;
+            if (intermediate <= 0) {
+                throw std::runtime_error("compiled layer has no FFN width for weight estimate");
+            }
             bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) * shape.hidden);
         }
     }
@@ -72,7 +80,7 @@ std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
 }
 
 std::size_t estimate_mtp_non_expert_weights(const RuntimeTopology& shape) {
-    if (shape.mtp_num_hidden_layers <= 0) return 0;
+    if (shape.checkpoint.mtp_num_hidden_layers <= 0) return 0;
     const auto bf16_bytes = [](std::size_t elements) {
         return elements * sizeof(__nv_bfloat16);
     };
@@ -90,7 +98,7 @@ std::size_t estimate_mtp_non_expert_weights(const RuntimeTopology& shape) {
     const AttentionSpec& attention = shape.attention_layout(full_attention_layer);
     std::size_t bytes = bf16_bytes(2ull * shape.hidden * shape.hidden);
     bytes += bf16_bytes(3ull * shape.hidden); // two pre-fc norms and final norm
-    for (int layer = 0; layer < shape.mtp_num_hidden_layers; ++layer) {
+    for (int layer = 0; layer < shape.checkpoint.mtp_num_hidden_layers; ++layer) {
         bytes += bf16_bytes(2ull * shape.hidden); // input and post-attention norms
         bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * shape.hidden);
         bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * shape.hidden);
@@ -134,14 +142,14 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
     const int moe_layers = moe_layer_count(resources.shape_) +
         (resources.options_.enable_mtp && resources.shape_.num_experts > 0
-            ? resources.shape_.mtp_num_hidden_layers : 0);
+            ? resources.shape_.checkpoint.mtp_num_hidden_layers : 0);
     const size_t expert_bytes = bytes_per_expert_bf16(resources.shape_);
     ExpertOffloadPlanInputs inputs;
     inputs.shape = resources.shape_;
     inputs.options = resources.options_.expert_offload;
     inputs.gpu_free_bytes = free_bytes;
     inputs.non_expert_weight_bytes = estimate_non_expert_weights(
-        resources.shape_, resources.model_.capabilities.tied_embeddings) +
+        resources.shape_, resources.program_, resources.model_.capabilities.tied_embeddings) +
         (resources.options_.enable_mtp
             ? estimate_mtp_non_expert_weights(resources.shape_) : 0) +
         (64ull << 20);
@@ -149,7 +157,7 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     inputs.context_tokens = model.max_context_;
     if (resources.options_.enable_mtp) {
         inputs.extra_moe_layers = resources.shape_.num_experts > 0
-            ? resources.shape_.mtp_num_hidden_layers : 0;
+            ? resources.shape_.checkpoint.mtp_num_hidden_layers : 0;
         const int full_attention_layer = [&]() {
             for (int layer = resources.shape_.num_hidden_layers - 1; layer >= 0; --layer) {
                 if (resources.shape_.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::Attention) {
@@ -161,7 +169,7 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
         if (full_attention_layer >= 0) {
             const AttentionSpec& attention = resources.shape_.attention_layout(full_attention_layer);
             inputs.extra_kv_reservation_bytes = static_cast<size_t>(
-                resources.shape_.mtp_num_hidden_layers) * 2ull *
+                resources.shape_.checkpoint.mtp_num_hidden_layers) * 2ull *
                 static_cast<size_t>(attention.key_value_width()) *
                 sizeof(__nv_bfloat16) * static_cast<size_t>(model.max_context_);
         }

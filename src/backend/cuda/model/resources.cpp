@@ -6,7 +6,7 @@ namespace celeg {
 
 void CudaCompiledModel::allocate_celeg_resources() {
     // Size all per-session device buffers from the runtime shape.
-    sampling_.reset_vocabulary(static_cast<size_t>(resources_.shape_.vocab_size));
+    sampling_.reset_vocabulary(static_cast<size_t>(resources_.shape_.checkpoint.vocab_size));
     workspace_.hidden_.reset(static_cast<size_t>(resources_.shape_.hidden));
     workspace_.residual_.reset(static_cast<size_t>(resources_.shape_.hidden));
     workspace_.normed_.reset(static_cast<size_t>(resources_.shape_.hidden));
@@ -49,13 +49,13 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.gate_up_.reset(static_cast<size_t>(2 * resources_.shape_.max_feed_forward_intermediate));
     workspace_.activated_.reset(static_cast<size_t>(resources_.shape_.max_feed_forward_intermediate));
     workspace_.mlp_output_.reset(static_cast<size_t>(resources_.shape_.hidden));
-    workspace_.logits_.reset(static_cast<size_t>(resources_.shape_.vocab_size));
-    if (resources_.options_.enable_mtp && resources_.shape_.mtp_num_hidden_layers > 0) {
+    workspace_.logits_.reset(static_cast<size_t>(resources_.shape_.checkpoint.vocab_size));
+    if (resources_.options_.enable_mtp && resources_.shape_.checkpoint.mtp_num_hidden_layers > 0) {
         workspace_.mtp_embedding_.reset(static_cast<size_t>(resources_.shape_.hidden));
         workspace_.mtp_hidden_norm_.reset(static_cast<size_t>(resources_.shape_.hidden));
         workspace_.mtp_fused_.reset(static_cast<size_t>(2 * resources_.shape_.hidden));
         workspace_.mtp_base_hidden_.reset(static_cast<size_t>(resources_.shape_.hidden));
-        workspace_.mtp_logits_.reset(static_cast<size_t>(resources_.shape_.vocab_size));
+        workspace_.mtp_logits_.reset(static_cast<size_t>(resources_.shape_.checkpoint.vocab_size));
         workspace_.mtp_token_.reset(1);
         workspace_.mtp_candidate_.reset(1);
         workspace_.mtp_target_candidate_.reset(1);
@@ -89,7 +89,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
         workspace_.moe_gu_scratch_.reset(static_cast<size_t>(K) * 2 * inter);
         workspace_.moe_act_scratch_.reset(static_cast<size_t>(K) * inter);
         const int mtp_layers = resources_.options_.enable_mtp
-            ? resources_.shape_.mtp_num_hidden_layers : 0;
+            ? resources_.shape_.checkpoint.mtp_num_hidden_layers : 0;
         workspace_.moe_router_float_.resize(static_cast<size_t>(
             resources_.shape_.num_hidden_layers + mtp_layers));
     }

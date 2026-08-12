@@ -45,7 +45,7 @@ void CudaCompiledModel::load_checkpoint_weights(
     // how many experts fit in the GPU cache per layer.
     configure_cuda_expert_resources(*this);
     const int mtp_layer_count = resources_.options_.enable_mtp
-        ? resources_.shape_.mtp_num_hidden_layers : 0;
+        ? resources_.shape_.checkpoint.mtp_num_hidden_layers : 0;
     const int resource_layer_count = resources_.shape_.num_hidden_layers +
         mtp_layer_count;
     workspace_.expert_caches_.resize(static_cast<size_t>(resource_layer_count));
@@ -65,9 +65,9 @@ void CudaCompiledModel::load_checkpoint_weights(
     std::vector<int> shared_owner(2, -1);
     for (int i = 0; i < resources_.shape_.num_hidden_layers; ++i) {
         LayerCommon common_layer;
-        const bool sequential_mixer_model = resources_.shape_.mamba2_layer_count > 0;
         const CompiledLayerProgram& semantic_layer = resources_.program_.layers.at(
             static_cast<size_t>(i));
+        const bool sequential_mixer_model = semantic_layer.mixer == CompiledMixer::Mamba2;
         const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
             const std::string name = spec.weightless()
                 ? std::string{} : tensor_name(resources_.model_.weight_plan.requests, role, i);
@@ -82,9 +82,11 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
                                               semantic_layer.feed_forward_norm);
         }
-        if (!sequential_mixer_model && resources_.shape_.has_split_attention_norms) {
+        if (!sequential_mixer_model && semantic_layer.post_attention_norm.enabled()) {
             common_layer.post_attention_norm = load_norm(
                 TensorRole::AttentionPostNorm, semantic_layer.post_attention_norm);
+        }
+        if (!sequential_mixer_model && semantic_layer.post_feed_forward_norm.enabled()) {
             common_layer.post_feed_forward_norm = load_norm(
                 TensorRole::FfnOutputNorm, semantic_layer.post_feed_forward_norm);
         }
@@ -105,12 +107,15 @@ void CudaCompiledModel::load_checkpoint_weights(
             // Sequential mixer models own their block-specific projections in the layer
             // variant below; there is no generic post-mixer FFN descriptor.
             common_layer.feed_forward = DenseFfnWeights{};
-        } else if (resources_.shape_.layer_uses_moe(i)) {
+        } else if (semantic_layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
             // Mixture-of-experts feed-forward for this layer.
-            const int E = resources_.shape_.num_experts;
-            const int inter = resources_.shape_.moe_intermediate;
+            if (!semantic_layer.moe) {
+                throw std::runtime_error("compiled MoE layer has no router program");
+            }
+            const int E = semantic_layer.moe->router.expert_count;
+            const int inter = semantic_layer.moe->routed.mlp.intermediate_size;
             const float* expert_bias = nullptr;
-            if (resources_.shape_.use_expert_bias) {
+            if (semantic_layer.moe->router.has_expert_bias) {
                 // Checkpoint naming varies across otherwise equivalent MoE
                 // layouts. Resolve the neutral role from the repository
                 // evidence instead of coupling CUDA loading to one spelling.
@@ -140,8 +145,8 @@ void CudaCompiledModel::load_checkpoint_weights(
             moe_weights.expert_bias = expert_bias;
             moe_weights.router_float = router_float.data();
 
-            if (resources_.shape_.shared_expert_intermediate > 0) {
-                const int shared_inter = resources_.shape_.shared_expert_intermediate;
+            if (semantic_layer.moe->shared) {
+                const int shared_inter = semantic_layer.moe->shared->mlp.intermediate_size;
                 moe_weights.shared_w13 = resources_.weight_loader_->load_concat_linear_weight(
                     repo, layer_name(i, "shared_expert.w13.weight"),
                     {
@@ -180,7 +185,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                                request.layer == i && request.expert == 0;
                     });
                 const bool packed_expert_model = !individual_expert_model &&
-                    resources_.shape_.shared_expert_intermediate > 0;
+                    semantic_layer.moe->shared.has_value();
                 const bool named_expert_model = !packed_expert_model &&
                     (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
                      repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed")));
@@ -296,8 +301,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                         return request.role == TensorRole::MoeExpertGate &&
                                request.layer == i && request.expert == 0;
                     });
-                if (!individual_expert_model &&
-                    resources_.shape_.shared_expert_intermediate > 0) {
+                if (!individual_expert_model && semantic_layer.moe->shared) {
                     moe_weights.gate_up = resources_.weight_loader_->load_expert_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::MoePackedGateUp, i),
@@ -324,9 +328,10 @@ void CudaCompiledModel::load_checkpoint_weights(
 
             common_layer.feed_forward = moe_weights;
         } else {
-            const int intermediate = resources_.shape_.feed_forward_intermediates.empty()
-                ? resources_.shape_.intermediate
-                : resources_.shape_.feed_forward_intermediates.at(static_cast<size_t>(i));
+            const int intermediate = semantic_layer.feed_forward_intermediate;
+            if (intermediate <= 0) {
+                throw std::runtime_error("compiled dense layer has no FFN width");
+            }
             const LinearWeight* w13 = resources_.weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "feed_forward.w13.weight"),
                 {
@@ -341,12 +346,14 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
-        const MixerKind layer_type =
-            resources_.shape_.mixer_kinds[static_cast<size_t>(i)];
-        if (layer_type == MixerKind::Attention) {
+        const CompiledMixer layer_type = semantic_layer.mixer;
+        if (layer_type == CompiledMixer::Attention) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
-            attention_layer.layout = resources_.shape_.attention_layout(i);
+            if (!semantic_layer.attention) {
+                throw std::runtime_error("compiled attention layer has no layout");
+            }
+            attention_layer.layout = *semantic_layer.attention;
             std::string query_name;
             const AttentionSpec& layout = attention_layer.layout;
             if (const auto* alibi = std::get_if<AlibiBiasSpec>(&layout.bias)) {
@@ -521,11 +528,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
             if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
             resources_.layers_.emplace_back(std::move(attention_layer));
-        } else if (layer_type == MixerKind::GatedDeltaNet) {
+        } else if (layer_type == CompiledMixer::GatedDeltaNet) {
             GatedDeltaNetLayer gated_delta_layer;
             gated_delta_layer.common = common_layer;
-            gated_delta_layer.spec = resources_.shape_.gated_delta_net_layouts.at(
-                static_cast<size_t>(i));
+            if (!semantic_layer.gated_delta_net) {
+                throw std::runtime_error("compiled GatedDeltaNet layer has no layout");
+            }
+            gated_delta_layer.spec = *semantic_layer.gated_delta_net;
             const GatedDeltaNetSpec& spec = gated_delta_layer.spec;
             const int key_width = spec.key_heads * spec.key_head_dim;
             const int value_width = spec.value_heads * spec.value_head_dim;
@@ -622,10 +631,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             gated_delta_layer.recurrent_state.reset(static_cast<size_t>(spec.value_heads) *
                 spec.key_head_dim * spec.value_head_dim);
             resources_.layers_.emplace_back(std::move(gated_delta_layer));
-        } else if (layer_type == MixerKind::Mamba2) {
+        } else if (layer_type == CompiledMixer::Mamba2) {
             Mamba2Layer mamba_layer;
             mamba_layer.common = common_layer;
-            mamba_layer.spec = resources_.shape_.mamba2_layouts.at(static_cast<size_t>(i));
+            if (!semantic_layer.mamba2) {
+                throw std::runtime_error("compiled Mamba2 layer has no layout");
+            }
+            mamba_layer.spec = *semantic_layer.mamba2;
             const Mamba2Spec& spec = mamba_layer.spec;
             const int conv_dim = spec.intermediate_size +
                 2 * spec.group_count * spec.state_size;
@@ -657,10 +669,12 @@ void CudaCompiledModel::load_checkpoint_weights(
             mamba_layer.conv_state.reset(static_cast<size_t>(conv_dim) * spec.conv_kernel);
             mamba_layer.ssm_state.reset(static_cast<size_t>(spec.intermediate_size) * spec.state_size);
             resources_.layers_.emplace_back(std::move(mamba_layer));
-        } else if (layer_type == MixerKind::MlpOnly) {
+        } else if (layer_type == CompiledMixer::MlpOnly) {
             MlpOnlyLayer mlp_layer;
             mlp_layer.common = common_layer;
-            mlp_layer.spec = resources_.shape_.mlp_only_layouts.at(static_cast<size_t>(i));
+            mlp_layer.spec = MlpBlockSpec{
+                semantic_layer.feed_forward_intermediate,
+                semantic_layer.feed_forward_activation};
             mlp_layer.up = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
                 {mlp_layer.spec.intermediate_size, resources_.shape_.hidden});

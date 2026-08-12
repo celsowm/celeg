@@ -35,6 +35,7 @@ public:
         const int hidden = integer_value(metadata, descriptor_.dimensions.at("hidden"));
         const int query_heads = integer_value(metadata, descriptor_.dimensions.at("query_heads"));
         RuntimeTopology topology;
+        NumericalPolicy numerical_policy;
         topology.hidden = hidden;
         topology.intermediate = integer_value(metadata, descriptor_.dimensions.at("intermediate"));
         topology.dense_intermediate = topology.intermediate;
@@ -48,27 +49,27 @@ public:
         topology.num_hidden_layers = physical_layer_count * repeat_count;
         if (const auto mtp = descriptor_.dimensions.find("mtp_layers");
             mtp != descriptor_.dimensions.end()) {
-            topology.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
+            topology.checkpoint.mtp_num_hidden_layers = integer_value(metadata, mtp->second);
         }
-        topology.vocab_size = integer_value(metadata, descriptor_.dimensions.at("vocab"));
-        if (topology.vocab_size == 0 && metadata.is_gguf() && metadata.contains("tokenizer.ggml.tokens")) {
-            topology.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
+        topology.checkpoint.vocab_size = integer_value(metadata, descriptor_.dimensions.at("vocab"));
+        if (topology.checkpoint.vocab_size == 0 && metadata.is_gguf() && metadata.contains("tokenizer.ggml.tokens")) {
+            topology.checkpoint.vocab_size = static_cast<int>(metadata.strings("tokenizer.ggml.tokens").size());
         }
-        topology.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
+        topology.checkpoint.max_position_embeddings = integer_value(metadata, descriptor_.dimensions.at("context"));
         topology.conv_cache = descriptor_.convolution_cache.has_value()
             ? integer_value(metadata, *descriptor_.convolution_cache) : 0;
         topology.conv_dim = descriptor_.convolution_channels.has_value()
             ? integer_value(metadata, *descriptor_.convolution_channels, hidden) : 0;
         const int kv_heads = integer_value(metadata, descriptor_.dimensions.at("kv_heads"));
         const int head_dim = integer_value(metadata, descriptor_.dimensions.at("head_dim"), hidden, query_heads);
-        topology.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
-        topology.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
-        topology.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
+        topology.checkpoint.token_policy.bos_token_id = token_value(metadata, descriptor_.bos, descriptor_.gguf_bos);
+        topology.checkpoint.token_policy.eos_token_ids = eos_values(metadata, descriptor_);
+        topology.checkpoint.token_policy.pad_token_id = token_value(metadata, descriptor_.pad, descriptor_.gguf_pad);
         const auto& numbers = descriptor_.numbers;
-        topology.numerical_policy.norm_eps = static_cast<float>(number_value(metadata, numbers.at("norm_eps")));
-        topology.numerical_policy.post_norm_eps = numbers.contains("post_norm_eps")
+        numerical_policy.norm_eps = static_cast<float>(number_value(metadata, numbers.at("norm_eps")));
+        numerical_policy.post_norm_eps = numbers.contains("post_norm_eps")
             ? static_cast<float>(number_value(metadata, numbers.at("post_norm_eps")))
-            : topology.numerical_policy.norm_eps;
+            : numerical_policy.norm_eps;
         const double rope_theta = number_value(metadata, numbers.at("rope_theta"));
         const std::vector<float> scheduled_rope_theta = scaling_factor_values(
             metadata, descriptor_.rope_theta_schedule);
@@ -95,13 +96,13 @@ public:
             metadata, descriptor_.rope_scaling_long_factors);
         const double rotary_fraction = descriptor_.rotary_fraction.has_value()
             ? number_value(metadata, *descriptor_.rotary_fraction) : 1.0;
-        topology.numerical_policy.embedding_multiplier = static_cast<float>(
+        numerical_policy.embedding_multiplier = static_cast<float>(
             number_value(metadata, numbers.at("embedding_multiplier"), hidden));
-        topology.numerical_policy.logits_multiplier = numbers.contains("logits_multiplier")
+        numerical_policy.logits_multiplier = numbers.contains("logits_multiplier")
             ? static_cast<float>(number_value(metadata, numbers.at("logits_multiplier"))) : 1.0f;
-        topology.numerical_policy.attention_multiplier = static_cast<float>(number_value(metadata, numbers.at("attention_multiplier")));
-        topology.numerical_policy.residual_multiplier = static_cast<float>(number_value(metadata, numbers.at("residual_multiplier")));
-        topology.numerical_policy.logits_divisor = static_cast<float>(number_value(metadata, numbers.at("logits_divisor")));
+        numerical_policy.attention_multiplier = static_cast<float>(number_value(metadata, numbers.at("attention_multiplier")));
+        numerical_policy.residual_multiplier = static_cast<float>(number_value(metadata, numbers.at("residual_multiplier")));
+        numerical_policy.logits_divisor = static_cast<float>(number_value(metadata, numbers.at("logits_divisor")));
         const std::vector<std::string> scheduled_mixer = mixer_schedule_values(metadata, descriptor_);
         if (!scheduled_mixer.empty() && scheduled_mixer.size() !=
             static_cast<size_t>(topology.num_hidden_layers)) {
@@ -239,9 +240,9 @@ public:
             }
         }
         if (descriptor_.map_physical_layers) {
-            topology.checkpoint_layer_for_layer.resize(static_cast<size_t>(topology.num_hidden_layers));
+            topology.checkpoint.checkpoint_layer_for_layer.resize(static_cast<size_t>(topology.num_hidden_layers));
             for (int layer = 0; layer < topology.num_hidden_layers; ++layer) {
-                topology.checkpoint_layer_for_layer[static_cast<size_t>(layer)] =
+                topology.checkpoint.checkpoint_layer_for_layer[static_cast<size_t>(layer)] =
                     layer % physical_layer_count;
             }
         }
@@ -331,13 +332,13 @@ public:
             attention.key_value_heads = scheduled_layer_kv_heads;
             attention.head_dim = layer_head_dim;
             attention.query_norm = {descriptor_.query_norm_enabled
-                ? topology.numerical_policy.norm_eps : 0.0f,
+                ? numerical_policy.norm_eps : 0.0f,
                 descriptor_.query_norm_kind};
             attention.key_norm = {descriptor_.key_norm_enabled
-                ? topology.numerical_policy.norm_eps : 0.0f,
+                ? numerical_policy.norm_eps : 0.0f,
                 descriptor_.key_norm_kind};
             attention.pattern = FullCausalPattern{};
-            attention.query_scale = topology.numerical_policy.attention_multiplier;
+            attention.query_scale = numerical_policy.attention_multiplier;
             attention.output_gate = {descriptor_.attention_gate_kind,
                                      descriptor_.attention_gate_packed_with_query};
             if (descriptor_.attention_state_kind == "latent") {
@@ -428,9 +429,6 @@ public:
             }
             topology.attention_layouts[static_cast<size_t>(layer)] = std::move(attention);
         }
-        topology.shared_kv_group_count = shared_layers > 0
-            ? (has_attention_variants ? 2 : 1) : 0;
-        topology.has_split_attention_norms = descriptor_.split_attention_norms;
         topology.has_per_layer_input = descriptor_.per_layer_input_size.has_value();
         topology.per_layer_input_size = topology.has_per_layer_input
             ? integer_value(metadata, *descriptor_.per_layer_input_size) : 0;
@@ -442,9 +440,13 @@ public:
         topology.validate();
         ArchitectureResolutionStages stages;
         stages.topology = [topology](const CheckpointView&) { return topology; };
+        stages.numerical_policy = [numerical_policy](const CheckpointView&) {
+            return numerical_policy;
+        };
         stages.graph = [this](ResolvedModel& model, const RuntimeTopology& topology,
+                              const NumericalPolicy& numerical_policy,
                               const CheckpointView& view) {
-            build_descriptor_graph(model, descriptor_, topology, view.metadata);
+            build_descriptor_graph(model, descriptor_, topology, numerical_policy, view.metadata);
         };
         stages.weights = [this](ResolvedModel& model, const CheckpointView&) {
             auto policy = descriptor_detail::create_naming_policy(descriptor_);

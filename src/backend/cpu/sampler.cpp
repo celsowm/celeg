@@ -44,7 +44,7 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
     if (temperature <= 0.0f || generation.top_k == 1) {
         std::int32_t best = 0;
         float best_value = penalized(0);
-        for (std::int32_t token = 1; token < shape.vocab_size; ++token) {
+        for (std::int32_t token = 1; token < shape.checkpoint.vocab_size; ++token) {
             const float value = penalized(token);
             if (value > best_value) {
                 best = token;
@@ -53,7 +53,7 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
         }
         return best;
     }
-    const int top_k = std::min(generation.top_k, shape.vocab_size);
+    const int top_k = std::min(generation.top_k, shape.checkpoint.vocab_size);
     struct Candidate {
         std::int32_t token;
         float score;
@@ -66,8 +66,8 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
     // path is hot for CPU generation and the final K-way sort is sufficient
     // for deterministic ordering and top-p truncation.
     std::vector<Candidate> candidates;
-    candidates.reserve(static_cast<size_t>(shape.vocab_size));
-    for (std::int32_t token = 0; token < shape.vocab_size; ++token) {
+    candidates.reserve(static_cast<size_t>(shape.checkpoint.vocab_size));
+    for (std::int32_t token = 0; token < shape.checkpoint.vocab_size; ++token) {
         candidates.push_back({token, penalized(token) / temperature});
     }
     if (static_cast<int>(candidates.size()) > top_k) {

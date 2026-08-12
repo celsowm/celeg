@@ -28,17 +28,18 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
 
 void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
                             const RuntimeTopology& topology,
+                            const NumericalPolicy& numerical_policy,
                             const CheckpointMetadata& metadata) {
     model.graph.hidden = topology.hidden;
     model.graph.embedding_transform.multiplier =
-        topology.numerical_policy.embedding_multiplier;
+        numerical_policy.embedding_multiplier;
     if (descriptor.embedding_post_norm_kind) {
         model.graph.embedding_transform.post_norm = NormSpec{
-            topology.numerical_policy.norm_eps, *descriptor.embedding_post_norm_kind};
+            numerical_policy.norm_eps, *descriptor.embedding_post_norm_kind};
     }
-    model.graph.logits_divisor = topology.numerical_policy.logits_divisor;
-    model.graph.logits_multiplier = topology.numerical_policy.logits_multiplier;
-    model.graph.final_norm = {topology.numerical_policy.norm_eps,
+    model.graph.logits_divisor = numerical_policy.logits_divisor;
+    model.graph.logits_multiplier = numerical_policy.logits_multiplier;
+    model.graph.final_norm = {numerical_policy.norm_eps,
                               descriptor.final_norm_kind};
     model.graph.final_logit_softcap = descriptor.final_logit_softcap.has_value()
         ? static_cast<float>(number_value(metadata, *descriptor.final_logit_softcap)) : 0.0f;
@@ -69,8 +70,8 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
     model.graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
     for (int layer_index = 0; layer_index < topology.num_hidden_layers; ++layer_index) {
         LayerSpec layer;
-        const float epsilon = topology.numerical_policy.norm_eps;
-        const float post_epsilon = topology.numerical_policy.post_norm_eps;
+        const float epsilon = numerical_policy.norm_eps;
+        const float post_epsilon = numerical_policy.post_norm_eps;
         layer.operator_norm = {epsilon, descriptor.operator_norm_kind};
         layer.feed_forward_norm = {epsilon, descriptor.feed_forward_norm_kind};
         if (descriptor.split_attention_norms) {
@@ -131,7 +132,7 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
                 intermediate, topology.feed_forward_activations.at(
                     static_cast<size_t>(layer_index))};
         }
-        layer.residual.multiplier = topology.numerical_policy.residual_multiplier;
+        layer.residual.multiplier = numerical_policy.residual_multiplier;
         layer.execute_feed_forward = topology.mixer_kinds[static_cast<size_t>(layer_index)] !=
             MixerKind::MlpOnly;
         layer.per_layer_input = {topology.per_layer_input_size, ActivationKind::GeluTanh,

@@ -34,23 +34,26 @@ struct NumericalPolicy {
     void validate() const;
 };
 
-// Runtime-only derived topology. It is generic execution data; architecture
-// identity and checkpoint matching are deliberately absent. Token and
-// numerical behavior are explicit policies rather than loose topology fields.
+struct CheckpointDimensions {
+    int vocab_size = 0;
+    int max_position_embeddings = 0;
+    std::vector<int> checkpoint_layer_for_layer;
+    TokenPolicy token_policy;
+    int mtp_num_hidden_layers = 0;
+
+    void validate() const;
+};
+
+// Runtime-only execution cache plus the import dimensions needed by model
+// loading and tokenization. Semantic execution policy remains in ModelGraph.
 struct RuntimeTopology {
     int hidden = 0;
     int intermediate = 0;
     int max_feed_forward_intermediate = 0;
     int num_hidden_layers = 0;
-    int vocab_size = 0;
+    CheckpointDimensions checkpoint;
     int conv_cache = 0;
     int conv_dim = 0;
-    int max_position_embeddings = 0;
-    // Maps each executable layer to its source checkpoint block.  An empty
-    // table means the identity mapping.
-    std::vector<int> checkpoint_layer_for_layer;
-    TokenPolicy token_policy;
-    NumericalPolicy numerical_policy;
     std::vector<MixerKind> mixer_kinds;
     std::vector<FeedForwardKind> feed_forward_kinds;
     std::vector<bool> execute_feed_forward;
@@ -82,8 +85,6 @@ struct RuntimeTopology {
     std::vector<AttentionSpec> attention_layouts;
     std::vector<int> feed_forward_intermediates;
     std::vector<ActivationKind> feed_forward_activations;
-    int shared_kv_group_count = 0;
-    bool has_split_attention_norms = false;
     bool has_per_layer_input = false;
     int per_layer_input_size = 0;
     // Auxiliary multi-token predictor depth. Kept after the established
@@ -185,7 +186,7 @@ struct RuntimeTopology {
     }
     std::string fingerprint() const;
     std::string summary() const;
-    void validate() const;
+void validate() const;
 
     const AttentionSpec& attention_layout(int layer) const {
         if (layer < 0 || layer >= static_cast<int>(attention_layouts.size())) {

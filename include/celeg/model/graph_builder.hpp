@@ -8,6 +8,7 @@ namespace celeg {
 // provider remains responsible for resolving topology and metadata; this
 // helper only materializes the already-resolved dense layer contract.
 void build_dense_transformer_graph(ResolvedModel& model,
-                                  const RuntimeTopology& import_topology);
+                                  const RuntimeTopology& import_topology,
+                                  const NumericalPolicy& numerical_policy);
 
 } // namespace celeg

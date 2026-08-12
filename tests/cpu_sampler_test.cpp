@@ -7,7 +7,7 @@
 
 int main() {
     celeg::RuntimeTopology shape;
-    shape.vocab_size = 4;
+    shape.checkpoint.vocab_size = 4;
 
     celeg::GenerationConfig greedy;
     greedy.temperature = 0.0f;

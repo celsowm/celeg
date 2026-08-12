@@ -150,13 +150,8 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
 RuntimeTopology compose_runtime_topology(RuntimeTopology import_topology,
                                          const ModelGraph& graph) {
     RuntimeTopology topology = ExecutionTopology::derive(graph);
-    topology.vocab_size = import_topology.vocab_size;
-    topology.max_position_embeddings = import_topology.max_position_embeddings;
-    topology.checkpoint_layer_for_layer =
-        std::move(import_topology.checkpoint_layer_for_layer);
-    topology.token_policy = std::move(import_topology.token_policy);
-    topology.numerical_policy = import_topology.numerical_policy;
-    topology.mtp_num_hidden_layers = import_topology.mtp_num_hidden_layers;
+    topology.checkpoint = std::move(import_topology.checkpoint);
+    topology.checkpoint.mtp_num_hidden_layers = import_topology.checkpoint.mtp_num_hidden_layers;
     return topology;
 }
 
@@ -341,17 +336,39 @@ void NumericalPolicy::validate() const {
     }
 }
 
+void CheckpointDimensions::validate() const {
+    if (vocab_size <= 0 || max_position_embeddings <= 0 ||
+        mtp_num_hidden_layers < 0) {
+        throw std::runtime_error("invalid checkpoint dimensions");
+    }
+    if (!checkpoint_layer_for_layer.empty()) {
+        for (int layer : checkpoint_layer_for_layer) {
+            if (layer < 0) throw std::runtime_error("negative checkpoint layer mapping");
+        }
+    }
+    token_policy.validate();
+    const auto validate_token_id = [this](int token, const char* name) {
+        if (token < 0 || token >= vocab_size) {
+            throw std::runtime_error(std::string("resolved ") + name +
+                                     " token id is outside the vocabulary");
+        }
+    };
+    validate_token_id(token_policy.bos_token_id, "BOS");
+    validate_token_id(token_policy.pad_token_id, "pad");
+    for (int token : token_policy.eos_token_ids) validate_token_id(token, "EOS");
+}
+
 std::string RuntimeTopology::fingerprint() const {
     std::ostringstream out;
     out << "h" << hidden << "-l" << num_hidden_layers
-        << "-mtp" << mtp_num_hidden_layers
-        << "-voc" << vocab_size
+        << "-mtp" << checkpoint.mtp_num_hidden_layers
+        << "-voc" << checkpoint.vocab_size
         << "-int" << intermediate << "-cc" << conv_cache
         << "-e" << num_experts << "-k" << experts_per_token
         << "-mi" << moe_intermediate;
     out << "-m2i" << mamba2_intermediate;
     out << "-map";
-    for (int layer : checkpoint_layer_for_layer) out << '-' << layer;
+    for (int layer : checkpoint.checkpoint_layer_for_layer) out << '-' << layer;
     for (const AttentionSpec& attention : attention_layouts) {
         if (const auto* rope = attention.rope_position()) {
             out << "-r" << rope->theta << '-' << rope->rotary_fraction
@@ -422,16 +439,6 @@ std::string RuntimeTopology::fingerprint() const {
     for (int width : feed_forward_intermediates) out << '-' << width;
     out << "-exec";
     for (bool execute : execute_feed_forward) out << '-' << execute;
-    out << "-tok" << token_policy.bos_token_id << '-' << token_policy.pad_token_id;
-    for (int eos : token_policy.eos_token_ids) out << '-' << eos;
-    out << "-num" << numerical_policy.norm_eps << '-'
-        << numerical_policy.post_norm_eps << '-'
-        << numerical_policy.embedding_multiplier << '-'
-        << numerical_policy.attention_multiplier << '-'
-        << numerical_policy.residual_multiplier << '-'
-        << numerical_policy.logits_multiplier << '-'
-        << numerical_policy.logits_divisor << '-'
-        << numerical_policy.final_logit_softcap;
     return out.str();
 }
 
@@ -439,39 +446,23 @@ std::string RuntimeTopology::summary() const {
     std::ostringstream out;
     out << "hidden=" << hidden << " intermediate=" << intermediate
         << " layers=" << num_hidden_layers
-        << " mtp_layers=" << mtp_num_hidden_layers
+        << " mtp_layers=" << checkpoint.mtp_num_hidden_layers
         << " attention_layers=" << attention_layer_count
         << " conv_layers=" << conv_layer_count
-        << " vocab=" << vocab_size;
+        << " vocab=" << checkpoint.vocab_size;
     return out.str();
 }
 
 void RuntimeTopology::validate() const {
-    if (hidden <= 0 || intermediate <= 0 || vocab_size <= 0 ||
-        num_hidden_layers <= 0 || mtp_num_hidden_layers < 0) {
+    if (hidden <= 0 || intermediate <= 0 || num_hidden_layers <= 0) {
         throw std::runtime_error("invalid resolved model topology");
     }
-    if (!checkpoint_layer_for_layer.empty()) {
-        if (static_cast<int>(checkpoint_layer_for_layer.size()) != num_hidden_layers) {
+    checkpoint.validate();
+    if (!checkpoint.checkpoint_layer_for_layer.empty()) {
+        if (static_cast<int>(checkpoint.checkpoint_layer_for_layer.size()) != num_hidden_layers) {
             throw std::runtime_error("checkpoint layer mapping length mismatch");
         }
-        for (int layer : checkpoint_layer_for_layer) {
-            if (layer < 0) throw std::runtime_error("negative checkpoint layer mapping");
-        }
     }
-    token_policy.validate();
-    const auto validate_token_id = [this](int token, const char* name) {
-        if (token < 0 || token >= vocab_size) {
-            throw std::runtime_error(std::string("resolved ") + name +
-                                     " token id is outside the vocabulary");
-        }
-    };
-    validate_token_id(token_policy.bos_token_id, "BOS");
-    validate_token_id(token_policy.pad_token_id, "pad");
-    for (int token : token_policy.eos_token_ids) {
-        validate_token_id(token, "EOS");
-    }
-    numerical_policy.validate();
     if (static_cast<int>(mixer_kinds.size()) != num_hidden_layers) {
         throw std::runtime_error("resolved mixer schedule length mismatch: mixers=" +
             std::to_string(mixer_kinds.size()) + " expected=" +
@@ -587,11 +578,6 @@ void ResolvedModel::validate() const {
     graph.validate();
     if (graph.layers.size() != static_cast<size_t>(topology.num_hidden_layers)) {
         throw std::runtime_error("resolved graph/topology layer count mismatch");
-    }
-    if (graph.embedding_transform.multiplier != topology.numerical_policy.embedding_multiplier ||
-        graph.logits_divisor != topology.numerical_policy.logits_divisor ||
-        graph.final_norm.epsilon != topology.numerical_policy.norm_eps) {
-        throw std::runtime_error("resolved graph/topology numerical policy mismatch");
     }
     for (size_t layer = 0; layer < graph.layers.size(); ++layer) {
         if (graph.layers[layer].mixer_kind() != topology.mixer_kinds[layer] ||

@@ -604,11 +604,11 @@ int main() {
         real_path != nullptr && *real_path != '\0') {
         const auto bootstrap = celeg::detail::load_model_bootstrap(std::filesystem::path(real_path));
         celeg::CudaModel model(real_path, 1024);
-        model.session().prefill({bootstrap.model.topology.token_policy.bos_token_id});
+        model.session().prefill({bootstrap.model.topology.checkpoint.token_policy.bos_token_id});
         const std::vector<float> first = model.diagnostics().copy_logits();
         for (float value : first) if (!std::isfinite(value)) return 6;
         model.session().reset();
-        model.session().prefill({bootstrap.model.topology.token_policy.bos_token_id});
+        model.session().prefill({bootstrap.model.topology.checkpoint.token_policy.bos_token_id});
         const std::vector<float> second = model.diagnostics().copy_logits();
         if (first.size() != second.size()) return 7;
         for (size_t i = 0; i < std::min<size_t>(first.size(), 64); ++i) {

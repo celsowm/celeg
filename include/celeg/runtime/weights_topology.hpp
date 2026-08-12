@@ -20,12 +20,12 @@ struct TensorSpec {
 
 inline TensorSpec token_embedding(const RuntimeTopology& shape) {
     return {TensorRole::TokenEmbedding, "model.embed_tokens.weight",
-            {"model.embedding.weight"}, {shape.vocab_size, shape.hidden}, false};
+            {"model.embedding.weight"}, {shape.checkpoint.vocab_size, shape.hidden}, false};
 }
 
 inline TensorSpec language_model_head(const RuntimeTopology& shape, bool tied) {
     return {TensorRole::LanguageModelHead, "model.lm_head.weight", {},
-            {shape.vocab_size, shape.hidden}, tied};
+            {shape.checkpoint.vocab_size, shape.hidden}, tied};
 }
 
 inline TensorSpec final_norm(const RuntimeTopology& shape) {

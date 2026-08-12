@@ -164,7 +164,7 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     header.position = state.position;
     header.max_context = state.max_context;
     header.layers = state.shape.num_hidden_layers;
-    header.vocab = state.shape.vocab_size;
+    header.vocab = state.shape.checkpoint.vocab_size;
     header.attention_layers = state.shape.attention_layer_count;
     if (state.rng_state != nullptr) {
         CELEG_CUDA(cudaMemcpy(&header.rng_state, state.rng_state->data(),
@@ -249,7 +249,7 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     }
     if (header.position <= 0 || header.position > state.max_context ||
         header.layers != state.shape.num_hidden_layers ||
-        header.vocab != state.shape.vocab_size ||
+        header.vocab != state.shape.checkpoint.vocab_size ||
         header.attention_layers != state.shape.attention_layer_count) {
         throw std::runtime_error("session dimensions are incompatible with this model");
     }

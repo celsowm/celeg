@@ -105,7 +105,7 @@ void CpuModel::prefill_session(const std::vector<int32_t>& tokens,
         throw std::invalid_argument("CPU prefill exceeds context");
     }
     for (int32_t token : tokens) {
-        if (token < 0 || token >= state_->shared->shape.vocab_size) {
+        if (token < 0 || token >= state_->shared->shape.checkpoint.vocab_size) {
             throw std::invalid_argument("CPU token out of range");
         }
     }
@@ -177,7 +177,7 @@ void CpuModel::eval_token_session(int32_t token) {
     if (state_->session_.phase != SessionPhase::Ready) {
         throw std::runtime_error("CPU model is not ready for token evaluation");
     }
-    if (token < 0 || token >= state_->shared->shape.vocab_size) {
+    if (token < 0 || token >= state_->shared->shape.checkpoint.vocab_size) {
         throw std::invalid_argument("CPU token out of range");
     }
     const auto started = std::chrono::steady_clock::now();
@@ -204,7 +204,7 @@ RuntimeMetrics CpuModel::session_metrics() const { return state_->session_.metri
 CpuPrefillProfile CpuModel::session_prefill_profile() const { return state_->session_.prefill_profile; }
 void CpuModel::clear_session_metrics() { state_->session_.metrics = {}; }
 CpuModelMemoryStats CpuModel::session_memory_stats() const { return state_->memory_stats(); }
-int CpuModel::session_vocab_size() const { return state_->shared->shape.vocab_size; }
+int CpuModel::session_vocab_size() const { return state_->shared->shape.checkpoint.vocab_size; }
 CpuIsa CpuModel::session_isa() const { return state_->shared->options.isa; }
 CpuKvCacheMode CpuModel::session_kv_cache_mode() const {
     return state_->shared->options.kv_cache_mode;

@@ -9,7 +9,7 @@ int main() {
     try {
         celeg::RuntimeTopology shape;
         shape.hidden = 128;
-        shape.vocab_size = 256;
+        shape.checkpoint.vocab_size = 256;
         shape.num_hidden_layers = 2;
         shape.max_feed_forward_intermediate = 192;
         shape.moe_intermediate = 64;

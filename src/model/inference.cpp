@@ -91,6 +91,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     facts.tied_embeddings = m.tied_embeddings.value_or(false);
     facts.evidence = m.evidence;
     RuntimeTopology& topology = facts.topology;
+    NumericalPolicy& numerical_policy = facts.numerical_policy;
     topology.hidden = *m.hidden_size;
     std::vector<int> intermediate_sizes;
     intermediate_sizes.reserve(static_cast<size_t>(*m.layer_count));
@@ -145,8 +146,8 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     topology.dense_intermediate = topology.intermediate;
     topology.max_feed_forward_intermediate = topology.intermediate;
     topology.num_hidden_layers = *m.layer_count;
-    topology.vocab_size = *m.vocab_size;
-    topology.max_position_embeddings = *m.context_length;
+    topology.checkpoint.vocab_size = *m.vocab_size;
+    topology.checkpoint.max_position_embeddings = *m.context_length;
     topology.mixer_kinds.assign(static_cast<size_t>(*m.layer_count), MixerKind::Attention);
     topology.feed_forward_kinds.assign(static_cast<size_t>(*m.layer_count),
                                         FeedForwardKind::Dense);
@@ -212,13 +213,12 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                    "invalid MoE routing group score width");
         }
     }
-    topology.shared_kv_group_count = 0;
-    topology.token_policy = {*m.bos_token_id, m.eos_token_ids, *m.pad_token_id};
-    topology.numerical_policy.norm_eps = *m.norm_epsilon;
-    topology.numerical_policy.embedding_multiplier = m.embedding_multiplier.value_or(1.0f);
-    topology.numerical_policy.residual_multiplier = m.residual_multiplier.value_or(1.0f);
-    topology.numerical_policy.logits_multiplier = m.logits_multiplier.value_or(1.0f);
-    topology.numerical_policy.logits_divisor = m.logits_divisor.value_or(1.0f);
+    topology.checkpoint.token_policy = {*m.bos_token_id, m.eos_token_ids, *m.pad_token_id};
+    numerical_policy.norm_eps = *m.norm_epsilon;
+    numerical_policy.embedding_multiplier = m.embedding_multiplier.value_or(1.0f);
+    numerical_policy.residual_multiplier = m.residual_multiplier.value_or(1.0f);
+    numerical_policy.logits_multiplier = m.logits_multiplier.value_or(1.0f);
+    numerical_policy.logits_divisor = m.logits_divisor.value_or(1.0f);
 
     const auto make_attention = [&](int query_heads, int key_value_heads, int head_dim,
                                     bool query_key_norm) {
@@ -528,7 +528,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
     }
     if (m.attention_multiplier.has_value()) {
-        topology.numerical_policy.attention_multiplier = *m.attention_multiplier;
+        numerical_policy.attention_multiplier = *m.attention_multiplier;
     } else {
         int attention_head_dim = 0;
         for (int layer = 0; layer < *m.layer_count; ++layer) {
@@ -537,12 +537,12 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 break;
             }
         }
-    topology.numerical_policy.attention_multiplier = attention_head_dim > 0
+    numerical_policy.attention_multiplier = attention_head_dim > 0
             ? 1.0f / std::sqrt(static_cast<float>(attention_head_dim)) : 1.0f;
     }
     for (AttentionSpec& attention : topology.attention_layouts) {
         if (attention.query_heads > 0) {
-            attention.query_scale *= topology.numerical_policy.attention_multiplier;
+            attention.query_scale *= numerical_policy.attention_multiplier;
         }
     }
     topology.validate();
@@ -905,6 +905,14 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 std::string CanonicalModelFacts::fingerprint() const {
     std::ostringstream out;
     out << resolution_mode << ':' << source_format << ':' << topology.fingerprint()
+        << ":num=" << numerical_policy.norm_eps << ':'
+        << numerical_policy.post_norm_eps << ':'
+        << numerical_policy.embedding_multiplier << ':'
+        << numerical_policy.attention_multiplier << ':'
+        << numerical_policy.residual_multiplier << ':'
+        << numerical_policy.logits_multiplier << ':'
+        << numerical_policy.logits_divisor << ':'
+        << numerical_policy.final_logit_softcap
         << ":tied=" << tied_embeddings;
     for (const auto& binding : bindings.values) {
         out << ':' << static_cast<int>(binding.role) << ':' << binding.layer << ':'
@@ -916,6 +924,7 @@ std::string CanonicalModelFacts::fingerprint() const {
 
 void CanonicalModelFacts::validate() const {
     topology.validate();
+    numerical_policy.validate();
     bindings.validate();
     const auto require = [&](TensorRole role, int layer) {
         if (bindings.find(role, layer) == nullptr) {

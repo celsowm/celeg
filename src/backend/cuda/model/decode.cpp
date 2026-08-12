@@ -26,7 +26,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         CELEG_CUDA(cudaMemcpyAsync(workspace_.hidden_.data(), converted.data(),
                                    converted.size() * sizeof(__nv_bfloat16),
                                    cudaMemcpyHostToDevice, stream_.get()));
-        initialize_per_layer_input_host(resources_.shape_.token_policy.pad_token_id);
+        initialize_per_layer_input_host(resources_.shape_.checkpoint.token_policy.pad_token_id);
     } else {
         resources_.weight_layout_->embed_token(
             token, workspace_.hidden_.data(), resources_.shape_.hidden, stream_.get());
@@ -269,12 +269,12 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                         1, resources_.shape_.hidden, resources_.program_.final_norm.epsilon,
                         stream_.get());
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-                1, resources_.shape_.vocab_size, resources_.shape_.hidden);
-    launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
+                1, resources_.shape_.checkpoint.vocab_size, resources_.shape_.hidden);
+    launch_scale(workspace_.logits_.data(), resources_.shape_.checkpoint.vocab_size,
                  resources_.program_.logits_multiplier /
                      resources_.program_.logits_divisor, stream_.get());
         if (resources_.program_.final_logit_softcap > 0.0f) {
-            launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
+            launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.checkpoint.vocab_size,
                                 resources_.program_.final_logit_softcap, stream_.get());
         }
         finalize_mtp_verification();
@@ -664,12 +664,12 @@ void CudaCompiledModel::forward_token_paged_host(
         launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(), 1,
                        resources_.shape_.hidden, resources_.program_.final_norm.epsilon, stream_.get());
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(), 1,
-               resources_.shape_.vocab_size, resources_.shape_.hidden);
-        launch_scale(workspace_.logits_.data(), resources_.shape_.vocab_size,
+               resources_.shape_.checkpoint.vocab_size, resources_.shape_.hidden);
+        launch_scale(workspace_.logits_.data(), resources_.shape_.checkpoint.vocab_size,
                      resources_.program_.logits_multiplier /
                          resources_.program_.logits_divisor, stream_.get());
         if (resources_.program_.final_logit_softcap > 0.0f) {
-            launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.vocab_size,
+            launch_tanh_softcap(workspace_.logits_.data(), resources_.shape_.checkpoint.vocab_size,
                                 resources_.program_.final_logit_softcap, stream_.get());
         }
     }

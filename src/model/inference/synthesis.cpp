@@ -31,7 +31,7 @@ private:
 ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const {
     facts.validate();
     ResolvedModel intermediate;
-    build_dense_transformer_graph(intermediate, facts.topology);
+    build_dense_transformer_graph(intermediate, facts.topology, facts.numerical_policy);
     intermediate.graph.validate();
     return intermediate.graph;
 }

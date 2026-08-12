@@ -20,7 +20,7 @@ int main() {
         celeg::ResolvedModel model;
         model.topology.hidden = 8;
         model.topology.intermediate = 16;
-        model.topology.vocab_size = 32;
+        model.topology.checkpoint.vocab_size = 32;
         model.topology.num_hidden_layers = 2;
         model.topology.feed_forward_intermediates = {12, 20};
         model.topology.attention_layouts.resize(2);

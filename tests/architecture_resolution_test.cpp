@@ -117,7 +117,8 @@ int main() {
     CELEG_TEST_CHECK(model.topology.intermediate == 1728);
     CELEG_TEST_CHECK(model.graph.layers.size() == 1);
     CELEG_TEST_CHECK(model.capabilities.tied_embeddings);
-    CELEG_TEST_CHECK(model.topology.numerical_policy.attention_multiplier == 0.125f);
+    CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(model.graph.layers[0].mixer).query_scale ==
+                     0.125f);
 
     for (const auto& [model_type, architecture_id] : {
              std::pair<std::string, std::string>{

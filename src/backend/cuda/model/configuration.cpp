@@ -36,7 +36,7 @@ void CudaCompiledModel::configure_model(
         resources_.options_.fused_residuals = false;
     }
     resources_.model_identity_ = resources_.model_.provenance.identity;
-    check_moe_quantization_policy(resources_.options_.weight_mode, resources_.shape_.num_experts > 0);
+    check_moe_quantization_policy(resources_.options_.weight_mode, resources_.program_.has_moe());
 }
 
 } // namespace celeg

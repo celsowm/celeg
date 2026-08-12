@@ -35,7 +35,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
                        stream_.get());
         enqueue_decode_non_attention_mixer(resources_.layers_.front(), 0);
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-               1, resources_.shape_.vocab_size, resources_.shape_.hidden);
+               1, resources_.shape_.checkpoint.vocab_size, resources_.shape_.hidden);
         CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
         return;
     }
@@ -89,7 +89,7 @@ void CudaCompiledModel::warmup_decode_gemms() {
                resources_.options_.fused_residuals ? 1.0f : 0.0f);
     }
     linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-           1, resources_.shape_.vocab_size, resources_.shape_.hidden);
+           1, resources_.shape_.checkpoint.vocab_size, resources_.shape_.hidden);
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 

@@ -61,7 +61,7 @@ CpuBatchMetrics CpuModel::prefill_batch(std::span<const CpuPrefillItem> items) {
             session.session_.phase != SessionPhase::Prefilling) {
             throw std::runtime_error("CPU session is not eligible for prefill");
         }
-        if (item.token < 0 || item.token >= session.shared->shape.vocab_size) {
+        if (item.token < 0 || item.token >= session.shared->shape.checkpoint.vocab_size) {
             throw std::invalid_argument("CPU prefill token out of range");
         }
         session.session_.phase = SessionPhase::Prefilling;
@@ -94,7 +94,7 @@ CpuBatchMetrics CpuModel::prefill_chunk(
         throw std::runtime_error("CPU session is not eligible for chunked prefill");
     }
     for (int32_t token : tokens) {
-        if (token < 0 || token >= session.shared->shape.vocab_size) {
+    if (token < 0 || token >= session.shared->shape.checkpoint.vocab_size) {
             throw std::invalid_argument("CPU chunked prefill token out of range");
         }
         session.session_.seen[static_cast<size_t>(token)] = 1;
