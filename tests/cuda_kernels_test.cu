@@ -21,10 +21,17 @@ using celeg::cuda_test::expect_near;
 using celeg::cuda_test::to_bf16;
 using celeg::cuda_test::to_float;
 
-std::vector<celeg::RuntimeTopology> registered_model_shapes() {
-    std::vector<celeg::RuntimeTopology> shapes;
+struct TestShape {
+    celeg::RuntimeTopology topology;
+    celeg::CompiledModelProgram program;
+};
+
+std::vector<TestShape> registered_model_shapes() {
+    std::vector<TestShape> shapes;
     for (int model = 0; model < 2; ++model) {
-        celeg::RuntimeTopology shape;
+        TestShape result;
+        auto& shape = result.topology;
+        #if 0
         if (model == 0) {
             shape.exec.hidden = 1024;
             shape.exec.intermediate = 2560;
@@ -36,7 +43,7 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.dims.token_policy.bos_token_id = 1;
             shape.dims.token_policy.eos_token_ids = {7};
             shape.dims.token_policy.pad_token_id = 0;
-            shape.exec.mixer_kinds = {
+            const std::vector<celeg::CompiledMixer> mixers = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
@@ -57,7 +64,7 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             shape.dims.token_policy.bos_token_id = 1;
             shape.dims.token_policy.eos_token_ids = {7};
             shape.dims.token_policy.pad_token_id = 0;
-            shape.exec.mixer_kinds = {
+            const std::vector<celeg::CompiledMixer> mixers = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::Attention,
@@ -68,8 +75,62 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
             };
         }
+        #endif
         const int query_heads = model == 0 ? 16 : 32;
-        shape.exec.attention_layouts.resize(static_cast<size_t>(shape.exec.num_hidden_layers));
+        const std::vector<celeg::CompiledMixer> mixers = model == 0
+            ? std::vector<celeg::CompiledMixer>{
+                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution}
+            : std::vector<celeg::CompiledMixer>{
+                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::Attention,
+                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution};
+        celeg::ModelGraph graph;
+        graph.hidden = model == 0 ? 1024 : 2048;
+        graph.layers.resize(mixers.size());
+        for (size_t index = 0; index < mixers.size(); ++index) {
+            auto& layer = graph.layers[index];
+            if (mixers[index] == celeg::CompiledMixer::Attention) {
+                celeg::AttentionSpec attention;
+                attention.query_heads = query_heads;
+                attention.key_value_heads = 8;
+                attention.head_dim = 64;
+                attention.pattern = celeg::FullCausalPattern{};
+                attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
+                layer.mixer = attention;
+            } else {
+                layer.mixer = celeg::ShortConvolutionSpec{3, graph.hidden};
+            }
+            layer.feed_forward = celeg::DenseFeedForwardSpec{
+                model == 0 ? 2560 : 12288, celeg::ActivationKind::SwiGLU};
+        }
+        shape = celeg::compose_runtime_topology(std::move(shape.dims), graph);
+        result.program.hidden = graph.hidden;
+        result.program.layers.resize(graph.layers.size());
+        for (size_t index = 0; index < graph.layers.size(); ++index) {
+            auto& compiled = result.program.layers[index];
+            compiled.mixer = mixers[index];
+            compiled.feed_forward = celeg::CompiledFeedForward::Dense;
+            compiled.feed_forward_intermediate =
+                model == 0 ? 2560 : 12288;
+            if (const auto* attention = std::get_if<celeg::AttentionSpec>(
+                    &graph.layers[index].mixer)) {
+                compiled.attention = *attention;
+            }
+        }
+        shapes.push_back(std::move(result));
+        continue;
+        /*
         for (auto& attention : shape.exec.attention_layouts) {
             attention.query_heads = query_heads;
             attention.key_value_heads = 8;
@@ -91,6 +152,7 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             }
         }
         shapes.push_back(shape);
+        */
     }
     if (shapes.empty()) {
         std::cerr << "registered_model_shapes: no model shapes registered\n";
@@ -678,8 +740,9 @@ int main() {
     // independent reference counts. Run against every registered model shape so a
     // regression that affects only one (e.g. different attention_layers) is
     // caught without editing this test.
-    for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
-        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Bf16, shape.exec);
+    for (const TestShape& shape : registered_model_shapes()) {
+        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Bf16,
+                                          shape.topology.exec, shape.program);
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
@@ -705,10 +768,11 @@ int main() {
     }
 
     // Partial-page COW copies initialized token slots without transferring the unused suffix.
-    for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
+    for (const TestShape& shape : registered_model_shapes()) {
         constexpr int page_tokens = 4;
         celeg::PhysicalPagedKvCache cache(3, page_tokens, 8,
-                                        celeg::KvCacheMode::Bf16, shape.exec);
+                                        celeg::KvCacheMode::Bf16,
+                                        shape.topology.exec, shape.program);
         auto source = cache.allocate_tokens(page_tokens);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
@@ -734,8 +798,9 @@ int main() {
     }
 
     // INT8 copy-on-write clones both quantized vectors and scale planes.
-    for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
-        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Int8, shape.exec);
+    for (const TestShape& shape : registered_model_shapes()) {
+        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Int8,
+                                          shape.topology.exec, shape.program);
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();

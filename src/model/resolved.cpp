@@ -234,22 +234,8 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
     result.gated_delta_net_layer_count = 0;
     result.mamba2_layer_count = 0;
     result.mlp_only_layer_count = 0;
-    result.num_dense_layers = 0;
     result.mamba2_intermediate = 0;
     result.max_feed_forward_intermediate = 0;
-    result.dense_intermediate = 0;
-    result.moe_intermediate = 0;
-    result.shared_expert_intermediate = 0;
-    result.num_experts = 0;
-    result.experts_per_token = 0;
-    result.normalize_topk = false;
-    result.moe_router_softmax = false;
-    result.use_expert_bias = false;
-    result.routed_scaling_factor = 1.0f;
-    result.moe_routing_group_count = 0;
-    result.moe_routing_experts_per_group = 0;
-    result.moe_routing_groups_per_token = 0;
-    result.moe_routing_group_score_top_k = 0;
     int maximum_conv_cache = 0;
     int maximum_conv_dim = 0;
     for (std::size_t index = 0; index < layer_count; ++index) {
@@ -320,38 +306,11 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
         std::visit([&](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
             if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-                ++result.num_dense_layers;
-                result.dense_intermediate = std::max(
-                    result.dense_intermediate, feed_forward.intermediate_size);
                 result.max_feed_forward_intermediate = std::max(
                     result.max_feed_forward_intermediate, feed_forward.intermediate_size);
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-                result.moe_intermediate = std::max(
-                    result.moe_intermediate, feed_forward.intermediate_size);
                 result.max_feed_forward_intermediate = std::max(
                     result.max_feed_forward_intermediate, feed_forward.intermediate_size);
-                result.num_experts = std::max(result.num_experts, feed_forward.num_experts);
-                result.experts_per_token = std::max(
-                    result.experts_per_token, feed_forward.experts_per_token);
-                result.normalize_topk = result.normalize_topk || feed_forward.normalize_topk;
-                result.moe_router_softmax = result.moe_router_softmax ||
-                    feed_forward.router_softmax;
-                result.use_expert_bias = result.use_expert_bias ||
-                    feed_forward.use_expert_bias;
-                result.routed_scaling_factor = feed_forward.routed_scaling_factor;
-                result.moe_routing_group_count = std::max(
-                    result.moe_routing_group_count, feed_forward.routing_group_count);
-                result.moe_routing_experts_per_group = std::max(
-                    result.moe_routing_experts_per_group,
-                    feed_forward.routing_experts_per_group);
-                result.moe_routing_groups_per_token = std::max(
-                    result.moe_routing_groups_per_token,
-                    feed_forward.routing_groups_per_token);
-                result.moe_routing_group_score_top_k = std::max(
-                    result.moe_routing_group_score_top_k,
-                    feed_forward.routing_group_score_top_k);
-                result.shared_expert_intermediate = std::max(
-                    result.shared_expert_intermediate, feed_forward.shared_intermediate_size);
             } else {
                 static_assert(always_false_v<FeedForward>,
                               "unhandled feed-forward derivation variant");
@@ -589,8 +548,7 @@ std::string ExecutionTopology::fingerprint() const {
         << "-max-mamba-proj" << maximum_mamba_projection_width_value
         << "-max-gdn-qkv" << maximum_gated_delta_net_qkv_width_value
         << "-max-ff" << max_feed_forward_intermediate
-        << "-e" << num_experts << "-k" << experts_per_token
-        << "-mi" << moe_intermediate;
+        << "-ff" << max_feed_forward_intermediate;
     return out.str();
 }
 
@@ -610,10 +568,6 @@ void ExecutionTopology::validate() const {
     if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count +
         mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {
         throw std::runtime_error("resolved layer counts are inconsistent");
-    }
-    if (num_experts > 0 && (moe_intermediate <= 0 || experts_per_token <= 0 ||
-                            experts_per_token > num_experts)) {
-        throw std::runtime_error("invalid resolved MoE topology");
     }
     if (max_feed_forward_intermediate <= 0 ||
         maximum_attention_projection_width_value < 0 ||

@@ -65,10 +65,9 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_path);
         const auto& model = bootstrap.model;
-        const auto& shape = model.topology.exec;
 
         std::vector<int> moe_layer_ids;
-        for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
+        for (int layer = 0; layer < static_cast<int>(model.graph.layers.size()); ++layer) {
             if (model.graph.layers.at(static_cast<size_t>(layer)).feed_forward_kind() ==
                     celeg::FeedForwardKind::MixtureOfExperts) {
                 moe_layer_ids.push_back(layer);
@@ -79,23 +78,27 @@ int main(int argc, char** argv) {
             std::cout << "No MoE layers in this model, nothing to pack.\n";
             return 0;
         }
+        const auto& first_moe = std::get<celeg::MixtureOfExpertsSpec>(
+            model.graph.layers.at(static_cast<size_t>(moe_layer_ids.front())).feed_forward);
+        const int expert_count = first_moe.num_experts;
+        const int moe_intermediate = first_moe.intermediate_size;
 
         std::cout << "Packing MoE experts for " << model.provenance.identity << "...\n"
                   << "  MoE layers: " << moe_layers << "\n"
-                  << "  Experts/layer: " << shape.num_experts << "\n"
-                  << "  Intermediate: " << shape.moe_intermediate << "\n"
-                  << "  Hidden: " << shape.hidden << "\n";
+                  << "  Experts/layer: " << expert_count << "\n"
+                  << "  Intermediate: " << moe_intermediate << "\n"
+                  << "  Hidden: " << model.graph.hidden << "\n";
 
         celeg::SafeTensorRepository repo(model_path);
 
         SidecarHeader header;
         header.num_layers = static_cast<std::uint32_t>(moe_layers);
-        header.num_experts = static_cast<std::uint32_t>(shape.num_experts);
-        header.moe_intermediate = static_cast<std::uint64_t>(shape.moe_intermediate);
-        header.hidden = static_cast<std::uint64_t>(shape.hidden);
+        header.num_experts = static_cast<std::uint32_t>(expert_count);
+        header.moe_intermediate = static_cast<std::uint64_t>(moe_intermediate);
+        header.hidden = static_cast<std::uint64_t>(model.graph.hidden);
 
         std::vector<std::vector<SidecarExpertIndex>> index(
-            moe_layers, std::vector<SidecarExpertIndex>(shape.num_experts));
+            moe_layers, std::vector<SidecarExpertIndex>(expert_count));
 
         std::ofstream out(sidecar_path, std::ios::binary);
         if (!out) {
@@ -118,8 +121,8 @@ int main(int argc, char** argv) {
             out.write(padding.data(), padding.size());
         }
 
-        const size_t moe_inter = static_cast<size_t>(shape.moe_intermediate);
-        const size_t hidden_c = static_cast<size_t>(shape.hidden);
+        const size_t moe_inter = static_cast<size_t>(moe_intermediate);
+        const size_t hidden_c = static_cast<size_t>(model.graph.hidden);
         const size_t gate_up_elems = 2 * moe_inter * hidden_c;
         const size_t down_elems = hidden_c * moe_inter;
         const size_t gate_up_bytes = gate_up_elems * 2; // BF16 element size = 2
@@ -133,7 +136,7 @@ int main(int argc, char** argv) {
             const int actual_layer_idx = moe_layer_ids[static_cast<size_t>(l)];
             std::cout << "Packing layer " << actual_layer_idx << " (" << (l + 1) << "/" << moe_layers << ")...\n";
 
-            for (int e = 0; e < shape.num_experts; ++e) {
+            for (int e = 0; e < expert_count; ++e) {
                 const std::string w1_name = layer_name(
                     actual_layer_idx, "feed_forward.experts." + std::to_string(e) + ".w1.weight");
                 const std::string w3_name = layer_name(

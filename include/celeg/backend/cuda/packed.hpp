@@ -36,7 +36,8 @@ struct PackedWorkspaceRequirements {
         size_t maximum_batch,
         size_t maximum_prefill_tokens,
         size_t page_table_stride,
-        const ExecutionTopology& shape);
+        const ExecutionTopology& shape,
+        const CompiledModelProgram& program);
 };
 
 enum class PackedOperation { Decode, Prefill };

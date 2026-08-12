@@ -106,7 +106,8 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     size_t maximum_batch,
     size_t maximum_prefill_tokens,
     size_t page_table_stride,
-    const ExecutionTopology& shape) {
+    const ExecutionTopology& shape,
+    const CompiledModelProgram& program) {
     if (maximum_batch == 0 || maximum_prefill_tokens == 0) {
         throw std::invalid_argument("packed capacities must be positive");
     }
@@ -129,7 +130,12 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
         1, shape.mamba2_intermediate));
     result.maximum_ffn_intermediate =
         static_cast<size_t>(shape.max_feed_forward_intermediate);
-    result.moe_intermediate = static_cast<size_t>(std::max(0, shape.moe_intermediate));
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (layer.moe) {
+            result.moe_intermediate = std::max(result.moe_intermediate,
+                static_cast<size_t>(layer.moe->routed.mlp.intermediate_size));
+        }
+    }
     result.layer_slots = maximum_batch * static_cast<size_t>(shape.num_hidden_layers);
     result.page_table_entries = maximum_prefill_tokens * page_table_stride;
     return result;

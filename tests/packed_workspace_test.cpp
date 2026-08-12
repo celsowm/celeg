@@ -20,9 +20,20 @@ int main() {
                 index == 0 ? 128 : 192, celeg::ActivationKind::SwiGLU};
         }
         const celeg::RuntimeTopology shape = celeg::compose_runtime_topology({}, graph);
+        celeg::CompiledModelProgram program;
+        program.hidden = graph.hidden;
+        program.layers.resize(graph.layers.size());
+        for (size_t index = 0; index < graph.layers.size(); ++index) {
+            program.layers[index].mixer = celeg::CompiledMixer::Attention;
+            program.layers[index].feed_forward = celeg::CompiledFeedForward::Dense;
+            program.layers[index].attention = std::get<celeg::AttentionSpec>(
+                graph.layers[index].mixer);
+            program.layers[index].feed_forward_intermediate =
+                index == 0 ? 128 : 192;
+        }
 
         const auto requirements = celeg::PackedWorkspaceRequirements::derive(
-            4, 16, 8, shape.exec);
+            4, 16, 8, shape.exec, program);
         if (requirements.maximum_projection_width != 320 ||
             requirements.maximum_ffn_intermediate != 192 ||
             requirements.layer_slots != 8 ||

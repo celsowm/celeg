@@ -13,6 +13,7 @@
 #include "celeg/backend/cuda/moe/expert_source.hpp"
 
 #include <memory>
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -71,6 +72,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         NormWeightKind::Scale);
     mtp.logits = resources.lm_head_ ? resources.lm_head_ : resources.embedding_;
     mtp.layers.reserve(static_cast<size_t>(mtp.layer_count));
+    const auto moe_program = std::find_if(resources.program_.layers.begin(),
+        resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
+            return layer.moe.has_value();
+        });
 
     for (int index = 0; index < mtp.layer_count; ++index) {
         const std::string prefix = "mtp.layers." + std::to_string(index);
@@ -82,9 +87,9 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             repo, prefix + ".post_attention_layernorm.weight", {resources.shape_.hidden},
             NormWeightKind::Scale);
 
-        if (resources.shape_.num_experts > 0) {
-            const int E = resources.shape_.num_experts;
-            const int inter = resources.shape_.moe_intermediate;
+        if (moe_program != resources.program_.layers.end()) {
+            const int E = moe_program->moe->router.expert_count;
+            const int inter = moe_program->moe->routed.mlp.intermediate_size;
             MoeFfnWeights moe{};
             moe.router = resources.weight_loader_->load_router_weight_named(
                 repo, prefix + ".mlp.gate.weight", E, resources.shape_.hidden);
@@ -96,8 +101,8 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                                       E * resources.shape_.hidden, model.stream_.get());
             moe.router_float = router_float.data();
 
-            if (resources.shape_.shared_expert_intermediate > 0) {
-                const int shared = resources.shape_.shared_expert_intermediate;
+            if (moe_program->moe->shared) {
+                const int shared = moe_program->moe->shared->mlp.intermediate_size;
                 moe.shared_w13 = resources.weight_loader_->load_concat_linear_weight(
                     repo, prefix + ".mlp.shared_expert.w13.weight",
                     {{prefix + ".mlp.shared_expert.gate_proj.weight",

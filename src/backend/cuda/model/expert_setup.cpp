@@ -4,6 +4,7 @@
 #include "celeg/backend/cuda/moe/offload.hpp"
 
 #include <cstdio>
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 
@@ -100,6 +101,8 @@ std::size_t estimate_mtp_non_expert_weights(const ExecutionTopology& shape,
     }
     const AttentionSpec& attention = program.layers.at(
         static_cast<size_t>(full_attention_layer)).attention.value();
+    const auto moe_layer = std::find_if(program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
     std::size_t bytes = bf16_bytes(2ull * shape.hidden * shape.hidden);
     bytes += bf16_bytes(3ull * shape.hidden); // two pre-fc norms and final norm
     for (int layer = 0; layer < dims.mtp_num_hidden_layers; ++layer) {
@@ -108,11 +111,13 @@ std::size_t estimate_mtp_non_expert_weights(const ExecutionTopology& shape,
         bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * shape.hidden);
         bytes += bf16_bytes(static_cast<size_t>(shape.hidden) * attention.query_width());
         if (attention.has_query_key_norm()) bytes += bf16_bytes(2ull * attention.head_dim);
-        if (shape.num_experts > 0) {
-            bytes += bf16_bytes(static_cast<size_t>(shape.num_experts) * shape.hidden);
-            bytes += static_cast<size_t>(shape.num_experts) * shape.hidden * sizeof(float);
-            if (shape.shared_expert_intermediate > 0) {
-                const size_t shared = static_cast<size_t>(shape.shared_expert_intermediate);
+        if (moe_layer != program.layers.end()) {
+            const int experts = moe_layer->moe->router.expert_count;
+            bytes += bf16_bytes(static_cast<size_t>(experts) * shape.hidden);
+            bytes += static_cast<size_t>(experts) * shape.hidden * sizeof(float);
+            if (moe_layer->moe->shared) {
+                const size_t shared = static_cast<size_t>(
+                    moe_layer->moe->shared->mlp.intermediate_size);
                 bytes += bf16_bytes(3ull * shared * shape.hidden + shape.hidden);
             }
         } else {
@@ -139,6 +144,14 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     if (!resources.options_.expert_offload.enabled() ||
         !resources.program_.has_moe()) {
         return;
+    }
+    int maximum_experts = 0;
+    int maximum_moe_intermediate = 0;
+    for (const CompiledLayerProgram& layer : resources.program_.layers) {
+        if (!layer.moe) continue;
+        maximum_experts = std::max(maximum_experts, layer.moe->router.expert_count);
+        maximum_moe_intermediate = std::max(
+            maximum_moe_intermediate, layer.moe->routed.mlp.intermediate_size);
     }
 
     size_t free_bytes = 0;
@@ -201,8 +214,8 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
         !resources.weights_->expert_sidecar) {
         auto sidecar = std::make_unique<ExpertSidecar>();
         if (sidecar->load(resources.options_.expert_offload.expert_sidecar_path,
-                          moe_layers, resources.shape_.num_experts,
-                          resources.shape_.moe_intermediate, resources.shape_.hidden)) {
+                          moe_layers, maximum_experts,
+                          maximum_moe_intermediate, resources.shape_.hidden)) {
             resources.weights_->expert_sidecar = std::move(sidecar);
             std::fprintf(stderr, "Loaded compatible expert sidecar from %s\n",
                          resources.options_.expert_offload.expert_sidecar_path.c_str());
@@ -217,11 +230,11 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
         if (resources.weights_->usage_stats.layers.empty()) {
             if (!resources.weights_->usage_stats.load(
                     resources.weights_->usage_profile_path, moe_layers,
-                    resources.shape_.num_experts)) {
+                    maximum_experts)) {
                 resources.weights_->usage_stats.layers.assign(
                     static_cast<size_t>(moe_layers),
                     std::vector<ExpertUsageEntry>(
-                        static_cast<size_t>(resources.shape_.num_experts)));
+                        static_cast<size_t>(maximum_experts)));
             } else {
                 std::fprintf(stderr,
                              "Loaded persistent expert usage statistics from %s\n",

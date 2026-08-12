@@ -7,6 +7,26 @@
 
 namespace celeg {
 
+namespace {
+int maximum_experts(const CompiledModelProgram& program) {
+    int result = 1;
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (layer.moe) result = std::max(result, layer.moe->router.expert_count);
+    }
+    return result;
+}
+
+int maximum_experts_per_token(const CompiledModelProgram& program) {
+    int result = 1;
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (layer.moe) {
+            result = std::max(result, layer.moe->router.experts_per_token);
+        }
+    }
+    return result;
+}
+} // namespace
+
 PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
                                  size_t maximum_prefill_tokens_value,
                                  PhysicalPagedKvCache* paged_kv_value,
@@ -22,7 +42,7 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
       requirements_(PackedWorkspaceRequirements::derive(
           maximum_batch_value, maximum_prefill_tokens_value,
           paged_kv_value ? static_cast<size_t>(paged_kv_value->max_pages_per_request()) : 0,
-          shape_)),
+          shape_, program_)),
       handles(),
       stream(handles.stream),
       cublas(handles.cublas),
@@ -60,15 +80,15 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
       activated(maximum_prefill_token_capacity * requirements_.maximum_ffn_intermediate),
       mlp_output(maximum_prefill_token_capacity * shape_.hidden),
       moe_hidden_float(maximum_prefill_token_capacity * shape_.hidden),
-      moe_sel(maximum_prefill_token_capacity * shape_.experts_per_token),
-      moe_routing_w(maximum_prefill_token_capacity * shape_.experts_per_token),
-      moe_router_scratch(maximum_prefill_token_capacity * shape_.num_experts),
+      moe_sel(maximum_prefill_token_capacity * maximum_experts_per_token(program_)),
+      moe_routing_w(maximum_prefill_token_capacity * maximum_experts_per_token(program_)),
+      moe_router_scratch(maximum_prefill_token_capacity * maximum_experts(program_)),
       moe_output(maximum_prefill_token_capacity * shape_.hidden),
       moe_output_accum(maximum_prefill_token_capacity * shape_.hidden),
       moe_gu_scratch(static_cast<size_t>(maximum_prefill_token_capacity) *
-                     shape_.experts_per_token * 2 * requirements_.moe_intermediate),
+                     maximum_experts_per_token(program_) * 2 * requirements_.moe_intermediate),
       moe_act_scratch(static_cast<size_t>(maximum_prefill_token_capacity) *
-                      shape_.experts_per_token * requirements_.moe_intermediate),
+                      maximum_experts_per_token(program_) * requirements_.moe_intermediate),
       logits(maximum_prefill_token_capacity * vocab_size_),
       sampling_scores(maximum_batch * vocab_size_),
       selected_values(maximum_batch * static_cast<size_t>(kMaxTopK)),

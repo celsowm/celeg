@@ -19,20 +19,20 @@ struct TensorSpec {
 };
 
 inline TensorSpec token_embedding(const CheckpointDimensions& dims,
-                                  const ExecutionTopology& shape) {
+                                  const ModelGraph& graph) {
     return {TensorRole::TokenEmbedding, "model.embed_tokens.weight",
-            {"model.embedding.weight"}, {dims.vocab_size, shape.hidden}, false};
+            {"model.embedding.weight"}, {dims.vocab_size, graph.hidden}, false};
 }
 
 inline TensorSpec language_model_head(const CheckpointDimensions& dims,
-                                     const ExecutionTopology& shape, bool tied) {
+                                     const ModelGraph& graph, bool tied) {
     return {TensorRole::LanguageModelHead, "model.lm_head.weight", {},
-            {dims.vocab_size, shape.hidden}, tied};
+            {dims.vocab_size, graph.hidden}, tied};
 }
 
-inline TensorSpec final_norm(const ExecutionTopology& shape) {
+inline TensorSpec final_norm(const ModelGraph& graph) {
     return {TensorRole::FinalNorm, "model.embedding_norm.weight",
-            {"model.norm.weight", "model.final_norm.weight"}, {shape.hidden}, false};
+            {"model.norm.weight", "model.final_norm.weight"}, {graph.hidden}, false};
 }
 
 } // namespace celeg::weights

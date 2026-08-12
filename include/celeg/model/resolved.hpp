@@ -76,20 +76,6 @@ public:
     int maximum_gated_delta_net_qkv_width_value = 0;
     int maximum_gated_delta_net_output_width_value = 0;
     int maximum_gated_delta_net_gate_width_value = 0;
-    int dense_intermediate = 0;
-    int moe_intermediate = 0;
-    int shared_expert_intermediate = 0;
-    int num_dense_layers = 0;
-    int num_experts = 0;
-    int experts_per_token = 0;
-    bool normalize_topk = false;
-    bool moe_router_softmax = false;
-    bool use_expert_bias = false;
-    float routed_scaling_factor = 1.0f;
-    int moe_routing_group_count = 0;
-    int moe_routing_experts_per_group = 0;
-    int moe_routing_groups_per_token = 0;
-    int moe_routing_group_score_top_k = 0;
 
     int maximum_attention_projection_width() const {
         return maximum_attention_projection_width_value;
