@@ -23,6 +23,7 @@ bool CudaSchedulerDriver::step() {
 }
 
 void CudaSchedulerDriver::start() {
+    if (!engine_options_.worker_thread) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = false;
