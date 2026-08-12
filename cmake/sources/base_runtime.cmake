@@ -41,7 +41,6 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/resolved.cpp
     src/model/program.cpp
     src/model/weight_plan.cpp
-    src/model/graph_builder.cpp
     src/composition/builtin_runtime.cpp
     src/composition/builtin_chat_templates.cpp
     src/text/semantic_chat/delimited.cpp

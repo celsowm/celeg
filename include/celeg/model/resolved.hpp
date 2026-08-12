@@ -44,14 +44,14 @@ struct CheckpointDimensions {
     void validate() const;
 };
 
-// Runtime-only execution cache plus the import dimensions needed by model
-// loading and tokenization. Semantic execution policy remains in ModelGraph.
-struct RuntimeTopology {
+// Runtime-only execution cache derived from the final semantic graph. It has
+// no checkpoint/import ownership and cannot be constructed by a frontend.
+class ExecutionTopology {
+public:
     int hidden = 0;
     int intermediate = 0;
     int max_feed_forward_intermediate = 0;
     int num_hidden_layers = 0;
-    CheckpointDimensions checkpoint;
     int conv_cache = 0;
     int conv_dim = 0;
     std::vector<MixerKind> mixer_kinds;
@@ -87,10 +87,6 @@ struct RuntimeTopology {
     std::vector<ActivationKind> feed_forward_activations;
     bool has_per_layer_input = false;
     int per_layer_input_size = 0;
-    // Auxiliary multi-token predictor depth. Kept after the established
-    // execution fields so older backend translation units cannot misread the
-    // existing topology while a build is being relinked.
-    int mtp_num_hidden_layers = 0;
 
     int maximum_attention_projection_width() const {
         int maximum = 0;
@@ -194,6 +190,22 @@ void validate() const;
         }
         return attention_layouts[static_cast<size_t>(layer)];
     }
+
+    static ExecutionTopology derive(const ModelGraph& graph);
+
+private:
+    ExecutionTopology() = default;
+};
+
+// Checkpoint/import dimensions are kept separate from the derived execution
+// cache. Runtime code must explicitly choose the boundary it consumes.
+struct RuntimeTopology {
+    CheckpointDimensions checkpoint;
+    ExecutionTopology exec;
+
+    std::string fingerprint() const;
+    std::string summary() const;
+    void validate() const;
 };
 
 struct ModelProvenance {
@@ -203,17 +215,6 @@ struct ModelProvenance {
     std::string checkpoint_profile_id;
     std::string chat_template_id;
     std::string identity;
-};
-
-// Allocation/index cache derived solely from final graph semantics.  The
-// private constructor prevents front-ends from manufacturing an execution
-// cache independently of graph synthesis.
-class ExecutionTopology final : public RuntimeTopology {
-public:
-    static ExecutionTopology derive(const ModelGraph& graph);
-
-private:
-    ExecutionTopology() = default;
 };
 
 struct ResolvedModel {

@@ -1,6 +1,5 @@
 #include "celeg/model/inference.hpp"
 
-#include "celeg/model/graph_builder.hpp"
 #include "celeg/model/weight_plan.hpp"
 
 #include <stdexcept>
@@ -30,10 +29,7 @@ private:
 
 ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const {
     facts.validate();
-    ResolvedModel intermediate;
-    build_dense_transformer_graph(intermediate, facts.topology, facts.numerical_policy);
-    intermediate.graph.validate();
-    return intermediate.graph;
+    return facts.graph;
 }
 
 ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) const {

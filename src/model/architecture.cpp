@@ -18,7 +18,8 @@ ResolvedModel resolve_architecture_stages(
     NumericalPolicy numerical_policy = stages.numerical_policy(checkpoint);
     import_topology.validate();
     numerical_policy.validate();
-    stages.graph(model, import_topology, numerical_policy, checkpoint);
+    model.graph = stages.graph(import_topology, numerical_policy, checkpoint);
+    model.graph.validate();
     model.topology = compose_runtime_topology(std::move(import_topology), model.graph);
     model.topology.validate();
     stages.weights(model, checkpoint);

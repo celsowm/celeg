@@ -220,6 +220,42 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     numerical_policy.logits_multiplier = m.logits_multiplier.value_or(1.0f);
     numerical_policy.logits_divisor = m.logits_divisor.value_or(1.0f);
 
+    ModelGraph& graph = facts.graph;
+    graph.hidden = *m.hidden_size;
+    graph.final_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
+    graph.embedding_transform.multiplier = numerical_policy.embedding_multiplier;
+    graph.logits_multiplier = numerical_policy.logits_multiplier;
+    graph.logits_divisor = numerical_policy.logits_divisor;
+    graph.layers.resize(static_cast<size_t>(*m.layer_count));
+    for (int layer = 0; layer < *m.layer_count; ++layer) {
+        LayerSpec& semantic_layer = graph.layers[static_cast<size_t>(layer)];
+        semantic_layer.operator_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
+        semantic_layer.feed_forward_norm = {numerical_policy.norm_eps, NormWeightKind::Scale};
+        semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
+        semantic_layer.execute_feed_forward = topology.execute_feed_forward.at(
+            static_cast<size_t>(layer));
+        if (topology.feed_forward_kinds.at(static_cast<size_t>(layer)) ==
+            FeedForwardKind::MixtureOfExperts) {
+            semantic_layer.feed_forward = MixtureOfExpertsSpec{
+                .intermediate_size = topology.moe_intermediate,
+                .num_experts = topology.num_experts,
+                .experts_per_token = topology.experts_per_token,
+                .normalize_topk = topology.normalize_topk,
+                .use_expert_bias = topology.use_expert_bias,
+                .routed_scaling_factor = topology.routed_scaling_factor,
+                .routing_group_count = topology.moe_routing_group_count,
+                .routing_experts_per_group = topology.moe_routing_experts_per_group,
+                .routing_groups_per_token = topology.moe_routing_groups_per_token,
+                .routing_group_score_top_k = topology.moe_routing_group_score_top_k,
+                .has_shared_expert = topology.shared_expert_intermediate > 0,
+                .shared_intermediate_size = topology.shared_expert_intermediate,
+                .router_softmax = topology.moe_router_softmax};
+        } else {
+            semantic_layer.feed_forward = DenseFeedForwardSpec{
+                intermediate_sizes.at(static_cast<size_t>(layer)), ActivationKind::SwiGLU};
+        }
+    }
+
     const auto make_attention = [&](int query_heads, int key_value_heads, int head_dim,
                                     bool query_key_norm) {
         AttentionSpec attention;
@@ -243,6 +279,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         return attention;
     };
     for (int layer = 0; layer < *m.layer_count; ++layer) {
+        LayerSpec& semantic_layer = graph.layers[static_cast<size_t>(layer)];
         const auto has_tensor = [&](std::string_view name) {
             return input.inventory.find(name) != nullptr;
         };
@@ -341,6 +378,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 conv_kernel, key_dim, value_dim, heads, heads, true,
                 m.recurrent_safe_decay.value_or(false),
                 m.recurrent_decay_lower_bound.value_or(-5.0f), true, true};
+            semantic_layer.mixer = topology.gated_delta_net_layouts[static_cast<size_t>(layer)];
             ++topology.gated_delta_net_layer_count;
             topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
             continue;
@@ -402,6 +440,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             // storage/output layout.
             attention.query_scale = std::sqrt(static_cast<float>(value_dim) /
                                               static_cast<float>(nope + rope));
+            semantic_layer.mixer = attention;
             topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::Attention;
             topology.attention_slot_for_layer[static_cast<size_t>(layer)] =
                 topology.attention_layer_count++;
@@ -457,6 +496,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             topology.mamba2_layouts[static_cast<size_t>(layer)] =
                 Mamba2Spec{conv_kernel, inner, state_size, time_step_rank, heads, head_dim,
                            group_count, chunk_size, true, false};
+            semantic_layer.mixer = topology.mamba2_layouts[static_cast<size_t>(layer)];
             ++topology.mamba2_layer_count;
             topology.mamba2_intermediate = std::max(topology.mamba2_intermediate, inner);
             topology.execute_feed_forward[static_cast<size_t>(layer)] = false;
@@ -470,6 +510,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                         "short-convolution layer has no positive cache length");
                 }
                 topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::ShortConvolution;
+                semantic_layer.mixer = ShortConvolutionSpec{*m.shortconv_cache, *m.hidden_size, false};
                 ++topology.conv_layer_count;
                 topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
                 continue;
@@ -483,6 +524,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             topology.mlp_only_layouts[static_cast<size_t>(layer)] =
                 MlpBlockSpec{intermediate_sizes.at(static_cast<size_t>(layer)),
                              ActivationKind::Relu2};
+            semantic_layer.mixer = topology.mlp_only_layouts[static_cast<size_t>(layer)];
             ++topology.mlp_only_layer_count;
             topology.execute_feed_forward[static_cast<size_t>(layer)] = false;
             continue;
@@ -525,6 +567,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         topology.layer_for_attention_slot.push_back(layer);
         topology.attention_layouts[static_cast<size_t>(layer)] =
             make_attention(*query_heads, *key_value_heads, head_dim, has_query_norm);
+        semantic_layer.mixer = topology.attention_layouts[static_cast<size_t>(layer)];
         topology.execute_feed_forward[static_cast<size_t>(layer)] = has_ffn;
     }
     if (m.attention_multiplier.has_value()) {
@@ -540,9 +583,10 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     numerical_policy.attention_multiplier = attention_head_dim > 0
             ? 1.0f / std::sqrt(static_cast<float>(attention_head_dim)) : 1.0f;
     }
-    for (AttentionSpec& attention : topology.attention_layouts) {
-        if (attention.query_heads > 0) {
-            attention.query_scale *= numerical_policy.attention_multiplier;
+    for (LayerSpec& semantic_layer : graph.layers) {
+        if (auto* attention = std::get_if<AttentionSpec>(&semantic_layer.mixer);
+            attention != nullptr && attention->query_heads > 0) {
+            attention->query_scale *= numerical_policy.attention_multiplier;
         }
     }
     topology.validate();
@@ -925,6 +969,7 @@ std::string CanonicalModelFacts::fingerprint() const {
 void CanonicalModelFacts::validate() const {
     topology.validate();
     numerical_policy.validate();
+    graph.validate();
     bindings.validate();
     const auto require = [&](TensorRole role, int layer) {
         if (bindings.find(role, layer) == nullptr) {

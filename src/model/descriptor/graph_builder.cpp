@@ -26,29 +26,30 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
 
 } // namespace
 
-void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
-                            const RuntimeTopology& topology,
-                            const NumericalPolicy& numerical_policy,
-                            const CheckpointMetadata& metadata) {
-    model.graph.hidden = topology.hidden;
-    model.graph.embedding_transform.multiplier =
+ModelGraph build_descriptor_graph(const Descriptor& descriptor,
+                                  const RuntimeTopology& topology,
+                                  const NumericalPolicy& numerical_policy,
+                                  const CheckpointMetadata& metadata) {
+    ModelGraph graph;
+    graph.hidden = topology.hidden;
+    graph.embedding_transform.multiplier =
         numerical_policy.embedding_multiplier;
     if (descriptor.embedding_post_norm_kind) {
-        model.graph.embedding_transform.post_norm = NormSpec{
+        graph.embedding_transform.post_norm = NormSpec{
             numerical_policy.norm_eps, *descriptor.embedding_post_norm_kind};
     }
-    model.graph.logits_divisor = numerical_policy.logits_divisor;
-    model.graph.logits_multiplier = numerical_policy.logits_multiplier;
-    model.graph.final_norm = {numerical_policy.norm_eps,
+    graph.logits_divisor = numerical_policy.logits_divisor;
+    graph.logits_multiplier = numerical_policy.logits_multiplier;
+    graph.final_norm = {numerical_policy.norm_eps,
                               descriptor.final_norm_kind};
-    model.graph.final_logit_softcap = descriptor.final_logit_softcap.has_value()
+    graph.final_logit_softcap = descriptor.final_logit_softcap.has_value()
         ? static_cast<float>(number_value(metadata, *descriptor.final_logit_softcap)) : 0.0f;
     if (descriptor.norm_after_physical_block) {
         const int physical_layer_count = integer_value(
             metadata, descriptor.dimensions.at("layers"));
-        model.graph.norm_after_layers = {physical_layer_count - 1};
+        graph.norm_after_layers = {physical_layer_count - 1};
     } else {
-        model.graph.norm_after_layers.clear();
+        graph.norm_after_layers.clear();
     }
     const bool orthogonalize_current_value = boolean_value(
         metadata, descriptor.orthogonalize_current_value, false);
@@ -66,8 +67,8 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
         ? integer_value(metadata, *descriptor.shared_kv_suffix_layers) : 0;
     const int shared_start = topology.num_hidden_layers - shared_layers;
 
-    model.graph.layers.clear();
-    model.graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
+    graph.layers.clear();
+    graph.layers.reserve(static_cast<size_t>(topology.num_hidden_layers));
     for (int layer_index = 0; layer_index < topology.num_hidden_layers; ++layer_index) {
         LayerSpec layer;
         const float epsilon = numerical_policy.norm_eps;
@@ -137,8 +138,10 @@ void build_descriptor_graph(ResolvedModel& model, const Descriptor& descriptor,
             MixerKind::MlpOnly;
         layer.per_layer_input = {topology.per_layer_input_size, ActivationKind::GeluTanh,
                                  topology.has_per_layer_input};
-        model.graph.layers.push_back(std::move(layer));
+        graph.layers.push_back(std::move(layer));
     }
+    graph.validate();
+    return graph;
 }
 
 } // namespace celeg::descriptor_detail

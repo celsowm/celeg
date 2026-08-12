@@ -246,6 +246,7 @@ struct InferenceInput {
 struct CanonicalModelFacts {
     RuntimeTopology topology;
     NumericalPolicy numerical_policy;
+    ModelGraph graph;
     TensorRoleBindings bindings;
     bool tied_embeddings = false;
     std::string resolution_mode;

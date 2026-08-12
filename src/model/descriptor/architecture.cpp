@@ -443,10 +443,11 @@ public:
         stages.numerical_policy = [numerical_policy](const CheckpointView&) {
             return numerical_policy;
         };
-        stages.graph = [this](ResolvedModel& model, const RuntimeTopology& topology,
+        stages.graph = [this](const RuntimeTopology& topology,
                               const NumericalPolicy& numerical_policy,
                               const CheckpointView& view) {
-            build_descriptor_graph(model, descriptor_, topology, numerical_policy, view.metadata);
+            return build_descriptor_graph(descriptor_, topology, numerical_policy,
+                                          view.metadata);
         };
         stages.weights = [this](ResolvedModel& model, const CheckpointView&) {
             auto policy = descriptor_detail::create_naming_policy(descriptor_);
