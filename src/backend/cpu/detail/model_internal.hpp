@@ -53,48 +53,25 @@ struct CpuWorkspacePlan {
                      static_cast<size_t>(shape.max_gated_delta_net_output_width())));
         plan.attention_projection = static_cast<size_t>(
             shape.maximum_attention_projection_width());
-        for (const AttentionSpec& attention : shape.attention_layouts) {
-            plan.attention_projection = std::max(plan.attention_projection,
-                static_cast<size_t>(attention.latent_query_width()));
-            plan.attention_output = std::max(plan.attention_output,
-                static_cast<size_t>(attention.latent_query_content_width()));
-            plan.latent_output = std::max(plan.latent_output,
-                static_cast<size_t>(attention.latent_output_width()));
-            plan.latent_projection = std::max(plan.latent_projection,
-                static_cast<size_t>(attention.latent_query_projection_width()));
-            plan.latent_projection = std::max(plan.latent_projection,
-                static_cast<size_t>(attention.latent_query_content_width()));
-            if (const auto* latent = attention.latent_state(); latent && latent->factorized) {
-                plan.latent_projection = std::max(plan.latent_projection,
-                    static_cast<size_t>(latent->query_rank));
-            }
-            if (const auto* latent = attention.latent_state()) {
-                plan.latent_state = std::max(plan.latent_state,
-                    static_cast<size_t>(latent->latent_rank));
-                plan.latent_rotary = std::max(plan.latent_rotary,
-                    static_cast<size_t>(attention.latent_query_rope_width()));
-                plan.latent_key_rotary = std::max(plan.latent_key_rotary,
-                    static_cast<size_t>(latent->rope_head_dim));
-            }
-        }
-        for (const GatedDeltaNetSpec& spec : shape.gated_delta_net_layouts) {
-            plan.gated_delta_qkv = std::max(plan.gated_delta_qkv,
-                static_cast<size_t>(2 * spec.key_heads * spec.key_head_dim +
-                                    spec.value_heads * spec.value_head_dim));
-            plan.gated_delta_output = std::max(plan.gated_delta_output,
-                static_cast<size_t>(spec.value_heads * spec.value_head_dim));
-            plan.gated_delta_gate = std::max(plan.gated_delta_gate,
-                static_cast<size_t>(spec.decay_width()));
-        }
-        for (const Mamba2Spec& spec : shape.mamba2_layouts) {
-            plan.mamba_projection = std::max(plan.mamba_projection,
-                2ULL * static_cast<size_t>(spec.intermediate_size) +
-                2ULL * static_cast<size_t>(spec.group_count) * static_cast<size_t>(spec.state_size) +
-                static_cast<size_t>(spec.num_heads));
-            plan.mamba_conv = std::max(plan.mamba_conv,
-                static_cast<size_t>(spec.intermediate_size) +
-                2ULL * static_cast<size_t>(spec.group_count) * static_cast<size_t>(spec.state_size));
-        }
+        plan.attention_projection = std::max(plan.attention_projection,
+            static_cast<size_t>(shape.maximum_attention_latent_query_rope_width()));
+        plan.attention_projection = std::max(plan.attention_projection,
+            static_cast<size_t>(shape.maximum_attention_latent_projection_width()));
+        plan.attention_output = std::max(plan.attention_output,
+            static_cast<size_t>(shape.maximum_attention_latent_output_width()));
+        plan.latent_state = static_cast<size_t>(shape.maximum_attention_latent_rank());
+        plan.latent_rotary = static_cast<size_t>(
+            shape.maximum_attention_latent_query_rope_width());
+        plan.latent_key_rotary = static_cast<size_t>(
+            shape.maximum_attention_latent_rope_width());
+        plan.latent_output = static_cast<size_t>(shape.maximum_attention_latent_output_width());
+        plan.latent_projection = static_cast<size_t>(
+            shape.maximum_attention_latent_projection_width());
+        plan.gated_delta_qkv = static_cast<size_t>(shape.max_gated_delta_net_qkv_width());
+        plan.gated_delta_output = static_cast<size_t>(shape.max_gated_delta_net_output_width());
+        plan.gated_delta_gate = static_cast<size_t>(shape.max_gated_delta_net_gate_width());
+        plan.mamba_projection = static_cast<size_t>(shape.maximum_mamba_projection_width());
+        plan.mamba_conv = static_cast<size_t>(shape.maximum_mamba_conv_width());
         plan.mamba_inner = static_cast<size_t>(shape.mamba2_intermediate);
         plan.feed_forward = static_cast<size_t>(shape.max_feed_forward_intermediate);
         plan.q8_blocks = static_cast<size_t>(shape.hidden) / 256;
@@ -363,7 +340,6 @@ struct CpuCompiledModel {
         std::vector<TensorRequest> weight_requests;
         std::unordered_map<std::string, CpuLinearWeight> compressed_linear_cache;
         bool tie_word_embeddings = true;
-        float final_logit_softcap = 0.0f;
         CpuWeightStore weight_store;
         std::unique_ptr<CpuExpertBackingStore> expert_backing_store;
         mutable std::mutex expert_pack_mutex;

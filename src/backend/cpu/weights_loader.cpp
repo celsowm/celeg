@@ -51,10 +51,10 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
             const int intermediate = layer_program.feed_forward_intermediate;
             common.mlp_up = load_matrix(source, reader, writer,
                 tensor_name(weight_requests, TensorRole::FfnUp, layer),
-                {intermediate, shape.hidden});
+                {intermediate, program.hidden});
             common.w2 = load_matrix(source, reader, writer,
                 tensor_name(weight_requests, TensorRole::FfnDown, layer),
-                {shape.hidden, intermediate});
+                {program.hidden, intermediate});
         }
         return common;
     }

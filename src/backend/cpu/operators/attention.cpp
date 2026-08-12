@@ -154,7 +154,7 @@ void apply_cpu_attention_output_gate(float* output, const float* gate,
 }
 
 void apply_cpu_latent_attention_positions(
-    const ExecutionTopology& shape, const AttentionSpec& layout,
+    const AttentionSpec& layout,
     float* query_rope, float* key_rope, int scalar_position,
     const std::array<int32_t, 3>& rope_position) {
     const auto* latent = layout.latent_state();
@@ -171,7 +171,6 @@ void apply_cpu_latent_attention_positions(
                  scalar_position, *rope);
         cpu_rope(key_rope, 1, latent->rope_head_dim, scalar_position, *rope);
     }
-    (void)shape;
 }
 
 } // namespace celeg

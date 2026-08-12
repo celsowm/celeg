@@ -64,30 +64,36 @@ const char* policy_name(ExpertCachePolicy policy) {
 
 } // namespace
 
-std::size_t bytes_per_expert_bf16(const ExecutionTopology& shape) {
+std::size_t bytes_per_expert_bf16(const CompiledModelProgram& program) {
+    int moe_intermediate = 0;
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (layer.moe) {
+            moe_intermediate = std::max(moe_intermediate,
+                layer.moe->routed.mlp.intermediate_size);
+        }
+    }
     const std::size_t gate_up = static_cast<std::size_t>(2) *
-        static_cast<std::size_t>(shape.moe_intermediate) *
-        static_cast<std::size_t>(shape.hidden);
-    const std::size_t down = static_cast<std::size_t>(shape.hidden) *
-        static_cast<std::size_t>(shape.moe_intermediate);
+        static_cast<std::size_t>(moe_intermediate) *
+        static_cast<std::size_t>(program.hidden);
+    const std::size_t down = static_cast<std::size_t>(program.hidden) *
+        static_cast<std::size_t>(moe_intermediate);
     return (gate_up + down) * kBf16Bytes;
 }
 
-int moe_layer_count(const ExecutionTopology& shape) {
-    if (shape.num_experts <= 0) return 0;
+int moe_layer_count(const CompiledModelProgram& program) {
     int count = 0;
-    for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {
-        if (shape.layer_uses_moe(layer)) ++count;
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (layer.moe) ++count;
     }
     return count;
 }
 
-std::size_t kv_cache_bytes(const ExecutionTopology& shape, int context_tokens) {
+std::size_t kv_cache_bytes(const CompiledModelProgram& program, int context_tokens) {
     if (context_tokens <= 0) return 0;
     std::size_t bytes = 0;
-    for (size_t layer = 0; layer < shape.attention_layouts.size(); ++layer) {
-        if (shape.mixer_kinds[static_cast<size_t>(layer)] != MixerKind::Attention) continue;
-        const AttentionSpec& layout = shape.attention_layouts[layer];
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (!layer.attention) continue;
+        const AttentionSpec& layout = *layer.attention;
         if (layout.kv_sharing.shared() && !layout.kv_sharing.publishes) continue;
         bytes += static_cast<std::size_t>(2) *
             static_cast<std::size_t>(layout.key_value_width()) * kBf16Bytes *
@@ -97,27 +103,36 @@ std::size_t kv_cache_bytes(const ExecutionTopology& shape, int context_tokens) {
 }
 
 ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
-    const ExecutionTopology& shape = inputs.shape;
+    const CompiledModelProgram& program = inputs.program;
     const ExpertOffloadOptions& options = inputs.options;
 
+    int max_experts = 0;
+    int max_experts_per_token = 0;
+    for (const CompiledLayerProgram& layer : program.layers) {
+        if (!layer.moe) continue;
+        max_experts = std::max(max_experts, layer.moe->router.expert_count);
+        max_experts_per_token = std::max(max_experts_per_token,
+                                         layer.moe->router.experts_per_token);
+    }
+
     ExpertOffloadPlan plan;
-    plan.moe_layers = moe_layer_count(shape) + std::max(0, inputs.extra_moe_layers);
-    plan.bytes_per_expert = bytes_per_expert_bf16(shape);
+    plan.moe_layers = moe_layer_count(program) + std::max(0, inputs.extra_moe_layers);
+    plan.bytes_per_expert = bytes_per_expert_bf16(program);
     plan.gpu_free_bytes = inputs.gpu_free_bytes;
     plan.non_expert_weight_bytes = inputs.non_expert_weight_bytes;
-    plan.kv_reservation_bytes = kv_cache_bytes(shape, inputs.context_tokens) +
+    plan.kv_reservation_bytes = kv_cache_bytes(program, inputs.context_tokens) +
         inputs.extra_kv_reservation_bytes;
     plan.workspace_bytes = inputs.workspace_bytes;
     plan.reserve_bytes = options.gpu_memory_reserve_bytes;
     plan.host_mode = options.host_mode;
     plan.policy = options.policy;
 
-    if (!options.enabled() || plan.moe_layers == 0 || shape.num_experts <= 0) {
+    if (!options.enabled() || plan.moe_layers == 0 || max_experts <= 0) {
         plan.enabled = false;
-        plan.experts_per_layer = shape.num_experts;
+        plan.experts_per_layer = max_experts;
         plan.host_experts_per_layer = 0;
         plan.gpu_expert_cache_bytes =
-            static_cast<std::size_t>(shape.num_experts) *
+            static_cast<std::size_t>(max_experts) *
             static_cast<std::size_t>(plan.moe_layers) * plan.bytes_per_expert;
         return plan;
     }
@@ -150,8 +165,8 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
     // hard lower bound for the planner.
     const int min_experts = std::max(
         0, std::min(std::max(options.minimum_experts_per_layer,
-                             shape.experts_per_token),
-                    shape.num_experts));
+                             max_experts_per_token),
+                    max_experts));
     if (slots_per_layer < min_experts) {
         std::ostringstream msg;
         msg << "expert offload cannot fit the minimum "
@@ -159,7 +174,7 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
             << slots_per_layer << ")";
         throw std::runtime_error(msg.str());
     }
-    slots_per_layer = std::min(slots_per_layer, shape.num_experts);
+    slots_per_layer = std::min(slots_per_layer, max_experts);
 
     // Respect the host pinned budget: every non-resident expert may need host
     // storage. If it would overflow, force more experts onto the GPU.
@@ -169,13 +184,13 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
             static_cast<std::size_t>(plan.moe_layers) * plan.bytes_per_expert;
         const int max_host_per_layer = static_cast<int>(
             options.maximum_pinned_host_bytes / per_layer_host_bytes);
-        const int min_gpu_for_host = shape.num_experts - max_host_per_layer;
+        const int min_gpu_for_host = max_experts - max_host_per_layer;
         slots_per_layer = std::max(slots_per_layer, min_gpu_for_host);
-        slots_per_layer = std::min(slots_per_layer, shape.num_experts);
+        slots_per_layer = std::min(slots_per_layer, max_experts);
     }
 
     plan.experts_per_layer = slots_per_layer;
-    plan.host_experts_per_layer = shape.num_experts - slots_per_layer;
+    plan.host_experts_per_layer = max_experts - slots_per_layer;
     // Prefetch depth cannot exceed the experts that are actually host-resident
     // (no point prefetching what is already cached).
     if (options.backing == ExpertBackingMode::DiskCached) {

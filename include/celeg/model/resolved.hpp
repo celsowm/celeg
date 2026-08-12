@@ -54,9 +54,6 @@ public:
     int num_hidden_layers = 0;
     int conv_cache = 0;
     int conv_dim = 0;
-    std::vector<MixerKind> mixer_kinds;
-    std::vector<FeedForwardKind> feed_forward_kinds;
-    std::vector<bool> execute_feed_forward;
     std::vector<int> attention_slot_for_layer;
     std::vector<int> layer_for_attention_slot;
     int attention_layer_count = 0;
@@ -65,9 +62,20 @@ public:
     int mamba2_layer_count = 0;
     int mlp_only_layer_count = 0;
     int mamba2_intermediate = 0;
-    std::vector<GatedDeltaNetSpec> gated_delta_net_layouts;
-    std::vector<Mamba2Spec> mamba2_layouts;
-    std::vector<MlpBlockSpec> mlp_only_layouts;
+    int maximum_mamba_projection_width_value = 0;
+    int maximum_mamba_conv_width_value = 0;
+    int maximum_attention_projection_width_value = 0;
+    int maximum_attention_query_heads_value = 0;
+    int maximum_attention_head_dim_value = 0;
+    int maximum_attention_output_width_value = 0;
+    int maximum_attention_latent_rank_value = 0;
+    int maximum_attention_latent_rope_width_value = 0;
+    int maximum_attention_latent_query_rope_width_value = 0;
+    int maximum_attention_latent_output_width_value = 0;
+    int maximum_attention_latent_projection_width_value = 0;
+    int maximum_gated_delta_net_qkv_width_value = 0;
+    int maximum_gated_delta_net_output_width_value = 0;
+    int maximum_gated_delta_net_gate_width_value = 0;
     int dense_intermediate = 0;
     int moe_intermediate = 0;
     int shared_expert_intermediate = 0;
@@ -82,114 +90,54 @@ public:
     int moe_routing_experts_per_group = 0;
     int moe_routing_groups_per_token = 0;
     int moe_routing_group_score_top_k = 0;
-    std::vector<AttentionSpec> attention_layouts;
-    std::vector<int> feed_forward_intermediates;
-    std::vector<ActivationKind> feed_forward_activations;
-    bool has_per_layer_input = false;
-    int per_layer_input_size = 0;
 
     int maximum_attention_projection_width() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            maximum = std::max(maximum, layout.projection_width());
-        }
-        return maximum;
+        return maximum_attention_projection_width_value;
     }
     int maximum_attention_query_heads() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            maximum = std::max(maximum, layout.query_heads);
-        }
-        return maximum;
+        return maximum_attention_query_heads_value;
     }
     int maximum_attention_head_dim() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            maximum = std::max(maximum, layout.head_dim);
-        }
-        return maximum;
+        return maximum_attention_head_dim_value;
     }
 
     int maximum_mamba_projection_width() const {
-        int maximum = 0;
-        for (const Mamba2Spec& spec : mamba2_layouts) {
-            maximum = std::max(maximum, 2 * spec.intermediate_size +
-                2 * spec.group_count * spec.state_size + spec.num_heads);
-        }
-        return maximum;
+        return maximum_mamba_projection_width_value;
+    }
+    int maximum_mamba_conv_width() const {
+        return maximum_mamba_conv_width_value;
     }
     int maximum_attention_output_width() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            maximum = std::max(maximum, layout.uses_latent_state()
-                ? layout.latent_query_content_width() : layout.query_width());
-        }
-        return maximum;
+        return maximum_attention_output_width_value;
     }
     int maximum_attention_latent_rank() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            if (const auto* latent = layout.latent_state()) {
-                maximum = std::max(maximum, latent->latent_rank);
-            }
-        }
-        return maximum;
+        return maximum_attention_latent_rank_value;
     }
     int maximum_attention_latent_rope_width() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            if (const auto* latent = layout.latent_state()) {
-                maximum = std::max(maximum, latent->decoupled_rope
-                    ? latent->rope_head_dim : 0);
-            }
-        }
-        return maximum;
+        return maximum_attention_latent_rope_width_value;
     }
     int maximum_attention_latent_query_rope_width() const {
-        int maximum = 0;
-        for (const AttentionSpec& layout : attention_layouts) {
-            maximum = std::max(maximum, layout.latent_query_rope_width());
-        }
-        return maximum;
+        return maximum_attention_latent_query_rope_width_value;
+    }
+    int maximum_attention_latent_output_width() const {
+        return maximum_attention_latent_output_width_value;
+    }
+    int maximum_attention_latent_projection_width() const {
+        return maximum_attention_latent_projection_width_value;
     }
     int max_gated_delta_net_qkv_width() const {
-        int maximum = 0;
-        for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
-            maximum = std::max(maximum, 2 * layout.key_heads * layout.key_head_dim +
-                layout.value_heads * layout.value_head_dim);
-        }
-        return maximum;
+        return maximum_gated_delta_net_qkv_width_value;
     }
     int max_gated_delta_net_output_width() const {
-        int maximum = 0;
-        for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
-            maximum = std::max(maximum, layout.value_heads * layout.value_head_dim);
-        }
-        return maximum;
+        return maximum_gated_delta_net_output_width_value;
     }
     int max_gated_delta_net_gate_width() const {
-        int maximum = 0;
-        for (const GatedDeltaNetSpec& layout : gated_delta_net_layouts) {
-            maximum = std::max(maximum, std::max(layout.value_heads,
-                layout.decay_width()));
-        }
-        return maximum;
+        return maximum_gated_delta_net_gate_width_value;
     }
 
-    bool layer_uses_moe(int layer) const {
-        return layer >= 0 && layer < static_cast<int>(feed_forward_kinds.size()) &&
-               feed_forward_kinds[static_cast<size_t>(layer)] == FeedForwardKind::MixtureOfExperts;
-    }
     std::string fingerprint() const;
     std::string summary() const;
-void validate() const;
-
-    const AttentionSpec& attention_layout(int layer) const {
-        if (layer < 0 || layer >= static_cast<int>(attention_layouts.size())) {
-            throw std::out_of_range("attention layer is out of range");
-        }
-        return attention_layouts[static_cast<size_t>(layer)];
-    }
+    void validate() const;
 
     static ExecutionTopology derive(const ModelGraph& graph);
 

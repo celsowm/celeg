@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 
 #include <cstddef>
 #include <utility>
@@ -19,7 +19,7 @@ struct PackedLayerBinding {
 // it does not rediscover architecture behavior from checkpoint identity.
 class PackedLayerProgram {
 public:
-    static PackedLayerProgram compile(const ExecutionTopology& shape);
+    static PackedLayerProgram compile(const CompiledModelProgram& program);
 
     size_t size() const { return layers_.size(); }
     PackedLayerKind kind(size_t layer) const { return layers_.at(layer).kind; }

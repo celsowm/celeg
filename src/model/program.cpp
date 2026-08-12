@@ -1,5 +1,6 @@
 #include "celeg/model/program.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -169,17 +170,20 @@ std::string MoeLayerProgram::fingerprint() const {
 
 PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     PerLayerInputPlan result;
-    const ExecutionTopology& topology = model.shape();
-    if (!topology.has_per_layer_input) {
+    const ModelGraph& graph = model.graph;
+    const auto enabled_layer = std::find_if(
+        graph.layers.begin(), graph.layers.end(),
+        [](const LayerSpec& layer) { return layer.per_layer_input.enabled; });
+    if (enabled_layer == graph.layers.end()) {
         return result;
     }
-    if (topology.num_hidden_layers <= 0 || topology.per_layer_input_size <= 0 ||
-        topology.hidden <= 0) {
+    if (graph.layers.empty() || graph.hidden <= 0 ||
+        enabled_layer->per_layer_input.input_size <= 0) {
         throw std::invalid_argument("invalid per-layer input dimensions");
     }
     result.enabled = true;
-    result.layer_count = topology.num_hidden_layers;
-    result.input_size = topology.per_layer_input_size;
+    result.layer_count = static_cast<int>(graph.layers.size());
+    result.input_size = enabled_layer->per_layer_input.input_size;
     result.packed_width = checked_product(
         static_cast<std::size_t>(result.layer_count),
         static_cast<std::size_t>(result.input_size),
@@ -189,7 +193,7 @@ PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
             "per-layer input width exceeds the compiled execution index range");
     }
     result.token_scale = std::sqrt(static_cast<float>(result.input_size));
-    result.context_scale = 1.0f / std::sqrt(static_cast<float>(topology.hidden));
+    result.context_scale = 1.0f / std::sqrt(static_cast<float>(graph.hidden));
     result.residual_scale = kPerLayerResidualScale;
     if (model.graph.layers.empty()) {
         throw std::invalid_argument("per-layer input requires resolved layer specifications");
@@ -270,10 +274,10 @@ void CompiledModelProgram::validate() const {
             layer.attention.has_value() || layer.short_convolution.has_value() ||
             layer.gated_delta_net.has_value() || layer.mamba2.has_value();
         if (layer.mixer == CompiledMixer::MlpOnly) {
-            if (has_mixer_spec) {
-                throw std::invalid_argument("MLP-only layer has mixer semantics");
+            if (has_mixer_spec || !layer.mlp_only) {
+                throw std::invalid_argument("MLP-only layer has invalid mixer semantics");
             }
-        } else if (!has_mixer_spec) {
+        } else if (!has_mixer_spec || layer.mlp_only) {
             throw std::invalid_argument("compiled mixer has no semantic specification");
         }
         if (layer.mixer == CompiledMixer::Attention && !layer.attention) {
@@ -425,7 +429,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
                 compiled.mamba2 = mixer;
             } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
-                // MLP-only layers intentionally have no mixer payload.
+                compiled.mlp_only = mixer;
             } else {
                 static_assert(always_false_v<Mixer>, "unhandled mixer lowering variant");
             }
@@ -442,6 +446,13 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
                               "unhandled feed-forward lowering variant");
             }
         }, layer.feed_forward);
+        if (compiled.mlp_only) {
+            if (compiled.feed_forward_intermediate != compiled.mlp_only->intermediate_size) {
+                throw std::invalid_argument(
+                    "MLP-only mixer and feed-forward widths do not agree");
+            }
+            compiled.feed_forward_activation = compiled.mlp_only->activation;
+        }
         for (std::size_t request_index = 0;
              request_index < model.weight_plan.requests.size(); ++request_index) {
             if (model.weight_plan.requests[request_index].layer == static_cast<int>(layer_index)) {

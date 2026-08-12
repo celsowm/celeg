@@ -112,7 +112,7 @@ void execute_cpu_mamba2_token(
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());
     cpu_residual_add(workspace.hidden.data(), workspace.residual.data(),
-                     shared.shape.hidden);
+                     shared.program.hidden);
 }
 
 void execute_cpu_short_convolution_token(
@@ -124,7 +124,7 @@ void execute_cpu_short_convolution_token(
     shared.linear.gemv(weights.in, workspace.normed.data(),
                        workspace.conv_projected.data());
     cpu_conv_decode(workspace.conv_projected.data(), weights.weight_tap_major.data(),
-                    state.state.data(), workspace.op_output.data(), shared.shape.hidden,
+                    state.state.data(), workspace.op_output.data(), shared.program.hidden,
                     shared.shape.conv_cache, model.session_.position_value);
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());
@@ -138,7 +138,7 @@ void execute_cpu_gated_delta_chunk(
     auto& shared = *model.shared;
     CpuExecutionContext execution{shared, workspace, model.session_};
     const GatedDeltaNetSpec& spec = weights.spec;
-    const size_t hidden = static_cast<size_t>(shared.shape.hidden);
+    const size_t hidden = static_cast<size_t>(shared.program.hidden);
 
     auto started = Clock::now();
     if (spec.factorized_projections) {
@@ -203,7 +203,7 @@ void execute_cpu_short_convolution_chunk(
     auto& workspace = model.workspace_;
     auto& shared = *model.shared;
     CpuExecutionContext execution{shared, workspace, model.session_};
-    const size_t hidden = static_cast<size_t>(shared.shape.hidden);
+    const size_t hidden = static_cast<size_t>(shared.program.hidden);
 
     auto started = Clock::now();
     cpu_chunk_layer_gemm(execution, weights.in, workspace.chunk_normed.data(),
@@ -215,7 +215,7 @@ void execute_cpu_short_convolution_chunk(
     auto& state = model.convolution_state(layer);
     cpu_conv_prefill(workspace.chunk_conv.data(), weights.weight_tap_major.data(),
                      state.state.data(), workspace.chunk_op.data(), rows,
-                     shared.shape.hidden, shared.shape.conv_cache,
+                     shared.program.hidden, shared.shape.conv_cache,
                      model.session_.position_value, shared.pool);
     model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
 

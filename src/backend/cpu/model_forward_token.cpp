@@ -25,10 +25,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             ? *embeddings->rope_at_position(static_cast<std::size_t>(session_.position_value))
             : session_.next_rope_position;
     if (raw_embedding) {
-        if (embeddings->width != shared->shape.hidden) {
+        if (embeddings->width != shared->program.hidden) {
             throw std::invalid_argument("raw embedding width does not match model hidden size");
         }
-        std::copy(raw_embedding, raw_embedding + shared->shape.hidden,
+        std::copy(raw_embedding, raw_embedding + shared->program.hidden,
                   workspace_.hidden.begin());
     } else {
         shared->linear.embedding(shared->weight_store.embedding, token, workspace_.hidden.data());
@@ -38,7 +38,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     }
     if (shared->program.embedding_transform.post_norm) {
         cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.embedding_norm.data(),
-                            shared->shape.hidden,
+                            shared->program.hidden,
                             shared->program.embedding_transform.post_norm->epsilon);
     }
     if (shared->program.per_layer_input.enabled) {
@@ -73,7 +73,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, semantics.operator_norm.epsilon);
+                    shared->program.hidden, semantics.operator_norm.epsilon);
         if (!semantics.execute_feed_forward &&
             semantics.mixer == CompiledMixer::MlpOnly) {
             const auto& mlp = std::get<CpuCompiledModel::MlpOnlyWeights>(layer_program);
@@ -99,16 +99,16 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
         if (semantics.post_attention_norm.enabled()) {
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
-                                shared->shape.hidden, semantics.post_attention_norm.epsilon);
+                                shared->program.hidden, semantics.post_attention_norm.epsilon);
         }
-        cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
+        cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
 
         // Mixer-only layers do not have the generic post-attention
         // normalization and dense FFN.
         if (!semantics.execute_feed_forward) continue;
 
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, semantics.feed_forward_norm.epsilon);
+                    shared->program.hidden, semantics.feed_forward_norm.epsilon);
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
             const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
@@ -118,9 +118,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             if (semantics.post_feed_forward_norm.enabled()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->shape.hidden, semantics.post_feed_forward_norm.epsilon);
+                                    shared->program.hidden, semantics.post_feed_forward_norm.epsilon);
             }
-            cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
+            cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else {
             execute_cpu_dense_feed_forward_token(execution, index, common);
             if (semantics.residual.multiplier != 1.0f) {
@@ -128,9 +128,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             }
             if (semantics.post_feed_forward_norm.enabled()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->shape.hidden, semantics.post_feed_forward_norm.epsilon);
+                                    shared->program.hidden, semantics.post_feed_forward_norm.epsilon);
             }
-            cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->shape.hidden);
+            cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         }
         if (shared->program.per_layer_input.enabled) {
             const PerLayerInputPlan& plan = shared->program.per_layer_input;
@@ -151,18 +151,18 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             if (common.layer_scalar != 1.0f) {
                 for (float& value : workspace_.hidden) value *= common.layer_scalar;
             }
-            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->shape.hidden);
+            cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
         }
         if (std::binary_search(shared->program.norm_after_layers.begin(),
                                shared->program.norm_after_layers.end(),
                                static_cast<int>(index))) {
             cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.final_norm.data(),
-                                shared->shape.hidden, shared->program.final_norm.epsilon);
+                                shared->program.hidden, shared->program.final_norm.epsilon);
         }
     }
     if (compute_logits) {
         cpu_rmsnorm(workspace_.hidden.data(), shared->weight_store.final_norm.data(), workspace_.normed.data(),
-                    shared->shape.hidden, shared->program.final_norm.epsilon);
+                    shared->program.hidden, shared->program.final_norm.epsilon);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
         if (shared->program.logits_multiplier != 1.0f) {
@@ -171,10 +171,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (shared->program.logits_divisor != 1.0f) {
             for (float& value : workspace_.logits) value /= shared->program.logits_divisor;
         }
-        if (shared->final_logit_softcap > 0.0f) {
+        if (shared->program.final_logit_softcap > 0.0f) {
             for (float& value : workspace_.logits) {
-                value = std::tanh(value / shared->final_logit_softcap) *
-                    shared->final_logit_softcap;
+                value = std::tanh(value / shared->program.final_logit_softcap) *
+                    shared->program.final_logit_softcap;
             }
         }
     }

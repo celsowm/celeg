@@ -4,28 +4,28 @@
 
 namespace celeg {
 
-PackedLayerProgram PackedLayerProgram::compile(const ExecutionTopology& shape) {
-    if (shape.num_hidden_layers <= 0 ||
-        shape.mixer_kinds.size() != static_cast<size_t>(shape.num_hidden_layers)) {
+PackedLayerProgram PackedLayerProgram::compile(const CompiledModelProgram& program) {
+    if (program.layers.empty()) {
         throw std::invalid_argument("packed layer program has incomplete mixer topology");
     }
     std::vector<PackedLayerBinding> layers;
-    layers.reserve(shape.mixer_kinds.size());
-    for (const MixerKind kind : shape.mixer_kinds) {
+    layers.reserve(program.layers.size());
+    for (const CompiledLayerProgram& layer : program.layers) {
+        const CompiledMixer kind = layer.mixer;
         switch (kind) {
-        case MixerKind::Attention:
+        case CompiledMixer::Attention:
             layers.push_back({PackedLayerKind::Attention});
             break;
-        case MixerKind::ShortConvolution:
+        case CompiledMixer::ShortConvolution:
             layers.push_back({PackedLayerKind::ShortConvolution});
             break;
-        case MixerKind::GatedDeltaNet:
+        case CompiledMixer::GatedDeltaNet:
             layers.push_back({PackedLayerKind::GatedDeltaNet});
             break;
-        case MixerKind::Mamba2:
+        case CompiledMixer::Mamba2:
             layers.push_back({PackedLayerKind::Mamba2});
             break;
-        case MixerKind::MlpOnly:
+        case CompiledMixer::MlpOnly:
             layers.push_back({PackedLayerKind::MlpOnly});
             break;
         default:

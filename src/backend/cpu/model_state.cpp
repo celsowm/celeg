@@ -43,7 +43,7 @@ void CpuCompiledModel::allocate_state() {
             session_.states.emplace_back(std::move(state));
         } else if (const auto* mamba = mamba2_operator(layer)) {
             Mamba2State state;
-            const auto& spec = shared->shape.mamba2_layouts.at(index);
+            const auto& spec = shared->program.layers.at(index).mamba2.value();
             state.conv.resize(static_cast<size_t>(spec.intermediate_size +
                               2 * spec.group_count * spec.state_size) *
                               static_cast<size_t>(spec.conv_kernel));
@@ -62,7 +62,7 @@ void CpuCompiledModel::allocate_state() {
         } else {
             ConvolutionState state;
             state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
-                               shared->shape.hidden);
+                               shared->program.hidden);
             session_.states.emplace_back(std::move(state));
         }
     }

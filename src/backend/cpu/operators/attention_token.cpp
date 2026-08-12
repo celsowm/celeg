@@ -110,7 +110,7 @@ void execute_cpu_attention_token(
                     }
                 }
                 apply_cpu_latent_attention_positions(
-                    execution.shared.shape, layout, query_rope, key_rope,
+                    layout, query_rope, key_rope,
                     execution.session.position_value, rope_position);
                 const int owner = execution.shared.layer_to_kv_owner.at(index);
                 CpuCompiledModel::AttentionState& state = model.attention_state(static_cast<size_t>(owner));

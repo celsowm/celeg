@@ -489,7 +489,7 @@ public:
         stages.provenance.chat_template_id = descriptor_.chat_template;
         stages.provenance.profile = {descriptor_.id, "", {}, descriptor_.chat_template};
         ResolvedModel result = resolve_architecture_stages(checkpoint, std::move(stages));
-        result.provenance.identity = descriptor_.id + "-" + result.topology.fingerprint();
+        result.provenance.identity = descriptor_.id + "-" + result.graph.fingerprint();
         return result;
     }
 

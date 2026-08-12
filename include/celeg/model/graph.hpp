@@ -458,6 +458,7 @@ struct ModelGraph {
     float final_logit_softcap = 0.0f;
 
     void validate() const;
+    std::string fingerprint() const;
 
     bool has_moe() const {
         for (const LayerSpec& layer : layers) {

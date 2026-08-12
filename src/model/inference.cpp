@@ -905,7 +905,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
 
 std::string CanonicalModelFacts::fingerprint() const {
     std::ostringstream out;
-    out << resolution_mode << ':' << source_format << ":hidden=" << graph.hidden
+    out << resolution_mode << ':' << source_format << ":graph=" << graph.fingerprint()
         << ":layers=" << graph.layers.size()
         << ":vocab=" << checkpoint.vocab_size
         << ":num=" << numerical_policy.norm_eps << ':'

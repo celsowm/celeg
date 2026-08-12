@@ -3,6 +3,7 @@
 #include "common.hpp"
 
 #include <chrono>
+#include <stdexcept>
 
 namespace celeg {
 namespace {
@@ -27,14 +28,18 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
                                 const CpuCompiledModel::MlpOnlyWeights& weights) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;
-    const int intermediate = shared.shape.mlp_only_layouts.at(layer).intermediate_size;
+    const CompiledLayerProgram& semantics = shared.program.layers.at(layer);
+    const int intermediate = semantics.feed_forward_intermediate;
+    if (!semantics.mlp_only || semantics.mlp_only->activation != ActivationKind::Relu2) {
+        throw std::logic_error("CPU MLP-only execution received unsupported semantics");
+    }
     shared.linear.gemv(weights.common.mlp_up, workspace.normed.data(),
                        workspace.activated.data());
     cpu_relu2(workspace.activated.data(), workspace.activated.data(), intermediate);
     shared.linear.gemv(weights.common.w2, workspace.activated.data(),
                        workspace.hidden.data());
     cpu_residual_add(workspace.hidden.data(), workspace.residual.data(),
-                     shared.shape.hidden);
+                     shared.program.hidden);
 }
 
 void execute_cpu_dense_feed_forward_token(
@@ -66,7 +71,7 @@ void execute_cpu_dense_feed_forward_chunk(
     const auto started = Clock::now();
     cpu_chunk_layer_gemm(context, weights.w13,
                          workspace.chunk_normed.data(), workspace.chunk_gate_up.data(),
-                         rows, static_cast<size_t>(shared.shape.hidden), normed_q8_ready);
+                         rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
     if (context.session.phase == SessionPhase::Prefilling) {
         context.session.prefill_profile.linear_ms += elapsed_ms(started);
     }
@@ -84,7 +89,7 @@ void execute_cpu_dense_feed_forward_chunk(
     const auto output_started = Clock::now();
     cpu_chunk_layer_gemm(context, weights.w2,
                          workspace.chunk_activated.data(), workspace.chunk_mlp.data(),
-                         rows, static_cast<size_t>(shared.shape.hidden), normed_q8_ready);
+                         rows, static_cast<size_t>(shared.program.hidden), normed_q8_ready);
     if (context.session.phase == SessionPhase::Prefilling) {
         context.session.prefill_profile.linear_ms += elapsed_ms(output_started);
     }

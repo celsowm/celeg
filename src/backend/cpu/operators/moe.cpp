@@ -137,7 +137,7 @@ void execute_cpu_moe_token(CpuCompiledModel& model, size_t layer,
                            const MoeLayerProgram& semantics) {
     auto& shared = *model.shared;
     auto& workspace = model.workspace_;
-    const size_t hidden = static_cast<size_t>(shared.shape.hidden);
+    const size_t hidden = static_cast<size_t>(shared.program.hidden);
     const int experts = semantics.router.expert_count;
     const int selected = semantics.router.experts_per_token;
     const int intermediate = semantics.routed.mlp.intermediate_size;
@@ -150,7 +150,7 @@ void execute_cpu_moe_token(CpuCompiledModel& model, size_t layer,
     workspace.moe_weights.resize(static_cast<size_t>(selected));
     shared.linear.gemv_raw(weights.router.data(), workspace.normed.data(),
                            workspace.moe_router_logits.data(), experts,
-                           shared.shape.hidden);
+                           shared.program.hidden);
     const CpuMoeRoute route = route_cpu_moe(
         semantics.router, workspace.moe_router_logits, weights.router_bias);
     std::copy(route.experts.begin(), route.experts.end(), workspace.moe_selected.begin());
@@ -210,7 +210,7 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
                            size_t rows, bool& normed_q8_ready) {
     auto& shared = *model.shared;
     auto& workspace = model.workspace_;
-    const size_t hidden = static_cast<size_t>(shared.shape.hidden);
+    const size_t hidden = static_cast<size_t>(shared.program.hidden);
     const int experts = semantics.router.expert_count;
     const int selected = semantics.router.experts_per_token;
     const int intermediate = semantics.routed.mlp.intermediate_size;
@@ -232,7 +232,7 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
     const auto router_started = Clock::now();
     shared.linear.gemm_raw(weights.router.data(), workspace.chunk_normed.data(),
                            workspace.moe_router_logits.data(), rows, experts,
-                           shared.shape.hidden);
+                           shared.program.hidden);
     for (size_t row = 0; row < rows; ++row) {
         const float* logits = workspace.moe_router_logits.data() +
             row * static_cast<size_t>(experts);

@@ -17,7 +17,7 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const std::array<int32_t, 3>& rope_position);
 
 void apply_cpu_latent_attention_positions(
-    const ExecutionTopology& shape, const AttentionSpec& layout,
+    const AttentionSpec& layout,
     float* query_rope, float* key_rope, int scalar_position,
     const std::array<int32_t, 3>& rope_position);
 

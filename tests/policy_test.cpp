@@ -3,7 +3,6 @@
 #include "support/assertions.hpp"
 
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 
 int main() {
@@ -38,6 +37,7 @@ int main() {
     CELEG_TEST_CHECK(rejected_numerical);
 
     celeg::ResolvedModel resolved;
+    resolved.graph.hidden = 8;
     resolved.topology.exec.hidden = 8;
     resolved.topology.exec.intermediate = 16;
     resolved.topology.dims.vocab_size = 32;
@@ -61,7 +61,7 @@ int main() {
     CELEG_TEST_CHECK(per_layer.checked_elements(3) == 24);
 
     celeg::ResolvedModel overflow = resolved;
-    overflow.topology.exec.num_hidden_layers = std::numeric_limits<int>::max();
+    overflow.graph.hidden = 0;
     bool rejected_overflow = false;
     try {
         (void)celeg::PerLayerInputPlan::derive(overflow);

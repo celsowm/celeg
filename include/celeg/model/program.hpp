@@ -179,6 +179,9 @@ struct CompiledLayerProgram {
     NormSpec feed_forward_norm;
     NormSpec post_feed_forward_norm;
     ResidualSpec residual;
+    // MLP-only mixer semantics are needed by the backend even though this
+    // mixer has no separate operator payload.
+    std::optional<MlpBlockSpec> mlp_only;
 };
 
 struct CompiledModelProgram {

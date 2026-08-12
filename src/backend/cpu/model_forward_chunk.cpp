@@ -36,7 +36,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         tokens.size() > static_cast<size_t>(shared->max_context - session_.position_value)) {
         throw std::runtime_error("CPU chunked prefill exceeds context limit");
     }
-    if (embeddings && embeddings->width != shared->shape.hidden) {
+    if (embeddings && embeddings->width != shared->program.hidden) {
         throw std::invalid_argument("raw embedding width does not match model hidden size");
     }
     const bool has_sequential_only_layer = std::any_of(
@@ -53,8 +53,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
 
     const size_t rows = tokens.size();
     const int base_position = session_.position_value;
-    const ExecutionTopology& shape = shared->shape;
-    const size_t hidden = static_cast<size_t>(shape.hidden);
+    const size_t hidden = static_cast<size_t>(shared->program.hidden);
     CpuExecutionContext execution{*shared, workspace_, session_};
     workspace_.ensure_chunk(rows, shared->workspace_plan);
 
@@ -345,7 +344,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     float* key_rope = (latent.decoupled_rope && latent.rope_head_dim != 0)
                         ? workspace_.chunk_latent_key_rope.data() +
                             row * static_cast<size_t>(latent.rope_head_dim) : nullptr;
-                    apply_cpu_latent_attention_positions(shape, layout, query_rope, key_rope,
+                    apply_cpu_latent_attention_positions(layout, query_rope, key_rope,
                                                          position, rope_position);
                 });
                 const int owner = shared->layer_to_kv_owner.at(index);
@@ -392,7 +391,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                         decompressed + head * latent.value_head_dim);
                         }
                         shared->linear.gemv(attention->gate, workspace_.chunk_normed.data() +
-                            row * shape.hidden, workspace_.chunk_attention_gate.data() +
+                            row * shared->program.hidden, workspace_.chunk_attention_gate.data() +
                             row * static_cast<size_t>(layout.latent_output_width()));
                         apply_cpu_attention_output_gate(decompressed,
                             workspace_.chunk_attention_gate.data() +
@@ -559,9 +558,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         if (shared->program.logits_divisor != 1.0f) {
             for (float& value : workspace_.logits) value /= shared->program.logits_divisor;
         }
-        if (shared->final_logit_softcap > 0.0f) {
+        if (shared->program.final_logit_softcap > 0.0f) {
             for (float& value : workspace_.logits) {
-                value = std::tanh(value / shared->final_logit_softcap) * shared->final_logit_softcap;
+                value = std::tanh(value / shared->program.final_logit_softcap) * shared->program.final_logit_softcap;
             }
         }
     }

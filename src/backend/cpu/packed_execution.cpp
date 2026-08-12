@@ -233,7 +233,7 @@ struct CpuCompiledModel::BatchScratch {
                         const std::array<int32_t, 3> rope_position = {
                             position, position, position};
                         apply_cpu_latent_attention_positions(
-                            shape, layout,
+                            layout,
                             rope_width == 0 ? nullptr : workspace_.latent_rope.data() + row * rope_width,
                             latent.decoupled_rope && latent.rope_head_dim != 0
                                 ? workspace_.latent_key_rope.data() +
@@ -310,7 +310,7 @@ struct CpuCompiledModel::BatchScratch {
                     ConvolutionState& state = sessions[row]->convolution_state(index);
                     cpu_conv_decode(workspace_.conv_projected.data() + row * 3ULL * hidden,
                                     convolution->weight_tap_major.data(), state.state.data(),
-                                    workspace_.op_output.data() + row * hidden, shape.hidden,
+                                    workspace_.op_output.data() + row * hidden, shared.program.hidden,
                                     shape.conv_cache, sessions[row]->session_.position_value);
                 });
                 layer_gemm(convolution->out, workspace_.op_output.data(),
@@ -346,7 +346,8 @@ struct CpuCompiledModel::BatchScratch {
                 workspace_.moe_group_cursor.resize(static_cast<size_t>(experts));
                 workspace_.moe_route_order.resize(routes);
                 shared.linear.gemm_raw(moe->router.data(), workspace_.normed.data(),
-                                       workspace_.moe_router_logits.data(), rows, experts, shape.hidden);
+                                       workspace_.moe_router_logits.data(), rows, experts,
+                                       shared.program.hidden);
                 for (size_t row = 0; row < rows; ++row) {
                     const float* logits = workspace_.moe_router_logits.data() +
                         row * static_cast<size_t>(experts);
@@ -535,9 +536,10 @@ struct CpuCompiledModel::BatchScratch {
                 if (shared.program.logits_divisor != 1.0f) {
                     for (float& value : session.workspace_.logits) value /= shared.program.logits_divisor;
                 }
-                if (shared.final_logit_softcap > 0.0f) {
+                if (shared.program.final_logit_softcap > 0.0f) {
                     for (float& value : session.workspace_.logits) {
-                        value = std::tanh(value / shared.final_logit_softcap) * shared.final_logit_softcap;
+                        value = std::tanh(value / shared.program.final_logit_softcap) *
+                            shared.program.final_logit_softcap;
                     }
                 }
             }
