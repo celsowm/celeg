@@ -41,6 +41,9 @@ struct Args {
     std::string host = "127.0.0.1";
     int context = 4096;
     int threads = 0;
+    int max_active_requests = 1;
+    int max_batched_tokens = 256;
+    int prefill_chunk_tokens = 256;
     std::string backend = "cpu";
     std::string repo;
     std::string quant = "Q4_K_M";
@@ -52,6 +55,7 @@ struct Args {
     int expert_host_cache_mib = 4096;
     bool enable_mtp = false;
     int mtp_speculative_tokens = 1;
+    bool cuda_graph = true;
 };
 
 Args parse_args(int argc, char** argv) {
@@ -68,6 +72,9 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--host") args.host = value();
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--threads") args.threads = std::stoi(value());
+        else if (key == "--max-active-requests") args.max_active_requests = std::stoi(value());
+        else if (key == "--max-batched-tokens") args.max_batched_tokens = std::stoi(value());
+        else if (key == "--prefill-chunk-tokens") args.prefill_chunk_tokens = std::stoi(value());
         else if (key == "--backend") args.backend = value();
         else if (key == "--repo") args.repo = value();
         else if (key == "--quant") args.quant = value();
@@ -79,14 +86,16 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--expert-host-cache-mib") args.expert_host_cache_mib = std::stoi(value());
         else if (key == "--mtp") args.enable_mtp = true;
         else if (key == "--mtp-speculative-tokens") args.mtp_speculative_tokens = std::stoi(value());
+        else if (key == "--no-cuda-graph") args.cuda_graph = false;
         else if (key == "--help") {
             std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--host 127.0.0.1] [--port 8080] [--context 4096] "
-                         "[--threads N] [--backend cpu|cuda] "
+                         "[--threads N] [--max-active-requests N] [--max-batched-tokens N] "
+                         "[--prefill-chunk-tokens N] [--backend cpu|cuda] "
                          "[--format auto|safetensors|gguf] [--quant TAG] "
                          "[--expert-offload none|auto|host] [--expert-cache-policy static|lru|lfu-lru] "
                          "[--expert-backing host|disk] [--expert-cache-per-layer N] "
                          "[--expert-host-cache-mib N] "
-                         "[--mtp] [--mtp-speculative-tokens N] "
+                         "[--mtp] [--mtp-speculative-tokens N] [--no-cuda-graph] "
                          "[--served-model-name NAME]\n";
             std::exit(0);
         } else {
@@ -180,6 +189,7 @@ int main(int argc, char** argv) {
             celeg::CudaModelOptions model_options;
             model_options.enable_mtp = args.enable_mtp;
             model_options.mtp_speculative_tokens = args.mtp_speculative_tokens;
+            model_options.cuda_graph = args.cuda_graph;
             if (args.enable_mtp) model_options.cuda_graph = false;
             if (args.expert_offload == "auto") {
                 model_options.expert_offload.mode = celeg::ExpertOffloadMode::Auto;
@@ -212,6 +222,9 @@ int main(int argc, char** argv) {
                 static_cast<std::size_t>(args.expert_host_cache_mib) * 1024 * 1024;
             celeg::ConcurrentEngineOptions engine_options;
             engine_options.worker_thread = false;
+            engine_options.max_active_requests = args.max_active_requests;
+            engine_options.max_batched_tokens = args.max_batched_tokens;
+            engine_options.prefill_chunk_tokens = args.prefill_chunk_tokens;
             // GatedDeltaNet and MlpOnly still require tokenwise scheduling;
             // Mamba2 has a packed state-preserving path.
             if (topology.gated_delta_net_layer_count > 0 ||

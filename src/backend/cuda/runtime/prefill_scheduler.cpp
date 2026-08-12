@@ -60,7 +60,8 @@ bool CudaSchedulerDriver::run_prefill_work() {
                             layer.attention->output_transform);
                 });
         });
-    const bool use_packed_prefill = !has_embedded && packed_executor_ &&
+    const bool use_packed_prefill = !has_embedded && engine_options_.packed_decode &&
+        packed_executor_ &&
         (requires_attention_transform ||
          (engine_options_.ragged_packed_prefill &&
           work.size() >= static_cast<size_t>(engine_options_.ragged_prefill_min_batch)));

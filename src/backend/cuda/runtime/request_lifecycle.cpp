@@ -217,7 +217,7 @@ void CudaSchedulerDriver::finish_request_locked(Request& request,
 
 
 void CudaSchedulerDriver::complete_prefill_locked(Request& request, Lane& lane) {
-    request.paged_ready = packed_executor_ != nullptr;
+    request.paged_ready = engine_options_.packed_decode && packed_executor_ != nullptr;
     if (packed_executor_ && prefix_cache_->enabled() &&
         request.options.prompt_embedding.empty()) {
         PrefixState state = lane.model->persistence().export_prefix_state();

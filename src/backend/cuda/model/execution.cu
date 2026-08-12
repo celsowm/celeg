@@ -35,10 +35,11 @@ void CudaCompiledModel::enqueue_sampling() {
     if (session_.generation_.forced_prefix &&
         session_.generation_.forced_prefix->position <
             session_.generation_.forced_prefix->tokens.size()) {
-        const int32_t token = session_.generation_.forced_prefix->tokens[
-            session_.generation_.forced_prefix->position];
+        const int32_t* token =
+            session_.generation_.forced_prefix->tokens.data() +
+            session_.generation_.forced_prefix->position;
         CELEG_CUDA(cudaMemcpyAsync(
-            sampling_.sampled_device.data(), &token, sizeof(token),
+            sampling_.sampled_device.data(), token, sizeof(*token),
             cudaMemcpyHostToDevice, stream_.get()));
         launch_mark_seen(sampling_.sampled_device.data(), sampling_.seen_tokens.data(),
                          resources_.shape_.vocab_size, stream_.get());

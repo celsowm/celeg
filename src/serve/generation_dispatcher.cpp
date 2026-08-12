@@ -2,6 +2,7 @@
 
 #include <utility>
 #include <vector>
+#include <iostream>
 
 namespace celeg::serve {
 
@@ -56,7 +57,15 @@ void GenerationDispatcher::cancel(RequestId id) {
 
 void GenerationDispatcher::run() {
     while (running_.load(std::memory_order_relaxed)) {
-        dispatch_once();
+        try {
+            dispatch_once();
+        } catch (const std::exception& error) {
+            std::cerr << "generation dispatcher: " << error.what() << std::endl;
+            running_.store(false, std::memory_order_relaxed);
+        } catch (...) {
+            std::cerr << "generation dispatcher: unknown exception" << std::endl;
+            running_.store(false, std::memory_order_relaxed);
+        }
     }
 }
 
