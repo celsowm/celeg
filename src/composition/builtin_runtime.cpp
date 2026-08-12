@@ -64,6 +64,7 @@ public:
         add_vision_role_chat_template(catalog);
         add_patch_role_chat_template(catalog);
         add_thinking_role_chat_template(catalog);
+        add_tagged_role_chat_template(catalog);
     }
 };
 

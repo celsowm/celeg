@@ -27,9 +27,11 @@ int64_t read_i64(const std::byte* source) {
     return value;
 }
 
-int signed_nibble(uint8_t packed, int half) {
+int centered_nibble(uint8_t packed, int half) {
     const int value = (packed >> (half * 4)) & 0x0f;
-    return value >= 8 ? value - 16 : value;
+    // compressed-tensors stores symmetric INT4 values as unsigned nibbles
+    // shifted by the zero code (8), not as two's-complement nibbles.
+    return value - 8;
 }
 
 } // namespace
@@ -124,7 +126,7 @@ std::vector<float> dequantize_packed_int4(const PackedInt4Matrix& matrix) {
         const uint8_t* source = matrix.values.data() +
             static_cast<size_t>(row) * matrix.packed_cols();
         for (int column = 0; column < matrix.cols; ++column) {
-            const int q = signed_nibble(source[column / 2], column & 1);
+            const int q = centered_nibble(source[column / 2], column & 1);
             const float scale = matrix.scales[static_cast<size_t>(row) *
                 matrix.groups_per_row() + static_cast<size_t>(column / matrix.group_size)];
             result[static_cast<size_t>(row) * matrix.cols + column] =

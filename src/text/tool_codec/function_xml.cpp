@@ -101,6 +101,14 @@ public:
         return out;
     }
 
+    std::string forced_tool_call_prefix(std::span<const ToolDefinition> tools,
+                                        const ToolChoice& choice) const override {
+        if (tools.empty()) return {};
+        const std::string& name = choice.mode == ToolChoiceMode::Specific &&
+                !choice.function_name.empty() ? choice.function_name : tools.front().function.name;
+        return "<function name=" + json_string(name) + ">";
+    }
+
     std::string render_tool_result(const ChatMessage& message) const override {
         return "<tool_response>\n" + message.content.value_or("") + "\n</tool_response>";
     }

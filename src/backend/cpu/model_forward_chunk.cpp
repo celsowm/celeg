@@ -268,7 +268,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         const float* projected = workspace_.chunk_qkv.data() +
                             row * static_cast<size_t>(query_stride * layout.query_heads);
                         for (int head = 0; head < layout.query_heads; ++head) {
-                            shared->linear.gemv_transpose(attention->latent_expansion,
+                            shared->linear.gemv_transpose(
+                                attention->latent_expansion,
                                 projected + head * query_stride,
                                 content + head * latent.latent_rank,
                                 static_cast<size_t>(head * expansion_stride),
@@ -283,6 +284,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                             }
                         }
                     });
+                    for (size_t row = 0; row < rows; ++row) {
+                        std::copy_n(workspace_.chunk_latent_projection.data() +
+                                        row * content_width,
+                                    content_width,
+                                    workspace_.chunk_qkv.data() + row *
+                                        shared->workspace_plan.attention_projection);
+                    }
                 } else {
                     layer_gemm(attention->q, workspace_.chunk_normed.data(),
                                workspace_.chunk_qkv.data());
@@ -293,10 +301,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 }
                 if (latent.factorized) {
                     layer_gemm(attention->latent_k_projection, workspace_.chunk_normed.data(),
-                               workspace_.chunk_qkv.data(), 0.0f, "latent_k_projection");
+                               workspace_.chunk_latent_projection.data(), 0.0f,
+                               "latent_k_projection");
                     for (size_t row = 0; row < rows; ++row) {
-                        std::copy(workspace_.chunk_qkv.data() + row * (latent.latent_rank + latent.rope_head_dim),
-                                  workspace_.chunk_qkv.data() + row * (latent.latent_rank + latent.rope_head_dim) + latent.latent_rank,
+                        std::copy(workspace_.chunk_latent_projection.data() +
+                                      row * (latent.latent_rank + latent.rope_head_dim),
+                                  workspace_.chunk_latent_projection.data() +
+                                      row * (latent.latent_rank + latent.rope_head_dim) + latent.latent_rank,
                                   workspace_.chunk_latent_key.data() + row * latent.latent_rank);
                         cpu_rmsnorm_inplace(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
                             attention->latent_k_norm.data(), static_cast<size_t>(latent.latent_rank),
@@ -304,8 +315,10 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         std::copy(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
                                   workspace_.chunk_latent_key.data() + (row + 1) * latent.latent_rank,
                                   workspace_.chunk_latent_value.data() + row * latent.latent_rank);
-                        std::copy(workspace_.chunk_qkv.data() + row * (latent.latent_rank + latent.rope_head_dim) + latent.latent_rank,
-                                  workspace_.chunk_qkv.data() + (row + 1) * (latent.latent_rank + latent.rope_head_dim),
+                        std::copy(workspace_.chunk_latent_projection.data() +
+                                      row * (latent.latent_rank + latent.rope_head_dim) + latent.latent_rank,
+                                  workspace_.chunk_latent_projection.data() +
+                                      (row + 1) * (latent.latent_rank + latent.rope_head_dim),
                                   workspace_.chunk_latent_key_rope.data() + row * latent.rope_head_dim);
                     }
                 } else {
@@ -352,8 +365,10 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     const int position = base_position + static_cast<int>(row);
                     run_latent_attention(
                         state, layout,
-                        (latent.factorized ? workspace_.chunk_latent_projection.data() :
-                            workspace_.chunk_qkv.data()) + row * content_width,
+                        latent.factorized
+                            ? workspace_.chunk_qkv.data() + row *
+                                  shared->workspace_plan.attention_projection
+                            : workspace_.chunk_qkv.data() + row * content_width,
                         rope_width == 0 ? nullptr : workspace_.chunk_latent_rope.data() + row * rope_width,
                         workspace_.chunk_op.data() + row * content_width,
                         committed_length, position, attention->relative_bias);
@@ -365,12 +380,16 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         const float* latent_output = workspace_.chunk_op.data() + row * content_width;
                         float* decompressed = workspace_.chunk_latent_decompressed.data() +
                             row * static_cast<size_t>(layout.latent_output_width());
+                        float* expansion_scratch = workspace_.chunk_latent_projection.data() +
+                            row * shared->workspace_plan.latent_projection;
                         for (int head = 0; head < layout.query_heads; ++head) {
                             shared->linear.gemv_transpose(attention->latent_expansion,
                                 latent_output + head * latent.latent_rank,
-                                decompressed + head * latent.value_head_dim,
+                                expansion_scratch,
                                 static_cast<size_t>(head * expansion_stride + latent.nope_head_dim),
                                 static_cast<size_t>(latent.value_head_dim));
+                            std::copy_n(expansion_scratch, latent.value_head_dim,
+                                        decompressed + head * latent.value_head_dim);
                         }
                         shared->linear.gemv(attention->gate, workspace_.chunk_normed.data() +
                             row * shape.hidden, workspace_.chunk_attention_gate.data() +

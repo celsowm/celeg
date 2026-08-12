@@ -13,6 +13,7 @@
 #include "celeg/backend/cuda/moe/expert_source.hpp"
 
 #include <filesystem>
+#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -110,13 +111,15 @@ void CudaCompiledModel::load_checkpoint_weights(
             const int inter = resources_.shape_.moe_intermediate;
             const float* expert_bias = nullptr;
             if (resources_.shape_.use_expert_bias) {
-                // Checkpoint naming varies: some formats use
-                // "feed_forward.expert_bias.weight"; others use
-                // release ships "feed_forward.expert_bias" (no .weight suffix).
-                const std::string bias_name = repo.contains(
-                    layer_name(i, "feed_forward.expert_bias.weight"))
-                    ? layer_name(i, "feed_forward.expert_bias.weight")
-                    : layer_name(i, "feed_forward.expert_bias");
+                // Checkpoint naming varies across otherwise equivalent MoE
+                // layouts. Resolve the neutral role from the repository
+                // evidence instead of coupling CUDA loading to one spelling.
+                const std::string bias_name =
+                    repo.contains(layer_name(i, "feed_forward.expert_bias.weight"))
+                        ? layer_name(i, "feed_forward.expert_bias.weight")
+                    : repo.contains(layer_name(i, "feed_forward.expert_bias"))
+                        ? layer_name(i, "feed_forward.expert_bias")
+                    : layer_name(i, "mlp.gate.expert_bias");
                 expert_bias = resources_.weight_loader_->load_f32_weight(
                     repo, bias_name, {static_cast<int64_t>(E)});
             }
@@ -153,14 +156,31 @@ void CudaCompiledModel::load_checkpoint_weights(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::MoeSharedDown, i),
                     {resources_.shape_.hidden, shared_inter});
-                moe_weights.shared_gate = resources_.weight_loader_->load_linear_weight(
-                    repo, tensor_name(resources_.model_.weight_plan.requests,
-                                      TensorRole::MoeSharedGateWeight, i),
-                    {1, resources_.shape_.hidden});
+                const auto gate_request = std::find_if(
+                    resources_.model_.weight_plan.requests.begin(),
+                    resources_.model_.weight_plan.requests.end(),
+                    [i](const TensorRequest& request) {
+                        return request.role == TensorRole::MoeSharedGateWeight &&
+                               request.layer == i && request.expert == -1;
+                    });
+                if (gate_request != resources_.model_.weight_plan.requests.end()) {
+                    moe_weights.shared_gate = resources_.weight_loader_->load_linear_weight(
+                        repo, tensor_name(resources_.model_.weight_plan.requests,
+                                          TensorRole::MoeSharedGateWeight, i),
+                        {1, resources_.shape_.hidden});
+                }
             }
 
             if (workspace_.expert_offload_plan_.enabled) {
-                const bool packed_expert_model = resources_.shape_.shared_expert_intermediate > 0;
+                const bool individual_expert_model = std::any_of(
+                    resources_.model_.weight_plan.requests.begin(),
+                    resources_.model_.weight_plan.requests.end(),
+                    [i](const TensorRequest& request) {
+                        return request.role == TensorRole::MoeExpertGate &&
+                               request.layer == i && request.expert == 0;
+                    });
+                const bool packed_expert_model = !individual_expert_model &&
+                    resources_.shape_.shared_expert_intermediate > 0;
                 const bool named_expert_model = !packed_expert_model &&
                     (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
                      repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed")));
@@ -269,7 +289,15 @@ void CudaCompiledModel::load_checkpoint_weights(
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 }
             } else {
-                if (resources_.shape_.shared_expert_intermediate > 0) {
+                const bool individual_expert_model = std::any_of(
+                    resources_.model_.weight_plan.requests.begin(),
+                    resources_.model_.weight_plan.requests.end(),
+                    [i](const TensorRequest& request) {
+                        return request.role == TensorRole::MoeExpertGate &&
+                               request.layer == i && request.expert == 0;
+                    });
+                if (!individual_expert_model &&
+                    resources_.shape_.shared_expert_intermediate > 0) {
                     moe_weights.gate_up = resources_.weight_loader_->load_expert_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::MoePackedGateUp, i),

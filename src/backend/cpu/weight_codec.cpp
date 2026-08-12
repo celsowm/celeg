@@ -144,9 +144,11 @@ CpuLinearWeight CpuWeightCodec::matrix(
     if (has_packed_int4_matrix(*source_, name)) {
         const PackedInt4Matrix packed = load_packed_int4_matrix(*source_, name, expected);
         const std::vector<float> values = dequantize_packed_int4(packed);
-        return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
+        Q4GroupMatrix repacked = quantize_float_groupwise_q4(
             values.data(), static_cast<size_t>(packed.rows),
-            static_cast<size_t>(packed.cols), group_size_));
+            static_cast<size_t>(packed.cols), group_size_);
+        if (writer_) writer_->add_q4_matrix(name, repacked);
+        return CpuLinearWeight::from_q4(std::move(repacked));
     }
     const HostTensorView tensor = source_->tensor(name);
     if (tensor.shape != expected || expected.size() != 2) {
@@ -231,8 +233,10 @@ CpuLinearWeight CpuWeightCodec::concat(
             joined.insert(joined.end(), values.begin(), values.end());
             total_rows += static_cast<size_t>(packed.rows);
         }
-        return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
-            joined.data(), total_rows, static_cast<size_t>(cols), group_size_));
+        Q4GroupMatrix repacked = quantize_float_groupwise_q4(
+            joined.data(), total_rows, static_cast<size_t>(cols), group_size_);
+        if (writer_) writer_->add_q4_matrix(synthetic, repacked);
+        return CpuLinearWeight::from_q4(std::move(repacked));
     }
     const int64_t cols = parts.front().second[1];
     size_t total_rows = 0;

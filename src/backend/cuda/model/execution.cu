@@ -32,6 +32,18 @@ PhaseProfile& decode_phase_profile() {
 }
 
 void CudaCompiledModel::enqueue_sampling() {
+    if (session_.generation_.forced_prefix &&
+        session_.generation_.forced_prefix->position <
+            session_.generation_.forced_prefix->tokens.size()) {
+        const int32_t token = session_.generation_.forced_prefix->tokens[
+            session_.generation_.forced_prefix->position];
+        CELEG_CUDA(cudaMemcpyAsync(
+            sampling_.sampled_device.data(), &token, sizeof(token),
+            cudaMemcpyHostToDevice, stream_.get()));
+        launch_mark_seen(sampling_.sampled_device.data(), sampling_.seen_tokens.data(),
+                         resources_.shape_.vocab_size, stream_.get());
+        return;
+    }
     CudaSampler::enqueue(
         workspace_.logits_, sampling_.seen_tokens, sampling_.sampling_scores, sampling_.topk_values, sampling_.topk_indices,
         resources_.shape_, session_.generation_, sampling_.rng_state,
@@ -113,7 +125,10 @@ void CudaCompiledModel::enqueue_decode_forward() {
 void CudaCompiledModel::enqueue_decode_step() {
     decode_phase_profile().begin(stream_.get());
     mtp_candidate_used_ = resources_.mtp_.available() &&
-        session_.generation_.greedy() && mtp_candidate_ready_;
+        session_.generation_.greedy() && mtp_candidate_ready_ &&
+        !(session_.generation_.forced_prefix &&
+          session_.generation_.forced_prefix->position <
+              session_.generation_.forced_prefix->tokens.size());
     if (mtp_candidate_used_) {
         CELEG_CUDA(cudaMemcpyAsync(
             sampling_.sampled_device.data(), workspace_.mtp_candidate_.data(),
@@ -178,7 +193,10 @@ void CudaCompiledModel::decode_async_begin() {
     decode_async_begin_time_ = std::chrono::steady_clock::now();
     const bool segmented = use_segmented_attention(session_.position_);
     session_.active_segmented_attention_ = segmented;
-    if (resources_.options_.cuda_graph) {
+    const bool forcing_prefix = session_.generation_.forced_prefix &&
+        session_.generation_.forced_prefix->position <
+            session_.generation_.forced_prefix->tokens.size();
+    if (resources_.options_.cuda_graph && !forcing_prefix) {
         CudaGraphExec& graph = graph_for_attention(segmented);
         if (!graph.ready()) capture_decode_graph(segmented);
         graph.launch(stream_.get());
@@ -207,6 +225,11 @@ int32_t CudaCompiledModel::decode_async_finish() {
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
     session_.phase_ = SessionPhase::Ready;
     ++session_.position_;
+    if (session_.generation_.forced_prefix &&
+        session_.generation_.forced_prefix->position <
+            session_.generation_.forced_prefix->tokens.size()) {
+        ++session_.generation_.forced_prefix->position;
+    }
     if (resources_.mtp_.available() && session_.generation_.greedy()) {
         ++session_.metrics_.mtp_verified_tokens;
         if (mtp_verification_host_.data()[0] ==

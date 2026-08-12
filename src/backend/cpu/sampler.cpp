@@ -28,6 +28,10 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
                                 const GenerationConfig& generation,
                                 std::span<const std::uint8_t> seen,
                                 std::uint64_t& rng_state) {
+    if (generation.forced_prefix &&
+        generation.forced_prefix->position < generation.forced_prefix->tokens.size()) {
+        return generation.forced_prefix->tokens[generation.forced_prefix->position++];
+    }
     const float temperature = generation.temperature;
     auto penalized = [&](std::int32_t token) {
         float value = logits[static_cast<size_t>(token)];

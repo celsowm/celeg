@@ -82,6 +82,45 @@ int main() {
     CELEG_TEST_CHECK(lfm2_codec->render_tool_definitions(
         std::span<const celeg::ToolDefinition>(&tool_definition, 1), tool_choice).find("weather") != std::string::npos);
 
+    const auto& tagged = catalog.find("chat:tagged-role");
+    const auto* tagged_codec = catalog.tool_codec("chat:tagged-role");
+    CELEG_TEST_CHECK(tagged_codec != nullptr);
+    const std::string tagged_prompt = tagged.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "What is the weather?"}},
+        std::vector<celeg::ChatToolDefinition>{tool_definition}, true,
+        celeg::ChatTemplateOptions{false});
+    CELEG_TEST_CHECK(tagged_prompt.find("\"type\": \"function\"") != std::string::npos);
+    CELEG_TEST_CHECK(tagged_prompt.find("\"parameters\": {\"type\": \"object\"}") != std::string::npos);
+    CELEG_TEST_CHECK(tagged_prompt.find("<tool_call>{function-name}") != std::string::npos);
+    const std::string tagged_required_prompt = tagged.format(
+        std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, "Call the weather tool."}},
+        std::vector<celeg::ChatToolDefinition>{tool_definition}, true,
+        celeg::ChatTemplateOptions{
+            false, {celeg::ToolChoiceMode::Required, {}}});
+    CELEG_TEST_CHECK(tagged_required_prompt.find(
+        "You must call a function for this request. Do not answer with prose.") !=
+        std::string::npos);
+
+    const std::string tagged_system_prompt = tagged.format(
+        std::vector<celeg::ChatMessage>{
+            {celeg::ChatRole::System, "You are a weather assistant."},
+            {celeg::ChatRole::User, "What is the weather?"}},
+        std::vector<celeg::ChatToolDefinition>{tool_definition}, true,
+        celeg::ChatTemplateOptions{false});
+    CELEG_TEST_CHECK(tagged_system_prompt.find(
+        "<role>SYSTEM</role>You are a weather assistant.\n# Tools") == 0);
+    CELEG_TEST_CHECK(tagged_system_prompt.find(
+        "<|role_end|><role>HUMAN</role>What is the weather?<|role_end|>") != std::string::npos);
+    CELEG_TEST_CHECK(tagged_system_prompt.find(
+        "<role>SYSTEM</role>You are a weather assistant.\n# Tools") ==
+        tagged_system_prompt.rfind("<role>SYSTEM</role>You are a weather assistant.\n# Tools"));
+    const auto tagged_parse = tagged_codec->parse_generation(
+        "<tool_call>weather\n<arg_key>city</arg_key>\n"
+        "<arg_value>Paris</arg_value>\n</tool_call>");
+    CELEG_TEST_CHECK(tagged_parse.status == celeg::ToolParseStatus::Complete);
+    CELEG_TEST_CHECK(tagged_parse.calls.size() == 1);
+    CELEG_TEST_CHECK(tagged_parse.calls[0].arguments == "{\"city\":\"Paris\"}");
+
     const auto& granite = catalog.find("chat:role-envelope");
     const auto& granite_by_id = catalog.find("chat:role-envelope");
 

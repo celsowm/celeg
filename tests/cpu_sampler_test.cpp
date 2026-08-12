@@ -2,6 +2,7 @@
 #include "support/assertions.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 int main() {
@@ -26,4 +27,13 @@ int main() {
     const auto second = celeg::CpuSampler::sample(logits, shape, sampled, seen, rng);
     CELEG_TEST_CHECK(first == second);
     CELEG_TEST_CHECK(first == 1 || first == 3);
+
+    celeg::GenerationConfig forced;
+    forced.temperature = 0.0f;
+    forced.forced_prefix = std::make_shared<celeg::ForcedTokenPrefix>();
+    forced.forced_prefix->tokens = {3, 2};
+    rng = 99;
+    CELEG_TEST_CHECK(celeg::CpuSampler::sample(logits, shape, forced, seen, rng) == 3);
+    CELEG_TEST_CHECK(celeg::CpuSampler::sample(logits, shape, forced, seen, rng) == 2);
+    CELEG_TEST_CHECK(forced.forced_prefix->position == 2);
 }

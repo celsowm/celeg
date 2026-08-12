@@ -104,6 +104,49 @@ int main() {
         }
     }
 
+    // Compressed-tensors expert gate/up projections remain two row-contiguous
+    // internal-Q4 segments.  The logical weight must execute like one matrix.
+    const size_t split_rows = 13;
+    const auto q4_first = celeg::quantize_float_groupwise_q4(
+        weights.data(), split_rows, cols, 32);
+    const auto q4_second = celeg::quantize_float_groupwise_q4(
+        weights.data() + split_rows * cols, rows - split_rows, cols, 32);
+    celeg::CpuLinearWeight segmented;
+    segmented.rows = rows;
+    segmented.cols = cols;
+    segmented.segments.emplace_back(q4_first);
+    segmented.segments.emplace_back(q4_second);
+    segmented.validate();
+    std::vector<float> segmented_gemv(rows);
+    linear.gemv(segmented, input.data(), segmented_gemv.data());
+    std::vector<float> segmented_expected(rows);
+    linear.gemv(q4_first, input.data(), segmented_expected.data());
+    linear.gemv(q4_second, input.data(), segmented_expected.data() + split_rows);
+    for (size_t r = 0; r < rows; ++r) {
+        CELEG_TEST_CHECK(std::abs(segmented_gemv[r] - segmented_expected[r]) < 1e-5f);
+    }
+    std::vector<float> segmented_gemm(batch * rows);
+    linear.gemm(segmented, batch_input.data(), segmented_gemm.data(), batch);
+    std::vector<float> segmented_expected_gemm(batch * rows);
+    std::vector<float> first_gemm(batch * split_rows);
+    std::vector<float> second_gemm(batch * (rows - split_rows));
+    linear.gemm(q4_first, batch_input.data(), first_gemm.data(), batch);
+    linear.gemm(q4_second, batch_input.data(), second_gemm.data(), batch);
+    for (size_t b = 0; b < batch; ++b) {
+        std::copy(first_gemm.begin() + b * split_rows,
+                  first_gemm.begin() + (b + 1) * split_rows,
+                  segmented_expected_gemm.begin() + b * rows);
+        std::copy(second_gemm.begin() + b * (rows - split_rows),
+                  second_gemm.begin() + (b + 1) * (rows - split_rows),
+                  segmented_expected_gemm.begin() + b * rows + split_rows);
+    }
+    for (size_t b = 0; b < batch; ++b) {
+        for (size_t r = 0; r < rows; ++r) {
+            CELEG_TEST_CHECK(std::abs(segmented_gemm[b * rows + r] -
+                                      segmented_expected_gemm[b * rows + r]) < 1e-5f);
+        }
+    }
+
     std::vector<float> norm_weight(8, 1.0f), norm_out(8);
     const float norm_in[8] = {1,2,3,4,5,6,7,8};
     celeg::cpu_rmsnorm(norm_in, norm_weight.data(), norm_out.data(), 8, 1e-5f);

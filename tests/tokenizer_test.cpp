@@ -22,6 +22,7 @@ int main() {
         {"id":0,"content":"<|startoftext|>","special":true},
         {"id":99,"content":"<|image_pad|>","special":true},
         {"id":100,"content":"<think>","special":false},
+        {"id":101,"content":"<tool_call>","special":false},
         {"id":9,"content":"<|endoftext|>","special":true},
         {"id":10,"content":"<|im_end|>","special":true}
       ]
@@ -35,6 +36,7 @@ int main() {
     CELEG_TEST_CHECK(tokenizer.bos_id() == 0 && tokenizer.eos_id() == 10);
     CELEG_TEST_CHECK(tokenizer.token_id("<|image_pad|>") == 99);
     CELEG_TEST_CHECK(tokenizer.encode("<think>", false) == std::vector<int32_t>{100});
+    CELEG_TEST_CHECK(tokenizer.encode("<tool_call>", false) == std::vector<int32_t>{101});
     CELEG_TEST_CHECK(tokenizer.decode({100}, true) == "<think>");
     const auto contraction = tokenizer.encode("'S", false);
     CELEG_TEST_CHECK(contraction.size() == 1 && contraction[0] == 8);

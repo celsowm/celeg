@@ -34,7 +34,8 @@ celeg::HostTensorView view(celeg::TensorDType dtype, std::vector<int64_t> shape,
 
 int main() {
     MemoryRepository repository;
-    const std::vector<uint32_t> packed(2 * 4, 0x87878787u);
+    // compressed-tensors stores centered INT4 codes: 0..15 represents -8..7.
+    const std::vector<uint32_t> packed(2 * 4, 0x0f0f0f0fu);
     const std::vector<uint16_t> scales(2 * 1, 0x3f80u);
     const std::vector<int64_t> shape = {2, 32};
     repository.tensors.emplace("w_packed", view(celeg::TensorDType::I32, {2, 4}, packed));

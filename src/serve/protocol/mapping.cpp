@@ -39,6 +39,23 @@ NormalizedContent normalize_content(
     return result;
 }
 
+celeg::ToolChoice map_tool_choice(
+    const std::optional<std::variant<std::string,
+                                     celeg::serve::protocol::ToolChoiceDto>>& value) {
+    if (!value) return {};
+    if (std::holds_alternative<celeg::serve::protocol::ToolChoiceDto>(*value)) {
+        return {celeg::ToolChoiceMode::Specific,
+                std::get<celeg::serve::protocol::ToolChoiceDto>(*value).function.name};
+    }
+    const std::string& mode = std::get<std::string>(*value);
+    if (mode == "none") return {celeg::ToolChoiceMode::None, {}};
+    if (mode == "required") return {celeg::ToolChoiceMode::Required, {}};
+    if (mode.starts_with("function:")) {
+        return {celeg::ToolChoiceMode::Specific, mode.substr(9)};
+    }
+    return {};
+}
+
 } // namespace
 
 namespace celeg::serve::protocol {
@@ -186,7 +203,8 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::ChatCapabilities& capabilities,
                                     std::span<const std::int32_t> eos_token_ids,
                                     const celeg::ChatTemplateOptions& template_options,
-                                    std::size_t max_context_tokens) {
+                                    std::size_t max_context_tokens,
+                                    const celeg::IChatToolCallCodec* tool_codec) {
     validate_chat_request(request, capabilities);
 
     std::vector<celeg::ChatMessage> messages;
@@ -225,6 +243,7 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         effective_template_options.enable_thinking =
             request.chat_template_kwargs->enable_thinking;
     }
+    effective_template_options.tool_choice = map_tool_choice(request.tool_choice);
 
     const std::size_t max_output_tokens =
         request.max_tokens ? static_cast<std::size_t>(*request.max_tokens) : 128;
@@ -334,6 +353,17 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
     if (request.top_k) generate_request.generation.top_k = *request.top_k;
     if (request.seed) generate_request.generation.seed = *request.seed;
     generate_request.generation.validate();
+    if (tool_codec && effective_template_options.tool_choice.mode !=
+            celeg::ToolChoiceMode::Auto &&
+        effective_template_options.tool_choice.mode != celeg::ToolChoiceMode::None) {
+        const std::string prefix = tool_codec->forced_tool_call_prefix(
+            tools, effective_template_options.tool_choice);
+        if (!prefix.empty()) {
+            auto forced = std::make_shared<celeg::ForcedTokenPrefix>();
+            forced->tokens = tokenizer.encode(prefix, /*add_bos=*/false);
+            if (!forced->tokens.empty()) generate_request.generation.forced_prefix = std::move(forced);
+        }
+    }
     return generate_request;
 }
 

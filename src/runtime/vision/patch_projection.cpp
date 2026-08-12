@@ -459,8 +459,17 @@ class PatchProjectionProviderFactory final : public IVisionProviderFactory {
 public:
     std::string_view id() const override { return "patch-projection"; }
     bool supports(const std::filesystem::path& model_path) const override {
-        return std::filesystem::is_directory(model_path) &&
-               std::filesystem::is_regular_file(model_path / "model.safetensors.index.json");
+        if (!std::filesystem::is_directory(model_path) ||
+            !std::filesystem::is_regular_file(model_path / "model.safetensors.index.json")) {
+            return false;
+        }
+        try {
+            const SafeTensorRepository repository(model_path);
+            return repository.contains(
+                "model.vision_tower.patch_embedder.patch_embedding.weight");
+        } catch (...) {
+            return false;
+        }
     }
     std::shared_ptr<const IVisualEmbeddingProvider> create(const std::filesystem::path& model_path) const override {
         return make_patch_visual_embedding_provider(model_path);

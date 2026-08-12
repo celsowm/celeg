@@ -80,8 +80,10 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     model_identity = bootstrap.model.provenance.identity;
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
-    compressed_checkpoint = repository->contains(
-        "model.layers.0.self_attn.q_proj.weight_packed");
+    const std::vector<std::string> repository_names = repository->names();
+    compressed_checkpoint = std::any_of(
+        repository_names.begin(), repository_names.end(),
+        [](const std::string& name) { return name.ends_with("_packed"); });
     prepare_pack_path();
     if (options.expert_backing == CpuExpertBacking::DiskCached &&
         !native_checkpoint && !compressed_checkpoint &&

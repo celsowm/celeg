@@ -26,6 +26,7 @@ enum class TokenizerPreTokenizerKind : uint8_t {
     Default,
     NumericTriplets,
     NumericRuns,
+    ByteLevelRegex,
     RawUtf8,
 };
 

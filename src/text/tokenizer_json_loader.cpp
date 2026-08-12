@@ -4,6 +4,7 @@
 #include "celeg/checkpoint/formats/json.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 
 namespace celeg {
@@ -37,6 +38,41 @@ void add_reasoning_delimiters(TokenizerDefinition& definition) {
         if (existing == definition.special_tokens.end()) {
             definition.special_tokens.push_back({std::string(text), id});
         }
+    }
+}
+
+std::optional<std::string> configured_token_text(const Json& config,
+                                                 std::string_view key) {
+    if (!config.contains(key)) return std::nullopt;
+    const Json& value = config[key];
+    if (value.is_string()) return value.as_string();
+    if (value.is_object() && value.contains("content") && value["content"].is_string()) {
+        return value["content"].as_string();
+    }
+    return std::nullopt;
+}
+
+void apply_tokenizer_config(TokenizerDefinition& definition, const std::string& path) {
+    const std::filesystem::path config_path =
+        std::filesystem::path(path).parent_path() / "tokenizer_config.json";
+    if (!std::filesystem::is_regular_file(config_path)) return;
+    const Json config = Json::parse_file(config_path.string());
+    const auto id_for = [&definition](const std::optional<std::string>& text) {
+        if (!text) return std::optional<int32_t>{};
+        const auto it = std::find_if(definition.special_tokens.begin(),
+                                     definition.special_tokens.end(),
+            [&text](const TokenizerSpecialToken& token) { return token.text == *text; });
+        if (it == definition.special_tokens.end()) return std::optional<int32_t>{};
+        return std::optional<int32_t>{it->id};
+    };
+    if (const auto bos = id_for(configured_token_text(config, "bos_token"))) {
+        definition.bos_id = *bos;
+    }
+    if (const auto eos = id_for(configured_token_text(config, "eos_token"))) {
+        definition.eos_id = *eos;
+    }
+    if (const auto pad = id_for(configured_token_text(config, "pad_token"))) {
+        definition.pad_id = *pad;
     }
 }
 
@@ -79,10 +115,12 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
             }
             definition.tokens[static_cast<size_t>(token.id)] = token.text;
             const bool is_special = item.contains("special") && item["special"].as_bool();
-            if (is_special || token.text == "<think>" || token.text == "</think>") {
-                token.skip_on_decode = is_special;
-                definition.special_tokens.push_back(std::move(token));
-            }
+            // Hugging Face's added-token matcher applies to every entry in
+            // `added_tokens`, not only entries marked special.  Keeping the
+            // full set here is required for exact prompt tokenization of
+            // control-like delimiters whose `special` flag is false.
+            token.skip_on_decode = is_special;
+            definition.special_tokens.push_back(std::move(token));
         }
     }
 
@@ -97,7 +135,9 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
     if (root.contains("pre_tokenizer")) {
         if (const Json* regex = find_regex_node(root["pre_tokenizer"])) {
             const std::string pattern = regex->as_string();
-            if (pattern.find("\\p{N}{1,3}") != std::string::npos) {
+            if (pattern.find("?+\\p{L}+") != std::string::npos) {
+                definition.pre_tokenizer = TokenizerPreTokenizerKind::ByteLevelRegex;
+            } else if (pattern.find("\\p{N}{1,3}") != std::string::npos) {
                 definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericTriplets;
             } else if (definition.pre_tokenizer != TokenizerPreTokenizerKind::RawUtf8) {
                 definition.pre_tokenizer = TokenizerPreTokenizerKind::NumericRuns;
@@ -127,6 +167,7 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
         definition.bos_id = endoftext_id;
         definition.eos_id = endoftext_id;
     }
+    apply_tokenizer_config(definition, path);
     return definition;
 }
 

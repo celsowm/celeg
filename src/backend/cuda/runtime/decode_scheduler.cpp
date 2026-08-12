@@ -3,7 +3,7 @@
 
 namespace celeg {
 bool CudaSchedulerDriver::run_decode_work() {
-    struct Work { Lane* lane; RequestId id; bool paged_ready; };
+    struct Work { Lane* lane; RequestId id; bool paged_ready; bool forcing_prefix; };
     std::vector<Work> work;
     // Phase 1: build work list under a single lock.  Copy paged_ready so
     // the classify phase (phase 3) never needs to re-acquire the lock.
@@ -33,7 +33,10 @@ bool CudaSchedulerDriver::run_decode_work() {
                     page_needed.push_back(request.id);
                 }
             }
-            work.push_back({&lane, request.id, request.paged_ready});
+            const auto& prefix = request.options.generation.forced_prefix;
+            const bool forcing_prefix = prefix &&
+                prefix->position < prefix->tokens.size();
+            work.push_back({&lane, request.id, request.paged_ready, forcing_prefix});
             --decode_budget;
         }
     }
@@ -108,7 +111,8 @@ bool CudaSchedulerDriver::run_decode_work() {
             ? packed_executor_->validate_session(
                 packed_session_context(*item.lane->model), PackedOperation::Decode)
             : PackedEligibility{};
-        if (item.paged_ready && packed_executor_ && eligibility.accepted) {
+        if (item.paged_ready && packed_executor_ && eligibility.accepted &&
+            !item.forcing_prefix) {
             packed_work.push_back(item);
         } else {
             lane_work.push_back(item);

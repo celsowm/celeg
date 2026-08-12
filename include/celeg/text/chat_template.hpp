@@ -16,6 +16,7 @@ using ChatToolDefinition = ToolDefinition;
 
 struct ChatTemplateOptions {
     std::optional<bool> enable_thinking;
+    ToolChoice tool_choice{};
 };
 
 // Interface Segregation Principle: tokenizer chat formatting depends only on

@@ -120,8 +120,9 @@ bool CudaSchedulerDriver::admit_requests_locked() {
             engine_options_.scheduler_policy == SchedulerPolicy::GuaranteedNoEvict
                 ? request.prompt.size() + static_cast<size_t>(request.options.max_new_tokens)
                 : request.prompt.size() + static_cast<size_t>(engine_options_.page_tokens);
+        const bool forced_lane = request.options.generation.forced_prefix != nullptr;
         PrefixAcquireResult prefix;
-        if (request.options.prompt_embedding.empty()) {
+        if (!forced_lane && request.options.prompt_embedding.empty()) {
             prefix = prefix_cache_->acquire(request.prompt, reserved_tokens);
         } else {
             prefix.status = PrefixAcquireStatus::Miss;
@@ -142,7 +143,7 @@ bool CudaSchedulerDriver::admit_requests_locked() {
             if (!lane->model) {
                 CudaModelOptions lane_options = model_options_;
                 lane_options.allocate_local_kv_cache =
-                    !engine_options_.packed_decode;
+                    !engine_options_.packed_decode || forced_lane;
                 lane->model = std::make_unique<CudaModel>(
                     model_path_, max_context_, lane_options,
                     request.options.generation, runtime_);
@@ -162,8 +163,10 @@ bool CudaSchedulerDriver::admit_requests_locked() {
         request.lane_index = lane->index;
         lane->request_id = id;
         try {
-            lane->model->session().release_local_kv_cache();
-            lane->model->session().reset(false);
+            if (!forced_lane && engine_options_.packed_decode) {
+                lane->model->session().release_local_kv_cache();
+            }
+            lane->model->session().reset(forced_lane);
             if (prefix_hit) {
                 if (!prefix.state) {
                     throw std::runtime_error("prefix cache hit has no session state");
@@ -175,7 +178,8 @@ bool CudaSchedulerDriver::admit_requests_locked() {
                 request.paged_ready = true;
             } else {
                 request.status = RequestStatus::Prefill;
-                request.paged_ready = packed_executor_ != nullptr;
+                request.paged_ready = !forced_lane && engine_options_.packed_decode &&
+                    packed_executor_ != nullptr;
             }
         } catch (const std::exception& error) {
             finish_request_locked(request, RequestStatus::Failed, error.what());

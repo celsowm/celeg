@@ -360,7 +360,12 @@ int main(int argc, char** argv) {
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, is_gguf ? gguf_path : model);
         const celeg::ITokenizer& tokenizer = *tokenizer_storage;
-        if (tokenizer.bos_id() != topology.token_policy.bos_token_id ||
+        // A JSON checkpoint may omit bos_token_id while its tokenizer config
+        // still names a non-zero BOS token.  BOS is not injected when the
+        // chat template requests add_bos=false, so the unresolved zero is not
+        // a runtime disagreement; EOS remains a hard generation boundary.
+        if ((topology.token_policy.bos_token_id != 0 &&
+             tokenizer.bos_id() != topology.token_policy.bos_token_id) ||
             !celeg::is_stop_token(topology.token_policy.eos_token_ids, tokenizer.eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +
                 std::to_string(tokenizer.bos_id()) + "/" +

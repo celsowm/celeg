@@ -53,6 +53,7 @@ private:
     void init_byte_encoder();
 
     std::vector<std::string> pretokenize(std::string_view text) const;
+    std::vector<std::string> pretokenize_byte_level_regex(std::string_view text) const;
     std::vector<int32_t> encode_ordinary(std::string_view text) const;
     std::vector<std::string> bpe(std::string_view encoded_piece) const;
     std::vector<std::string> bpe_symbols(std::vector<std::string> symbols) const;

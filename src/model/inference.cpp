@@ -396,6 +396,12 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 kv_rank, rope, nope, true, true, q_rank, value_dim,
                 NormSpec{*m.norm_epsilon, NormWeightKind::Scale},
                 NormSpec{*m.norm_epsilon, NormWeightKind::Scale}};
+            // The latent attention score combines the absorbed content part
+            // with the decoupled rotary part, so its softmax scale is based on
+            // qk_head_dim rather than the value head width used by the
+            // storage/output layout.
+            attention.query_scale = std::sqrt(static_cast<float>(value_dim) /
+                                              static_cast<float>(nope + rope));
             topology.mixer_kinds[static_cast<size_t>(layer)] = MixerKind::Attention;
             topology.attention_slot_for_layer[static_cast<size_t>(layer)] =
                 topology.attention_layer_count++;

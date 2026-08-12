@@ -156,6 +156,118 @@ BpeTokenizer::BpeTokenizer(const TokenizerDefinition& definition) {
     load_definition(definition);
 }
 
+std::vector<std::string> BpeTokenizer::pretokenize_byte_level_regex(
+    std::string_view text) const {
+    std::vector<std::string> pieces;
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '\'' && i + 1 < text.size()) {
+            static constexpr std::string_view suffixes[] = {
+                "'s", "'t", "'d", "'m", "'ll", "'ve", "'re"};
+            bool matched = false;
+            for (const std::string_view suffix : suffixes) {
+                if (i + suffix.size() <= text.size() &&
+                    ascii_case_equal(text, i, suffix)) {
+                    pieces.emplace_back(text.substr(i, suffix.size()));
+                    i += suffix.size();
+                    matched = true;
+                    break;
+                }
+            }
+            if (matched) continue;
+        }
+
+        const auto [cp, len] = next_cp(text, i);
+        const int kind = category(cp);
+        if (kind == 1) {
+            size_t end = i + len;
+            while (end < text.size()) {
+                const auto [next, next_len] = next_cp(text, end);
+                if (category(next) != 1) break;
+                end += next_len;
+            }
+            pieces.emplace_back(text.substr(i, end - i));
+            i = end;
+            continue;
+        }
+        if (kind == 0 && cp == ' ' && i + len < text.size()) {
+            const auto [next, next_len] = next_cp(text, i + len);
+            if (category(next) == 1) {
+                size_t end = i + len + next_len;
+                while (end < text.size()) {
+                    const auto [cur, cur_len] = next_cp(text, end);
+                    if (category(cur) != 1) break;
+                    end += cur_len;
+                }
+                pieces.emplace_back(text.substr(i, end - i));
+                i = end;
+                continue;
+            }
+        }
+        if (kind == 3 || (kind == 0 && cp == ' ' && i + len < text.size() &&
+                          category(next_cp(text, i + len).first) == 3)) {
+            const size_t start = i;
+            size_t punctuation = i;
+            if (kind == 0) punctuation += len;
+            const auto [punctuation_cp, punctuation_len] = next_cp(text, punctuation);
+            // A single optional leading character belongs to a following
+            // letter run; punctuation otherwise follows the `++` branch.
+            if (kind == 3 && punctuation_cp == cp && punctuation_len == len &&
+                punctuation + punctuation_len < text.size() &&
+                category(next_cp(text, punctuation + punctuation_len).first) == 1) {
+                size_t end = punctuation + punctuation_len;
+                while (end < text.size()) {
+                    const auto [next, next_len] = next_cp(text, end);
+                    if (category(next) != 1) break;
+                    end += next_len;
+                }
+                pieces.emplace_back(text.substr(start, end - start));
+                i = end;
+                continue;
+            }
+            size_t end = punctuation + punctuation_len;
+            while (end < text.size()) {
+                const auto [next, next_len] = next_cp(text, end);
+                if (category(next) != 3) break;
+                end += next_len;
+            }
+            while (end < text.size()) {
+                const auto [next, next_len] = next_cp(text, end);
+                if (next != '\n' && next != '\r') break;
+                end += next_len;
+            }
+            pieces.emplace_back(text.substr(start, end - start));
+            i = end;
+            continue;
+        }
+        if (kind == 0) {
+            size_t end = i + len;
+            while (end < text.size()) {
+                const auto [next, next_len] = next_cp(text, end);
+                if (!is_space_cp(next)) break;
+                end += next_len;
+            }
+            pieces.emplace_back(text.substr(i, end - i));
+            i = end;
+            continue;
+        }
+        if (kind == 2) {
+            pieces.emplace_back(text.substr(i, len));
+            i += len;
+            continue;
+        }
+        size_t end = i + len;
+        while (end < text.size()) {
+            const auto [next, next_len] = next_cp(text, end);
+            if (!is_space_cp(next)) end += next_len;
+            else break;
+        }
+        pieces.emplace_back(text.substr(i, end - i));
+        i = end;
+    }
+    return pieces;
+}
+
 void BpeTokenizer::init_byte_encoder() {
     std::vector<int> bs;
     for (int b = 33; b <= 126; ++b) bs.push_back(b);
@@ -221,6 +333,9 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
     if (pre_tokenizer_ == TokenizerPreTokenizerKind::RawUtf8) {
         if (!text.empty()) pieces.emplace_back(text);
         return pieces;
+    }
+    if (pre_tokenizer_ == TokenizerPreTokenizerKind::ByteLevelRegex) {
+        return pretokenize_byte_level_regex(text);
     }
     size_t i = 0;
     while (i < text.size()) {

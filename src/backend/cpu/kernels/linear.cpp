@@ -214,6 +214,19 @@ void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
 
     if (std::all_of(weight.segments.begin(), weight.segments.end(),
                     [](const CpuLinearMatrix& segment) {
+                        return std::holds_alternative<Q4GroupMatrix>(segment);
+                    })) {
+        size_t output_offset = 0;
+        for (const CpuLinearMatrix& segment : weight.segments) {
+            const Q4GroupMatrix& matrix = std::get<Q4GroupMatrix>(segment);
+            gemv(matrix, input, output + output_offset, beta);
+            output_offset += matrix.rows;
+        }
+        return;
+    }
+
+    if (std::all_of(weight.segments.begin(), weight.segments.end(),
+                    [](const CpuLinearMatrix& segment) {
                         return std::holds_alternative<CpuInt8Matrix>(segment);
                     })) {
         size_t output_offset = 0;
@@ -318,6 +331,29 @@ void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
         std::holds_alternative<Q4GroupMatrix>(weight.segments.front())) {
         gemm(std::get<Q4GroupMatrix>(weight.segments.front()),
              input, output, rows, beta);
+        return;
+    }
+
+    if (std::all_of(weight.segments.begin(), weight.segments.end(),
+                    [](const CpuLinearMatrix& segment) {
+                        return std::holds_alternative<Q4GroupMatrix>(segment);
+                    })) {
+        size_t output_offset = 0;
+        for (const CpuLinearMatrix& segment : weight.segments) {
+            const Q4GroupMatrix& matrix = std::get<Q4GroupMatrix>(segment);
+            std::vector<float> segment_output(rows * matrix.rows);
+            gemm(matrix, input, segment_output.data(), rows, 0.0f);
+            for (size_t row = 0; row < rows; ++row) {
+                for (size_t column = 0; column < matrix.rows; ++column) {
+                    float& destination = output[row * weight.rows +
+                                                output_offset + column];
+                    const float value = segment_output[row * matrix.rows + column];
+                    destination = beta == 0.0f
+                        ? value : value + beta * destination;
+                }
+            }
+            output_offset += matrix.rows;
+        }
         return;
     }
 

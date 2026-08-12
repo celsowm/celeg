@@ -54,7 +54,8 @@ void execute_cpu_attention_token(
                     const int query_stride = latent.nope_head_dim + latent.rope_head_dim;
                     const int expansion_stride = latent.nope_head_dim + latent.value_head_dim;
                     for (int head = 0; head < layout.query_heads; ++head) {
-                        execution.shared.linear.gemv_transpose(attention.latent_expansion,
+                        execution.shared.linear.gemv_transpose(
+                            attention.latent_expansion,
                             execution.workspace.latent_projection.data() +
                                 static_cast<size_t>(head * query_stride),
                             query_content + static_cast<size_t>(head * latent.latent_rank),
@@ -81,9 +82,9 @@ void execute_cpu_attention_token(
                 }
                 if (latent.factorized) {
                     execution.shared.linear.gemv(attention.latent_k_projection,
-                        execution.workspace.normed.data(), execution.workspace.qkv.data());
-                    std::copy(execution.workspace.qkv.data(),
-                              execution.workspace.qkv.data() + latent.latent_rank,
+                        execution.workspace.normed.data(), execution.workspace.latent_projection.data());
+                    std::copy(execution.workspace.latent_projection.data(),
+                              execution.workspace.latent_projection.data() + latent.latent_rank,
                               execution.workspace.latent_key.data());
                     cpu_rmsnorm_inplace(execution.workspace.latent_key.data(), attention.latent_k_norm.data(),
                                         static_cast<size_t>(latent.latent_rank),
@@ -91,8 +92,8 @@ void execute_cpu_attention_token(
                     std::copy(execution.workspace.latent_key.data(),
                               execution.workspace.latent_key.data() + latent.latent_rank,
                               execution.workspace.latent_value.data());
-                    std::copy(execution.workspace.qkv.data() + latent.latent_rank,
-                              execution.workspace.qkv.data() + latent.latent_rank + latent.rope_head_dim,
+                    std::copy(execution.workspace.latent_projection.data() + latent.latent_rank,
+                              execution.workspace.latent_projection.data() + latent.latent_rank + latent.rope_head_dim,
                               execution.workspace.latent_key_rope.data());
                 } else {
                     execution.shared.linear.gemv(attention.k, execution.workspace.normed.data(),
@@ -101,17 +102,20 @@ void execute_cpu_attention_token(
                                         execution.workspace.latent_value.data());
                 }
                 float* key_rope = nullptr;
-                if (latent.decoupled_rope && latent.rope_head_dim != 0 &&
-                    !latent.factorized) {
+                if (latent.decoupled_rope && latent.rope_head_dim != 0) {
                     key_rope = execution.workspace.latent_key_rope.data();
-                    execution.shared.linear.gemv(attention.latent_k_rope, execution.workspace.normed.data(), key_rope);
+                    if (!latent.factorized) {
+                        execution.shared.linear.gemv(attention.latent_k_rope,
+                            execution.workspace.normed.data(), key_rope);
+                    }
                 }
                 apply_cpu_latent_attention_positions(
                     execution.shared.shape, layout, query_rope, key_rope,
                     execution.session.position_value, rope_position);
                 const int owner = execution.shared.layer_to_kv_owner.at(index);
                 CpuCompiledModel::AttentionState& state = model.attention_state(static_cast<size_t>(owner));
-                model.store_latent(state, execution.session.position_value, execution.workspace.latent_key.data(),
+                model.store_latent(state, execution.session.position_value,
+                             execution.workspace.latent_key.data(),
                              execution.workspace.latent_value.data(), key_rope);
                 model.run_latent_attention(state, layout, query_content, query_rope,
                                      execution.workspace.op_output.data(), execution.session.position_value + 1,
@@ -123,10 +127,13 @@ void execute_cpu_attention_token(
                         execution.shared.linear.gemv_transpose(attention.latent_expansion,
                             execution.workspace.op_output.data() +
                                 static_cast<size_t>(head * latent.latent_rank),
-                            execution.workspace.latent_decompressed.data() +
-                                static_cast<size_t>(head * latent.value_head_dim),
+                            execution.workspace.latent_projection.data(),
                             static_cast<size_t>(head * expansion_stride + latent.nope_head_dim),
                             static_cast<size_t>(latent.value_head_dim));
+                        std::copy_n(execution.workspace.latent_projection.data(),
+                                    latent.value_head_dim,
+                                    execution.workspace.latent_decompressed.data() +
+                                        static_cast<size_t>(head * latent.value_head_dim));
                     }
                     output_input = execution.workspace.latent_decompressed.data();
                     execution.shared.linear.gemv(attention.gate, execution.workspace.normed.data(),

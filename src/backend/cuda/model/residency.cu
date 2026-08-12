@@ -269,11 +269,14 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
                             shared_inter, stream_.get());
         linear(workspace_.activated_.data(), *moe.shared_w2, workspace_.mlp_output_.data(),
                1, resources_.shape_.hidden, shared_inter);
-        linear(workspace_.normed_.data(), *moe.shared_gate, workspace_.moe_shared_gate_.data(),
-               1, 1, resources_.shape_.hidden);
-        launch_sigmoid_scale_by_scalar(workspace_.mlp_output_.data(),
-                                       workspace_.moe_shared_gate_.data(),
-                                       resources_.shape_.hidden, stream_.get());
+        if (moe.shared_gate != nullptr) {
+            linear(workspace_.normed_.data(), *moe.shared_gate,
+                   workspace_.moe_shared_gate_.data(), 1, 1,
+                   resources_.shape_.hidden);
+            launch_sigmoid_scale_by_scalar(workspace_.mlp_output_.data(),
+                                           workspace_.moe_shared_gate_.data(),
+                                           resources_.shape_.hidden, stream_.get());
+        }
         launch_residual_add(workspace_.moe_output_.data(), workspace_.mlp_output_.data(),
                             resources_.shape_.hidden, stream_.get());
     }
@@ -334,7 +337,6 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
                                 rows * resources_.shape_.hidden, stream_.get());
     if (moe.shared_w13 != nullptr) {
         const int shared_inter = resources_.shape_.shared_expert_intermediate;
-        const size_t shared_plane = static_cast<size_t>(rows) * shared_inter;
         linear(workspace_.prefill_normed_.data(), *moe.shared_w13,
                workspace_.prefill_gate_up_.data(), rows, 2 * shared_inter,
                resources_.shape_.hidden);
@@ -344,12 +346,14 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         linear(workspace_.prefill_activated_.data(), *moe.shared_w2,
                workspace_.prefill_mlp_output_.data(), rows,
                resources_.shape_.hidden, shared_inter);
-        linear(workspace_.prefill_normed_.data(), *moe.shared_gate,
-               workspace_.moe_pf_shared_gate_.data(), rows, 1,
-               resources_.shape_.hidden);
-        launch_sigmoid_multiply_strided(workspace_.prefill_mlp_output_.data(),
-                                        workspace_.moe_pf_shared_gate_.data(),
-                                        rows, resources_.shape_.hidden, stream_.get());
+        if (moe.shared_gate != nullptr) {
+            linear(workspace_.prefill_normed_.data(), *moe.shared_gate,
+                   workspace_.moe_pf_shared_gate_.data(), rows, 1,
+                   resources_.shape_.hidden);
+            launch_sigmoid_multiply_strided(workspace_.prefill_mlp_output_.data(),
+                                            workspace_.moe_pf_shared_gate_.data(),
+                                            rows, resources_.shape_.hidden, stream_.get());
+        }
         launch_residual_add(workspace_.moe_pf_output_.data(),
                             workspace_.prefill_mlp_output_.data(),
                             rows * resources_.shape_.hidden, stream_.get());

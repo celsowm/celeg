@@ -27,6 +27,14 @@ public:
         return out;
     }
 
+    std::string forced_tool_call_prefix(std::span<const ToolDefinition> tools,
+                                        const ToolChoice& choice) const override {
+        if (tools.empty()) return {};
+        const std::string& name = choice.mode == ToolChoiceMode::Specific &&
+                !choice.function_name.empty() ? choice.function_name : tools.front().function.name;
+        return "<|tool_call>call:" + name;
+    }
+
     std::string render_tool_result(const ChatMessage& message) const override {
         return "<|tool_response>response:" + message.tool_call_id.value_or("unknown") +
                "{value:" + message.content.value_or("") + "}<tool_response|>";

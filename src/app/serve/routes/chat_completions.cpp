@@ -101,7 +101,7 @@ void register_chat_completions_route(uWS::App& app,
                 }
                 generate_request = protocol::to_generate_request(
                     request, tokenizer, chat_template, capabilities, stop_tokens, {},
-                    max_context_tokens);
+                    max_context_tokens, request_tool_codec);
             } catch (const std::exception& error) {
                 res->writeStatus("400 Bad Request")
                     ->writeHeader("Content-Type", "application/json")

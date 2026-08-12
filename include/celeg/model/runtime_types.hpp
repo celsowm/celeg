@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <array>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace celeg {
@@ -92,12 +94,20 @@ struct PrefixState {
     std::vector<uint16_t> gated_delta_state_bf16;
 };
 
+struct ForcedTokenPrefix {
+    std::vector<int32_t> tokens;
+    std::size_t position = 0;
+};
+
 struct GenerationConfig {
     float temperature = 0.1f;
     int top_k = 50;
     float top_p = 1.0f;
     float repetition_penalty = 1.05f;
     uint64_t seed = 1;
+    // Protocol-level constrained generation.  The runtime only sees token
+    // ids; the text layer owns the protocol-specific prefix that produced it.
+    std::shared_ptr<ForcedTokenPrefix> forced_prefix;
 
     bool greedy() const { return temperature <= 0.0f || top_k == 1; }
     void validate() const;

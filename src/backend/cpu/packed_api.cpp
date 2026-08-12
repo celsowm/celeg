@@ -16,8 +16,10 @@ bool requires_sequential_execution(const CompiledModelProgram& program) {
         [](const CompiledLayerProgram& layer) {
             return layer.chunk_capability != CompiledChunkCapability::Native ||
                 (layer.attention.has_value() &&
-                 !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                     layer.attention->output_transform));
+                 (!std::holds_alternative<NoAttentionOutputTransformSpec>(
+                      layer.attention->output_transform) ||
+                  (layer.attention->latent_state() &&
+                   layer.attention->latent_state()->factorized)));
         });
 }
 
@@ -77,6 +79,7 @@ CpuBatchMetrics CpuModel::prefill_batch(std::span<const CpuPrefillItem> items) {
         CpuCompiledModel& session = *item.session->state_;
         ++session.session_.metrics.prefill_tokens;
         session.session_.metrics.last_prefill_ms += elapsed / items.size();
+        if (item.final_token) session.session_.phase = SessionPhase::Ready;
     }
     return {items.size(), elapsed};
 }
