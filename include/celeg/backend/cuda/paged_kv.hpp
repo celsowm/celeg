@@ -5,6 +5,7 @@
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/cache/kv_page_allocator.hpp"
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 #include "celeg/runtime/cache/page_layout.hpp"
 
 #include <cstddef>
@@ -24,7 +25,8 @@ public:
                          int page_tokens,
                          int max_context,
                          KvCacheMode mode,
-                         const ExecutionTopology& shape);
+                         const ExecutionTopology& shape,
+                         const CompiledModelProgram& program);
     ~PhysicalPagedKvCache() = default;
 
     PhysicalPagedKvCache(const PhysicalPagedKvCache&) = delete;

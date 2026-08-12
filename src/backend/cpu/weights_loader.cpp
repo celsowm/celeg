@@ -75,23 +75,23 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {tensor_name(weight_requests, TensorRole::FfnGate, layer),
-             {intermediate, shape.hidden}},
+             {intermediate, program.hidden}},
             {tensor_name(weight_requests, TensorRole::FfnUp, layer),
-             {intermediate, shape.hidden}},
+             {intermediate, program.hidden}},
         });
     common.w2 = load_matrix(source, reader, writer,
         tensor_name(weight_requests, TensorRole::FfnDown, layer),
-        {shape.hidden, intermediate});
+        {program.hidden, intermediate});
     if (program.per_layer_input.enabled) {
         common.per_layer_input_gate = load_matrix(source, reader, writer,
             tensor_name(weight_requests, TensorRole::PerLayerInputGate, layer),
-            {shape.per_layer_input_size, shape.hidden});
+            {program.per_layer_input.input_size, program.hidden});
         common.per_layer_projection = load_matrix(source, reader, writer,
             tensor_name(weight_requests, TensorRole::PerLayerProjection, layer),
-            {shape.hidden, shape.per_layer_input_size});
+            {program.hidden, program.per_layer_input.input_size});
         common.per_layer_input_norm = load_vector(source, reader, writer,
             tensor_name(weight_requests, TensorRole::PerLayerInputNorm, layer),
-            {shape.hidden});
+            {program.hidden});
         const std::vector<float> scalar = load_vector(source, reader, writer,
             tensor_name(weight_requests, TensorRole::LayerScalar, layer), {1});
         common.layer_scalar = scalar.front();
@@ -137,18 +137,18 @@ void CpuCompiledModel::Shared::load_weights() {
         !native_checkpoint;
     weight_store.embedding = load_matrix(source, reader.get(), writer.get(),
         tensor_name(weight_requests, TensorRole::TokenEmbedding),
-        {dims.vocab_size, shape.hidden});
+        {dims.vocab_size, program.hidden});
     if (!tie_word_embeddings) {
         weight_store.lm_head = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::LanguageModelHead),
-            {dims.vocab_size, shape.hidden});
+            {dims.vocab_size, program.hidden});
     }
     if (program.final_norm.weightless()) {
-        weight_store.final_norm.assign(static_cast<size_t>(shape.hidden), 1.0f);
+        weight_store.final_norm.assign(static_cast<size_t>(program.hidden), 1.0f);
     } else {
         weight_store.final_norm = load_vector(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::FinalNorm),
-            {shape.hidden});
+            {program.hidden});
         if (program.final_norm.weight_kind == NormWeightKind::OnePlusScale) {
             for (float& value : weight_store.final_norm) value += 1.0f;
         }
@@ -156,10 +156,10 @@ void CpuCompiledModel::Shared::load_weights() {
     if (program.embedding_transform.post_norm) {
         const NormSpec& spec = *program.embedding_transform.post_norm;
         if (spec.weightless()) {
-            weight_store.embedding_norm.assign(static_cast<size_t>(shape.hidden), 1.0f);
+            weight_store.embedding_norm.assign(static_cast<size_t>(program.hidden), 1.0f);
         } else {
             weight_store.embedding_norm = load_vector(source, reader.get(), writer.get(),
-                tensor_name(weight_requests, TensorRole::FinalNorm), {shape.hidden});
+                tensor_name(weight_requests, TensorRole::FinalNorm), {program.hidden});
             if (spec.weight_kind == NormWeightKind::OnePlusScale) {
                 for (float& value : weight_store.embedding_norm) value += 1.0f;
             }
@@ -168,13 +168,15 @@ void CpuCompiledModel::Shared::load_weights() {
     if (program.per_layer_input.enabled) {
         weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerEmbedding),
-                            {dims.vocab_size, shape.num_hidden_layers * shape.per_layer_input_size});
+                            {dims.vocab_size, program.per_layer_input.layer_count *
+                                program.per_layer_input.input_size});
         weight_store.per_layer_context_projection = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerContextProjection),
-            {shape.num_hidden_layers * shape.per_layer_input_size, shape.hidden});
+            {program.per_layer_input.layer_count * program.per_layer_input.input_size,
+             program.hidden});
         weight_store.per_layer_projection_norm = load_vector(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerProjectionNorm),
-            {shape.per_layer_input_size});
+            {program.per_layer_input.input_size});
     }
 
     const auto load_operator = [&](int index,
@@ -190,7 +192,7 @@ void CpuCompiledModel::Shared::load_weights() {
                     layer.latent_q_projection = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryProjection, index),
-                        {latent.query_rank, shape.hidden});
+        {latent.query_rank, program.hidden});
                     layer.latent_q_expansion = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryExpansion, index),
@@ -203,7 +205,7 @@ void CpuCompiledModel::Shared::load_weights() {
                     layer.latent_k_projection = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentKeyProjection, index),
-                        {latent.latent_rank + latent.rope_head_dim, shape.hidden});
+                        {latent.latent_rank + latent.rope_head_dim, program.hidden});
                     layer.latent_k_norm = load_vector(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentKeyNorm, index),
@@ -215,36 +217,36 @@ void CpuCompiledModel::Shared::load_weights() {
                          latent.latent_rank});
                     layer.out = load_matrix(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentOutput, index),
-                        {shape.hidden, attention.latent_output_width()});
+                        {program.hidden, attention.latent_output_width()});
                     layer.gate = load_matrix(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionGate, index),
-                        {attention.output_gate_width(), shape.hidden});
+                        {attention.output_gate_width(), program.hidden});
                     return layer;
                 }
                 layer.q = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentQuery, index),
-                    {attention.latent_query_content_width(), shape.hidden});
+                    {attention.latent_query_content_width(), program.hidden});
                 if (attention.latent_query_rope_width() != 0) {
                     layer.latent_q_rope = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryRope, index),
-                        {attention.latent_query_rope_width(), shape.hidden});
+                        {attention.latent_query_rope_width(), program.hidden});
                 }
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentKey, index),
-                    {latent.latent_rank, shape.hidden});
+                        {latent.latent_rank, program.hidden});
                 layer.v = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentValue, index),
-                    {latent.latent_rank, shape.hidden});
+                        {latent.latent_rank, program.hidden});
                 if (latent.decoupled_rope && latent.rope_head_dim != 0) {
                     layer.latent_k_rope = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentKeyRope, index),
-                        {latent.rope_head_dim, shape.hidden});
+                        {latent.rope_head_dim, program.hidden});
                 }
                 layer.out = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentOutput, index),
-                    {shape.hidden, attention.latent_query_content_width()});
+                    {program.hidden, attention.latent_query_content_width()});
                 if (const auto* relative =
                         std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
                     layer.relative_bias = load_vector(
@@ -257,19 +259,19 @@ void CpuCompiledModel::Shared::load_weights() {
             }
             layer.q = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionQuery, index),
-                {attention.query_projection_width(), shape.hidden});
+                {attention.query_projection_width(), program.hidden});
             if (!attention.uses_external_memory() &&
                 (!attention.kv_sharing.shared() || attention.kv_sharing.publishes)) {
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionKey, index),
-                    {attention.key_value_width(), shape.hidden});
+                    {attention.key_value_width(), program.hidden});
                 layer.v = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionValue, index),
-                    {attention.key_value_width(), shape.hidden});
+                    {attention.key_value_width(), program.hidden});
             }
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionOutput, index),
-                {shape.hidden, attention.query_width()});
+                {program.hidden, attention.query_width()});
             layer.q_norm = attention.query_norm.enabled()
                 ? (attention.query_norm.weightless()
                     ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
@@ -293,7 +295,7 @@ void CpuCompiledModel::Shared::load_weights() {
             if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {
                 layer.gate = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionGate, index),
-                    {attention.query_width(), shape.hidden});
+                    {attention.query_width(), program.hidden});
             }
             if (const auto* relative =
                     std::get_if<RelativePositionBiasSpec>(&attention.bias)) {
@@ -316,31 +318,31 @@ void CpuCompiledModel::Shared::load_weights() {
             if (spec.factorized_projections) {
                 layer.q = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::GatedDeltaNetQuery, index),
-                    {key_width, shape.hidden});
+                    {key_width, program.hidden});
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::GatedDeltaNetKey, index),
-                    {key_width, shape.hidden});
+                    {key_width, program.hidden});
                 layer.v = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::GatedDeltaNetValue, index),
-                    {value_width, shape.hidden});
+                    {value_width, program.hidden});
                 layer.z = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::GatedDeltaNetOutputGate, index),
-                    {value_width, shape.hidden});
+                    {value_width, program.hidden});
             } else {
                 layer.qkv = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::GatedDeltaNetQkv, index),
-                    {qkv_width, shape.hidden});
+                    {qkv_width, program.hidden});
                 layer.z = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::GatedDeltaNetZ, index),
-                    {value_width, shape.hidden});
+                    {value_width, program.hidden});
             }
             layer.b = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::GatedDeltaNetBeta, index),
-                {spec.value_heads, shape.hidden});
+                {spec.value_heads, program.hidden});
             layer.a = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, spec.factorized_projections
                     ? TensorRole::GatedDeltaNetDecay : TensorRole::GatedDeltaNetAlpha, index),
-                {spec.decay_width(), shape.hidden});
+                {spec.decay_width(), program.hidden});
             const int conv_dim = qkv_width;
             if (spec.factorized_projections) {
                 layer.q_conv_weight = load_vector(source, reader.get(), writer.get(),
@@ -375,7 +377,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 {spec.value_head_dim});
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::GatedDeltaNetOutput, index),
-                {shape.hidden, value_width});
+                {program.hidden, value_width});
             return layer;
         }
 
@@ -386,7 +388,7 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.in = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::Mamba2Input, index),
                 {2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
-                 spec.num_heads, shape.hidden});
+                 spec.num_heads, program.hidden});
             layer.conv_weight = load_vector(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::Mamba2Conv, index),
                 {conv_dim, 1, spec.conv_kernel});
@@ -402,7 +404,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 tensor_name(weight_requests, TensorRole::Mamba2Norm, index), {spec.intermediate_size});
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::Mamba2Output, index),
-                {shape.hidden, spec.intermediate_size});
+                {program.hidden, spec.intermediate_size});
             return layer;
         }
         if (layer_program.mixer == CompiledMixer::MlpOnly) return MlpOnlyWeights{};
@@ -412,27 +414,27 @@ void CpuCompiledModel::Shared::load_weights() {
             layer_program.short_convolution.value();
         layer.in = load_matrix(source, reader.get(), writer.get(),
             layer_name(index, "conv.in_proj.weight"),
-            {3 * shape.hidden, shape.hidden});
+            {3 * program.hidden, program.hidden});
         const std::vector<float> channel_major =
             load_vector(source, reader.get(), writer.get(),
             layer_name(index, "conv.conv.weight"),
-            {shape.hidden, 1, convolution.cache_length});
+            {program.hidden, 1, convolution.cache_length});
         layer.weight_tap_major.resize(channel_major.size());
         for (int tap = 0; tap < convolution.cache_length; ++tap) {
-            for (int channel = 0; channel < shape.hidden; ++channel) {
-                layer.weight_tap_major[static_cast<size_t>(tap) * shape.hidden + channel] =
+            for (int channel = 0; channel < program.hidden; ++channel) {
+                layer.weight_tap_major[static_cast<size_t>(tap) * program.hidden + channel] =
                     channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
             }
         }
         layer.out = load_matrix(source, reader.get(), writer.get(),
             layer_name(index, "conv.out_proj.weight"),
-            {shape.hidden, shape.hidden});
+            {program.hidden, program.hidden});
         return layer;
     };
 
-    if (shape.num_experts > 0) {
-        weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
-        for (int index = 0; index < shape.num_hidden_layers; ++index) {
+    if (program.has_moe()) {
+        weight_store.layers.reserve(program.layers.size());
+        for (int index = 0; index < static_cast<int>(program.layers.size()); ++index) {
             const CompiledLayerProgram& layer_program = program.layers.at(
                 static_cast<size_t>(index));
             if (layer_program.feed_forward != CompiledFeedForward::MixtureOfExperts) {
@@ -463,42 +465,43 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::AttentionInputNorm)
                     ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
-                    : layer_name(index, "operator_norm.weight"), {shape.hidden});
+                    : layer_name(index, "operator_norm.weight"), {program.hidden});
             layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::FfnInputNorm)
                     ? tensor_name(weight_requests, TensorRole::FfnInputNorm, index)
-                    : layer_name(index, "ffn_norm.weight"), {shape.hidden});
+                    : layer_name(index, "ffn_norm.weight"), {program.hidden});
             if (packed_expert_model) {
                 for (float& value : layer.common.operator_norm) value += 1.0f;
                 for (float& value : layer.common.ffn_norm) value += 1.0f;
             }
             layer.operator_layer = load_operator(index, layer_program);
-            layer.num_experts = shape.num_experts;
-            layer.experts_per_token = shape.experts_per_token;
-            layer.normalize_topk = shape.normalize_topk;
-            layer.use_expert_bias = shape.use_expert_bias;
-            layer.routed_scaling_factor = shape.routed_scaling_factor;
+            layer.num_experts = moe_semantics.router.expert_count;
+            layer.experts_per_token = moe_semantics.router.experts_per_token;
+            layer.normalize_topk = moe_semantics.router.normalization ==
+                MoeNormalizationKind::SumSelected;
+            layer.use_expert_bias = moe_semantics.router.has_expert_bias;
+            layer.routed_scaling_factor = moe_semantics.router.routed_scaling;
             layer.router = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::MoeRouter)
                     ? tensor_name(weight_requests, TensorRole::MoeRouter, index)
                     : layer_name(index, "feed_forward.gate.weight"),
-                {shape.num_experts, shape.hidden});
+                {moe_semantics.router.expert_count, program.hidden});
 
             if (packed_expert_model) {
                 const int shared_intermediate = moe_semantics.shared->mlp.intermediate_size;
                 layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
                     layer_name(index, "shared_expert.w13.weight"), {
                         {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
-                         {shared_intermediate, shape.hidden}},
+                         {shared_intermediate, program.hidden}},
                         {tensor_name(weight_requests, TensorRole::MoeSharedUp, index),
-                         {shared_intermediate, shape.hidden}},
+                         {shared_intermediate, program.hidden}},
                     });
                 layer.shared_w2 = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
-                    {shape.hidden, shared_intermediate});
+                    {program.hidden, shared_intermediate});
                 layer.shared_gate = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::MoeSharedGateWeight, index),
-                    {1, shape.hidden});
+                    {1, program.hidden});
                 layer.has_shared_gate = true;
                 layer.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
                     .packed_matrices(
@@ -515,13 +518,13 @@ void CpuCompiledModel::Shared::load_weights() {
                 layer.shared_w13 = load_concat(source, reader.get(), writer.get(),
                     layer_name(index, "mlp.shared_experts.w13.weight"), {
                         {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
-                         {shared_intermediate, shape.hidden}},
+                         {shared_intermediate, program.hidden}},
                         {tensor_name(weight_requests, TensorRole::MoeSharedUp, index),
-                         {shared_intermediate, shape.hidden}},
+                         {shared_intermediate, program.hidden}},
                     });
                 layer.shared_w2 = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
-                    {shape.hidden, shared_intermediate});
+                    {program.hidden, shared_intermediate});
             }
 
             const std::string bias_name = has_request(TensorRole::MoeRouterBias)
@@ -530,14 +533,14 @@ void CpuCompiledModel::Shared::load_weights() {
             if ((source && source->contains(bias_name)) ||
                 (reader && reader->contains(bias_name))) {
                 layer.router_bias = load_vector(source, reader.get(), writer.get(),
-                    bias_name, {shape.num_experts});
+                    bias_name, {moe_semantics.router.expert_count});
             }
 
             if (!disk_cached_experts) {
-                layer.expert_w13.resize(static_cast<size_t>(shape.num_experts));
-                layer.expert_w2.resize(static_cast<size_t>(shape.num_experts));
+                layer.expert_w13.resize(static_cast<size_t>(moe_semantics.router.expert_count));
+                layer.expert_w2.resize(static_cast<size_t>(moe_semantics.router.expert_count));
             }
-            for (int expert = 0; expert < shape.num_experts; ++expert) {
+            for (int expert = 0; expert < moe_semantics.router.expert_count; ++expert) {
                 const int moe_inter = program.layers.at(static_cast<size_t>(index))
                     .moe->routed.mlp.intermediate_size;
                 if (moe_inter <= 0) {
@@ -552,14 +555,14 @@ void CpuCompiledModel::Shared::load_weights() {
                     layer.expert_w13[static_cast<size_t>(expert)] = load_concat(
                         source, reader.get(), writer.get(), w13_name,
                         {{tensor_name(weight_requests, TensorRole::MoeExpertGate,
-                                      index, expert), {moe_inter, shape.hidden}},
+                                      index, expert), {moe_inter, program.hidden}},
                          {tensor_name(weight_requests, TensorRole::MoeExpertUp,
-                                      index, expert), {moe_inter, shape.hidden}}});
+                                      index, expert), {moe_inter, program.hidden}}});
                     layer.expert_w2[static_cast<size_t>(expert)] = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::MoeExpertDown,
                                     index, expert),
-                        {shape.hidden, moe_inter});
+                        {program.hidden, moe_inter});
                     continue;
                 }
                 const std::string prefix =
@@ -582,28 +585,28 @@ void CpuCompiledModel::Shared::load_weights() {
 
                 const std::vector<std::pair<std::string, std::vector<int64_t>>> parts{
                     {layer_name(index, prefix + ".w1.weight"),
-                     {moe_inter, shape.hidden}},
+                     {moe_inter, program.hidden}},
                     {layer_name(index, prefix + ".w3.weight"),
-                     {moe_inter, shape.hidden}},
+                     {moe_inter, program.hidden}},
                 };
                 if (disk_cached_experts) {
                     (void)load_concat(source, nullptr, writer.get(),
                                       w13_name, parts);
                     (void)load_matrix(source, nullptr, writer.get(),
-                                      w2_name, {shape.hidden, moe_inter});
+                                      w2_name, {program.hidden, moe_inter});
                 } else {
                     layer.expert_w13[static_cast<size_t>(expert)] = load_concat(
                         source, reader.get(), writer.get(), w13_name, parts);
                     layer.expert_w2[static_cast<size_t>(expert)] = load_matrix(
                         source, reader.get(), writer.get(), w2_name,
-                        {shape.hidden, moe_inter});
+                        {program.hidden, moe_inter});
                 }
             }
             weight_store.layers.push_back(std::move(layer));
         }
     } else {
-        weight_store.layers.reserve(static_cast<size_t>(shape.num_hidden_layers));
-        for (int index = 0; index < shape.num_hidden_layers; ++index) {
+        weight_store.layers.reserve(program.layers.size());
+        for (int index = 0; index < static_cast<int>(program.layers.size()); ++index) {
             CommonWeights common =
                 load_common(source, reader.get(), writer.get(), index);
             auto layer = load_operator(index, program.layers.at(static_cast<size_t>(index)));

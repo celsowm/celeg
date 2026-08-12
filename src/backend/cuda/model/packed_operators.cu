@@ -494,7 +494,7 @@ void PackedMoeExecutor::run(
     const MoeFfnDevice device = moe_ffn_device(*moe, semantics.moe.value());
     launch_moe_ffn(device, w.moe_sel.data(), w.moe_routing_w.data(),
                    w.normed.data(), w.moe_output_accum.data(), rows,
-                   context.shape.experts_per_token, w.moe_gu_scratch.data(),
+                   semantics.moe->router.experts_per_token, w.moe_gu_scratch.data(),
                    w.moe_act_scratch.data(), w.stream.get());
     launch_finalize_moe_output(w.moe_output_accum.data(), w.moe_output.data(),
                                rows * context.shape.hidden, w.stream.get());

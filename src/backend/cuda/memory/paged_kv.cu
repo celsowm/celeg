@@ -22,12 +22,13 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
                                            int page_tokens,
                                            int max_context,
                                            KvCacheMode mode,
-                                           const ExecutionTopology& shape)
+                                           const ExecutionTopology& shape,
+                                           const CompiledModelProgram& program)
     : page_tokens_(page_tokens),
       mode_(mode),
       attention_layer_count_(shape.attention_layer_count),
       attention_slot_for_layer_(shape.attention_slot_for_layer),
-      layout_(page_tokens, shape),
+      layout_(page_tokens, shape, program),
       allocator_(page_count, page_tokens) {
     if (max_context <= 0) throw std::invalid_argument("paged KV max_context must be positive");
     if (mode_ == KvCacheMode::Int8) {

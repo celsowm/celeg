@@ -11,11 +11,13 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
                                  size_t maximum_prefill_tokens_value,
                                  PhysicalPagedKvCache* paged_kv_value,
                                  const ExecutionTopology& shape,
+                                 const CompiledModelProgram& program,
                                  int vocab_size)
     : maximum_batch(maximum_batch_value),
       maximum_prefill_token_capacity(maximum_prefill_tokens_value),
       paged_kv(paged_kv_value),
       shape_(shape),
+      program_(program),
       vocab_size_(vocab_size),
       requirements_(PackedWorkspaceRequirements::derive(
           maximum_batch_value, maximum_prefill_tokens_value,

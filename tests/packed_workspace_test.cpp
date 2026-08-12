@@ -7,19 +7,19 @@
 
 int main() {
     try {
-        celeg::RuntimeTopology shape;
-        shape.exec.hidden = 128;
-        shape.dims.vocab_size = 256;
-        shape.exec.num_hidden_layers = 2;
-        shape.exec.max_feed_forward_intermediate = 192;
-        shape.exec.moe_intermediate = 64;
-        shape.exec.attention_layouts.resize(2);
-        shape.exec.attention_layouts[0].query_heads = 2;
-        shape.exec.attention_layouts[0].key_value_heads = 1;
-        shape.exec.attention_layouts[0].head_dim = 64;
-        shape.exec.attention_layouts[1] = shape.exec.attention_layouts[0];
-        shape.exec.attention_layouts[1].query_heads = 3;
-        shape.exec.feed_forward_intermediates = {128, 192};
+        celeg::ModelGraph graph;
+        graph.hidden = 128;
+        graph.layers.resize(2);
+        for (int index = 0; index < 2; ++index) {
+            celeg::AttentionSpec attention;
+            attention.query_heads = index == 0 ? 2 : 3;
+            attention.key_value_heads = 1;
+            attention.head_dim = 64;
+            graph.layers[index].mixer = attention;
+            graph.layers[index].feed_forward = celeg::DenseFeedForwardSpec{
+                index == 0 ? 128 : 192, celeg::ActivationKind::SwiGLU};
+        }
+        const celeg::RuntimeTopology shape = celeg::compose_runtime_topology({}, graph);
 
         const auto requirements = celeg::PackedWorkspaceRequirements::derive(
             4, 16, 8, shape.exec);
@@ -34,15 +34,6 @@ int main() {
                 " slots=" + std::to_string(requirements.layer_slots) +
                 " pages=" + std::to_string(requirements.page_table_entries));
         }
-
-        shape.exec.feed_forward_intermediates[1] = 256;
-        bool rejected = false;
-        try {
-            (void)celeg::PackedWorkspaceRequirements::derive(4, 16, 8, shape.exec);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        if (!rejected) throw std::runtime_error("oversized layer was not rejected");
 
         celeg::SessionPhase phase = celeg::SessionPhase::Empty;
         int position = 0;

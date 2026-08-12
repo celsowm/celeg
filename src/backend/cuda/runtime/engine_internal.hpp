@@ -3,6 +3,7 @@
 #include "celeg/backend/cuda/concurrency.hpp"
 #include "celeg/backend/cuda/model.hpp"
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 #include "celeg/backend/cuda/packed.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/runtime/cache/prefix_cache.hpp"
@@ -61,6 +62,7 @@ private:
     std::shared_ptr<const RuntimeContext> runtime_;
     RuntimeTopology topology_;
     ExecutionTopology& shape_;
+    CompiledModelProgram program_;
 
     mutable std::mutex mutex_;
     std::mutex step_mutex_;

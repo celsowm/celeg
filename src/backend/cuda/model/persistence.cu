@@ -11,7 +11,8 @@ namespace celeg {
 
 SessionStore::SessionState CudaCompiledModel::make_session_state() {
     SessionStore::SessionState state{
-        .shape = resources_.shape_, .dims = resources_.dims_,
+        .shape = resources_.shape_, .program = resources_.program_,
+        .dims = resources_.dims_,
         .max_context = max_context_, .position = session_.position_,
         .kv_cache_mode = resources_.options_.kv_cache_mode, .model_identity = resources_.model_identity_,
         .stream = stream_.get(), .seen_tokens = &sampling_.seen_tokens,
@@ -194,8 +195,7 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     for (size_t layer_index = 0; layer_index < state.layer_buffers.size(); ++layer_index) {
         const auto& layer = state.layer_buffers[layer_index];
         if (layer.is_attention && layer.owns_kv_cache) {
-            const AttentionSpec& layout = state.shape.attention_layout(
-                static_cast<int>(layer_index));
+            const AttentionSpec& layout = state.program.layers.at(layer_index).attention.value();
             const size_t cache_elements = static_cast<size_t>(state.position) *
                 static_cast<size_t>(layout.key_value_width());
             const size_t scale_elements = static_cast<size_t>(state.position) *
@@ -275,8 +275,7 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     for (size_t layer_index = 0; layer_index < state.layer_buffers.size(); ++layer_index) {
         const auto& layer = state.layer_buffers[layer_index];
         if (layer.is_attention && layer.owns_kv_cache) {
-            const AttentionSpec& layout = state.shape.attention_layout(
-                static_cast<int>(layer_index));
+            const AttentionSpec& layout = state.program.layers.at(layer_index).attention.value();
             const size_t cache_elements = static_cast<size_t>(header.position) *
                 static_cast<size_t>(layout.key_value_width());
             const size_t scale_elements = static_cast<size_t>(header.position) *

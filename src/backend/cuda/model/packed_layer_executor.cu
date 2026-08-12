@@ -53,7 +53,7 @@ void PackedLayerExecutor::run_attention_layer(
     bool segmented_attention,
     int segmented_chunks) {
     PackedOperatorContext context{
-        workspace_, gemm_.dispatcher(), plan_, workspace_.shape_};
+        workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
     PackedAttentionExecutor::run(context, reference, attention, rows,
                                  layer_index, segmented_attention,
                                  segmented_chunks);
@@ -66,7 +66,7 @@ void PackedLayerExecutor::run_convolution_layer(
     int layer_index,
     int ragged_requests) {
     PackedOperatorContext context{
-        workspace_, gemm_.dispatcher(), plan_, workspace_.shape_};
+        workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
     PackedConvolutionExecutor::run(context, reference, convolution, rows,
                                    layer_index, ragged_requests);
 }
@@ -78,7 +78,7 @@ void PackedLayerExecutor::run_mlp_layer(
     const std::vector<PackedSessionContext>* batch_models,
     int layer_index) {
     PackedOperatorContext context{
-        workspace_, gemm_.dispatcher(), plan_, workspace_.shape_};
+        workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
     if (const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward)) {
         (void)moe;
         PackedMoeExecutor::run(context, reference, common_layer, rows,
@@ -114,7 +114,7 @@ void PackedLayerExecutor::run_transformer_layers(
                        semantics.operator_norm.epsilon,
                        workspace_.stream.get());
         PackedOperatorContext context{
-            workspace_, gemm_.dispatcher(), plan_, workspace_.shape_};
+            workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
         if (layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
             throw std::runtime_error(
                 "packed CUDA execution requires tokenwise scheduling for sequential mixers");

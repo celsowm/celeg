@@ -4,32 +4,30 @@
 #include <iostream>
 
 int main() {
-    celeg::RuntimeTopology shape;
-    shape.exec.num_hidden_layers = 2;
-    shape.exec.mixer_kinds = {celeg::MixerKind::Attention,
-                         celeg::MixerKind::Attention};
-    shape.exec.attention_layouts.resize(2);
-    shape.exec.attention_layouts[0].query_heads = 2;
-    shape.exec.attention_layouts[0].key_value_heads = 1;
-    shape.exec.attention_layouts[0].head_dim = 4;
-    shape.exec.attention_layouts[0].query_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
-    shape.exec.attention_layouts[0].key_norm = shape.exec.attention_layouts[0].query_norm;
-    shape.exec.attention_layouts[0].kv_sharing = {0, true};
-    shape.exec.attention_layouts[0].position = celeg::RopePositionSpec{10000.0, 1.0, {}};
-    shape.exec.attention_layouts[1].query_heads = 2;
-    shape.exec.attention_layouts[1].key_value_heads = 1;
-    shape.exec.attention_layouts[1].head_dim = 4;
-    shape.exec.attention_layouts[1].query_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
-    shape.exec.attention_layouts[1].key_norm = shape.exec.attention_layouts[1].query_norm;
-    shape.exec.attention_layouts[1].kv_sharing = {0, false};
-    shape.exec.attention_layouts[1].position = celeg::RopePositionSpec{10000.0, 1.0, {}};
+    celeg::ModelGraph graph;
+    graph.hidden = 8;
+    graph.layers.resize(2);
+    for (auto& layer : graph.layers) {
+        celeg::AttentionSpec attention;
+        attention.query_heads = 2;
+        attention.key_value_heads = 1;
+        attention.head_dim = 4;
+        attention.query_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+        attention.key_norm = attention.query_norm;
+        attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
+        layer.mixer = attention;
+        layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
+    }
+    std::get<celeg::AttentionSpec>(graph.layers[0].mixer).kv_sharing = {0, true};
+    std::get<celeg::AttentionSpec>(graph.layers[1].mixer).kv_sharing = {0, false};
+    const celeg::RuntimeTopology shape = celeg::compose_runtime_topology({}, graph);
 
     celeg::CompiledModelProgram program;
     program.layers.resize(2);
     for (size_t index = 0; index < program.layers.size(); ++index) {
         auto& layer = program.layers[index];
         layer.mixer = celeg::CompiledMixer::Attention;
-        layer.attention = shape.exec.attention_layouts[index];
+        layer.attention = std::get<celeg::AttentionSpec>(graph.layers[index].mixer);
         layer.state_layout = celeg::CompiledAttentionStateLayout{};
         layer.state_layout->key_width = 4;
         layer.state_layout->value_width = 4;
@@ -44,17 +42,22 @@ int main() {
     CELEG_TEST_CHECK(topology.layer_to_pool == std::vector<int>({0, 0}));
     CELEG_TEST_CHECK(topology.layer_to_owner == std::vector<int>({0, 0}));
 
-    celeg::RuntimeTopology latent_shape;
-    latent_shape.exec.num_hidden_layers = 1;
-    latent_shape.exec.mixer_kinds = {celeg::MixerKind::Attention};
-    latent_shape.exec.attention_layouts = {shape.exec.attention_layouts[0]};
-    latent_shape.exec.attention_layouts[0].kv_sharing = {};
-    latent_shape.exec.attention_layouts[0].state =
+    celeg::ModelGraph latent_graph;
+    latent_graph.hidden = 8;
+    latent_graph.layers.resize(1);
+    auto latent_attention = std::get<celeg::AttentionSpec>(graph.layers[0].mixer);
+    latent_attention.kv_sharing = {};
+    latent_attention.state =
         celeg::LatentAttentionStateSpec{16, 2, 6, true};
+    latent_graph.layers[0].mixer = latent_attention;
+    latent_graph.layers[0].feed_forward =
+        celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
+    const celeg::RuntimeTopology latent_shape =
+        celeg::compose_runtime_topology({}, latent_graph);
     celeg::CompiledModelProgram latent_program;
     latent_program.layers.resize(1);
     latent_program.layers[0].mixer = celeg::CompiledMixer::Attention;
-    latent_program.layers[0].attention = latent_shape.exec.attention_layouts[0];
+    latent_program.layers[0].attention = latent_attention;
     latent_program.layers[0].state_layout = celeg::CompiledAttentionStateLayout{};
     latent_program.layers[0].state_layout->kind = celeg::CompiledStateLayoutKind::Latent;
     latent_program.layers[0].state_layout->latent_width = 16;

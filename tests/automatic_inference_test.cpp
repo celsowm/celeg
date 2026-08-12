@@ -301,9 +301,9 @@ int main() {
     hybrid_checkpoint.repository = hybrid_gguf_repository();
     const celeg::ResolvedModel hybrid_model =
         catalog.select(hybrid_checkpoint.metadata).resolve(hybrid_checkpoint);
-    CELEG_TEST_CHECK(hybrid_model.topology.exec.mixer_kinds[0] ==
+    CELEG_TEST_CHECK(hybrid_model.graph.layers[0].mixer_kind() ==
                      celeg::MixerKind::ShortConvolution);
-    CELEG_TEST_CHECK(hybrid_model.topology.exec.mixer_kinds[1] == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(hybrid_model.graph.layers[1].mixer_kind() == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(hybrid_model.capabilities.tied_embeddings);
 
     auto conflicting = metadata();
@@ -366,11 +366,14 @@ int main() {
         std::fprintf(stderr, "ling failure: %s\n", error.what());
         return 1;
     }
-    CELEG_TEST_CHECK(ling_model.topology.exec.mixer_kinds[0] == celeg::MixerKind::GatedDeltaNet);
-    CELEG_TEST_CHECK(ling_model.topology.exec.mixer_kinds[3] == celeg::MixerKind::Attention);
-    CELEG_TEST_CHECK(ling_model.topology.exec.attention_layout(3).latent_state()->factorized);
-    CELEG_TEST_CHECK(ling_model.topology.exec.feed_forward_kinds[0] == celeg::FeedForwardKind::Dense);
-    CELEG_TEST_CHECK(ling_model.topology.exec.feed_forward_kinds[1] == celeg::FeedForwardKind::MixtureOfExperts);
+    CELEG_TEST_CHECK(ling_model.graph.layers[0].mixer_kind() == celeg::MixerKind::GatedDeltaNet);
+    CELEG_TEST_CHECK(ling_model.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(ling_model.graph.layers[3].mixer)
+                         .latent_state()->factorized);
+    CELEG_TEST_CHECK(ling_model.graph.layers[0].feed_forward_kind() ==
+                     celeg::FeedForwardKind::Dense);
+    CELEG_TEST_CHECK(ling_model.graph.layers[1].feed_forward_kind() ==
+                     celeg::FeedForwardKind::MixtureOfExperts);
     CELEG_TEST_CHECK(celeg::explain_resolution(ling_checkpoint).failures.empty());
     return 0;
 }

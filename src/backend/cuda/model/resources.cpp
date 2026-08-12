@@ -32,14 +32,8 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.latent_decompressed_.reset(static_cast<size_t>(
         resources_.shape_.maximum_attention_output_width()));
     workspace_.conv_projected_.reset(static_cast<size_t>(3 * resources_.shape_.hidden));
-    size_t mamba_projection_width = 0;
-    for (const Mamba2Spec& spec : resources_.shape_.mamba2_layouts) {
-        mamba_projection_width = std::max(mamba_projection_width,
-            2ULL * static_cast<size_t>(spec.intermediate_size) +
-            2ULL * static_cast<size_t>(spec.group_count) * static_cast<size_t>(spec.state_size) +
-            static_cast<size_t>(spec.num_heads));
-    }
-    workspace_.mamba_projected_.reset(mamba_projection_width);
+    workspace_.mamba_projected_.reset(static_cast<size_t>(
+        resources_.shape_.maximum_mamba_projection_width()));
     workspace_.mamba_inner_.reset(static_cast<size_t>(resources_.shape_.mamba2_intermediate));
     workspace_.gated_delta_qkv_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_qkv_width()));
     workspace_.gated_delta_z_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_output_width()));

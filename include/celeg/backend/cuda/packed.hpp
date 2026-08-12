@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 #include "celeg/backend/cuda/packed_session.hpp"
 #include "celeg/backend/cuda/execution_plan.hpp"
 
@@ -139,6 +140,7 @@ public:
                          size_t maximum_prefill_tokens,
                          PhysicalPagedKvCache* paged_kv,
                          const ExecutionTopology& shape,
+                         const CompiledModelProgram& program,
                          int vocab_size,
                          CudaExecutionPlan plan);
     ~PackedDecodeExecutor();

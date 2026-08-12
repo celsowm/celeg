@@ -50,7 +50,7 @@ CpuExpertBackingMetrics CpuExpertBackingStore::metrics() const {
 
 void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
     if (shared.options.expert_backing != CpuExpertBacking::DiskCached ||
-        shared.shape.num_experts <= 0) {
+        !shared.program.has_moe()) {
         return;
     }
 
@@ -100,11 +100,10 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
     if (!expert_backing_store) {
         throw std::logic_error("CPU disk-backed expert cache is not configured");
     }
-    if (layer < 0 || layer >= shape.num_hidden_layers ||
-        expert < 0 || expert >= shape.num_experts ||
-        layer >= static_cast<int>(program.layers.size()) ||
-        program.layers[static_cast<size_t>(layer)].feed_forward !=
-            CompiledFeedForward::MixtureOfExperts) {
+    if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
+        !program.layers[static_cast<size_t>(layer)].moe ||
+        expert < 0 || expert >= program.layers[static_cast<size_t>(layer)]
+            .moe->router.expert_count) {
         throw std::out_of_range("CPU expert cache request is out of range");
     }
 

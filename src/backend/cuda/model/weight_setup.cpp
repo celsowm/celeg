@@ -93,10 +93,10 @@ void CudaCompiledModel::load_checkpoint_weights(
         if (resources_.program_.per_layer_input.enabled) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerInputGate, i),
-                {resources_.shape_.per_layer_input_size, resources_.shape_.hidden});
+                {resources_.program_.per_layer_input.input_size, resources_.program_.hidden});
             common_layer.per_layer_projection = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerProjection, i),
-                {resources_.shape_.hidden, resources_.shape_.per_layer_input_size});
+                {resources_.program_.hidden, resources_.program_.per_layer_input.input_size});
             common_layer.per_layer_input_norm = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::PerLayerInputNorm, i),
                 {resources_.shape_.hidden});

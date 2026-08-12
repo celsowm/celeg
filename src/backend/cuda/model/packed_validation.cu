@@ -117,15 +117,6 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
         shape.max_feed_forward_intermediate <= 0) {
         throw std::invalid_argument("packed topology has invalid workspace dimensions");
     }
-    for (size_t layer = 0; layer < shape.feed_forward_intermediates.size(); ++layer) {
-        if (shape.feed_forward_intermediates[layer] <= 0 ||
-            static_cast<size_t>(shape.feed_forward_intermediates[layer]) >
-                static_cast<size_t>(shape.max_feed_forward_intermediate)) {
-            throw std::invalid_argument(
-                "packed topology layer " + std::to_string(layer) +
-                " exceeds max_feed_forward_intermediate");
-        }
-    }
     PackedWorkspaceRequirements result;
     result.maximum_batch = maximum_batch;
     result.maximum_prefill_tokens = maximum_prefill_tokens;

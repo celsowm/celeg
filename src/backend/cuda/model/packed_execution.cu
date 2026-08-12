@@ -31,11 +31,12 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                       size_t maximum_prefill_tokens_value,
                                       PhysicalPagedKvCache* paged_kv_value,
                                       const ExecutionTopology& shape,
+                                      const CompiledModelProgram& program,
                                       int vocab_size,
                                       CudaExecutionPlan plan_value)
         : PackedWorkspace(maximum_batch_value, maximum_prefill_tokens_value,
-                          paged_kv_value, shape, vocab_size),
-          layer_program_(PackedLayerProgram::compile(shape)),
+                          paged_kv_value, shape, program, vocab_size),
+          layer_program_(PackedLayerProgram::compile(program)),
           plan_(std::move(plan_value)),
           compatibility_(plan_.fingerprint(), plan_.device().device_ordinal),
           metadata_cache_(maximum_batch),
@@ -425,10 +426,11 @@ PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,
                                            size_t maximum_prefill_tokens,
                                            PhysicalPagedKvCache* paged_kv,
                                            const ExecutionTopology& shape,
+                                           const CompiledModelProgram& program,
                                            int vocab_size,
                                            CudaExecutionPlan plan)
     : state_(std::make_unique<PackedDecodeExecutorImpl>(
-          maximum_sessions, maximum_prefill_tokens, paged_kv, shape, vocab_size,
+          maximum_sessions, maximum_prefill_tokens, paged_kv, shape, program, vocab_size,
           std::move(plan))) {}
 
 PackedDecodeExecutor::~PackedDecodeExecutor() = default;

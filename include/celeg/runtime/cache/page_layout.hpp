@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 
 #include <cstddef>
 #include <limits>
@@ -33,7 +34,8 @@ struct PageLayout {
 
     PageLayout() = default;
     PageLayout(int page_tokens_value,
-               const ExecutionTopology& shape)
+               const ExecutionTopology& shape,
+               const CompiledModelProgram& program)
         : page_tokens(page_tokens_value),
           attention_layers(shape.attention_layer_count) {
         if (page_tokens <= 0) {
@@ -49,8 +51,10 @@ struct PageLayout {
             const int model_layer = slot < static_cast<int>(shape.layer_for_attention_slot.size())
                 ? shape.layer_for_attention_slot[static_cast<size_t>(slot)] : slot;
             const AttentionSpec* attention = nullptr;
-            if (model_layer >= 0 && model_layer < static_cast<int>(shape.attention_layouts.size())) {
-                attention = &shape.attention_layout(model_layer);
+            if (model_layer >= 0 && model_layer < static_cast<int>(program.layers.size())) {
+                const CompiledLayerProgram& layer = program.layers.at(
+                    static_cast<size_t>(model_layer));
+                if (layer.attention) attention = &layer.attention.value();
             }
             if (!attention) {
                 throw std::invalid_argument("PageLayout requires an attention layout for every slot");

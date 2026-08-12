@@ -2,6 +2,7 @@
 
 #include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/program.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 
 #include <array>
@@ -49,6 +50,7 @@ public:
     // never retains a reference beyond the call.
     struct SessionState {
         const ExecutionTopology& shape;
+        const CompiledModelProgram& program;
         const CheckpointDimensions& dims;
         int max_context = 0;
         int position = 0;

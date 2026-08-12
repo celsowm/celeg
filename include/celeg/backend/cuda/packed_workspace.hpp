@@ -4,6 +4,7 @@
 #include "celeg/backend/cuda/packed_handles.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/model/runtime_types.hpp"
+#include "celeg/model/program.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,7 @@ struct PackedWorkspace {
                     size_t maximum_prefill_tokens,
                     PhysicalPagedKvCache* paged_kv,
                     const ExecutionTopology& shape,
+                    const CompiledModelProgram& program,
                     int vocab_size);
 
     void ensure_segmented_workspace(int rows, int chunks);
@@ -28,6 +30,7 @@ struct PackedWorkspace {
     size_t maximum_prefill_token_capacity = 0;
     PhysicalPagedKvCache* paged_kv = nullptr;
     const ExecutionTopology& shape_;
+    const CompiledModelProgram& program_;
     int vocab_size_ = 0;
     PackedWorkspaceRequirements requirements_;
     PackedExecutionHandles handles;

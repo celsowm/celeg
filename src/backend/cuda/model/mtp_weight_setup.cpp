@@ -20,9 +20,9 @@
 namespace celeg {
 namespace {
 
-int last_full_attention_layer(const ExecutionTopology& shape) {
-    for (int layer = shape.num_hidden_layers - 1; layer >= 0; --layer) {
-        if (shape.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::Attention) {
+int last_full_attention_layer(const CompiledModelProgram& program) {
+    for (int layer = static_cast<int>(program.layers.size()) - 1; layer >= 0; --layer) {
+        if (program.layers.at(static_cast<size_t>(layer)).mixer == CompiledMixer::Attention) {
             return layer;
         }
     }
@@ -43,12 +43,13 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     if (!resources.options_.allocate_local_kv_cache) {
         throw std::invalid_argument("MTP requires a local KV cache; disable packed/paged execution");
     }
-    const int full_layer = last_full_attention_layer(resources.shape_);
+    const int full_layer = last_full_attention_layer(resources.program_);
     if (full_layer < 0) {
         throw std::runtime_error("MTP requires a full-attention target layer");
     }
     const AttentionSpec mtp_layout = [&]() {
-        AttentionSpec layout = resources.shape_.attention_layout(full_layer);
+        AttentionSpec layout = resources.program_.layers.at(
+            static_cast<size_t>(full_layer)).attention.value();
         layout.kv_sharing = {};
         return layout;
     }();

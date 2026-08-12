@@ -38,24 +38,16 @@ int main() {
 
     celeg::ResolvedModel resolved;
     resolved.graph.hidden = 8;
-    resolved.topology.exec.hidden = 8;
-    resolved.topology.exec.intermediate = 16;
-    resolved.topology.dims.vocab_size = 32;
-    resolved.topology.exec.num_hidden_layers = 2;
-    resolved.topology.exec.mixer_kinds = {
-        celeg::MixerKind::Attention, celeg::MixerKind::Attention};
-    resolved.topology.exec.feed_forward_kinds = {
-        celeg::FeedForwardKind::Dense, celeg::FeedForwardKind::Dense};
-    resolved.topology.exec.attention_layer_count = 2;
-    resolved.topology.exec.conv_layer_count = 0;
-    resolved.topology.exec.attention_layouts.resize(2);
-    resolved.topology.exec.has_per_layer_input = true;
-    resolved.topology.exec.per_layer_input_size = 4;
     resolved.graph.layers.resize(2);
     for (auto& layer : resolved.graph.layers) {
+        layer.mixer = celeg::AttentionSpec{};
         layer.per_layer_input = {4, celeg::ActivationKind::GeluTanh, true};
         layer.per_layer_input_norm.epsilon = 1.0e-5f;
+        layer.feed_forward = celeg::DenseFeedForwardSpec{
+            16, celeg::ActivationKind::SwiGLU};
     }
+    resolved.topology = celeg::compose_runtime_topology(
+        celeg::CheckpointDimensions{32, 0, {}, {}, 0}, resolved.graph);
     const auto per_layer = celeg::PerLayerInputPlan::derive(resolved);
     CELEG_TEST_CHECK(per_layer.enabled && per_layer.packed_width == 8);
     CELEG_TEST_CHECK(per_layer.checked_elements(3) == 24);
@@ -70,15 +62,7 @@ int main() {
     }
     CELEG_TEST_CHECK(rejected_overflow);
 
-    celeg::RuntimeTopology token_topology;
-    token_topology.exec.hidden = 8;
-    token_topology.exec.intermediate = 16;
-    token_topology.dims.vocab_size = 32;
-    token_topology.exec.num_hidden_layers = 1;
-    token_topology.exec.mixer_kinds = {celeg::MixerKind::Attention};
-    token_topology.exec.feed_forward_kinds = {celeg::FeedForwardKind::Dense};
-    token_topology.exec.attention_layer_count = 1;
-    token_topology.exec.attention_layouts.resize(1);
+    celeg::RuntimeTopology token_topology = resolved.topology;
     token_topology.dims.token_policy = {1, {2}, 32};
     bool rejected_token_range = false;
     try {
