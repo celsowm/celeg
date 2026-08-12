@@ -154,7 +154,7 @@ void apply_cpu_attention_output_gate(float* output, const float* gate,
 }
 
 void apply_cpu_latent_attention_positions(
-    const RuntimeTopology& shape, const AttentionSpec& layout,
+    const ExecutionTopology& shape, const AttentionSpec& layout,
     float* query_rope, float* key_rope, int scalar_position,
     const std::array<int32_t, 3>& rope_position) {
     const auto* latent = layout.latent_state();

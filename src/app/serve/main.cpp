@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model, *runtime);
         const auto& topology = bootstrap.model.topology;
-        if (args.context > topology.checkpoint.max_position_embeddings) {
+        if (args.context > topology.dims.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
@@ -162,8 +162,8 @@ int main(int argc, char** argv) {
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.provenance.identity : args.served_model_name;
         const std::vector<std::int32_t> eos_token_ids(
-            bootstrap.model.topology.checkpoint.token_policy.eos_token_ids.begin(),
-            bootstrap.model.topology.checkpoint.token_policy.eos_token_ids.end());
+            bootstrap.model.topology.dims.token_policy.eos_token_ids.begin(),
+            bootstrap.model.topology.dims.token_policy.eos_token_ids.end());
 
         celeg::VisualEmbeddingProvider visual_embeddings;
         for (const auto& provider_id : runtime->vision_providers().ids()) {
@@ -227,8 +227,8 @@ int main(int argc, char** argv) {
             engine_options.prefill_chunk_tokens = args.prefill_chunk_tokens;
             // GatedDeltaNet and MlpOnly still require tokenwise scheduling;
             // Mamba2 has a packed state-preserving path.
-            if (topology.gated_delta_net_layer_count > 0 ||
-                topology.mlp_only_layer_count > 0) {
+            if (topology.exec.gated_delta_net_layer_count > 0 ||
+                topology.exec.mlp_only_layer_count > 0) {
                 engine_options.packed_decode = false;
                 engine_options.ragged_packed_prefill = false;
             }

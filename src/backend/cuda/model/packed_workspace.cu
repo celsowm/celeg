@@ -10,11 +10,13 @@ namespace celeg {
 PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
                                  size_t maximum_prefill_tokens_value,
                                  PhysicalPagedKvCache* paged_kv_value,
-                                 const RuntimeTopology& shape)
+                                 const ExecutionTopology& shape,
+                                 int vocab_size)
     : maximum_batch(maximum_batch_value),
       maximum_prefill_token_capacity(maximum_prefill_tokens_value),
       paged_kv(paged_kv_value),
       shape_(shape),
+      vocab_size_(vocab_size),
       requirements_(PackedWorkspaceRequirements::derive(
           maximum_batch_value, maximum_prefill_tokens_value,
           paged_kv_value ? static_cast<size_t>(paged_kv_value->max_pages_per_request()) : 0,
@@ -65,8 +67,8 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
                      shape_.experts_per_token * 2 * requirements_.moe_intermediate),
       moe_act_scratch(static_cast<size_t>(maximum_prefill_token_capacity) *
                       shape_.experts_per_token * requirements_.moe_intermediate),
-      logits(maximum_prefill_token_capacity * shape_.checkpoint.vocab_size),
-      sampling_scores(maximum_batch * shape_.checkpoint.vocab_size),
+      logits(maximum_prefill_token_capacity * vocab_size_),
+      sampling_scores(maximum_batch * vocab_size_),
       selected_values(maximum_batch * static_cast<size_t>(kMaxTopK)),
       selected_indices(maximum_batch * static_cast<size_t>(kMaxTopK)),
       h_positions(maximum_prefill_token_capacity),

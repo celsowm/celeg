@@ -4,7 +4,7 @@
 
 namespace celeg {
 
-PackedLayerProgram PackedLayerProgram::compile(const RuntimeTopology& shape) {
+PackedLayerProgram PackedLayerProgram::compile(const ExecutionTopology& shape) {
     if (shape.num_hidden_layers <= 0 ||
         shape.mixer_kinds.size() != static_cast<size_t>(shape.num_hidden_layers)) {
         throw std::invalid_argument("packed layer program has incomplete mixer topology");

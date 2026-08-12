@@ -45,7 +45,7 @@ void CudaCompiledModel::load_checkpoint_weights(
     // how many experts fit in the GPU cache per layer.
     configure_cuda_expert_resources(*this);
     const int mtp_layer_count = resources_.options_.enable_mtp
-        ? resources_.shape_.checkpoint.mtp_num_hidden_layers : 0;
+        ? resources_.dims_.mtp_num_hidden_layers : 0;
     const int resource_layer_count = resources_.shape_.num_hidden_layers +
         mtp_layer_count;
     workspace_.expert_caches_.resize(static_cast<size_t>(resource_layer_count));

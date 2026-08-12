@@ -20,7 +20,7 @@
 namespace celeg {
 namespace {
 
-int last_full_attention_layer(const RuntimeTopology& shape) {
+int last_full_attention_layer(const ExecutionTopology& shape) {
     for (int layer = shape.num_hidden_layers - 1; layer >= 0; --layer) {
         if (shape.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::Attention) {
             return layer;
@@ -34,7 +34,7 @@ int last_full_attention_layer(const RuntimeTopology& shape) {
 void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     CudaModelResources& resources = model.resources_;
     if (!resources.options_.enable_mtp) return;
-    if (resources.shape_.checkpoint.mtp_num_hidden_layers <= 0) {
+    if (resources.dims_.mtp_num_hidden_layers <= 0) {
         throw std::invalid_argument("MTP was requested but the checkpoint has no MTP layers");
     }
     if (!repo.contains("mtp.fc.weight")) {
@@ -55,7 +55,7 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
 
     CudaMtpResources& mtp = resources.mtp_;
     mtp.enabled = true;
-    mtp.layer_count = resources.shape_.checkpoint.mtp_num_hidden_layers;
+    mtp.layer_count = resources.dims_.mtp_num_hidden_layers;
     mtp.fc = resources.weight_loader_->load_linear_weight(
         repo, "mtp.fc.weight",
         {resources.shape_.hidden, 2 * resources.shape_.hidden});

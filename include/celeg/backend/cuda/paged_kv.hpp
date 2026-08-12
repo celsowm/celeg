@@ -24,7 +24,7 @@ public:
                          int page_tokens,
                          int max_context,
                          KvCacheMode mode,
-                         const RuntimeTopology& shape);
+                         const ExecutionTopology& shape);
     ~PhysicalPagedKvCache() = default;
 
     PhysicalPagedKvCache(const PhysicalPagedKvCache&) = delete;

@@ -48,7 +48,8 @@ public:
     // writes to. The host fills this struct and passes it in; the store
     // never retains a reference beyond the call.
     struct SessionState {
-        const RuntimeTopology& shape;
+        const ExecutionTopology& shape;
+        const CheckpointDimensions& dims;
         int max_context = 0;
         int position = 0;
         KvCacheMode kv_cache_mode = KvCacheMode::Bf16;

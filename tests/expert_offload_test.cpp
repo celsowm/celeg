@@ -10,53 +10,52 @@ namespace {
 //   4 experts/token, 6 attention layers, 8 KV heads, head_dim 64.
 celeg::RuntimeTopology make_8b_a1b_shape() {
     celeg::RuntimeTopology shape;
-    shape.hidden = 2048;
-    shape.num_hidden_layers = 24;
-    shape.num_dense_layers = 2;
-    shape.feed_forward_kinds.assign(static_cast<size_t>(shape.num_hidden_layers),
+    shape.exec.hidden = 2048;
+    shape.exec.num_hidden_layers = 24;
+    shape.exec.num_dense_layers = 2;
+    shape.exec.feed_forward_kinds.assign(static_cast<size_t>(shape.exec.num_hidden_layers),
                                     celeg::FeedForwardKind::MixtureOfExperts);
-    shape.feed_forward_kinds[0] = celeg::FeedForwardKind::Dense;
-    shape.feed_forward_kinds[1] = celeg::FeedForwardKind::Dense;
-    shape.moe_intermediate = 1792;
-    shape.num_experts = 32;
-    shape.experts_per_token = 4;
-    shape.mixer_kinds.assign(static_cast<size_t>(shape.num_hidden_layers),
+    shape.exec.feed_forward_kinds[0] = celeg::FeedForwardKind::Dense;
+    shape.exec.feed_forward_kinds[1] = celeg::FeedForwardKind::Dense;
+    shape.exec.moe_intermediate = 1792;
+    shape.exec.num_experts = 32;
+    shape.exec.experts_per_token = 4;
+    shape.exec.mixer_kinds.assign(static_cast<size_t>(shape.exec.num_hidden_layers),
                              celeg::MixerKind::ShortConvolution);
-    std::fill_n(shape.mixer_kinds.begin(), 6, celeg::MixerKind::Attention);
-    shape.attention_layouts.resize(static_cast<size_t>(shape.num_hidden_layers));
-    for (auto& attention : shape.attention_layouts) {
+    std::fill_n(shape.exec.mixer_kinds.begin(), 6, celeg::MixerKind::Attention);
+    shape.exec.attention_layouts.resize(static_cast<size_t>(shape.exec.num_hidden_layers));
+    for (auto& attention : shape.exec.attention_layouts) {
         attention.query_heads = 32;
         attention.key_value_heads = 8;
         attention.head_dim = 64;
         attention.pattern = celeg::FullCausalPattern{};
     }
-    for (auto& attention : shape.attention_layouts) {
+    for (auto& attention : shape.exec.attention_layouts) {
         attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
     }
     // Derived field used by the KV planner; the 8B-A1B model has 6 attention
     // layers.
-    shape.attention_layer_count = 6;
+    shape.exec.attention_layer_count = 6;
     return shape;
 }
 
 void test_byte_helpers() {
     const celeg::RuntimeTopology shape = make_8b_a1b_shape();
     // 21 MiB per expert per the proposal.
-    const std::size_t per_expert = celeg::bytes_per_expert_bf16(shape);
+    const std::size_t per_expert = celeg::bytes_per_expert_bf16(shape.exec);
     CELEG_TEST_CHECK(per_expert == 3ull * 1792ull * 2048ull * 2ull);
     CELEG_TEST_CHECK(per_expert == 21ull * 1024ull * 1024ull);
 
-    CELEG_TEST_CHECK(celeg::moe_layer_count(shape) == 22);
+    CELEG_TEST_CHECK(celeg::moe_layer_count(shape.exec) == 22);
 
     // 12 KiB/token: 6 layers * 2 * 8 KV heads * 64 * 2 bytes.
-    const std::size_t kv_per_token = celeg::kv_cache_bytes(shape, 1);
+    const std::size_t kv_per_token = celeg::kv_cache_bytes(shape.exec, 1);
     CELEG_TEST_CHECK(kv_per_token == 12ull * 1024ull);
-    CELEG_TEST_CHECK(celeg::kv_cache_bytes(shape, 16384) == 12ull * 1024ull * 16384ull);
+    CELEG_TEST_CHECK(celeg::kv_cache_bytes(shape.exec, 16384) == 12ull * 1024ull * 16384ull);
 }
 
 void test_disabled_plan() {
-    celeg::ExpertOffloadPlanInputs in;
-    in.shape = make_8b_a1b_shape();
+    celeg::ExpertOffloadPlanInputs in(make_8b_a1b_shape().exec);
     in.options.mode = celeg::ExpertOffloadMode::None;
     const celeg::ExpertOffloadPlan plan = celeg::plan_expert_offload(in);
     CELEG_TEST_CHECK(!plan.enabled);
@@ -65,8 +64,7 @@ void test_disabled_plan() {
 }
 
 void test_auto_plan_rtx3060() {
-    celeg::ExpertOffloadPlanInputs in;
-    in.shape = make_8b_a1b_shape();
+    celeg::ExpertOffloadPlanInputs in(make_8b_a1b_shape().exec);
     in.options.mode = celeg::ExpertOffloadMode::Auto;
     in.options.gpu_memory_reserve_bytes = 768ull * 1024 * 1024;
     in.gpu_free_bytes = static_cast<std::size_t>(10.42 * 1024 * 1024 * 1024);
@@ -88,8 +86,7 @@ void test_auto_plan_rtx3060() {
 }
 
 void test_explicit_per_layer() {
-    celeg::ExpertOffloadPlanInputs in;
-    in.shape = make_8b_a1b_shape();
+    celeg::ExpertOffloadPlanInputs in(make_8b_a1b_shape().exec);
     in.options.mode = celeg::ExpertOffloadMode::Host;
     in.options.experts_per_layer = 14;
     const celeg::ExpertOffloadPlan plan = celeg::plan_expert_offload(in);
@@ -102,8 +99,7 @@ void test_explicit_per_layer() {
 }
 
 void test_infeasible_throws() {
-    celeg::ExpertOffloadPlanInputs in;
-    in.shape = make_8b_a1b_shape();
+    celeg::ExpertOffloadPlanInputs in(make_8b_a1b_shape().exec);
     in.options.mode = celeg::ExpertOffloadMode::Auto;
     in.gpu_free_bytes = static_cast<std::size_t>(1.5 * 1024 * 1024 * 1024);
     in.non_expert_weight_bytes =
@@ -118,8 +114,7 @@ void test_infeasible_throws() {
 }
 
 void test_report_nonempty() {
-    celeg::ExpertOffloadPlanInputs in;
-    in.shape = make_8b_a1b_shape();
+    celeg::ExpertOffloadPlanInputs in(make_8b_a1b_shape().exec);
     in.options.mode = celeg::ExpertOffloadMode::Host;
     in.options.experts_per_layer = 14;
     const celeg::ExpertOffloadPlan plan = celeg::plan_expert_offload(in);

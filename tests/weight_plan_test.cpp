@@ -18,13 +18,13 @@ public:
 int main() {
     try {
         celeg::ResolvedModel model;
-        model.topology.hidden = 8;
-        model.topology.intermediate = 16;
-        model.topology.checkpoint.vocab_size = 32;
-        model.topology.num_hidden_layers = 2;
-        model.topology.feed_forward_intermediates = {12, 20};
-        model.topology.attention_layouts.resize(2);
-        for (auto& attention : model.topology.attention_layouts) {
+        model.topology.exec.hidden = 8;
+        model.topology.exec.intermediate = 16;
+        model.topology.dims.vocab_size = 32;
+        model.topology.exec.num_hidden_layers = 2;
+        model.topology.exec.feed_forward_intermediates = {12, 20};
+        model.topology.exec.attention_layouts.resize(2);
+        for (auto& attention : model.topology.exec.attention_layouts) {
             attention.query_heads = 1;
             attention.key_value_heads = 1;
             attention.head_dim = 8;
@@ -35,7 +35,7 @@ int main() {
             celeg::LayerSpec layer;
             layer.operator_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
             layer.feed_forward_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
-            layer.mixer = model.topology.attention_layouts[model.graph.layers.size()];
+            layer.mixer = model.topology.exec.attention_layouts[model.graph.layers.size()];
             layer.feed_forward = celeg::DenseFeedForwardSpec{
                 intermediate, celeg::ActivationKind::SwiGLU};
             model.graph.layers.push_back(std::move(layer));

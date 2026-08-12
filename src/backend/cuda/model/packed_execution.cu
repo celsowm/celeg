@@ -30,10 +30,11 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
     explicit PackedDecodeExecutorImpl(size_t maximum_batch_value,
                                       size_t maximum_prefill_tokens_value,
                                       PhysicalPagedKvCache* paged_kv_value,
-                                      const RuntimeTopology& shape,
+                                      const ExecutionTopology& shape,
+                                      int vocab_size,
                                       CudaExecutionPlan plan_value)
         : PackedWorkspace(maximum_batch_value, maximum_prefill_tokens_value,
-                          paged_kv_value, shape),
+                          paged_kv_value, shape, vocab_size),
           layer_program_(PackedLayerProgram::compile(shape)),
           plan_(std::move(plan_value)),
           compatibility_(plan_.fingerprint(), plan_.device().device_ordinal),
@@ -165,7 +166,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             temperatures.data(), repetition_penalties.data(),
             top_k.data(), top_p.data(), sampling_scores.data(),
             selected_values.data(), selected_indices.data(), rows,
-            shape_.checkpoint.vocab_size, sampled.data(), stream.get());
+            vocab_size_, sampled.data(), stream.get());
 
         layer_executor_.launch_embedding_rows(reference, rows);
 
@@ -176,17 +177,17 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                                rows, shape_.hidden, reference.program().final_norm.epsilon,
                        stream.get());
         layer_executor_.linear(normed.data(), *reference.logits_weight(),
-                               logits.data(), rows, shape_.checkpoint.vocab_size,
+                               logits.data(), rows, vocab_size_,
                                shape_.hidden);
-        launch_scale(logits.data(), rows * shape_.checkpoint.vocab_size,
+        launch_scale(logits.data(), rows * vocab_size_,
                      reference.program().logits_multiplier /
                          reference.program().logits_divisor, stream.get());
         if (reference.program().final_logit_softcap > 0.0f) {
-            launch_tanh_softcap(logits.data(), rows * shape_.checkpoint.vocab_size,
+            launch_tanh_softcap(logits.data(), rows * vocab_size_,
                                 reference.program().final_logit_softcap, stream.get());
         }
         launch_scatter_bf16_rows(
-            logits.data(), d_logits.data(), rows, shape_.checkpoint.vocab_size,
+            logits.data(), d_logits.data(), rows, vocab_size_,
             stream.get());
         launch_scatter_decode_state(
             sampled.data(), positions.data(), d_sampled_dest.data(),
@@ -269,7 +270,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             }
         }
         for (const int32_t token : explicit_tokens) {
-            if (token < 0 || token >= shape_.checkpoint.vocab_size) {
+            if (token < 0 || token >= vocab_size_) {
                 throw std::invalid_argument("CUDA token id is outside the vocabulary");
             }
         }
@@ -305,7 +306,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         gpu_begin.record(stream.get());
         const auto host_prepare_done = std::chrono::steady_clock::now();
         launch_mark_seen_batch_ptrs(sampled.data(), d_flat_seen.data(), rows,
-                                    shape_.checkpoint.vocab_size, stream.get());
+                                    vocab_size_, stream.get());
         layer_executor_.launch_embedding_rows(reference, rows);
         layer_executor_.run_transformer_layers(reference, rows,
                                                 attention.segmented,
@@ -334,17 +335,17 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
                            finalized, shape_.hidden, reference.program().final_norm.epsilon, stream.get());
             layer_executor_.linear(normed.data(), *reference.logits_weight(),
                                    logits.data(), finalized,
-                                   shape_.checkpoint.vocab_size, shape_.hidden);
-        launch_scale(logits.data(), finalized * shape_.checkpoint.vocab_size,
+                                   vocab_size_, shape_.hidden);
+        launch_scale(logits.data(), finalized * vocab_size_,
                    reference.program().logits_multiplier /
                        reference.program().logits_divisor, stream.get());
             if (reference.program().final_logit_softcap > 0.0f) {
-                launch_tanh_softcap(logits.data(), finalized * shape_.checkpoint.vocab_size,
+                launch_tanh_softcap(logits.data(), finalized * vocab_size_,
                                     reference.program().final_logit_softcap, stream.get());
             }
             launch_scatter_bf16_selected_rows(logits.data(), d_selected_final_rows.data(),
                                                d_selected_logits.data(), finalized,
-                                               shape_.checkpoint.vocab_size, stream.get());
+                                               vocab_size_, stream.get());
         }
         launch_scatter_selected_decode_state(
             sampled.data(), positions.data(), d_final_rows.data(),
@@ -423,10 +424,12 @@ void PackedPrefillPipeline::run(
 PackedDecodeExecutor::PackedDecodeExecutor(size_t maximum_sessions,
                                            size_t maximum_prefill_tokens,
                                            PhysicalPagedKvCache* paged_kv,
-                                           const RuntimeTopology& shape,
+                                           const ExecutionTopology& shape,
+                                           int vocab_size,
                                            CudaExecutionPlan plan)
     : state_(std::make_unique<PackedDecodeExecutorImpl>(
-          maximum_sessions, maximum_prefill_tokens, paged_kv, shape, std::move(plan))) {}
+          maximum_sessions, maximum_prefill_tokens, paged_kv, shape, vocab_size,
+          std::move(plan))) {}
 
 PackedDecodeExecutor::~PackedDecodeExecutor() = default;
 

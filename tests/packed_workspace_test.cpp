@@ -8,21 +8,21 @@
 int main() {
     try {
         celeg::RuntimeTopology shape;
-        shape.hidden = 128;
-        shape.checkpoint.vocab_size = 256;
-        shape.num_hidden_layers = 2;
-        shape.max_feed_forward_intermediate = 192;
-        shape.moe_intermediate = 64;
-        shape.attention_layouts.resize(2);
-        shape.attention_layouts[0].query_heads = 2;
-        shape.attention_layouts[0].key_value_heads = 1;
-        shape.attention_layouts[0].head_dim = 64;
-        shape.attention_layouts[1] = shape.attention_layouts[0];
-        shape.attention_layouts[1].query_heads = 3;
-        shape.feed_forward_intermediates = {128, 192};
+        shape.exec.hidden = 128;
+        shape.dims.vocab_size = 256;
+        shape.exec.num_hidden_layers = 2;
+        shape.exec.max_feed_forward_intermediate = 192;
+        shape.exec.moe_intermediate = 64;
+        shape.exec.attention_layouts.resize(2);
+        shape.exec.attention_layouts[0].query_heads = 2;
+        shape.exec.attention_layouts[0].key_value_heads = 1;
+        shape.exec.attention_layouts[0].head_dim = 64;
+        shape.exec.attention_layouts[1] = shape.exec.attention_layouts[0];
+        shape.exec.attention_layouts[1].query_heads = 3;
+        shape.exec.feed_forward_intermediates = {128, 192};
 
         const auto requirements = celeg::PackedWorkspaceRequirements::derive(
-            4, 16, 8, shape);
+            4, 16, 8, shape.exec);
         if (requirements.maximum_projection_width != 320 ||
             requirements.maximum_ffn_intermediate != 192 ||
             requirements.layer_slots != 8 ||
@@ -35,10 +35,10 @@ int main() {
                 " pages=" + std::to_string(requirements.page_table_entries));
         }
 
-        shape.feed_forward_intermediates[1] = 256;
+        shape.exec.feed_forward_intermediates[1] = 256;
         bool rejected = false;
         try {
-            (void)celeg::PackedWorkspaceRequirements::derive(4, 16, 8, shape);
+            (void)celeg::PackedWorkspaceRequirements::derive(4, 16, 8, shape.exec);
         } catch (const std::invalid_argument&) {
             rejected = true;
         }

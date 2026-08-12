@@ -169,7 +169,7 @@ std::string MoeLayerProgram::fingerprint() const {
 
 PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     PerLayerInputPlan result;
-    const ExecutionTopology& topology = model.topology;
+    const ExecutionTopology& topology = model.shape();
     if (!topology.has_per_layer_input) {
         return result;
     }

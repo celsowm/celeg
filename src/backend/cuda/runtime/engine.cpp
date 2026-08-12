@@ -34,7 +34,8 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
       max_context_(max_context),
       model_options_(model_options),
       engine_options_(engine_options),
-      runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()) {
+      runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
+      shape_(topology_.exec) {
     if (max_context_ <= 0) throw std::invalid_argument("max_context must be positive");
     if (engine_options_.max_active_requests <= 0)
         throw std::invalid_argument("max_active_requests must be positive");
@@ -64,7 +65,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
         : pages_per_lane * active;
     // Load the model topology so the physical paged KV arena and the packed
     // executor can size per-attention-layer storage from the resolved topology.
-    shape_ = detail::load_model_bootstrap(
+    topology_ = detail::load_model_bootstrap(
         std::filesystem::path(model_path_), *runtime_).model.topology;
     if (engine_options_.packed_decode) {
         paged_kv_ = std::make_unique<PhysicalPagedKvCache>(
@@ -91,7 +92,7 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
         packed_executor_ = std::make_unique<PackedDecodeExecutor>(
             static_cast<size_t>(engine_options_.max_active_requests),
             static_cast<size_t>(engine_options_.max_batched_tokens),
-            paged_kv_.get(), shape_,
+            paged_kv_.get(), shape_, topology_.dims.vocab_size,
             CudaExecutionPlan::compile(
                 packed_options, max_context_, discover_cuda_device_capabilities()));
     }

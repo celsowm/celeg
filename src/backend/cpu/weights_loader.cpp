@@ -137,11 +137,11 @@ void CpuCompiledModel::Shared::load_weights() {
         !native_checkpoint;
     weight_store.embedding = load_matrix(source, reader.get(), writer.get(),
         tensor_name(weight_requests, TensorRole::TokenEmbedding),
-        {shape.checkpoint.vocab_size, shape.hidden});
+        {dims.vocab_size, shape.hidden});
     if (!tie_word_embeddings) {
         weight_store.lm_head = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::LanguageModelHead),
-            {shape.checkpoint.vocab_size, shape.hidden});
+            {dims.vocab_size, shape.hidden});
     }
     if (program.final_norm.weightless()) {
         weight_store.final_norm.assign(static_cast<size_t>(shape.hidden), 1.0f);
@@ -168,7 +168,7 @@ void CpuCompiledModel::Shared::load_weights() {
     if (program.per_layer_input.enabled) {
         weight_store.per_layer_embedding = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerEmbedding),
-                            {shape.checkpoint.vocab_size, shape.num_hidden_layers * shape.per_layer_input_size});
+                            {dims.vocab_size, shape.num_hidden_layers * shape.per_layer_input_size});
         weight_store.per_layer_context_projection = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::PerLayerContextProjection),
             {shape.num_hidden_layers * shape.per_layer_input_size, shape.hidden});

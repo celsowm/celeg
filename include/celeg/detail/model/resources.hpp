@@ -55,13 +55,16 @@ struct CudaMtpResources {
 // position, phase, and metrics live in SessionState.
 struct CudaModelResources {
     explicit CudaModelResources(CudaExecutionPlan execution_plan)
-        : plan_(std::move(execution_plan)), options_(plan_.options()) {}
+        : plan_(std::move(execution_plan)), options_(plan_.options()),
+          shape_(topology_.exec), dims_(topology_.dims) {}
 
     CudaExecutionPlan plan_;
     CudaModelOptions options_;
     ResolvedModel model_;
     CompiledModelProgram program_;
-    RuntimeTopology shape_;
+    RuntimeTopology topology_;
+    ExecutionTopology& shape_;
+    CheckpointDimensions& dims_;
     std::string model_identity_;
     std::shared_ptr<SharedModelWeights> weights_;
     std::unique_ptr<WeightLoader> weight_loader_;

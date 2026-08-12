@@ -33,7 +33,7 @@ struct PageLayout {
 
     PageLayout() = default;
     PageLayout(int page_tokens_value,
-               const RuntimeTopology& shape)
+               const ExecutionTopology& shape)
         : page_tokens(page_tokens_value),
           attention_layers(shape.attention_layer_count) {
         if (page_tokens <= 0) {

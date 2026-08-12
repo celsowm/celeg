@@ -31,7 +31,7 @@ bool has_attention_output_transform(const CompiledModelProgram& program) {
 void CudaCompiledModel::validate_token_ids(
     const std::vector<int32_t>& tokens) const {
     for (const int32_t token : tokens) {
-        if (token < 0 || token >= resources_.shape_.checkpoint.vocab_size) {
+        if (token < 0 || token >= resources_.dims_.vocab_size) {
             throw std::invalid_argument("CUDA token id is outside the vocabulary");
         }
     }
@@ -155,7 +155,7 @@ void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
                              tokens.size() * sizeof(int32_t),
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(input.data(), static_cast<int>(tokens.size()),
-                           sampling_.seen_tokens.data(), resources_.shape_.checkpoint.vocab_size,
+                           sampling_.seen_tokens.data(), resources_.dims_.vocab_size,
                            stream_.get());
     const auto started = std::chrono::steady_clock::now();
     const bool exact_device_path = has_attention_output_transform(resources_.program_);

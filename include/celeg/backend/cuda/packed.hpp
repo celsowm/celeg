@@ -35,7 +35,7 @@ struct PackedWorkspaceRequirements {
         size_t maximum_batch,
         size_t maximum_prefill_tokens,
         size_t page_table_stride,
-        const RuntimeTopology& shape);
+        const ExecutionTopology& shape);
 };
 
 enum class PackedOperation { Decode, Prefill };
@@ -138,7 +138,8 @@ public:
     PackedDecodeExecutor(size_t maximum_sessions,
                          size_t maximum_prefill_tokens,
                          PhysicalPagedKvCache* paged_kv,
-                         const RuntimeTopology& shape,
+                         const ExecutionTopology& shape,
+                         int vocab_size,
                          CudaExecutionPlan plan);
     ~PackedDecodeExecutor();
 

@@ -272,7 +272,7 @@ int main() {
     const auto& architecture = catalog.select(checkpoint.metadata);
     const celeg::ResolvedModel model = architecture.resolve(checkpoint);
     CELEG_TEST_CHECK(model.provenance.identity.find("automatic") != std::string::npos);
-    CELEG_TEST_CHECK(model.topology.hidden == 8);
+    CELEG_TEST_CHECK(model.topology.exec.hidden == 8);
     CELEG_TEST_CHECK(model.graph.embedding_transform.multiplier == 2.0f);
     CELEG_TEST_CHECK(std::abs(std::get<celeg::AttentionSpec>(model.graph.layers[0].mixer).query_scale -
                               0.3535533906f) < 1.0e-6f);
@@ -290,7 +290,7 @@ int main() {
     const auto& gguf_architecture = catalog.select(gguf_checkpoint.metadata);
     const celeg::ResolvedModel gguf_model = gguf_architecture.resolve(gguf_checkpoint);
     CELEG_TEST_CHECK(gguf_model.provenance.source_format == "gguf");
-    CELEG_TEST_CHECK(gguf_model.topology.hidden == 8);
+    CELEG_TEST_CHECK(gguf_model.topology.exec.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(gguf_model.provenance.chat_template_id ==
                      "chat:thinking-function");
@@ -301,9 +301,9 @@ int main() {
     hybrid_checkpoint.repository = hybrid_gguf_repository();
     const celeg::ResolvedModel hybrid_model =
         catalog.select(hybrid_checkpoint.metadata).resolve(hybrid_checkpoint);
-    CELEG_TEST_CHECK(hybrid_model.topology.mixer_kinds[0] ==
+    CELEG_TEST_CHECK(hybrid_model.topology.exec.mixer_kinds[0] ==
                      celeg::MixerKind::ShortConvolution);
-    CELEG_TEST_CHECK(hybrid_model.topology.mixer_kinds[1] == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(hybrid_model.topology.exec.mixer_kinds[1] == celeg::MixerKind::Attention);
     CELEG_TEST_CHECK(hybrid_model.capabilities.tied_embeddings);
 
     auto conflicting = metadata();
@@ -366,11 +366,11 @@ int main() {
         std::fprintf(stderr, "ling failure: %s\n", error.what());
         return 1;
     }
-    CELEG_TEST_CHECK(ling_model.topology.mixer_kinds[0] == celeg::MixerKind::GatedDeltaNet);
-    CELEG_TEST_CHECK(ling_model.topology.mixer_kinds[3] == celeg::MixerKind::Attention);
-    CELEG_TEST_CHECK(ling_model.topology.attention_layout(3).latent_state()->factorized);
-    CELEG_TEST_CHECK(ling_model.topology.feed_forward_kinds[0] == celeg::FeedForwardKind::Dense);
-    CELEG_TEST_CHECK(ling_model.topology.feed_forward_kinds[1] == celeg::FeedForwardKind::MixtureOfExperts);
+    CELEG_TEST_CHECK(ling_model.topology.exec.mixer_kinds[0] == celeg::MixerKind::GatedDeltaNet);
+    CELEG_TEST_CHECK(ling_model.topology.exec.mixer_kinds[3] == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(ling_model.topology.exec.attention_layout(3).latent_state()->factorized);
+    CELEG_TEST_CHECK(ling_model.topology.exec.feed_forward_kinds[0] == celeg::FeedForwardKind::Dense);
+    CELEG_TEST_CHECK(ling_model.topology.exec.feed_forward_kinds[1] == celeg::FeedForwardKind::MixtureOfExperts);
     CELEG_TEST_CHECK(celeg::explain_resolution(ling_checkpoint).failures.empty());
     return 0;
 }

@@ -43,7 +43,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     }
     const cudaStream_t stream = stream_.get();
     const int hidden = resources_.shape_.hidden;
-    const int vocab = resources_.shape_.checkpoint.vocab_size;
+    const int vocab = resources_.dims_.vocab_size;
     const float eps = resources_.program_.final_norm.epsilon;
     CudaMtpResources& mtp = resources_.mtp_;
 
@@ -195,12 +195,12 @@ void CudaCompiledModel::finalize_mtp_verification() {
     const cudaStream_t stream = stream_.get();
     launch_argmax_bf16(
         workspace_.mtp_logits_.data(), sampling_.seen_tokens.data(),
-        resources_.shape_.checkpoint.vocab_size,
+        resources_.dims_.vocab_size,
         session_.generation_.repetition_penalty,
         workspace_.mtp_candidate_.data(), stream);
     launch_argmax_bf16(
         workspace_.logits_.data(), sampling_.seen_tokens.data(),
-        resources_.shape_.checkpoint.vocab_size,
+        resources_.dims_.vocab_size,
         session_.generation_.repetition_penalty,
         workspace_.mtp_target_candidate_.data(), stream);
 }

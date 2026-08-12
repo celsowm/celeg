@@ -19,14 +19,16 @@ struct PackedWorkspace {
     PackedWorkspace(size_t maximum_batch,
                     size_t maximum_prefill_tokens,
                     PhysicalPagedKvCache* paged_kv,
-                    const RuntimeTopology& shape);
+                    const ExecutionTopology& shape,
+                    int vocab_size);
 
     void ensure_segmented_workspace(int rows, int chunks);
 
     size_t maximum_batch = 0;
     size_t maximum_prefill_token_capacity = 0;
     PhysicalPagedKvCache* paged_kv = nullptr;
-    RuntimeTopology shape_;
+    const ExecutionTopology& shape_;
+    int vocab_size_ = 0;
     PackedWorkspaceRequirements requirements_;
     PackedExecutionHandles handles;
     CudaStream& stream;

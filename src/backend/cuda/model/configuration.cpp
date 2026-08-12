@@ -22,7 +22,7 @@ void CudaCompiledModel::configure_model(
             resources_.options_, max_context_, resources_.plan_.device());
     }
     resources_.program_ = CudaModelCompiler{}.compile(resources_.model_);
-    resources_.shape_ = resources_.model_.topology;
+    resources_.topology_ = resources_.model_.topology;
     const bool non_default_residual = std::any_of(
         resources_.program_.layers.begin(), resources_.program_.layers.end(),
         [](const CompiledLayerProgram& layer) {

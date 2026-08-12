@@ -106,11 +106,11 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     size_t maximum_batch,
     size_t maximum_prefill_tokens,
     size_t page_table_stride,
-    const RuntimeTopology& shape) {
+    const ExecutionTopology& shape) {
     if (maximum_batch == 0 || maximum_prefill_tokens == 0) {
         throw std::invalid_argument("packed capacities must be positive");
     }
-    if (shape.hidden <= 0 || shape.checkpoint.vocab_size <= 0 ||
+    if (shape.hidden <= 0 ||
         shape.num_hidden_layers <= 0 ||
         std::max(shape.maximum_attention_projection_width(),
                  shape.maximum_mamba_projection_width()) <= 0 ||

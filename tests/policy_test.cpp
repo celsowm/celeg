@@ -38,19 +38,19 @@ int main() {
     CELEG_TEST_CHECK(rejected_numerical);
 
     celeg::ResolvedModel resolved;
-    resolved.topology.hidden = 8;
-    resolved.topology.intermediate = 16;
-    resolved.topology.checkpoint.vocab_size = 32;
-    resolved.topology.num_hidden_layers = 2;
-    resolved.topology.mixer_kinds = {
+    resolved.topology.exec.hidden = 8;
+    resolved.topology.exec.intermediate = 16;
+    resolved.topology.dims.vocab_size = 32;
+    resolved.topology.exec.num_hidden_layers = 2;
+    resolved.topology.exec.mixer_kinds = {
         celeg::MixerKind::Attention, celeg::MixerKind::Attention};
-    resolved.topology.feed_forward_kinds = {
+    resolved.topology.exec.feed_forward_kinds = {
         celeg::FeedForwardKind::Dense, celeg::FeedForwardKind::Dense};
-    resolved.topology.attention_layer_count = 2;
-    resolved.topology.conv_layer_count = 0;
-    resolved.topology.attention_layouts.resize(2);
-    resolved.topology.has_per_layer_input = true;
-    resolved.topology.per_layer_input_size = 4;
+    resolved.topology.exec.attention_layer_count = 2;
+    resolved.topology.exec.conv_layer_count = 0;
+    resolved.topology.exec.attention_layouts.resize(2);
+    resolved.topology.exec.has_per_layer_input = true;
+    resolved.topology.exec.per_layer_input_size = 4;
     resolved.graph.layers.resize(2);
     for (auto& layer : resolved.graph.layers) {
         layer.per_layer_input = {4, celeg::ActivationKind::GeluTanh, true};
@@ -61,7 +61,7 @@ int main() {
     CELEG_TEST_CHECK(per_layer.checked_elements(3) == 24);
 
     celeg::ResolvedModel overflow = resolved;
-    overflow.topology.num_hidden_layers = std::numeric_limits<int>::max();
+    overflow.topology.exec.num_hidden_layers = std::numeric_limits<int>::max();
     bool rejected_overflow = false;
     try {
         (void)celeg::PerLayerInputPlan::derive(overflow);
@@ -71,15 +71,15 @@ int main() {
     CELEG_TEST_CHECK(rejected_overflow);
 
     celeg::RuntimeTopology token_topology;
-    token_topology.hidden = 8;
-    token_topology.intermediate = 16;
-    token_topology.checkpoint.vocab_size = 32;
-    token_topology.num_hidden_layers = 1;
-    token_topology.mixer_kinds = {celeg::MixerKind::Attention};
-    token_topology.feed_forward_kinds = {celeg::FeedForwardKind::Dense};
-    token_topology.attention_layer_count = 1;
-    token_topology.attention_layouts.resize(1);
-    token_topology.checkpoint.token_policy = {1, {2}, 32};
+    token_topology.exec.hidden = 8;
+    token_topology.exec.intermediate = 16;
+    token_topology.dims.vocab_size = 32;
+    token_topology.exec.num_hidden_layers = 1;
+    token_topology.exec.mixer_kinds = {celeg::MixerKind::Attention};
+    token_topology.exec.feed_forward_kinds = {celeg::FeedForwardKind::Dense};
+    token_topology.exec.attention_layer_count = 1;
+    token_topology.exec.attention_layouts.resize(1);
+    token_topology.dims.token_policy = {1, {2}, 32};
     bool rejected_token_range = false;
     try {
         token_topology.validate();

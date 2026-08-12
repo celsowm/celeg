@@ -76,7 +76,7 @@ void CudaCompiledModel::prefill_chunk_paged(
                              cudaMemcpyHostToDevice, stream_.get()));
     launch_mark_seen_batch(workspace_.paged_prefill_tokens_.data(),
                            static_cast<int>(tokens.size()), sampling_.seen_tokens.data(),
-                           resources_.shape_.checkpoint.vocab_size, stream_.get());
+                           resources_.dims_.vocab_size, stream_.get());
     session_.phase_ = SessionPhase::Prefilling;
     const auto started = std::chrono::steady_clock::now();
     for (size_t i = 0; i < tokens.size(); ++i) {

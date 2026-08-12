@@ -200,9 +200,10 @@ private:
 
 // Checkpoint/import dimensions are kept separate from the derived execution
 // cache. Runtime code must explicitly choose the boundary it consumes.
-struct RuntimeTopology : public ExecutionTopology {
-    RuntimeTopology() : ExecutionTopology() {}
-    CheckpointDimensions checkpoint;
+struct RuntimeTopology {
+    RuntimeTopology() : exec() {}
+    CheckpointDimensions dims;
+    ExecutionTopology exec;
 
     std::string fingerprint() const;
     std::string summary() const;
@@ -225,7 +226,7 @@ struct ResolvedModel {
     ModelCapabilities capabilities;
     ModelProvenance provenance;
 
-    const RuntimeTopology& shape() const { return topology; }
+    const ExecutionTopology& shape() const { return topology.exec; }
     void validate() const;
 };
 

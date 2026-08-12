@@ -14,10 +14,11 @@ std::size_t bf16_bytes(std::size_t elements) {
     return elements * sizeof(__nv_bfloat16);
 }
 
-std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
+std::size_t estimate_non_expert_weights(const ExecutionTopology& shape,
+                                        const CheckpointDimensions& dims,
                                         const CompiledModelProgram& program,
                                         bool tied_embeddings) {
-    std::size_t bytes = bf16_bytes(static_cast<std::size_t>(shape.checkpoint.vocab_size) *
+    std::size_t bytes = bf16_bytes(static_cast<std::size_t>(dims.vocab_size) *
                                    static_cast<std::size_t>(shape.hidden));
     if (!tied_embeddings) bytes += bytes;
     bytes += bf16_bytes(static_cast<std::size_t>(shape.hidden));
@@ -79,8 +80,9 @@ std::size_t estimate_non_expert_weights(const RuntimeTopology& shape,
     return bytes;
 }
 
-std::size_t estimate_mtp_non_expert_weights(const RuntimeTopology& shape) {
-    if (shape.checkpoint.mtp_num_hidden_layers <= 0) return 0;
+std::size_t estimate_mtp_non_expert_weights(const ExecutionTopology& shape,
+                                            const CheckpointDimensions& dims) {
+    if (dims.mtp_num_hidden_layers <= 0) return 0;
     const auto bf16_bytes = [](std::size_t elements) {
         return elements * sizeof(__nv_bfloat16);
     };
@@ -98,7 +100,7 @@ std::size_t estimate_mtp_non_expert_weights(const RuntimeTopology& shape) {
     const AttentionSpec& attention = shape.attention_layout(full_attention_layer);
     std::size_t bytes = bf16_bytes(2ull * shape.hidden * shape.hidden);
     bytes += bf16_bytes(3ull * shape.hidden); // two pre-fc norms and final norm
-    for (int layer = 0; layer < shape.checkpoint.mtp_num_hidden_layers; ++layer) {
+    for (int layer = 0; layer < dims.mtp_num_hidden_layers; ++layer) {
         bytes += bf16_bytes(2ull * shape.hidden); // input and post-attention norms
         bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * shape.hidden);
         bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * shape.hidden);
@@ -142,22 +144,21 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     CELEG_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
     const int moe_layers = moe_layer_count(resources.shape_) +
         (resources.options_.enable_mtp && resources.shape_.num_experts > 0
-            ? resources.shape_.checkpoint.mtp_num_hidden_layers : 0);
+            ? resources.dims_.mtp_num_hidden_layers : 0);
     const size_t expert_bytes = bytes_per_expert_bf16(resources.shape_);
-    ExpertOffloadPlanInputs inputs;
-    inputs.shape = resources.shape_;
+    ExpertOffloadPlanInputs inputs(resources.shape_);
     inputs.options = resources.options_.expert_offload;
     inputs.gpu_free_bytes = free_bytes;
     inputs.non_expert_weight_bytes = estimate_non_expert_weights(
-        resources.shape_, resources.program_, resources.model_.capabilities.tied_embeddings) +
+        resources.shape_, resources.dims_, resources.program_, resources.model_.capabilities.tied_embeddings) +
         (resources.options_.enable_mtp
-            ? estimate_mtp_non_expert_weights(resources.shape_) : 0) +
+            ? estimate_mtp_non_expert_weights(resources.shape_, resources.dims_) : 0) +
         (64ull << 20);
     inputs.workspace_bytes = resources.options_.lt_workspace_bytes + (256ull << 20);
     inputs.context_tokens = model.max_context_;
     if (resources.options_.enable_mtp) {
         inputs.extra_moe_layers = resources.shape_.num_experts > 0
-            ? resources.shape_.checkpoint.mtp_num_hidden_layers : 0;
+            ? resources.dims_.mtp_num_hidden_layers : 0;
         const int full_attention_layer = [&]() {
             for (int layer = resources.shape_.num_hidden_layers - 1; layer >= 0; --layer) {
                 if (resources.shape_.mixer_kinds.at(static_cast<size_t>(layer)) == MixerKind::Attention) {
@@ -169,7 +170,7 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
         if (full_attention_layer >= 0) {
             const AttentionSpec& attention = resources.shape_.attention_layout(full_attention_layer);
             inputs.extra_kv_reservation_bytes = static_cast<size_t>(
-                resources.shape_.checkpoint.mtp_num_hidden_layers) * 2ull *
+                resources.dims_.mtp_num_hidden_layers) * 2ull *
                 static_cast<size_t>(attention.key_value_width()) *
                 sizeof(__nv_bfloat16) * static_cast<size_t>(model.max_context_);
         }

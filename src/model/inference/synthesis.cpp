@@ -35,14 +35,12 @@ ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const 
 ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) const {
     facts.validate();
     ResolvedModel result;
-    result.topology.checkpoint = facts.checkpoint;
     result.graph = GraphSynthesizer{}.synthesize(facts);
     result.capabilities = {true, true, false, facts.tied_embeddings};
     result.provenance.architecture_id = facts.resolution_mode;
     result.provenance.source_format = facts.source_format;
     result.provenance.checkpoint_profile_id = facts.resolution_mode;
-    result.topology = compose_runtime_topology(
-        std::move(result.topology.checkpoint), result.graph);
+    result.topology = compose_runtime_topology(facts.checkpoint, result.graph);
     result.topology.validate();
     CanonicalBindingNamingPolicy naming(facts.bindings);
     build_weight_plan_from_graph(result, naming);

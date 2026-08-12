@@ -14,7 +14,7 @@ struct PackedOperatorContext {
     PackedWorkspace& workspace;
     GemmDispatcher& gemm;
     const CudaExecutionPlan& plan;
-    const RuntimeTopology& shape;
+    const ExecutionTopology& shape;
 
     void linear(const __nv_bfloat16* input,
                 const LinearWeight& weight,

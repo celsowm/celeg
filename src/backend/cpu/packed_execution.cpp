@@ -45,7 +45,7 @@ struct CpuCompiledModel::BatchScratch {
         validate_shared(sessions);
         SharedWeights& shared = *sessions.front()->shared;
         const size_t rows = sessions.size();
-        const RuntimeTopology& shape = shared.shape;
+        const ExecutionTopology& shape = shared.shape;
         const size_t hidden = static_cast<size_t>(shared.program.hidden);
         workspace_.ensure(rows, shared.workspace_plan);
         auto parallel_for = [&](size_t count, const auto& body) {

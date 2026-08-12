@@ -70,8 +70,8 @@ void CpuCompiledModel::allocate_state() {
 
 void CpuCompiledModel::allocate_activations() {
     workspace_.ensure(1, shared->workspace_plan);
-    workspace_.logits.resize(shared->shape.checkpoint.vocab_size);
-    session_.seen.resize(shared->shape.checkpoint.vocab_size);
+    workspace_.logits.resize(shared->dims.vocab_size);
+    session_.seen.resize(shared->dims.vocab_size);
 }
 
 const CpuCompiledModel::CommonWeights& CpuCompiledModel::common_weights(

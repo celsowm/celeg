@@ -14,7 +14,7 @@ CpuStatePageLayout lower_cpu_state_page_layout(const CompiledAttentionStateLayou
         0, 0, state.latent_elements, state.rotary_elements};
 }
 
-CpuKvTopology build_cpu_kv_topology(const RuntimeTopology& shape,
+CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
                                     const CompiledModelProgram& program,
                                     const CpuModelOptions& options) {
     CpuKvTopology result;

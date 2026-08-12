@@ -5,8 +5,7 @@ __pycache__/
 *.user
 .vs/
 .cache/
-err.txt
-out.txt
+*.txt
 *.log
 # Model weights / tokenizer artifacts are fetched at runtime by the C++ HF
 # cache downloader (src/download_main.cpp). Do not commit them. This pattern

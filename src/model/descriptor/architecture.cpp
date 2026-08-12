@@ -154,6 +154,7 @@ public:
                 } else if (kind == "mlp_only" || kind == "MlpOnly" || kind == "-") {
                     graph.layers[static_cast<size_t>(layer)].mixer = MlpBlockSpec{
                         intermediate, descriptor_.feed_forward_activation};
+                    graph.layers[static_cast<size_t>(layer)].execute_feed_forward = false;
                 } else if (kind != "full_attention" && kind != "attention" && kind != "*") {
                     throw std::invalid_argument("descriptor has unsupported mixer kind: " + kind);
                 }
@@ -307,6 +308,14 @@ public:
             throw std::invalid_argument("descriptor shared KV suffix is out of range");
         }
         const int shared_start = layer_count - shared_layers;
+        if (descriptor_.double_wide_shared_suffix) {
+            for (int layer = shared_start; layer < layer_count; ++layer) {
+                if (auto* dense = std::get_if<DenseFeedForwardSpec>(
+                        &graph.layers[static_cast<size_t>(layer)].feed_forward)) {
+                    dense->intermediate_size *= 2;
+                }
+            }
+        }
         const auto scheduled_is_sliding = [&](int layer) {
             if (scheduled_sliding.empty()) return false;
             const size_t index = scheduled_sliding.size() == 1 ? 0 :

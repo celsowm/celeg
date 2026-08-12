@@ -7,10 +7,11 @@
 
 namespace celeg {
 
+// Metadata staging consumes only the derived execution cache.
 void stage_packed_persistent_metadata(
     PackedWorkspace& workspace,
     const std::vector<PackedSessionContext>& models,
-    const RuntimeTopology& shape);
+                         const ExecutionTopology& shape);
 
 void stage_packed_step_metadata(
     PackedWorkspace& workspace,

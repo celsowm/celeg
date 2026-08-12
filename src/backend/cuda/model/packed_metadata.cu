@@ -13,7 +13,7 @@ namespace celeg {
 void stage_packed_persistent_metadata(
     PackedWorkspace& workspace,
     const std::vector<PackedSessionContext>& models,
-    const RuntimeTopology& shape) {
+    const ExecutionTopology& shape) {
     const size_t rows = models.size();
     for (size_t row = 0; row < rows; ++row) {
         const PackedSessionContext& model = models[row];

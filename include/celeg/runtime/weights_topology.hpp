@@ -18,17 +18,19 @@ struct TensorSpec {
     bool optional = false;
 };
 
-inline TensorSpec token_embedding(const RuntimeTopology& shape) {
+inline TensorSpec token_embedding(const CheckpointDimensions& dims,
+                                  const ExecutionTopology& shape) {
     return {TensorRole::TokenEmbedding, "model.embed_tokens.weight",
-            {"model.embedding.weight"}, {shape.checkpoint.vocab_size, shape.hidden}, false};
+            {"model.embedding.weight"}, {dims.vocab_size, shape.hidden}, false};
 }
 
-inline TensorSpec language_model_head(const RuntimeTopology& shape, bool tied) {
+inline TensorSpec language_model_head(const CheckpointDimensions& dims,
+                                     const ExecutionTopology& shape, bool tied) {
     return {TensorRole::LanguageModelHead, "model.lm_head.weight", {},
-            {shape.checkpoint.vocab_size, shape.hidden}, tied};
+            {dims.vocab_size, shape.hidden}, tied};
 }
 
-inline TensorSpec final_norm(const RuntimeTopology& shape) {
+inline TensorSpec final_norm(const ExecutionTopology& shape) {
     return {TensorRole::FinalNorm, "model.embedding_norm.weight",
             {"model.norm.weight", "model.final_norm.weight"}, {shape.hidden}, false};
 }

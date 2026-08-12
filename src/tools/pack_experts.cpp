@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_path);
         const auto& model = bootstrap.model;
-        const auto& shape = model.topology;
+        const auto& shape = model.topology.exec;
 
         std::vector<int> moe_layer_ids;
         for (int layer = 0; layer < shape.num_hidden_layers; ++layer) {

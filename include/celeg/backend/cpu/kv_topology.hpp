@@ -18,7 +18,7 @@ struct CpuKvTopology {
 
 CpuStatePageLayout lower_cpu_state_page_layout(const AttentionSpec& attention);
 
-CpuKvTopology build_cpu_kv_topology(const RuntimeTopology& shape,
+CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
                                     const CompiledModelProgram& program,
                                     const CpuModelOptions& options);
 

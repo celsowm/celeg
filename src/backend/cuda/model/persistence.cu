@@ -11,7 +11,8 @@ namespace celeg {
 
 SessionStore::SessionState CudaCompiledModel::make_session_state() {
     SessionStore::SessionState state{
-        .shape = resources_.shape_, .max_context = max_context_, .position = session_.position_,
+        .shape = resources_.shape_, .dims = resources_.dims_,
+        .max_context = max_context_, .position = session_.position_,
         .kv_cache_mode = resources_.options_.kv_cache_mode, .model_identity = resources_.model_identity_,
         .stream = stream_.get(), .seen_tokens = &sampling_.seen_tokens,
         .logits = &workspace_.logits_, .rng_state = &sampling_.rng_state};
@@ -164,7 +165,7 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     header.position = state.position;
     header.max_context = state.max_context;
     header.layers = state.shape.num_hidden_layers;
-    header.vocab = state.shape.checkpoint.vocab_size;
+    header.vocab = state.dims.vocab_size;
     header.attention_layers = state.shape.attention_layer_count;
     if (state.rng_state != nullptr) {
         CELEG_CUDA(cudaMemcpy(&header.rng_state, state.rng_state->data(),
@@ -249,7 +250,7 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     }
     if (header.position <= 0 || header.position > state.max_context ||
         header.layers != state.shape.num_hidden_layers ||
-        header.vocab != state.shape.checkpoint.vocab_size ||
+        header.vocab != state.dims.vocab_size ||
         header.attention_layers != state.shape.attention_layer_count) {
         throw std::runtime_error("session dimensions are incompatible with this model");
     }

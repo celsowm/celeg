@@ -254,7 +254,9 @@ struct ExpertOffloadPlan {
 // `workspace_bytes` are supplied by the caller (from cudaMemGetInfo and the
 // weight arena) so the planner itself is pure and testable.
 struct ExpertOffloadPlanInputs {
-    RuntimeTopology shape;
+    explicit ExpertOffloadPlanInputs(const ExecutionTopology& shape_value)
+        : shape(shape_value) {}
+    ExecutionTopology shape;
     ExpertOffloadOptions options;
     std::size_t gpu_free_bytes = 0;
     std::size_t non_expert_weight_bytes = 0;

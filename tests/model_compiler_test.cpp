@@ -27,7 +27,7 @@ int main() {
         16, 4, 2, true, true, 1.5f};
     model.graph.layers.push_back(convolution_layer);
     model.graph.hidden = 8;
-    model.topology.hidden = 8;
+    model.topology.exec.hidden = 8;
     model.weight_plan.requests.push_back({celeg::TensorRole::AttentionInputNorm, 0, -1, {}});
     model.weight_plan.requests.push_back({celeg::TensorRole::AttentionOutput, 0, -1, {}});
     model.weight_plan.requests.push_back({celeg::TensorRole::ShortConvInput, 1, -1, {}});

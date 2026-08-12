@@ -179,7 +179,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error(
                 "--cpu-q4-group is only valid for Safetensors checkpoints");
         }
-        if (args.context > topology.checkpoint.max_position_embeddings) {
+        if (args.context > topology.dims.max_position_embeddings) {
             throw std::runtime_error("--context exceeds model maximum");
         }
         const auto chat_catalog = celeg::make_chat_template_catalog();
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
         std::string pending;
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t token = engine.session().decode();
-            if (celeg::is_stop_token(topology.checkpoint.token_policy.eos_token_ids, token)) break;
+            if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, token)) break;
             pending += tokenizer.decode({token}, true);
             std::cout << pending << std::flush;
             pending.clear();

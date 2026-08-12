@@ -53,7 +53,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
 
     const size_t rows = tokens.size();
     const int base_position = session_.position_value;
-    const RuntimeTopology& shape = shared->shape;
+    const ExecutionTopology& shape = shared->shape;
     const size_t hidden = static_cast<size_t>(shape.hidden);
     CpuExecutionContext execution{*shared, workspace_, session_};
     workspace_.ensure_chunk(rows, shared->workspace_plan);
@@ -120,7 +120,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         parallel_rows(shared->pool, rows, [&](size_t row) {
             const int32_t embedding_token = embeddings &&
                     embeddings->at_position(static_cast<size_t>(base_position) + row)
-                ? shape.checkpoint.token_policy.pad_token_id : tokens[row];
+                ? shared->dims.token_policy.pad_token_id : tokens[row];
             float* destination = workspace_.per_layer_input.data() + row * packed;
             shared->linear.embedding(shared->weight_store.per_layer_embedding,
                                      embedding_token, destination);

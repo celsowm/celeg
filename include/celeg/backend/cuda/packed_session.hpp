@@ -71,7 +71,7 @@ struct PackedSessionContext {
     bool* active_segmented_attention_state = nullptr;
     const CudaModelOptions* options_state = nullptr;
     const GenerationConfig* generation_state = nullptr;
-    const RuntimeTopology* shape_state = nullptr;
+    const ExecutionTopology* shape_state = nullptr;
     const CompiledModelProgram* program_state = nullptr;
     std::shared_ptr<SharedModelWeights> weights_state;
 
@@ -107,7 +107,7 @@ struct PackedSessionContext {
     }
     const CudaModelOptions& options() const { return *options_state; }
     const GenerationConfig& generation() const { return *generation_state; }
-    const RuntimeTopology& shape() const { return *shape_state; }
+    const ExecutionTopology& shape() const { return *shape_state; }
     const CompiledModelProgram& program() const { return *program_state; }
     const std::shared_ptr<SharedModelWeights>& weights() const {
         return weights_state;

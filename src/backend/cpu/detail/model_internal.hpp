@@ -43,7 +43,7 @@ struct CpuWorkspacePlan {
     size_t feed_forward = 0;
     size_t q8_blocks = 0;
 
-    static CpuWorkspacePlan from_topology(const RuntimeTopology& shape) {
+    static CpuWorkspacePlan from_topology(const ExecutionTopology& shape) {
         CpuWorkspacePlan plan;
         plan.hidden = static_cast<size_t>(shape.hidden);
         plan.attention_output = static_cast<size_t>(shape.maximum_attention_query_heads()) *
@@ -355,7 +355,9 @@ struct CpuCompiledModel {
         std::filesystem::path pack_file;
         std::string source_id;
         bool loaded_pack = false;
-        RuntimeTopology shape;
+        RuntimeTopology runtime_topology;
+        ExecutionTopology& shape;
+        CheckpointDimensions& dims;
         CompiledModelProgram program;
         std::string model_identity;
         std::vector<TensorRequest> weight_requests;

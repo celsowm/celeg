@@ -48,7 +48,8 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
       options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
       pool(options.threads, options.affinity),
-      linear(resolve_isa(options.isa), pool) {
+      linear(resolve_isa(options.isa), pool),
+      shape(runtime_topology.exec), dims(runtime_topology.dims) {
     if (max_context <= 0) throw std::invalid_argument("max_context must be positive");
     if (options.kv_page_tokens == 0) {
         throw std::invalid_argument("CPU KV page size must be positive");
@@ -72,7 +73,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
         bootstrap.checkpoint.repository.get());
     native_checkpoint = native_storage != nullptr &&
                         native_storage->has_native_block_storage();
-    shape = bootstrap.model.topology;
+    runtime_topology = bootstrap.model.topology;
     workspace_plan = CpuWorkspacePlan::from_topology(shape);
     tie_word_embeddings = bootstrap.model.capabilities.tied_embeddings;
     program = CpuModelCompiler{}.compile(bootstrap.model);

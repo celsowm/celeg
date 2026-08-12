@@ -59,7 +59,8 @@ private:
     CudaModelOptions model_options_;
     ConcurrentEngineOptions engine_options_;
     std::shared_ptr<const RuntimeContext> runtime_;
-    RuntimeTopology shape_;
+    RuntimeTopology topology_;
+    ExecutionTopology& shape_;
 
     mutable std::mutex mutex_;
     std::mutex step_mutex_;

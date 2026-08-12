@@ -26,17 +26,17 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
     for (int model = 0; model < 2; ++model) {
         celeg::RuntimeTopology shape;
         if (model == 0) {
-            shape.hidden = 1024;
-            shape.intermediate = 2560;
-            shape.num_hidden_layers = 14;
-            shape.checkpoint.vocab_size = 65536;
-            shape.conv_cache = 3;
-            shape.conv_dim = 1024;
-            shape.checkpoint.max_position_embeddings = 128000;
-            shape.checkpoint.token_policy.bos_token_id = 1;
-            shape.checkpoint.token_policy.eos_token_ids = {7};
-            shape.checkpoint.token_policy.pad_token_id = 0;
-            shape.mixer_kinds = {
+            shape.exec.hidden = 1024;
+            shape.exec.intermediate = 2560;
+            shape.exec.num_hidden_layers = 14;
+            shape.dims.vocab_size = 65536;
+            shape.exec.conv_cache = 3;
+            shape.exec.conv_dim = 1024;
+            shape.dims.max_position_embeddings = 128000;
+            shape.dims.token_policy.bos_token_id = 1;
+            shape.dims.token_policy.eos_token_ids = {7};
+            shape.dims.token_policy.pad_token_id = 0;
+            shape.exec.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
@@ -47,17 +47,17 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             };
         } else {
             // The Thinking and Instruct profiles share the same topology.
-            shape.hidden = 2048;
-            shape.intermediate = 12288;
-            shape.num_hidden_layers = 16;
-            shape.checkpoint.vocab_size = 65536;
-            shape.conv_cache = 3;
-            shape.conv_dim = 2048;
-            shape.checkpoint.max_position_embeddings = 128000;
-            shape.checkpoint.token_policy.bos_token_id = 1;
-            shape.checkpoint.token_policy.eos_token_ids = {7};
-            shape.checkpoint.token_policy.pad_token_id = 0;
-            shape.mixer_kinds = {
+            shape.exec.hidden = 2048;
+            shape.exec.intermediate = 12288;
+            shape.exec.num_hidden_layers = 16;
+            shape.dims.vocab_size = 65536;
+            shape.exec.conv_cache = 3;
+            shape.exec.conv_dim = 2048;
+            shape.dims.max_position_embeddings = 128000;
+            shape.dims.token_policy.bos_token_id = 1;
+            shape.dims.token_policy.eos_token_ids = {7};
+            shape.dims.token_policy.pad_token_id = 0;
+            shape.exec.mixer_kinds = {
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::Attention, celeg::MixerKind::ShortConvolution,
                 celeg::MixerKind::ShortConvolution, celeg::MixerKind::Attention,
@@ -69,25 +69,25 @@ std::vector<celeg::RuntimeTopology> registered_model_shapes() {
             };
         }
         const int query_heads = model == 0 ? 16 : 32;
-        shape.attention_layouts.resize(static_cast<size_t>(shape.num_hidden_layers));
-        for (auto& attention : shape.attention_layouts) {
+        shape.exec.attention_layouts.resize(static_cast<size_t>(shape.exec.num_hidden_layers));
+        for (auto& attention : shape.exec.attention_layouts) {
             attention.query_heads = query_heads;
             attention.key_value_heads = 8;
             attention.head_dim = 64;
             attention.pattern = celeg::FullCausalPattern{};
         }
-        for (auto& attention : shape.attention_layouts) {
+        for (auto& attention : shape.exec.attention_layouts) {
             attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
         }
-        shape.attention_layer_count = 0;
-        shape.conv_layer_count = 0;
-        for (int i = 0; i < shape.num_hidden_layers; ++i) {
-            if (shape.mixer_kinds[static_cast<size_t>(i)] == celeg::MixerKind::Attention) {
-                shape.attention_slot_for_layer.push_back(shape.attention_layer_count++);
-                shape.layer_for_attention_slot.push_back(i);
+        shape.exec.attention_layer_count = 0;
+        shape.exec.conv_layer_count = 0;
+        for (int i = 0; i < shape.exec.num_hidden_layers; ++i) {
+            if (shape.exec.mixer_kinds[static_cast<size_t>(i)] == celeg::MixerKind::Attention) {
+                shape.exec.attention_slot_for_layer.push_back(shape.exec.attention_layer_count++);
+                shape.exec.layer_for_attention_slot.push_back(i);
             } else {
-                shape.attention_slot_for_layer.push_back(-1);
-                ++shape.conv_layer_count;
+                shape.exec.attention_slot_for_layer.push_back(-1);
+                ++shape.exec.conv_layer_count;
             }
         }
         shapes.push_back(shape);
@@ -679,7 +679,7 @@ int main() {
     // regression that affects only one (e.g. different attention_layers) is
     // caught without editing this test.
     for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
-        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Bf16, shape);
+        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Bf16, shape.exec);
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
@@ -708,7 +708,7 @@ int main() {
     for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
         constexpr int page_tokens = 4;
         celeg::PhysicalPagedKvCache cache(3, page_tokens, 8,
-                                        celeg::KvCacheMode::Bf16, shape);
+                                        celeg::KvCacheMode::Bf16, shape.exec);
         auto source = cache.allocate_tokens(page_tokens);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
@@ -735,7 +735,7 @@ int main() {
 
     // INT8 copy-on-write clones both quantized vectors and scale planes.
     for (const celeg::RuntimeTopology& shape : registered_model_shapes()) {
-        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Int8, shape);
+        celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Int8, shape.exec);
         auto source = cache.allocate_tokens(1);
         CELEG_TEST_CHECK(source && source->size() == 1);
         const uint32_t source_page = source->front();
