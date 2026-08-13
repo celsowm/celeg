@@ -8,6 +8,7 @@
 #include "cuda/sampling_tests.hpp"
 #include "cuda/attention_tests.hpp"
 #include "celeg/model/resolved.hpp"
+#include "celeg/model/runtime_types.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -447,8 +448,8 @@ int main() {
         std::vector<float> topp = {1.0f, 1.0f};
         celeg::DeviceBuffer<float> dtemp(rows), dpenalty(rows), dtopp(rows);
         celeg::DeviceBuffer<int32_t> dtopk(rows), result(rows);
-        celeg::DeviceBuffer<float> scores(rows * vocab), values(rows * 128);
-        celeg::DeviceBuffer<int32_t> indices(rows * 128);
+        celeg::DeviceBuffer<float> scores(rows * vocab), values(rows * celeg::kMaxTopK);
+        celeg::DeviceBuffer<int32_t> indices(rows * celeg::kMaxTopK);
         CELEG_CUDA(cudaMemcpy(dtemp.data(), temp.data(), dtemp.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dpenalty.data(), penalty.data(), dpenalty.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dtopk.data(), topk.data(), dtopk.bytes(), cudaMemcpyHostToDevice));
@@ -456,8 +457,8 @@ int main() {
         celeg::launch_packed_sample_topk(
             dlogits.data(), dseen.data(), drng.data(), dtemp.data(),
             dpenalty.data(), dtopk.data(), dtopp.data(), scores.data(),
-            values.data(), indices.data(), rows, vocab, result.data(),
-            stream.get());
+            values.data(), indices.data(), rows, vocab, celeg::kMaxTopK,
+            result.data(), stream.get());
         std::vector<int32_t> tokens(rows);
         CELEG_CUDA(cudaMemcpyAsync(tokens.data(), result.data(), result.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));

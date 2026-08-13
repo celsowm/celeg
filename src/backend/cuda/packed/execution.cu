@@ -167,7 +167,7 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
             temperatures.data(), repetition_penalties.data(),
             top_k.data(), top_p.data(), sampling_scores.data(),
             selected_values.data(), selected_indices.data(), rows,
-            vocab_size_, sampled.data(), stream.get());
+            vocab_size_, kMaxTopK, sampled.data(), stream.get());
 
         layer_executor_.launch_embedding_rows(reference, rows);
 

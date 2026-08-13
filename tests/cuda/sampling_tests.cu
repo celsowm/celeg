@@ -4,6 +4,7 @@
 #include "../support/assertions.hpp"
 #include "../support/cuda_kernel_assertions.cuh"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/model/runtime_types.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -130,6 +131,10 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     celeg::DeviceBuffer<int32_t> reference_indices(top_k), fused_indices(top_k);
     celeg::DeviceBuffer<int32_t> reference_result(1), fused_result(1);
     celeg::DeviceBuffer<uint64_t> reference_rng(1), fused_rng(1);
+    celeg::DeviceBuffer<float> fused_partial_values(
+        static_cast<size_t>(celeg::kSamplingPartialBlocks) * celeg::kMaxTopK);
+    celeg::DeviceBuffer<int32_t> fused_partial_indices(
+        static_cast<size_t>(celeg::kSamplingPartialBlocks) * celeg::kMaxTopK);
     CELEG_CUDA(cudaMemcpy(dlogits.data(), logits.data(), dlogits.bytes(),
                         cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dseen.data(), seen.data(), dseen.bytes(),
@@ -154,6 +159,7 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     celeg::launch_fused_sample_topk(
         dlogits.data(), dseen.data(), fused_scores.data(),
         fused_values.data(), fused_indices.data(),
+        fused_partial_values.data(), fused_partial_indices.data(),
         static_cast<int>(logits.size()), temperature, penalty,
         top_k, top_p, fused_rng.data(), fused_result.data(), stream.get());
 
@@ -216,6 +222,10 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     celeg::DeviceBuffer<int32_t> dindices(top_k);
     celeg::DeviceBuffer<int32_t> dresult(1);
     celeg::DeviceBuffer<uint64_t> drng(1);
+    celeg::DeviceBuffer<float> dpartial_values(
+        static_cast<size_t>(celeg::kSamplingPartialBlocks) * celeg::kMaxTopK);
+    celeg::DeviceBuffer<int32_t> dpartial_indices(
+        static_cast<size_t>(celeg::kSamplingPartialBlocks) * celeg::kMaxTopK);
     uint64_t seed = 4242;
     CELEG_CUDA(cudaMemcpy(dlogits.data(), logits.data(), dlogits.bytes(),
                         cudaMemcpyHostToDevice));
@@ -225,7 +235,8 @@ void run_sampling_tests(celeg::CudaStream& stream) {
 
     celeg::launch_fused_sample_topk(
         dlogits.data(), dseen.data(), dscores.data(), dvalues.data(),
-        dindices.data(), vocab, temperature, penalty, top_k, 1.0f,
+        dindices.data(), dpartial_values.data(), dpartial_indices.data(),
+        vocab, temperature, penalty, top_k, 1.0f,
         drng.data(), dresult.data(), stream.get());
 
     std::vector<int32_t> got_indices(top_k);

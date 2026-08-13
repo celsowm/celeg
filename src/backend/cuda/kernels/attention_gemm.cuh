@@ -50,6 +50,14 @@ __global__ void flash_attn_prefill_kernel(
     constexpr int kWarps = kThreads / 32;
     constexpr int kRowsPerWarp = Br / kWarps;
     constexpr int kMaxAccPerLane = 4;
+    // s_k's QK^T read has every lane in a warp read the same `d` at row
+    // `col == lane`, i.e. stride head_dim across lanes. For every head_dim
+    // celeg supports (64/128) that stride is a multiple of the 32-bank cycle,
+    // so all 32 lanes land in the same bank without this pad -- a 32-way
+    // serialized conflict on the kernel's hottest loop. s_q's read in the same
+    // loop is a broadcast (every lane reads the same address) so it needs no
+    // padding, and s_v's read is already lane-contiguous.
+    constexpr int kKPad = 8;
 
     const int q_tile = blockIdx.x;
     const int q_head = blockIdx.y;
@@ -64,11 +72,12 @@ __global__ void flash_attn_prefill_kernel(
     const int tid = threadIdx.x;
     const int warp = tid / 32;
     const int lane = tid % 32;
+    const int k_stride = head_dim + kKPad;
 
     extern __shared__ __nv_bfloat16 smem[];
     __nv_bfloat16* s_q = smem;
     __nv_bfloat16* s_k = s_q + Br * head_dim;
-    __nv_bfloat16* s_v = s_k + Bc * head_dim;
+    __nv_bfloat16* s_v = s_k + Bc * k_stride;
     float* s_s = reinterpret_cast<float*>(s_v + Bc * head_dim);
 
     float row_max[kRowsPerWarp];
@@ -103,7 +112,7 @@ __global__ void flash_attn_prefill_kernel(
         for (int i = tid; i < actual_bc * head_dim; i += kThreads) {
             int row = i / head_dim;
             int dim = i % head_dim;
-            s_k[row * head_dim + dim] = k_base[(k_start + row) * kv_width + dim];
+            s_k[row * k_stride + dim] = k_base[(k_start + row) * kv_width + dim];
             s_v[row * head_dim + dim] = v_base[(k_start + row) * kv_width + dim];
         }
         __syncthreads();
@@ -122,7 +131,7 @@ __global__ void flash_attn_prefill_kernel(
                 float dot = 0.0f;
                 for (int d = 0; d < head_dim; ++d) {
                     dot += bf16_float(s_q[row * head_dim + d]) *
-                           bf16_float(s_k[col * head_dim + d]);
+                           bf16_float(s_k[col * k_stride + d]);
                 }
                 s_s[row * Bc + col] = dot * scale;
             }
@@ -200,15 +209,47 @@ void launch_gqa_prefill_flash(
     int q_width, int kv_width, int out_width, int sliding_window,
     cudaStream_t stream) {
     constexpr int Br = 64;
+    constexpr int Bc = 64;
+    constexpr int kKPad = 8;
+    // row_acc[][kMaxAccPerLane] in the kernel gives each lane 4 float slots
+    // for its strided (d = lane, lane+32, lane+64, lane+96) accumulation, so
+    // head_dim above 128 would index past the array. Every caller currently
+    // gates on this externally (head_dim <= 128); assert it here too so a new
+    // caller fails loudly instead of silently corrupting registers.
+    if (head_dim > 128) {
+        throw std::invalid_argument(
+            "launch_gqa_prefill_flash: head_dim exceeds the kernel's supported maximum (128)");
+    }
     const int num_q_tiles = (rows + Br - 1) / Br;
     dim3 grid(num_q_tiles, q_heads);
     dim3 block(256);
     const size_t smem_bytes =
-        static_cast<size_t>(Br + 64 + 64) * head_dim * sizeof(__nv_bfloat16) +
-        static_cast<size_t>(Br) * 64 * sizeof(float);
-    cudaFuncSetAttribute(flash_attn_prefill_kernel,
-                         cudaFuncAttributeMaxDynamicSharedMemorySize,
-                         static_cast<int>(smem_bytes));
+        (static_cast<size_t>(Br) * head_dim +
+         static_cast<size_t>(Bc) * (head_dim + kKPad) +
+         static_cast<size_t>(Bc) * head_dim) * sizeof(__nv_bfloat16) +
+        static_cast<size_t>(Br) * Bc * sizeof(float);
+    // cudaFuncSetAttribute is a driver call, issued once per attention layer
+    // per prefill chunk if unconditional -- cheap in isolation, but pure
+    // overhead once a given device has already been configured for at least
+    // this many bytes. Cache the configured size per device (mirrors
+    // mmq_tensor_core_supported()'s per-device cache, for the same reason:
+    // callers may legally switch the current CUDA device between calls).
+    static std::mutex smem_mutex;
+    static std::unordered_map<int, size_t> configured_smem_bytes_by_device;
+    int device = 0;
+    const bool have_device = cudaGetDevice(&device) == cudaSuccess;
+    bool needs_configure = true;
+    if (have_device) {
+        std::lock_guard<std::mutex> lock(smem_mutex);
+        size_t& configured = configured_smem_bytes_by_device[device];
+        needs_configure = smem_bytes > configured;
+        if (needs_configure) configured = smem_bytes;
+    }
+    if (needs_configure) {
+        CELEG_CUDA(cudaFuncSetAttribute(flash_attn_prefill_kernel,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize,
+                             static_cast<int>(smem_bytes)));
+    }
     flash_attn_prefill_kernel<<<grid, block, smem_bytes, stream>>>(
         q, k, v, out, rows, q_heads, kv_heads, head_dim,
         q_width, kv_width, out_width, sliding_window);

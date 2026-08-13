@@ -42,6 +42,12 @@ struct PromptEmbedding {
 // Public generation limit shared by CPU and CUDA samplers.
 inline constexpr int kMaxTopK = 128;
 
+// Number of grid-parallel blocks the CUDA top-k sampler splits the
+// vocabulary across before merging (see launch_fused_sample_topk). Only
+// used above a vocabulary-size threshold; small vocabularies use a single
+// block directly.
+inline constexpr int kSamplingPartialBlocks = 8;
+
 struct ModelMemoryStats {
     size_t weights = 0;
     size_t kv_cache = 0;

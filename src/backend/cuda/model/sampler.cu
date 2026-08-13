@@ -11,6 +11,8 @@ void CudaSampler::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
                           DeviceBuffer<float>& sampling_scores,
                           DeviceBuffer<float>& topk_values,
                           DeviceBuffer<std::int32_t>& topk_indices,
+                          DeviceBuffer<float>& partial_values,
+                          DeviceBuffer<std::int32_t>& partial_indices,
                           const ExecutionTopology& shape,
                           int vocab_size,
                           const GenerationConfig& generation,
@@ -30,7 +32,8 @@ void CudaSampler::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
         ? generation.temperature : 1.0f;
     launch_fused_sample_topk(
         logits.data(), seen_tokens.data(), sampling_scores.data(),
-        topk_values.data(), topk_indices.data(), vocab_size,
+        topk_values.data(), topk_indices.data(),
+        partial_values.data(), partial_indices.data(), vocab_size,
         effective_temperature, generation.repetition_penalty,
         effective_top_k, generation.greedy() ? 1.0f : generation.top_p,
         rng_state.data(), sampled_device.data(), stream);

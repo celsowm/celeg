@@ -38,11 +38,10 @@ __global__ void embedding_batch_kernel(const int32_t* tokens,
 
 __global__ void embedding_slice_kernel(const int32_t* token, const __nv_bfloat16* table,
                                        int table_width, int offset,
-                                       __nv_bfloat16* out, int width, bool device_token) {
+                                       __nv_bfloat16* out, int width) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= width) return;
-    const int row = device_token ? *token : *token;
-    out[i] = table[static_cast<size_t>(row) * table_width + offset + i];
+    out[i] = table[static_cast<size_t>(*token) * table_width + offset + i];
 }
 
 __global__ void embedding_slice_value_kernel(int32_t token, const __nv_bfloat16* table,
@@ -197,7 +196,7 @@ void launch_embedding_slice_device(const int32_t* token, const __nv_bfloat16* ta
                                    int table_width, int offset, __nv_bfloat16* out,
                                    int width, cudaStream_t stream) {
     embedding_slice_kernel<<<(width + 255) / 256, 256, 0, stream>>>(
-        token, table, table_width, offset, out, width, true);
+        token, table, table_width, offset, out, width);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

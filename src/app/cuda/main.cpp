@@ -21,7 +21,34 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
+
+// The NVIDIA CUDA driver/runtime DLLs (nvcuda.dll, cudart64_*.dll,
+// cublasLt64_*.dll) have exit-time DLL_PROCESS_DETACH teardown that is prone
+// to an intermittent access violation / heap corruption on Windows once the
+// CUDA context is torn down (this reproduces on unmodified master, with
+// --no-cuda-graph, and with CUDA_MODULE_LOADING=EAGER, so it is not
+// celeg-specific state; it happens after all real work — model teardown,
+// generation, printing — is already complete). ExitProcess() still runs
+// every attached DLL's DLL_PROCESS_DETACH handler, so even std::_Exit()
+// hits the same crash; only TerminateProcess on our own process skips DLL
+// notifications entirely and avoids it. Everything meaningful (stdout,
+// session files) must be flushed/closed before this is called.
+[[noreturn]] void exit_process_immediately(int code) {
+    std::cout.flush();
+    std::cerr.flush();
+#if defined(_WIN32)
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
+#endif
+    std::exit(code);
+}
 
 struct Args {
     std::string model_dir;
@@ -347,7 +374,7 @@ int main(int argc, char** argv) {
         }
         if (args.print_config) {
             std::cout << topology.summary() << '\n';
-            return 0;
+            exit_process_immediately(0);
         }
 
         const auto chat_catalog = celeg::make_chat_template_catalog();
@@ -399,7 +426,7 @@ int main(int argc, char** argv) {
                     std::cout << input[i];
                 }
                 std::cout << '\n';
-                return 0;
+                exit_process_immediately(0);
             }
             if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {
                 throw std::runtime_error("prompt plus output exceeds --context");
@@ -578,7 +605,7 @@ int main(int argc, char** argv) {
                           << "expert_offload.misses=" << off.misses << '\n'
                           << "expert_offload.hit_rate=" << off.hit_rate << '\n';
             }
-            return 0;
+            exit_process_immediately(0);
         }
 
         if (!args.dump_logits.empty() || args.print_top > 0) {
@@ -614,9 +641,9 @@ int main(int argc, char** argv) {
                       << "runtime.mtp_rejected_tokens=" << runtime.mtp_rejected_tokens << '\n'
                       << "runtime.mtp_used_tokens=" << runtime.mtp_used_tokens << '\n';
         }
-        return 0;
+        exit_process_immediately(0);
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
-        return 1;
+        exit_process_immediately(1);
     }
 }

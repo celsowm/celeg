@@ -7,6 +7,9 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
+#include <stdexcept>
+#include <unordered_map>
 
 namespace celeg {
 namespace {
@@ -54,7 +57,7 @@ __device__ float block_max(float value, float* warp_values, float* block_value) 
     if (lane == 0) warp_values[warp] = value;
     __syncthreads();
     if (threadIdx.x == 0) {
-        float maximum = 0.0f;
+        float maximum = -FLT_MAX;
         const int warp_count = (blockDim.x + 31) / 32;
         for (int i = 0; i < warp_count; ++i) maximum = fmaxf(maximum, warp_values[i]);
         *block_value = maximum;
@@ -80,6 +83,19 @@ __device__ __forceinline__ int unpack_int4(const uint8_t* packed, int column) {
     const uint8_t nibble = (column & 1) == 0 ? byte & 0x0fU : byte >> 4;
     return nibble >= 8U ? static_cast<int>(nibble) - 16
                         : static_cast<int>(nibble);
+}
+
+// Whether a bf16x2 vector load/store is safe across all of `ptrs`: each must
+// be 4-byte aligned (cudaMalloc-backed buffers always are at the base, but a
+// caller could in principle pass a pointer offset by an odd number of bf16
+// elements). Checked once per kernel launch (same answer for every thread in
+// the grid, so this is a uniform branch, not a source of warp divergence),
+// so a bandwidth-bound elementwise kernel can pack two bf16 values per
+// 32-bit transaction whenever it's safe and fall back to the scalar loop
+// byte-for-byte identical to before otherwise.
+template <typename... Ptrs>
+__device__ __forceinline__ bool bf16x2_aligned(Ptrs... ptrs) {
+    return (((reinterpret_cast<uintptr_t>(ptrs) & 3u) == 0) && ...);
 }
 
 __host__ __device__ __forceinline__ int attention_threads(int head_dim) {
@@ -109,9 +125,25 @@ __global__ void head_rmsnorm_kernel(__nv_bfloat16* data,
     __shared__ float inv;
     if (threadIdx.x == 0) inv = rsqrtf(sum / static_cast<float>(head_dim) + eps);
     __syncthreads();
-    for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
-        const float normalized = rounded_bf16_float(bf16_float(vector[i]) * inv);
-        vector[i] = __float2bfloat16(normalized * bf16_float(norm_weight[i]));
+    // See rmsnorm_kernel in norm.cuh for why this loop (but not the
+    // reduction above) is safe to vectorize: every output element depends
+    // only on its own input, so this is bit-identical to the scalar loop.
+    if ((head_dim & 1) == 0 && bf16x2_aligned(vector, norm_weight)) {
+        const int half = head_dim >> 1;
+        __nv_bfloat162* vector2 = reinterpret_cast<__nv_bfloat162*>(vector);
+        const __nv_bfloat162* weight2 = reinterpret_cast<const __nv_bfloat162*>(norm_weight);
+        for (int i = threadIdx.x; i < half; i += blockDim.x) {
+            const __nv_bfloat162 vv = vector2[i];
+            const __nv_bfloat162 wv = weight2[i];
+            const float n0 = rounded_bf16_float(__low2float(vv) * inv);
+            const float n1 = rounded_bf16_float(__high2float(vv) * inv);
+            vector2[i] = __floats2bfloat162_rn(n0 * __low2float(wv), n1 * __high2float(wv));
+        }
+    } else {
+        for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
+            const float normalized = rounded_bf16_float(bf16_float(vector[i]) * inv);
+            vector[i] = __float2bfloat16(normalized * bf16_float(norm_weight[i]));
+        }
     }
 }
 

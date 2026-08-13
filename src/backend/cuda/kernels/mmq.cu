@@ -61,9 +61,24 @@ bool mmq_tensor_core_enabled() {
     // supports int8 mma.sync. CELEG_MMQ_TENSOR_CORES is left as an explicit
     // override only so the same binary can still bisect a regression between
     // the MMA and DP4A prefill kernels; it is not meant to be user-facing.
+    //
+    // This resolves once per (thread, device): every matmul launch used to
+    // pay a getenv() plus mmq_tensor_core_supported()'s mutex+map lookup, on
+    // the decode hot path that's ~one call per GEMM per layer per token. The
+    // thread_local pair below skips straight to the cached answer whenever
+    // the device hasn't changed since this thread last resolved it; a device
+    // switch (legal per mmq_tensor_core_supported()'s contract) just falls
+    // through to a full, still-correct re-resolution.
+    thread_local int cached_device = -1;
+    thread_local bool cached_enabled = false;
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) return false;
+    if (device == cached_device) return cached_enabled;
+
     const char* setting = std::getenv("CELEG_MMQ_TENSOR_CORES");
-    if (setting != nullptr) return setting[0] == '1';
-    return mmq_tensor_core_supported();
+    cached_enabled = setting != nullptr ? setting[0] == '1' : mmq_tensor_core_supported();
+    cached_device = device;
+    return cached_enabled;
 }
 
 __global__ void quantize_q8_1_kernel(const __nv_bfloat16* __restrict__ x,
@@ -246,16 +261,16 @@ __global__ void q6k_mmq_kernel(const int8_t* __restrict__ q8,
                 int packed_w = 0;
 #pragma unroll
                 for (int t = 0; t < 4; ++t) {
-                    const int n = g + t;
+                    const int index = g + t;
                     int q;
                     if (grp == 0) {
-                        q = (ql[n] & 0xF) | (((qh[n] >> 0) & 3) << 4);
+                        q = (ql[index] & 0xF) | (((qh[index] >> 0) & 3) << 4);
                     } else if (grp == 1) {
-                        q = (ql[n + 32] & 0xF) | (((qh[n] >> 2) & 3) << 4);
+                        q = (ql[index + 32] & 0xF) | (((qh[index] >> 2) & 3) << 4);
                     } else if (grp == 2) {
-                        q = (ql[n] >> 4) | (((qh[n] >> 4) & 3) << 4);
+                        q = (ql[index] >> 4) | (((qh[index] >> 4) & 3) << 4);
                     } else {
-                        q = (ql[n + 32] >> 4) | (((qh[n] >> 6) & 3) << 4);
+                        q = (ql[index + 32] >> 4) | (((qh[index] >> 6) & 3) << 4);
                     }
                     packed_w |= q << (t * 8);
                 }
@@ -270,16 +285,16 @@ __global__ void q6k_mmq_kernel(const int8_t* __restrict__ q8,
                 int packed_w = 0;
 #pragma unroll
                 for (int t = 0; t < 4; ++t) {
-                    const int n = g + t;
+                    const int index = g + t;
                     int q;
                     if (grp == 0) {
-                        q = (ql[n] & 0xF) | (((qh[n] >> 0) & 3) << 4);
+                        q = (ql[index] & 0xF) | (((qh[index] >> 0) & 3) << 4);
                     } else if (grp == 1) {
-                        q = (ql[n + 32] & 0xF) | (((qh[n] >> 2) & 3) << 4);
+                        q = (ql[index + 32] & 0xF) | (((qh[index] >> 2) & 3) << 4);
                     } else if (grp == 2) {
-                        q = (ql[n] >> 4) | (((qh[n] >> 4) & 3) << 4);
+                        q = (ql[index] >> 4) | (((qh[index] >> 4) & 3) << 4);
                     } else {
-                        q = (ql[n + 32] >> 4) | (((qh[n] >> 6) & 3) << 4);
+                        q = (ql[index + 32] >> 4) | (((qh[index] >> 6) & 3) << 4);
                     }
                     packed_w |= q << (t * 8);
                 }
@@ -377,28 +392,35 @@ __global__ void q4k_mmq_prefill_kernel(
     }
 }
 
-// Ampere path for real prefill. One warp owns a 16x16 output tile and uses
-// integer tensor cores for each 32-wide GGUF sub-block. Q4_K's scale/min are
-// per 32 values, so the two k=16 MMA results are combined before applying the
-// floating-point dequantization correction. The raw GGUF blocks remain the
-// only persistent weight storage.
+// Ampere path for real prefill. Each warp owns a 16x16 output tile and uses
+// integer tensor cores for each 32-wide GGUF sub-block; WarpsPerBlock warps
+// share one block, all covering the same 16 activation rows (blockIdx.y), so
+// the 16x32 activation tile is loaded once per block and reused by every
+// warp instead of being reloaded per output tile. This keeps enough resident
+// warps per SM to hide wmma/global-load latency instead of running one warp
+// (32 threads) per block. Q4_K's scale/min are per 32 values, so the two
+// k=16 MMA results are combined before applying the floating-point
+// dequantization correction. The raw GGUF blocks remain the only persistent
+// weight storage.
+template <int WarpsPerBlock>
 __global__ void q4k_mmq_tensor_core_kernel(
     const int8_t* __restrict__ q8, const float* __restrict__ q8_scales,
     const float* __restrict__ q8_sums, const uint8_t* __restrict__ blocks,
     __nv_bfloat16* __restrict__ y, int m, int n, int k, size_t row_bytes,
     int output_stride, float beta) {
     namespace wmma = nvcuda::wmma;
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
     const int activation_base = blockIdx.y * kMmqTensorCoreTile;
-    const int output_base = blockIdx.x * kMmqTensorCoreTile;
-    const int lane = threadIdx.x;
+    const int output_base = (blockIdx.x * WarpsPerBlock + warp) * kMmqTensorCoreTile;
     __shared__ int8_t activation_tile[kMmqTensorCoreTile * kMmqQ8_1BlockSize];
-    __shared__ int8_t weight_tile[kMmqQ8_1BlockSize * kMmqTensorCoreTile];
-    __shared__ int dot_lo_tile[kMmqTensorCoreTile * kMmqTensorCoreTile];
-    __shared__ int dot_hi_tile[kMmqTensorCoreTile * kMmqTensorCoreTile];
+    __shared__ int8_t weight_tile[WarpsPerBlock][kMmqQ8_1BlockSize * kMmqTensorCoreTile];
+    __shared__ int dot_lo_tile[WarpsPerBlock][kMmqTensorCoreTile * kMmqTensorCoreTile];
+    __shared__ int dot_hi_tile[WarpsPerBlock][kMmqTensorCoreTile * kMmqTensorCoreTile];
     float accumulated[8] = {};
 
     for (int sub = 0; sub < k / kMmqQ8_1BlockSize; ++sub) {
-        for (int index = lane; index < kMmqTensorCoreTile * kMmqQ8_1BlockSize; index += 32) {
+        for (int index = threadIdx.x; index < kMmqTensorCoreTile * kMmqQ8_1BlockSize; index += blockDim.x) {
             const int row = index / kMmqQ8_1BlockSize;
             const int column = index % kMmqQ8_1BlockSize;
             activation_tile[index] = activation_base + row < m
@@ -419,7 +441,7 @@ __global__ void q4k_mmq_tensor_core_kernel(
             }
             // B is [K,N] in column-major form for C=A*B. Its leading
             // dimension is the full 32-wide GGUF sub-block, not N.
-            weight_tile[output * kMmqQ8_1BlockSize + column] = static_cast<int8_t>(value);
+            weight_tile[warp][output * kMmqQ8_1BlockSize + column] = static_cast<int8_t>(value);
         }
         __syncthreads();
         wmma::fragment<wmma::matrix_a, 16, 16, 16, signed char, wmma::row_major> a;
@@ -427,14 +449,14 @@ __global__ void q4k_mmq_tensor_core_kernel(
         wmma::fragment<wmma::accumulator, 16, 16, 16, int> c;
         wmma::fill_fragment(c, 0);
         wmma::load_matrix_sync(a, activation_tile, kMmqQ8_1BlockSize);
-        wmma::load_matrix_sync(b, weight_tile, kMmqQ8_1BlockSize);
+        wmma::load_matrix_sync(b, weight_tile[warp], kMmqQ8_1BlockSize);
         wmma::mma_sync(c, a, b, c);
-        wmma::store_matrix_sync(dot_lo_tile, c, kMmqTensorCoreTile, wmma::mem_row_major);
+        wmma::store_matrix_sync(dot_lo_tile[warp], c, kMmqTensorCoreTile, wmma::mem_row_major);
         wmma::fill_fragment(c, 0);
         wmma::load_matrix_sync(a, activation_tile + 16, kMmqQ8_1BlockSize);
-        wmma::load_matrix_sync(b, weight_tile + 16, kMmqQ8_1BlockSize);
+        wmma::load_matrix_sync(b, weight_tile[warp] + 16, kMmqQ8_1BlockSize);
         wmma::mma_sync(c, a, b, c);
-        wmma::store_matrix_sync(dot_hi_tile, c, kMmqTensorCoreTile, wmma::mem_row_major);
+        wmma::store_matrix_sync(dot_hi_tile[warp], c, kMmqTensorCoreTile, wmma::mem_row_major);
         __syncthreads();
         for (int index = lane; index < kMmqTensorCoreTile * kMmqTensorCoreTile; index += 32) {
             const int row = index / kMmqTensorCoreTile;
@@ -453,7 +475,7 @@ __global__ void q4k_mmq_tensor_core_kernel(
                 // q8_sums holds the sum of the quantized int8 activations.
                 accumulated[index / 32] += q8_scales[activation_offset] *
                     (__half2float(block->d) * static_cast<float>(scale) *
-                         static_cast<float>(dot_lo_tile[index] + dot_hi_tile[index]) -
+                         static_cast<float>(dot_lo_tile[warp][index] + dot_hi_tile[warp][index]) -
                      __half2float(block->dmin) * static_cast<float>(minimum) *
                          q8_sums[activation_offset]);
             }
@@ -490,23 +512,25 @@ __device__ __forceinline__ int q6k_pack4(const BlockQ6K* blk, int half, int grou
     return packed;
 }
 
+template <int WarpsPerBlock>
 __global__ void q6k_mmq_tensor_core_kernel(
     const int8_t* __restrict__ q8, const float* __restrict__ q8_scales,
     const float* __restrict__ q8_sums, const uint8_t* __restrict__ blocks,
     __nv_bfloat16* __restrict__ y, int m, int n, int k, size_t row_bytes,
     int output_stride, float beta) {
     namespace wmma = nvcuda::wmma;
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
     const int activation_base = blockIdx.y * kMmqTensorCoreTile;
-    const int output_base = blockIdx.x * kMmqTensorCoreTile;
-    const int lane = threadIdx.x;
+    const int output_base = (blockIdx.x * WarpsPerBlock + warp) * kMmqTensorCoreTile;
     __shared__ int8_t activation_tile[kMmqTensorCoreTile * kMmqQ8_1BlockSize];
-    __shared__ int8_t weight_tile[kMmqQ8_1BlockSize * kMmqTensorCoreTile];
-    __shared__ int dot_lo_tile[kMmqTensorCoreTile * kMmqTensorCoreTile];
-    __shared__ int dot_hi_tile[kMmqTensorCoreTile * kMmqTensorCoreTile];
+    __shared__ int8_t weight_tile[WarpsPerBlock][kMmqQ8_1BlockSize * kMmqTensorCoreTile];
+    __shared__ int dot_lo_tile[WarpsPerBlock][kMmqTensorCoreTile * kMmqTensorCoreTile];
+    __shared__ int dot_hi_tile[WarpsPerBlock][kMmqTensorCoreTile * kMmqTensorCoreTile];
     float accumulated[8] = {};
 
     for (int sub = 0; sub < k / kMmqQ8_1BlockSize; ++sub) {
-        for (int index = lane; index < kMmqTensorCoreTile * kMmqQ8_1BlockSize; index += 32) {
+        for (int index = threadIdx.x; index < kMmqTensorCoreTile * kMmqQ8_1BlockSize; index += blockDim.x) {
             const int row = index / kMmqQ8_1BlockSize;
             const int column = index % kMmqQ8_1BlockSize;
             activation_tile[index] = activation_base + row < m
@@ -531,7 +555,7 @@ __global__ void q6k_mmq_tensor_core_kernel(
                 else if (group == 2) value = (ql[index_in_group] >> 4) | (((qh[index_in_group] >> 4) & 3) << 4);
                 else value = (ql[index_in_group + 32] >> 4) | (((qh[index_in_group] >> 6) & 3) << 4);
             }
-            weight_tile[output * kMmqQ8_1BlockSize + column] = static_cast<int8_t>(value);
+            weight_tile[warp][output * kMmqQ8_1BlockSize + column] = static_cast<int8_t>(value);
         }
         __syncthreads();
         wmma::fragment<wmma::matrix_a, 16, 16, 16, signed char, wmma::row_major> a;
@@ -539,14 +563,14 @@ __global__ void q6k_mmq_tensor_core_kernel(
         wmma::fragment<wmma::accumulator, 16, 16, 16, int> c;
         wmma::fill_fragment(c, 0);
         wmma::load_matrix_sync(a, activation_tile, kMmqQ8_1BlockSize);
-        wmma::load_matrix_sync(b, weight_tile, kMmqQ8_1BlockSize);
+        wmma::load_matrix_sync(b, weight_tile[warp], kMmqQ8_1BlockSize);
         wmma::mma_sync(c, a, b, c);
-        wmma::store_matrix_sync(dot_lo_tile, c, kMmqTensorCoreTile, wmma::mem_row_major);
+        wmma::store_matrix_sync(dot_lo_tile[warp], c, kMmqTensorCoreTile, wmma::mem_row_major);
         wmma::fill_fragment(c, 0);
         wmma::load_matrix_sync(a, activation_tile + 16, kMmqQ8_1BlockSize);
-        wmma::load_matrix_sync(b, weight_tile + 16, kMmqQ8_1BlockSize);
+        wmma::load_matrix_sync(b, weight_tile[warp] + 16, kMmqQ8_1BlockSize);
         wmma::mma_sync(c, a, b, c);
-        wmma::store_matrix_sync(dot_hi_tile, c, kMmqTensorCoreTile, wmma::mem_row_major);
+        wmma::store_matrix_sync(dot_hi_tile[warp], c, kMmqTensorCoreTile, wmma::mem_row_major);
         __syncthreads();
         for (int index = lane; index < kMmqTensorCoreTile * kMmqTensorCoreTile; index += 32) {
             const int row = index / kMmqTensorCoreTile;
@@ -571,9 +595,9 @@ __global__ void q6k_mmq_tensor_core_kernel(
                 const float scale = q8_scales[activation_offset] * __half2float(block->d);
                 accumulated[index / 32] += scale *
                     (static_cast<float>(block->scales[scale_lo_index]) *
-                         (static_cast<float>(dot_lo_tile[index]) - 32.0f * static_cast<float>(sum_lo)) +
+                         (static_cast<float>(dot_lo_tile[warp][index]) - 32.0f * static_cast<float>(sum_lo)) +
                      static_cast<float>(block->scales[scale_lo_index + 1]) *
-                         (static_cast<float>(dot_hi_tile[index]) - 32.0f * static_cast<float>(sum_hi)));
+                         (static_cast<float>(dot_hi_tile[warp][index]) - 32.0f * static_cast<float>(sum_hi)));
             }
         }
         __syncthreads();
@@ -709,9 +733,11 @@ void launch_q4k_mmq_with_policy(const int8_t* q8, const float* q8_scales,
         q4k_mmq_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
     } else if (use_tensor_cores && m >= kMmqTensorCoreTile && n >= kMmqTensorCoreTile) {
-        const dim3 tensor_grid(static_cast<unsigned>((n + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile),
+        constexpr int kTensorWarpsPerBlock = 8;
+        constexpr int kTensorColsPerBlock = kMmqTensorCoreTile * kTensorWarpsPerBlock;
+        const dim3 tensor_grid(static_cast<unsigned>((n + kTensorColsPerBlock - 1) / kTensorColsPerBlock),
                                static_cast<unsigned>((m + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile));
-        q4k_mmq_tensor_core_kernel<<<tensor_grid, 32, 0, stream>>>(
+        q4k_mmq_tensor_core_kernel<kTensorWarpsPerBlock><<<tensor_grid, kTensorWarpsPerBlock * 32, 0, stream>>>(
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
     } else {
         const dim3 tiled_grid(grid_x, static_cast<unsigned>((m + kMmqPrefillTileRows - 1) /
@@ -744,9 +770,11 @@ void launch_q6k_mmq_with_policy(const int8_t* q8, const float* q8_scales,
         q6k_mmq_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
     } else if (use_tensor_cores && m >= kMmqTensorCoreTile && n >= kMmqTensorCoreTile) {
-        const dim3 tensor_grid(static_cast<unsigned>((n + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile),
+        constexpr int kTensorWarpsPerBlock = 8;
+        constexpr int kTensorColsPerBlock = kMmqTensorCoreTile * kTensorWarpsPerBlock;
+        const dim3 tensor_grid(static_cast<unsigned>((n + kTensorColsPerBlock - 1) / kTensorColsPerBlock),
                                static_cast<unsigned>((m + kMmqTensorCoreTile - 1) / kMmqTensorCoreTile));
-        q6k_mmq_tensor_core_kernel<<<tensor_grid, 32, 0, stream>>>(
+        q6k_mmq_tensor_core_kernel<kTensorWarpsPerBlock><<<tensor_grid, kTensorWarpsPerBlock * 32, 0, stream>>>(
             q8, q8_scales, q8_sums, blocks, y, m, n, k, row_bytes, output_stride, beta);
     } else {
         const dim3 tiled_grid(grid_x, static_cast<unsigned>((m + kMmqPrefillTileRows - 1) /

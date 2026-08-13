@@ -328,12 +328,18 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             } else {
             const int query_projection_width = attention->query->rows;
             const bool output_gate = layout.output_gate.enabled();
+            const bool gate_packed = output_gate && layout.output_gate.packed_with_query;
             prof.begin(stream_.get());
             {
             auto native_fanout = native_fanout_scope(
                 workspace_.prefill_normed_.data(), rows, resources_.program_.hidden);
+            // When the gate is packed with the query, project into the raw
+            // scratch buffer: the compacted query and the extracted gate are
+            // read out into disjoint destinations below, since compacting a
+            // [query|gate] row in place cannot be done race-free across blocks.
             linear(workspace_.prefill_normed_.data(), *attention->query,
-                   workspace_.prefill_q_.data(), rows, query_projection_width,
+                   gate_packed ? workspace_.prefill_qkv_.data() : workspace_.prefill_q_.data(),
+                   rows, query_projection_width,
                    resources_.program_.hidden);
             if (attention->key && attention->value) {
                 linear(workspace_.prefill_normed_.data(), *attention->key,
@@ -347,8 +353,9 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.end(PrefillPhase::QkvProj, stream_.get());
             prof.begin(stream_.get());
             if (output_gate) {
-                if (layout.output_gate.packed_with_query) {
-                    launch_extract_attention_output_gate(workspace_.prefill_q_.data(),
+                if (gate_packed) {
+                    launch_extract_attention_output_gate(workspace_.prefill_qkv_.data(),
+                                              workspace_.prefill_q_.data(),
                                               workspace_.prefill_attention_gate_.data(),
                                               rows, layout.query_width(), stream_.get());
                 } else {

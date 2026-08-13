@@ -47,6 +47,7 @@ void CudaCompiledModel::enqueue_sampling() {
     }
     CudaSampler::enqueue(
         workspace_.logits_, sampling_.seen_tokens, sampling_.sampling_scores, sampling_.topk_values, sampling_.topk_indices,
+        sampling_.partial_values, sampling_.partial_indices,
         resources_.shape_, resources_.dims_.vocab_size, session_.generation_, sampling_.rng_state,
         sampling_.sampled_device, stream_.get());
 }

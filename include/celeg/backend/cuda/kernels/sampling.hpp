@@ -35,6 +35,8 @@ void launch_fused_sample_topk(const __nv_bfloat16* logits,
                               float* scores,
                               float* selected_values,
                               int32_t* selected_indices,
+                              float* partial_values,
+                              int32_t* partial_indices,
                               int vocab,
                               float temperature,
                               float repetition_penalty,
@@ -56,7 +58,9 @@ void launch_packed_sample_topk(
     const float* top_p,
     float* scores, float* selected_values,
     int32_t* selected_indices,
-    int rows, int vocab, int32_t* result,
+    int rows, int vocab,
+    int selected_stride,
+    int32_t* result,
     cudaStream_t stream);
 
 } // namespace celeg

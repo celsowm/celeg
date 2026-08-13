@@ -1,7 +1,5 @@
 #include "celeg/model/interaction.hpp"
 
-#include <stdexcept>
-
 namespace celeg {
 
 std::string resolve_chat_template_id(const CheckpointMetadata& metadata) {
@@ -31,9 +29,7 @@ std::string resolve_chat_template_id(const CheckpointMetadata& metadata) {
         source.find("<arg_value>") != std::string::npos) {
         return "chat:tagged-role";
     }
-    throw std::invalid_argument(
-        "UnsupportedChatTemplateConstruct: no registered interaction protocol matches "
-        "the checkpoint template evidence");
+    return {};
 }
 
 } // namespace celeg

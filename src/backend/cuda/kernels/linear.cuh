@@ -18,6 +18,12 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
         ? (weight + static_cast<size_t>(output_row) * packed_cols)
         : nullptr;
     const float row_scale = (output_row < n) ? scales[output_row] : 0.0f;
+    // tile_k is always a multiple of 8 (callers use 512), so every k-tile
+    // boundary lands on an even byte offset; only the row's base offset can
+    // break 4-byte alignment, so we check it once per row and reuse it for
+    // every tile.
+    const bool row_weight_aligned =
+        (output_row < n) && ((reinterpret_cast<uintptr_t>(row_weight) & 3u) == 0);
 
     for (int activation_row = blockIdx.y;
          activation_row < m;
@@ -25,7 +31,7 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
         const __nv_bfloat16* input =
             x + static_cast<size_t>(activation_row) * k;
 
-        float accum = 0.0f;
+        float accum_partial = 0.0f;
         for (int base_k = 0; base_k < k; base_k += tile_k) {
             const int chunk = (k - base_k) < tile_k ? (k - base_k) : tile_k;
 
@@ -39,22 +45,41 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
             __syncthreads();
 
             if (output_row < n) {
-                float sum = 0.0f;
-                for (int column = lane; column < chunk; column += 32) {
-                    sum += bf16_float(s_act[column]) *
-                           static_cast<float>(unpack_int4(row_weight, base_k + column));
+                int column = 0;
+                if (row_weight_aligned) {
+                    const uint32_t* words =
+                        reinterpret_cast<const uint32_t*>(row_weight + (base_k >> 1));
+                    for (int group = lane * 8; group + 8 <= chunk; group += 32 * 8) {
+                        const uint32_t word = words[group >> 3];
+                        #pragma unroll
+                        for (int i = 0; i < 8; ++i) {
+                            const uint8_t nibble = (word >> (i * 4)) & 0xFU;
+                            const int value = nibble >= 8U
+                                ? static_cast<int>(nibble) - 16
+                                : static_cast<int>(nibble);
+                            accum_partial += bf16_float(s_act[group + i]) *
+                                              static_cast<float>(value);
+                        }
+                    }
+                    column = (chunk / 8) * 8;
                 }
-                accum += warp_sum(sum);
+                for (int c = column + lane; c < chunk; c += 32) {
+                    accum_partial += bf16_float(s_act[c]) *
+                        static_cast<float>(unpack_int4(row_weight, base_k + c));
+                }
             }
 
             __syncthreads();
         }
-        if (output_row < n && lane == 0) {
-            float value = accum * row_scale;
-            const size_t output_index =
-                static_cast<size_t>(activation_row) * n + output_row;
-            if (beta != 0.0f) value += beta * bf16_float(y[output_index]);
-            y[output_index] = __float2bfloat16(value);
+        if (output_row < n) {
+            const float accum = warp_sum(accum_partial);
+            if (lane == 0) {
+                float value = accum * row_scale;
+                const size_t output_index =
+                    static_cast<size_t>(activation_row) * n + output_row;
+                if (beta != 0.0f) value += beta * bf16_float(y[output_index]);
+                y[output_index] = __float2bfloat16(value);
+            }
         }
     }
 }

@@ -15,6 +15,8 @@ public:
                         DeviceBuffer<float>& sampling_scores,
                         DeviceBuffer<float>& topk_values,
                         DeviceBuffer<std::int32_t>& topk_indices,
+                        DeviceBuffer<float>& partial_values,
+                        DeviceBuffer<std::int32_t>& partial_indices,
                         const ExecutionTopology& shape,
                         int vocab_size,
                         const GenerationConfig& generation,
