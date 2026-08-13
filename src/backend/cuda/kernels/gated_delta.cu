@@ -128,7 +128,7 @@ __global__ void gated_delta_sequence_state_kernel(
     __nv_bfloat16* recurrent_state, __nv_bfloat16* output, int rows,
     int key_head_dim, int value_head_dim, int key_heads, int value_heads, bool vector_decay,
     bool safe_decay, float decay_lower_bound) {
-    constexpr int columns_per_block = 4;
+    constexpr int columns_per_block = 8;
     const int value_head = static_cast<int>(blockIdx.x);
     const int v_dim = static_cast<int>(blockIdx.y) * columns_per_block + threadIdx.y;
     const int lane = threadIdx.x;
@@ -493,6 +493,157 @@ __global__ void gated_delta_recurrent_kernel(
 // implementation to a checkpoint identity.  Grouped-query layouts retain the
 // generic path below because more than one value head would otherwise update
 // the same key-channel convolution history.
+template <int KeyHeadDim, int ValueHeadDim>
+__global__ __launch_bounds__(ValueHeadDim)
+void gated_delta_fused_register_state_kernel(
+    const __nv_bfloat16* projected_qkv, const __nv_bfloat16* z,
+    const __nv_bfloat16* b, const __nv_bfloat16* a,
+    const __nv_bfloat16* conv_weight, const __nv_bfloat16* dt_bias,
+    const __nv_bfloat16* a_log, const __nv_bfloat16* norm_weight,
+    __nv_bfloat16* conv_state, __nv_bfloat16* recurrent_state,
+    __nv_bfloat16* output, int conv_kernel, int key_heads, float eps,
+    bool vector_decay, bool safe_decay, float decay_lower_bound,
+    bool sigmoid_output_gate) {
+    static_assert(ValueHeadDim % 32 == 0);
+    static_assert(KeyHeadDim % 32 == 0);
+    constexpr int warps = ValueHeadDim / 32;
+    const int head = static_cast<int>(blockIdx.x);
+    const int value_dim = static_cast<int>(threadIdx.x);
+    const int lane = value_dim & 31;
+    const int key_width = key_heads * KeyHeadDim;
+    const int value_width = key_heads * ValueHeadDim;
+    const __nv_bfloat16* qkv = projected_qkv;
+    const __nv_bfloat16* z_row = z;
+    const __nv_bfloat16* b_row = b;
+    const __nv_bfloat16* a_row = a;
+    __nv_bfloat16* output_row = output;
+    extern __shared__ float shared[];
+    float* q_values = shared;
+    float* k_values = q_values + KeyHeadDim;
+    float* decay_values = k_values + KeyHeadDim;
+    float* reductions = decay_values + KeyHeadDim;
+    if (head >= key_heads) return;
+
+    auto convolve = [&](int channel) {
+        __nv_bfloat16* history = conv_state + static_cast<size_t>(channel) * conv_kernel;
+        const __nv_bfloat16* weights = conv_weight + static_cast<size_t>(channel) * conv_kernel;
+        float filtered = 0.0f;
+        if (conv_kernel == 4) {
+            const __nv_bfloat16 h1 = history[1];
+            const __nv_bfloat16 h2 = history[2];
+            const __nv_bfloat16 h3 = history[3];
+            const __nv_bfloat16 current = qkv[channel];
+            history[0] = h1; history[1] = h2; history[2] = h3; history[3] = current;
+            filtered = bf16_float(h1) * bf16_float(weights[0]) +
+                bf16_float(h2) * bf16_float(weights[1]) +
+                bf16_float(h3) * bf16_float(weights[2]) +
+                bf16_float(current) * bf16_float(weights[3]);
+        } else {
+            for (int tap = 1; tap < conv_kernel; ++tap) history[tap - 1] = history[tap];
+            history[conv_kernel - 1] = qkv[channel];
+            for (int tap = 0; tap < conv_kernel; ++tap) {
+                filtered += bf16_float(history[tap]) * bf16_float(weights[tap]);
+            }
+        }
+        return filtered * sigmoid(filtered);
+    };
+
+    q_values[value_dim] = convolve(head * KeyHeadDim + value_dim);
+    k_values[value_dim] = convolve(key_width + head * KeyHeadDim + value_dim);
+    const float value = convolve(2 * key_width + head * ValueHeadDim + value_dim);
+    __syncthreads();
+
+    float q_sum = q_values[value_dim] * q_values[value_dim];
+    float k_sum = k_values[value_dim] * k_values[value_dim];
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        q_sum += __shfl_down_sync(0xffffffffu, q_sum, offset);
+        k_sum += __shfl_down_sync(0xffffffffu, k_sum, offset);
+    }
+    if (lane == 0) {
+        const int warp = value_dim >> 5;
+        reductions[4 + warp] = q_sum;
+        reductions[8 + warp] = k_sum;
+    }
+    __syncthreads();
+    if (value_dim == 0) {
+        float total_q = 0.0f, total_k = 0.0f;
+#pragma unroll
+        for (int warp = 0; warp < warps; ++warp) {
+            total_q += reductions[4 + warp];
+            total_k += reductions[8 + warp];
+        }
+        reductions[0] = rsqrtf(total_q + eps);
+        reductions[1] = rsqrtf(total_k + eps);
+        if (!vector_decay) {
+            const float raw = bf16_float(a_row[head]) + bf16_float(dt_bias[head]);
+            reductions[2] = safe_decay
+                ? expf(sigmoid(expf(bf16_float(a_log[head])) * raw) * decay_lower_bound)
+                : expf(-expf(bf16_float(a_log[head])) * softplus(raw));
+        }
+    }
+    __syncthreads();
+    q_values[value_dim] *= reductions[0];
+    k_values[value_dim] *= reductions[1];
+    __nv_bfloat16* state = recurrent_state + static_cast<size_t>(head) *
+        KeyHeadDim * ValueHeadDim;
+    float state_registers[KeyHeadDim];
+#pragma unroll
+    for (int key = 0; key < KeyHeadDim; ++key) {
+        state_registers[key] = bf16_float(
+            state[static_cast<size_t>(key) * ValueHeadDim + value_dim]);
+    }
+    float memory = 0.0f;
+#pragma unroll
+    for (int key = 0; key < KeyHeadDim; ++key) {
+        const int decay_index = head * KeyHeadDim + key;
+        const float decay = vector_decay
+            ? (safe_decay
+                ? expf(sigmoid(expf(bf16_float(a_log[head])) *
+                    (bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))) * decay_lower_bound)
+                : expf(-expf(bf16_float(a_log[head])) *
+                    softplus(bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))))
+            : reductions[2];
+        state_registers[key] = bf16_float(__float2bfloat16(state_registers[key] * decay));
+        memory += state_registers[key] * k_values[key];
+    }
+    const float delta = (value - memory) * sigmoid(bf16_float(b_row[head]));
+    float result = 0.0f;
+#pragma unroll
+    for (int key = 0; key < KeyHeadDim; ++key) {
+        state_registers[key] = bf16_float(__float2bfloat16(
+            state_registers[key] + k_values[key] * delta));
+        result += state_registers[key] * q_values[key];
+    }
+    output_row[head * ValueHeadDim + value_dim] =
+        __float2bfloat16(result / sqrtf(static_cast<float>(KeyHeadDim)));
+    __syncthreads();
+
+    const float raw = bf16_float(output_row[head * ValueHeadDim + value_dim]);
+    float output_sum = raw * raw;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        output_sum += __shfl_down_sync(0xffffffffu, output_sum, offset);
+    }
+    if (lane == 0) reductions[12 + (value_dim >> 5)] = output_sum;
+    __syncthreads();
+    if (value_dim == 0) {
+        float total = 0.0f;
+#pragma unroll
+        for (int warp = 0; warp < warps; ++warp) total += reductions[12 + warp];
+        reductions[3] = rsqrtf(total / ValueHeadDim + eps);
+    }
+    __syncthreads();
+    const float gate = bf16_float(z_row[head * ValueHeadDim + value_dim]);
+    const size_t output_offset = static_cast<size_t>(head) * ValueHeadDim + value_dim;
+    output_row[output_offset] = __float2bfloat16(
+        bf16_float(output_row[output_offset]) * reductions[3] * bf16_float(norm_weight[value_dim]) *
+        (sigmoid_output_gate ? sigmoid(gate) : gate * sigmoid(gate)));
+#pragma unroll
+    for (int key = 0; key < KeyHeadDim; ++key) {
+        state[static_cast<size_t>(key) * ValueHeadDim + value_dim] =
+            __float2bfloat16(state_registers[key]);
+    }
+}
+
 __global__ void gated_delta_fused_single_head_kernel(
     const __nv_bfloat16* projected_qkv, const __nv_bfloat16* z,
     const __nv_bfloat16* b, const __nv_bfloat16* a,
@@ -695,13 +846,24 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
     if (rows > 0 && key_head_dim <= 256 && value_head_dim <= 256) {
         const int key_width = key_heads * key_head_dim;
         const int qkv_width = 2 * key_width + value_heads * value_head_dim;
+        if (rows == 1 && key_heads == value_heads && key_head_dim == 128 &&
+            value_head_dim == 128) {
+            const size_t shared_bytes = static_cast<size_t>(3 * key_head_dim + 16) * sizeof(float);
+            gated_delta_fused_register_state_kernel<128, 128><<<key_heads, 128, shared_bytes, stream>>>(
+                projected_qkv, projected_z, projected_b, projected_a, conv_weight,
+                dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
+                conv_kernel, key_heads, eps, vector_decay, safe_decay,
+                decay_lower_bound, sigmoid_output_gate);
+            CELEG_KERNEL_DEBUG_SYNC(stream);
+            return;
+        }
         if (rows >= 64) {
-            const int tiles = (value_head_dim + 3) / 4;
+            const int tiles = (value_head_dim + 7) / 8;
             gated_delta_sequence_prepare_kernel<<<key_heads, 256, 0, stream>>>(
                 const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,
                 rows, conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
             const dim3 state_grid(value_heads, tiles);
-            const dim3 state_block(32, 4);
+            const dim3 state_block(32, 8);
             switch (key_head_dim) {
                 case 32:
                     gated_delta_sequence_state_kernel<32><<<state_grid, state_block, 0, stream>>>(
