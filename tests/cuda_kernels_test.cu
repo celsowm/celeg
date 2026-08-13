@@ -104,7 +104,7 @@ int main() {
     // operator.  Exercise grouped key/value heads, then compare its output
     // and both persisted state buffers with the CPU reference.
     {
-        constexpr int rows = 64, kernel = 2, dim = 2, key_heads = 1, value_heads = 2;
+        constexpr int rows = 64, kernel = 4, dim = 2, key_heads = 1, value_heads = 2;
         constexpr int qkv_width = 2 * key_heads * dim + value_heads * dim;
         constexpr int value_width = value_heads * dim;
         std::vector<float> qkv(rows * qkv_width), z(rows * value_width), b(rows * value_heads),

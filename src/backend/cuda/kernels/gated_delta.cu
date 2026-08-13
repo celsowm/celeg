@@ -59,6 +59,22 @@ __global__ void gated_delta_sequence_prepare_kernel(
         __nv_bfloat16* current = qkv + static_cast<size_t>(row) * qkv_width;
         auto convolve = [&](int channel) {
             __nv_bfloat16* history = conv_state + static_cast<size_t>(channel) * conv_kernel;
+            if (conv_kernel == 4) {
+                const __nv_bfloat16 h1 = history[1];
+                const __nv_bfloat16 h2 = history[2];
+                const __nv_bfloat16 h3 = history[3];
+                const __nv_bfloat16 current_value = current[channel];
+                history[0] = h1;
+                history[1] = h2;
+                history[2] = h3;
+                history[3] = current_value;
+                const __nv_bfloat16* weights = conv_weight + static_cast<size_t>(channel) * 4;
+                const float filtered = bf16_float(h1) * bf16_float(weights[0]) +
+                    bf16_float(h2) * bf16_float(weights[1]) +
+                    bf16_float(h3) * bf16_float(weights[2]) +
+                    bf16_float(current_value) * bf16_float(weights[3]);
+                return filtered * sigmoid(filtered);
+            }
             for (int tap = 1; tap < conv_kernel; ++tap) history[tap - 1] = history[tap];
             history[conv_kernel - 1] = current[channel];
             float filtered = 0.0f;
@@ -210,14 +226,26 @@ __global__ void gated_delta_sequence_norm_kernel(
     const int value_head = static_cast<int>(blockIdx.x), lane = static_cast<int>(threadIdx.x);
     if (value_head >= value_heads) return;
     const int value_width = value_heads * value_head_dim;
-    __shared__ float partial[128];
+    __shared__ float warp_sums[4];
     for (int row = 0; row < rows; ++row) {
         __nv_bfloat16* values = output + static_cast<size_t>(row) * value_width + value_head * value_head_dim;
         float sum = 0.0f;
         for (int d = lane; d < value_head_dim; d += blockDim.x) { const float value = bf16_float(values[d]); sum += value * value; }
-        partial[lane] = sum; __syncthreads();
-        for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) { if (lane < offset) partial[lane] += partial[lane + offset]; __syncthreads(); }
-        const float inverse = rsqrtf(partial[0] / value_head_dim + eps);
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum += __shfl_down_sync(0xffffffffu, sum, offset);
+        }
+        const int warp = lane >> 5;
+        if ((lane & 31) == 0) warp_sums[warp] = sum;
+        __syncthreads();
+        if (warp == 0) {
+            sum = lane < 4 ? warp_sums[lane] : 0.0f;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                sum += __shfl_down_sync(0xffffffffu, sum, offset);
+            }
+            if (lane == 0) warp_sums[0] = rsqrtf(sum / value_head_dim + eps);
+        }
+        __syncthreads();
+        const float inverse = warp_sums[0];
         for (int d = lane; d < value_head_dim; d += blockDim.x) {
             const float gate = bf16_float(z[static_cast<size_t>(row) * value_width + value_head * value_head_dim + d]);
             values[d] = __float2bfloat16(bf16_float(values[d]) * inverse * bf16_float(norm_weight[d]) *
@@ -487,7 +515,7 @@ __global__ void gated_delta_fused_single_head_kernel(
     float* k_values = q_values + key_head_dim;
     float* decay = k_values + key_head_dim;
     float* reductions = decay + key_head_dim;
-    float* inverse = reductions + 8;
+    float* inverse = reductions + 16;
 
     auto convolve_channel = [&](int channel) {
         __nv_bfloat16* history = conv_state + static_cast<size_t>(channel) * conv_kernel;
@@ -540,7 +568,7 @@ __global__ void gated_delta_fused_single_head_kernel(
     }
     if ((lane & 31) == 0) {
         reductions[lane >> 5] = q_square;
-        reductions[4 + (lane >> 5)] = k_square;
+        reductions[8 + (lane >> 5)] = k_square;
     }
     __syncthreads();
     if (lane == 0) {
@@ -548,22 +576,33 @@ __global__ void gated_delta_fused_single_head_kernel(
         float k_total = 0.0f;
         for (int warp = 0; warp < (blockDim.x + 31) / 32; ++warp) {
             q_total += reductions[warp];
-            k_total += reductions[4 + warp];
+            k_total += reductions[8 + warp];
         }
         reductions[0] = rsqrtf(q_total + eps);
         reductions[1] = rsqrtf(k_total + eps);
     }
     __syncthreads();
+    if (!vector_decay && lane == 0) {
+        const float raw_decay = bf16_float(a_row[head]) + bf16_float(dt_bias[head]);
+        reductions[2] = safe_decay
+            ? expf(sigmoid(expf(bf16_float(a_log[head])) * raw_decay) * decay_lower_bound)
+            : expf(-expf(bf16_float(a_log[head])) * softplus(raw_decay));
+    }
+    __syncthreads();
     if (lane < key_head_dim) {
         q_values[lane] *= reductions[0];
         k_values[lane] *= reductions[1];
-        const int decay_index = vector_decay ? head * key_head_dim + lane : head;
-        decay[lane] = safe_decay
-            ? expf(sigmoid(expf(bf16_float(a_log[head])) *
-                (bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))) *
-                decay_lower_bound)
-            : expf(-expf(bf16_float(a_log[head])) *
-                softplus(bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index])));
+        if (vector_decay) {
+            const int decay_index = head * key_head_dim + lane;
+            decay[lane] = safe_decay
+                ? expf(sigmoid(expf(bf16_float(a_log[head])) *
+                    (bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index]))) *
+                    decay_lower_bound)
+                : expf(-expf(bf16_float(a_log[head])) *
+                    softplus(bf16_float(a_row[decay_index]) + bf16_float(dt_bias[decay_index])));
+        } else {
+            decay[lane] = reductions[2];
+        }
     }
     __syncthreads();
 
@@ -702,7 +741,7 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
             return;
         }
         if (key_heads == value_heads) {
-            const size_t shared_bytes = static_cast<size_t>(3 * key_head_dim + 9) * sizeof(float);
+            const size_t shared_bytes = static_cast<size_t>(3 * key_head_dim + 16) * sizeof(float);
             gated_delta_fused_single_head_kernel<<<key_heads, 256, shared_bytes, stream>>>(
                 projected_qkv, projected_z, projected_b, projected_a, conv_weight,
                 dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, rows,
