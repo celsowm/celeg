@@ -27,12 +27,20 @@ public:
             return metadata.is_gguf() && metadata.contains(
                 metadata.architecture_type() + "." + std::string(suffix));
         };
+        // GGUF tokenizer tables are structural vocabulary evidence.  Several
+        // valid GGUF writers deliberately omit <architecture>.vocab_size
+        // because the table is the authoritative source (notably hybrid
+        // recurrent checkpoints).  Do not make an identity string decide
+        // whether the generic resolver gets a chance to inspect them.
+        const bool has_vocabulary =
+            has("vocab_size") || has_gguf("vocab_size") ||
+            metadata.contains("tokenizer.ggml.tokens");
         const bool has_structural_metadata =
             (has("hidden_size") || has_gguf("embedding_length")) &&
             (has("num_hidden_layers") || has_gguf("block_count")) &&
             (has("num_attention_heads") || has("num_heads") ||
              has("mamba_num_heads") || has_gguf("attention.head_count")) &&
-            (has("vocab_size") || has_gguf("vocab_size"));
+            has_vocabulary;
         return {has_structural_metadata, 0,
                 has_structural_metadata ? "generic structural metadata" :
                                            "required structural metadata is absent"};

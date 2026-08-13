@@ -100,7 +100,7 @@ CpuGgufMatrix gguf_matrix(const HostTensorView& tensor,
     const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
     if (type != GgmlType::Q2_K && type != GgmlType::Q3_K &&
         type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
-        type != GgmlType::Q8_0 && type != GgmlType::Q4_K &&
+        type != GgmlType::Q8_0 && type != GgmlType::Q4_K && type != GgmlType::Q5_K &&
         type != GgmlType::Q6_K) {
         throw std::runtime_error("unsupported CPU GGUF linear quantization: " + name);
     }
@@ -162,7 +162,7 @@ CpuLinearWeight CpuWeightCodec::matrix(
         const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
         if (matrix.type == GgmlType::Q2_K || matrix.type == GgmlType::Q3_K ||
             matrix.type == GgmlType::Q4_0 || matrix.type == GgmlType::Q5_0 ||
-            matrix.type == GgmlType::Q8_0) {
+            matrix.type == GgmlType::Q8_0 || matrix.type == GgmlType::Q5_K) {
             const std::vector<float> values = dequantize_matrix(matrix);
             return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
                 values.data(), matrix.rows, matrix.cols, group_size_));
@@ -260,7 +260,8 @@ CpuLinearWeight CpuWeightCodec::concat(
             matrices.push_back(gguf_matrix(tensors[i], parts[i].first));
             needs_repack = needs_repack || matrices.back().type == GgmlType::Q4_0 ||
                 matrices.back().type == GgmlType::Q5_0 ||
-                matrices.back().type == GgmlType::Q8_0;
+                matrices.back().type == GgmlType::Q8_0 ||
+                matrices.back().type == GgmlType::Q5_K;
         }
         if (needs_repack) {
             std::vector<float> joined(total_rows * static_cast<size_t>(cols));

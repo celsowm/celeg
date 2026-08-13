@@ -25,6 +25,14 @@ struct BlockQ4K {
     uint8_t qs[128];
 };
 
+struct BlockQ5K {
+    uint16_t d;
+    uint16_t dmin;
+    uint8_t scales[12];
+    uint8_t qh[32];
+    uint8_t qs[128];
+};
+
 struct BlockQ6K {
     uint8_t ql[128];
     uint8_t qh[64];
@@ -64,6 +72,7 @@ struct BlockQ8_0 {
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4K) == 144);
+static_assert(sizeof(BlockQ5K) == 176);
 static_assert(sizeof(BlockQ2K) == 84);
 static_assert(sizeof(BlockQ3K) == 110);
 static_assert(sizeof(BlockQ6K) == 210);
@@ -103,6 +112,14 @@ int q4k_value(const BlockQ4K& block, int col) {
     const int within = col & 31;
     const uint8_t byte = block.qs[(sub >> 1) * 32 + within];
     return (sub & 1) ? (byte >> 4) : (byte & 0x0f);
+}
+
+int q5k_value(const BlockQ5K& block, int col) {
+    const int sub = col >> 5;
+    const int within = col & 31;
+    const uint8_t packed = block.qs[(sub >> 1) * 32 + within];
+    const int low = (sub & 1) ? (packed >> 4) : (packed & 0x0f);
+    return low | (((block.qh[within] >> sub) & 1) << 4);
 }
 
 int q6k_value(const BlockQ6K& block, int col) {
@@ -200,9 +217,9 @@ size_t CpuGgufMatrix::row_bytes() const {
 void CpuGgufMatrix::validate() const {
     if (type != GgmlType::Q2_K && type != GgmlType::Q3_K &&
         type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
-        type != GgmlType::Q8_0 && type != GgmlType::Q4_K &&
+        type != GgmlType::Q8_0 && type != GgmlType::Q4_K && type != GgmlType::Q5_K &&
         type != GgmlType::Q6_K) {
-        throw std::invalid_argument("CPU GGUF matrix requires Q2_K, Q3_K, Q4_0, Q5_0, Q8_0, Q4_K or Q6_K");
+        throw std::invalid_argument("CPU GGUF matrix requires Q2_K, Q3_K, Q4_0, Q5_0, Q8_0, Q4_K, Q5_K or Q6_K");
     }
     if (rows == 0 || cols == 0 || !data || row_bytes() == 0 ||
         bytes != static_cast<size_t>(rows) * row_bytes()) {
@@ -511,6 +528,25 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
                     const int col = sub * 32 + i;
                     output[b * 256 + static_cast<size_t>(col)] =
                         d * static_cast<float>(scale * q4k_value(weight, col)) -
+                        dmin * static_cast<float>(minimum);
+                }
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::Q5_K) {
+        const auto* weights = reinterpret_cast<const BlockQ5K*>(packed);
+        for (size_t b = 0; b < blocks; ++b) {
+            const BlockQ5K& weight = weights[b];
+            const float d = fp16_to_float(weight.d);
+            const float dmin = fp16_to_float(weight.dmin);
+            for (int sub = 0; sub < 8; ++sub) {
+                uint8_t scale = 0, minimum = 0;
+                q4k_scale_min(sub, weight.scales, scale, minimum);
+                for (int i = 0; i < 32; ++i) {
+                    const int col = sub * 32 + i;
+                    output[b * 256 + static_cast<size_t>(col)] =
+                        d * static_cast<float>(scale * q5k_value(weight, col)) -
                         dmin * static_cast<float>(minimum);
                 }
             }

@@ -12,7 +12,15 @@ namespace celeg::inference_detail {
 
 bool shape_is(const TensorInventoryEntry& entry,
               std::initializer_list<std::int64_t> expected) {
-    return entry.shape == std::vector<std::int64_t>(expected);
+    const std::vector<std::int64_t> wanted(expected);
+    if (entry.shape == wanted) return true;
+
+    // GGUF stores a depth-wise [channels, 1, taps] kernel as the equivalent
+    // two-dimensional [channels, taps] tensor.  The singleton axis has no
+    // mathematical meaning, so normalize that storage distinction at the
+    // evidence boundary instead of teaching every backend a format name.
+    return entry.shape.size() == 2 && wanted.size() == 3 && wanted[1] == 1 &&
+           entry.shape[0] == wanted[0] && entry.shape[1] == wanted[2];
 }
 
 const TensorInventoryEntry* find_unique(const TensorInventory& inventory,

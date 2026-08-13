@@ -266,6 +266,20 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
     return result;
 }
 
+std::optional<int> tokenizer_vocabulary_size(const CheckpointMetadata& metadata,
+                                             std::vector<EvidenceItem>& evidence) {
+    constexpr std::string_view key = "tokenizer.ggml.tokens";
+    if (!metadata.contains(key)) return std::nullopt;
+    const auto* tokens = std::get_if<std::vector<std::string>>(&metadata.value(key));
+    if (!tokens || tokens->empty() || tokens->size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                               "tokenizer vocabulary table is invalid");
+    }
+    evidence.push_back({EvidenceKind::Derived, std::string(key),
+                        "vocab_size = " + std::to_string(tokens->size())});
+    return static_cast<int>(tokens->size());
+}
+
 std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view key) {
     std::string resolved_key(key);
     if (!metadata.contains(resolved_key)) {
@@ -373,6 +387,9 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "mamba_chunk_size", "ssm.chunk_size");
     result.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
                                      "vocab_size", "vocab_size");
+    if (!result.vocab_size.has_value()) {
+        result.vocab_size = tokenizer_vocabulary_size(metadata, result.evidence);
+    }
     result.context_length = aliases<int>(
         metadata, {"max_position_embeddings", "max_seq_len", "context_length"},
         result.evidence, "context_length", "context_length");

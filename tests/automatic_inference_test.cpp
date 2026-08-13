@@ -296,6 +296,19 @@ int main() {
                      "chat:thinking-function");
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
 
+    // A GGUF tokenizer table is authoritative vocabulary structure when a
+    // writer omits the redundant architecture-local vocab_size field.
+    auto tokenizer_vocab = gguf_metadata();
+    tokenizer_vocab.values.erase("conventional.vocab_size");
+    tokenizer_vocab.values["tokenizer.ggml.tokens"] =
+        std::vector<std::string>(32, "token");
+    celeg::CheckpointView tokenizer_vocab_checkpoint;
+    tokenizer_vocab_checkpoint.metadata = std::move(tokenizer_vocab);
+    tokenizer_vocab_checkpoint.repository = gguf_repository();
+    const celeg::ResolvedModel tokenizer_vocab_model =
+        catalog.select(tokenizer_vocab_checkpoint.metadata).resolve(tokenizer_vocab_checkpoint);
+    CELEG_TEST_CHECK(tokenizer_vocab_model.topology.dims.vocab_size == 32);
+
     celeg::CheckpointView hybrid_checkpoint;
     hybrid_checkpoint.metadata = hybrid_gguf_metadata();
     hybrid_checkpoint.repository = hybrid_gguf_repository();

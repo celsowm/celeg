@@ -270,6 +270,16 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             has_tensor(model_layer_prefix + "attention.f_proj.weight") &&
             has_tensor(model_layer_prefix + "attention.q_conv1d.weight");
         const bool has_mla = has_tensor(model_layer_prefix + "attention.q_a_proj.weight");
+        const bool has_fused_gated_delta =
+            has_tensor(layer_prefix + "attn_qkv.weight") &&
+            has_tensor(layer_prefix + "attn_gate.weight") &&
+            has_tensor(layer_prefix + "ssm_alpha.weight") &&
+            has_tensor(layer_prefix + "ssm_beta.weight") &&
+            has_tensor(layer_prefix + "ssm_conv1d.weight") &&
+            has_tensor(layer_prefix + "ssm_dt.bias") &&
+            has_tensor(layer_prefix + "ssm_a") &&
+            has_tensor(layer_prefix + "ssm_norm.weight") &&
+            has_tensor(layer_prefix + "ssm_out.weight");
         const bool has_attention =
             has_tensor(layer_prefix + "attn_q.weight") ||
             has_tensor("model.layers." + std::to_string(layer) + ".self_attn.q_proj.weight") ||
@@ -292,10 +302,50 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
         const auto query_heads = m.query_heads.value_for(layer);
         const auto key_value_heads = m.key_value_heads.value_for(layer);
         const auto explicit_head_dim = m.head_dim.value_for(layer);
-        if (has_mamba && has_attention) {
+        if ((has_mamba || has_fused_gated_delta) && has_attention) {
             inference_detail::fail(ResolutionFailureKind::ConflictingInferenceFacts,
-                                   "layer has both attention and Mamba-2 tensor grammars: " +
+                                   "layer has mutually exclusive attention and recurrent tensor grammars: " +
                                        std::to_string(layer));
+        }
+        if (has_fused_gated_delta) {
+            const auto* qkv = input.inventory.find(layer_prefix + "attn_qkv.weight");
+            const auto* z = input.inventory.find(layer_prefix + "attn_gate.weight");
+            const auto* alpha = input.inventory.find(layer_prefix + "ssm_alpha.weight");
+            const auto* beta = input.inventory.find(layer_prefix + "ssm_beta.weight");
+            const auto* convolution = input.inventory.find(layer_prefix + "ssm_conv1d.weight");
+            const auto* dt_bias = input.inventory.find(layer_prefix + "ssm_dt.bias");
+            const auto* a_log = input.inventory.find(layer_prefix + "ssm_a");
+            const auto* norm = input.inventory.find(layer_prefix + "ssm_norm.weight");
+            const auto* output = input.inventory.find(layer_prefix + "ssm_out.weight");
+            const int key_dim = m.mamba_state_size.value_or(0);
+            const int key_heads = m.mamba_group_count.value_or(0);
+            const int value_heads = m.mamba_time_step_rank.value_or(0);
+            const int value_width = output && output->shape.size() == 2
+                ? static_cast<int>(output->shape[1]) : 0;
+            const int value_dim = value_heads > 0 && value_width % value_heads == 0
+                ? value_width / value_heads : 0;
+            const int qkv_width = 2 * key_heads * key_dim + value_width;
+            if (!qkv || !z || !alpha || !beta || !convolution || !dt_bias || !a_log ||
+                !norm || !output || key_dim <= 0 || key_heads <= 0 || value_heads <= 0 ||
+                value_dim <= 0 || !inference_detail::shape_is(*qkv,
+                    {qkv_width, *m.hidden_size}) || !inference_detail::shape_is(*z,
+                    {value_width, *m.hidden_size}) || !inference_detail::shape_is(*alpha,
+                    {value_heads, *m.hidden_size}) || !inference_detail::shape_is(*beta,
+                    {value_heads, *m.hidden_size}) || !inference_detail::shape_is(*convolution,
+                    {qkv_width, 1, m.mamba_conv_kernel.value_or(0)}) ||
+                !inference_detail::shape_is(*dt_bias, {value_heads}) ||
+                !inference_detail::shape_is(*a_log, {value_heads}) ||
+                !inference_detail::shape_is(*norm, {value_dim}) ||
+                !inference_detail::shape_is(*output, {*m.hidden_size, value_width})) {
+                inference_detail::fail(ResolutionFailureKind::ShapeConstraintViolation,
+                    "fused recurrent linear-attention tensor shapes do not agree with geometry for layer " +
+                    std::to_string(layer));
+            }
+            semantic_layer.mixer = GatedDeltaNetSpec{
+                m.mamba_conv_kernel.value_or(0), key_dim, value_dim, key_heads, value_heads,
+                false, false, -5.0f, false, false};
+            semantic_layer.execute_feed_forward = has_ffn;
+            continue;
         }
         if (has_kda) {
             const auto* q = input.inventory.find(model_layer_prefix + "attention.q_proj.weight");
@@ -508,8 +558,25 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                                    "query/key normalization evidence is incomplete for layer " +
                                        std::to_string(layer));
         }
-        semantic_layer.mixer = make_attention(*query_heads, *key_value_heads,
-                                              head_dim, has_query_norm);
+        AttentionSpec attention = make_attention(*query_heads, *key_value_heads,
+                                                 head_dim, has_query_norm);
+        const auto q_candidates = inference_detail::attention_tensor_candidates(layer, "q_proj.weight");
+        const TensorInventoryEntry* query = nullptr;
+        for (const std::string& name : q_candidates) {
+            if (const auto* candidate = input.inventory.find(name)) {
+                if (query != nullptr) {
+                    inference_detail::fail(ResolutionFailureKind::AmbiguousTensorBinding,
+                        "multiple query projections are present for layer " + std::to_string(layer));
+                }
+                query = candidate;
+            }
+        }
+        if (query && inference_detail::shape_is(*query,
+                {2 * attention.query_width(), *m.hidden_size})) {
+            attention.output_gate = {AttentionGateKind::Sigmoid, true,
+                                     AttentionGateGranularity::ElementWise};
+        }
+        semantic_layer.mixer = std::move(attention);
         semantic_layer.execute_feed_forward = has_ffn;
     }
     if (m.attention_multiplier.has_value()) {
@@ -691,6 +758,32 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             bind(TensorRole::GatedDeltaNetOutput, "o_proj.weight",
                  {*m.hidden_size, spec.value_width()});
         } else if (graph.layers[static_cast<size_t>(layer)].mixer_kind() ==
+                   MixerKind::GatedDeltaNet) {
+            const GatedDeltaNetSpec& spec = std::get<GatedDeltaNetSpec>(
+                graph.layers[static_cast<size_t>(layer)].mixer);
+            const int qkv_width = spec.qkv_width();
+            const auto bind = [&](TensorRole role, std::string_view suffix,
+                                  std::initializer_list<std::int64_t> shape) {
+                const auto* tensor = inference_detail::find_unique(
+                    input.inventory, {layer_prefix + std::string(suffix)}, role, layer, shape, {});
+                inference_detail::add_binding(facts.bindings, role, layer, *tensor, {});
+            };
+            bind(TensorRole::GatedDeltaNetQkv, "attn_qkv.weight",
+                 {qkv_width, *m.hidden_size});
+            bind(TensorRole::GatedDeltaNetZ, "attn_gate.weight",
+                 {spec.value_width(), *m.hidden_size});
+            bind(TensorRole::GatedDeltaNetAlpha, "ssm_alpha.weight",
+                 {spec.value_heads, *m.hidden_size});
+            bind(TensorRole::GatedDeltaNetBeta, "ssm_beta.weight",
+                 {spec.value_heads, *m.hidden_size});
+            bind(TensorRole::GatedDeltaNetDtBias, "ssm_dt.bias", {spec.value_heads});
+            bind(TensorRole::GatedDeltaNetALog, "ssm_a", {spec.value_heads});
+            bind(TensorRole::GatedDeltaNetConv, "ssm_conv1d.weight",
+                 {qkv_width, 1, spec.conv_kernel});
+            bind(TensorRole::GatedDeltaNetNorm, "ssm_norm.weight", {spec.value_head_dim});
+            bind(TensorRole::GatedDeltaNetOutput, "ssm_out.weight",
+                 {*m.hidden_size, spec.value_width()});
+        } else if (graph.layers[static_cast<size_t>(layer)].mixer_kind() ==
                    MixerKind::ShortConvolution) {
             const auto* input_projection = inference_detail::find_unique(
                 input.inventory,
@@ -756,7 +849,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
                 input.inventory,
                 inference_detail::attention_tensor_candidates(layer, "q_proj.weight"),
                 TensorRole::AttentionQuery, layer,
-                {query_head_count * layer_head_dim, *m.hidden_size}, {});
+                {attention.query_projection_width(), *m.hidden_size}, {});
             inference_detail::add_binding(facts.bindings, TensorRole::AttentionQuery,
                                           layer, *q, {});
             const auto* k = inference_detail::find_unique(

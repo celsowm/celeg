@@ -122,6 +122,13 @@ void test_fixture() {
     std::cout << "test_fixture PASS\n";
 }
 
+void test_q5k_trait() {
+    const auto trait = celeg::ggml_type_trait(celeg::GgmlType::Q5_K);
+    CELEG_TEST_CHECK(trait.block_size == 256);
+    CELEG_TEST_CHECK(trait.type_size == 176);
+    CELEG_TEST_CHECK(std::string(celeg::ggml_type_name(celeg::GgmlType::Q5_K)) == "Q5_K");
+}
+
 void test_real_file_optional() {
     const char* env = std::getenv("CELEG_GGUF_TEST_FILE");
     if (env == nullptr) {
@@ -149,6 +156,7 @@ int main() {
 #endif
     try {
         test_fixture();
+        test_q5k_trait();
         test_real_file_optional();
         std::cout << "ALL PASS\n";
     } catch (const std::exception& e) {

@@ -35,6 +35,7 @@ GgmlType parse_ggml_type(int32_t raw) {
         case 10: return GgmlType::Q2_K;
         case 11: return GgmlType::Q3_K;
         case 12: return GgmlType::Q4_K;
+        case 13: return GgmlType::Q5_K;
         case 14: return GgmlType::Q6_K;
         case 30: return GgmlType::BF16;
         default: return GgmlType::Unknown;
@@ -201,6 +202,8 @@ GgmlTypeTrait ggml_type_trait(GgmlType type) {
         case GgmlType::Q3_K: return {256, 110};
         // Q4_K super-block: 256 elems, 144 bytes (2 f16 + 12 scales + 128 quants).
         case GgmlType::Q4_K: return {256, 144};
+        // Q5_K super-block: Q4_K layout plus 32 high-bit bytes.
+        case GgmlType::Q5_K: return {256, 176};
         // Q6_K super-block: 256 elems, 210 bytes.
         case GgmlType::Q6_K: return {256, 210};
         case GgmlType::Unknown: return {0, 0};
@@ -220,6 +223,7 @@ const char* ggml_type_name(GgmlType type) {
         case GgmlType::Q2_K: return "Q2_K";
         case GgmlType::Q3_K: return "Q3_K";
         case GgmlType::Q4_K: return "Q4_K";
+        case GgmlType::Q5_K: return "Q5_K";
         case GgmlType::Q6_K: return "Q6_K";
         case GgmlType::Unknown: return "Unknown";
     }
