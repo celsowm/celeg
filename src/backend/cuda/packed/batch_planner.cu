@@ -1,6 +1,6 @@
-#include "celeg/backend/cuda/packed_batch_planner.hpp"
+#include "celeg/backend/cuda/packed/batch_planner.hpp"
 
-#include "celeg/backend/cuda/packed_metadata.hpp"
+#include "celeg/backend/cuda/packed/metadata.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 
 #include <algorithm>

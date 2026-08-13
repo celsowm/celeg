@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/packed_operators.hpp"
+#include "celeg/backend/cuda/packed/operators.hpp"
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/kernels/gated_delta.hpp"

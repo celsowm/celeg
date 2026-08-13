@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed_session.hpp"
+#include "celeg/backend/cuda/packed/session.hpp"
 
 #include <cstddef>
 #include <cstdint>

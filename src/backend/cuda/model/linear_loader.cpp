@@ -4,8 +4,8 @@
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
-#include "celeg/checkpoint/packed_int8.hpp"
-#include "celeg/checkpoint/packed_int4.hpp"
+#include "celeg/checkpoint/packed/int8.hpp"
+#include "celeg/checkpoint/packed/int4.hpp"
 #include "weight_loader_internal.hpp"
 
 #include <cstddef>

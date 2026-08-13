@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/packed_workspace.hpp"
+#include "celeg/backend/cuda/packed/workspace.hpp"
 
 #include "celeg/backend/cuda/paged_kv.hpp"
 

@@ -47,8 +47,8 @@ f8b22f8b995f1dfca1f0c2e1e4cf774536694096b403797f5da1186570971e12  ./include/cele
 f61ba5d6b157bd66a7279e3a0eb40aaac48e36e291bcd4ebe408d321ac213de7  ./include/celeg/backend/cuda/kernels/rope.hpp
 eb026841c29982cf99ed16f1ef986a53fbcbd27b88986b3f038906601229ade2  ./include/celeg/backend/cuda/kernels/sampling.hpp
 a6a87c9ad7b6376f3c64347910899b1c657816bfefa872a011e20a372443439f  ./include/celeg/backend/cuda/kernels/scatter.hpp
-8cb2d76dbbc65af3087cd072952a37d5d3f72ca25438c38d1c51fa6659fe3532  ./include/celeg/backend/cuda/packed_session.hpp
-1af76489e15b6da032e822a1aab25bd0f24fbeee461f2ff665ebc9ca939f2243  ./include/celeg/backend/cuda/packed.hpp
+76d821e8bf5200a34ffa73c3b4fc9941c598b8f5543ab3db960ec30921e7fb03  ./include/celeg/backend/cuda/packed/session.hpp
+7d86a38400091f31b96cee3f8181ab136783b2d26e91eb559370b0f4d9023b95  ./include/celeg/backend/cuda/packed/executor.hpp
 7a421d44f80e06c952b95e248c9876a7597c61917e75a9fd29242f24fdff68f6  ./include/celeg/backend/cuda/paged_kv.hpp
 8d728f51a07aac6e076a8a8a7a4a9f39fb18d0a314a7fa9a138c85c098dc72a8  ./include/celeg/backend/cuda/phase_profile.hpp
 159cfde15df99f88cc08cccf1c22bb2f3d85143b18c53dd52b41b413bb281a77  ./include/celeg/backend/cuda/session_store.hpp
@@ -195,7 +195,7 @@ f473cbd186510425821dd2f8a23c0af7970f563a0009248b2a7f389adf81a19c  ./src/backend/
 af97c7e868ef498917ffa9122065714fb005d06582c4d2aff11a68fc8bad6194  ./src/backend/cuda/kernels/linear.cuh
 cc96145099ea69df9b73d737a141b525661be33b6a361bbbf21fdad576d49a9e  ./src/backend/cuda/kernels/mmq.cu
 9d4c1ed31e4430cb45204df6837eda626b61dd9a60474076d779f8feb8c5d129  ./src/backend/cuda/kernels/norm.cuh
-4884205d7c4b6b694b1eb05b7e4eb4efe39b392b245afd2bd65372a84cb72319  ./src/backend/cuda/kernels/packed.cu
+4884205d7c4b6b694b1eb05b7e4eb4efe39b392b245afd2bd65372a84cb72319  ./src/backend/cuda/kernels/packed/kernels.cu
 58d836d8788bc27d5e9f193dd592d8c6318d5bcb0e375cabcdf1f5d8940f8400  ./src/backend/cuda/kernels/position.cuh
 3f3a2d66c31bfb0a9d21b590b444966a329526d922f44dce8991812527dc9f8c  ./src/backend/cuda/kernels/qkv_rope.cuh
 10cb92230abde6e695c455d9ac66fd678bbc8abaa4cf0a756efd30c6fd45b52d  ./src/backend/cuda/kernels/rope.cuh
@@ -216,7 +216,7 @@ a8c00bb31c7776dd0c293c992de1f816285d3983aa12a3a9b37ced925397beca  ./src/backend/
 c2c0d63b0b7ad3da846ec85f3cd9324ec1a31e95ff90a6b535c5e735ca42b699  ./src/backend/cuda/model/linear_loader.cpp
 d62feee101a84b66bdd983e15be8986413059fdb080bf7f07b3edefce4c528b6  ./src/backend/cuda/model/loader_cache.cu
 232d214e21099d0a548634cb4440ea7aa22c91a326fa5fcf82bd5ce451330097  ./src/backend/cuda/model/loader_experts.cu
-eca4b91710c4c1657a0a647dffd53686dcebe8a2e96c0c31f531ca0dba2f3a5b  ./src/backend/cuda/model/packed_execution.cu
+064adf341ac46ee44247d53a35ce1c0def30d2d7f554d0ad8503e2b2512a61f9  ./src/backend/cuda/packed/execution.cu
 dbc166a5d244ad7fb59f7ee38625a71c7e7a46201e1f8cd8191fa6b2a582984d  ./src/backend/cuda/model/paged_prefill.cpp
 c70cddc79eb01973c98152503b39b82aa275a054b425b14558c37c00327cd50d  ./src/backend/cuda/model/persistence.cu
 5b0b52206604e796cadde54f7ae82e09f8cc33038d13e2390371621f170d0563  ./src/backend/cuda/model/prefill_batched.cpp

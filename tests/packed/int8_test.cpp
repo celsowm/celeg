@@ -1,4 +1,4 @@
-#include "celeg/checkpoint/packed_int8.hpp"
+#include "celeg/checkpoint/packed/int8.hpp"
 #include "support/assertions.hpp"
 
 #include <cstring>

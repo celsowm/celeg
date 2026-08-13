@@ -1,7 +1,7 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
-#include "celeg/checkpoint/packed_int4.hpp"
+#include "celeg/checkpoint/packed/int4.hpp"
 #include <cstring>
 #include <stdexcept>
 #include <vector>

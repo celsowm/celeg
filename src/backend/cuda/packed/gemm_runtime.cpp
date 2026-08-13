@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/packed_gemm_runtime.hpp"
+#include "celeg/backend/cuda/packed/gemm_runtime.hpp"
 
 #include <stdexcept>
 

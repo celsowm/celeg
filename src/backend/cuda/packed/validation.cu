@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/packed/executor.hpp"
 #include "celeg/detail/model/types.hpp"
 
 #include <algorithm>

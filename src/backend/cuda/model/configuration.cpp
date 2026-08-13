@@ -2,7 +2,7 @@
 #include "celeg/backend/cuda/compiler.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/weight_policy.hpp"
-#include "celeg/checkpoint/packed_int8.hpp"
+#include "celeg/checkpoint/packed/int8.hpp"
 
 #include <algorithm>
 #include <stdexcept>

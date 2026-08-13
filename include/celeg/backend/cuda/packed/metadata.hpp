@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed_workspace.hpp"
+#include "celeg/backend/cuda/packed/workspace.hpp"
 
 #include <cstdint>
 #include <vector>

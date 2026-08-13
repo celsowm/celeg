@@ -1,8 +1,8 @@
 #include "celeg/backend/cpu/weight_codec.hpp"
 
 #include "celeg/checkpoint/weight_repository.hpp"
-#include "celeg/checkpoint/packed_int8.hpp"
-#include "celeg/checkpoint/packed_int4.hpp"
+#include "celeg/checkpoint/packed/int8.hpp"
+#include "celeg/checkpoint/packed/int4.hpp"
 #include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>

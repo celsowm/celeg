@@ -57,7 +57,7 @@ COMMON=(
 for source in \
     "$ROOT/src/kernels.cu" \
     "$ROOT/src/model.cu" \
-    "$ROOT/src/packed.cu" \
+    "$ROOT/src/backend/cuda/kernels/packed/kernels.cu" \
     "$ROOT/src/paged_kv.cu" \
     "$ROOT/tests/cuda_kernels_test.cu"; do
     echo "checking ${source#$ROOT/}"

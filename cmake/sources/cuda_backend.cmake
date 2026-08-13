@@ -9,7 +9,7 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/kernels/attention_output.cu
     src/backend/cuda/kernels/rope_pairing.cu
     src/backend/cuda/kernels/sampling.cu
-    src/backend/cuda/kernels/packed.cu
+    src/backend/cuda/kernels/packed/kernels.cu
     src/backend/cuda/kernels/gguf.cu
     src/backend/cuda/kernels/mmq.cu
     src/backend/cuda/model/setup.cpp
@@ -38,16 +38,16 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/paged_prefill.cpp
     src/backend/cuda/model/prefill_profile.cpp
     src/backend/cuda/model/weights.cpp
-    src/backend/cuda/model/packed_execution.cu
-    src/backend/cuda/model/packed_batch_planner.cu
-    src/backend/cuda/model/packed_layer_executor.cu
-    src/backend/cuda/model/packed_validation.cu
-    src/backend/cuda/model/packed_workspace.cu
-    src/backend/cuda/model/packed_commit.cpp
-    src/backend/cuda/model/packed_metadata.cu
-    src/backend/cuda/model/packed_layer_program.cpp
-    src/backend/cuda/model/packed_operators.cu
-    src/backend/cuda/model/packed_gemm_runtime.cpp
+    src/backend/cuda/packed/execution.cu
+    src/backend/cuda/packed/batch_planner.cu
+    src/backend/cuda/packed/layer_executor.cu
+    src/backend/cuda/packed/validation.cu
+    src/backend/cuda/packed/workspace.cu
+    src/backend/cuda/packed/commit.cpp
+    src/backend/cuda/packed/metadata.cu
+    src/backend/cuda/packed/layer_program.cpp
+    src/backend/cuda/packed/operators.cu
+    src/backend/cuda/packed/gemm_runtime.cpp
     src/backend/cuda/model/persistence.cu
     src/backend/cuda/model/speculative_state.cu
     src/backend/cuda/model/mtp_execution.cu

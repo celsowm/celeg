@@ -3,10 +3,10 @@
 `PackedDecodeExecutor` is the public façade. Its reusable device/host state is
 owned by `PackedDecodeExecutorImpl`, while decode and ragged-prefill request
 validation and workflow entry are owned by the distinct
-[`PackedDecodePipeline`](../include/celeg/backend/cuda/packed_pipelines.hpp)
+[`PackedDecodePipeline`](../include/celeg/backend/cuda/packed/pipelines.hpp)
 and `PackedPrefillPipeline` collaborators. Both paths finish through the
 explicit host commit helpers in
-[`packed_commit.hpp`](../include/celeg/backend/cuda/packed_commit.hpp).
+[`commit.hpp`](../include/celeg/backend/cuda/packed/commit.hpp).
 
 Decode and ragged prefill are separate operations and must not share host
 state transitions. A failed launch or completion wait occurs before commit;

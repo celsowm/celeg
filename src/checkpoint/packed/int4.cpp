@@ -1,4 +1,4 @@
-#include "celeg/checkpoint/packed_int4.hpp"
+#include "celeg/checkpoint/packed/int4.hpp"
 
 #include "celeg/model/weights/quantization.hpp"
 

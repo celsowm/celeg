@@ -1,4 +1,4 @@
-#include "celeg/backend/cuda/packed_commit.hpp"
+#include "celeg/backend/cuda/packed/commit.hpp"
 #include "support/assertions.hpp"
 
 #include <iostream>

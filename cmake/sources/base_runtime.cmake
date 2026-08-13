@@ -2,8 +2,8 @@
 set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp
-    src/checkpoint/packed_int8.cpp
-    src/checkpoint/packed_int4.cpp
+    src/checkpoint/packed/int8.cpp
+    src/checkpoint/packed/int4.cpp
     src/checkpoint/formats/gguf.cpp
     src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp

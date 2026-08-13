@@ -1,9 +1,9 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed_gemm_runtime.hpp"
-#include "celeg/backend/cuda/packed_layer_program.hpp"
-#include "celeg/backend/cuda/packed_operators.hpp"
-#include "celeg/backend/cuda/packed_workspace.hpp"
+#include "celeg/backend/cuda/packed/gemm_runtime.hpp"
+#include "celeg/backend/cuda/packed/layer_program.hpp"
+#include "celeg/backend/cuda/packed/operators.hpp"
+#include "celeg/backend/cuda/packed/workspace.hpp"
 
 #include <vector>
 

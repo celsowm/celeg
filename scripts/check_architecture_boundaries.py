@@ -247,7 +247,7 @@ def main() -> int:
     # Packed execution must consume resources and compiled policy prepared by
     # its owner. These checks keep accidental hot-path plan compilation and
     # direct CUDA allocation out of the orchestration translation unit.
-    packed_execution = root / "src/backend/cuda/model/packed_execution.cu"
+    packed_execution = root / "src/backend/cuda/packed/execution.cu"
     if packed_execution.is_file():
         packed_text = packed_execution.read_text(encoding="utf-8")
         forbidden_packed = (

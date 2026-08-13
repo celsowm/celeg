@@ -1,8 +1,8 @@
 #pragma once
 
 #include "celeg/backend/cuda/gemm_dispatcher.hpp"
-#include "celeg/backend/cuda/packed_session.hpp"
-#include "celeg/backend/cuda/packed_workspace.hpp"
+#include "celeg/backend/cuda/packed/session.hpp"
+#include "celeg/backend/cuda/packed/workspace.hpp"
 #include "celeg/detail/model/compiled_model.hpp"
 
 #include <cstddef>

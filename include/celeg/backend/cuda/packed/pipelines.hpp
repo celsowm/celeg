@@ -1,6 +1,6 @@
 #pragma once
 
-#include "celeg/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/packed/executor.hpp"
 
 namespace celeg {
 

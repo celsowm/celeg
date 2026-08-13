@@ -4,7 +4,7 @@
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/model.hpp"
 #include "celeg/model/resolved.hpp"
-#include "celeg/backend/cuda/packed.hpp"
+#include "celeg/backend/cuda/packed/executor.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/backend/cuda/kernels/mmq.hpp"
 #include "celeg/runtime/cache/prefix_cache.hpp"

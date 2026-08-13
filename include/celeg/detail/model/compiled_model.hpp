@@ -12,7 +12,7 @@
 #include "celeg/backend/cuda/sampling_state.hpp"
 #include "celeg/backend/cuda/decode_graphs.hpp"
 #include "celeg/backend/cuda/workspace.hpp"
-#include "celeg/backend/cuda/packed_session.hpp"
+#include "celeg/backend/cuda/packed/session.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/detail/model/types.hpp"

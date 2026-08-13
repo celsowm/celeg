@@ -378,7 +378,7 @@ using Layer = std::variant<AttentionLayer, ConvolutionLayer, GatedDeltaNetLayer,
 
 // Free-function visitors replace the old common / as_attention /
 // as_convolution statics). Putting them at namespace scope means callers
-// in packed.cu no longer need `friend struct PackedDecodeExecutorImpl`.
+// in packed/kernels.cu no longer need `friend struct PackedDecodeExecutorImpl`.
 inline LayerCommon& common(Layer& layer) {
     return std::visit([](auto& value) -> LayerCommon& { return value.common; }, layer);
 }
@@ -436,7 +436,7 @@ inline bool is_moe_ffn(const FeedForwardWeights& ff) {
 
 // Builds the MoE router config / FFN device descriptor from the model shape and
 // MoE weights. Shared by the standalone decode/prefill paths (model.cu) and the
-// packed executor (packed.cu) so both stay in lock-step with the checkpoint
+// packed executor (packed/execution.cu) so both stay in lock-step with the checkpoint
 // topology. Defined inline here (where MoeFfnWeights is complete) to avoid
 // duplicating the descriptor construction across translation units.
 inline celeg::MoeRouterConfig moe_router_config(const MoeLayerProgram& semantics) {

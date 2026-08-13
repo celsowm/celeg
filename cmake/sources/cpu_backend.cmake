@@ -13,8 +13,8 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/operators/moe.cpp
     src/backend/cpu/operators/recurrent.cpp
     src/backend/cpu/sampler.cpp
-    src/backend/cpu/packed_execution.cpp
-    src/backend/cpu/packed_api.cpp
+    src/backend/cpu/packed/execution.cpp
+    src/backend/cpu/packed/api.cpp
     src/backend/cpu/concurrent.cpp
     src/backend/cpu/detail/batch_scheduler.cpp
     src/backend/cpu/detail/admission_controller.cpp

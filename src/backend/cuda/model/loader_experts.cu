@@ -1,7 +1,7 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/checkpoint/tensor_names.hpp"
-#include "celeg/checkpoint/packed_int4.hpp"
+#include "celeg/checkpoint/packed/int4.hpp"
 
 #include <cuda_runtime.h>
 
