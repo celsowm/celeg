@@ -35,10 +35,10 @@ int main(int argc, char** argv) {
         const celeg::detail::ModelBootstrap bootstrap =
             celeg::detail::load_model_bootstrap(model_dir);
         const auto& topology = bootstrap.model.topology;
-        const auto chat_catalog = celeg::make_chat_template_catalog();
-        const auto& chat_template = chat_catalog.find(bootstrap.model.provenance.chat_template_id);
         celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(
             (model_dir / "tokenizer.json").string()));
+        const auto chat_template = celeg::resolve_chat_template(
+            bootstrap.checkpoint.metadata, tokenizer);
         const std::vector<int32_t> tokens = tokenizer.encode(
             celeg::render_chat(
                 std::vector<celeg::ChatMessage>{{celeg::ChatRole::User, prompt}},

@@ -399,6 +399,7 @@ endif()
 # the package ABI and also forced CPU-only consumers to discover CUDA headers.
 set(CELEG_PUBLIC_HEADERS
     include/celeg/api.h
+    include/celeg/app/run_preparation.hpp
     include/celeg/backend/cpu/concurrent.hpp
     include/celeg/backend/cpu/gguf.hpp
     include/celeg/backend/cpu/isa.hpp
@@ -544,6 +545,10 @@ if(CELEG_BUILD_TESTS)
         )
     target_include_directories(chat_template_test PRIVATE include)
     add_test(NAME chat_template_test COMMAND chat_template_test)
+    add_executable(chat_template_resolution_test tests/chat_template_resolution_test.cpp)
+    target_include_directories(chat_template_resolution_test PRIVATE include tests)
+    target_link_libraries(chat_template_resolution_test PRIVATE celeg_base)
+    add_test(NAME chat_template_resolution_test COMMAND chat_template_resolution_test)
     add_executable(protocol_utils_test tests/protocol_utils_test.cpp)
     target_include_directories(protocol_utils_test PRIVATE include tests)
     add_test(NAME protocol_utils_test COMMAND protocol_utils_test)

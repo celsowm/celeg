@@ -1,4 +1,4 @@
-#include "detail/model_internal.hpp"
+#include "../detail/model_internal.hpp"
 
 #include "celeg/backend/cpu/sampler.hpp"
 

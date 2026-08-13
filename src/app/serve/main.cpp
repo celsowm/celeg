@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -36,6 +37,7 @@ using celeg::serve::GenerationDispatcher;
 
 struct Args {
     std::string model_dir;
+    std::string chat_template_file;
     std::string served_model_name;
     int port = 8080;
     std::string host = "127.0.0.1";
@@ -67,6 +69,7 @@ Args parse_args(int argc, char** argv) {
             return argv[i];
         };
         if (key == "--model") args.model_dir = value();
+        else if (key == "--chat-template-file") args.chat_template_file = value();
         else if (key == "--served-model-name") args.served_model_name = value();
         else if (key == "--port") args.port = std::stoi(value());
         else if (key == "--host") args.host = value();
@@ -96,7 +99,7 @@ Args parse_args(int argc, char** argv) {
                          "[--expert-backing host|disk] [--expert-cache-per-layer N] "
                          "[--expert-host-cache-mib N] "
                          "[--mtp] [--mtp-speculative-tokens N] [--no-cuda-graph] "
-                         "[--served-model-name NAME]\n";
+                         "[--served-model-name NAME] [--chat-template-file PATH]\n";
             std::exit(0);
         } else {
             throw std::runtime_error("unknown argument: " + key);
@@ -151,13 +154,18 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--context exceeds model maximum");
         }
 
-        const auto& chat_template = runtime->chat_templates().find(
-            bootstrap.model.provenance.chat_template_id);
         const auto& tokenizer_provider = celeg::select_tokenizer_provider(
             *runtime, bootstrap.checkpoint, model);
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, model);
         const celeg::ITokenizer& tokenizer = *tokenizer_storage;
+        const celeg::ResolvedChatTemplate chat_template = celeg::resolve_chat_template(
+            bootstrap.checkpoint.metadata, tokenizer,
+            args.chat_template_file.empty()
+                ? std::nullopt
+                : std::optional{std::filesystem::path(args.chat_template_file)});
+        std::cerr << "chat.template=" << chat_template.source_origin()
+                  << " fingerprint=" << chat_template.fingerprint() << '\n';
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.provenance.identity : args.served_model_name;
@@ -243,10 +251,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--backend must be cpu or cuda");
         }
 
-        celeg::ChatCapabilities chat_capabilities =
-            runtime->chat_templates().capabilities(bootstrap.model.provenance.chat_template_id);
-        const celeg::IChatToolCallCodec* chat_tool_codec =
-            runtime->chat_templates().tool_codec(bootstrap.model.provenance.chat_template_id);
+        celeg::ChatCapabilities chat_capabilities = chat_template.capabilities();
+        const celeg::IChatToolCallCodec* chat_tool_codec = chat_template.tool_codec();
         chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());

@@ -558,6 +558,9 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                              sizeof(session_.position_), cudaMemcpyHostToDevice,
                              stream_.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
+    // See benchmark_decode(): runner shutdown bypasses static destructors on
+    // Windows, so an enabled profile must be emitted before returning.
+    prof.report();
     release_prefill_workspace();
     session_.phase_ = SessionPhase::Ready;
 }

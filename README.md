@@ -221,6 +221,26 @@ Celeg reads GGUF model metadata and tokenizer data directly. Supported GGUF
 architectures include LFM2/LFM2-MoE, MiniCPM5, SmolLM3, and Nemotron-H Q4_K_M;
 Granite GGUF is not supported at this time.
 
+### Chat-template resolution
+
+Chat behavior is model-agnostic. Celeg compiles a deterministic Hugging Face
+chat template supplied by checkpoint metadata, or—for GGUF files without one—
+infers the role-delimited protocol only when the tokenizer proves its BOS,
+turn, and assistant-prefix tokens. It reports the source and fingerprint on
+startup. A present template that uses unsupported or unsafe Jinja constructs
+fails explicitly rather than changing the prompt format.
+
+Use `--chat-template-file path/to/chat_template.jinja` with `celeg-run`,
+`celeg-cpu-run`, or `celeg-serve` to override checkpoint metadata. The override
+is read once when the model loads and is used by chat completions and
+tokenization alike.
+
+The cached LFM2.5 350M GGUF can be used directly on CUDA:
+
+```text
+celeg-run --repo LiquidAI/LFM2.5-350M-GGUF:Q4_K_M --prompt "Hello" --max-new-tokens 32
+```
+
 ## Runner options
 
 Both runners support model selection, prompts, context length, maximum output

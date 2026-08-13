@@ -1,12 +1,8 @@
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/backend/cpu/model.hpp"
 #include "celeg/backend/cpu/topology.hpp"
-#include "celeg/text/chat_template.hpp"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/app/run_preparation.hpp"
 #include "celeg/runtime/request_types.hpp"
-#include "celeg/checkpoint/downloader.hpp"
-#include "celeg/text/tokenizer.hpp"
-#include "celeg/runtime/context.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -25,6 +21,7 @@ struct Args {
     std::string repo;
     std::string prompt;
     std::string system;
+    std::string chat_template_file;
     std::string isa = "auto";
     std::string pack_cache;
     std::string affinity = "none";
@@ -65,6 +62,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--repo") args.repo = value();
         else if (key == "--prompt") args.prompt = value();
         else if (key == "--system") args.system = value();
+        else if (key == "--chat-template-file") args.chat_template_file = value();
         else if (key == "--cpu-isa") args.isa = value();
         else if (key == "--cpu-pack-cache") args.pack_cache = value();
         else if (key == "--cpu-affinity") args.affinity = value();
@@ -89,7 +87,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--temperature") args.temperature = std::stof(value());
         else if (key == "--repetition-penalty") args.repetition_penalty = std::stof(value());
         else if (key == "--seed") args.seed = std::stoull(value());
-        else if (key == "--raw-prompt") args.raw_prompt = true;
+        else if (key == "--raw") args.raw_prompt = true;
         else if (key == "--no-pack-cache") args.no_pack_cache = true;
         else if (key == "--print-cpu") args.print_cpu = true;
         else if (key == "--memory-report") args.memory_report = true;
@@ -106,6 +104,7 @@ Args parse_args(int argc, char** argv) {
                 << "  --cpu-expert-backing memory|disk\n"
                 << "  --cpu-expert-cache-mib N\n"
                 << "  --context N --max-new-tokens N --memory-report\n"
+                << "  --raw --chat-template-file PATH\n"
                 << "  --temperature F --top-k N --top-p F\n";
             std::exit(0);
         } else throw std::runtime_error("unknown argument: " + key);
@@ -151,55 +150,22 @@ int main(int argc, char** argv) {
                       << celeg::detect_cpu_topology().summary() << '\n';
             if (args.model_dir.empty() && args.repo.empty()) return 0;
         }
-        std::string repo_id = args.repo;
-        std::string quant_tag;
-        if (!repo_id.empty()) {
-            const size_t colon = repo_id.find(':');
-            if (colon != std::string::npos) {
-                quant_tag = repo_id.substr(colon + 1);
-                repo_id = repo_id.substr(0, colon);
-            }
-        }
-        const bool repo_is_gguf = !repo_id.empty() &&
-            (repo_id.ends_with("-GGUF") || !quant_tag.empty());
-        std::filesystem::path model;
-        if (!args.repo.empty()) {
-            model = repo_is_gguf
-                ? celeg::resolve_hf_gguf(
-                      repo_id, quant_tag.empty() ? "Q4_K_M" : quant_tag)
-                : celeg::resolve_hf_model(args.repo);
-        } else {
-            model = std::filesystem::path(args.model_dir);
-        }
-        const auto runtime = celeg::create_builtin_runtime_context();
-        const celeg::detail::ModelBootstrap bootstrap =
-            celeg::detail::load_model_bootstrap(model, *runtime);
-        const auto& topology = bootstrap.model.topology;
-        if (bootstrap.checkpoint.tokenizer && args.group_size_explicit) {
+        const celeg::app::RunInputs run_inputs{
+            args.model_dir, args.repo, args.prompt, args.system, args.chat_template_file,
+            args.context, args.max_new_tokens, args.top_k, args.temperature, args.top_p,
+            args.repetition_penalty, args.seed, args.raw_prompt};
+        const celeg::app::PreparedRun prepared = celeg::app::prepare_run(
+            run_inputs, !args.raw_prompt);
+        const auto& topology = prepared.bootstrap.model.topology;
+        if (prepared.bootstrap.checkpoint.tokenizer && args.group_size_explicit) {
             throw std::runtime_error(
                 "--cpu-q4-group is only valid for Safetensors checkpoints");
         }
-        if (args.context > topology.dims.max_position_embeddings) {
-            throw std::runtime_error("--context exceeds model maximum");
+        if (prepared.chat_template) {
+            std::cerr << "chat.template=" << prepared.chat_template->source_origin()
+                      << " fingerprint=" << prepared.chat_template->fingerprint() << '\n';
         }
-        const auto chat_catalog = celeg::make_chat_template_catalog();
-        const celeg::IChatTemplate* chat_template = nullptr;
-        if (!args.raw_prompt) {
-            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_template_id);
-        }
-        const auto& tokenizer_provider = celeg::select_tokenizer_provider(
-            *runtime, bootstrap.checkpoint, model);
-        const auto tokenizer_storage = tokenizer_provider.create(
-            bootstrap.checkpoint, model);
-        const celeg::ITokenizer& tokenizer = *tokenizer_storage;
-        std::vector<celeg::ChatMessage> chat_messages;
-        if (!args.system.empty()) {
-            chat_messages.push_back({celeg::ChatRole::System, args.system});
-        }
-        chat_messages.push_back({celeg::ChatRole::User, args.prompt});
-        const std::string text = args.raw_prompt
-            ? args.prompt : celeg::render_chat(chat_messages, *chat_template);
-        const std::vector<int32_t> input = tokenizer.encode(text, args.raw_prompt);
+        const std::vector<int32_t> input = celeg::app::prepare_prompt(run_inputs, prepared);
         if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {
             throw std::runtime_error("prompt plus output exceeds context");
         }
@@ -223,13 +189,8 @@ int main(int argc, char** argv) {
             : celeg::CpuExpertBacking::Memory;
         options.expert_cache_bytes =
             static_cast<size_t>(args.expert_cache_mib) * 1024ULL * 1024ULL;
-        celeg::GenerationConfig generation;
-        generation.temperature = args.temperature;
-        generation.top_k = args.top_k;
-        generation.top_p = args.top_p;
-        generation.repetition_penalty = args.repetition_penalty;
-        generation.seed = args.seed;
-        celeg::CpuModel engine(model.string(), args.context, options, generation);
+        celeg::CpuModel engine(prepared.checkpoint_path.string(), args.context, options,
+                               celeg::app::generation_config(run_inputs));
         std::cerr << "backend=" << engine.diagnostics().backend_description() << '\n';
         if (!engine.diagnostics().pack_path().empty()) {
             std::cerr << "cpu.pack_path=" << engine.diagnostics().pack_path() << '\n';
@@ -249,7 +210,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t token = engine.session().decode();
             if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, token)) break;
-            pending += tokenizer.decode({token}, true);
+            pending += prepared.tokenizer->decode({token}, true);
             std::cout << pending << std::flush;
             pending.clear();
         }

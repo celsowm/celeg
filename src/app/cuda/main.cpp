@@ -1,11 +1,6 @@
-#include "celeg/text/chat_template.hpp"
-#include "celeg/checkpoint/downloader.hpp"
-#include "celeg/detail/checkpoint/bootstrap.hpp"
+#include "celeg/app/run_preparation.hpp"
 #include "celeg/runtime/request_types.hpp"
-#include "celeg/checkpoint/formats/gguf.hpp"
 #include "celeg/backend/cuda/model.hpp"
-#include "celeg/text/tokenizer.hpp"
-#include "celeg/runtime/context.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -55,6 +50,7 @@ struct Args {
     std::string repo;
     std::string prompt;
     std::string system;
+    std::string chat_template_file;
     std::string dump_logits;
     std::string save_session;
     std::string load_session;
@@ -71,7 +67,7 @@ struct Args {
     int benchmark_prefill_tokens = 0;
     int lt_workspace_mb = 64;
     int lt_heuristics = 8;
-    std::string gemm_backend = "cublas";
+    std::string gemm_backend = "cublaslt";
     std::string weight_mode = "auto";
     std::string kv_cache_mode = "bf16";
     std::string attention_mode = "auto";
@@ -84,7 +80,7 @@ struct Args {
     bool print_config = false;
     bool tokens_only = false;
     bool no_cuda_graph = false;
-    bool lt_autotune = false;
+    bool lt_autotune = true;
     bool memory_report = false;
     bool runtime_metrics = false;
     bool enable_mtp = false;
@@ -119,6 +115,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--repo") args.repo = value();
         else if (key == "--prompt") args.prompt = value();
         else if (key == "--system") args.system = value();
+        else if (key == "--chat-template-file") args.chat_template_file = value();
         else if (key == "--max-new-tokens") args.max_new_tokens = std::stoi(value());
         else if (key == "--context") args.context = std::stoi(value());
         else if (key == "--dump-logits") args.dump_logits = value();
@@ -172,6 +169,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--help") {
             std::cout
                 << "celeg-run [--model DIR | --repo REPO_ID] [--prompt TEXT] [--system TEXT]\n"
+                << "  [--chat-template-file PATH]\n"
                 << "  [--max-new-tokens N] [--context N] [--raw]\n"
                 << "  [--fused-residuals] [--fast-attention] [--fused-projections]\n"
                 << "  [--print-config] [--tokens-only] [--no-cuda-graph]\n"
@@ -337,80 +335,39 @@ void print_memory_stats(const celeg::ModelMemoryStats& stats) {
 int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
-        // Split an optional `:QUANT_TAG` suffix off the --repo argument so the
-        // CLI can select a specific GGUF shard (e.g. `...LFM2.5-230M-GGUF:Q4_K_M`).
-        std::string repo_id = args.repo;
-        std::string quant_tag;
-        if (!repo_id.empty()) {
-            const size_t colon = repo_id.find(':');
-            if (colon != std::string::npos) {
-                quant_tag = repo_id.substr(colon + 1);
-                repo_id = repo_id.substr(0, colon);
-            }
-        }
-        const bool repo_is_gguf = !repo_id.empty() &&
-            (repo_id.ends_with("-GGUF") || !quant_tag.empty());
-        const bool direct_gguf = !args.model_dir.empty() &&
-            std::filesystem::path(args.model_dir).extension() == ".gguf";
-        const bool is_gguf = repo_is_gguf || direct_gguf;
-
-        std::filesystem::path model;        // checkpoint dir (safetensors)
-        std::filesystem::path gguf_path;    // concrete .gguf file (GGUF)
-        if (repo_is_gguf) {
-            gguf_path = celeg::resolve_hf_gguf(repo_id,
-                quant_tag.empty() ? "Q4_K_M" : quant_tag);
-        } else if (!args.repo.empty()) {
-            model = celeg::resolve_hf_model(args.repo);
-        } else {
-            model = std::filesystem::path(args.model_dir);
-            if (direct_gguf) gguf_path = model;
-        }
-        const auto runtime = celeg::create_builtin_runtime_context();
-        const celeg::detail::ModelBootstrap bootstrap =
-            celeg::detail::load_model_bootstrap(is_gguf ? gguf_path : model, *runtime);
-        const auto& topology = bootstrap.model.topology;
-        if (args.context > topology.dims.max_position_embeddings) {
-            throw std::runtime_error("--context exceeds max_position_embeddings");
+        const celeg::app::RunInputs run_inputs{
+            args.model_dir, args.repo, args.prompt, args.system, args.chat_template_file,
+            args.context, args.max_new_tokens, args.top_k, args.temperature, args.top_p,
+            args.repetition_penalty, args.seed, args.raw_prompt};
+        const celeg::app::PreparedRun prepared = celeg::app::prepare_run(
+            run_inputs, !args.raw_prompt || args.print_config);
+        const auto& topology = prepared.bootstrap.model.topology;
+        if (prepared.chat_template) {
+            std::cerr << "chat.template=" << prepared.chat_template->source_origin()
+                      << " fingerprint=" << prepared.chat_template->fingerprint() << '\n';
         }
         if (args.print_config) {
-            std::cout << topology.summary() << '\n';
+            std::cout << topology.summary() << '\n'
+                      << "chat.template=" << prepared.chat_template->source_origin() << '\n'
+                      << "chat.template_fingerprint=" << prepared.chat_template->fingerprint() << '\n';
             exit_process_immediately(0);
         }
-
-        const auto chat_catalog = celeg::make_chat_template_catalog();
-        const celeg::IChatTemplate* chat_template = nullptr;
-        if (!args.raw_prompt) {
-            chat_template = &chat_catalog.find(bootstrap.model.provenance.chat_template_id);
-        }
-        const auto& tokenizer_provider = celeg::select_tokenizer_provider(
-            *runtime, bootstrap.checkpoint, is_gguf ? gguf_path : model);
-        const auto tokenizer_storage = tokenizer_provider.create(
-            bootstrap.checkpoint, is_gguf ? gguf_path : model);
-        const celeg::ITokenizer& tokenizer = *tokenizer_storage;
         // A JSON checkpoint may omit bos_token_id while its tokenizer config
         // still names a non-zero BOS token.  BOS is not injected when the
         // chat template requests add_bos=false, so the unresolved zero is not
         // a runtime disagreement; EOS remains a hard generation boundary.
         if ((topology.dims.token_policy.bos_token_id != 0 &&
-             tokenizer.bos_id() != topology.dims.token_policy.bos_token_id) ||
-            !celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, tokenizer.eos_id())) {
+             prepared.tokenizer->bos_id() != topology.dims.token_policy.bos_token_id) ||
+            !celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, prepared.tokenizer->eos_id())) {
             throw std::runtime_error("tokenizer special IDs disagree with config: bos=" +
-                std::to_string(tokenizer.bos_id()) + "/" +
+                std::to_string(prepared.tokenizer->bos_id()) + "/" +
                 std::to_string(topology.dims.token_policy.bos_token_id) + " eos=" +
-                std::to_string(tokenizer.eos_id()));
+                std::to_string(prepared.tokenizer->eos_id()));
         }
 
         std::vector<int32_t> input;
         if (args.load_session.empty()) {
-            std::vector<celeg::ChatMessage> chat_messages;
-            if (!args.system.empty()) {
-                chat_messages.push_back({celeg::ChatRole::System, args.system});
-            }
-            chat_messages.push_back({celeg::ChatRole::User, args.prompt});
-            const std::string formatted = args.raw_prompt
-                ? args.prompt : celeg::render_chat(chat_messages, *chat_template);
-            // Chat formatting contains <|startoftext|>; raw prompts receive BOS automatically.
-            input = tokenizer.encode(formatted, args.raw_prompt);
+            input = celeg::app::prepare_prompt(run_inputs, prepared);
             if (args.benchmark_prefill_tokens > 0) {
                 if (input.empty()) throw std::runtime_error("benchmark prompt produced no tokens");
                 if (static_cast<int>(input.size()) > args.benchmark_prefill_tokens) {
@@ -453,7 +410,7 @@ int main(int argc, char** argv) {
             // GGUF checkpoints benefit from INT8 re-quantization: decode reads
             // 2x less weight traffic than BF16 while prefill falls back to
             // BF16 cuBLAS tensor-core GEMM via the kept BF16 device buffer.
-            model_options.weight_mode = is_gguf
+            model_options.weight_mode = prepared.is_gguf
                 ? celeg::WeightMode::Int8
                 : celeg::WeightMode::Bf16;
         } else if (args.weight_mode == "int8") {
@@ -530,33 +487,27 @@ int main(int argc, char** argv) {
             off.usage_profile_path = args.expert_usage_profile;
             off.direct_io = args.expert_direct_io;
         }
-        celeg::GenerationConfig generation;
-        generation.temperature = args.temperature;
-        generation.top_k = args.top_k;
-        generation.top_p = args.top_p;
-        generation.repetition_penalty = args.repetition_penalty;
-        generation.seed = args.seed;
         // Single-file checkpoints ship model.safetensors; sharded checkpoints
         // ship model.safetensors.index.json in the same directory. The model
         // constructor resolves the index when given the directory root. GGUF
         // checkpoints pass the concrete .gguf file path directly.
         const std::string model_path =
-            is_gguf ? gguf_path.string()
+            prepared.is_gguf ? prepared.checkpoint_path.string()
                     : [&] {
                           const std::filesystem::path single =
-                              model / "model.safetensors";
+                              prepared.checkpoint_path / "model.safetensors";
                           const std::filesystem::path index =
-                              model / "model.safetensors.index.json";
+                              prepared.checkpoint_path / "model.safetensors.index.json";
                           return std::filesystem::is_regular_file(single)
                                      ? single.string()
                                      : std::filesystem::is_regular_file(index)
-                                           ? model.string()
+                                           ? prepared.checkpoint_path.string()
                                            : single.string();
                       }();
         celeg::CudaModel engine(
             model_path, args.context,
-            model_options, generation);
-        if (is_gguf) {
+            model_options, celeg::app::generation_config(run_inputs));
+        if (prepared.is_gguf) {
             std::cerr << "source=gguf(q4_k,q6_k)\n"
                       << "weight_mode=" << args.weight_mode << "\n"
                       << "pack_path=none\n";
@@ -620,7 +571,7 @@ int main(int argc, char** argv) {
             const int32_t next = engine.session().decode();
             if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, next)) break;
             generated.push_back(next);
-            std::cout << tokenizer.decode({next}, true) << std::flush;
+            std::cout << prepared.tokenizer->decode({next}, true) << std::flush;
         }
         std::cout << '\n';
         if (!args.save_session.empty()) engine.persistence().save_session(args.save_session);

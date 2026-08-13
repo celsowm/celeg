@@ -1,7 +1,9 @@
 #pragma once
 
 #include "celeg/text/chat_contract.hpp"
+#include "celeg/checkpoint/metadata.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
@@ -11,6 +13,8 @@
 #include <vector>
 
 namespace celeg {
+
+class ITokenizer;
 
 using ChatToolDefinition = ToolDefinition;
 
@@ -42,6 +46,46 @@ public:
                                bool add_generation_prompt,
                                const ChatTemplateOptions& options) const = 0;
 };
+
+// A model-scoped interaction contract compiled from checkpoint template
+// metadata.  It deliberately carries no model, repository, or architecture
+// identity: the rendered wire format is selected solely by template source or
+// by tokenizer evidence when the source is absent.
+class ResolvedChatTemplate final : public IChatTemplate {
+public:
+    using IChatTemplate::format;
+
+    std::string format(std::span<const ChatMessage> messages,
+                       std::span<const ChatToolDefinition> tools,
+                       bool add_generation_prompt,
+                       const ChatTemplateOptions& options) const override;
+
+    const std::string& source_origin() const noexcept { return source_origin_; }
+    const std::string& fingerprint() const noexcept { return fingerprint_; }
+    ChatCapabilities capabilities() const noexcept { return capabilities_; }
+    const IChatToolCallCodec* tool_codec() const noexcept { return tool_codec_.get(); }
+
+private:
+    friend ResolvedChatTemplate resolve_chat_template(
+        const CheckpointMetadata&, const ITokenizer&,
+        const std::optional<std::filesystem::path>&);
+
+    bool include_bos_ = false;
+    bool tools_in_system_ = false;
+    std::string source_origin_;
+    std::string fingerprint_;
+    ChatCapabilities capabilities_;
+    std::shared_ptr<const IChatToolCallCodec> tool_codec_;
+};
+
+// Resolves a checkpoint's interaction format.  An override wins over
+// checkpoint metadata; source-less checkpoints may use only a conservative
+// tokenizer-evidence inference.  Templates that are present but outside the
+// deterministic supported subset fail instead of silently changing protocol.
+ResolvedChatTemplate resolve_chat_template(
+    const CheckpointMetadata& metadata,
+    const ITokenizer& tokenizer,
+    const std::optional<std::filesystem::path>& override_file = std::nullopt);
 
 std::string render_chat(std::span<const ChatMessage> messages,
                         const IChatTemplate& chat_template,
