@@ -54,6 +54,7 @@ struct ChatMessageDto {
     std::optional<ChatContentDto> content;
     std::optional<std::vector<ToolCallDto>> tool_calls;
     std::optional<std::string> tool_call_id;
+    std::optional<std::string> reasoning_content;
 };
 
 struct ToolChoiceFunctionDto {

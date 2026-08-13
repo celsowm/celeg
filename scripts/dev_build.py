@@ -15,6 +15,15 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HF_REPO = "LiquidAI/LFM2.5-230M"
 
 
+def print_visible(value: str, *, end: str = "\n") -> None:
+    """Emit build output even when the Windows console is not UTF-8."""
+    try:
+        print(value, end=end)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write((value + end).encode("utf-8", errors="replace"))
+        sys.stdout.buffer.flush()
+
+
 def build_directory(args: argparse.Namespace, environment: Environment) -> pathlib.Path:
     if args.build_dir:
         return pathlib.Path(args.build_dir).expanduser().resolve()
@@ -85,11 +94,16 @@ def run_visible(
     capture: bool = False,
     filter_includes: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    print("+", subprocess.list2cmdline(list(command)))
+    rendered_command = "+ " + subprocess.list2cmdline(list(command))
+    # Visual Studio's show-includes prefix can contain Unicode characters on
+    # localized Windows installations.  Logging a command must never prevent
+    # the command itself from running just because the attached console is
+    # still configured for cp1252.
+    print_visible(rendered_command)
     if capture:
         result = run_capture(command, env=env, cwd=cwd)
         if result.stdout:
-            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+            print_visible(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
         return result
     if filter_includes:
         process = subprocess.Popen(
@@ -107,7 +121,7 @@ def run_visible(
             lower = line.casefold()
             if "including file:" in lower or "incluindo arquivo:" in lower:
                 continue
-            print(line, end="")
+            print_visible(line, end="")
         return subprocess.CompletedProcess(list(command), process.wait())
     return subprocess.run(list(command), cwd=str(cwd), env=dict(env), text=True, check=False)
 
@@ -126,7 +140,7 @@ def configure(args: argparse.Namespace, environment: Environment, directory: pat
         re.IGNORECASE,
     )
     if environment.backend == "cuda" and unsupported:
-        print("configure: NVCC rejected this host compiler; retrying with -allow-unsupported-compiler")
+        print_visible("configure: NVCC rejected this host compiler; retrying with -allow-unsupported-compiler")
         retry = run_visible(
             configure_command(args, environment, directory, allow_unsupported=True),
             env=environment.values,
@@ -258,13 +272,13 @@ class SmokeCoordinator:
 
     def _run_cached_inference(self, runner: pathlib.Path) -> None:
         if self.environment.backend != "cuda":
-            print("smoke: model inference skipped for CPU verification")
+            print_visible("smoke: model inference skipped for CPU verification")
             return
         if not self.environment.checkpoint:
-            print(f"smoke: {HF_REPO} is not cached; model inference skipped")
+            print_visible(f"smoke: {HF_REPO} is not cached; model inference skipped")
             return
         if not self.environment.gpu_name:
-            print("smoke: no CUDA device is visible; model inference skipped")
+            print_visible("smoke: no CUDA device is visible; model inference skipped")
             return
         result = run_visible(
             [
@@ -285,4 +299,3 @@ class SmokeCoordinator:
         runner = self._runner()
         self._run_commands(self._commands(runner))
         self._run_cached_inference(runner)
-

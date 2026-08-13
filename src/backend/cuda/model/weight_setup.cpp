@@ -67,7 +67,7 @@ void CudaCompiledModel::load_checkpoint_weights(
         LayerCommon common_layer;
         const CompiledLayerProgram& semantic_layer = resources_.program_.layers.at(
             static_cast<size_t>(i));
-        const bool sequential_mixer_model = semantic_layer.mixer == CompiledMixer::Mamba2;
+        const bool mixer_only_layer = !semantic_layer.execute_feed_forward;
         const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
             const std::string name = spec.weightless()
                 ? std::string{} : tensor_name(resources_.model_.weight_plan.requests, role, i);
@@ -78,15 +78,15 @@ void CudaCompiledModel::load_checkpoint_weights(
             repo, semantic_layer.operator_norm.weightless() ? std::string{} :
                 tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
             {resources_.program_.hidden}, semantic_layer.operator_norm.weight_kind);
-        if (!sequential_mixer_model) {
+        if (!mixer_only_layer) {
             common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
                                               semantic_layer.feed_forward_norm);
         }
-        if (!sequential_mixer_model && semantic_layer.post_attention_norm.enabled()) {
+        if (!mixer_only_layer && semantic_layer.post_attention_norm.enabled()) {
             common_layer.post_attention_norm = load_norm(
                 TensorRole::AttentionPostNorm, semantic_layer.post_attention_norm);
         }
-        if (!sequential_mixer_model && semantic_layer.post_feed_forward_norm.enabled()) {
+        if (!mixer_only_layer && semantic_layer.post_feed_forward_norm.enabled()) {
             common_layer.post_feed_forward_norm = load_norm(
                 TensorRole::FfnOutputNorm, semantic_layer.post_feed_forward_norm);
         }
@@ -103,9 +103,9 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.layer_scalar = resources_.weight_loader_->load_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
-        if (sequential_mixer_model) {
-            // Sequential mixer models own their block-specific projections in the layer
-            // variant below; there is no generic post-mixer FFN descriptor.
+        if (mixer_only_layer) {
+            // The compiled layer program, rather than the mixer identity,
+            // determines whether a generic post-mixer FFN exists.
             common_layer.feed_forward = DenseFfnWeights{};
         } else if (semantic_layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
             // Mixture-of-experts feed-forward for this layer.

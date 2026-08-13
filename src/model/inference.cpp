@@ -690,6 +690,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
             "model.language_model.layers." + index + ".post_attention_layernorm.weight",
             "model.layers." + index + ".ffn_norm.weight",
             "blk." + index + ".ffn_norm.weight",
+            "blk." + index + ".post_attention_norm.weight",
         };
         const auto* attention_norm = inference_detail::find_unique(
             input.inventory, norm_candidates, TensorRole::AttentionInputNorm, layer,

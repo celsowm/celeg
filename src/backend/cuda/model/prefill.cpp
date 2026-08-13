@@ -67,7 +67,17 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
         prefill_chunk(tokens, true, true);
         return;
     }
-    if (resources_.shape_.mamba2_layer_count > 0) {
+    const bool needs_sequential_adapter = std::any_of(
+        resources_.program_.layers.begin(), resources_.program_.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            // Packed Gated Delta execution preserves row order for each
+            // session and now consumes a contiguous recurrent sequence in a
+            // single topology-gated kernel. Mamba2 still requires the token
+            // adapter until its own scan program is available.
+            return layer.chunk_capability == CompiledChunkCapability::SequentialAdapter &&
+                layer.mixer != CompiledMixer::GatedDeltaNet;
+        });
+    if (needs_sequential_adapter) {
         prefill_chunk(tokens, true, true);
         return;
     }

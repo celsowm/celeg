@@ -174,9 +174,9 @@ void validate_chat_request(const ChatCompletionRequest& request,
                 }
             }
         }
-        if (role == ChatRole::Assistant && (!message.content &&
-            (!message.tool_calls || message.tool_calls->empty()))) {
-            throw std::invalid_argument("assistant messages require content or tool_calls");
+        if (role == ChatRole::Assistant && (!message.content && !message.reasoning_content) &&
+            (!message.tool_calls || message.tool_calls->empty())) {
+            throw std::invalid_argument("assistant messages require content, reasoning_content, or tool_calls");
         }
         if (role == ChatRole::Tool) {
             if (!pending_tool_calls.contains(*message.tool_call_id)) {
@@ -199,12 +199,11 @@ ErrorResponseDto error_response(std::string message, std::optional<std::string> 
 
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::ITokenizer& tokenizer,
-                                    const celeg::IChatTemplate& chat_template,
-                                    const celeg::ChatCapabilities& capabilities,
+                                    const celeg::ResolvedInteraction& interaction,
                                     std::span<const std::int32_t> eos_token_ids,
                                     const celeg::ChatTemplateOptions& template_options,
-                                    std::size_t max_context_tokens,
-                                    const celeg::IChatToolCallCodec* tool_codec) {
+                                    std::size_t max_context_tokens) {
+    const celeg::ChatCapabilities capabilities = interaction.capabilities();
     validate_chat_request(request, capabilities);
 
     std::vector<celeg::ChatMessage> messages;
@@ -228,7 +227,8 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         images.insert(images.end(), normalized.images.begin(), normalized.images.end());
         message_images.push_back(normalized.images);
         celeg::ChatMessage mapped{role_from_string(message.role), normalized.text,
-                                  {}, message.tool_call_id, std::nullopt};
+                                  {}, message.tool_call_id, std::nullopt,
+                                  message.reasoning_content};
         if (message.tool_calls) {
             for (const ToolCallDto& call : *message.tool_calls) {
                 mapped.tool_calls.push_back({call.id, call.function.name, call.function.arguments});
@@ -256,7 +256,7 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                  std::string& rendered,
                                  std::vector<std::int32_t>& encoded) {
         rendered = celeg::render_chat(
-            candidate, tools, chat_template, /*add_generation_prompt=*/true,
+            candidate, tools, interaction, /*add_generation_prompt=*/true,
             effective_template_options);
         encoded = tokenizer.encode(rendered, /*add_bos=*/false);
     };
@@ -353,11 +353,9 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
     if (request.top_k) generate_request.generation.top_k = *request.top_k;
     if (request.seed) generate_request.generation.seed = *request.seed;
     generate_request.generation.validate();
-    if (tool_codec && effective_template_options.tool_choice.mode !=
-            celeg::ToolChoiceMode::Auto &&
+    if (effective_template_options.tool_choice.mode != celeg::ToolChoiceMode::Auto &&
         effective_template_options.tool_choice.mode != celeg::ToolChoiceMode::None) {
-        const std::string prefix = tool_codec->forced_tool_call_prefix(
-            tools, effective_template_options.tool_choice);
+        const std::string prefix = interaction.forced_tool_call_prefix(tools, effective_template_options.tool_choice);
         if (!prefix.empty()) {
             auto forced = std::make_shared<celeg::ForcedTokenPrefix>();
             forced->tokens = tokenizer.encode(prefix, /*add_bos=*/false);
@@ -386,7 +384,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
                                                    const celeg::ITokenizer& tokenizer,
-                                                   const celeg::IChatToolCallCodec* tool_codec) {
+                                                   const celeg::ResolvedInteraction& interaction) {
     ChatCompletionResponse response;
     response.id = id;
     response.model = model;
@@ -395,8 +393,8 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
     ChatCompletionChoice choice;
     choice.index = 0;
     const std::string text = tokenizer.decode(completion_tokens);
-    if (tool_codec) {
-        const auto parsed = tool_codec->parse_generation(text);
+    if (interaction.tool_call_grammar()) {
+        const auto parsed = interaction.parse_tool_calls(text);
         if (!parsed.calls.empty()) {
             choice.message.content = parsed.assistant_text;
             choice.message.tool_calls = std::vector<ToolCallDto>{};
@@ -431,7 +429,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
                                              const celeg::ITokenizer& tokenizer,
-                                             const celeg::IChatToolCallCodec* tool_codec,
+                                             const celeg::ResolvedInteraction& interaction,
                                              std::string_view accumulated_text) {
     ChatCompletionChunk chunk;
     chunk.id = id;
@@ -443,8 +441,8 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
     if (include_role) choice.delta.role = "assistant";
     if (!new_tokens.empty()) {
         const std::string text = tokenizer.decode(new_tokens);
-        if (tool_codec) {
-            const auto parsed = tool_codec->parse_generation(text);
+        if (interaction.tool_call_grammar()) {
+            const auto parsed = interaction.parse_tool_calls(text);
             if (!parsed.calls.empty()) {
                 choice.delta.tool_calls = std::vector<ToolCallDto>{};
                 for (const auto& call : parsed.calls) {
@@ -457,8 +455,8 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
             choice.delta.content = text;
         }
     }
-    if (new_tokens.empty() && finish && tool_codec && !accumulated_text.empty()) {
-        const auto parsed = tool_codec->parse_generation(accumulated_text);
+    if (new_tokens.empty() && finish && interaction.tool_call_grammar() && !accumulated_text.empty()) {
+        const auto parsed = interaction.parse_tool_calls(accumulated_text);
         if (!parsed.calls.empty()) {
             choice.delta.content.reset();
             choice.delta.tool_calls = std::vector<ToolCallDto>{};
@@ -497,7 +495,7 @@ ChatCompletionChunk to_chat_completion_chunk(
 
 TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
                                       const celeg::ITokenizer& tokenizer,
-                                      const celeg::IChatTemplate& chat_template,
+                                      const celeg::ResolvedInteraction& interaction,
                                       std::size_t max_model_len) {
     if (static_cast<bool>(request.prompt) == static_cast<bool>(request.messages)) {
         throw std::invalid_argument("exactly one of prompt or messages must be set");
@@ -516,7 +514,7 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
                                 normalize_content(message.content).text});
         }
         const std::string prompt_text = celeg::render_chat(
-            messages, {}, chat_template, /*add_generation_prompt=*/true,
+            messages, {}, interaction, /*add_generation_prompt=*/true,
             celeg::ChatTemplateOptions{
                 request.chat_template_kwargs
                     ? std::optional<bool>{request.chat_template_kwargs->enable_thinking}

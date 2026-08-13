@@ -3,6 +3,7 @@
 #include "support/cuda_kernel_assertions.cuh"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/weight_layout.hpp"
+#include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/model/reference.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "cuda/sampling_tests.hpp"
@@ -98,6 +99,36 @@ std::vector<TestShape> registered_model_shapes() {
 
 int main() {
     celeg::CudaStream stream;
+
+    // The sequence CUDA path is a parallel form of the neutral recurrent
+    // operator.  Exercise grouped key/value heads, then compare its output
+    // and both persisted state buffers with the CPU reference.
+    {
+        constexpr int rows = 64, kernel = 2, dim = 2, key_heads = 1, value_heads = 2;
+        constexpr int qkv_width = 2 * key_heads * dim + value_heads * dim;
+        constexpr int value_width = value_heads * dim;
+        std::vector<float> qkv(rows * qkv_width), z(rows * value_width), b(rows * value_heads),
+            a(rows * value_heads), conv(qkv_width * kernel), dt(value_heads), alog(value_heads), norm(dim, 1.0f);
+        for (size_t i = 0; i < qkv.size(); ++i) qkv[i] = 0.003f * static_cast<float>(i + 1);
+        for (size_t i = 0; i < z.size(); ++i) z[i] = -0.02f * static_cast<float>(i + 1);
+        for (size_t i = 0; i < b.size(); ++i) { b[i] = -0.2f; a[i] = 0.1f; }
+        for (size_t i = 0; i < conv.size(); ++i) conv[i] = 0.02f;
+        std::fill(dt.begin(), dt.end(), 0.5f); std::fill(alog.begin(), alog.end(), -0.3f);
+        std::vector<float> cpu_conv(qkv_width * kernel), cpu_state(value_heads * dim * dim), cpu_out(rows * value_width);
+        celeg::cpu_gated_delta_net_prefill(qkv.data(), z.data(), b.data(), a.data(), conv.data(), dt.data(), alog.data(), norm.data(), cpu_conv.data(), cpu_state.data(), cpu_out.data(), rows, kernel, dim, dim, key_heads, value_heads, 1e-6f);
+        std::vector<__nv_bfloat16> hq(qkv.size()), hz(z.size()), hb(b.size()), ha(a.size()), hc(conv.size()), hdt(dt.size()), hal(alog.size()), hn(norm.size());
+        for (size_t i=0;i<hq.size();++i) hq[i]=to_bf16(qkv[i]); for(size_t i=0;i<hz.size();++i) hz[i]=to_bf16(z[i]); for(size_t i=0;i<hb.size();++i){hb[i]=to_bf16(b[i]);ha[i]=to_bf16(a[i]);} for(size_t i=0;i<hc.size();++i)hc[i]=to_bf16(conv[i]); for(int i=0;i<value_heads;++i){hdt[i]=to_bf16(dt[i]);hal[i]=to_bf16(alog[i]);} for(int i=0;i<dim;++i)hn[i]=to_bf16(norm[i]);
+        celeg::DeviceBuffer<__nv_bfloat16> dq(qkv.size()), dz(z.size()), db(b.size()), da(a.size()), dc(conv.size()), ddt(dt.size()), dal(alog.size()), dn(norm.size()), dcs(qkv_width*kernel), drs(value_heads*dim*dim), dout(rows*value_width);
+        CELEG_CUDA(cudaMemcpy(dq.data(),hq.data(),dq.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dz.data(),hz.data(),dz.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(db.data(),hb.data(),db.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(da.data(),ha.data(),da.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dc.data(),hc.data(),dc.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(ddt.data(),hdt.data(),ddt.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dal.data(),hal.data(),dal.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dn.data(),hn.data(),dn.bytes(),cudaMemcpyHostToDevice));
+        celeg::launch_gated_delta_net(dq.data(), dz.data(), db.data(), da.data(),
+            dc.data(), ddt.data(), dal.data(), dn.data(), dcs.data(), drs.data(),
+            dout.data(), rows, kernel, dim, dim, key_heads, value_heads, 1e-6f, false,
+            false, -5.0f, false, stream.get());
+        std::vector<__nv_bfloat16> got(cpu_out.size()), got_conv(cpu_conv.size()), got_state(cpu_state.size()); CELEG_CUDA(cudaMemcpyAsync(got.data(),dout.data(),dout.bytes(),cudaMemcpyDeviceToHost,stream.get())); CELEG_CUDA(cudaMemcpyAsync(got_conv.data(),dcs.data(),dcs.bytes(),cudaMemcpyDeviceToHost,stream.get())); CELEG_CUDA(cudaMemcpyAsync(got_state.data(),drs.data(),drs.bytes(),cudaMemcpyDeviceToHost,stream.get())); CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for(size_t i=0;i<got.size();++i) expect_near(to_float(got[i]),cpu_out[i],0.03f);
+        for(size_t i=0;i<got_conv.size();++i) expect_near(to_float(got_conv[i]),cpu_conv[i],0.03f);
+        for(size_t i=0;i<got_state.size();++i) expect_near(to_float(got_state[i]),cpu_state[i],0.03f);
+    }
 
     // Embedding by scalar value.
     {

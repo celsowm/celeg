@@ -1,6 +1,5 @@
 #include "celeg/model/architecture.hpp"
 #include "celeg/model/inference.hpp"
-#include "celeg/text/chat_template_import.hpp"
 #include "support/assertions.hpp"
 
 #include <cstdint>
@@ -34,18 +33,6 @@ int main() {
     CELEG_TEST_CHECK(flat_facts.layer_count == component_facts.layer_count);
     CELEG_TEST_CHECK(flat_facts.query_heads == component_facts.query_heads);
     CELEG_TEST_CHECK(flat_facts.vocab_size == component_facts.vocab_size);
-
-    const celeg::ChatTemplateProgram program = celeg::import_hf_chat_template(
-        "{% for message in messages %}{{ message['content'] }}{% endfor %}"
-        "{% if add_generation_prompt %}assistant{% endif %}");
-    CELEG_TEST_CHECK(!program.fingerprint().empty());
-    bool unsupported_template_rejected = false;
-    try {
-        (void)celeg::import_hf_chat_template("{% macro unsafe() %}{% endmacro %}");
-    } catch (const std::invalid_argument&) {
-        unsupported_template_rejected = true;
-    }
-    CELEG_TEST_CHECK(unsupported_template_rejected);
 
     std::cout << "semantic_identity_test: ok\n";
 }

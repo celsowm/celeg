@@ -1,7 +1,7 @@
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
 #include "celeg/checkpoint/tokenizer.hpp"
-#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/chat_template.hpp"
 #include "support/assertions.hpp"
 #include <filesystem>
 #include <fstream>
@@ -139,7 +139,11 @@ int main() {
 
     celeg::BpeTokenizer gemma_tokenizer(
         celeg::load_tokenizer_definition_json(gemma_path.string()));
-    const celeg::TurnChatTemplate gemma_template;
+    celeg::CheckpointMetadata gemma_metadata;
+    gemma_metadata.values["chat_template"] = std::string(
+        "{{ bos_token }}{% for message in messages %}<|turn>{{ message.role }}\n{{ message.content }}<turn|>\n{% endfor %}{% if add_generation_prompt %}<|turn>model\n{% endif %}");
+    const celeg::ResolvedInteraction gemma_template =
+        celeg::resolve_interaction(gemma_metadata, gemma_tokenizer);
     CELEG_TEST_CHECK(gemma_tokenizer.bos_id() == 2);
     CELEG_TEST_CHECK(gemma_tokenizer.eos_id() == 1);
     CELEG_TEST_CHECK(gemma_tokenizer.pad_id() == 0);
@@ -165,7 +169,7 @@ int main() {
     const std::string gemma_developer = celeg::render_chat(
         std::vector<celeg::ChatMessage>{{celeg::ChatRole::Developer, "no"}},
         gemma_template, true);
-    CELEG_TEST_CHECK(gemma_developer.find("<|turn>system\nno") != std::string::npos);
+    CELEG_TEST_CHECK(gemma_developer.find("<|turn>developer\nno") != std::string::npos);
     std::filesystem::remove(gemma_path);
     std::cout << "tokenizer_test: ok\n";
     } catch (const std::exception& error) {

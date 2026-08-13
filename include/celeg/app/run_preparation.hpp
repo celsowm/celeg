@@ -40,7 +40,7 @@ struct PreparedRun {
     std::shared_ptr<const RuntimeContext> runtime;
     detail::ModelBootstrap bootstrap;
     std::unique_ptr<ITokenizer> tokenizer;
-    std::optional<ResolvedChatTemplate> chat_template;
+    std::optional<ResolvedInteraction> chat_template;
 };
 
 PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat_template = true);

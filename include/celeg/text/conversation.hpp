@@ -24,6 +24,7 @@ struct ChatMessage {
     std::vector<ToolCall> tool_calls;
     std::optional<std::string> tool_call_id;
     std::optional<std::string> name;
+    std::optional<std::string> reasoning_content;
 };
 
 inline void validate_conversation(std::span<const ChatMessage> messages) {
@@ -38,8 +39,8 @@ inline void validate_conversation(std::span<const ChatMessage> messages) {
             for (const std::string& id : call_ids) found = found || id == *message.tool_call_id;
             if (!found) throw std::invalid_argument("tool message references an unknown tool call id");
         } else if (message.role == ChatRole::Assistant) {
-            if (!message.content && message.tool_calls.empty()) {
-                throw std::invalid_argument("assistant messages require content or tool_calls");
+            if (!message.content && !message.reasoning_content && message.tool_calls.empty()) {
+                throw std::invalid_argument("assistant messages require content, reasoning_content, or tool_calls");
             }
             call_ids.clear();
             for (const ToolCall& call : message.tool_calls) {

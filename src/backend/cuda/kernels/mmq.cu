@@ -157,13 +157,16 @@ __global__ void q4k_mmq_kernel(const int8_t* __restrict__ q8,
             int dot = 0;
 #pragma unroll
             for (int g = 0; g < kMmqQ8_1BlockSize; g += 4) {
-                int packed_w = 0;
-#pragma unroll
-                for (int t = 0; t < 4; ++t) {
-                    const uint8_t byte = qs[g + t];
-                    const int wv = high ? (byte >> 4) : (byte & 0xF);
-                    packed_w |= wv << (t * 8);
-                }
+                // Four Q4_K values occupy exactly four consecutive bytes.
+                // Select their high or low nibbles with one packed load and
+                // mask rather than constructing the DP4A operand byte by
+                // byte.  GGUF's super-block layout guarantees this range is
+                // in bounds; memcpy also keeps the load valid for every
+                // alignment produced by a checkpoint payload.
+                uint32_t packed_bytes = 0;
+                memcpy(&packed_bytes, qs + g, sizeof(packed_bytes));
+                const int packed_w = static_cast<int>(
+                    (high ? (packed_bytes >> 4) : packed_bytes) & 0x0F0F0F0Fu);
                 int packed_a = 0;
                 memcpy(&packed_a, a_ptr + g, 4);
                 dot = __dp4a(packed_w, packed_a, dot);

@@ -1,0 +1,12 @@
+{
+  "name": "lfm25_350m_q4_k_m",
+  "repo": "LiquidAI/LFM2.5-350M-GGUF",
+  "gguf_filename": "LFM2.5-350M-Q4_K_M.gguf",
+  "weight_mode": "auto",
+  "context": 1024,
+  "prefill_tokens": 512,
+  "decode_tokens": 128,
+  "batch": 512,
+  "cpu_threads": 8,
+  "minimum_win_ratio": 1.05
+}

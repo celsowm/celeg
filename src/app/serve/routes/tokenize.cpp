@@ -11,12 +11,12 @@ namespace protocol = celeg::serve::protocol;
 } // namespace
 
 void register_tokenize_route(uWS::App& app, const celeg::ITokenizer& tokenizer,
-                             const celeg::IChatTemplate& chat_template,
+                             const celeg::ResolvedInteraction& interaction,
                              std::size_t max_model_len) {
-    app.post("/tokenize", [&tokenizer, &chat_template, max_model_len](auto* res, auto* /*req*/) {
+    app.post("/tokenize", [&tokenizer, &interaction, max_model_len](auto* res, auto* /*req*/) {
         handle_json_post<protocol::TokenizeRequest, protocol::TokenizeResponse>(
-            res, [&tokenizer, &chat_template, max_model_len](const protocol::TokenizeRequest& request) {
-                return protocol::to_tokenize_response(request, tokenizer, chat_template, max_model_len);
+            res, [&tokenizer, &interaction, max_model_len](const protocol::TokenizeRequest& request) {
+                return protocol::to_tokenize_response(request, tokenizer, interaction, max_model_len);
             });
     });
 }

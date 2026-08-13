@@ -292,8 +292,6 @@ int main() {
     CELEG_TEST_CHECK(gguf_model.provenance.source_format == "gguf");
     CELEG_TEST_CHECK(gguf_model.graph.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
-    CELEG_TEST_CHECK(gguf_model.provenance.chat_template_id ==
-                     "chat:thinking-function");
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
 
     // A GGUF tokenizer table is authoritative vocabulary structure when a

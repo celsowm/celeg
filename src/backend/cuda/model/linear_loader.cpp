@@ -122,7 +122,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
         if (ggml_type != GgmlType::Q2_K && ggml_type != GgmlType::Q3_K &&
             ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
-            ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
+            ggml_type != GgmlType::Q5_K && ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
             throw std::runtime_error("unsupported GGUF linear quantization: " + name);
         }
         const GgmlTypeTrait trait = ggml_type_trait(ggml_type);
@@ -140,7 +140,8 @@ const LinearWeight* WeightLoader::load_linear_weight(
             static_cast<size_t>(cols) / trait.block_size * trait.type_size;
 
         if (ggml_type == GgmlType::Q2_K || ggml_type == GgmlType::Q3_K ||
-            ggml_type == GgmlType::Q4_0 || ggml_type == GgmlType::Q5_0 || ggml_type == GgmlType::Q8_0) {
+            ggml_type == GgmlType::Q4_0 || ggml_type == GgmlType::Q5_0 ||
+            ggml_type == GgmlType::Q5_K || ggml_type == GgmlType::Q8_0) {
             std::vector<__nv_bfloat16> host_bf16;
             dequantize_gguf_to_bf16(tensor, host_bf16);
             weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);

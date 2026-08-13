@@ -58,8 +58,8 @@ def find_binary(build: Path, name: str) -> Path:
 
 
 def run(binary: Path, model: Path, extra: list[str], profile: bool,
-        prefill: int, decode: int, context: int) -> str:
-    weight_flags = ["--weight-mode", "native"] if model.suffix.lower() == ".gguf" else []
+        prefill: int, decode: int, context: int, weight_mode: str) -> str:
+    weight_flags = ["--weight-mode", weight_mode] if model.suffix.lower() == ".gguf" else []
     cmd = [str(binary), "--model", str(model), *weight_flags, *BASE_FLAGS,
            "--benchmark-prefill-tokens", str(prefill),
            "--benchmark-decode", str(decode), "--benchmark-warmup", "1",
@@ -91,6 +91,9 @@ def main() -> None:
     ap.add_argument("--prefill", type=int, default=512)
     ap.add_argument("--decode", type=int, default=128)
     ap.add_argument("--context", type=int, default=1024)
+    ap.add_argument("--weight-mode", choices=("auto", "native", "int8", "int4"),
+                    default="auto",
+                    help="GGUF linear mode to profile (default: auto, the safe production path)")
     ap.add_argument("--top-k", type=int, default=None)
     ap.add_argument("--temperature", type=float, default=None)
     ap.add_argument("--sweep", action="store_true",
@@ -107,7 +110,8 @@ def main() -> None:
         extra += ["--temperature", str(args.temperature)]
 
     if not args.no_profile:
-        out = run(binary, args.model, extra, True, args.prefill, args.decode, args.context)
+        out = run(binary, args.model, extra, True, args.prefill, args.decode,
+                  args.context, args.weight_mode)
         started = False
         for line in out.splitlines():
             if line.startswith("=== decode phase profile"):
@@ -136,7 +140,7 @@ def main() -> None:
         base = None
         for name, flags in configs:
             out = run(binary, args.model, extra + flags, False,
-                      args.prefill, args.decode, args.context)
+                      args.prefill, args.decode, args.context, args.weight_mode)
             speed = tps(out)
             if speed is None:
                 print(f"{name:<24} {'n/a':>9}")

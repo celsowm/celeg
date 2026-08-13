@@ -4,7 +4,6 @@
 #include "celeg/runtime/context.hpp"
 #include "celeg/runtime/providers.hpp"
 #include "celeg/runtime/vision/providers.hpp"
-#include "celeg/text/semantic_chat_templates.hpp"
 
 #include <filesystem>
 
@@ -48,26 +47,6 @@ public:
     }
 };
 
-class ChatTemplateRuntimeModule final : public IRuntimeModule {
-public:
-    std::string_view id() const override { return "chat-template-runtime"; }
-
-    void register_into(RuntimeBuilder& builder) const override {
-        ChatTemplateCatalog& catalog =
-            builder.chat_template_catalog_for_registration();
-        add_delimited_chat_template(catalog);
-        add_role_envelope_chat_template(catalog);
-        add_turn_chat_template(catalog);
-        add_thinking_function_chat_template(catalog);
-        add_reasoning_xml_chat_template(catalog);
-        add_metadata_thinking_chat_template(catalog);
-        add_vision_role_chat_template(catalog);
-        add_patch_role_chat_template(catalog);
-        add_thinking_role_chat_template(catalog);
-        add_tagged_role_chat_template(catalog);
-    }
-};
-
 } // namespace
 
 std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
@@ -75,7 +54,6 @@ std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
     modules.push_back(std::make_unique<CheckpointResolutionModule>());
     modules.push_back(std::make_unique<TokenizerRuntimeModule>());
     modules.push_back(std::make_unique<VisionRuntimeModule>());
-    modules.push_back(std::make_unique<ChatTemplateRuntimeModule>());
     return modules;
 }
 

@@ -30,12 +30,10 @@ ErrorResponseDto error_response(std::string message,
 // Stop token ids are passed through unchanged (callers own the model's token ids).
 GenerateRequest to_generate_request(const ChatCompletionRequest& request,
                                     const celeg::ITokenizer& tokenizer,
-                                    const celeg::IChatTemplate& chat_template,
-                                    const celeg::ChatCapabilities& capabilities,
+                                    const celeg::ResolvedInteraction& interaction,
                                     std::span<const std::int32_t> eos_token_ids,
                                     const celeg::ChatTemplateOptions& template_options = {},
-                                    std::size_t max_context_tokens = 0,
-                                    const celeg::IChatToolCallCodec* tool_codec = nullptr);
+                                    std::size_t max_context_tokens = 0);
 
 // Maps a backend FinishReason to the OpenAI wire string. Returns "" for
 // FinishReason::None (request still in progress).
@@ -49,7 +47,7 @@ ChatCompletionResponse to_chat_completion_response(const std::string& id,
                                                    const std::vector<std::int32_t>& completion_tokens,
                                                    FinishReason reason,
                                                    const celeg::ITokenizer& tokenizer,
-                                                   const celeg::IChatToolCallCodec* tool_codec);
+                                                   const celeg::ResolvedInteraction& interaction);
 
 // Builds one SSE chunk for a batch of newly generated tokens. include_role
 // should be true only for the first chunk of a stream. finish_reason is
@@ -61,7 +59,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
                                              bool include_role,
                                              std::optional<FinishReason> finish,
                                              const celeg::ITokenizer& tokenizer,
-                                             const celeg::IChatToolCallCodec* tool_codec,
+                                             const celeg::ResolvedInteraction& interaction,
                                              std::string_view accumulated_text = {});
 
 ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
@@ -77,7 +75,7 @@ ChatCompletionChunk to_chat_completion_chunk(const std::string& id,
 // context window, echoed back as-is.
 TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
                                       const celeg::ITokenizer& tokenizer,
-                                      const celeg::IChatTemplate& chat_template,
+                                      const celeg::ResolvedInteraction& interaction,
                                       std::size_t max_model_len);
 
 } // namespace celeg::serve::protocol

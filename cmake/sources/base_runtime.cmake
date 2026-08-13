@@ -31,7 +31,6 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/descriptor/role_codec.cpp
     src/model/architecture.cpp
     src/model/automatic_architecture.cpp
-    src/model/interaction.cpp
     src/model/inference.cpp
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp
@@ -43,31 +42,12 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/program.cpp
     src/model/weight_plan.cpp
     src/composition/builtin_runtime.cpp
-    src/composition/builtin_chat_templates.cpp
-    src/text/semantic_chat/delimited.cpp
-    src/text/semantic_chat/role_envelope.cpp
-    src/text/semantic_chat/turn.cpp
-    src/text/semantic_chat/thinking_function.cpp
-    src/text/semantic_chat/reasoning_xml.cpp
-    src/text/semantic_chat/metadata_thinking.cpp
-    src/text/semantic_chat/vision_role.cpp
-    src/text/semantic_chat/patch_role.cpp
-    src/text/semantic_chat/thinking_role.cpp
-    src/text/semantic_chat/tagged_role.cpp
-    src/text/tool_codec/delimited.cpp
-    src/text/tool_codec/native_tag.cpp
-    src/text/tool_codec/function_xml.cpp
-    src/text/tool_codec/parameter_xml.cpp
-    src/text/tool_codec/tagged_json.cpp
-    src/text/tool_codec/tagged_role.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
     src/model/weights/roles.cpp
     src/model/reference.cpp
     src/text/tokenizer.cpp
     src/text/tokenizer_json_loader.cpp
-    src/text/chat/template_support.cpp
-    src/text/chat/template_import.cpp
     src/text/chat/template.cpp
     src/runtime/cache/host_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp

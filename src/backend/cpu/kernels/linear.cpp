@@ -467,8 +467,8 @@ void CpuLinearEngine::gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
     if (jobs.empty()) return;
     if (!input || !output) throw std::invalid_argument("null grouped CPU GEMM buffer");
 
-    // Routed experts in LFM share shape and use one native GGUF segment. Keep
-    // the unusual/mixed case correct through the ordinary GEMM path.
+    // Routed experts can share shape and use one native GGUF segment. Keep an
+    // unusual or mixed layout correct through the ordinary GEMM path.
     const CpuLinearWeight* first = jobs.front().weight;
     if (!first) throw std::invalid_argument("grouped CPU GEMM has null weight");
     first->validate();

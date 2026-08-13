@@ -154,7 +154,7 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                       resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
+                       semantics.execute_feed_forward ? 1.0f : 0.0f);
             launch_scale(workspace_.hidden_.data(), resources_.program_.hidden, semantics.residual.multiplier,
                          stream_.get());
         } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
@@ -248,11 +248,11 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
-            resources_.shape_.mamba2_layer_count > 0) {
+            !semantics.execute_feed_forward) {
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                                 resources_.program_.hidden, stream_.get());
         }
-        if (resources_.shape_.mamba2_layer_count == 0) run_mlp_decode(common_layer, layer_idx);
+        if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_idx);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
@@ -397,7 +397,7 @@ void CudaCompiledModel::forward_token_paged_host(
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        layout.latent_query_content_width(),
                        resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                           resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
+                           semantics.execute_feed_forward ? 1.0f : 0.0f);
                 launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                              semantics.residual.multiplier,
                              stream_.get());
@@ -555,7 +555,7 @@ void CudaCompiledModel::forward_token_paged_host(
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(), 1,
                    resources_.program_.hidden, layout.query_width(),
                    resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                       resources_.shape_.mamba2_layer_count == 0 ? 1.0f : 0.0f);
+                       semantics.execute_feed_forward ? 1.0f : 0.0f);
             launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             }
@@ -648,11 +648,11 @@ void CudaCompiledModel::forward_token_paged_host(
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
-            resources_.shape_.mamba2_layer_count > 0) {
+            !semantics.execute_feed_forward) {
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                                 resources_.program_.hidden, stream_.get());
         }
-        if (resources_.shape_.mamba2_layer_count == 0) run_mlp_decode(common_layer, layer_index);
+        if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_index);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_index)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,

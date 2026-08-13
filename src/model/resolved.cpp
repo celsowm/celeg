@@ -554,7 +554,10 @@ std::string ExecutionTopology::summary() const {
     std::ostringstream out;
     out << "layers=" << num_hidden_layers
         << " attention_layers=" << attention_layer_count
-        << " conv_layers=" << conv_layer_count;
+        << " conv_layers=" << conv_layer_count
+        << " gated_delta_layers=" << gated_delta_net_layer_count
+        << " mamba2_layers=" << mamba2_layer_count
+        << " mlp_only_layers=" << mlp_only_layer_count;
     return out.str();
 }
 

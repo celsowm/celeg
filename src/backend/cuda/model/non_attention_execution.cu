@@ -11,6 +11,10 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
     const CompiledLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer_index));
     if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+        // Recurrent Gated Delta execution is neither attention nor the
+        // feed-forward block below. Attribute the complete neutral mixer so
+        // decode profiles cannot hide its cost in the uninstrumented gap.
+        decode_phase_profile().begin(stream_.get());
         const GatedDeltaNetSpec& spec = gated_delta->spec;
         const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
             spec.value_heads * spec.value_head_dim;
@@ -56,6 +60,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
         linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
                value_width);
+        decode_phase_profile().end(DecodePhase::Other, stream_.get());
         return;
     }
     if (Mamba2Layer* mamba = as_mamba2(layer)) {

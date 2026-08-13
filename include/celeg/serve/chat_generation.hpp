@@ -25,13 +25,13 @@ struct ChatGenerationDelta {
 class ChatGenerationInterpreter {
 public:
     ChatGenerationInterpreter(const ITokenizer& tokenizer,
-                              const IChatToolCallCodec* tool_codec);
+                              const ResolvedInteraction& interaction);
 
     ChatGenerationDelta consume(std::span<const std::int32_t> tokens, bool finished);
 
 private:
     const ITokenizer& tokenizer_;
-    const IChatToolCallCodec* tool_codec_;
+    const ResolvedInteraction& interaction_;
     std::string generated_text_;
     std::string emitted_text_;
     std::size_t emitted_calls_ = 0;

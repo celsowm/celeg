@@ -157,7 +157,6 @@ struct Descriptor {
     std::vector<BindingPattern> bindings;
     bool tied_embeddings = false;
     std::optional<Field> tied_embeddings_field;
-    std::string chat_template;
 };
 
 const Json& required(const Json& object, std::string_view key);

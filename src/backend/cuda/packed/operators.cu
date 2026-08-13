@@ -286,25 +286,23 @@ void PackedGatedDeltaNetExecutor::run(
         if (!state_layer) throw std::logic_error("packed GatedDeltaNet state binding mismatch");
         const size_t count = row_descriptors
             ? row_descriptors->at(request).token_count : 1;
-        for (size_t token = 0; token < count; ++token, ++flat) {
-            if (flat >= static_cast<size_t>(rows)) {
-                throw std::invalid_argument("packed GatedDeltaNet row mapping exceeds input");
-            }
-            launch_gated_delta_net(
-                w.gated_delta_qkv.data() + static_cast<size_t>(flat) * qkv_width,
-                w.gated_delta_z.data() + static_cast<size_t>(flat) * value_width,
-                w.gated_delta_b.data() + static_cast<size_t>(flat) * spec.value_heads,
-                w.gated_delta_a.data() + static_cast<size_t>(flat) * spec.decay_width(),
-                gated_delta.conv_weight, gated_delta.dt_bias, gated_delta.a_log,
-                gated_delta.norm, state_layer->conv_state.data(),
-                state_layer->recurrent_state.data(),
-                w.gated_delta_output.data() + static_cast<size_t>(flat) * value_width,
-                1, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
-                spec.key_heads, spec.value_heads,
-                semantics.operator_norm.epsilon, spec.vector_decay,
-                spec.safe_decay, spec.decay_lower_bound, spec.sigmoid_output_gate,
-                w.stream.get());
+        if (count > static_cast<size_t>(rows) - flat) {
+            throw std::invalid_argument("packed GatedDeltaNet row mapping exceeds input");
         }
+        launch_gated_delta_net(
+            w.gated_delta_qkv.data() + flat * static_cast<size_t>(qkv_width),
+            w.gated_delta_z.data() + flat * static_cast<size_t>(value_width),
+            w.gated_delta_b.data() + flat * static_cast<size_t>(spec.value_heads),
+            w.gated_delta_a.data() + flat * static_cast<size_t>(spec.decay_width()),
+            gated_delta.conv_weight, gated_delta.dt_bias, gated_delta.a_log,
+            gated_delta.norm, state_layer->conv_state.data(),
+            state_layer->recurrent_state.data(),
+            w.gated_delta_output.data() + flat * static_cast<size_t>(value_width),
+            static_cast<int>(count), spec.conv_kernel, spec.key_head_dim,
+            spec.value_head_dim, spec.key_heads, spec.value_heads,
+            semantics.operator_norm.epsilon, spec.vector_decay, spec.safe_decay,
+            spec.decay_lower_bound, spec.sigmoid_output_gate, w.stream.get());
+        flat += count;
     }
     if (flat != static_cast<size_t>(rows)) {
         throw std::invalid_argument("packed GatedDeltaNet row mapping is incomplete");

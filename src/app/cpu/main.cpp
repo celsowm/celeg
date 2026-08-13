@@ -47,6 +47,7 @@ struct Args {
     bool raw_prompt = false;
     bool no_pack_cache = false;
     bool print_cpu = false;
+    bool print_config = false;
     bool memory_report = false;
 };
 
@@ -90,6 +91,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--raw") args.raw_prompt = true;
         else if (key == "--no-pack-cache") args.no_pack_cache = true;
         else if (key == "--print-cpu") args.print_cpu = true;
+        else if (key == "--print-config") args.print_config = true;
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--help") {
             std::cout
@@ -103,7 +105,7 @@ Args parse_args(int argc, char** argv) {
                 << "  --cpu-pack-cache DIR | --no-pack-cache\n"
                 << "  --cpu-expert-backing memory|disk\n"
                 << "  --cpu-expert-cache-mib N\n"
-                << "  --context N --max-new-tokens N --memory-report\n"
+                << "  --context N --max-new-tokens N --memory-report --print-config\n"
                 << "  --raw --chat-template-file PATH\n"
                 << "  --temperature F --top-k N --top-p F\n";
             std::exit(0);
@@ -114,7 +116,9 @@ Args parse_args(int argc, char** argv) {
         throw std::runtime_error("--model or --repo is required");
     if (!args.model_dir.empty() && !args.repo.empty())
         throw std::runtime_error("--model and --repo are mutually exclusive");
-    if (args.prompt.empty()) throw std::runtime_error("--prompt is required");
+    if (args.prompt.empty() && !args.print_config) {
+        throw std::runtime_error("--prompt is required unless --print-config is used");
+    }
     if (args.context <= 0 || args.max_new_tokens < 0 || args.threads < 0 ||
         args.kv_page_tokens <= 0 || args.prefill_chunk_tokens <= 0 ||
         args.prefill_chunk_threshold <= 0 ||
@@ -155,7 +159,7 @@ int main(int argc, char** argv) {
             args.context, args.max_new_tokens, args.top_k, args.temperature, args.top_p,
             args.repetition_penalty, args.seed, args.raw_prompt};
         const celeg::app::PreparedRun prepared = celeg::app::prepare_run(
-            run_inputs, !args.raw_prompt);
+            run_inputs, !args.raw_prompt || args.print_config);
         const auto& topology = prepared.bootstrap.model.topology;
         if (prepared.bootstrap.checkpoint.tokenizer && args.group_size_explicit) {
             throw std::runtime_error(
@@ -164,6 +168,18 @@ int main(int argc, char** argv) {
         if (prepared.chat_template) {
             std::cerr << "chat.template=" << prepared.chat_template->source_origin()
                       << " fingerprint=" << prepared.chat_template->fingerprint() << '\n';
+            for (const std::string& diagnostic : prepared.chat_template->diagnostics()) {
+                std::cerr << "chat.template_diagnostic=" << diagnostic << '\n';
+            }
+        }
+        if (args.print_config) {
+            std::cout << topology.summary() << '\n'
+                      << "chat.template=" << prepared.chat_template->source_origin() << '\n'
+                      << "chat.template_fingerprint=" << prepared.chat_template->fingerprint() << '\n';
+            for (const std::string& diagnostic : prepared.chat_template->diagnostics()) {
+                std::cout << "chat.template_diagnostic=" << diagnostic << '\n';
+            }
+            return 0;
         }
         const std::vector<int32_t> input = celeg::app::prepare_prompt(run_inputs, prepared);
         if (static_cast<int>(input.size()) + args.max_new_tokens > args.context) {

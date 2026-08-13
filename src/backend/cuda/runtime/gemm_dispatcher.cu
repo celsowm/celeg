@@ -322,6 +322,22 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
         case LinearKernelKind::Q4kMmq:
         case LinearKernelKind::Q6kMmq:
             throw std::runtime_error("MMQ kernels are dispatched via gguf_quantized(), not the plan switch");
+        case LinearKernelKind::MixedBf16AndGgufMmq:
+            // Native GGUF mode is deliberately per-tensor: formats with a
+            // proven MMQ path stay block-quantized above, while unsupported
+            // block formats and ordinary tensors remain BF16. Do not make a
+            // model-level promise that every tensor has the same storage.
+            if (bound_weight.kind != LinearStorageKind::Bf16 || !bound_weight.bf16) {
+                throw std::runtime_error("mixed native GGUF plan has no executable linear storage");
+            }
+            if (m == 1) {
+                launch_bf16_gemv(x, bound_weight.bf16, y, n, k, beta, stream_);
+            } else if (options_.gemm_backend == GemmBackend::CublasLt) {
+                linear_cublaslt(x, bound_weight.bf16, y, m, n, k, beta);
+            } else {
+                linear_cublas(x, bound_weight.bf16, y, m, n, k, beta);
+            }
+            return;
     }
     throw std::runtime_error("unknown linear execution plan");
 }

@@ -218,17 +218,28 @@ celeg-run --model path/to/model.gguf \
 ```
 
 Celeg reads GGUF model metadata and tokenizer data directly. Supported GGUF
-architectures include LFM2/LFM2-MoE, MiniCPM5, SmolLM3, and Nemotron-H Q4_K_M;
-Granite GGUF is not supported at this time.
+execution is selected from tensor structure and checkpoint evidence rather
+than a repository or architecture-name switch. The cached LFM2.5-350M,
+MiniCPM5-1B, Nemotron-3-Nano-4B, and Qwen3.5-0.8B GGUF fixtures exercise dense
+and hybrid attention/recurrent schedules through that same path.
 
 ### Chat-template resolution
 
 Chat behavior is model-agnostic. Celeg compiles a deterministic Hugging Face
-chat template supplied by checkpoint metadata, or—for GGUF files without one—
-infers the role-delimited protocol only when the tokenizer proves its BOS,
-turn, and assistant-prefix tokens. It reports the source and fingerprint on
-startup. A present template that uses unsupported or unsafe Jinja constructs
-fails explicitly rather than changing the prompt format.
+chat template supplied by checkpoint metadata or a companion
+`chat_template.jinja`, or—for GGUF files without either—infers a
+role-delimited program only when the tokenizer proves its BOS, role delimiter,
+turn terminator, and assistant-generation prefix. It reports the source,
+fingerprint, and any inference diagnostic on startup and `--print-config`.
+A present template that uses unsupported or unsafe Jinja constructs fails with
+a source location rather than changing the prompt format.
+
+The deterministic safe-Jinja boundary includes variables, branches, loops,
+`set`, macros, string/list operations, JSON rendering, and the thinking/tool
+fields exposed by the canonical message data model. Includes/imports, I/O,
+dynamic execution, and object introspection are rejected. Tool definitions
+may be rendered by any template; a tool-enabled completion is accepted only
+when the compiled program also proves a supported response grammar.
 
 Use `--chat-template-file path/to/chat_template.jinja` with `celeg-run`,
 `celeg-cpu-run`, or `celeg-serve` to override checkpoint metadata. The override

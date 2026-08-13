@@ -55,11 +55,12 @@ PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat) {
     if (!prepared.tokenizer) throw std::runtime_error("tokenizer provider returned null");
 
     if (resolve_chat) {
-        prepared.chat_template.emplace(resolve_chat_template(
+        prepared.chat_template.emplace(resolve_interaction(
             prepared.bootstrap.checkpoint.metadata, *prepared.tokenizer,
             inputs.chat_template_file.empty()
                 ? std::nullopt
-                : std::optional{std::filesystem::path(inputs.chat_template_file)}));
+                : std::optional{std::filesystem::path(inputs.chat_template_file)},
+            prepared.checkpoint_path.parent_path() / "chat_template.jinja"));
     }
     return prepared;
 }

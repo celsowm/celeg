@@ -124,7 +124,6 @@ int main() {
 
     CELEG_TEST_CHECK(runtime.architectures().find("test-extension") != nullptr);
     CELEG_TEST_CHECK(runtime.checkpoint_formats().select("model.gguf").id() == "gguf");
-    CELEG_TEST_CHECK(runtime.chat_templates().find("chat:delimited").format({}, false).size() > 0);
     CELEG_TEST_CHECK(runtime.tokenizer_providers().find("test-tokenizer").id() == "test-tokenizer");
     celeg::CheckpointView tokenizer_checkpoint;
     auto tokenizer_data = std::make_shared<celeg::TokenizerData>();

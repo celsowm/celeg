@@ -233,11 +233,11 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                          layer.operator_norm, {graph.hidden}, physical_layer);
         append_mixer(model, layer, layer_index, physical_layer);
         const bool mlp_only = layer.mixer_kind() == MixerKind::MlpOnly;
-        if (!mlp_only) {
+        if (layer.execute_feed_forward && !mlp_only) {
             add_norm_request(model, TensorRole::FfnInputNorm, layer_index,
                              layer.feed_forward_norm, {graph.hidden}, physical_layer);
         }
-        std::visit([&](const auto& feed_forward) {
+        if (layer.execute_feed_forward || mlp_only) std::visit([&](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
             if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
                 add_request(model, TensorRole::FfnGate, layer_index, -1,

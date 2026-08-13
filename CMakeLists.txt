@@ -471,9 +471,6 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/serve/types.hpp
     include/celeg/text/chat_template.hpp
     include/celeg/text/chat_contract.hpp
-    include/celeg/text/semantic_chat_templates.hpp
-    include/celeg/text/chat_template_import.hpp
-    include/celeg/text/interaction.hpp
     include/celeg/text/tool_call.hpp
     include/celeg/text/conversation.hpp
     include/celeg/text/tokenizer.hpp)
@@ -521,29 +518,9 @@ if(CELEG_BUILD_TESTS)
     target_include_directories(automatic_inference_test PRIVATE include tests)
     target_link_libraries(automatic_inference_test PRIVATE celeg_base)
     add_test(NAME automatic_inference_test COMMAND automatic_inference_test)
-    set(CELEG_CHAT_TEMPLATE_SOURCES
-        src/composition/builtin_chat_templates.cpp
-        src/text/chat/template.cpp src/text/chat/template_support.cpp
-        src/text/chat/template_import.cpp
-        src/text/semantic_chat/delimited.cpp
-        src/text/semantic_chat/role_envelope.cpp
-        src/text/semantic_chat/turn.cpp
-        src/text/semantic_chat/thinking_function.cpp
-        src/text/semantic_chat/reasoning_xml.cpp
-        src/text/semantic_chat/metadata_thinking.cpp
-        src/text/semantic_chat/vision_role.cpp
-        src/text/semantic_chat/patch_role.cpp
-        src/text/semantic_chat/thinking_role.cpp
-        src/text/semantic_chat/tagged_role.cpp
-        src/text/tool_codec/delimited.cpp
-        src/text/tool_codec/native_tag.cpp
-        src/text/tool_codec/function_xml.cpp
-        src/text/tool_codec/parameter_xml.cpp
-        src/text/tool_codec/tagged_json.cpp src/text/tool_codec/tagged_role.cpp)
-    add_executable(chat_template_test tests/chat_template_test.cpp
-        ${CELEG_CHAT_TEMPLATE_SOURCES}
-        )
-    target_include_directories(chat_template_test PRIVATE include)
+    add_executable(chat_template_test tests/chat_template_test.cpp)
+    target_include_directories(chat_template_test PRIVATE include tests)
+    target_link_libraries(chat_template_test PRIVATE celeg_base)
     add_test(NAME chat_template_test COMMAND chat_template_test)
     add_executable(chat_template_resolution_test tests/chat_template_resolution_test.cpp)
     target_include_directories(chat_template_resolution_test PRIVATE include tests)
@@ -575,19 +552,19 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     add_test(NAME quantization_test COMMAND quantization_test)
     add_executable(tokenizer_test tests/tokenizer_test.cpp src/text/tokenizer.cpp
         src/text/tokenizer_json_loader.cpp
-        ${CELEG_CHAT_TEMPLATE_SOURCES}
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
+        src/text/chat/template.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_test PRIVATE include)
     add_test(NAME tokenizer_test COMMAND tokenizer_test)
     add_executable(tokenizer_benchmark tests/tokenizer_benchmark.cpp src/text/tokenizer.cpp
         src/text/tokenizer_json_loader.cpp
-        ${CELEG_CHAT_TEMPLATE_SOURCES}
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
+        src/text/chat/template.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_benchmark PRIVATE include)
     add_executable(tokenizer_probe tests/tokenizer_probe.cpp src/text/tokenizer.cpp
         src/text/tokenizer_json_loader.cpp
-        ${CELEG_CHAT_TEMPLATE_SOURCES}
-        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp)
+        src/text/chat/template.cpp
+        src/checkpoint/formats/json.cpp src/checkpoint/formats/gguf.cpp src/checkpoint/metadata.cpp)
     target_include_directories(tokenizer_probe PRIVATE include)
     add_executable(safetensors_test tests/safetensors_test.cpp src/checkpoint/formats/safetensors.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(safetensors_test PRIVATE include)
@@ -790,7 +767,7 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
         add_executable(cuda_kernels_test tests/cuda_kernels_test.cu
             tests/cuda/sampling_tests.cu
             tests/cuda/attention_tests.cu)
-        target_link_libraries(cuda_kernels_test PRIVATE celeg_cuda_backend)
+        target_link_libraries(cuda_kernels_test PRIVATE celeg_cuda_backend celeg_cpu_backend)
         target_include_directories(cuda_kernels_test PRIVATE include)
         if(CELEG_RUN_CUDA_TESTS)
             add_test(NAME cuda_kernels_test COMMAND cuda_kernels_test)

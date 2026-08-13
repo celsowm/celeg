@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         const auto& topology = bootstrap.model.topology;
         celeg::BpeTokenizer tokenizer(celeg::load_tokenizer_definition_json(
             (model_dir / "tokenizer.json").string()));
-        const auto chat_template = celeg::resolve_chat_template(
+        const auto chat_template = celeg::resolve_interaction(
             bootstrap.checkpoint.metadata, tokenizer);
         const std::vector<int32_t> tokens = tokenizer.encode(
             celeg::render_chat(

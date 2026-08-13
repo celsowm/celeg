@@ -2,7 +2,6 @@
 
 #include "celeg/checkpoint/catalog.hpp"
 #include "celeg/model/architecture.hpp"
-#include "celeg/text/chat_template.hpp"
 #include "celeg/runtime/providers.hpp"
 
 #include <filesystem>
@@ -19,7 +18,6 @@ public:
     const CheckpointFormatCatalog& checkpoint_formats() const {
         return *checkpoint_formats_;
     }
-    const ChatTemplateCatalog& chat_templates() const { return *chat_templates_; }
     const TokenizerProviderCatalog& tokenizer_providers() const {
         return *tokenizer_providers_;
     }
@@ -30,20 +28,17 @@ private:
     friend class RuntimeBuilder;
     RuntimeContext(std::shared_ptr<const ArchitectureCatalog> architectures,
                    std::shared_ptr<const CheckpointFormatCatalog> checkpoint_formats,
-                   std::shared_ptr<const ChatTemplateCatalog> chat_templates,
                    std::shared_ptr<const TokenizerProviderCatalog> tokenizer_providers,
                    std::shared_ptr<const BackendFactoryCatalog> backends,
                    std::shared_ptr<const VisionProviderCatalog> vision_providers)
         : architectures_(std::move(architectures)),
           checkpoint_formats_(std::move(checkpoint_formats)),
-          chat_templates_(std::move(chat_templates)),
           tokenizer_providers_(std::move(tokenizer_providers)),
           backends_(std::move(backends)),
           vision_providers_(std::move(vision_providers)) {}
 
     std::shared_ptr<const ArchitectureCatalog> architectures_;
     std::shared_ptr<const CheckpointFormatCatalog> checkpoint_formats_;
-    std::shared_ptr<const ChatTemplateCatalog> chat_templates_;
     std::shared_ptr<const TokenizerProviderCatalog> tokenizer_providers_;
     std::shared_ptr<const BackendFactoryCatalog> backends_;
     std::shared_ptr<const VisionProviderCatalog> vision_providers_;
@@ -61,11 +56,6 @@ public:
     RuntimeBuilder& add_builtins();
     RuntimeBuilder& add_architecture(std::unique_ptr<IArchitecture> architecture);
     RuntimeBuilder& add_checkpoint_format(std::unique_ptr<ICheckpointFormat> format);
-    RuntimeBuilder& add_chat_template(
-        std::string profile_id,
-        std::unique_ptr<IChatTemplate> chat_template,
-        std::unique_ptr<IChatToolCallCodec> tool_call_codec = nullptr,
-        ChatCapabilities capabilities = {});
     RuntimeBuilder& add_tokenizer_provider(std::unique_ptr<ITokenizerProvider> provider);
     RuntimeBuilder& add_backend_factory(std::unique_ptr<IBackendFactory> factory);
     RuntimeBuilder& add_vision_provider(std::unique_ptr<IVisionProviderFactory> provider);
@@ -76,14 +66,12 @@ public:
     // They are invalid after build() and are deliberately not exposed by
     // RuntimeContext.
     ArchitectureCatalog& architecture_catalog_for_registration() { return *architectures_; }
-    ChatTemplateCatalog& chat_template_catalog_for_registration() { return *chat_templates_; }
     VisionProviderCatalog& vision_catalog_for_registration() { return *vision_providers_; }
     RuntimeContext build();
 
 private:
     std::shared_ptr<ArchitectureCatalog> architectures_;
     std::shared_ptr<CheckpointFormatCatalog> checkpoint_formats_;
-    std::shared_ptr<ChatTemplateCatalog> chat_templates_;
     std::shared_ptr<TokenizerProviderCatalog> tokenizer_providers_;
     std::shared_ptr<BackendFactoryCatalog> backends_;
     std::shared_ptr<VisionProviderCatalog> vision_providers_;

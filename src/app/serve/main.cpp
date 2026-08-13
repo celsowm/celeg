@@ -159,13 +159,17 @@ int main(int argc, char** argv) {
         const auto tokenizer_storage = tokenizer_provider.create(
             bootstrap.checkpoint, model);
         const celeg::ITokenizer& tokenizer = *tokenizer_storage;
-        const celeg::ResolvedChatTemplate chat_template = celeg::resolve_chat_template(
+        const celeg::ResolvedInteraction chat_template = celeg::resolve_interaction(
             bootstrap.checkpoint.metadata, tokenizer,
             args.chat_template_file.empty()
                 ? std::nullopt
-                : std::optional{std::filesystem::path(args.chat_template_file)});
+                : std::optional{std::filesystem::path(args.chat_template_file)},
+            model.parent_path() / "chat_template.jinja");
         std::cerr << "chat.template=" << chat_template.source_origin()
                   << " fingerprint=" << chat_template.fingerprint() << '\n';
+        for (const std::string& diagnostic : chat_template.diagnostics()) {
+            std::cerr << "chat.template_diagnostic=" << diagnostic << '\n';
+        }
 
         const std::string model_name =
             args.served_model_name.empty() ? bootstrap.model.provenance.identity : args.served_model_name;
@@ -252,7 +256,6 @@ int main(int argc, char** argv) {
         }
 
         celeg::ChatCapabilities chat_capabilities = chat_template.capabilities();
-        const celeg::IChatToolCallCodec* chat_tool_codec = chat_template.tool_codec();
         chat_capabilities.vision = static_cast<bool>(visual_embeddings);
 
         GenerationDispatcher dispatcher(service->requests(), service->scheduler());
@@ -272,7 +275,6 @@ int main(int argc, char** argv) {
             app, tokenizer, chat_template, static_cast<std::size_t>(args.context));
         celeg::app::serve::register_chat_completions_route(
             app, dispatcher, service->requests(), tokenizer, chat_template,
-            chat_capabilities, chat_tool_codec,
             model_name, eos_token_ids, static_cast<std::size_t>(args.context), loop);
 
         app.listen(args.host, args.port, [&](auto* listen_socket) {

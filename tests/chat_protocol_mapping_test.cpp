@@ -2,7 +2,7 @@
 #include "celeg/serve/protocol/mapping.hpp"
 #include "celeg/text/tokenizer.hpp"
 #include "celeg/text/tokenizer_definition.hpp"
-#include "celeg/text/semantic_chat_templates.hpp"
+#include "celeg/text/chat_template.hpp"
 #include "support/assertions.hpp"
 
 #include <filesystem>
@@ -125,12 +125,16 @@ int main() {
     // Full request -> GenerateRequest pipeline against a real tokenizer.
     const auto tokenizer_path = std::filesystem::temp_directory_path() / "celeg_chat_protocol_test.json";
     const celeg::BpeTokenizer tokenizer = make_test_tokenizer(tokenizer_path);
-    const celeg::DelimitedChatTemplate chat_template;
+    celeg::CheckpointMetadata chat_metadata;
+    chat_metadata.values["chat_template"] = std::string(
+        "{{ bos_token }}{% for message in messages %}<|im_start|>{{ message.role }}\n{{ message.content }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}");
+    const celeg::ResolvedInteraction chat_template =
+        celeg::resolve_interaction(chat_metadata, tokenizer);
     std::filesystem::remove(tokenizer_path);
 
     const std::vector<std::int32_t> eos_token_ids{2, 130073};
     const serve::GenerateRequest generate_request = protocol::to_generate_request(
-        request, tokenizer, chat_template, {}, eos_token_ids);
+        request, tokenizer, chat_template, eos_token_ids);
     CELEG_TEST_CHECK(generate_request.eos_token_ids == eos_token_ids);
     CELEG_TEST_CHECK(generate_request.max_output_tokens == 16);
     CELEG_TEST_CHECK(generate_request.generation.temperature == 0.5f);
@@ -144,7 +148,7 @@ int main() {
     sliding_request.messages.push_back({"user", std::string("hi")});
     sliding_request.max_tokens = 1;
     const serve::GenerateRequest sliding_generate = protocol::to_generate_request(
-        sliding_request, tokenizer, chat_template, {}, eos_token_ids, {}, 23);
+        sliding_request, tokenizer, chat_template, eos_token_ids, {}, 23);
     CELEG_TEST_CHECK(sliding_generate.context_window_trimmed);
     CELEG_TEST_CHECK(sliding_generate.prompt_tokens.size() + sliding_generate.max_output_tokens <= 23);
 
@@ -158,7 +162,7 @@ int main() {
     empty_request.model = "lfm2.5-test";
     threw = false;
     try {
-        protocol::to_generate_request(empty_request, tokenizer, chat_template, {}, eos_token_ids);
+        protocol::to_generate_request(empty_request, tokenizer, chat_template, eos_token_ids);
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -168,7 +172,7 @@ int main() {
     const std::vector<std::int32_t> completion_tokens = {7, 8};
     const protocol::ChatCompletionResponse response = protocol::to_chat_completion_response(
         "req-1", "lfm2.5-test", 1000, generate_request.prompt_tokens.size(),
-        completion_tokens, serve::FinishReason::Stop, tokenizer, {});
+        completion_tokens, serve::FinishReason::Stop, tokenizer, chat_template);
     CELEG_TEST_CHECK(response.id == "req-1");
     CELEG_TEST_CHECK(response.object == "chat.completion");
     CELEG_TEST_CHECK(response.choices.size() == 1);
@@ -188,14 +192,14 @@ int main() {
     // only the terminal chunk carries a finish_reason.
     const protocol::ChatCompletionChunk first_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, completion_tokens, /*include_role=*/true,
-        /*finish=*/std::nullopt, tokenizer, {});
+        /*finish=*/std::nullopt, tokenizer, chat_template);
     CELEG_TEST_CHECK(first_chunk.choices[0].delta.role && *first_chunk.choices[0].delta.role == "assistant");
     CELEG_TEST_CHECK(first_chunk.choices[0].delta.content && *first_chunk.choices[0].delta.content == "hi");
     CELEG_TEST_CHECK(!first_chunk.choices[0].finish_reason.has_value());
 
     const protocol::ChatCompletionChunk final_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, {}, /*include_role=*/false,
-        /*finish=*/serve::FinishReason::Stop, tokenizer, {});
+        /*finish=*/serve::FinishReason::Stop, tokenizer, chat_template);
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.role.has_value());
     CELEG_TEST_CHECK(!final_chunk.choices[0].delta.content.has_value());
     CELEG_TEST_CHECK(final_chunk.choices[0].finish_reason && *final_chunk.choices[0].finish_reason == "stop");

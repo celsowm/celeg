@@ -645,6 +645,12 @@ void CpuCompiledModel::Shared::load_weights() {
         std::visit([&](const auto& value) {
             using Value = std::decay_t<decltype(value)>;
             const auto check_common = [&](const CommonWeights& common) {
+                // Hybrid schedules may intentionally omit a feed-forward
+                // block on recurrent layers.  The compiler has already
+                // proven that from the layer program; requiring dense MLP
+                // matrices here would reintroduce a backend-specific
+                // semantic assumption.
+                if (!program.layers[layer].execute_feed_forward) return;
                 require_matrix(common.w13, "layer " + std::to_string(layer) + ".w13");
                 require_matrix(common.w2, "layer " + std::to_string(layer) + ".w2");
             };

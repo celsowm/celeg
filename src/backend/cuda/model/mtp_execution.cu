@@ -39,7 +39,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     if (!resources_.mtp_.available()) return;
     if (resources_.mtp_.layer_count != 1) {
         throw std::runtime_error(
-            "Qwen MTP currently requires exactly one auxiliary decoder layer");
+            "MTP currently requires exactly one auxiliary decoder layer");
     }
     const cudaStream_t stream = stream_.get();
     const int hidden = resources_.program_.hidden;

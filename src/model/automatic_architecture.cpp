@@ -2,7 +2,6 @@
 
 #include "celeg/model/inference.hpp"
 
-#include "celeg/model/interaction.hpp"
 
 #include <string>
 #include <stdexcept>
@@ -54,7 +53,6 @@ public:
         CanonicalModelFacts facts = infer_canonical_model_facts(input);
         facts.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
         ResolvedModel result = ResolutionAssembler{}.assemble(facts);
-        result.provenance.chat_template_id = resolve_chat_template_id(checkpoint.metadata);
         return result;
     }
 };

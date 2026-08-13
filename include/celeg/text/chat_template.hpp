@@ -1,20 +1,19 @@
 #pragma once
 
-#include "celeg/text/chat_contract.hpp"
 #include "celeg/checkpoint/metadata.hpp"
+#include "celeg/text/chat_contract.hpp"
 
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace celeg {
 
 class ITokenizer;
+class InteractionRenderProgram;
 
 using ChatToolDefinition = ToolDefinition;
 
@@ -23,103 +22,73 @@ struct ChatTemplateOptions {
     ToolChoice tool_choice{};
 };
 
-// Interface Segregation Principle: tokenizer chat formatting depends only on
-// this narrow interface, not on model metadata.
-class IChatTemplate {
-public:
-    virtual ~IChatTemplate() = default;
+// A parser is exposed only when the compiled template proves that generated
+// tool calls use this exact deterministic wire grammar. Rendering always goes
+// through the Jinja program; this grammar never formats a second protocol.
+struct ToolCallGrammar {
+    std::string opening;
+    std::string closing;
+    std::string call_prefix;
+    std::string call_suffix;
+    std::string required_prefix;
+    bool parallel_calls = false;
+    bool xml_parameters = false;
 
-    // Formats a full multi-turn conversation. Options are part of the
-    // contract so a renderer cannot silently discard a caller's request.
-    std::string format(std::span<const ChatMessage> messages,
-                       bool add_generation_prompt) const {
-        return format(messages, std::span<const ChatToolDefinition>{},
-                      add_generation_prompt, {});
-    }
-    std::string format(std::span<const ChatMessage> messages,
-                       std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt) const {
-        return format(messages, tools, add_generation_prompt, {});
-    }
-    virtual std::string format(std::span<const ChatMessage> messages,
-                               std::span<const ChatToolDefinition> tools,
-                               bool add_generation_prompt,
-                               const ChatTemplateOptions& options) const = 0;
+    ToolParseResult parse(std::string_view generated) const;
 };
 
-// A model-scoped interaction contract compiled from checkpoint template
-// metadata.  It deliberately carries no model, repository, or architecture
-// identity: the rendered wire format is selected solely by template source or
-// by tokenizer evidence when the source is absent.
-class ResolvedChatTemplate final : public IChatTemplate {
+// Model-scoped, immutable interaction contract. Its render program is compiled
+// once during model preparation from a source override, checkpoint source, or
+// conservative tokenizer evidence. No model/repository/architecture name
+// participates in this decision.
+class ResolvedInteraction final {
 public:
-    using IChatTemplate::format;
-
+    std::string format(std::span<const ChatMessage> messages,
+                       bool add_generation_prompt = true) const;
     std::string format(std::span<const ChatMessage> messages,
                        std::span<const ChatToolDefinition> tools,
-                       bool add_generation_prompt,
-                       const ChatTemplateOptions& options) const override;
+                       bool add_generation_prompt = true,
+                       const ChatTemplateOptions& options = {}) const;
 
     const std::string& source_origin() const noexcept { return source_origin_; }
     const std::string& fingerprint() const noexcept { return fingerprint_; }
+    const std::vector<std::string>& diagnostics() const noexcept { return diagnostics_; }
     ChatCapabilities capabilities() const noexcept { return capabilities_; }
-    const IChatToolCallCodec* tool_codec() const noexcept { return tool_codec_.get(); }
+    const std::optional<ToolCallGrammar>& tool_call_grammar() const noexcept {
+        return tool_call_grammar_;
+    }
+    ToolParseResult parse_tool_calls(std::string_view generated) const;
+    std::string forced_tool_call_prefix(std::span<const ChatToolDefinition> tools,
+                                        const ToolChoice& choice) const;
 
 private:
-    friend ResolvedChatTemplate resolve_chat_template(
+    friend ResolvedInteraction resolve_interaction(
         const CheckpointMetadata&, const ITokenizer&,
+        const std::optional<std::filesystem::path>&,
         const std::optional<std::filesystem::path>&);
 
-    bool include_bos_ = false;
-    bool tools_in_system_ = false;
+    std::shared_ptr<const InteractionRenderProgram> render_program_;
     std::string source_origin_;
     std::string fingerprint_;
+    std::string bos_token_;
+    std::vector<std::string> diagnostics_;
     ChatCapabilities capabilities_;
-    std::shared_ptr<const IChatToolCallCodec> tool_codec_;
+    std::optional<ToolCallGrammar> tool_call_grammar_;
 };
 
-// Resolves a checkpoint's interaction format.  An override wins over
-// checkpoint metadata; source-less checkpoints may use only a conservative
-// tokenizer-evidence inference.  Templates that are present but outside the
-// deterministic supported subset fail instead of silently changing protocol.
-ResolvedChatTemplate resolve_chat_template(
+ResolvedInteraction resolve_interaction(
     const CheckpointMetadata& metadata,
     const ITokenizer& tokenizer,
-    const std::optional<std::filesystem::path>& override_file = std::nullopt);
+    const std::optional<std::filesystem::path>& override_file = std::nullopt,
+    const std::optional<std::filesystem::path>& companion_file = std::nullopt);
 
 std::string render_chat(std::span<const ChatMessage> messages,
-                        const IChatTemplate& chat_template,
+                        const ResolvedInteraction& interaction,
                         bool add_generation_prompt = true);
 std::string render_chat(std::span<const ChatMessage> messages,
                         std::span<const ChatToolDefinition> tools,
-                        const IChatTemplate& chat_template,
-                        bool add_generation_prompt = true);
-std::string render_chat(std::span<const ChatMessage> messages,
-                        std::span<const ChatToolDefinition> tools,
-                        const IChatTemplate& chat_template,
-                        bool add_generation_prompt,
-                        const ChatTemplateOptions& options);
-
-class ChatTemplateCatalog {
-public:
-    void add(std::string template_id, std::unique_ptr<IChatTemplate> chat_template,
-             std::unique_ptr<IChatToolCallCodec> tool_call_codec = nullptr,
-             ChatCapabilities capabilities = {});
-    void freeze();
-    const IChatTemplate& find(std::string_view template_id) const;
-    ChatCapabilities capabilities(std::string_view template_id) const;
-    const IChatToolCallCodec* tool_codec(std::string_view template_id) const;
-
-private:
-    struct Entry {
-        std::unique_ptr<IChatTemplate> chat_template;
-        std::shared_ptr<const IChatToolCallCodec> tool_call_codec;
-        ChatCapabilities capabilities;
-    };
-    std::unordered_map<std::string, Entry> entries_;
-    bool frozen_ = false;
-};
-
-ChatTemplateCatalog make_chat_template_catalog();
+                        const ResolvedInteraction& interaction,
+                        bool add_generation_prompt = true,
+                        const ChatTemplateOptions& options = {});
 
 } // namespace celeg

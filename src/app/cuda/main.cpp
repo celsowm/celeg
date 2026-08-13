@@ -345,11 +345,17 @@ int main(int argc, char** argv) {
         if (prepared.chat_template) {
             std::cerr << "chat.template=" << prepared.chat_template->source_origin()
                       << " fingerprint=" << prepared.chat_template->fingerprint() << '\n';
+            for (const std::string& diagnostic : prepared.chat_template->diagnostics()) {
+                std::cerr << "chat.template_diagnostic=" << diagnostic << '\n';
+            }
         }
         if (args.print_config) {
             std::cout << topology.summary() << '\n'
                       << "chat.template=" << prepared.chat_template->source_origin() << '\n'
                       << "chat.template_fingerprint=" << prepared.chat_template->fingerprint() << '\n';
+            for (const std::string& diagnostic : prepared.chat_template->diagnostics()) {
+                std::cout << "chat.template_diagnostic=" << diagnostic << '\n';
+            }
             exit_process_immediately(0);
         }
         // A JSON checkpoint may omit bos_token_id while its tokenizer config

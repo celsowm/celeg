@@ -21,7 +21,6 @@ struct CheckpointProfile {
     std::string id;
     std::string repository_contains;
     std::vector<MetadataPatch> patches;
-    std::string chat_template;
 };
 
 class CheckpointProfileResolver {

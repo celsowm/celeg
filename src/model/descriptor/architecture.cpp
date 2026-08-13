@@ -486,8 +486,7 @@ public:
         stages.provenance.architecture_id = descriptor_.id;
         stages.provenance.source_format = metadata.is_gguf() ? "gguf" : "safetensors";
         stages.provenance.checkpoint_profile_id = descriptor_.id;
-        stages.provenance.chat_template_id = descriptor_.chat_template;
-        stages.provenance.profile = {descriptor_.id, "", {}, descriptor_.chat_template};
+        stages.provenance.profile = {descriptor_.id, "", {}};
         ResolvedModel result = resolve_architecture_stages(checkpoint, std::move(stages));
         result.provenance.identity = descriptor_.id + "-" + result.graph.fingerprint();
         return result;
