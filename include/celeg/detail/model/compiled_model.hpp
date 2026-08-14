@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/backend/cuda/model.hpp"
+#include "celeg/backend/cuda/attention_capability.hpp"
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/backend/cuda/execution_plan.hpp"
@@ -42,14 +43,14 @@ struct CudaCompiledModel {
     // (attention_chunk_tokens, 256) because prefill parallelism comes from
     // chunk *count*, not chunk size: more, shorter chunks -> more concurrent
     // blocks and a shorter serial critical path per block.
-    static constexpr int kPrefillAttnChunkTokens = 64;
+    static constexpr int kPrefillAttnChunkTokens = kAttentionPrefillChunkTokens;
 
     // Row-count ceiling for launch_gqa_prefill_gemm's dense
     // O(q_heads*rows^2) score/probability scratch. A single prefill_batched
     // call above this falls back to launch_gqa_prefill_segmented
     // (O(rows) scratch) instead of allocating an unbounded scratch buffer.
     // 2048 rows keeps the scratch under ~1GB even at 32 attention heads.
-    static constexpr int kMaxGemmAttentionRows = 2048;
+    static constexpr int kMaxGemmAttentionRows = kAttentionMaxGemmRows;
 
     // A speculative candidate may advance recurrent mixers before the target
     // model decides whether to accept it.  KV storage is append-only and is

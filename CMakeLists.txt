@@ -763,6 +763,12 @@ target_link_libraries(weight_plan_test PRIVATE celeg_base)
     target_link_libraries(runtime_backend_extension_test PRIVATE celeg_base)
     target_include_directories(runtime_backend_extension_test PRIVATE include tests)
     add_test(NAME runtime_backend_extension_test COMMAND runtime_backend_extension_test)
+    # Host-only policy test: the CUDA attention capability matrix is data, so it
+    # is verified on every preset, with or without a CUDA toolchain.
+    add_executable(cuda_attention_capability_test tests/cuda_attention_capability_test.cpp)
+    target_link_libraries(cuda_attention_capability_test PRIVATE celeg_base)
+    target_include_directories(cuda_attention_capability_test PRIVATE include tests)
+    add_test(NAME cuda_attention_capability_test COMMAND cuda_attention_capability_test)
     add_executable(image_codec_test tests/image_codec_test.cpp)
     target_link_libraries(image_codec_test PRIVATE celeg_base)
     target_include_directories(image_codec_test PRIVATE include tests)

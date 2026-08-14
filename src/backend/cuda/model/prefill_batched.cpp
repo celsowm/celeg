@@ -433,14 +433,44 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             prof.end(PrefillPhase::RopeKv, stream_.get());
 
             prof.begin(stream_.get());
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                if (attention->key && attention->value) launch_store_kv_int8_prefill(
-                    workspace_.prefill_k_.data(), workspace_.prefill_v_.data(),
-                    owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                    owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                    rows, owner_layout.key_value_heads, owner_layout.head_dim,
-                    stream_.get());
-                if (attention->alibi_slopes.data()) {
+            // The flash request is an execution preference, not a capability:
+            // CELEG_FLASH_ATTN is resolved once into CudaModelOptions::flash_attn
+            // at model-configuration construction time (see runtime_types.hpp);
+            // execution code just reads the resolved option and lets the
+            // capability policy decide whether it can be honoured for this head
+            // dimension.
+            AttentionRequest attention_request;
+            attention_request.kv_format = resources_.options_.kv_cache_mode;
+            attention_request.operation = AttentionOperation::Prefill;
+            attention_request.layout = AttentionKvLayout::Contiguous;
+            attention_request.position_source = AttentionPositionSource::HostScalar;
+            attention_request.bias = attention->alibi_slopes.data()
+                ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+            attention_request.fast_attention = resources_.options_.fast_attention;
+            attention_request.flash_attention_requested = resources_.options_.flash_attn;
+            attention_request.head_dim = owner_layout.head_dim;
+            attention_request.rows = rows;
+            const AttentionCapability attention_plan =
+                require_attention_capability(attention_request);
+            const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
+            if (attention->key && attention->value) {
+                if (int8_kv) {
+                    launch_store_kv_int8_prefill(
+                        workspace_.prefill_k_.data(), workspace_.prefill_v_.data(),
+                        owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        rows, owner_layout.key_value_heads, owner_layout.head_dim,
+                        stream_.get());
+                } else {
+                    launch_store_kv_prefill(
+                        workspace_.prefill_k_.data(), workspace_.prefill_v_.data(),
+                        owner->key_cache.data(), owner->value_cache.data(),
+                        rows, owner_layout.key_value_width(), stream_.get());
+                }
+            }
+            switch (attention_plan.algorithm) {
+            case AttentionAlgorithm::Alibi:
+                if (int8_kv) {
                     launch_gqa_prefill_alibi_int8(
                         workspace_.prefill_q_.data(), owner->key_cache_int8.data(),
                         owner->value_cache_int8.data(), owner->key_cache_scales.data(),
@@ -448,76 +478,67 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         rows, attention->alibi_slopes.data(), layout.query_heads,
                         owner_layout.key_value_heads, owner_layout.head_dim,
                         layout.sliding_window_size(), stream_.get());
-                } else if (resources_.options_.fast_attention) {
-                    launch_gqa_prefill_online_int8(
-                        workspace_.prefill_q_.data(), owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                        workspace_.prefill_op_output_.data(), rows, layout.query_heads,
-                        owner_layout.key_value_heads, owner_layout.head_dim,
-                        layout.sliding_window_size(), stream_.get());
                 } else {
-                    launch_gqa_prefill_strict_int8(
-                        workspace_.prefill_q_.data(), owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                        workspace_.prefill_op_output_.data(), rows, layout.query_heads,
-                        owner_layout.key_value_heads, owner_layout.head_dim,
-                        layout.sliding_window_size(), stream_.get());
-                }
-            } else {
-                if (attention->key && attention->value) launch_store_kv_prefill(
-                    workspace_.prefill_k_.data(), workspace_.prefill_v_.data(),
-                    owner->key_cache.data(), owner->value_cache.data(),
-                    rows, owner_layout.key_value_width(), stream_.get());
-                if (attention->alibi_slopes.data()) {
                     launch_gqa_prefill_alibi(
                         workspace_.prefill_q_.data(), owner->key_cache.data(),
                         owner->value_cache.data(), workspace_.prefill_op_output_.data(),
                         rows, attention->alibi_slopes.data(), layout.query_heads,
                         owner_layout.key_value_heads, owner_layout.head_dim,
                         layout.sliding_window_size(), stream_.get());
-                } else if (resources_.options_.fast_attention) {
-                    // CELEG_FLASH_ATTN is resolved once into
-                    // CudaModelOptions::flash_attn at model-configuration
-                    // construction time (see runtime_types.hpp); execution
-                    // code just reads the resolved option.
-                    const bool use_flash = resources_.options_.flash_attn;
-                    // The batched GEMM path is only valid for the narrow-head
-                    // layouts it was tuned for.  With head_dim=128 its
-                    // strided GQA batches can corrupt the KV state; use the
-                    // tiled path automatically for wider heads so the next
-                    // decode step sees a valid cache.  This is a kernel
-                    // capability boundary, not an architecture dispatch.
-                    const bool flash_supported = owner_layout.head_dim <= 128;
-                    if (flash_supported && (use_flash || owner_layout.head_dim > 64)) {
-                        launch_gqa_prefill_flash(
-                            workspace_.prefill_q_.data(),
-                            owner->key_cache.data(), owner->value_cache.data(),
-                            workspace_.prefill_op_output_.data(), rows,
-                            layout.query_heads, owner_layout.key_value_heads,
-                            owner_layout.head_dim, layout.query_width(), owner_layout.key_value_width(),
-                            layout.query_width(), layout.sliding_window_size(), stream_.get());
-                    } else if (rows <= kMaxGemmAttentionRows) {
-                        launch_gqa_prefill_gemm(
-                            gemm_->cublas().get(), workspace_.prefill_q_.data(),
-                            owner->key_cache.data(), owner->value_cache.data(),
-                            workspace_.prefill_op_output_.data(), workspace_.prefill_attn_scores_.data(),
-                            workspace_.prefill_attn_probs_.data(), rows,
-                            layout.query_heads, owner_layout.key_value_heads,
-                            owner_layout.head_dim, layout.query_width(), owner_layout.key_value_width(),
-                            layout.query_width(), layout.sliding_window_size(), stream_.get());
-                    } else {
-                        const int chunks = (rows + kPrefillAttnChunkTokens - 1) /
-                            kPrefillAttnChunkTokens;
-                        launch_gqa_prefill_segmented(
-                            workspace_.prefill_q_.data(), owner->key_cache.data(),
-                            owner->value_cache.data(), workspace_.prefill_op_output_.data(),
-                            rows, layout.query_heads, owner_layout.key_value_heads,
-                            owner_layout.head_dim, kPrefillAttnChunkTokens, chunks,
-                            layout.sliding_window_size(),
-                            workspace_.prefill_attn_partial_max_.data(),
-                            workspace_.prefill_attn_partial_denom_.data(),
-                            workspace_.prefill_attn_partial_accum_.data(), stream_.get());
-                    }
+                }
+                break;
+            case AttentionAlgorithm::Online:
+                // Only the Int8 prefill matrix reaches the online kernel.
+                launch_gqa_prefill_online_int8(
+                    workspace_.prefill_q_.data(), owner->key_cache_int8.data(),
+                    owner->value_cache_int8.data(),
+                    owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                    workspace_.prefill_op_output_.data(), rows, layout.query_heads,
+                    owner_layout.key_value_heads, owner_layout.head_dim,
+                    layout.sliding_window_size(), stream_.get());
+                break;
+            case AttentionAlgorithm::Flash:
+                launch_gqa_prefill_flash(
+                    workspace_.prefill_q_.data(),
+                    owner->key_cache.data(), owner->value_cache.data(),
+                    workspace_.prefill_op_output_.data(), rows,
+                    layout.query_heads, owner_layout.key_value_heads,
+                    owner_layout.head_dim, layout.query_width(), owner_layout.key_value_width(),
+                    layout.query_width(), layout.sliding_window_size(), stream_.get());
+                break;
+            case AttentionAlgorithm::Gemm:
+                launch_gqa_prefill_gemm(
+                    gemm_->cublas().get(), workspace_.prefill_q_.data(),
+                    owner->key_cache.data(), owner->value_cache.data(),
+                    workspace_.prefill_op_output_.data(), workspace_.prefill_attn_scores_.data(),
+                    workspace_.prefill_attn_probs_.data(), rows,
+                    layout.query_heads, owner_layout.key_value_heads,
+                    owner_layout.head_dim, layout.query_width(), owner_layout.key_value_width(),
+                    layout.query_width(), layout.sliding_window_size(), stream_.get());
+                break;
+            case AttentionAlgorithm::Segmented: {
+                const int chunks = (rows + kPrefillAttnChunkTokens - 1) /
+                    kPrefillAttnChunkTokens;
+                launch_gqa_prefill_segmented(
+                    workspace_.prefill_q_.data(), owner->key_cache.data(),
+                    owner->value_cache.data(), workspace_.prefill_op_output_.data(),
+                    rows, layout.query_heads, owner_layout.key_value_heads,
+                    owner_layout.head_dim, kPrefillAttnChunkTokens, chunks,
+                    layout.sliding_window_size(),
+                    workspace_.prefill_attn_partial_max_.data(),
+                    workspace_.prefill_attn_partial_denom_.data(),
+                    workspace_.prefill_attn_partial_accum_.data(), stream_.get());
+                break;
+            }
+            case AttentionAlgorithm::Strict:
+                if (int8_kv) {
+                    launch_gqa_prefill_strict_int8(
+                        workspace_.prefill_q_.data(), owner->key_cache_int8.data(),
+                        owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        workspace_.prefill_op_output_.data(), rows, layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
+                        layout.sliding_window_size(), stream_.get());
                 } else {
                     launch_gqa_prefill_strict(
                         workspace_.prefill_q_.data(), owner->key_cache.data(),
@@ -525,6 +546,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         rows, layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
                 }
+                break;
             }
             prof.end(PrefillPhase::Attention, stream_.get());
             if (output_gate) {

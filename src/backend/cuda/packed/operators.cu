@@ -7,6 +7,7 @@
 #include "celeg/backend/cuda/kernels/rope_pairing.hpp"
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/paged_kv.hpp"
+#include "celeg/backend/cuda/attention_capability.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -101,7 +102,19 @@ void run_paged_attention_cache(PackedOperatorContext& context,
     const AttentionSpec& owner_layout = owner.layout;
     const int slot = w.paged_kv ? w.paged_kv->attention_slot(cache_layer) : -1;
     const int stride = w.paged_kv->max_pages_per_request();
-    if (reference.options().kv_cache_mode == KvCacheMode::Int8) {
+    AttentionRequest request;
+    request.kv_format = reference.options().kv_cache_mode;
+    request.operation = AttentionOperation::Decode;
+    request.layout = AttentionKvLayout::Paged;
+    request.position_source = AttentionPositionSource::DeviceCounter;
+    request.bias = current.alibi_slopes.data() ? AttentionPositionBias::Alibi
+                                               : AttentionPositionBias::None;
+    request.fast_attention = reference.options().fast_attention;
+    request.segmented_attention = segmented_attention;
+    request.head_dim = owner_layout.head_dim;
+    request.rows = rows;
+    const AttentionCapability plan = require_attention_capability(request);
+    if (request.kv_format == KvCacheMode::Int8) {
         if (current.key && current.value) launch_store_kv_int8_paged_batch(
             w.k.data(), w.v.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
             w.paged_kv->key_scales(), w.paged_kv->value_scales(), w.d_page_tables.data(),
@@ -109,7 +122,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             w.paged_kv->page_vector_elements(), w.paged_kv->layer_vector_offset(slot),
             w.paged_kv->page_scale_elements(), w.paged_kv->layer_scale_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, w.stream.get());
-        if (current.alibi_slopes.data()) {
+        if (plan.algorithm == AttentionAlgorithm::Alibi) {
             launch_gqa_decode_alibi_int8_paged_batch(
                 w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
                 w.paged_kv->key_scales(), w.paged_kv->value_scales(),
@@ -120,7 +133,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
                 w.paged_kv->layer_scale_offset(slot), layout.query_heads,
                 owner_layout.key_value_heads, owner_layout.head_dim,
                 layout.sliding_window_size(), w.stream.get());
-        } else if (segmented_attention) {
+        } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
             launch_gqa_decode_int8_paged_segmented_batch(
                 w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
                 w.paged_kv->key_scales(), w.paged_kv->value_scales(),
@@ -142,7 +155,8 @@ void run_paged_attention_cache(PackedOperatorContext& context,
                 w.paged_kv->layer_vector_offset(slot), w.paged_kv->page_scale_elements(),
                 w.paged_kv->layer_scale_offset(slot), layout.query_heads,
                 owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window_size(), reference.options().fast_attention, w.stream.get());
+                layout.sliding_window_size(),
+                plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
         }
         return;
     }
@@ -152,7 +166,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
         w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
         w.paged_kv->layer_vector_offset(slot), owner_layout.key_value_heads,
         owner_layout.head_dim, w.stream.get());
-    if (current.alibi_slopes.data()) {
+    if (plan.algorithm == AttentionAlgorithm::Alibi) {
         launch_gqa_decode_alibi_paged_batch(
             w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
             w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
@@ -160,7 +174,7 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             w.paged_kv->page_vector_elements(), w.paged_kv->layer_vector_offset(slot),
             layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
             layout.sliding_window_size(), w.stream.get());
-    } else if (segmented_attention) {
+    } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
         launch_gqa_decode_paged_segmented_batch(
             w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
             w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
@@ -178,7 +192,8 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
             w.paged_kv->layer_vector_offset(slot), layout.query_heads,
             owner_layout.key_value_heads, owner_layout.head_dim,
-            layout.sliding_window_size(), reference.options().fast_attention, w.stream.get());
+            layout.sliding_window_size(),
+            plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
     }
 }
 
@@ -195,13 +210,26 @@ void run_local_attention_cache(PackedOperatorContext& context,
     const AttentionSpec& layout = current.layout;
     const AttentionSpec& owner_layout = owner.layout;
     const size_t offset = static_cast<size_t>(cache_layer) * w.maximum_batch;
-    if (reference.options().kv_cache_mode == KvCacheMode::Int8) {
+    AttentionRequest request;
+    request.kv_format = reference.options().kv_cache_mode;
+    request.operation = AttentionOperation::Decode;
+    request.layout = AttentionKvLayout::BatchPointers;
+    request.position_source = AttentionPositionSource::DeviceCounter;
+    request.bias = current.alibi_slopes.data() ? AttentionPositionBias::Alibi
+                                               : AttentionPositionBias::None;
+    request.fast_attention = reference.options().fast_attention;
+    // There is no batch-pointer segmented kernel; long contexts run paged.
+    request.segmented_attention = false;
+    request.head_dim = owner_layout.head_dim;
+    request.rows = rows;
+    const AttentionCapability plan = require_attention_capability(request);
+    if (request.kv_format == KvCacheMode::Int8) {
         if (current.key && current.value) launch_store_kv_int8_batch_ptrs(
             w.k.data(), w.v.data(), w.d_key_int8.data() + offset,
             w.d_value_int8.data() + offset, w.d_key_scales.data() + offset,
             w.d_value_scales.data() + offset, w.positions.data(), rows,
             owner_layout.key_value_heads, owner_layout.head_dim, w.stream.get());
-        if (current.alibi_slopes.data()) {
+        if (plan.algorithm == AttentionAlgorithm::Alibi) {
             launch_gqa_decode_alibi_int8_batch_ptrs(
                 w.q.data(), w.d_key_int8.data() + offset, w.d_value_int8.data() + offset,
                 w.d_key_scales.data() + offset, w.d_value_scales.data() + offset,
@@ -214,7 +242,7 @@ void run_local_attention_cache(PackedOperatorContext& context,
             w.d_key_scales.data() + offset, w.d_value_scales.data() + offset,
             w.op_output.data(), w.positions.data(), rows, layout.query_heads,
             owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window_size(),
-            reference.options().fast_attention, w.stream.get());
+            plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
         }
         return;
     }
@@ -222,7 +250,7 @@ void run_local_attention_cache(PackedOperatorContext& context,
         w.k.data(), w.v.data(), w.d_key_bf16.data() + offset,
         w.d_value_bf16.data() + offset, w.positions.data(), rows,
         owner_layout.key_value_width(), w.stream.get());
-    if (current.alibi_slopes.data()) {
+    if (plan.algorithm == AttentionAlgorithm::Alibi) {
         launch_gqa_decode_alibi_batch_ptrs(
             w.q.data(), w.d_key_bf16.data() + offset, w.d_value_bf16.data() + offset,
             w.op_output.data(), w.positions.data(), current.alibi_slopes.data(), rows,
@@ -233,7 +261,7 @@ void run_local_attention_cache(PackedOperatorContext& context,
         w.q.data(), w.d_key_bf16.data() + offset, w.d_value_bf16.data() + offset,
         w.op_output.data(), w.positions.data(), rows, layout.query_heads,
         owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window_size(),
-        reference.options().fast_attention, w.stream.get());
+        plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
     }
 }
 

@@ -240,12 +240,35 @@ void CudaCompiledModel::enqueue_decode_attention(
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                if (attention->key && attention->value) launch_store_kv_int8_device(
-                    k, v, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                    owner->key_cache_scales.data(), owner->value_cache_scales.data(), position_device_.data(),
-                    owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-                if (attention->alibi_slopes.data()) {
+            AttentionRequest attention_request;
+            attention_request.kv_format = resources_.options_.kv_cache_mode;
+            attention_request.operation = AttentionOperation::Decode;
+            attention_request.layout = AttentionKvLayout::Contiguous;
+            attention_request.position_source = AttentionPositionSource::DeviceCounter;
+            attention_request.bias = attention->alibi_slopes.data()
+                ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+            attention_request.fast_attention = resources_.options_.fast_attention;
+            attention_request.segmented_attention = session_.active_segmented_attention_;
+            attention_request.head_dim = owner_layout.head_dim;
+            const AttentionCapability attention_plan =
+                require_attention_capability(attention_request);
+            const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
+            if (attention->key && attention->value) {
+                if (int8_kv) {
+                    launch_store_kv_int8_device(
+                        k, v, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        position_device_.data(), owner_layout.key_value_heads,
+                        owner_layout.head_dim, stream_.get());
+                } else {
+                    launch_store_kv_device(
+                        k, v, owner->key_cache.data(), owner->value_cache.data(),
+                        position_device_.data(), owner_layout.key_value_width(), stream_.get());
+                }
+            }
+            switch (attention_plan.algorithm) {
+            case AttentionAlgorithm::Alibi:
+                if (int8_kv) {
                     launch_gqa_decode_alibi_int8_device(
                         q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
                         owner->key_cache_scales.data(), owner->value_cache_scales.data(),
@@ -253,10 +276,21 @@ void CudaCompiledModel::enqueue_decode_attention(
                         attention->alibi_slopes.data(), layout.query_heads,
                         owner_layout.key_value_heads, owner_layout.head_dim,
                         layout.sliding_window_size(), stream_.get());
-                } else if (session_.active_segmented_attention_) {
+                } else {
+                    launch_gqa_decode_alibi_device(
+                        q, owner->key_cache.data(), owner->value_cache.data(),
+                        workspace_.op_output_.data(), position_device_.data(),
+                        attention->alibi_slopes.data(), layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
+                        layout.sliding_window_size(), stream_.get());
+                }
+                break;
+            case AttentionAlgorithm::Segmented:
+                if (int8_kv) {
                     launch_gqa_decode_segmented_int8_device(
                         q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        workspace_.op_output_.data(),
                         position_device_.data(), layout.query_heads,
                         owner_layout.key_value_heads, owner_layout.head_dim,
                         resources_.options_.attention_chunk_tokens, workspace_.attention_chunks_,
@@ -264,33 +298,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         workspace_.attention_partial_max_.data(),
                         workspace_.attention_partial_denom_.data(),
                         workspace_.attention_partial_accum_.data(), stream_.get());
-                } else if (resources_.options_.fast_attention) {
-                    launch_gqa_decode_online_int8_device(
-                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
-                        position_device_.data(), layout.query_heads,
-                        owner_layout.key_value_heads, owner_layout.head_dim,
-                        layout.sliding_window_size(), stream_.get());
                 } else {
-                    launch_gqa_decode_strict_int8_device(
-                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
-                        position_device_.data(), layout.query_heads,
-                        owner_layout.key_value_heads, owner_layout.head_dim,
-                        layout.sliding_window_size(), stream_.get());
-                }
-            } else {
-                if (attention->key && attention->value) launch_store_kv_device(
-                    k, v, owner->key_cache.data(), owner->value_cache.data(),
-                    position_device_.data(), owner_layout.key_value_width(), stream_.get());
-                if (attention->alibi_slopes.data()) {
-                    launch_gqa_decode_alibi_device(
-                        q, owner->key_cache.data(), owner->value_cache.data(),
-                        workspace_.op_output_.data(), position_device_.data(),
-                        attention->alibi_slopes.data(), layout.query_heads,
-                        owner_layout.key_value_heads, owner_layout.head_dim,
-                        layout.sliding_window_size(), stream_.get());
-                } else if (session_.active_segmented_attention_) {
                     launch_gqa_decode_segmented_device(
                         q, owner->key_cache.data(), owner->value_cache.data(),
                         workspace_.op_output_.data(), position_device_.data(),
@@ -300,12 +308,34 @@ void CudaCompiledModel::enqueue_decode_attention(
                         workspace_.attention_partial_max_.data(),
                         workspace_.attention_partial_denom_.data(),
                         workspace_.attention_partial_accum_.data(), stream_.get());
-                } else if (resources_.options_.fast_attention) {
+                }
+                break;
+            case AttentionAlgorithm::Online:
+                if (int8_kv) {
+                    launch_gqa_decode_online_int8_device(
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        workspace_.op_output_.data(),
+                        position_device_.data(), layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
+                        layout.sliding_window_size(), stream_.get());
+                } else {
                     launch_gqa_decode_online_device(
                         q, owner->key_cache.data(), owner->value_cache.data(),
                         workspace_.op_output_.data(), position_device_.data(),
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+                }
+                break;
+            case AttentionAlgorithm::Strict:
+                if (int8_kv) {
+                    launch_gqa_decode_strict_int8_device(
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        workspace_.op_output_.data(),
+                        position_device_.data(), layout.query_heads,
+                        owner_layout.key_value_heads, owner_layout.head_dim,
+                        layout.sliding_window_size(), stream_.get());
                 } else {
                     launch_gqa_decode_strict_device(
                         q, owner->key_cache.data(), owner->value_cache.data(),
@@ -313,6 +343,10 @@ void CudaCompiledModel::enqueue_decode_attention(
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
                 }
+                break;
+            case AttentionAlgorithm::Flash:
+            case AttentionAlgorithm::Gemm:
+                throw UnsupportedAttentionCapability(attention_plan);
             }
             if (const auto* transform = std::get_if<OrthogonalizeCurrentValueSpec>(
                     &layout.output_transform)) {

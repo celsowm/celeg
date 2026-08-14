@@ -105,32 +105,56 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             }
             launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
             const AttentionSpec& owner_layout = owner->layout;
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+            // Host-scalar contiguous decode.  The capability policy records that
+            // this path has no ALiBi and no segmented kernel, so a model that
+            // needs either is rejected here instead of silently running the
+            // unbiased kernel.
+            AttentionRequest attention_request;
+            attention_request.kv_format = resources_.options_.kv_cache_mode;
+            attention_request.operation = AttentionOperation::Decode;
+            attention_request.layout = AttentionKvLayout::Contiguous;
+            attention_request.position_source = AttentionPositionSource::HostScalar;
+            attention_request.bias = attention->alibi_slopes.data()
+                ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+            attention_request.fast_attention = resources_.options_.fast_attention;
+            attention_request.head_dim = owner_layout.head_dim;
+            const AttentionCapability attention_plan =
+                require_attention_capability(attention_request);
+            const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
+            if (int8_kv) {
                 launch_store_kv_int8(
                     k, v, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
                     owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                    session_.position_, owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-                if (resources_.options_.fast_attention) {
-                    launch_gqa_decode_online_int8(
-                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
-                        session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                } else {
-                    launch_gqa_decode_strict_int8(
-                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(), workspace_.op_output_.data(),
-                        session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                }
+                    session_.position_, owner_layout.key_value_heads, owner_layout.head_dim,
+                    stream_.get());
             } else {
                 launch_store_kv(k, v, owner->key_cache.data(), owner->value_cache.data(),
                                 session_.position_, owner_layout.key_value_width(), stream_.get());
-                if (resources_.options_.fast_attention) {
+            }
+            switch (attention_plan.algorithm) {
+            case AttentionAlgorithm::Online:
+                if (int8_kv) {
+                    launch_gqa_decode_online_int8(
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        workspace_.op_output_.data(),
+                        session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
+                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+                } else {
                     launch_gqa_decode_online(
                         q, owner->key_cache.data(), owner->value_cache.data(),
                         workspace_.op_output_.data(), session_.position_ + 1,
                         layout.query_heads, owner_layout.key_value_heads,
+                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+                }
+                break;
+            case AttentionAlgorithm::Strict:
+                if (int8_kv) {
+                    launch_gqa_decode_strict_int8(
+                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
+                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        workspace_.op_output_.data(),
+                        session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
                 } else {
                     launch_gqa_decode_strict(
@@ -139,6 +163,12 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
                 }
+                break;
+            case AttentionAlgorithm::Alibi:
+            case AttentionAlgorithm::Segmented:
+            case AttentionAlgorithm::Flash:
+            case AttentionAlgorithm::Gemm:
+                throw UnsupportedAttentionCapability(attention_plan);
             }
             if (output_gate) {
                 const __nv_bfloat16* gate = q + layout.query_width();
@@ -448,6 +478,18 @@ void CudaCompiledModel::forward_token_paged_host(
                 : attention;
             if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
             const AttentionSpec& owner_layout = owner->layout;
+            AttentionRequest attention_request;
+            attention_request.kv_format = resources_.options_.kv_cache_mode;
+            attention_request.operation = AttentionOperation::Decode;
+            attention_request.layout = AttentionKvLayout::Paged;
+            attention_request.position_source = AttentionPositionSource::DeviceCounter;
+            attention_request.bias = attention->alibi_slopes.data()
+                ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+            attention_request.fast_attention = resources_.options_.fast_attention;
+            attention_request.segmented_attention = use_segmented_attention(session_.position_);
+            attention_request.head_dim = owner_layout.head_dim;
+            const AttentionCapability attention_plan =
+                require_attention_capability(attention_request);
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
                 launch_store_kv_int8_paged_batch(
                     k, v, paged_kv.key_int8(), paged_kv.value_int8(),
@@ -457,7 +499,7 @@ void CudaCompiledModel::forward_token_paged_host(
                     paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
                     paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
                     owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-                if (attention->alibi_slopes.data()) {
+                if (attention_plan.algorithm == AttentionAlgorithm::Alibi) {
                     launch_gqa_decode_alibi_int8_paged_batch(
                         q, paged_kv.key_int8(), paged_kv.value_int8(),
                         paged_kv.key_scales(), paged_kv.value_scales(),
@@ -469,7 +511,7 @@ void CudaCompiledModel::forward_token_paged_host(
                         paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                } else if (use_segmented_attention(session_.position_)) {
+                } else if (attention_plan.algorithm == AttentionAlgorithm::Segmented) {
                     const int chunks = (session_.position_ + 1 +
                         resources_.options_.attention_chunk_tokens - 1) /
                         resources_.options_.attention_chunk_tokens;
@@ -497,7 +539,7 @@ void CudaCompiledModel::forward_token_paged_host(
                         paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(),
-                        resources_.options_.fast_attention,
+                        attention_plan.algorithm == AttentionAlgorithm::Online,
                         stream_.get());
                 }
             } else {
@@ -507,7 +549,7 @@ void CudaCompiledModel::forward_token_paged_host(
                     1, slot, paged_kv.page_tokens(),
                     paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
                     owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-                if (attention->alibi_slopes.data()) {
+                if (attention_plan.algorithm == AttentionAlgorithm::Alibi) {
                     launch_gqa_decode_alibi_paged_batch(
                         q, paged_kv.key_bf16(), paged_kv.value_bf16(),
                         device_page_table, page_table_stride,
@@ -517,7 +559,7 @@ void CudaCompiledModel::forward_token_paged_host(
                         paged_kv.layer_vector_offset(slot), layout.query_heads,
                         owner_layout.key_value_heads, owner_layout.head_dim,
                         layout.sliding_window_size(), stream_.get());
-                } else if (use_segmented_attention(session_.position_)) {
+                } else if (attention_plan.algorithm == AttentionAlgorithm::Segmented) {
                     const int chunks = (session_.position_ + 1 +
                         resources_.options_.attention_chunk_tokens - 1) /
                         resources_.options_.attention_chunk_tokens;
@@ -541,7 +583,7 @@ void CudaCompiledModel::forward_token_paged_host(
                         paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
                         layout.query_heads, owner_layout.key_value_heads,
                         owner_layout.head_dim, layout.sliding_window_size(),
-                        resources_.options_.fast_attention,
+                        attention_plan.algorithm == AttentionAlgorithm::Online,
                         stream_.get());
                 }
             }

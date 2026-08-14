@@ -108,19 +108,49 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream);
-    if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+    // The auxiliary predictor never runs the long-context chunked path: it
+    // decodes a single speculative token against its own cache.
+    AttentionRequest attention_request;
+    attention_request.kv_format = resources_.options_.kv_cache_mode;
+    attention_request.operation = AttentionOperation::Decode;
+    attention_request.layout = AttentionKvLayout::Contiguous;
+    attention_request.position_source = AttentionPositionSource::DeviceCounter;
+    attention_request.bias = attention->alibi_slopes.data()
+        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+    attention_request.fast_attention = resources_.options_.fast_attention;
+    attention_request.head_dim = layout.head_dim;
+    const AttentionCapability attention_plan =
+        require_attention_capability(attention_request);
+    const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
+    if (int8_kv) {
         launch_store_kv_int8_device(
             k, v, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
             attention->key_cache_scales.data(), attention->value_cache_scales.data(),
             position_device_.data(), layout.key_value_heads, layout.head_dim, stream);
-        if (attention->alibi_slopes.data()) {
+    } else {
+        launch_store_kv_device(k, v, attention->key_cache.data(),
+                               attention->value_cache.data(), position_device_.data(),
+                               layout.key_value_width(), stream);
+    }
+    switch (attention_plan.algorithm) {
+    case AttentionAlgorithm::Alibi:
+        if (int8_kv) {
             launch_gqa_decode_alibi_int8_device(
                 q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
                 attention->key_cache_scales.data(), attention->value_cache_scales.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 attention->alibi_slopes.data(), layout.query_heads,
                 layout.key_value_heads, layout.head_dim, layout.sliding_window_size(), stream);
-        } else if (resources_.options_.fast_attention) {
+        } else {
+            launch_gqa_decode_alibi_device(
+                q, attention->key_cache.data(), attention->value_cache.data(),
+                workspace_.op_output_.data(), position_device_.data(),
+                attention->alibi_slopes.data(), layout.query_heads,
+                layout.key_value_heads, layout.head_dim, layout.sliding_window_size(), stream);
+        }
+        break;
+    case AttentionAlgorithm::Online:
+        if (int8_kv) {
             launch_gqa_decode_online_int8_device(
                 q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
                 attention->key_cache_scales.data(), attention->value_cache_scales.data(),
@@ -128,26 +158,18 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 layout.sliding_window_size(), stream);
         } else {
-            launch_gqa_decode_strict_int8_device(
-                q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
-                attention->key_cache_scales.data(), attention->value_cache_scales.data(),
+            launch_gqa_decode_online_device(
+                q, attention->key_cache.data(), attention->value_cache.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 layout.sliding_window_size(), stream);
         }
-    } else {
-        launch_store_kv_device(k, v, attention->key_cache.data(),
-                               attention->value_cache.data(), position_device_.data(),
-                               layout.key_value_width(), stream);
-        if (attention->alibi_slopes.data()) {
-            launch_gqa_decode_alibi_device(
-                q, attention->key_cache.data(), attention->value_cache.data(),
-                workspace_.op_output_.data(), position_device_.data(),
-                attention->alibi_slopes.data(), layout.query_heads,
-                layout.key_value_heads, layout.head_dim, layout.sliding_window_size(), stream);
-        } else if (resources_.options_.fast_attention) {
-            launch_gqa_decode_online_device(
-                q, attention->key_cache.data(), attention->value_cache.data(),
+        break;
+    case AttentionAlgorithm::Strict:
+        if (int8_kv) {
+            launch_gqa_decode_strict_int8_device(
+                q, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
+                attention->key_cache_scales.data(), attention->value_cache_scales.data(),
                 workspace_.op_output_.data(), position_device_.data(),
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 layout.sliding_window_size(), stream);
@@ -158,6 +180,11 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 layout.sliding_window_size(), stream);
         }
+        break;
+    case AttentionAlgorithm::Segmented:
+    case AttentionAlgorithm::Flash:
+    case AttentionAlgorithm::Gemm:
+        throw UnsupportedAttentionCapability(attention_plan);
     }
     if (layout.output_gate.enabled()) {
         launch_sigmoid_multiply(workspace_.op_output_.data(),
