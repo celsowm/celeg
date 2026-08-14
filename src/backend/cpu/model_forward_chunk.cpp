@@ -182,10 +182,22 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             }
         };
 
-        if (const auto* gated_delta = gated_delta_net_operator(layer_program)) {
+        visit_operator_weights(layer_program,
+          [&](const CpuCompiledModel::GatedDeltaNetWeights* gated_delta) {
             execute_cpu_gated_delta_chunk(*this, index, *gated_delta, rows,
                                           normed_q8_ready);
-        } else if (const auto* attention = attention_operator(layer_program)) {
+          },
+          [&](const CpuCompiledModel::Mamba2Weights*) {
+            throw std::logic_error("CPU chunked prefill does not implement the Mamba2 mixer");
+          },
+          [&](const CpuCompiledModel::MlpOnlyWeights*) {
+            throw std::logic_error("CPU chunked prefill does not implement MLP-only blocks");
+          },
+          [&](const CpuCompiledModel::ConvolutionWeights* convolution) {
+            execute_cpu_short_convolution_chunk(*this, index, *convolution, rows,
+                                                normed_q8_ready);
+          },
+          [&](const CpuCompiledModel::AttentionWeights* attention) {
             const AttentionSpec& layout = semantics.attention.value();
             if (layout.uses_external_memory()) {
                 const size_t q_width = static_cast<size_t>(layout.query_width());
@@ -472,12 +484,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                        workspace_.chunk_hidden.data());
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             }
-        } else {
-            const auto* convolution = convolution_operator(layer_program);
-            if (!convolution) throw std::logic_error("CPU layer has no operator");
-            execute_cpu_short_convolution_chunk(*this, index, *convolution, rows,
-                                                normed_q8_ready);
-        }
+          });
 
         if (semantics.residual.multiplier != 1.0f) {
             scale(workspace_.chunk_hidden, rows * hidden,

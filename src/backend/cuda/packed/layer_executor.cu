@@ -115,9 +115,10 @@ void PackedLayerExecutor::run_transformer_layers(
                        workspace_.stream.get());
         PackedOperatorContext context{
             workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
-        if (layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
-            const auto* mlp = as_mlp_only(layer);
-            if (!mlp) {
+        const PackedLayerKind kind = layer_program_.kind(layer_index);
+        visit_layer(layer,
+          [&](const MlpOnlyLayer* mlp) {
+            if (kind != PackedLayerKind::MlpOnly) {
                 throw std::logic_error("packed layer program disagrees with MLP-only binding");
             }
             const int intermediate = mlp->spec.intermediate_size;
@@ -142,40 +143,40 @@ void PackedLayerExecutor::run_transformer_layers(
             }
             linear(workspace_.activated.data(), *mlp->down, workspace_.hidden.data(), rows,
                    workspace_.program_.hidden, intermediate);
-        } else if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
-            const auto* attention = as_attention(layer);
-            if (!attention) {
+          },
+          [&](const AttentionLayer* attention) {
+            if (kind != PackedLayerKind::Attention) {
                 throw std::logic_error("packed layer program disagrees with layer binding");
             }
             run_attention_layer(reference, *attention, rows,
                                 static_cast<int>(layer_index),
                                 segmented_attention, segmented_chunks);
-        } else if (layer_program_.kind(layer_index) == PackedLayerKind::GatedDeltaNet) {
-            const auto* gated_delta = as_gated_delta_net(layer);
-            if (!gated_delta) {
+          },
+          [&](const GatedDeltaNetLayer* gated_delta) {
+            if (kind != PackedLayerKind::GatedDeltaNet) {
                 throw std::logic_error(
                     "packed layer program disagrees with GatedDeltaNet binding");
             }
             PackedGatedDeltaNetExecutor::run(
                 context, reference, *gated_delta, rows,
                 static_cast<int>(layer_index), batch_models, row_descriptors);
-        } else if (layer_program_.kind(layer_index) == PackedLayerKind::Mamba2) {
-            const auto* mamba = as_mamba2(layer);
-            if (!mamba) {
+          },
+          [&](const Mamba2Layer* mamba) {
+            if (kind != PackedLayerKind::Mamba2) {
                 throw std::logic_error(
                     "packed layer program disagrees with Mamba2 binding");
             }
             PackedMamba2Executor::run(
                 context, reference, *mamba, rows,
                 static_cast<int>(layer_index), batch_models, row_descriptors);
-        } else {
-            const auto* convolution = as_convolution(layer);
-            if (!convolution) {
+          },
+          [&](const ConvolutionLayer* convolution) {
+            if (kind != PackedLayerKind::ShortConvolution) {
                 throw std::logic_error("packed layer program disagrees with layer binding");
             }
             run_convolution_layer(reference, *convolution, rows,
                                   static_cast<int>(layer_index), ragged_requests);
-        }
+          });
         if (!reference.options().fused_residuals) {
             launch_residual_add(workspace_.hidden.data(), workspace_.residual.data(),
                                 rows * workspace_.program_.hidden,

@@ -26,10 +26,7 @@ void stage_packed_persistent_metadata(
             const size_t index = static_cast<size_t>(layer_index) *
                                  workspace.maximum_batch + row;
             Layer& layer = model.layers()[layer_index];
-            if (as_mlp_only(layer)) {
-                // MLP-only blocks have no session-persistent state.  Keep
-                // their neutral metadata slot explicitly empty so the common
-                // packed layout remains valid for hybrid schedules.
+            const auto clear_slot = [&]() {
                 workspace.h_key_bf16.data()[index] = nullptr;
                 workspace.h_value_bf16.data()[index] = nullptr;
                 workspace.h_key_int8.data()[index] = nullptr;
@@ -37,9 +34,9 @@ void stage_packed_persistent_metadata(
                 workspace.h_key_scales.data()[index] = nullptr;
                 workspace.h_value_scales.data()[index] = nullptr;
                 workspace.h_conv_states.data()[index] = nullptr;
-                continue;
-            }
-            if (auto* attention = as_attention(layer)) {
+            };
+            visit_layer(layer,
+              [&](AttentionLayer* attention) {
                 workspace.h_key_bf16.data()[index] = attention->key_cache.data();
                 workspace.h_value_bf16.data()[index] = attention->value_cache.data();
                 workspace.h_key_int8.data()[index] = attention->key_cache_int8.data();
@@ -47,26 +44,23 @@ void stage_packed_persistent_metadata(
                 workspace.h_key_scales.data()[index] = attention->key_cache_scales.data();
                 workspace.h_value_scales.data()[index] = attention->value_cache_scales.data();
                 workspace.h_conv_states.data()[index] = nullptr;
-            } else {
-                if (auto* mamba = as_mamba2(layer)) {
-                    workspace.h_key_bf16.data()[index] = nullptr;
-                    workspace.h_value_bf16.data()[index] = nullptr;
-                    workspace.h_key_int8.data()[index] = nullptr;
-                    workspace.h_value_int8.data()[index] = nullptr;
-                    workspace.h_key_scales.data()[index] = nullptr;
-                    workspace.h_value_scales.data()[index] = nullptr;
-                    workspace.h_conv_states.data()[index] = mamba->conv_state.data();
-                    continue;
-                }
-                auto* convolution = as_convolution(layer);
-                workspace.h_key_bf16.data()[index] = nullptr;
-                workspace.h_value_bf16.data()[index] = nullptr;
-                workspace.h_key_int8.data()[index] = nullptr;
-                workspace.h_value_int8.data()[index] = nullptr;
-                workspace.h_key_scales.data()[index] = nullptr;
-                workspace.h_value_scales.data()[index] = nullptr;
+              },
+              [&](ConvolutionLayer* convolution) {
+                clear_slot();
                 workspace.h_conv_states.data()[index] = convolution->conv_state.data();
-            }
+              },
+              [&](GatedDeltaNetLayer* gated_delta) {
+                clear_slot();
+                workspace.h_conv_states.data()[index] = gated_delta->conv_state.data();
+              },
+              [&](Mamba2Layer* mamba) {
+                clear_slot();
+                workspace.h_conv_states.data()[index] = mamba->conv_state.data();
+              },
+              // MLP-only blocks have no session-persistent state.  Keep their
+              // neutral metadata slot explicitly empty so the common packed
+              // layout remains valid for hybrid schedules.
+              [&](MlpOnlyLayer*) { clear_slot(); });
         }
     }
 

@@ -90,19 +90,22 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
     // positions 0..position_ and every used slot is overwritten before
     // becoming visible after the position reset above.
     for (Layer& layer : resources_.layers_) {
-        if (AttentionLayer* attention = as_attention(layer)) {
-            (void)attention;
-            continue;
-        }
-        if (ConvolutionLayer* convolution = as_convolution(layer)) {
+        visit_layer(layer,
+          // KV caches are not zeroed here, as described above.
+          [](AttentionLayer*) {},
+          [&](ConvolutionLayer* convolution) {
             convolution->conv_state.zero_async(stream_.get());
-        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+          },
+          [&](GatedDeltaNetLayer* gated_delta) {
             gated_delta->conv_state.zero_async(stream_.get());
             gated_delta->recurrent_state.zero_async(stream_.get());
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             mamba->conv_state.zero_async(stream_.get());
             mamba->ssm_state.zero_async(stream_.get());
-        }
+          },
+          // MLP-only blocks hold no session state.
+          [](MlpOnlyLayer*) {});
     }
     // Prime the FFN-done, router-done and prefetch-done events so the offload
     // transfer stream can start promoting experts on the first layer of the

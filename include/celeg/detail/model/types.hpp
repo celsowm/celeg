@@ -10,6 +10,7 @@
 // them without leaking backend state classes.
 
 #include "celeg/backend/cuda/utils.cuh"
+#include "celeg/detail/exhaustive_visit.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
 #include "celeg/backend/cuda/moe.hpp"
@@ -29,7 +30,9 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -414,6 +417,16 @@ inline MlpOnlyLayer* as_mlp_only(Layer& layer) {
 }
 inline const MlpOnlyLayer* as_mlp_only(const Layer& layer) {
     return std::get_if<MlpOnlyLayer>(&layer);
+}
+
+// Exhaustive mixer dispatch. Every alternative of `Layer` must be matched by a
+// handler naming its concrete type; there is no generic fallback, so adding a
+// mixer turns every dispatch site that has not been updated into a compile
+// error. Handlers receive a non-null pointer to the active alternative.
+template <typename LayerRef, typename... Handlers>
+decltype(auto) visit_layer(LayerRef&& layer, Handlers&&... handlers) {
+    return visit_exhaustive(std::forward<LayerRef>(layer),
+                            std::forward<Handlers>(handlers)...);
 }
 
 // Feed-forward visitors. These decouple call sites from whether a layer uses

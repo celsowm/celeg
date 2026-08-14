@@ -495,6 +495,11 @@ endforeach()
 if(CELEG_BUILD_TESTS)
     enable_testing()
 
+    add_executable(layer_dispatch_exhaustiveness_test
+        tests/layer_dispatch_exhaustiveness_test.cpp)
+    target_include_directories(layer_dispatch_exhaustiveness_test PRIVATE include tests)
+    add_test(NAME layer_dispatch_exhaustiveness_test
+             COMMAND layer_dispatch_exhaustiveness_test)
     add_executable(json_test tests/json_test.cpp src/checkpoint/formats/json.cpp)
     target_include_directories(json_test PRIVATE include)
     add_test(NAME json_test COMMAND json_test)

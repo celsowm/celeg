@@ -313,15 +313,24 @@ ModelMemoryStats CudaCompiledModel::memory_stats() const {
     ModelMemoryStats stats;
     stats.weights = resources_.weights_ ? resources_.weights_->memory_bytes() : 0;
     for (const Layer& layer : resources_.layers_) {
-        if (const AttentionLayer* attention = as_attention(layer)) {
+        visit_layer(layer,
+          [&](const AttentionLayer* attention) {
             stats.kv_cache += attention->key_cache.bytes() + attention->value_cache.bytes() +
                 attention->key_cache_int8.bytes() + attention->value_cache_int8.bytes() +
                 attention->key_cache_scales.bytes() + attention->value_cache_scales.bytes();
-        } else if (const ConvolutionLayer* convolution = as_convolution(layer)) {
+          },
+          [&](const ConvolutionLayer* convolution) {
             stats.conv_state += convolution->conv_state.bytes();
-        } else if (const Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](const Mamba2Layer* mamba) {
             stats.conv_state += mamba->conv_state.bytes() + mamba->ssm_state.bytes();
-        }
+          },
+          [&](const GatedDeltaNetLayer* gated_delta) {
+            stats.conv_state += gated_delta->conv_state.bytes() +
+                gated_delta->recurrent_state.bytes();
+          },
+          // MLP-only blocks hold no per-layer state.
+          [](const MlpOnlyLayer*) {});
     }
     stats.activations =
         workspace_.hidden_.bytes() + workspace_.residual_.bytes() + workspace_.normed_.bytes() +

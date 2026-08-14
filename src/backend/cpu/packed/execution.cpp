@@ -143,8 +143,8 @@ struct CpuCompiledModel::BatchScratch {
                     shared.linear.gemm(weight, input, output, rows, beta);
                 }
             };
-            if (const GatedDeltaNetWeights* gated_delta =
-                    State::gated_delta_net_operator(layer_program)) {
+            visit_operator_weights(layer_program,
+              [&](const GatedDeltaNetWeights* gated_delta) {
                 const GatedDeltaNetSpec& spec = gated_delta->spec;
                 const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
                     spec.value_heads * spec.value_head_dim;
@@ -176,7 +176,27 @@ struct CpuCompiledModel::BatchScratch {
                 });
                 layer_gemm(gated_delta->out, workspace_.gated_delta_output.data(),
                            workspace_.hidden.data());
-            } else if (const AttentionWeights* attention = State::attention_operator(layer_program)) {
+              },
+              [&](const State::Mamba2Weights*) {
+                throw std::logic_error("packed CPU execution does not implement the Mamba2 mixer");
+              },
+              [&](const State::MlpOnlyWeights*) {
+                throw std::logic_error("packed CPU execution does not implement MLP-only blocks");
+              },
+              [&](const ConvolutionWeights* convolution) {
+                layer_gemm(convolution->in, workspace_.normed.data(),
+                           workspace_.conv_projected.data());
+                rows_for([&](size_t row) {
+                    ConvolutionState& state = sessions[row]->convolution_state(index);
+                    cpu_conv_decode(workspace_.conv_projected.data() + row * 3ULL * hidden,
+                                    convolution->weight_tap_major.data(), state.state.data(),
+                                    workspace_.op_output.data() + row * hidden, shared.program.hidden,
+                                    shape.conv_cache, sessions[row]->session_.position_value);
+                });
+                layer_gemm(convolution->out, workspace_.op_output.data(),
+                           workspace_.hidden.data());
+              },
+              [&](const AttentionWeights* attention) {
                 const AttentionSpec& layout = layer_semantics.attention.value();
                 if (layout.uses_external_memory()) {
                     const size_t q_width = static_cast<size_t>(layout.query_width());
@@ -301,21 +321,7 @@ struct CpuCompiledModel::BatchScratch {
                 }
                 layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 }
-            } else {
-                const ConvolutionWeights* convolution = State::convolution_operator(layer_program);
-                if (!convolution) throw std::logic_error("packed CPU layer has no operator");
-                layer_gemm(convolution->in, workspace_.normed.data(),
-                           workspace_.conv_projected.data());
-                rows_for([&](size_t row) {
-                    ConvolutionState& state = sessions[row]->convolution_state(index);
-                    cpu_conv_decode(workspace_.conv_projected.data() + row * 3ULL * hidden,
-                                    convolution->weight_tap_major.data(), state.state.data(),
-                                    workspace_.op_output.data() + row * hidden, shared.program.hidden,
-                                    shape.conv_cache, sessions[row]->session_.position_value);
-                });
-                layer_gemm(convolution->out, workspace_.op_output.data(),
-                           workspace_.hidden.data());
-            }
+              });
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.hidden.data() + row * hidden;

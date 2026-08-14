@@ -74,26 +74,34 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
                     shared->program.hidden, semantics.operator_norm.epsilon);
-        if (!semantics.execute_feed_forward &&
-            semantics.mixer == CompiledMixer::MlpOnly) {
-            const auto& mlp = std::get<CpuCompiledModel::MlpOnlyWeights>(layer_program);
-            execute_cpu_mlp_only_token(execution, index, mlp);
-            continue;
-        }
-        if (const auto* gated_delta = gated_delta_net_operator(layer_program)) {
-            execute_cpu_gated_delta_token(*this, index, *gated_delta);
-        } else if (const auto* mamba = mamba2_operator(layer_program)) {
-            execute_cpu_mamba2_token(*this, index, *mamba);
-            continue;
-        }
-        else if (const auto* attention = attention_operator(layer_program)) {
+        // Mamba2 and MLP-only mixers own the whole layer: they write the final
+        // hidden state themselves and skip the shared residual/feed-forward
+        // tail below.
+        bool mixer_owns_layer = false;
+        visit_operator_weights(layer_program,
+          [&](const CpuCompiledModel::AttentionWeights* attention) {
             execute_cpu_attention_token(execution, *this, index, *attention, semantics,
                                         rope_position);
-        } else {
-            const auto* convolution = convolution_operator(layer_program);
-            if (!convolution) throw std::logic_error("CPU layer has no operator");
+          },
+          [&](const CpuCompiledModel::ConvolutionWeights* convolution) {
             execute_cpu_short_convolution_token(*this, index, *convolution);
-        }
+          },
+          [&](const CpuCompiledModel::GatedDeltaNetWeights* gated_delta) {
+            execute_cpu_gated_delta_token(*this, index, *gated_delta);
+          },
+          [&](const CpuCompiledModel::Mamba2Weights* mamba) {
+            execute_cpu_mamba2_token(*this, index, *mamba);
+            mixer_owns_layer = true;
+          },
+          [&](const CpuCompiledModel::MlpOnlyWeights* mlp) {
+            if (semantics.execute_feed_forward) {
+                throw std::logic_error(
+                    "CPU MLP-only layer cannot also run a feed-forward block");
+            }
+            execute_cpu_mlp_only_token(execution, index, *mlp);
+            mixer_owns_layer = true;
+          });
+        if (mixer_owns_layer) continue;
         if (semantics.residual.multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
