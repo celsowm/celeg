@@ -216,3 +216,11 @@ std::string render_chat(
 }
 
 } // namespace celeg
+
+// Some isolated tokenizer targets compile template.cpp directly instead of
+// linking celeg_base. Keep this translation unit self-contained while the
+// implementation remains split by responsibility in private source fragments.
+#include "template/parser.cpp"
+#include "template/validation.cpp"
+#include "template/runtime.cpp"
+#include "template/tool_codec.cpp"
