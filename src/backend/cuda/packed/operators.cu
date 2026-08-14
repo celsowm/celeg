@@ -114,7 +114,33 @@ void run_paged_attention_cache(PackedOperatorContext& context,
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
     const AttentionCapability plan = require_attention_capability(request);
+    const GqaGeometry geometry{
+        .q_heads = layout.query_heads,
+        .kv_heads = owner_layout.key_value_heads,
+        .head_dim = owner_layout.head_dim,
+        .sliding_window = layout.sliding_window_size()};
+    const PagedKvIndex index{
+        .page_tables = w.d_page_tables.data(),
+        .page_table_stride = stride,
+        .attention_slot = slot,
+        .page_tokens = w.paged_kv->page_tokens(),
+        .page_vector_elements = w.paged_kv->page_vector_elements(),
+        .layer_vector_offset = w.paged_kv->layer_vector_offset(slot)};
+    const AttentionSegmentation segmentation{
+        .chunk_tokens = reference.options().attention_chunk_tokens,
+        .chunks = segmented_chunks,
+        .partial_max = w.segmented_partial_max.data(),
+        .partial_denom = w.segmented_partial_denom.data(),
+        .partial_accum = w.segmented_partial_accum.data()};
     if (request.kv_format == KvCacheMode::Int8) {
+        const PagedKvScaleIndex scale_index{
+            .page_scale_elements = w.paged_kv->page_scale_elements(),
+            .layer_scale_offset = w.paged_kv->layer_scale_offset(slot)};
+        const Int8KvPoolView pool{
+            .keys = w.paged_kv->key_int8(),
+            .values = w.paged_kv->value_int8(),
+            .key_scales = w.paged_kv->key_scales(),
+            .value_scales = w.paged_kv->value_scales()};
         if (current.key && current.value) launch_store_kv_int8_paged_batch(
             w.k.data(), w.v.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
             w.paged_kv->key_scales(), w.paged_kv->value_scales(), w.d_page_tables.data(),
@@ -123,43 +149,47 @@ void run_paged_attention_cache(PackedOperatorContext& context,
             w.paged_kv->page_scale_elements(), w.paged_kv->layer_scale_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, w.stream.get());
         if (plan.algorithm == AttentionAlgorithm::Alibi) {
-            launch_gqa_decode_alibi_int8_paged_batch(
-                w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
-                w.paged_kv->key_scales(), w.paged_kv->value_scales(),
-                w.d_page_tables.data(), stride, w.op_output.data(),
-                w.positions.data(), current.alibi_slopes.data(), rows, slot,
-                w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
-                w.paged_kv->layer_vector_offset(slot), w.paged_kv->page_scale_elements(),
-                w.paged_kv->layer_scale_offset(slot), layout.query_heads,
-                owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window_size(), w.stream.get());
+            launch_gqa_decode_alibi_int8_paged_batch({
+                .query = w.q.data(),
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .alibi_slopes = current.alibi_slopes.data(),
+                .stream = w.stream.get()});
         } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
-            launch_gqa_decode_int8_paged_segmented_batch(
-                w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
-                w.paged_kv->key_scales(), w.paged_kv->value_scales(),
-                w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
-                rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
-                w.paged_kv->layer_vector_offset(slot), w.paged_kv->page_scale_elements(),
-                w.paged_kv->layer_scale_offset(slot), layout.query_heads,
-                owner_layout.key_value_heads, owner_layout.head_dim,
-                reference.options().attention_chunk_tokens, segmented_chunks,
-                layout.sliding_window_size(), w.segmented_partial_max.data(),
-                w.segmented_partial_denom.data(), w.segmented_partial_accum.data(),
-                w.stream.get());
+            launch_gqa_decode_int8_paged_segmented_batch({
+                .query = w.q.data(),
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .segmentation = segmentation,
+                .stream = w.stream.get()});
         } else {
-            launch_gqa_decode_int8_paged_batch(
-                w.q.data(), w.paged_kv->key_int8(), w.paged_kv->value_int8(),
-                w.paged_kv->key_scales(), w.paged_kv->value_scales(),
-                w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
-                rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
-                w.paged_kv->layer_vector_offset(slot), w.paged_kv->page_scale_elements(),
-                w.paged_kv->layer_scale_offset(slot), layout.query_heads,
-                owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window_size(),
-                plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
+            launch_gqa_decode_int8_paged_batch({
+                .query = w.q.data(),
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .fast = plan.algorithm == AttentionAlgorithm::Online,
+                .stream = w.stream.get()});
         }
         return;
     }
+    const Bf16KvPoolView pool{
+        .keys = w.paged_kv->key_bf16(),
+        .values = w.paged_kv->value_bf16()};
     if (current.key && current.value) launch_store_kv_paged_batch(
         w.k.data(), w.v.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
         w.d_page_tables.data(), stride, w.positions.data(), rows, slot,
@@ -167,33 +197,38 @@ void run_paged_attention_cache(PackedOperatorContext& context,
         w.paged_kv->layer_vector_offset(slot), owner_layout.key_value_heads,
         owner_layout.head_dim, w.stream.get());
     if (plan.algorithm == AttentionAlgorithm::Alibi) {
-        launch_gqa_decode_alibi_paged_batch(
-            w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
-            w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
-            current.alibi_slopes.data(), rows, slot, w.paged_kv->page_tokens(),
-            w.paged_kv->page_vector_elements(), w.paged_kv->layer_vector_offset(slot),
-            layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
-            layout.sliding_window_size(), w.stream.get());
+        launch_gqa_decode_alibi_paged_batch({
+            .query = w.q.data(),
+            .kv = pool,
+            .index = index,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .alibi_slopes = current.alibi_slopes.data(),
+            .stream = w.stream.get()});
     } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
-        launch_gqa_decode_paged_segmented_batch(
-            w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
-            w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
-            rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
-            w.paged_kv->layer_vector_offset(slot), layout.query_heads,
-            owner_layout.key_value_heads, owner_layout.head_dim,
-            reference.options().attention_chunk_tokens, segmented_chunks,
-            layout.sliding_window_size(), w.segmented_partial_max.data(),
-            w.segmented_partial_denom.data(), w.segmented_partial_accum.data(),
-            w.stream.get());
+        launch_gqa_decode_paged_segmented_batch({
+            .query = w.q.data(),
+            .kv = pool,
+            .index = index,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .segmentation = segmentation,
+            .stream = w.stream.get()});
     } else {
-        launch_gqa_decode_paged_batch(
-            w.q.data(), w.paged_kv->key_bf16(), w.paged_kv->value_bf16(),
-            w.d_page_tables.data(), stride, w.op_output.data(), w.positions.data(),
-            rows, slot, w.paged_kv->page_tokens(), w.paged_kv->page_vector_elements(),
-            w.paged_kv->layer_vector_offset(slot), layout.query_heads,
-            owner_layout.key_value_heads, owner_layout.head_dim,
-            layout.sliding_window_size(),
-            plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
+        launch_gqa_decode_paged_batch({
+            .query = w.q.data(),
+            .kv = pool,
+            .index = index,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .fast = plan.algorithm == AttentionAlgorithm::Online,
+            .stream = w.stream.get()});
     }
 }
 
@@ -223,45 +258,72 @@ void run_local_attention_cache(PackedOperatorContext& context,
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
     const AttentionCapability plan = require_attention_capability(request);
+    const GqaGeometry geometry{
+        .q_heads = layout.query_heads,
+        .kv_heads = owner_layout.key_value_heads,
+        .head_dim = owner_layout.head_dim,
+        .sliding_window = layout.sliding_window_size()};
     if (request.kv_format == KvCacheMode::Int8) {
+        const Int8KvBatchView batch{
+            .keys = w.d_key_int8.data() + offset,
+            .values = w.d_value_int8.data() + offset,
+            .key_scales = w.d_key_scales.data() + offset,
+            .value_scales = w.d_value_scales.data() + offset};
         if (current.key && current.value) launch_store_kv_int8_batch_ptrs(
             w.k.data(), w.v.data(), w.d_key_int8.data() + offset,
             w.d_value_int8.data() + offset, w.d_key_scales.data() + offset,
             w.d_value_scales.data() + offset, w.positions.data(), rows,
             owner_layout.key_value_heads, owner_layout.head_dim, w.stream.get());
         if (plan.algorithm == AttentionAlgorithm::Alibi) {
-            launch_gqa_decode_alibi_int8_batch_ptrs(
-                w.q.data(), w.d_key_int8.data() + offset, w.d_value_int8.data() + offset,
-                w.d_key_scales.data() + offset, w.d_value_scales.data() + offset,
-                w.op_output.data(), w.positions.data(), current.alibi_slopes.data(), rows,
-                layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window_size(), w.stream.get());
+            launch_gqa_decode_alibi_int8_batch_ptrs({
+                .query = w.q.data(),
+                .kv = batch,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .alibi_slopes = current.alibi_slopes.data(),
+                .stream = w.stream.get()});
         } else {
-            launch_gqa_decode_int8_batch_ptrs(
-            w.q.data(), w.d_key_int8.data() + offset, w.d_value_int8.data() + offset,
-            w.d_key_scales.data() + offset, w.d_value_scales.data() + offset,
-            w.op_output.data(), w.positions.data(), rows, layout.query_heads,
-            owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window_size(),
-            plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
+            launch_gqa_decode_int8_batch_ptrs({
+                .query = w.q.data(),
+                .kv = batch,
+                .out = w.op_output.data(),
+                .positions = w.positions.data(),
+                .rows = rows,
+                .geometry = geometry,
+                .fast = plan.algorithm == AttentionAlgorithm::Online,
+                .stream = w.stream.get()});
         }
         return;
     }
+    const Bf16KvBatchView batch{
+        .keys = w.d_key_bf16.data() + offset,
+        .values = w.d_value_bf16.data() + offset};
     if (current.key && current.value) launch_store_kv_batch_ptrs(
         w.k.data(), w.v.data(), w.d_key_bf16.data() + offset,
         w.d_value_bf16.data() + offset, w.positions.data(), rows,
         owner_layout.key_value_width(), w.stream.get());
     if (plan.algorithm == AttentionAlgorithm::Alibi) {
-        launch_gqa_decode_alibi_batch_ptrs(
-            w.q.data(), w.d_key_bf16.data() + offset, w.d_value_bf16.data() + offset,
-            w.op_output.data(), w.positions.data(), current.alibi_slopes.data(), rows,
-            layout.query_heads, owner_layout.key_value_heads, owner_layout.head_dim,
-            layout.sliding_window_size(), w.stream.get());
+        launch_gqa_decode_alibi_batch_ptrs({
+            .query = w.q.data(),
+            .kv = batch,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .alibi_slopes = current.alibi_slopes.data(),
+            .stream = w.stream.get()});
     } else {
-    launch_gqa_decode_batch_ptrs(
-        w.q.data(), w.d_key_bf16.data() + offset, w.d_value_bf16.data() + offset,
-        w.op_output.data(), w.positions.data(), rows, layout.query_heads,
-        owner_layout.key_value_heads, owner_layout.head_dim, layout.sliding_window_size(),
-        plan.algorithm == AttentionAlgorithm::Online, w.stream.get());
+        launch_gqa_decode_batch_ptrs({
+            .query = w.q.data(),
+            .kv = batch,
+            .out = w.op_output.data(),
+            .positions = w.positions.data(),
+            .rows = rows,
+            .geometry = geometry,
+            .fast = plan.algorithm == AttentionAlgorithm::Online,
+            .stream = w.stream.get()});
     }
 }
 

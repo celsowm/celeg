@@ -54,38 +54,32 @@ __global__ void factorized_latent_rope_kernel(
                             head * (nope + rope) + nope + d];
 }
 
-void launch_factorized_latent_query(const __nv_bfloat16* query_projection,
-                                    const __nv_bfloat16* expansion,
-                                    __nv_bfloat16* query_content, int rows,
-                                    int query_heads, int query_nope, int query_rope,
-                                    int latent_rank, cudaStream_t stream) {
-    const size_t total = static_cast<size_t>(rows) * query_heads * latent_rank;
-    factorized_latent_query_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
-        query_projection, expansion, query_content, rows, query_heads,
-        query_nope, query_rope, latent_rank);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_factorized_latent_query(const FactorizedLatentQueryArgs& args) {
+    const size_t total =
+        static_cast<size_t>(args.rows) * args.query_heads * args.latent_rank;
+    factorized_latent_query_kernel<<<(total + 255) / 256, 256, 0, args.stream>>>(
+        args.query_projection, args.expansion, args.query_content, args.rows,
+        args.query_heads, args.query_nope, args.query_rope_dim,
+        args.latent_rank);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_factorized_latent_value(const __nv_bfloat16* latent_output,
-                                    const __nv_bfloat16* expansion,
-                                    __nv_bfloat16* value_output, int rows,
-                                    int query_heads, int query_nope, int value_dim,
-                                    int latent_rank, cudaStream_t stream) {
-    const size_t total = static_cast<size_t>(rows) * query_heads * value_dim;
-    factorized_latent_value_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
-        latent_output, expansion, value_output, rows, query_heads,
-        query_nope, value_dim, latent_rank);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_factorized_latent_value(const FactorizedLatentValueArgs& args) {
+    const size_t total =
+        static_cast<size_t>(args.rows) * args.query_heads * args.value_dim;
+    factorized_latent_value_kernel<<<(total + 255) / 256, 256, 0, args.stream>>>(
+        args.latent_output, args.expansion, args.value_output, args.rows,
+        args.query_heads, args.query_nope, args.value_dim, args.latent_rank);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_factorized_latent_rope(const __nv_bfloat16* query_projection,
-                                   __nv_bfloat16* query_rope, int rows,
-                                   int query_heads, int query_nope, int query_rope_dim,
-                                   cudaStream_t stream) {
-    const size_t total = static_cast<size_t>(rows) * query_heads * query_rope_dim;
-    factorized_latent_rope_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
-        query_projection, query_rope, rows, query_heads, query_nope, query_rope_dim);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_factorized_latent_rope(const FactorizedLatentRopeArgs& args) {
+    const size_t total =
+        static_cast<size_t>(args.rows) * args.query_heads * args.query_rope_dim;
+    factorized_latent_rope_kernel<<<(total + 255) / 256, 256, 0, args.stream>>>(
+        args.query_projection, args.query_rope, args.rows, args.query_heads,
+        args.query_nope, args.query_rope_dim);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
 __device__ __forceinline__ float latent_score(
@@ -273,60 +267,45 @@ __global__ void latent_attention_ptr_kernel(
         output[d] = __float2bfloat16(accumulator[index] / denominator);
 }
 
-void launch_latent_attention_device(
-    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
-    const __nv_bfloat16* key_cache, const __nv_bfloat16* value_cache,
-    const __nv_bfloat16* key_rope_cache, __nv_bfloat16* out,
-    const int32_t* position, const float* slopes, int query_heads,
-    int latent_rank, int rotary_width, float score_scale,
-    int sliding_window, cudaStream_t stream) {
-    latent_attention_contiguous_kernel<<<query_heads, 32, 0, stream>>>(
-        query_content, query_rope, key_cache, value_cache, key_rope_cache, out,
-        position, slopes, 1, false, query_heads, latent_rank, rotary_width,
-        score_scale, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_latent_attention_device(const LatentContiguousArgs& args) {
+    const LatentGeometry& g = args.geometry;
+    latent_attention_contiguous_kernel<<<g.query_heads, 32, 0, args.stream>>>(
+        args.query.content, args.query.rope, args.kv.keys, args.kv.values,
+        args.kv.key_rope, args.out, args.extent.position, args.alibi_slopes, 1,
+        false, g.query_heads, g.latent_rank, g.rotary_width, g.score_scale,
+        g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_latent_attention_prefill(
-    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
-    const __nv_bfloat16* key_cache, const __nv_bfloat16* value_cache,
-    const __nv_bfloat16* key_rope_cache, __nv_bfloat16* out, int rows,
-    const float* slopes, int query_heads, int latent_rank, int rotary_width,
-    float score_scale, int sliding_window, cudaStream_t stream) {
-    latent_attention_contiguous_kernel<<<rows * query_heads, 32, 0, stream>>>(
-        query_content, query_rope, key_cache, value_cache, key_rope_cache, out,
-        nullptr, slopes, rows, true, query_heads, latent_rank, rotary_width,
-        score_scale, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_latent_attention_prefill(const LatentContiguousArgs& args) {
+    const LatentGeometry& g = args.geometry;
+    const int rows = args.extent.rows;
+    latent_attention_contiguous_kernel<<<rows * g.query_heads, 32, 0, args.stream>>>(
+        args.query.content, args.query.rope, args.kv.keys, args.kv.values,
+        args.kv.key_rope, args.out, nullptr, args.alibi_slopes, rows, true,
+        g.query_heads, g.latent_rank, g.rotary_width, g.score_scale,
+        g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_latent_attention_paged_batch(
-    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
-    const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
-    __nv_bfloat16* out, const uint32_t* page_tables, int page_table_stride,
-    const int32_t* positions, const float* slopes, int rows, int slot,
-    int page_tokens, size_t page_elements, size_t layer_offset,
-    int query_heads, int latent_rank, int rotary_width, float score_scale,
-    int sliding_window, cudaStream_t stream) {
-    latent_attention_paged_kernel<<<rows * query_heads, 32, 0, stream>>>(
-        query_content, query_rope, key_pool, value_pool, out, page_tables,
-        page_table_stride, positions, slopes, rows, slot, page_tokens,
-        page_elements, layer_offset, query_heads, latent_rank, rotary_width,
-        score_scale, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_latent_attention_paged_batch(const LatentPagedArgs& args) {
+    const LatentGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    latent_attention_paged_kernel<<<args.rows * g.query_heads, 32, 0, args.stream>>>(
+        args.query.content, args.query.rope, args.kv.keys, args.kv.values,
+        args.out, index.page_tables, index.page_table_stride, args.positions,
+        args.alibi_slopes, args.rows, index.attention_slot, index.page_tokens,
+        index.page_vector_elements, index.layer_vector_offset, g.query_heads,
+        g.latent_rank, g.rotary_width, g.score_scale, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_latent_attention_batch_ptrs(
-    const __nv_bfloat16* query_content, const __nv_bfloat16* query_rope,
-    const __nv_bfloat16* const* key_cache,
-    const __nv_bfloat16* const* value_cache,
-    const __nv_bfloat16* const* key_rope_cache, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int query_heads,
-    int latent_rank, int rotary_width, float score_scale, int sliding_window,
-    cudaStream_t stream) {
-    latent_attention_ptr_kernel<<<rows * query_heads, 32, 0, stream>>>(
-        query_content, query_rope, key_cache, value_cache, key_rope_cache, out,
-        positions, slopes, rows, query_heads, latent_rank, rotary_width,
-        score_scale, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_latent_attention_batch_ptrs(const LatentBatchPtrArgs& args) {
+    const LatentGeometry& g = args.geometry;
+    latent_attention_ptr_kernel<<<args.rows * g.query_heads, 32, 0, args.stream>>>(
+        args.query.content, args.query.rope, args.kv.keys, args.kv.values,
+        args.kv.key_rope, args.out, args.positions, args.alibi_slopes,
+        args.rows, g.query_heads, g.latent_rank, g.rotary_width, g.score_scale,
+        g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }

@@ -315,99 +315,86 @@ __global__ void gqa_alibi_paged_int8_kernel(
         output[d] = __float2bfloat16(accumulator[index] / denominator);
 }
 
-void launch_gqa_decode_alibi_device(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
-    const __nv_bfloat16* value_cache, __nv_bfloat16* out,
-    const int32_t* position, const float* slopes, int q_heads, int kv_heads,
-    int head_dim, int sliding_window, cudaStream_t stream) {
-    gqa_alibi_contiguous_kernel<<<q_heads, 32, 0, stream>>>(
-        q, key_cache, value_cache, out, position, slopes, 1, false,
-        q_heads, kv_heads, head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_alibi_device(const GqaContiguousArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    gqa_alibi_contiguous_kernel<<<g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.out,
+        args.extent.position, args.alibi_slopes, 1, false,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_prefill_alibi(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
-    const __nv_bfloat16* value_cache, __nv_bfloat16* out, int rows,
-    const float* slopes, int q_heads, int kv_heads, int head_dim,
-    int sliding_window, cudaStream_t stream) {
-    gqa_alibi_contiguous_kernel<<<rows * q_heads, 32, 0, stream>>>(
-        q, key_cache, value_cache, out, nullptr, slopes, rows, true,
-        q_heads, kv_heads, head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_prefill_alibi(const GqaContiguousArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    const int rows = args.extent.rows;
+    gqa_alibi_contiguous_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.out, nullptr,
+        args.alibi_slopes, rows, true,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_alibi_int8_device(
-    const __nv_bfloat16* q, const int8_t* key_cache, const int8_t* value_cache,
-    const float* key_scales, const float* value_scales, __nv_bfloat16* out,
-    const int32_t* position, const float* slopes, int q_heads, int kv_heads,
-    int head_dim, int sliding_window, cudaStream_t stream) {
-    gqa_alibi_contiguous_int8_kernel<<<q_heads, 32, 0, stream>>>(
-        q, key_cache, value_cache, key_scales, value_scales, out, position,
-        slopes, 1, false, q_heads, kv_heads, head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_alibi_int8_device(const GqaContiguousInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    gqa_alibi_contiguous_int8_kernel<<<g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, args.out, args.extent.position,
+        args.alibi_slopes, 1, false,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_prefill_alibi_int8(
-    const __nv_bfloat16* q, const int8_t* key_cache, const int8_t* value_cache,
-    const float* key_scales, const float* value_scales, __nv_bfloat16* out,
-    int rows, const float* slopes, int q_heads, int kv_heads, int head_dim,
-    int sliding_window, cudaStream_t stream) {
-    gqa_alibi_contiguous_int8_kernel<<<rows * q_heads, 32, 0, stream>>>(
-        q, key_cache, value_cache, key_scales, value_scales, out, nullptr,
-        slopes, rows, true, q_heads, kv_heads, head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_prefill_alibi_int8(const GqaContiguousInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    const int rows = args.extent.rows;
+    gqa_alibi_contiguous_int8_kernel<<<rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, args.out, nullptr, args.alibi_slopes, rows, true,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_alibi_batch_ptrs(
-    const __nv_bfloat16* q, const __nv_bfloat16* const* keys,
-    const __nv_bfloat16* const* values, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int q_heads,
-    int kv_heads, int head_dim, int sliding_window, cudaStream_t stream) {
-    gqa_alibi_ptr_kernel<<<rows * q_heads, 32, 0, stream>>>(
-        q, keys, values, out, positions, slopes, rows, q_heads, kv_heads,
-        head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_alibi_batch_ptrs(const GqaBatchPtrArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    gqa_alibi_ptr_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.out, args.positions,
+        args.alibi_slopes, args.rows,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_alibi_int8_batch_ptrs(
-    const __nv_bfloat16* q, const int8_t* const* keys,
-    const int8_t* const* values, const float* const* key_scales,
-    const float* const* value_scales, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int q_heads,
-    int kv_heads, int head_dim, int sliding_window, cudaStream_t stream) {
-    gqa_alibi_int8_ptr_kernel<<<rows * q_heads, 32, 0, stream>>>(
-        q, keys, values, key_scales, value_scales, out, positions, slopes,
-        rows, q_heads, kv_heads, head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_alibi_int8_batch_ptrs(const GqaBatchPtrInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    gqa_alibi_int8_ptr_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, args.out, args.positions, args.alibi_slopes,
+        args.rows, g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_alibi_paged_batch(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_pool,
-    const __nv_bfloat16* value_pool, const uint32_t* tables, int stride,
-    __nv_bfloat16* out, const int32_t* positions, const float* slopes,
-    int rows, int slot, int page_tokens, size_t page_elements,
-    size_t layer_offset, int q_heads, int kv_heads, int head_dim,
-    int sliding_window, cudaStream_t stream) {
-    gqa_alibi_paged_kernel<<<rows * q_heads, 32, 0, stream>>>(
-        q, key_pool, value_pool, tables, stride, out, positions, slopes, rows,
-        slot, page_tokens, page_elements, layer_offset, q_heads, kv_heads,
-        head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_alibi_paged_batch(const GqaPagedArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    gqa_alibi_paged_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, index.page_tables,
+        index.page_table_stride, args.out, args.positions, args.alibi_slopes,
+        args.rows, index.attention_slot, index.page_tokens,
+        index.page_vector_elements, index.layer_vector_offset,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_alibi_int8_paged_batch(
-    const __nv_bfloat16* q, const int8_t* key_pool, const int8_t* value_pool,
-    const float* key_scales, const float* value_scales,
-    const uint32_t* tables, int stride, __nv_bfloat16* out,
-    const int32_t* positions, const float* slopes, int rows, int slot,
-    int page_tokens, size_t page_elements, size_t layer_offset,
-    size_t page_scale_elements, size_t layer_scale_offset, int q_heads,
-    int kv_heads, int head_dim, int sliding_window, cudaStream_t stream) {
-    gqa_alibi_paged_int8_kernel<<<rows * q_heads, 32, 0, stream>>>(
-        q, key_pool, value_pool, key_scales, value_scales, tables, stride, out,
-        positions, slopes, rows, slot, page_tokens, page_elements,
-        layer_offset, page_scale_elements, layer_scale_offset, q_heads,
-        kv_heads, head_dim, sliding_window);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_alibi_int8_paged_batch(const GqaPagedInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    const PagedKvScaleIndex& scales = args.scale_index;
+    gqa_alibi_paged_int8_kernel<<<args.rows * g.q_heads, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, index.page_tables, index.page_table_stride,
+        args.out, args.positions, args.alibi_slopes, args.rows,
+        index.attention_slot, index.page_tokens, index.page_vector_elements,
+        index.layer_vector_offset, scales.page_scale_elements,
+        scales.layer_scale_offset,
+        g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }

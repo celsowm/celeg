@@ -291,57 +291,49 @@ __global__ void gqa_prefill_segment_reduce_kernel(
     }
 }
 
-void launch_gqa_decode_segmented_device(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
-    const __nv_bfloat16* value_cache, __nv_bfloat16* out,
-    const int32_t* position, int q_heads, int kv_heads, int head_dim,
-    int chunk_tokens, int chunks, int sliding_window, float* partial_max,
-    float* partial_denom, float* partial_accum, cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_segment_partial_kernel<<<q_heads * chunks, 32, 0, stream>>>(
-        q, key_cache, value_cache, position, q_heads, kv_heads, head_dim,
-        chunk_tokens, chunks, sliding_window, partial_max, partial_denom,
-        partial_accum);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
-    gqa_decode_segment_reduce_kernel<<<q_heads, threads, 0, stream>>>(
-        out, q_heads, head_dim, chunks, partial_max, partial_denom, partial_accum);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_segmented_device(const GqaSegmentedArgs& args) {
+    const int threads = attention_threads(args.geometry.head_dim);
+    const AttentionSegmentation& seg = args.segmentation;
+    gqa_decode_segment_partial_kernel<<<args.geometry.q_heads * seg.chunks, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.extent.position,
+        args.geometry.q_heads, args.geometry.kv_heads, args.geometry.head_dim,
+        seg.chunk_tokens, seg.chunks, args.geometry.sliding_window,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
+    gqa_decode_segment_reduce_kernel<<<args.geometry.q_heads, threads, 0, args.stream>>>(
+        args.out, args.geometry.q_heads, args.geometry.head_dim, seg.chunks,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_prefill_segmented(
-    const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
-    const __nv_bfloat16* value_cache, __nv_bfloat16* out, int rows,
-    int q_heads, int kv_heads, int head_dim, int chunk_tokens, int chunks,
-    int sliding_window, float* partial_max, float* partial_denom,
-    float* partial_accum,
-    cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_prefill_segment_partial_kernel<<<rows * q_heads * chunks, threads, 0, stream>>>(
-        q, key_cache, value_cache, rows, q_heads, kv_heads, head_dim,
-        chunk_tokens, chunks, sliding_window, partial_max, partial_denom,
-        partial_accum);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
-    gqa_prefill_segment_reduce_kernel<<<rows * q_heads, threads, 0, stream>>>(
-        out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,
-        partial_accum);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_prefill_segmented(const GqaSegmentedArgs& args) {
+    const int threads = attention_threads(args.geometry.head_dim);
+    const AttentionSegmentation& seg = args.segmentation;
+    const int rows = args.extent.rows;
+    gqa_prefill_segment_partial_kernel<<<rows * args.geometry.q_heads * seg.chunks, threads, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, rows,
+        args.geometry.q_heads, args.geometry.kv_heads, args.geometry.head_dim,
+        seg.chunk_tokens, seg.chunks, args.geometry.sliding_window,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
+    gqa_prefill_segment_reduce_kernel<<<rows * args.geometry.q_heads, threads, 0, args.stream>>>(
+        args.out, rows, args.geometry.q_heads, args.geometry.head_dim,
+        seg.chunks, seg.partial_max, seg.partial_denom, seg.partial_accum);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_segmented_int8_device(
-    const __nv_bfloat16* q, const int8_t* key_cache,
-    const int8_t* value_cache, const float* key_scales,
-    const float* value_scales, __nv_bfloat16* out,
-    const int32_t* position, int q_heads, int kv_heads, int head_dim,
-    int chunk_tokens, int chunks, int sliding_window, float* partial_max,
-    float* partial_denom, float* partial_accum, cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_segment_partial_int8_kernel<<<q_heads * chunks, 32, 0, stream>>>(
-        q, key_cache, value_cache, key_scales, value_scales, position,
-        q_heads, kv_heads, head_dim, chunk_tokens, chunks, sliding_window,
-        partial_max, partial_denom, partial_accum);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
-    gqa_decode_segment_reduce_kernel<<<q_heads, threads, 0, stream>>>(
-        out, q_heads, head_dim, chunks, partial_max, partial_denom,
-        partial_accum);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+void launch_gqa_decode_segmented_int8_device(const GqaSegmentedInt8Args& args) {
+    const int threads = attention_threads(args.geometry.head_dim);
+    const AttentionSegmentation& seg = args.segmentation;
+    gqa_decode_segment_partial_int8_kernel<<<args.geometry.q_heads * seg.chunks, 32, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, args.extent.position,
+        args.geometry.q_heads, args.geometry.kv_heads, args.geometry.head_dim,
+        seg.chunk_tokens, seg.chunks, args.geometry.sliding_window,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
+    gqa_decode_segment_reduce_kernel<<<args.geometry.q_heads, threads, 0, args.stream>>>(
+        args.out, args.geometry.q_heads, args.geometry.head_dim, seg.chunks,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }

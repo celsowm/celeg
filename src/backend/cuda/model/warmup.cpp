@@ -113,12 +113,22 @@ void CudaCompiledModel::warmup_prefill_attention_gemm() {
     q.zero_async(stream_.get());
     k.zero_async(stream_.get());
     v.zero_async(stream_.get());
-    launch_gqa_prefill_gemm(
-        gemm_->cublas().get(), q.data(), k.data(), v.data(), out.data(),
-        scores.data(), probs.data(), kRows, layout.query_heads,
-        layout.key_value_heads, layout.head_dim, layout.query_width(),
-        layout.key_value_width(), layout.query_width(), layout.sliding_window_size(),
-        stream_.get());
+    launch_gqa_prefill_gemm({
+        .cublas = gemm_->cublas().get(),
+        .query = q.data(),
+        .kv = {.keys = k.data(), .values = v.data()},
+        .out = out.data(),
+        .scores_scratch = scores.data(),
+        .probs_scratch = probs.data(),
+        .geometry = {.q_heads = layout.query_heads,
+                     .kv_heads = layout.key_value_heads,
+                     .head_dim = layout.head_dim,
+                     .sliding_window = layout.sliding_window_size()},
+        .strides = {.q_width = layout.query_width(),
+                    .kv_width = layout.key_value_width(),
+                    .out_width = layout.query_width()},
+        .rows = kRows,
+        .stream = stream_.get()});
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 

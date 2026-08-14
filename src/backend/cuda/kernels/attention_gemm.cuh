@@ -202,12 +202,11 @@ __global__ void flash_attn_prefill_kernel(
     }
 }
 
-void launch_gqa_prefill_flash(
-    const __nv_bfloat16* q, const __nv_bfloat16* k,
-    const __nv_bfloat16* v, __nv_bfloat16* out, int rows,
-    int q_heads, int kv_heads, int head_dim,
-    int q_width, int kv_width, int out_width, int sliding_window,
-    cudaStream_t stream) {
+void launch_gqa_prefill_flash(const GqaPrefillFlashArgs& args) {
+    const int rows = args.rows;
+    const int q_heads = args.geometry.q_heads;
+    const int head_dim = args.geometry.head_dim;
+    const cudaStream_t stream = args.stream;
     constexpr int Br = 64;
     constexpr int Bc = 64;
     constexpr int kKPad = 8;
@@ -251,8 +250,10 @@ void launch_gqa_prefill_flash(
                              static_cast<int>(smem_bytes)));
     }
     flash_attn_prefill_kernel<<<grid, block, smem_bytes, stream>>>(
-        q, k, v, out, rows, q_heads, kv_heads, head_dim,
-        q_width, kv_width, out_width, sliding_window);
+        args.query, args.kv.keys, args.kv.values, args.out, rows, q_heads,
+        args.geometry.kv_heads, head_dim, args.strides.q_width,
+        args.strides.kv_width, args.strides.out_width,
+        args.geometry.sliding_window);
     CELEG_KERNEL_CHECK();
 }
 
@@ -320,13 +321,23 @@ void launch_causal_softmax(const float* scores, __nv_bfloat16* probs,
     CELEG_KERNEL_CHECK();
 }
 
-void launch_gqa_prefill_gemm(
-    cublasHandle_t cublas, const __nv_bfloat16* q, const __nv_bfloat16* k,
-    const __nv_bfloat16* v, __nv_bfloat16* out, float* scores_scratch,
-    __nv_bfloat16* probs_scratch, int rows, int q_heads, int kv_heads,
-    int head_dim, int q_width, int kv_width, int out_width,
-    int sliding_window,
-    cudaStream_t stream) {
+void launch_gqa_prefill_gemm(const GqaPrefillGemmArgs& args) {
+    const cublasHandle_t cublas = args.cublas;
+    const __nv_bfloat16* q = args.query;
+    const __nv_bfloat16* k = args.kv.keys;
+    const __nv_bfloat16* v = args.kv.values;
+    __nv_bfloat16* const out = args.out;
+    float* const scores_scratch = args.scores_scratch;
+    __nv_bfloat16* const probs_scratch = args.probs_scratch;
+    const int rows = args.rows;
+    const int q_heads = args.geometry.q_heads;
+    const int kv_heads = args.geometry.kv_heads;
+    const int head_dim = args.geometry.head_dim;
+    const int q_width = args.strides.q_width;
+    const int kv_width = args.strides.kv_width;
+    const int out_width = args.strides.out_width;
+    const int sliding_window = args.geometry.sliding_window;
+    const cudaStream_t stream = args.stream;
     const int group = q_heads / kv_heads;
     const float scale = rsqrtf(static_cast<float>(head_dim));
     const float zero = 0.0f;

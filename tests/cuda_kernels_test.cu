@@ -514,14 +514,25 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position), cudaMemcpyHostToDevice));
-        celeg::launch_gqa_decode_online_device(
-            dq.data(), dk.data(), dv.data(), reference.data(), dposition.data(),
-            q_heads, kv_heads, head_dim, 0, stream.get());
-        celeg::launch_gqa_decode_segmented_device(
-            dq.data(), dk.data(), dv.data(), segmented.data(), dposition.data(),
-            q_heads, kv_heads, head_dim, chunk_tokens, chunks, 0,
-            partial_max.data(), partial_denom.data(), partial_accum.data(),
-            stream.get());
+        celeg::launch_gqa_decode_online_device({
+            .query = dq.data(),
+            .kv = {.keys = dk.data(), .values = dv.data()},
+            .out = reference.data(),
+            .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+            .extent = {.position = dposition.data()},
+            .stream = stream.get()});
+        celeg::launch_gqa_decode_segmented_device({
+            .query = dq.data(),
+            .kv = {.keys = dk.data(), .values = dv.data()},
+            .out = segmented.data(),
+            .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+            .extent = {.position = dposition.data()},
+            .segmentation = {.chunk_tokens = chunk_tokens,
+                             .chunks = chunks,
+                             .partial_max = partial_max.data(),
+                             .partial_denom = partial_denom.data(),
+                             .partial_accum = partial_accum.data()},
+            .stream = stream.get()});
         std::vector<__nv_bfloat16> a(q.size()), b(q.size());
         CELEG_CUDA(cudaMemcpyAsync(a.data(), reference.data(), reference.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
@@ -668,12 +679,21 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dv.data(), values.data(), dv.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dtable.data(), table.data(), dtable.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dpositions.data(), positions.data(), dpositions.bytes(), cudaMemcpyHostToDevice));
-        celeg::launch_gqa_decode_paged_batch(
-            dq.data(), dk.data(), dv.data(), dtable.data(), 1,
-            dout.data(), dpositions.data(), 1, 0, page_tokens,
-            page_tokens * kv_heads * head_dim, 0,
-            q_heads, kv_heads, head_dim, 0, false,
-            stream.get());
+        celeg::launch_gqa_decode_paged_batch({
+            .query = dq.data(),
+            .kv = {.keys = dk.data(), .values = dv.data()},
+            .index = {.page_tables = dtable.data(),
+                      .page_table_stride = 1,
+                      .attention_slot = 0,
+                      .page_tokens = page_tokens,
+                      .page_vector_elements = page_tokens * kv_heads * head_dim,
+                      .layer_vector_offset = 0},
+            .out = dout.data(),
+            .positions = dpositions.data(),
+            .rows = 1,
+            .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+            .fast = false,
+            .stream = stream.get()});
         std::vector<__nv_bfloat16> output(head_dim);
         CELEG_CUDA(cudaMemcpyAsync(output.data(), dout.data(), dout.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
@@ -721,17 +741,39 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dv.data(), values.data(), dv.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dtable.data(), table.data(), dtable.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dpositions.data(), positions.data(), dpositions.bytes(), cudaMemcpyHostToDevice));
-        celeg::launch_gqa_decode_paged_batch(
-            dq.data(), dk.data(), dv.data(), dtable.data(), 2, normal.data(),
-            dpositions.data(), 1, 0, page_tokens,
-            page_tokens * kv_heads * head_dim, 0,
-            q_heads, kv_heads, head_dim, 0, true, stream.get());
-        celeg::launch_gqa_decode_paged_segmented_batch(
-            dq.data(), dk.data(), dv.data(), dtable.data(), 2,
-            segmented.data(), dpositions.data(), 1, 0, page_tokens,
-            page_tokens * kv_heads * head_dim, 0,
-            q_heads, kv_heads, head_dim, 1, 3, 0,
-            pmax.data(), pdenom.data(), paccum.data(), stream.get());
+        const celeg::PagedKvIndex paged_index{
+            .page_tables = dtable.data(),
+            .page_table_stride = 2,
+            .attention_slot = 0,
+            .page_tokens = page_tokens,
+            .page_vector_elements = page_tokens * kv_heads * head_dim,
+            .layer_vector_offset = 0};
+        const celeg::GqaGeometry paged_geometry{
+            .q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim};
+        celeg::launch_gqa_decode_paged_batch({
+            .query = dq.data(),
+            .kv = {.keys = dk.data(), .values = dv.data()},
+            .index = paged_index,
+            .out = normal.data(),
+            .positions = dpositions.data(),
+            .rows = 1,
+            .geometry = paged_geometry,
+            .fast = true,
+            .stream = stream.get()});
+        celeg::launch_gqa_decode_paged_segmented_batch({
+            .query = dq.data(),
+            .kv = {.keys = dk.data(), .values = dv.data()},
+            .index = paged_index,
+            .out = segmented.data(),
+            .positions = dpositions.data(),
+            .rows = 1,
+            .geometry = paged_geometry,
+            .segmentation = {.chunk_tokens = 1,
+                             .chunks = 3,
+                             .partial_max = pmax.data(),
+                             .partial_denom = pdenom.data(),
+                             .partial_accum = paccum.data()},
+            .stream = stream.get()});
         std::vector<__nv_bfloat16> a(head_dim), b(head_dim);
         CELEG_CUDA(cudaMemcpyAsync(a.data(), normal.data(), normal.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
@@ -783,20 +825,49 @@ int main() {
         CELEG_CUDA(cudaMemcpy(dvs.data(), value_scales.data(), dvs.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dtable.data(), table.data(), dtable.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dpositions.data(), positions.data(), dpositions.bytes(), cudaMemcpyHostToDevice));
-        celeg::launch_gqa_decode_int8_paged_batch(
-            dq.data(), dk.data(), dv.data(), dks.data(), dvs.data(),
-            dtable.data(), 2, normal.data(), dpositions.data(), 1, 0,
-            page_tokens, page_tokens * kv_heads * head_dim, 0,
-            page_tokens * kv_heads, 0,
-            q_heads, kv_heads, head_dim, 0, true,
-            stream.get());
-        celeg::launch_gqa_decode_int8_paged_segmented_batch(
-            dq.data(), dk.data(), dv.data(), dks.data(), dvs.data(),
-            dtable.data(), 2, segmented.data(), dpositions.data(), 1, 0,
-            page_tokens, page_tokens * kv_heads * head_dim, 0,
-            page_tokens * kv_heads, 0,
-            q_heads, kv_heads, head_dim, 1, 3, 0,
-            pmax.data(), pdenom.data(), paccum.data(), stream.get());
+        const celeg::Int8KvPoolView int8_pool{
+            .keys = dk.data(),
+            .values = dv.data(),
+            .key_scales = dks.data(),
+            .value_scales = dvs.data()};
+        const celeg::PagedKvIndex int8_index{
+            .page_tables = dtable.data(),
+            .page_table_stride = 2,
+            .attention_slot = 0,
+            .page_tokens = page_tokens,
+            .page_vector_elements = page_tokens * kv_heads * head_dim,
+            .layer_vector_offset = 0};
+        const celeg::PagedKvScaleIndex int8_scale_index{
+            .page_scale_elements = page_tokens * kv_heads,
+            .layer_scale_offset = 0};
+        const celeg::GqaGeometry int8_geometry{
+            .q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim};
+        celeg::launch_gqa_decode_int8_paged_batch({
+            .query = dq.data(),
+            .kv = int8_pool,
+            .index = int8_index,
+            .scale_index = int8_scale_index,
+            .out = normal.data(),
+            .positions = dpositions.data(),
+            .rows = 1,
+            .geometry = int8_geometry,
+            .fast = true,
+            .stream = stream.get()});
+        celeg::launch_gqa_decode_int8_paged_segmented_batch({
+            .query = dq.data(),
+            .kv = int8_pool,
+            .index = int8_index,
+            .scale_index = int8_scale_index,
+            .out = segmented.data(),
+            .positions = dpositions.data(),
+            .rows = 1,
+            .geometry = int8_geometry,
+            .segmentation = {.chunk_tokens = 1,
+                             .chunks = 3,
+                             .partial_max = pmax.data(),
+                             .partial_denom = pdenom.data(),
+                             .partial_accum = paccum.data()},
+            .stream = stream.get()});
         std::vector<__nv_bfloat16> a(head_dim), b(head_dim);
         CELEG_CUDA(cudaMemcpyAsync(a.data(), normal.data(), normal.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));

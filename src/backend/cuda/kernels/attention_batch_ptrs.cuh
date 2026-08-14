@@ -287,54 +287,34 @@ __global__ void gqa_decode_strict_int8_batch_ptrs_kernel(
     }
 }
 
-void launch_gqa_decode_batch_ptrs(
-    const __nv_bfloat16* q,
-    const __nv_bfloat16* const* key_cache,
-    const __nv_bfloat16* const* value_cache,
-    __nv_bfloat16* out,
-    const int32_t* positions,
-    int rows,
-    int q_heads,
-    int kv_heads,
-    int head_dim, int sliding_window,
-    bool fast,
-    cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    if (fast) {
-        gqa_decode_online_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
-            q, key_cache, value_cache, out, positions,
-            rows, q_heads, kv_heads, head_dim, sliding_window);
+void launch_gqa_decode_batch_ptrs(const GqaBatchPtrArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    const int threads = attention_threads(g.head_dim);
+    if (args.fast) {
+        gqa_decode_online_batch_ptrs_kernel<<<args.rows * g.q_heads, threads, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, args.out, args.positions,
+            args.rows, g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     } else {
-        gqa_decode_strict_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
-            q, key_cache, value_cache, out, positions,
-            rows, q_heads, kv_heads, head_dim, sliding_window);
+        gqa_decode_strict_batch_ptrs_kernel<<<args.rows * g.q_heads, threads, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, args.out, args.positions,
+            args.rows, g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     }
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
 
-void launch_gqa_decode_int8_batch_ptrs(
-    const __nv_bfloat16* q,
-    const int8_t* const* key_cache,
-    const int8_t* const* value_cache,
-    const float* const* key_scales,
-    const float* const* value_scales,
-    __nv_bfloat16* out,
-    const int32_t* positions,
-    int rows,
-    int q_heads,
-    int kv_heads,
-    int head_dim, int sliding_window,
-    bool fast,
-    cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    if (fast) {
-        gqa_decode_online_int8_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
-            q, key_cache, value_cache, key_scales, value_scales,
-            out, positions, rows, q_heads, kv_heads, head_dim, sliding_window);
+void launch_gqa_decode_int8_batch_ptrs(const GqaBatchPtrInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    const int threads = attention_threads(g.head_dim);
+    if (args.fast) {
+        gqa_decode_online_int8_batch_ptrs_kernel<<<args.rows * g.q_heads, threads, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+            args.kv.value_scales, args.out, args.positions, args.rows,
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     } else {
-        gqa_decode_strict_int8_batch_ptrs_kernel<<<rows * q_heads, threads, 0, stream>>>(
-            q, key_cache, value_cache, key_scales, value_scales,
-            out, positions, rows, q_heads, kv_heads, head_dim, sliding_window);
+        gqa_decode_strict_int8_batch_ptrs_kernel<<<args.rows * g.q_heads, threads, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+            args.kv.value_scales, args.out, args.positions, args.rows,
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     }
-    CELEG_KERNEL_DEBUG_SYNC(stream);
+    CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }

@@ -155,37 +155,58 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         launch_store_kv(k, v, owner.key_cache.data(), owner.value_cache.data(),
                         session_.position_, owner_layout.key_value_width(), stream_.get());
     }
+    const GqaGeometry geometry{
+        .q_heads = layout.query_heads,
+        .kv_heads = owner_layout.key_value_heads,
+        .head_dim = owner_layout.head_dim,
+        .sliding_window = layout.sliding_window_size()};
+    // Host-scalar contiguous decode: the kernel takes the KV length directly.
+    const AttentionExtent extent{.seq_len = session_.position_ + 1};
     switch (plan.algorithm) {
     case AttentionAlgorithm::Online:
         if (int8_kv) {
-            launch_gqa_decode_online_int8(
-                q, owner.key_cache_int8.data(), owner.value_cache_int8.data(),
-                owner.key_cache_scales.data(), owner.value_cache_scales.data(),
-                workspace_.op_output_.data(),
-                session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+            launch_gqa_decode_online_int8({
+                .query = q,
+                .kv = {.keys = owner.key_cache_int8.data(),
+                       .values = owner.value_cache_int8.data(),
+                       .key_scales = owner.key_cache_scales.data(),
+                       .value_scales = owner.value_cache_scales.data()},
+                .out = workspace_.op_output_.data(),
+                .geometry = geometry,
+                .extent = extent,
+                .stream = stream_.get()});
         } else {
-            launch_gqa_decode_online(
-                q, owner.key_cache.data(), owner.value_cache.data(),
-                workspace_.op_output_.data(), session_.position_ + 1,
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+            launch_gqa_decode_online({
+                .query = q,
+                .kv = {.keys = owner.key_cache.data(),
+                       .values = owner.value_cache.data()},
+                .out = workspace_.op_output_.data(),
+                .geometry = geometry,
+                .extent = extent,
+                .stream = stream_.get()});
         }
         break;
     case AttentionAlgorithm::Strict:
         if (int8_kv) {
-            launch_gqa_decode_strict_int8(
-                q, owner.key_cache_int8.data(), owner.value_cache_int8.data(),
-                owner.key_cache_scales.data(), owner.value_cache_scales.data(),
-                workspace_.op_output_.data(),
-                session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+            launch_gqa_decode_strict_int8({
+                .query = q,
+                .kv = {.keys = owner.key_cache_int8.data(),
+                       .values = owner.value_cache_int8.data(),
+                       .key_scales = owner.key_cache_scales.data(),
+                       .value_scales = owner.value_cache_scales.data()},
+                .out = workspace_.op_output_.data(),
+                .geometry = geometry,
+                .extent = extent,
+                .stream = stream_.get()});
         } else {
-            launch_gqa_decode_strict(
-                q, owner.key_cache.data(), owner.value_cache.data(),
-                workspace_.op_output_.data(), session_.position_ + 1,
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+            launch_gqa_decode_strict({
+                .query = q,
+                .kv = {.keys = owner.key_cache.data(),
+                       .values = owner.value_cache.data()},
+                .out = workspace_.op_output_.data(),
+                .geometry = geometry,
+                .extent = extent,
+                .stream = stream_.get()});
         }
         break;
     case AttentionAlgorithm::Alibi:
@@ -205,7 +226,39 @@ void CudaCompiledModel::store_and_attend_token_paged(
     const uint32_t* device_page_table = kv.device_page_table;
     const int page_table_stride = kv.page_table_stride;
 
+    const GqaGeometry geometry{
+        .q_heads = layout.query_heads,
+        .kv_heads = owner_layout.key_value_heads,
+        .head_dim = owner_layout.head_dim,
+        .sliding_window = layout.sliding_window_size()};
+    const PagedKvIndex index{
+        .page_tables = device_page_table,
+        .page_table_stride = page_table_stride,
+        .attention_slot = slot,
+        .page_tokens = paged_kv.page_tokens(),
+        .page_vector_elements = paged_kv.page_vector_elements(),
+        .layer_vector_offset = paged_kv.layer_vector_offset(slot)};
+    const auto segmentation = [&] {
+        const int chunks = (session_.position_ + 1 +
+            resources_.options_.attention_chunk_tokens - 1) /
+            resources_.options_.attention_chunk_tokens;
+        return AttentionSegmentation{
+            .chunk_tokens = resources_.options_.attention_chunk_tokens,
+            .chunks = chunks,
+            .partial_max = workspace_.attention_partial_max_.data(),
+            .partial_denom = workspace_.attention_partial_denom_.data(),
+            .partial_accum = workspace_.attention_partial_accum_.data()};
+    };
+
     if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+        const PagedKvScaleIndex scale_index{
+            .page_scale_elements = paged_kv.page_scale_elements(),
+            .layer_scale_offset = paged_kv.layer_scale_offset(slot)};
+        const Int8KvPoolView pool{
+            .keys = paged_kv.key_int8(),
+            .values = paged_kv.value_int8(),
+            .key_scales = paged_kv.key_scales(),
+            .value_scales = paged_kv.value_scales()};
         launch_store_kv_int8_paged_batch(
             k, v, paged_kv.key_int8(), paged_kv.value_int8(),
             paged_kv.key_scales(), paged_kv.value_scales(),
@@ -215,49 +268,46 @@ void CudaCompiledModel::store_and_attend_token_paged(
             paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
         if (plan.algorithm == AttentionAlgorithm::Alibi) {
-            launch_gqa_decode_alibi_int8_paged_batch(
-                q, paged_kv.key_int8(), paged_kv.value_int8(),
-                paged_kv.key_scales(), paged_kv.value_scales(),
-                device_page_table, page_table_stride,
-                workspace_.op_output_.data(), position_device_.data(),
-                attention.alibi_slopes.data(), 1, slot,
-                paged_kv.page_tokens(), paged_kv.page_vector_elements(),
-                paged_kv.layer_vector_offset(slot),
-                paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+            launch_gqa_decode_alibi_int8_paged_batch({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .alibi_slopes = attention.alibi_slopes.data(),
+                .stream = stream_.get()});
         } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
-            const int chunks = (session_.position_ + 1 +
-                resources_.options_.attention_chunk_tokens - 1) /
-                resources_.options_.attention_chunk_tokens;
-            launch_gqa_decode_int8_paged_segmented_batch(
-                q, paged_kv.key_int8(), paged_kv.value_int8(),
-                paged_kv.key_scales(), paged_kv.value_scales(),
-                device_page_table, page_table_stride, workspace_.op_output_.data(),
-                position_device_.data(), 1, slot,
-                paged_kv.page_tokens(),
-                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
-                chunks, layout.sliding_window_size(), workspace_.attention_partial_max_.data(),
-                workspace_.attention_partial_denom_.data(),
-                workspace_.attention_partial_accum_.data(), stream_.get());
+            launch_gqa_decode_int8_paged_segmented_batch({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .segmentation = segmentation(),
+                .stream = stream_.get()});
         } else {
-            launch_gqa_decode_int8_paged_batch(
-                q, paged_kv.key_int8(), paged_kv.value_int8(),
-                paged_kv.key_scales(), paged_kv.value_scales(),
-                device_page_table, page_table_stride, workspace_.op_output_.data(),
-                position_device_.data(), 1, slot,
-                paged_kv.page_tokens(),
-                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(),
-                plan.algorithm == AttentionAlgorithm::Online,
-                stream_.get());
+            launch_gqa_decode_int8_paged_batch({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .scale_index = scale_index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .fast = plan.algorithm == AttentionAlgorithm::Online,
+                .stream = stream_.get()});
         }
     } else {
+        const Bf16KvPoolView pool{
+            .keys = paged_kv.key_bf16(),
+            .values = paged_kv.value_bf16()};
         launch_store_kv_paged_batch(
             k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
             device_page_table, page_table_stride, position_device_.data(),
@@ -265,41 +315,38 @@ void CudaCompiledModel::store_and_attend_token_paged(
             paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
             owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
         if (plan.algorithm == AttentionAlgorithm::Alibi) {
-            launch_gqa_decode_alibi_paged_batch(
-                q, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                device_page_table, page_table_stride,
-                workspace_.op_output_.data(), position_device_.data(),
-                attention.alibi_slopes.data(), 1, slot,
-                paged_kv.page_tokens(), paged_kv.page_vector_elements(),
-                paged_kv.layer_vector_offset(slot), layout.query_heads,
-                owner_layout.key_value_heads, owner_layout.head_dim,
-                layout.sliding_window_size(), stream_.get());
+            launch_gqa_decode_alibi_paged_batch({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .alibi_slopes = attention.alibi_slopes.data(),
+                .stream = stream_.get()});
         } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
-            const int chunks = (session_.position_ + 1 +
-                resources_.options_.attention_chunk_tokens - 1) /
-                resources_.options_.attention_chunk_tokens;
-            launch_gqa_decode_paged_segmented_batch(
-                q, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                device_page_table, page_table_stride,
-                workspace_.op_output_.data(), position_device_.data(), 1, slot,
-                paged_kv.page_tokens(),
-                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
-                chunks, layout.sliding_window_size(), workspace_.attention_partial_max_.data(),
-                workspace_.attention_partial_denom_.data(),
-                workspace_.attention_partial_accum_.data(), stream_.get());
+            launch_gqa_decode_paged_segmented_batch({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .segmentation = segmentation(),
+                .stream = stream_.get()});
         } else {
-            launch_gqa_decode_paged_batch(
-                q, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                device_page_table, page_table_stride,
-                workspace_.op_output_.data(), position_device_.data(), 1, slot,
-                paged_kv.page_tokens(),
-                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                layout.query_heads, owner_layout.key_value_heads,
-                owner_layout.head_dim, layout.sliding_window_size(),
-                plan.algorithm == AttentionAlgorithm::Online,
-                stream_.get());
+            launch_gqa_decode_paged_batch({
+                .query = q,
+                .kv = pool,
+                .index = index,
+                .out = workspace_.op_output_.data(),
+                .positions = position_device_.data(),
+                .rows = 1,
+                .geometry = geometry,
+                .fast = plan.algorithm == AttentionAlgorithm::Online,
+                .stream = stream_.get()});
         }
     }
 }
@@ -380,18 +427,27 @@ void CudaCompiledModel::run_token_latent_attention_paged(
             latent.decoupled_rope ? latent.rope_head_dim : 0, stream_.get());
     }
     const float score_scale = layout.query_scale;
-    launch_latent_attention_paged_batch(
-        workspace_.latent_query_content_.data(),
-        layout.latent_query_rope_width() != 0
-            ? workspace_.latent_query_rope_.data() : nullptr,
-        paged_kv.key_bf16(), paged_kv.value_bf16(),
-        workspace_.op_output_.data(), kv.device_page_table,
-        kv.page_table_stride, position_device_.data(),
-        attention.alibi_slopes.data(), 1, slot, paged_kv.page_tokens(),
-        paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-        layout.query_heads, latent.latent_rank,
-        latent.decoupled_rope ? latent.rope_head_dim : 0,
-        score_scale, layout.sliding_window_size(), stream_.get());
+    launch_latent_attention_paged_batch({
+        .query = {.content = workspace_.latent_query_content_.data(),
+                  .rope = layout.latent_query_rope_width() != 0
+                              ? workspace_.latent_query_rope_.data() : nullptr},
+        .kv = {.keys = paged_kv.key_bf16(), .values = paged_kv.value_bf16()},
+        .index = {.page_tables = kv.device_page_table,
+                  .page_table_stride = kv.page_table_stride,
+                  .attention_slot = slot,
+                  .page_tokens = paged_kv.page_tokens(),
+                  .page_vector_elements = paged_kv.page_vector_elements(),
+                  .layer_vector_offset = paged_kv.layer_vector_offset(slot)},
+        .out = workspace_.op_output_.data(),
+        .positions = position_device_.data(),
+        .rows = 1,
+        .alibi_slopes = attention.alibi_slopes.data(),
+        .geometry = {.query_heads = layout.query_heads,
+                     .latent_rank = latent.latent_rank,
+                     .rotary_width = latent.decoupled_rope ? latent.rope_head_dim : 0,
+                     .score_scale = score_scale,
+                     .sliding_window = layout.sliding_window_size()},
+        .stream = stream_.get()});
     linear(workspace_.op_output_.data(), *attention.out,
            workspace_.hidden_.data(), 1, resources_.program_.hidden,
            layout.latent_query_content_width(),

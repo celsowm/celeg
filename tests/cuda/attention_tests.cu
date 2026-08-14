@@ -58,8 +58,13 @@ void run_attention_tests(celeg::CudaStream& stream) {
     CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
-    celeg::launch_gqa_decode_strict(
-        dq.data(), dk.data(), dv.data(), dout.data(), 2, 2, 1, 2, 0, stream.get());
+    celeg::launch_gqa_decode_strict({
+        .query = dq.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dout.data(),
+        .geometry = {.q_heads = 2, .kv_heads = 1, .head_dim = 2},
+        .extent = {.seq_len = 2},
+        .stream = stream.get()});
     std::vector<__nv_bfloat16> output(4);
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
@@ -88,9 +93,14 @@ void run_attention_tests(celeg::CudaStream& stream) {
     CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dslope.data(), &slope, sizeof(slope), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dposition.data(), &position, sizeof(position), cudaMemcpyHostToDevice));
-    celeg::launch_gqa_decode_alibi_device(
-        dq.data(), dk.data(), dv.data(), dout.data(), dposition.data(),
-        dslope.data(), 1, 1, 2, 0, stream.get());
+    celeg::launch_gqa_decode_alibi_device({
+        .query = dq.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dout.data(),
+        .geometry = {.q_heads = 1, .kv_heads = 1, .head_dim = 2},
+        .extent = {.position = dposition.data()},
+        .alibi_slopes = dslope.data(),
+        .stream = stream.get()});
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> output(2);
     CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
@@ -154,11 +164,24 @@ void run_attention_tests(celeg::CudaStream& stream) {
         dkeys.data(), dvalues.data(), dkey_ropes.data(), key_pool.data(),
         value_pool.data(), dpage_table.data(), 1, dpositions.data(), 2, 0,
         page_tokens, page_elements, 0, latent_rank, rotary_width, stream.get());
-    celeg::launch_latent_attention_paged_batch(
-        dquery_content.data(), dquery_rope.data(), key_pool.data(), value_pool.data(),
-        output.data(), dpage_table.data(), 1, dquery_position.data(), nullptr, 1, 0,
-        page_tokens, page_elements, 0, 1, latent_rank, rotary_width, 1.0f, 0,
-        stream.get());
+    celeg::launch_latent_attention_paged_batch({
+        .query = {.content = dquery_content.data(), .rope = dquery_rope.data()},
+        .kv = {.keys = key_pool.data(), .values = value_pool.data()},
+        .index = {.page_tables = dpage_table.data(),
+                  .page_table_stride = 1,
+                  .attention_slot = 0,
+                  .page_tokens = page_tokens,
+                  .page_vector_elements = page_elements,
+                  .layer_vector_offset = 0},
+        .out = output.data(),
+        .positions = dquery_position.data(),
+        .rows = 1,
+        .geometry = {.query_heads = 1,
+                     .latent_rank = latent_rank,
+                     .rotary_width = rotary_width,
+                     .score_scale = 1.0f,
+                     .sliding_window = 0},
+        .stream = stream.get()});
     std::vector<__nv_bfloat16> host_output(latent_rank);
     CELEG_CUDA(cudaMemcpyAsync(host_output.data(), output.data(), output.bytes(),
                                cudaMemcpyDeviceToHost, stream.get()));
@@ -319,8 +342,13 @@ void run_attention_tests(celeg::CudaStream& stream) {
     CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
-    celeg::launch_gqa_prefill_strict(dq.data(), dk.data(), dv.data(), dout.data(),
-                                   rows, q_heads, kv_heads, head_dim, 0, stream.get());
+    celeg::launch_gqa_prefill_strict({
+        .query = dq.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dout.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.rows = rows},
+        .stream = stream.get()});
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> output(q.size());
     CELEG_CUDA(cudaMemcpy(output.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost));
@@ -364,13 +392,23 @@ void run_attention_tests(celeg::CudaStream& stream) {
         dk.data(), dv.data(), key_cache.data(), value_cache.data(),
         key_scales.data(), value_scales.data(), rows, kv_heads, head_dim,
         stream.get());
-    celeg::launch_gqa_prefill_strict_int8(
-        dq.data(), key_cache.data(), value_cache.data(),
-        key_scales.data(), value_scales.data(), dout_int8.data(), rows,
-        q_heads, kv_heads, head_dim, 0, stream.get());
-    celeg::launch_gqa_prefill_strict(
-        dq.data(), dk.data(), dv.data(), dout_bf16.data(), rows,
-                                   q_heads, kv_heads, head_dim, 0, stream.get());
+    celeg::launch_gqa_prefill_strict_int8({
+        .query = dq.data(),
+        .kv = {.keys = key_cache.data(),
+               .values = value_cache.data(),
+               .key_scales = key_scales.data(),
+               .value_scales = value_scales.data()},
+        .out = dout_int8.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.rows = rows},
+        .stream = stream.get()});
+    celeg::launch_gqa_prefill_strict({
+        .query = dq.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = dout_bf16.data(),
+        .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+        .extent = {.rows = rows},
+        .stream = stream.get()});
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     std::vector<__nv_bfloat16> int8_output(q.size()), bf16_output(q.size());
     CELEG_CUDA(cudaMemcpy(int8_output.data(), dout_int8.data(),

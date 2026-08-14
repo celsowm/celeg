@@ -498,109 +498,90 @@ __global__ void gqa_decode_segment_reduce_batch_kernel(
     }
 }
 
-void launch_gqa_decode_paged_batch(
-    const __nv_bfloat16* q,
-    const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
-    const uint32_t* page_tables, int page_table_stride,
-    __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, size_t page_vector_elements,
-    size_t layer_vector_offset,
-    int q_heads, int kv_heads, int head_dim, int sliding_window, bool fast,
-    cudaStream_t stream) {
-    if (fast) {
-        gqa_decode_paged_batch_kernel<false><<<rows * q_heads, 64, 0, stream>>>(
-            q, key_pool, value_pool, page_tables, page_table_stride, out,
-            positions, rows, attention_slot, page_tokens, page_vector_elements,
-            layer_vector_offset,
-            q_heads, kv_heads, head_dim, sliding_window);
+void launch_gqa_decode_paged_batch(const GqaPagedArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    if (args.fast) {
+        gqa_decode_paged_batch_kernel<false><<<args.rows * g.q_heads, 64, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, index.page_tables,
+            index.page_table_stride, args.out, args.positions, args.rows,
+            index.attention_slot, index.page_tokens, index.page_vector_elements,
+            index.layer_vector_offset,
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     } else {
-        gqa_decode_paged_batch_kernel<true><<<rows * q_heads, 64, 0, stream>>>(
-            q, key_pool, value_pool, page_tables, page_table_stride, out,
-            positions, rows, attention_slot, page_tokens, page_vector_elements,
-            layer_vector_offset,
-            q_heads, kv_heads, head_dim, sliding_window);
+        gqa_decode_paged_batch_kernel<true><<<args.rows * g.q_heads, 64, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, index.page_tables,
+            index.page_table_stride, args.out, args.positions, args.rows,
+            index.attention_slot, index.page_tokens, index.page_vector_elements,
+            index.layer_vector_offset,
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     }
     CELEG_KERNEL_CHECK();
 }
 
-void launch_gqa_decode_int8_paged_batch(
-    const __nv_bfloat16* q,
-    const int8_t* key_pool, const int8_t* value_pool,
-    const float* key_scale_pool, const float* value_scale_pool,
-    const uint32_t* page_tables, int page_table_stride,
-    __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, size_t page_vector_elements,
-    size_t layer_vector_offset, size_t page_scale_elements,
-    size_t layer_scale_offset,
-    int q_heads, int kv_heads, int head_dim, int sliding_window, bool fast,
-    cudaStream_t stream) {
-    if (fast) {
-        gqa_decode_int8_paged_batch_kernel<false><<<rows * q_heads, 64, 0, stream>>>(
-            q, key_pool, value_pool, key_scale_pool, value_scale_pool,
-            page_tables, page_table_stride, out, positions, rows,
-            attention_slot, page_tokens, page_vector_elements, layer_vector_offset,
-            page_scale_elements, layer_scale_offset, q_heads,
-            kv_heads, head_dim, sliding_window);
+void launch_gqa_decode_int8_paged_batch(const GqaPagedInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    const PagedKvScaleIndex& scales = args.scale_index;
+    if (args.fast) {
+        gqa_decode_int8_paged_batch_kernel<false><<<args.rows * g.q_heads, 64, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+            args.kv.value_scales, index.page_tables, index.page_table_stride,
+            args.out, args.positions, args.rows, index.attention_slot,
+            index.page_tokens, index.page_vector_elements,
+            index.layer_vector_offset, scales.page_scale_elements,
+            scales.layer_scale_offset,
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     } else {
-        gqa_decode_int8_paged_batch_kernel<true><<<rows * q_heads, 64, 0, stream>>>(
-            q, key_pool, value_pool, key_scale_pool, value_scale_pool,
-            page_tables, page_table_stride, out, positions, rows,
-            attention_slot, page_tokens, page_vector_elements, layer_vector_offset,
-            page_scale_elements, layer_scale_offset, q_heads,
-            kv_heads, head_dim, sliding_window);
+        gqa_decode_int8_paged_batch_kernel<true><<<args.rows * g.q_heads, 64, 0, args.stream>>>(
+            args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+            args.kv.value_scales, index.page_tables, index.page_table_stride,
+            args.out, args.positions, args.rows, index.attention_slot,
+            index.page_tokens, index.page_vector_elements,
+            index.layer_vector_offset, scales.page_scale_elements,
+            scales.layer_scale_offset,
+            g.q_heads, g.kv_heads, g.head_dim, g.sliding_window);
     }
     CELEG_KERNEL_CHECK();
 }
 
-void launch_gqa_decode_paged_segmented_batch(
-    const __nv_bfloat16* q,
-    const __nv_bfloat16* key_pool, const __nv_bfloat16* value_pool,
-    const uint32_t* page_tables, int page_table_stride,
-    __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, size_t page_vector_elements,
-    size_t layer_vector_offset,
-    int q_heads, int kv_heads, int head_dim, int chunk_tokens, int chunks,
-    int sliding_window,
-    float* partial_max, float* partial_denom, float* partial_accum,
-    cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_paged_segment_partial_kernel<<<rows * q_heads * chunks, threads, 0, stream>>>(
-        q, key_pool, value_pool, page_tables, page_table_stride, positions,
-        rows, attention_slot, page_tokens, page_vector_elements,
-        layer_vector_offset, q_heads,
-        kv_heads, head_dim, chunk_tokens, chunks, sliding_window, partial_max,
-        partial_denom, partial_accum);
+void launch_gqa_decode_paged_segmented_batch(const GqaPagedSegmentedArgs& args) {
+    const GqaGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    const AttentionSegmentation& seg = args.segmentation;
+    const int threads = attention_threads(g.head_dim);
+    gqa_decode_paged_segment_partial_kernel<<<args.rows * g.q_heads * seg.chunks, threads, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, index.page_tables,
+        index.page_table_stride, args.positions, args.rows,
+        index.attention_slot, index.page_tokens, index.page_vector_elements,
+        index.layer_vector_offset, g.q_heads, g.kv_heads, g.head_dim,
+        seg.chunk_tokens, seg.chunks, g.sliding_window, seg.partial_max,
+        seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_CHECK();
-    gqa_decode_segment_reduce_batch_kernel<<<rows * q_heads, threads, 0, stream>>>(
-        out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,
-        partial_accum);
+    gqa_decode_segment_reduce_batch_kernel<<<args.rows * g.q_heads, threads, 0, args.stream>>>(
+        args.out, args.rows, g.q_heads, g.head_dim, seg.chunks,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_CHECK();
 }
 
-void launch_gqa_decode_int8_paged_segmented_batch(
-    const __nv_bfloat16* q,
-    const int8_t* key_pool, const int8_t* value_pool,
-    const float* key_scale_pool, const float* value_scale_pool,
-    const uint32_t* page_tables, int page_table_stride,
-    __nv_bfloat16* out, const int32_t* positions, int rows,
-    int attention_slot, int page_tokens, size_t page_vector_elements,
-    size_t layer_vector_offset, size_t page_scale_elements,
-    size_t layer_scale_offset,
-    int q_heads, int kv_heads, int head_dim, int chunk_tokens, int chunks,
-    int sliding_window,
-    float* partial_max, float* partial_denom, float* partial_accum,
-    cudaStream_t stream) {
-    const int threads = attention_threads(head_dim);
-    gqa_decode_int8_paged_segment_partial_kernel<<<rows * q_heads * chunks, threads, 0, stream>>>(
-        q, key_pool, value_pool, key_scale_pool, value_scale_pool,
-        page_tables, page_table_stride, positions, rows, attention_slot,
-        page_tokens, page_vector_elements, layer_vector_offset,
-        page_scale_elements, layer_scale_offset, q_heads, kv_heads, head_dim,
-        chunk_tokens, chunks, sliding_window, partial_max, partial_denom,
-        partial_accum);
+void launch_gqa_decode_int8_paged_segmented_batch(const GqaPagedSegmentedInt8Args& args) {
+    const GqaGeometry& g = args.geometry;
+    const PagedKvIndex& index = args.index;
+    const PagedKvScaleIndex& scales = args.scale_index;
+    const AttentionSegmentation& seg = args.segmentation;
+    const int threads = attention_threads(g.head_dim);
+    gqa_decode_int8_paged_segment_partial_kernel<<<args.rows * g.q_heads * seg.chunks, threads, 0, args.stream>>>(
+        args.query, args.kv.keys, args.kv.values, args.kv.key_scales,
+        args.kv.value_scales, index.page_tables, index.page_table_stride,
+        args.positions, args.rows, index.attention_slot, index.page_tokens,
+        index.page_vector_elements, index.layer_vector_offset,
+        scales.page_scale_elements, scales.layer_scale_offset,
+        g.q_heads, g.kv_heads, g.head_dim, seg.chunk_tokens, seg.chunks,
+        g.sliding_window, seg.partial_max, seg.partial_denom,
+        seg.partial_accum);
     CELEG_KERNEL_CHECK();
-    gqa_decode_segment_reduce_batch_kernel<<<rows * q_heads, threads, 0, stream>>>(
-        out, rows, q_heads, head_dim, chunks, partial_max, partial_denom,
-        partial_accum);
+    gqa_decode_segment_reduce_batch_kernel<<<args.rows * g.q_heads, threads, 0, args.stream>>>(
+        args.out, args.rows, g.q_heads, g.head_dim, seg.chunks,
+        seg.partial_max, seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_CHECK();
 }
