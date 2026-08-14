@@ -20,7 +20,6 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/detail/admission_controller.cpp
     src/backend/cpu/detail/request_lifecycle.cpp
     src/backend/cpu/detail/metrics_collector.cpp
-    src/backend/cpu/concurrent_metrics.cpp
     src/backend/cpu/kernels/quantized_dot.cpp
     src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
     src/backend/cpu/kernels/gguf.cpp

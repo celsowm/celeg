@@ -7,16 +7,16 @@
 namespace celeg {
 
 void CpuRequestLifecycle::cancel(const std::shared_ptr<Request>& request,
-                                  CpuConcurrentMetrics& metrics) {
+                                  ConcurrentMetrics& metrics) {
     if (!request || is_terminal(request->status)) return;
     request->status = RequestStatus::Cancelled;
     request->session.reset();
-    ++metrics.cancelled_requests;
+    ++metrics.cancelled;
 }
 
 void CpuRequestLifecycle::fail(const std::shared_ptr<Request>& request,
                                const std::string& error,
-                               CpuConcurrentMetrics& metrics) {
+                               ConcurrentMetrics& metrics) {
     if (!request || is_terminal(request->status)) return;
     if (request->cancel_requested) {
         cancel(request, metrics);
@@ -25,16 +25,16 @@ void CpuRequestLifecycle::fail(const std::shared_ptr<Request>& request,
     request->status = RequestStatus::Failed;
     request->error = error;
     request->session.reset();
-    ++metrics.failed_requests;
+    ++metrics.failed;
 }
 
 void CpuRequestLifecycle::observe_attention(
     const std::shared_ptr<Request>& request,
-    CpuConcurrentMetrics& metrics) {
+    CpuConcurrentMetricsExtras& extras) {
     if (!request || !request->session) return;
     const uint64_t current = request->session->diagnostics().attention_parallel_calls();
     if (current >= request->attention_parallel_observed) {
-        metrics.attention_parallel_calls +=
+        extras.attention_parallel_calls +=
             current - request->attention_parallel_observed;
     }
     request->attention_parallel_observed = current;
@@ -44,7 +44,8 @@ void CpuRequestLifecycle::apply_decode_token(
     const std::shared_ptr<Request>& request,
     int32_t token,
     std::chrono::steady_clock::time_point now,
-    CpuConcurrentMetrics& metrics) {
+    ConcurrentMetrics& metrics,
+    CpuConcurrentMetricsExtras& extras) {
     if (!request || request->status == RequestStatus::Cancelled) return;
     if (request->cancel_requested) {
         cancel(request, metrics);
@@ -62,20 +63,20 @@ void CpuRequestLifecycle::apply_decode_token(
         ++metrics.itl_samples;
     }
     request->last_token_at = now;
-    observe_attention(request, metrics);
+    observe_attention(request, extras);
     if (is_stop_token(request->options.eos_tokens, token) ||
         request->generated.size() >=
             static_cast<size_t>(request->options.max_new_tokens)) {
         request->status = RequestStatus::Finished;
         request->session.reset();
-        ++metrics.completed_requests;
+        ++metrics.completed;
     }
 }
 
 void CpuRequestLifecycle::apply_prefill(
     const std::shared_ptr<Request>& request,
     size_t consumed_tokens,
-    CpuConcurrentMetrics& metrics) {
+    ConcurrentMetrics& metrics) {
     if (!request || is_terminal(request->status)) return;
     if (request->cancel_requested) {
         cancel(request, metrics);

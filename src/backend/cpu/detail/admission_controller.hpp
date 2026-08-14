@@ -4,6 +4,7 @@
 #include "celeg/backend/cpu/numa_placement.hpp"
 #include "celeg/backend/cpu/prefix_cache.hpp"
 #include "celeg/detail/runtime/concurrency/batch_planner.hpp"
+#include "celeg/runtime/concurrency/metrics.hpp"
 #include "concurrent_request.hpp"
 
 #include <memory>
@@ -29,8 +30,8 @@ public:
     void admit(RequestMap& requests,
                const detail::BatchPlanner& planner,
                size_t maximum_active_requests,
-               CpuConcurrentMetrics& metrics);
-    void sync_prefix_metrics(CpuConcurrentMetrics& metrics) const;
+               ConcurrentMetrics& metrics);
+    void sync_prefix_metrics(ConcurrentMetrics& metrics) const;
 
 private:
     CpuModel& base_model_;
