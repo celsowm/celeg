@@ -10,7 +10,650 @@
 #include <stdexcept>
 #include <vector>
 
+// Host-driven single-token execution.
+//
+// `forward_token_host` (contiguous per-layer KV) and `forward_token_paged_host`
+// (physical page pool) used to be two ~300-400 line copies of the same per-layer
+// program.  They are now two entry points that differ only in their prologue,
+// their epilogue and one `TokenKvPolicy` value; everything between the operator
+// norm and the feed-forward block is executed once, here.
+//
+// The file is organized along the execution seams named in
+// docs/SOLID_REVIEW_BACKENDS.md §5.1:
+//
+//     layer iteration                 run_token_layers / run_token_layer
+//     mixer execution                 run_token_mixer + run_token_<mixer>
+//     attention capability selection  token_attention_plan
+//     KV access policy                store_and_attend_token_{contiguous,paged}
+//     feed-forward execution          run_mlp_decode (pre-existing)
+//     state transition                the entry points' epilogues
+//
+// Where the two KV policies genuinely diverge today, the divergence is an
+// explicit, commented `kv.paged()` branch rather than a duplicated function, so
+// the remaining capability gaps are visible instead of hidden in a second copy.
+
 namespace celeg {
+
+// ---------------------------------------------------------------------------
+// Layer iteration
+// ---------------------------------------------------------------------------
+
+void CudaCompiledModel::run_token_layers(const TokenKvPolicy& kv) {
+    // resources_.layers_ holds exactly one entry per hidden layer (see
+    // configure_layer_weights), so iterating the container and indexing the
+    // compiled program stay in step.
+    int layer_index = 0;
+    for (Layer& layer : resources_.layers_) {
+        run_token_layer(layer, layer_index, kv);
+        ++layer_index;
+    }
+}
+
+void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
+                                        const TokenKvPolicy& kv) {
+    LayerCommon& common_layer = common(layer);
+    const CompiledLayerProgram& semantics =
+        resources_.program_.layers.at(static_cast<size_t>(layer_index));
+
+    if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
+            cudaMemcpyDeviceToDevice, stream_.get()));
+    }
+    launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm,
+                   workspace_.normed_.data(), 1, resources_.program_.hidden,
+                   semantics.operator_norm.epsilon, stream_.get());
+
+    run_token_mixer(layer, common_layer, semantics, layer_index, kv);
+
+    if (common_layer.post_attention_norm) {
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
+                       workspace_.hidden_.data(), 1, resources_.program_.hidden,
+                       semantics.post_attention_norm.epsilon, stream_.get());
+    }
+    if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
+        !semantics.execute_feed_forward) {
+        launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
+                            resources_.program_.hidden, stream_.get());
+    }
+    if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_index);
+    if (std::binary_search(resources_.program_.norm_after_layers.begin(),
+                           resources_.program_.norm_after_layers.end(), layer_index)) {
+        launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
+                       workspace_.hidden_.data(), 1, resources_.program_.hidden,
+                       resources_.program_.final_norm.epsilon, stream_.get());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mixer execution
+// ---------------------------------------------------------------------------
+
+void CudaCompiledModel::run_token_mixer(Layer& layer, LayerCommon& common_layer,
+                                        const CompiledLayerProgram& semantics,
+                                        int layer_index, const TokenKvPolicy& kv) {
+    visit_layer(layer,
+      [&](AttentionLayer* attention) {
+        run_token_attention(*attention, common_layer, semantics, layer_index, kv);
+      },
+      [&](GatedDeltaNetLayer* gated_delta) {
+        run_token_gated_delta(*gated_delta, semantics);
+      },
+      [&](Mamba2Layer* mamba) {
+        run_token_mamba2(*mamba, semantics, kv);
+      },
+      [&](MlpOnlyLayer* mlp) {
+        run_token_mlp_only(*mlp);
+      },
+      [&](ConvolutionLayer* convolution) {
+        run_token_convolution(*convolution);
+      });
+}
+
+// ---------------------------------------------------------------------------
+// Attention capability selection
+// ---------------------------------------------------------------------------
+
+AttentionCapability CudaCompiledModel::token_attention_plan(
+    AttentionLayer& attention, const AttentionSpec& owner_layout,
+    const TokenKvPolicy& kv) {
+    AttentionRequest request;
+    request.kv_format = resources_.options_.kv_cache_mode;
+    request.operation = AttentionOperation::Decode;
+    request.layout = kv.kv_layout;
+    request.position_source = kv.position_source;
+    request.bias = attention.alibi_slopes.data()
+        ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
+    request.fast_attention = resources_.options_.fast_attention;
+    // Segmented decode exists only for device-counter launches.  The
+    // host-scalar contiguous path has no segmented (and no ALiBi) kernel, which
+    // the capability matrix records; asking for one there would be rejected by
+    // name rather than silently served by the unbiased kernel.
+    request.segmented_attention =
+        kv.paged() && use_segmented_attention(session_.position_);
+    request.head_dim = owner_layout.head_dim;
+    return require_attention_capability(request);
+}
+
+// ---------------------------------------------------------------------------
+// KV access policy
+// ---------------------------------------------------------------------------
+
+void CudaCompiledModel::store_and_attend_token_contiguous(
+    AttentionLayer& attention, AttentionLayer& owner, const AttentionCapability& plan,
+    __nv_bfloat16* q, __nv_bfloat16* k, __nv_bfloat16* v) {
+    const AttentionSpec& layout = attention.layout;
+    const AttentionSpec& owner_layout = owner.layout;
+    const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
+    if (int8_kv) {
+        launch_store_kv_int8(
+            k, v, owner.key_cache_int8.data(), owner.value_cache_int8.data(),
+            owner.key_cache_scales.data(), owner.value_cache_scales.data(),
+            session_.position_, owner_layout.key_value_heads, owner_layout.head_dim,
+            stream_.get());
+    } else {
+        launch_store_kv(k, v, owner.key_cache.data(), owner.value_cache.data(),
+                        session_.position_, owner_layout.key_value_width(), stream_.get());
+    }
+    switch (plan.algorithm) {
+    case AttentionAlgorithm::Online:
+        if (int8_kv) {
+            launch_gqa_decode_online_int8(
+                q, owner.key_cache_int8.data(), owner.value_cache_int8.data(),
+                owner.key_cache_scales.data(), owner.value_cache_scales.data(),
+                workspace_.op_output_.data(),
+                session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+        } else {
+            launch_gqa_decode_online(
+                q, owner.key_cache.data(), owner.value_cache.data(),
+                workspace_.op_output_.data(), session_.position_ + 1,
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+        }
+        break;
+    case AttentionAlgorithm::Strict:
+        if (int8_kv) {
+            launch_gqa_decode_strict_int8(
+                q, owner.key_cache_int8.data(), owner.value_cache_int8.data(),
+                owner.key_cache_scales.data(), owner.value_cache_scales.data(),
+                workspace_.op_output_.data(),
+                session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+        } else {
+            launch_gqa_decode_strict(
+                q, owner.key_cache.data(), owner.value_cache.data(),
+                workspace_.op_output_.data(), session_.position_ + 1,
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+        }
+        break;
+    case AttentionAlgorithm::Alibi:
+    case AttentionAlgorithm::Segmented:
+    case AttentionAlgorithm::Flash:
+    case AttentionAlgorithm::Gemm:
+        throw UnsupportedAttentionCapability(plan);
+    }
+}
+
+void CudaCompiledModel::store_and_attend_token_paged(
+    AttentionLayer& attention, const AttentionSpec& owner_layout,
+    const AttentionCapability& plan, int slot, __nv_bfloat16* q, __nv_bfloat16* k,
+    __nv_bfloat16* v, const TokenKvPolicy& kv) {
+    const AttentionSpec& layout = attention.layout;
+    PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
+    const uint32_t* device_page_table = kv.device_page_table;
+    const int page_table_stride = kv.page_table_stride;
+
+    if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+        launch_store_kv_int8_paged_batch(
+            k, v, paged_kv.key_int8(), paged_kv.value_int8(),
+            paged_kv.key_scales(), paged_kv.value_scales(),
+            device_page_table, page_table_stride, position_device_.data(),
+            1, slot, paged_kv.page_tokens(),
+            paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+            paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
+            owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
+        if (plan.algorithm == AttentionAlgorithm::Alibi) {
+            launch_gqa_decode_alibi_int8_paged_batch(
+                q, paged_kv.key_int8(), paged_kv.value_int8(),
+                paged_kv.key_scales(), paged_kv.value_scales(),
+                device_page_table, page_table_stride,
+                workspace_.op_output_.data(), position_device_.data(),
+                attention.alibi_slopes.data(), 1, slot,
+                paged_kv.page_tokens(), paged_kv.page_vector_elements(),
+                paged_kv.layer_vector_offset(slot),
+                paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
+        } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
+            const int chunks = (session_.position_ + 1 +
+                resources_.options_.attention_chunk_tokens - 1) /
+                resources_.options_.attention_chunk_tokens;
+            launch_gqa_decode_int8_paged_segmented_batch(
+                q, paged_kv.key_int8(), paged_kv.value_int8(),
+                paged_kv.key_scales(), paged_kv.value_scales(),
+                device_page_table, page_table_stride, workspace_.op_output_.data(),
+                position_device_.data(), 1, slot,
+                paged_kv.page_tokens(),
+                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+                paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
+                chunks, layout.sliding_window_size(), workspace_.attention_partial_max_.data(),
+                workspace_.attention_partial_denom_.data(),
+                workspace_.attention_partial_accum_.data(), stream_.get());
+        } else {
+            launch_gqa_decode_int8_paged_batch(
+                q, paged_kv.key_int8(), paged_kv.value_int8(),
+                paged_kv.key_scales(), paged_kv.value_scales(),
+                device_page_table, page_table_stride, workspace_.op_output_.data(),
+                position_device_.data(), 1, slot,
+                paged_kv.page_tokens(),
+                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+                paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(),
+                plan.algorithm == AttentionAlgorithm::Online,
+                stream_.get());
+        }
+    } else {
+        launch_store_kv_paged_batch(
+            k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
+            device_page_table, page_table_stride, position_device_.data(),
+            1, slot, paged_kv.page_tokens(),
+            paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+            owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
+        if (plan.algorithm == AttentionAlgorithm::Alibi) {
+            launch_gqa_decode_alibi_paged_batch(
+                q, paged_kv.key_bf16(), paged_kv.value_bf16(),
+                device_page_table, page_table_stride,
+                workspace_.op_output_.data(), position_device_.data(),
+                attention.alibi_slopes.data(), 1, slot,
+                paged_kv.page_tokens(), paged_kv.page_vector_elements(),
+                paged_kv.layer_vector_offset(slot), layout.query_heads,
+                owner_layout.key_value_heads, owner_layout.head_dim,
+                layout.sliding_window_size(), stream_.get());
+        } else if (plan.algorithm == AttentionAlgorithm::Segmented) {
+            const int chunks = (session_.position_ + 1 +
+                resources_.options_.attention_chunk_tokens - 1) /
+                resources_.options_.attention_chunk_tokens;
+            launch_gqa_decode_paged_segmented_batch(
+                q, paged_kv.key_bf16(), paged_kv.value_bf16(),
+                device_page_table, page_table_stride,
+                workspace_.op_output_.data(), position_device_.data(), 1, slot,
+                paged_kv.page_tokens(),
+                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
+                chunks, layout.sliding_window_size(), workspace_.attention_partial_max_.data(),
+                workspace_.attention_partial_denom_.data(),
+                workspace_.attention_partial_accum_.data(), stream_.get());
+        } else {
+            launch_gqa_decode_paged_batch(
+                q, paged_kv.key_bf16(), paged_kv.value_bf16(),
+                device_page_table, page_table_stride,
+                workspace_.op_output_.data(), position_device_.data(), 1, slot,
+                paged_kv.page_tokens(),
+                paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+                layout.query_heads, owner_layout.key_value_heads,
+                owner_layout.head_dim, layout.sliding_window_size(),
+                plan.algorithm == AttentionAlgorithm::Online,
+                stream_.get());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Attention
+// ---------------------------------------------------------------------------
+
+void CudaCompiledModel::run_token_latent_attention_paged(
+    AttentionLayer& attention, LayerCommon& common_layer,
+    const CompiledLayerProgram& semantics, int layer_index, const TokenKvPolicy& kv) {
+    const AttentionSpec& layout = attention.layout;
+    PhysicalPagedKvCache& paged_kv = *kv.paged_kv;
+    if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+        throw std::invalid_argument(
+            "CUDA latent attention requires BF16 paged state storage");
+    }
+    if (layout.output_gate.enabled() || layout.multi_axis_position()) {
+        throw std::invalid_argument(
+            "CUDA latent attention does not support query gates or M-RoPE yet");
+    }
+    const auto& latent = *layout.latent_state();
+    {
+    auto native_fanout = native_fanout_scope(
+        workspace_.normed_.data(), 1, resources_.program_.hidden);
+    linear(workspace_.normed_.data(), *attention.latent_query,
+           workspace_.latent_query_content_.data(), 1,
+           layout.latent_query_content_width(), resources_.program_.hidden);
+    if (layout.latent_query_rope_width() != 0) {
+        linear(workspace_.normed_.data(), *attention.latent_query_rope,
+               workspace_.latent_query_rope_.data(), 1,
+               layout.latent_query_rope_width(), resources_.program_.hidden);
+    }
+    if (attention.latent_key && attention.latent_value) {
+        linear(workspace_.normed_.data(), *attention.latent_key,
+               workspace_.latent_key_.data(), 1, latent.latent_rank,
+               resources_.program_.hidden);
+        linear(workspace_.normed_.data(), *attention.latent_value,
+               workspace_.latent_value_.data(), 1, latent.latent_rank,
+               resources_.program_.hidden);
+        if (attention.latent_key_rope && latent.decoupled_rope &&
+            latent.rope_head_dim != 0) {
+            linear(workspace_.normed_.data(), *attention.latent_key_rope,
+                   workspace_.latent_key_rope_.data(), 1,
+                   latent.rope_head_dim, resources_.program_.hidden);
+        }
+    }
+    }
+    if (const auto* rope = layout.rope_position();
+        rope && attention.latent_key_rope && latent.decoupled_rope &&
+        latent.rope_head_dim != 0) {
+        launch_dynamic_qk_norm_rope(
+            workspace_.latent_query_rope_.data(),
+            workspace_.latent_key_rope_.data(), nullptr, nullptr,
+            layout.query_heads, 1, latent.rope_head_dim,
+            session_.position_, static_cast<float>(rope->theta), 1.0f,
+            semantics.operator_norm.epsilon, false,
+            lower_cuda_rope_scaling(*rope), stream_.get());
+    }
+    const int cache_model_layer = attention.kv_owner_layer >= 0
+        ? attention.kv_owner_layer : layer_index;
+    const int slot = paged_kv.attention_slot(cache_model_layer);
+    if (slot < 0) throw std::logic_error("latent attention has no page slot");
+    AttentionLayer* owner = attention.kv_owner_layer >= 0
+        ? as_attention(resources_.layers_.at(static_cast<size_t>(cache_model_layer)))
+        : &attention;
+    if (!owner) throw std::logic_error("CUDA latent KV owner is not attention");
+    if (attention.latent_key && attention.latent_value) {
+        launch_store_latent_paged_batch(
+            workspace_.latent_key_.data(), workspace_.latent_value_.data(),
+            attention.latent_key_rope && latent.decoupled_rope &&
+                    latent.rope_head_dim != 0
+                ? workspace_.latent_key_rope_.data() : nullptr,
+            paged_kv.key_bf16(), paged_kv.value_bf16(), kv.device_page_table,
+            kv.page_table_stride, position_device_.data(), 1, slot,
+            paged_kv.page_tokens(), paged_kv.page_vector_elements(),
+            paged_kv.layer_vector_offset(slot), latent.latent_rank,
+            latent.decoupled_rope ? latent.rope_head_dim : 0, stream_.get());
+    }
+    const float score_scale = layout.query_scale;
+    launch_latent_attention_paged_batch(
+        workspace_.latent_query_content_.data(),
+        layout.latent_query_rope_width() != 0
+            ? workspace_.latent_query_rope_.data() : nullptr,
+        paged_kv.key_bf16(), paged_kv.value_bf16(),
+        workspace_.op_output_.data(), kv.device_page_table,
+        kv.page_table_stride, position_device_.data(),
+        attention.alibi_slopes.data(), 1, slot, paged_kv.page_tokens(),
+        paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
+        layout.query_heads, latent.latent_rank,
+        latent.decoupled_rope ? latent.rope_head_dim : 0,
+        score_scale, layout.sliding_window_size(), stream_.get());
+    linear(workspace_.op_output_.data(), *attention.out,
+           workspace_.hidden_.data(), 1, resources_.program_.hidden,
+           layout.latent_query_content_width(),
+           resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
+               semantics.execute_feed_forward ? 1.0f : 0.0f);
+    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
+                 semantics.residual.multiplier,
+                 stream_.get());
+}
+
+void CudaCompiledModel::run_token_attention(
+    AttentionLayer& attention, LayerCommon& common_layer,
+    const CompiledLayerProgram& semantics, int layer_index, const TokenKvPolicy& kv) {
+    const AttentionSpec& layout = attention.layout;
+
+    if (layout.uses_latent_state()) {
+        if (!kv.paged()) {
+            // Latent (MLA) attention was only ever implemented for the paged
+            // host path.  Latent layers never load AttentionLayer::query, so
+            // the contiguous host path used to dereference a null weight here
+            // instead of reporting the gap.  Reject it by name.
+            throw std::invalid_argument(
+                "CUDA latent attention is not implemented for contiguous host token "
+                "execution");
+        }
+        run_token_latent_attention_paged(attention, common_layer, semantics,
+                                         layer_index, kv);
+        return;
+    }
+
+    AttentionLayer* owner = &attention;
+    if (attention.kv_owner_layer >= 0) {
+        owner = as_attention(resources_.layers_.at(
+            static_cast<size_t>(attention.kv_owner_layer)));
+        if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
+    }
+    const AttentionSpec& owner_layout = owner->layout;
+
+    __nv_bfloat16* q = workspace_.qkv_output_.data();
+    const int query_projection_width = attention.query->rows;
+    const bool output_gate = layout.output_gate.enabled();
+    __nv_bfloat16* k = q + query_projection_width;
+    __nv_bfloat16* v = k + layout.key_value_width();
+    {
+    auto native_fanout = native_fanout_scope(
+        workspace_.normed_.data(), 1, resources_.program_.hidden);
+    linear(workspace_.normed_.data(), *attention.query, q,
+           1, query_projection_width, resources_.program_.hidden);
+    if (attention.key && attention.value) {
+        linear(workspace_.normed_.data(), *attention.key, k,
+               1, layout.key_value_width(), resources_.program_.hidden);
+        linear(workspace_.normed_.data(), *attention.value, v,
+               1, layout.key_value_width(), resources_.program_.hidden);
+    }
+    }
+
+    // Position encoding.  Two pre-existing asymmetries between the two KV
+    // policies are preserved here as explicit branches instead of being hidden
+    // in a second copy of the function:
+    //
+    //   * M-RoPE (multi-axis positions) is implemented only for the contiguous
+    //     host path; paged serving silently applies scalar RoPE to a multi-axis
+    //     layer today.
+    //   * QK-norm without RoPE is applied only on the paged path; the
+    //     contiguous path skips it.
+    //
+    // Both are capability gaps in the *other* path, not deliberate policy.
+    if (const auto* rope = layout.rope_position()) {
+        const auto* multi = kv.paged() ? nullptr : layout.multi_axis_position();
+        if (multi) {
+            const auto& position =
+                kv.rope_position ? *kv.rope_position : session_.next_rope_position_;
+            CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(), position.data(),
+                                       sizeof(position), cudaMemcpyHostToDevice,
+                                       stream_.get()));
+            launch_dynamic_mrope_qk_norm_rope(
+                q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
+                layout.query_heads, layout.key_value_heads, layout.head_dim,
+                mrope_position_device_.data(), multi->sections[0],
+                multi->sections[1], multi->sections[2], multi->interleaved,
+                static_cast<float>(rope->theta),
+                static_cast<float>(rope->rotary_fraction),
+                semantics.operator_norm.epsilon, layout.has_query_key_norm(),
+                lower_cuda_rope_scaling(*rope),
+                stream_.get());
+        } else {
+            launch_dynamic_qk_norm_rope(
+                q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
+                layout.query_heads, layout.key_value_heads, layout.head_dim,
+                session_.position_, static_cast<float>(rope->theta),
+                static_cast<float>(rope->rotary_fraction), semantics.operator_norm.epsilon,
+                layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
+        }
+    } else if (kv.paged() && layout.has_query_key_norm()) {
+        launch_dynamic_qk_norm_rope(
+            q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
+            layout.query_heads, layout.key_value_heads, layout.head_dim,
+            session_.position_, 1.0f, 0.0f, layout.query_norm.epsilon, true,
+            CudaRopeScaling{}, stream_.get());
+    }
+    launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
+
+    const AttentionCapability plan = token_attention_plan(attention, owner_layout, kv);
+    if (kv.paged()) {
+        const int cache_model_layer = attention.kv_owner_layer >= 0
+            ? attention.kv_owner_layer : layer_index;
+        const int slot = kv.paged_kv->attention_slot(cache_model_layer);
+        if (slot < 0) throw std::logic_error("attention layer has no page slot");
+        store_and_attend_token_paged(attention, owner_layout, plan, slot, q, k, v, kv);
+    } else {
+        store_and_attend_token_contiguous(attention, *owner, plan, q, k, v);
+    }
+
+    if (output_gate) {
+        const __nv_bfloat16* gate = q + layout.query_width();
+        if (!layout.output_gate.packed_with_query) {
+            linear(workspace_.normed_.data(), *attention.gate,
+                   workspace_.attention_gate_.data(), 1,
+                   layout.query_width(), resources_.program_.hidden);
+            gate = workspace_.attention_gate_.data();
+        }
+        launch_sigmoid_multiply(workspace_.op_output_.data(), gate,
+                                layout.query_width(), stream_.get());
+    }
+    linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
+           1, resources_.program_.hidden, layout.query_width(),
+           resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
+               semantics.execute_feed_forward ? 1.0f : 0.0f);
+    launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
+                 semantics.residual.multiplier, stream_.get());
+}
+
+// ---------------------------------------------------------------------------
+// Non-attention mixers.  These do not touch the KV cache, so the two host
+// token paths share them verbatim.
+// ---------------------------------------------------------------------------
+
+void CudaCompiledModel::run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
+                                              const CompiledLayerProgram& semantics) {
+    const GatedDeltaNetSpec& spec = gated_delta.spec;
+    const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
+        spec.value_heads * spec.value_head_dim;
+    const int value_width = spec.value_heads * spec.value_head_dim;
+    if (spec.factorized_projections) {
+        linear(workspace_.normed_.data(), *gated_delta.q,
+               workspace_.gated_delta_qkv_.data(), 1,
+               spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
+        linear(workspace_.normed_.data(), *gated_delta.k,
+               workspace_.qkv_output_.data(), 1,
+               spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
+        linear(workspace_.normed_.data(), *gated_delta.v,
+               workspace_.gated_delta_output_.data(), 1, value_width,
+               resources_.program_.hidden);
+        launch_interleave_gated_delta_qkv(
+            workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
+            workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
+            1, spec.key_heads * spec.key_head_dim, value_width, stream_.get());
+    } else {
+        linear(workspace_.normed_.data(), *gated_delta.qkv,
+               workspace_.gated_delta_qkv_.data(), 1, qkv_width,
+               resources_.program_.hidden);
+    }
+    linear(workspace_.normed_.data(), *gated_delta.z,
+           workspace_.gated_delta_z_.data(), 1, value_width,
+           resources_.program_.hidden);
+    linear(workspace_.normed_.data(), *gated_delta.b,
+           workspace_.gated_delta_b_.data(), 1, spec.value_heads,
+           resources_.program_.hidden);
+    linear(workspace_.normed_.data(), *gated_delta.a,
+           workspace_.gated_delta_a_.data(), 1, spec.decay_width(),
+           resources_.program_.hidden);
+    launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
+        workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
+        workspace_.gated_delta_a_.data(), gated_delta.conv_weight,
+        gated_delta.dt_bias, gated_delta.a_log, gated_delta.norm,
+        gated_delta.conv_state.data(), gated_delta.recurrent_state.data(),
+        workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
+        spec.key_head_dim, spec.value_head_dim, spec.key_heads,
+        spec.value_heads, semantics.operator_norm.epsilon,
+        spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
+        spec.sigmoid_output_gate, stream_.get());
+    linear(workspace_.gated_delta_output_.data(), *gated_delta.out,
+           workspace_.hidden_.data(), 1, resources_.program_.hidden,
+           value_width);
+}
+
+void CudaCompiledModel::run_token_mamba2(Mamba2Layer& mamba,
+                                         const CompiledLayerProgram& semantics,
+                                         const TokenKvPolicy& kv) {
+    const Mamba2Spec& spec = mamba.spec;
+    linear(workspace_.normed_.data(), *mamba.in,
+           workspace_.mamba_projected_.data(), 1,
+           2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
+               spec.num_heads, resources_.program_.hidden);
+    launch_mamba2_step(workspace_.mamba_projected_.data(), mamba.conv_weight,
+                       mamba.conv_bias, mamba.dt_bias, mamba.a_log, mamba.d,
+                       mamba.conv_state.data(), mamba.ssm_state.data(),
+                       workspace_.mamba_inner_.data(), spec.intermediate_size,
+                       spec.state_size, spec.num_heads, spec.head_dim,
+                       spec.group_count, spec.conv_kernel, stream_.get());
+    // NOTE: pre-existing divergence, preserved bit-for-bit.  The contiguous
+    // host path normalizes the Mamba2 inner state with the *post-attention*
+    // norm epsilon while the paged host path, batched prefill and the
+    // graph-capturable decode path all use the operator-norm epsilon.  Only one
+    // of these can be right; fixing it is a numerical change and therefore out
+    // of scope for this structural refactor.
+    const float epsilon = kv.paged() ? semantics.operator_norm.epsilon
+                                     : semantics.post_attention_norm.epsilon;
+    launch_rmsnorm(workspace_.mamba_inner_.data(), mamba.norm,
+                   workspace_.op_output_.data(), 1, spec.intermediate_size,
+                   epsilon, stream_.get());
+    launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
+                    spec.intermediate_size, stream_.get());
+    linear(workspace_.op_output_.data(), *mamba.out, workspace_.hidden_.data(),
+           1, resources_.program_.hidden, spec.intermediate_size);
+}
+
+void CudaCompiledModel::run_token_mlp_only(MlpOnlyLayer& mlp) {
+    linear(workspace_.normed_.data(), *mlp.up, workspace_.gate_up_.data(),
+           1, mlp.spec.intermediate_size, resources_.program_.hidden);
+    launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
+                 mlp.spec.intermediate_size, stream_.get());
+    linear(workspace_.activated_.data(), *mlp.down, workspace_.hidden_.data(),
+           1, resources_.program_.hidden, mlp.spec.intermediate_size);
+}
+
+void CudaCompiledModel::run_token_convolution(ConvolutionLayer& convolution) {
+    linear(workspace_.normed_.data(), *convolution.conv_in,
+           workspace_.conv_projected_.data(),
+           1, 3 * resources_.program_.hidden, resources_.program_.hidden);
+    launch_conv_decode(
+        workspace_.conv_projected_.data(), convolution.conv_weight,
+        convolution.conv_state.data(), workspace_.op_output_.data(),
+        resources_.program_.hidden, resources_.shape_.conv_cache, session_.position_,
+        stream_.get());
+    linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(),
+           1, resources_.program_.hidden, resources_.program_.hidden,
+           resources_.options_.fused_residuals ? 1.0f : 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Logits
+// ---------------------------------------------------------------------------
+
+void CudaCompiledModel::run_token_logits() {
+    launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
+                   1, resources_.program_.hidden, resources_.program_.final_norm.epsilon,
+                   stream_.get());
+    linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
+           1, resources_.dims_.vocab_size, resources_.program_.hidden);
+    launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
+                 resources_.program_.logits_multiplier /
+                     resources_.program_.logits_divisor, stream_.get());
+    if (resources_.program_.final_logit_softcap > 0.0f) {
+        launch_tanh_softcap(workspace_.logits_.data(), resources_.dims_.vocab_size,
+                            resources_.program_.final_logit_softcap, stream_.get());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry points: prologue, shared layer program, epilogue
+// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                                            const float* raw_embedding,
@@ -41,276 +684,17 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         initialize_per_layer_input_host(token);
     }
 
-    int layer_idx = 0;
-    for (Layer& layer : resources_.layers_) {
-        LayerCommon& common_layer = common(layer);
-        const CompiledLayerProgram& semantics = resources_.program_.layers.at(static_cast<size_t>(layer_idx));
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
-            CELEG_CUDA(cudaMemcpyAsync(
-                workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
-                cudaMemcpyDeviceToDevice, stream_.get()));
-        }
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
-                       1, resources_.program_.hidden, semantics.operator_norm.epsilon,
-                       stream_.get());
-        visit_layer(layer,
-          [&](AttentionLayer* attention) {
-            const AttentionSpec& layout = attention->layout;
-            AttentionLayer* owner = attention;
-            if (attention->kv_owner_layer >= 0) {
-                owner = as_attention(resources_.layers_.at(
-                    static_cast<size_t>(attention->kv_owner_layer)));
-                if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
-            }
-            __nv_bfloat16* q = workspace_.qkv_output_.data();
-            const int query_projection_width = attention->query->rows;
-            const bool output_gate = layout.output_gate.enabled();
-            __nv_bfloat16* k = q + query_projection_width;
-            __nv_bfloat16* v = k + layout.key_value_width();
-            {
-            auto native_fanout = native_fanout_scope(
-                workspace_.normed_.data(), 1, resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *attention->query, q,
-                   1, query_projection_width, resources_.program_.hidden);
-            if (attention->key && attention->value) {
-                linear(workspace_.normed_.data(), *attention->key, k,
-                       1, layout.key_value_width(), resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *attention->value, v,
-                       1, layout.key_value_width(), resources_.program_.hidden);
-            }
-            }
-            if (const auto* rope = layout.rope_position()) {
-                if (const auto* multi = layout.multi_axis_position()) {
-                    const auto& position = rope_position ? *rope_position : session_.next_rope_position_;
-                    CELEG_CUDA(cudaMemcpyAsync(mrope_position_device_.data(), position.data(),
-                                               sizeof(position), cudaMemcpyHostToDevice, stream_.get()));
-                    launch_dynamic_mrope_qk_norm_rope(
-                        q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                        layout.query_heads, layout.key_value_heads, layout.head_dim,
-                        mrope_position_device_.data(), multi->sections[0],
-                        multi->sections[1], multi->sections[2], multi->interleaved,
-                        static_cast<float>(rope->theta),
-                        static_cast<float>(rope->rotary_fraction),
-                        semantics.operator_norm.epsilon, layout.has_query_key_norm(),
-                        lower_cuda_rope_scaling(*rope),
-                        stream_.get());
-                } else {
-                    launch_dynamic_qk_norm_rope(
-                        q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                        layout.query_heads, layout.key_value_heads, layout.head_dim,
-                        session_.position_, static_cast<float>(rope->theta),
-                        static_cast<float>(rope->rotary_fraction), semantics.operator_norm.epsilon,
-                        layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
-                }
-            }
-            launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
-            const AttentionSpec& owner_layout = owner->layout;
-            // Host-scalar contiguous decode.  The capability policy records that
-            // this path has no ALiBi and no segmented kernel, so a model that
-            // needs either is rejected here instead of silently running the
-            // unbiased kernel.
-            AttentionRequest attention_request;
-            attention_request.kv_format = resources_.options_.kv_cache_mode;
-            attention_request.operation = AttentionOperation::Decode;
-            attention_request.layout = AttentionKvLayout::Contiguous;
-            attention_request.position_source = AttentionPositionSource::HostScalar;
-            attention_request.bias = attention->alibi_slopes.data()
-                ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-            attention_request.fast_attention = resources_.options_.fast_attention;
-            attention_request.head_dim = owner_layout.head_dim;
-            const AttentionCapability attention_plan =
-                require_attention_capability(attention_request);
-            const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
-            if (int8_kv) {
-                launch_store_kv_int8(
-                    k, v, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                    owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                    session_.position_, owner_layout.key_value_heads, owner_layout.head_dim,
-                    stream_.get());
-            } else {
-                launch_store_kv(k, v, owner->key_cache.data(), owner->value_cache.data(),
-                                session_.position_, owner_layout.key_value_width(), stream_.get());
-            }
-            switch (attention_plan.algorithm) {
-            case AttentionAlgorithm::Online:
-                if (int8_kv) {
-                    launch_gqa_decode_online_int8(
-                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                        workspace_.op_output_.data(),
-                        session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                } else {
-                    launch_gqa_decode_online(
-                        q, owner->key_cache.data(), owner->value_cache.data(),
-                        workspace_.op_output_.data(), session_.position_ + 1,
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                }
-                break;
-            case AttentionAlgorithm::Strict:
-                if (int8_kv) {
-                    launch_gqa_decode_strict_int8(
-                        q, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
-                        workspace_.op_output_.data(),
-                        session_.position_ + 1, layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                } else {
-                    launch_gqa_decode_strict(
-                        q, owner->key_cache.data(), owner->value_cache.data(),
-                        workspace_.op_output_.data(), session_.position_ + 1,
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                }
-                break;
-            case AttentionAlgorithm::Alibi:
-            case AttentionAlgorithm::Segmented:
-            case AttentionAlgorithm::Flash:
-            case AttentionAlgorithm::Gemm:
-                throw UnsupportedAttentionCapability(attention_plan);
-            }
-            if (output_gate) {
-                const __nv_bfloat16* gate = q + layout.query_width();
-                if (!layout.output_gate.packed_with_query) {
-                    linear(workspace_.normed_.data(), *attention->gate,
-                           workspace_.attention_gate_.data(), 1,
-                           layout.query_width(), resources_.program_.hidden);
-                    gate = workspace_.attention_gate_.data();
-                }
-                launch_sigmoid_multiply(workspace_.op_output_.data(),
-                                        gate,
-                                        layout.query_width(), stream_.get());
-            }
-            linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
-                   1, resources_.program_.hidden, layout.query_width(),
-                   resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                       semantics.execute_feed_forward ? 1.0f : 0.0f);
-            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden, semantics.residual.multiplier,
-                         stream_.get());
-          },
-          [&](GatedDeltaNetLayer* gated_delta) {
-            const GatedDeltaNetSpec& spec = gated_delta->spec;
-            const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
-                spec.value_heads * spec.value_head_dim;
-            const int value_width = spec.value_heads * spec.value_head_dim;
-            if (spec.factorized_projections) {
-                linear(workspace_.normed_.data(), *gated_delta->q,
-                       workspace_.gated_delta_qkv_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *gated_delta->k,
-                       workspace_.qkv_output_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *gated_delta->v,
-                       workspace_.gated_delta_output_.data(), 1, value_width,
-                       resources_.program_.hidden);
-                launch_interleave_gated_delta_qkv(
-                    workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
-                    workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
-                    1, spec.key_heads * spec.key_head_dim, value_width, stream_.get());
-            } else {
-                linear(workspace_.normed_.data(), *gated_delta->qkv,
-                       workspace_.gated_delta_qkv_.data(), 1, qkv_width,
-                       resources_.program_.hidden);
-            }
-            linear(workspace_.normed_.data(), *gated_delta->z,
-                   workspace_.gated_delta_z_.data(), 1, value_width,
-                   resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *gated_delta->b,
-                   workspace_.gated_delta_b_.data(), 1, spec.value_heads,
-                   resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *gated_delta->a,
-                   workspace_.gated_delta_a_.data(), 1, spec.decay_width(),
-                   resources_.program_.hidden);
-            launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
-                workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
-                workspace_.gated_delta_a_.data(), gated_delta->conv_weight,
-                gated_delta->dt_bias, gated_delta->a_log, gated_delta->norm,
-                gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
-                workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
-                spec.key_head_dim, spec.value_head_dim, spec.key_heads,
-                spec.value_heads, semantics.operator_norm.epsilon,
-                spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
-                spec.sigmoid_output_gate, stream_.get());
-            linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
-                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                   value_width);
-          },
-          [&](Mamba2Layer* mamba) {
-            const Mamba2Spec& spec = mamba->spec;
-            linear(workspace_.normed_.data(), *mamba->in,
-                   workspace_.mamba_projected_.data(), 1,
-                   2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
-                       spec.num_heads, resources_.program_.hidden);
-            launch_mamba2_step(workspace_.mamba_projected_.data(), mamba->conv_weight,
-                                mamba->conv_bias, mamba->dt_bias, mamba->a_log, mamba->d,
-                                mamba->conv_state.data(), mamba->ssm_state.data(),
-                                workspace_.mamba_inner_.data(), spec.intermediate_size,
-                                spec.state_size, spec.num_heads, spec.head_dim,
-                                spec.group_count, spec.conv_kernel, stream_.get());
-            launch_rmsnorm(workspace_.mamba_inner_.data(), mamba->norm,
-                           workspace_.op_output_.data(), 1, spec.intermediate_size,
-                           semantics.post_attention_norm.epsilon, stream_.get());
-            launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
-                            spec.intermediate_size, stream_.get());
-            linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),
-                   1, resources_.program_.hidden, spec.intermediate_size);
-          },
-          [&](MlpOnlyLayer* mlp) {
-            linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(),
-                   1, mlp->spec.intermediate_size, resources_.program_.hidden);
-            launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
-                         mlp->spec.intermediate_size, stream_.get());
-            linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(),
-                   1, resources_.program_.hidden, mlp->spec.intermediate_size);
-          },
-          [&](ConvolutionLayer* convolution) {
-            linear(workspace_.normed_.data(), *convolution->conv_in, workspace_.conv_projected_.data(),
-                   1, 3 * resources_.program_.hidden, resources_.program_.hidden);
-            launch_conv_decode(
-                workspace_.conv_projected_.data(), convolution->conv_weight,
-                convolution->conv_state.data(), workspace_.op_output_.data(),
-                resources_.program_.hidden, resources_.shape_.conv_cache, session_.position_,
-                stream_.get());
-            linear(workspace_.op_output_.data(), *convolution->conv_out, workspace_.hidden_.data(),
-                   1, resources_.program_.hidden, resources_.program_.hidden,
-                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
-          });
-        if (common_layer.post_attention_norm) {
-            launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
-                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           semantics.post_attention_norm.epsilon, stream_.get());
-        }
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
-            !semantics.execute_feed_forward) {
-            launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                                resources_.program_.hidden, stream_.get());
-        }
-        if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_idx);
-        if (std::binary_search(resources_.program_.norm_after_layers.begin(),
-                               resources_.program_.norm_after_layers.end(), layer_idx)) {
-            launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
-                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           resources_.program_.final_norm.epsilon, stream_.get());
-        }
-        ++layer_idx;
-    }
+    TokenKvPolicy kv;
+    kv.kv_layout = AttentionKvLayout::Contiguous;
+    kv.position_source = AttentionPositionSource::HostScalar;
+    kv.rope_position = rope_position;
+    run_token_layers(kv);
+
     if (resources_.mtp_.available()) {
         run_mtp_forward(token, rope_position);
     }
     if (compute_logits) {
-        launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
-                        1, resources_.program_.hidden, resources_.program_.final_norm.epsilon,
-                        stream_.get());
-        linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
-                1, resources_.dims_.vocab_size, resources_.program_.hidden);
-    launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
-                 resources_.program_.logits_multiplier /
-                     resources_.program_.logits_divisor, stream_.get());
-        if (resources_.program_.final_logit_softcap > 0.0f) {
-            launch_tanh_softcap(workspace_.logits_.data(), resources_.dims_.vocab_size,
-                                resources_.program_.final_logit_softcap, stream_.get());
-        }
+        run_token_logits();
         finalize_mtp_verification();
     }
     ++session_.position_;
@@ -335,398 +719,24 @@ void CudaCompiledModel::forward_token_paged_host(
         token, workspace_.hidden_.data(), resources_.program_.hidden, stream_.get());
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  resources_.program_.embedding_transform.multiplier, stream_.get());
+    // NOTE: pre-existing divergence, preserved bit-for-bit.  Unlike the
+    // contiguous path, paged serving does not apply
+    // `embedding_transform.post_norm` here.
     initialize_per_layer_input_host(token);
 
-    for (int layer_index = 0; layer_index < resources_.shape_.num_hidden_layers; ++layer_index) {
-        Layer& layer = resources_.layers_[static_cast<size_t>(layer_index)];
-        LayerCommon& common_layer = common(layer);
-        const CompiledLayerProgram& semantics = resources_.program_.layers.at(static_cast<size_t>(layer_index));
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
-            CELEG_CUDA(cudaMemcpyAsync(workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
-                                     cudaMemcpyDeviceToDevice, stream_.get()));
-        }
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
-                       1, resources_.program_.hidden, semantics.operator_norm.epsilon, stream_.get());
-        visit_layer(layer,
-          [&](AttentionLayer* attention) {
-            const AttentionSpec& layout = attention->layout;
-            if (layout.uses_latent_state()) {
-                if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                    throw std::invalid_argument(
-                        "CUDA latent attention requires BF16 paged state storage");
-                }
-                if (layout.output_gate.enabled() || layout.multi_axis_position()) {
-                    throw std::invalid_argument(
-                        "CUDA latent attention does not support query gates or M-RoPE yet");
-                }
-                const auto& latent = *layout.latent_state();
-                auto native_fanout = native_fanout_scope(
-                    workspace_.normed_.data(), 1, resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *attention->latent_query,
-                       workspace_.latent_query_content_.data(), 1,
-                       layout.latent_query_content_width(), resources_.program_.hidden);
-                if (layout.latent_query_rope_width() != 0) {
-                    linear(workspace_.normed_.data(), *attention->latent_query_rope,
-                           workspace_.latent_query_rope_.data(), 1,
-                           layout.latent_query_rope_width(), resources_.program_.hidden);
-                }
-                if (attention->latent_key && attention->latent_value) {
-                    linear(workspace_.normed_.data(), *attention->latent_key,
-                           workspace_.latent_key_.data(), 1, latent.latent_rank,
-                           resources_.program_.hidden);
-                    linear(workspace_.normed_.data(), *attention->latent_value,
-                           workspace_.latent_value_.data(), 1, latent.latent_rank,
-                           resources_.program_.hidden);
-                    if (attention->latent_key_rope && latent.decoupled_rope &&
-                        latent.rope_head_dim != 0) {
-                        linear(workspace_.normed_.data(), *attention->latent_key_rope,
-                               workspace_.latent_key_rope_.data(), 1,
-                               latent.rope_head_dim, resources_.program_.hidden);
-                    }
-                }
-                if (const auto* rope = layout.rope_position();
-                    rope && attention->latent_key_rope && latent.decoupled_rope &&
-                    latent.rope_head_dim != 0) {
-                    launch_dynamic_qk_norm_rope(
-                        workspace_.latent_query_rope_.data(),
-                        workspace_.latent_key_rope_.data(), nullptr, nullptr,
-                        layout.query_heads, 1, latent.rope_head_dim,
-                        session_.position_, static_cast<float>(rope->theta), 1.0f,
-                        semantics.operator_norm.epsilon, false,
-                        lower_cuda_rope_scaling(*rope), stream_.get());
-                }
-                const int cache_model_layer = attention->kv_owner_layer >= 0
-                    ? attention->kv_owner_layer : layer_index;
-                const int slot = paged_kv.attention_slot(cache_model_layer);
-                if (slot < 0) throw std::logic_error("latent attention has no page slot");
-                AttentionLayer* owner = attention->kv_owner_layer >= 0
-                    ? as_attention(resources_.layers_.at(static_cast<size_t>(cache_model_layer)))
-                    : attention;
-                if (!owner) throw std::logic_error("CUDA latent KV owner is not attention");
-                if (attention->latent_key && attention->latent_value) {
-                    launch_store_latent_paged_batch(
-                        workspace_.latent_key_.data(), workspace_.latent_value_.data(),
-                        attention->latent_key_rope && latent.decoupled_rope &&
-                                latent.rope_head_dim != 0
-                            ? workspace_.latent_key_rope_.data() : nullptr,
-                        paged_kv.key_bf16(), paged_kv.value_bf16(), device_page_table,
-                        page_table_stride, position_device_.data(), 1, slot,
-                        paged_kv.page_tokens(), paged_kv.page_vector_elements(),
-                        paged_kv.layer_vector_offset(slot), latent.latent_rank,
-                        latent.decoupled_rope ? latent.rope_head_dim : 0, stream_.get());
-                }
-                const float score_scale = layout.query_scale;
-                launch_latent_attention_paged_batch(
-                    workspace_.latent_query_content_.data(),
-                    layout.latent_query_rope_width() != 0
-                        ? workspace_.latent_query_rope_.data() : nullptr,
-                    paged_kv.key_bf16(), paged_kv.value_bf16(),
-                    workspace_.op_output_.data(), device_page_table,
-                    page_table_stride, position_device_.data(),
-                    attention->alibi_slopes.data(), 1, slot, paged_kv.page_tokens(),
-                    paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                    layout.query_heads, latent.latent_rank,
-                    latent.decoupled_rope ? latent.rope_head_dim : 0,
-                    score_scale, layout.sliding_window_size(), stream_.get());
-                linear(workspace_.op_output_.data(), *attention->out,
-                       workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                       layout.latent_query_content_width(),
-                       resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                           semantics.execute_feed_forward ? 1.0f : 0.0f);
-                launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
-                             semantics.residual.multiplier,
-                             stream_.get());
-            } else {
-            __nv_bfloat16* q = workspace_.qkv_output_.data();
-            const int query_projection_width = attention->query->rows;
-            const bool output_gate = layout.output_gate.enabled();
-            __nv_bfloat16* k = q + query_projection_width;
-            __nv_bfloat16* v = k + layout.key_value_width();
-            {
-            auto native_fanout = native_fanout_scope(
-                workspace_.normed_.data(), 1, resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *attention->query, q, 1,
-                   query_projection_width, resources_.program_.hidden);
-            if (attention->key && attention->value) {
-                linear(workspace_.normed_.data(), *attention->key, k, 1,
-                       layout.key_value_width(), resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *attention->value, v, 1,
-                       layout.key_value_width(), resources_.program_.hidden);
-            }
-            }
-            if (const auto* rope = layout.rope_position()) {
-                launch_dynamic_qk_norm_rope(
-                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                    layout.query_heads, layout.key_value_heads, layout.head_dim,
-                    session_.position_, static_cast<float>(rope->theta),
-                    static_cast<float>(rope->rotary_fraction), semantics.operator_norm.epsilon,
-                    layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
-            } else if (layout.has_query_key_norm()) {
-                launch_dynamic_qk_norm_rope(
-                    q, attention->key ? k : nullptr, attention->q_norm, attention->k_norm,
-                    layout.query_heads, layout.key_value_heads, layout.head_dim,
-                    session_.position_, 1.0f, 0.0f, layout.query_norm.epsilon, true,
-                    CudaRopeScaling{}, stream_.get());
-            }
-            launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
-            const int cache_model_layer = attention->kv_owner_layer >= 0
-                ? attention->kv_owner_layer : layer_index;
-            const int slot = paged_kv.attention_slot(cache_model_layer);
-            if (slot < 0) throw std::logic_error("attention layer has no page slot");
-            AttentionLayer* owner = attention->kv_owner_layer >= 0
-                ? as_attention(resources_.layers_.at(static_cast<size_t>(cache_model_layer)))
-                : attention;
-            if (!owner) throw std::logic_error("CUDA shared KV owner is not attention");
-            const AttentionSpec& owner_layout = owner->layout;
-            AttentionRequest attention_request;
-            attention_request.kv_format = resources_.options_.kv_cache_mode;
-            attention_request.operation = AttentionOperation::Decode;
-            attention_request.layout = AttentionKvLayout::Paged;
-            attention_request.position_source = AttentionPositionSource::DeviceCounter;
-            attention_request.bias = attention->alibi_slopes.data()
-                ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
-            attention_request.fast_attention = resources_.options_.fast_attention;
-            attention_request.segmented_attention = use_segmented_attention(session_.position_);
-            attention_request.head_dim = owner_layout.head_dim;
-            const AttentionCapability attention_plan =
-                require_attention_capability(attention_request);
-            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                launch_store_kv_int8_paged_batch(
-                    k, v, paged_kv.key_int8(), paged_kv.value_int8(),
-                    paged_kv.key_scales(), paged_kv.value_scales(),
-                    device_page_table, page_table_stride, position_device_.data(),
-                    1, slot, paged_kv.page_tokens(),
-                    paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                    paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                    owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-                if (attention_plan.algorithm == AttentionAlgorithm::Alibi) {
-                    launch_gqa_decode_alibi_int8_paged_batch(
-                        q, paged_kv.key_int8(), paged_kv.value_int8(),
-                        paged_kv.key_scales(), paged_kv.value_scales(),
-                        device_page_table, page_table_stride,
-                        workspace_.op_output_.data(), position_device_.data(),
-                        attention->alibi_slopes.data(), 1, slot,
-                        paged_kv.page_tokens(), paged_kv.page_vector_elements(),
-                        paged_kv.layer_vector_offset(slot),
-                        paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(), stream_.get());
-                } else if (attention_plan.algorithm == AttentionAlgorithm::Segmented) {
-                    const int chunks = (session_.position_ + 1 +
-                        resources_.options_.attention_chunk_tokens - 1) /
-                        resources_.options_.attention_chunk_tokens;
-                    launch_gqa_decode_int8_paged_segmented_batch(
-                        q, paged_kv.key_int8(), paged_kv.value_int8(),
-                        paged_kv.key_scales(), paged_kv.value_scales(),
-                        device_page_table, page_table_stride, workspace_.op_output_.data(),
-                        position_device_.data(), 1, slot,
-                        paged_kv.page_tokens(),
-                        paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                        paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
-                        chunks, layout.sliding_window_size(), workspace_.attention_partial_max_.data(),
-                        workspace_.attention_partial_denom_.data(),
-                        workspace_.attention_partial_accum_.data(), stream_.get());
-                } else {
-                    launch_gqa_decode_int8_paged_batch(
-                        q, paged_kv.key_int8(), paged_kv.value_int8(),
-                        paged_kv.key_scales(), paged_kv.value_scales(),
-                        device_page_table, page_table_stride, workspace_.op_output_.data(),
-                        position_device_.data(), 1, slot,
-                        paged_kv.page_tokens(),
-                        paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                        paged_kv.page_scale_elements(), paged_kv.layer_scale_offset(slot),
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(),
-                        attention_plan.algorithm == AttentionAlgorithm::Online,
-                        stream_.get());
-                }
-            } else {
-                launch_store_kv_paged_batch(
-                    k, v, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                    device_page_table, page_table_stride, position_device_.data(),
-                    1, slot, paged_kv.page_tokens(),
-                    paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                    owner_layout.key_value_heads, owner_layout.head_dim, stream_.get());
-                if (attention_plan.algorithm == AttentionAlgorithm::Alibi) {
-                    launch_gqa_decode_alibi_paged_batch(
-                        q, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                        device_page_table, page_table_stride,
-                        workspace_.op_output_.data(), position_device_.data(),
-                        attention->alibi_slopes.data(), 1, slot,
-                        paged_kv.page_tokens(), paged_kv.page_vector_elements(),
-                        paged_kv.layer_vector_offset(slot), layout.query_heads,
-                        owner_layout.key_value_heads, owner_layout.head_dim,
-                        layout.sliding_window_size(), stream_.get());
-                } else if (attention_plan.algorithm == AttentionAlgorithm::Segmented) {
-                    const int chunks = (session_.position_ + 1 +
-                        resources_.options_.attention_chunk_tokens - 1) /
-                        resources_.options_.attention_chunk_tokens;
-                    launch_gqa_decode_paged_segmented_batch(
-                        q, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                        device_page_table, page_table_stride,
-                        workspace_.op_output_.data(), position_device_.data(), 1, slot,
-                        paged_kv.page_tokens(),
-                        paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, resources_.options_.attention_chunk_tokens,
-                        chunks, layout.sliding_window_size(), workspace_.attention_partial_max_.data(),
-                        workspace_.attention_partial_denom_.data(),
-                        workspace_.attention_partial_accum_.data(), stream_.get());
-                } else {
-                    launch_gqa_decode_paged_batch(
-                        q, paged_kv.key_bf16(), paged_kv.value_bf16(),
-                        device_page_table, page_table_stride,
-                        workspace_.op_output_.data(), position_device_.data(), 1, slot,
-                        paged_kv.page_tokens(),
-                        paged_kv.page_vector_elements(), paged_kv.layer_vector_offset(slot),
-                        layout.query_heads, owner_layout.key_value_heads,
-                        owner_layout.head_dim, layout.sliding_window_size(),
-                        attention_plan.algorithm == AttentionAlgorithm::Online,
-                        stream_.get());
-                }
-            }
-            if (output_gate) {
-                const __nv_bfloat16* gate = q + layout.query_width();
-                if (!layout.output_gate.packed_with_query) {
-                    linear(workspace_.normed_.data(), *attention->gate,
-                           workspace_.attention_gate_.data(), 1,
-                           layout.query_width(), resources_.program_.hidden);
-                    gate = workspace_.attention_gate_.data();
-                }
-                launch_sigmoid_multiply(workspace_.op_output_.data(),
-                                        layout.output_gate.packed_with_query ? gate : workspace_.attention_gate_.data(),
-                                        layout.query_width(), stream_.get());
-            }
-            linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(), 1,
-                   resources_.program_.hidden, layout.query_width(),
-                   resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                       semantics.execute_feed_forward ? 1.0f : 0.0f);
-            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
-                         semantics.residual.multiplier, stream_.get());
-            }
-          },
-          [&](GatedDeltaNetLayer* gated_delta) {
-            const GatedDeltaNetSpec& spec = gated_delta->spec;
-            const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
-                spec.value_heads * spec.value_head_dim;
-            const int value_width = spec.value_heads * spec.value_head_dim;
-            if (spec.factorized_projections) {
-                linear(workspace_.normed_.data(), *gated_delta->q,
-                       workspace_.gated_delta_qkv_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *gated_delta->k,
-                       workspace_.qkv_output_.data(), 1,
-                       spec.key_heads * spec.key_head_dim, resources_.program_.hidden);
-                linear(workspace_.normed_.data(), *gated_delta->v,
-                       workspace_.gated_delta_output_.data(), 1, value_width,
-                       resources_.program_.hidden);
-                launch_interleave_gated_delta_qkv(
-                    workspace_.gated_delta_qkv_.data(), workspace_.qkv_output_.data(),
-                    workspace_.gated_delta_output_.data(), workspace_.gated_delta_qkv_.data(),
-                    1, spec.key_heads * spec.key_head_dim, value_width, stream_.get());
-            } else {
-                linear(workspace_.normed_.data(), *gated_delta->qkv,
-                       workspace_.gated_delta_qkv_.data(), 1, qkv_width,
-                       resources_.program_.hidden);
-            }
-            linear(workspace_.normed_.data(), *gated_delta->z,
-                   workspace_.gated_delta_z_.data(), 1, value_width,
-                   resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *gated_delta->b,
-                   workspace_.gated_delta_b_.data(), 1, spec.value_heads,
-                   resources_.program_.hidden);
-            linear(workspace_.normed_.data(), *gated_delta->a,
-                   workspace_.gated_delta_a_.data(), 1, spec.decay_width(),
-                   resources_.program_.hidden);
-            launch_gated_delta_net(workspace_.gated_delta_qkv_.data(),
-                workspace_.gated_delta_z_.data(), workspace_.gated_delta_b_.data(),
-                workspace_.gated_delta_a_.data(), gated_delta->conv_weight,
-                gated_delta->dt_bias, gated_delta->a_log, gated_delta->norm,
-                gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
-                workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
-                spec.key_head_dim, spec.value_head_dim, spec.key_heads,
-                spec.value_heads, semantics.operator_norm.epsilon,
-                spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
-                spec.sigmoid_output_gate, stream_.get());
-            linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
-                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                   value_width);
-          },
-          [&](Mamba2Layer* mamba) {
-            const Mamba2Spec& spec = mamba->spec;
-            linear(workspace_.normed_.data(), *mamba->in, workspace_.mamba_projected_.data(), 1,
-                   2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
-                       spec.num_heads, resources_.program_.hidden);
-            launch_mamba2_step(workspace_.mamba_projected_.data(), mamba->conv_weight,
-                               mamba->conv_bias, mamba->dt_bias, mamba->a_log, mamba->d,
-                               mamba->conv_state.data(), mamba->ssm_state.data(),
-                               workspace_.mamba_inner_.data(), spec.intermediate_size,
-                               spec.state_size, spec.num_heads, spec.head_dim,
-                               spec.group_count, spec.conv_kernel, stream_.get());
-            launch_rmsnorm(workspace_.mamba_inner_.data(), mamba->norm,
-                           workspace_.op_output_.data(), 1, spec.intermediate_size,
-                           semantics.operator_norm.epsilon, stream_.get());
-            launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
-                            spec.intermediate_size, stream_.get());
-            linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(), 1,
-                   resources_.program_.hidden, spec.intermediate_size);
-          },
-          [&](MlpOnlyLayer* mlp) {
-            linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(), 1,
-                   mlp->spec.intermediate_size, resources_.program_.hidden);
-            launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
-                         mlp->spec.intermediate_size, stream_.get());
-            linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(), 1,
-                   resources_.program_.hidden, mlp->spec.intermediate_size);
-          },
-          [&](ConvolutionLayer* convolution) {
-            linear(workspace_.normed_.data(), *convolution->conv_in, workspace_.conv_projected_.data(), 1,
-                   3 * resources_.program_.hidden, resources_.program_.hidden);
-            launch_conv_decode(workspace_.conv_projected_.data(), convolution->conv_weight,
-                               convolution->conv_state.data(), workspace_.op_output_.data(),
-                               resources_.program_.hidden, resources_.shape_.conv_cache,
-                               session_.position_, stream_.get());
-            linear(workspace_.op_output_.data(), *convolution->conv_out, workspace_.hidden_.data(), 1,
-                   resources_.program_.hidden, resources_.program_.hidden,
-                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
-          });
-        if (common_layer.post_attention_norm) {
-            launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
-                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           semantics.post_attention_norm.epsilon, stream_.get());
-        }
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
-            !semantics.execute_feed_forward) {
-            launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                                resources_.program_.hidden, stream_.get());
-        }
-        if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_index);
-        if (std::binary_search(resources_.program_.norm_after_layers.begin(),
-                               resources_.program_.norm_after_layers.end(), layer_index)) {
-            launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,
-                           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           resources_.program_.final_norm.epsilon, stream_.get());
-        }
-    }
-    if (compute_logits) {
-        launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(), 1,
-                       resources_.program_.hidden, resources_.program_.final_norm.epsilon, stream_.get());
-        linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(), 1,
-               resources_.dims_.vocab_size, resources_.program_.hidden);
-        launch_scale(workspace_.logits_.data(), resources_.dims_.vocab_size,
-                     resources_.program_.logits_multiplier /
-                         resources_.program_.logits_divisor, stream_.get());
-        if (resources_.program_.final_logit_softcap > 0.0f) {
-            launch_tanh_softcap(workspace_.logits_.data(), resources_.dims_.vocab_size,
-                                resources_.program_.final_logit_softcap, stream_.get());
-        }
-    }
+    TokenKvPolicy kv;
+    kv.kv_layout = AttentionKvLayout::Paged;
+    kv.position_source = AttentionPositionSource::DeviceCounter;
+    kv.paged_kv = &paged_kv;
+    kv.device_page_table = device_page_table;
+    kv.page_table_stride = page_table_stride;
+    run_token_layers(kv);
+
+    if (compute_logits) run_token_logits();
     ++session_.position_;
-    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &session_.position_, sizeof(session_.position_),
-                             cudaMemcpyHostToDevice, stream_.get()));
+    CELEG_CUDA(cudaMemcpyAsync(position_device_.data(), &session_.position_,
+                               sizeof(session_.position_),
+                               cudaMemcpyHostToDevice, stream_.get()));
 }
 
 } // namespace celeg
-

@@ -207,6 +207,36 @@ struct CudaCompiledModel {
     void run_mtp_forward_device(const int32_t* token_device);
     void finalize_mtp_verification();
 
+    // ---- Host-driven single-token execution ------------------------------
+    //
+    // Standalone decode and paged serving run the *same* per-layer program:
+    //
+    //     residual snapshot -> operator norm -> mixer -> post-attention norm
+    //     -> residual add -> feed-forward -> optional after-layer norm
+    //
+    // They differ only in how attention addresses the KV cache and where the
+    // sequence position comes from.  `TokenKvPolicy` is that difference, so
+    // both entry points share one layer loop and one mixer implementation
+    // instead of two near-identical forward functions that can drift.
+    struct TokenKvPolicy {
+        // Which KV addressing mode attention uses for this step.
+        AttentionKvLayout kv_layout = AttentionKvLayout::Contiguous;
+        // Where the attention kernels read the sequence position from.
+        AttentionPositionSource position_source = AttentionPositionSource::HostScalar;
+
+        // Paged layout only; null for the contiguous layout.
+        PhysicalPagedKvCache* paged_kv = nullptr;
+        const uint32_t* device_page_table = nullptr;
+        int page_table_stride = 0;
+
+        // Contiguous layout only: caller-supplied M-RoPE position for this
+        // step (prompt-embedding prefill). Null means "use the session's
+        // running position".
+        const std::array<int32_t, 3>* rope_position = nullptr;
+
+        bool paged() const { return kv_layout == AttentionKvLayout::Paged; }
+    };
+
     void forward_token_host(int32_t token, bool compute_logits,
                             const float* raw_embedding = nullptr,
                             const std::array<int32_t, 3>* rope_position = nullptr);
@@ -214,6 +244,76 @@ struct CudaCompiledModel {
                                   PhysicalPagedKvCache& paged_kv,
                                   const uint32_t* device_page_table,
                                   int page_table_stride);
+
+    // Layer iteration: shared by both host token paths.
+    void run_token_layers(const TokenKvPolicy& kv);
+    // One layer: norm/residual framing around the mixer and feed-forward.
+    void run_token_layer(Layer& layer, int layer_index, const TokenKvPolicy& kv);
+    // Mixer execution: exhaustive dispatch over the Layer variant.
+    void run_token_mixer(Layer& layer, LayerCommon& common_layer,
+                         const CompiledLayerProgram& semantics, int layer_index,
+                         const TokenKvPolicy& kv);
+
+    // Attention: projections, RoPE, KV access, output gate, output projection.
+    void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
+                             const CompiledLayerProgram& semantics, int layer_index,
+                             const TokenKvPolicy& kv);
+    // Latent (MLA-style) attention over paged state.
+    void run_token_latent_attention_paged(AttentionLayer& attention,
+                                          LayerCommon& common_layer,
+                                          const CompiledLayerProgram& semantics,
+                                          int layer_index, const TokenKvPolicy& kv);
+    // Attention capability selection for a host token step.
+    AttentionCapability token_attention_plan(AttentionLayer& attention,
+                                             const AttentionSpec& owner_layout,
+                                             const TokenKvPolicy& kv);
+    // KV access policy: append this token's K/V and run the scoring kernel.
+    void store_and_attend_token_contiguous(AttentionLayer& attention,
+                                           AttentionLayer& owner,
+                                           const AttentionCapability& plan,
+                                           __nv_bfloat16* q, __nv_bfloat16* k,
+                                           __nv_bfloat16* v);
+    void store_and_attend_token_paged(AttentionLayer& attention,
+                                      const AttentionSpec& owner_layout,
+                                      const AttentionCapability& plan, int slot,
+                                      __nv_bfloat16* q, __nv_bfloat16* k,
+                                      __nv_bfloat16* v, const TokenKvPolicy& kv);
+
+    // Non-attention mixers: identical under both KV policies.
+    void run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
+                               const CompiledLayerProgram& semantics);
+    void run_token_mamba2(Mamba2Layer& mamba, const CompiledLayerProgram& semantics,
+                          const TokenKvPolicy& kv);
+    void run_token_mlp_only(MlpOnlyLayer& mlp);
+    void run_token_convolution(ConvolutionLayer& convolution);
+
+    // Final norm + logits projection + softcap.
+    void run_token_logits();
+
+    // ---- Batched prefill seams -------------------------------------------
+    void run_prefill_layers(int rows);
+    void run_prefill_layer(Layer& layer, int layer_index, int rows);
+    void run_prefill_mixer(Layer& layer, LayerCommon& common_layer,
+                           const CompiledLayerProgram& semantics, int rows);
+    void run_prefill_attention(AttentionLayer& attention, LayerCommon& common_layer,
+                               const CompiledLayerProgram& semantics, int rows);
+    void run_prefill_latent_attention(AttentionLayer& attention,
+                                      AttentionLayer& owner,
+                                      LayerCommon& common_layer,
+                                      const CompiledLayerProgram& semantics, int rows);
+    AttentionCapability prefill_attention_plan(AttentionLayer& attention,
+                                               const AttentionSpec& owner_layout,
+                                               int rows);
+    void store_and_attend_prefill(AttentionLayer& attention,
+                                  AttentionLayer& owner,
+                                  const AttentionCapability& plan, int rows);
+    void run_prefill_gated_delta(GatedDeltaNetLayer& gated_delta,
+                                 const CompiledLayerProgram& semantics, int rows);
+    void run_prefill_mamba2(Mamba2Layer& mamba, const CompiledLayerProgram& semantics,
+                            int rows);
+    void run_prefill_mlp_only(MlpOnlyLayer& mlp, int rows);
+    void run_prefill_convolution(ConvolutionLayer& convolution, int rows);
+    void run_prefill_logits(int rows);
 
     void enqueue_sampling();
     void enqueue_decode_forward();
