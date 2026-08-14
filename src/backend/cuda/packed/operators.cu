@@ -342,19 +342,32 @@ void PackedMamba2Executor::run(
         }
         const size_t count = row_descriptors
             ? row_descriptors->at(request).token_count : 1;
-        for (size_t token = 0; token < count; ++token, ++flat) {
-            if (flat >= static_cast<size_t>(rows)) {
-                throw std::invalid_argument("packed Mamba2 row mapping exceeds input");
-            }
-            launch_mamba2_step(
+        if (count > static_cast<size_t>(rows) - flat) {
+            throw std::invalid_argument("packed Mamba2 row mapping exceeds input");
+        }
+        if (count != 0 && spec.conv_kernel <= 8 && spec.state_size <= 256) {
+            launch_mamba2_prefill(
                 w.mamba_projected.data() + flat * projection_width,
                 mamba.conv_weight, mamba.conv_bias, mamba.dt_bias,
                 mamba.a_log, mamba.d, state_layer->conv_state.data(),
                 state_layer->ssm_state.data(),
                 w.mamba_inner.data() + flat * spec.intermediate_size,
-                spec.intermediate_size, spec.state_size, spec.num_heads,
-                spec.head_dim, spec.group_count, spec.conv_kernel,
+                static_cast<int>(count), spec.intermediate_size, spec.state_size,
+                spec.num_heads, spec.head_dim, spec.group_count, spec.conv_kernel,
                 w.stream.get());
+            flat += count;
+        } else {
+            for (size_t token = 0; token < count; ++token, ++flat) {
+                launch_mamba2_step(
+                    w.mamba_projected.data() + flat * projection_width,
+                    mamba.conv_weight, mamba.conv_bias, mamba.dt_bias,
+                    mamba.a_log, mamba.d, state_layer->conv_state.data(),
+                    state_layer->ssm_state.data(),
+                    w.mamba_inner.data() + flat * spec.intermediate_size,
+                    spec.intermediate_size, spec.state_size, spec.num_heads,
+                    spec.head_dim, spec.group_count, spec.conv_kernel,
+                    w.stream.get());
+            }
         }
     }
     if (flat != static_cast<size_t>(rows)) {

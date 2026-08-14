@@ -100,6 +100,65 @@ std::vector<TestShape> registered_model_shapes() {
 int main() {
     celeg::CudaStream stream;
 
+    // Batched Mamba2 prefill must be numerically identical to the canonical
+    // recurrent step sequence, including persistent convolution and SSM state.
+    {
+        constexpr int rows = 8, intermediate = 4, state_size = 3, heads = 2,
+            head_dim = 2, groups = 1, kernel = 4;
+        constexpr int conv_dim = intermediate + 2 * groups * state_size;
+        constexpr int projection = 2 * intermediate + 2 * groups * state_size + heads;
+        std::vector<float> projected(rows * projection), conv_weight(conv_dim * kernel),
+            conv_bias(conv_dim), dt_bias(heads), a_log(heads), d(heads);
+        for (size_t i = 0; i < projected.size(); ++i) projected[i] = 0.01f * float(i + 1);
+        for (size_t i = 0; i < conv_weight.size(); ++i) conv_weight[i] = 0.02f * float(i + 1);
+        for (int i = 0; i < conv_dim; ++i) conv_bias[i] = -0.1f + 0.01f * float(i);
+        for (int i = 0; i < heads; ++i) { dt_bias[i] = 0.2f; a_log[i] = -0.3f; d[i] = 0.4f; }
+        auto convert = [](const std::vector<float>& values) {
+            std::vector<__nv_bfloat16> result(values.size());
+            for (size_t i = 0; i < values.size(); ++i) result[i] = to_bf16(values[i]);
+            return result;
+        };
+        const auto hp = convert(projected), hw = convert(conv_weight), hb = convert(conv_bias),
+            hdt = convert(dt_bias), ha = convert(a_log), hd = convert(d);
+        celeg::DeviceBuffer<__nv_bfloat16> dp(hp.size()), dw(hw.size()), db(hb.size()),
+            ddt(hdt.size()), da(ha.size()), dd(hd.size()), batch_conv(conv_dim * kernel),
+            batch_state(intermediate * state_size), batch_inner(rows * intermediate),
+            step_conv(conv_dim * kernel), step_state(intermediate * state_size),
+            step_inner(rows * intermediate);
+        CELEG_CUDA(cudaMemcpy(dp.data(), hp.data(), dp.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dw.data(), hw.data(), dw.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(db.data(), hb.data(), db.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(ddt.data(), hdt.data(), ddt.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(da.data(), ha.data(), da.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dd.data(), hd.data(), dd.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemset(batch_conv.data(), 0, batch_conv.bytes()));
+        CELEG_CUDA(cudaMemset(batch_state.data(), 0, batch_state.bytes()));
+        CELEG_CUDA(cudaMemset(step_conv.data(), 0, step_conv.bytes()));
+        CELEG_CUDA(cudaMemset(step_state.data(), 0, step_state.bytes()));
+        celeg::launch_mamba2_prefill(dp.data(), dw.data(), db.data(), ddt.data(), da.data(), dd.data(),
+            batch_conv.data(), batch_state.data(), batch_inner.data(), rows, intermediate,
+            state_size, heads, head_dim, groups, kernel, stream.get());
+        for (int row = 0; row < rows; ++row) {
+            celeg::launch_mamba2_step(dp.data() + row * projection, dw.data(), db.data(), ddt.data(),
+                da.data(), dd.data(), step_conv.data(), step_state.data(),
+                step_inner.data() + row * intermediate, intermediate, state_size, heads,
+                head_dim, groups, kernel, stream.get());
+        }
+        std::vector<__nv_bfloat16> batch_out(rows * intermediate), step_out(rows * intermediate),
+            batch_cs(conv_dim * kernel), step_cs(conv_dim * kernel), batch_ss(intermediate * state_size),
+            step_ss(intermediate * state_size);
+        CELEG_CUDA(cudaMemcpyAsync(batch_out.data(), batch_inner.data(), batch_inner.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(step_out.data(), step_inner.data(), step_inner.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(batch_cs.data(), batch_conv.data(), batch_conv.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(step_cs.data(), step_conv.data(), step_conv.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(batch_ss.data(), batch_state.data(), batch_state.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(step_ss.data(), step_state.data(), step_state.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for (size_t i = 0; i < batch_out.size(); ++i) expect_near(to_float(batch_out[i]), to_float(step_out[i]), 0.20f);
+        for (size_t i = 0; i < batch_cs.size(); ++i) expect_near(to_float(batch_cs[i]), to_float(step_cs[i]), 0.20f);
+        for (size_t i = 0; i < batch_ss.size(); ++i) expect_near(to_float(batch_ss[i]), to_float(step_ss[i]), 0.20f);
+    }
+
     // The sequence CUDA path is a parallel form of the neutral recurrent
     // operator.  Exercise grouped key/value heads, then compare its output
     // and both persisted state buffers with the CPU reference.
@@ -128,6 +187,52 @@ int main() {
         for(size_t i=0;i<got.size();++i) expect_near(to_float(got[i]),cpu_out[i],0.03f);
         for(size_t i=0;i<got_conv.size();++i) expect_near(to_float(got_conv[i]),cpu_conv[i],0.03f);
         for(size_t i=0;i<got_state.size();++i) expect_near(to_float(got_state[i]),cpu_state[i],0.03f);
+    }
+
+    // The 128x128 one-to-one state geometry uses the register-resident decode
+    // specialization. Compare one causal four-tap step and its persisted
+    // buffers with the neutral CPU implementation.
+    {
+        constexpr int rows = 1, kernel = 4, dim = 128, heads = 1;
+        constexpr int qkv_width = 3 * dim, value_width = dim;
+        std::vector<float> qkv(qkv_width), z(value_width), b(heads, -0.2f),
+            a(heads, 0.1f), conv(qkv_width * kernel, 0.02f), dt(heads, 0.5f),
+            alog(heads, -0.3f), norm(dim, 1.0f), cpu_conv(qkv_width * kernel),
+            cpu_state(dim * dim), cpu_out(value_width);
+        for (size_t i = 0; i < qkv.size(); ++i) qkv[i] = 0.001f * static_cast<float>(i + 1);
+        for (size_t i = 0; i < z.size(); ++i) z[i] = -0.002f * static_cast<float>(i + 1);
+        celeg::cpu_gated_delta_net_prefill(qkv.data(), z.data(), b.data(), a.data(), conv.data(),
+            dt.data(), alog.data(), norm.data(), cpu_conv.data(), cpu_state.data(), cpu_out.data(),
+            rows, kernel, dim, dim, heads, heads, 1e-6f);
+        auto convert = [](const std::vector<float>& values) {
+            std::vector<__nv_bfloat16> result(values.size());
+            for (size_t i = 0; i < values.size(); ++i) result[i] = to_bf16(values[i]);
+            return result;
+        };
+        const auto hq = convert(qkv), hz = convert(z), hb = convert(b), ha = convert(a),
+            hc = convert(conv), hdt = convert(dt), hal = convert(alog), hn = convert(norm);
+        celeg::DeviceBuffer<__nv_bfloat16> dq(qkv.size()), dz(z.size()), db(b.size()), da(a.size()),
+            dc(conv.size()), ddt(dt.size()), dal(alog.size()), dn(norm.size()),
+            dcs(cpu_conv.size()), drs(cpu_state.size()), dout(cpu_out.size());
+        CELEG_CUDA(cudaMemcpy(dq.data(), hq.data(), dq.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dz.data(), hz.data(), dz.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(db.data(), hb.data(), db.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(da.data(), ha.data(), da.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dc.data(), hc.data(), dc.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(ddt.data(), hdt.data(), ddt.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dal.data(), hal.data(), dal.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dn.data(), hn.data(), dn.bytes(), cudaMemcpyHostToDevice));
+        celeg::launch_gated_delta_net(dq.data(), dz.data(), db.data(), da.data(), dc.data(),
+            ddt.data(), dal.data(), dn.data(), dcs.data(), drs.data(), dout.data(), rows, kernel,
+            dim, dim, heads, heads, 1e-6f, false, false, -5.0f, false, stream.get());
+        std::vector<__nv_bfloat16> got_out(cpu_out.size()), got_conv(cpu_conv.size()), got_state(cpu_state.size());
+        CELEG_CUDA(cudaMemcpyAsync(got_out.data(), dout.data(), dout.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(got_conv.data(), dcs.data(), dcs.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(got_state.data(), drs.data(), drs.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for (size_t i = 0; i < got_out.size(); ++i) expect_near(to_float(got_out[i]), cpu_out[i], 0.03f);
+        for (size_t i = 0; i < got_conv.size(); ++i) expect_near(to_float(got_conv[i]), cpu_conv[i], 0.03f);
+        for (size_t i = 0; i < got_state.size(); ++i) expect_near(to_float(got_state[i]), cpu_state[i], 0.03f);
     }
 
     // Embedding by scalar value.

@@ -415,8 +415,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             layer.feed_forward_norm, layer.post_feed_forward_norm};
         compiled.residual = layer.residual;
         if (layer.mixer_kind() == MixerKind::GatedDeltaNet ||
-            layer.mixer_kind() == MixerKind::Mamba2 ||
-            layer.mixer_kind() == MixerKind::MlpOnly) {
+            layer.mixer_kind() == MixerKind::Mamba2) {
             compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;
         }
         std::visit([&](const auto& mixer) {

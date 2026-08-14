@@ -128,7 +128,7 @@ __global__ void gated_delta_sequence_state_kernel(
     __nv_bfloat16* recurrent_state, __nv_bfloat16* output, int rows,
     int key_head_dim, int value_head_dim, int key_heads, int value_heads, bool vector_decay,
     bool safe_decay, float decay_lower_bound) {
-    constexpr int columns_per_block = 8;
+    constexpr int columns_per_block = 4;
     const int value_head = static_cast<int>(blockIdx.x);
     const int v_dim = static_cast<int>(blockIdx.y) * columns_per_block + threadIdx.y;
     const int lane = threadIdx.x;
@@ -252,6 +252,110 @@ __global__ void gated_delta_sequence_norm_kernel(
                 (sigmoid_output_gate ? sigmoid(gate) : gate * sigmoid(gate)));
         }
         __syncthreads();
+    }
+}
+
+// A 128x128 recurrent matrix is common enough to justify a neutral shape
+// specialization. Each warp owns four value columns, retaining their state
+// for a contiguous prefill sequence and reusing q/k across those columns.
+template <int KeyHeadDim, int ValueHeadDim>
+__global__ void gated_delta_sequence_register_tile_kernel(
+    const __nv_bfloat16* qkv, const __nv_bfloat16* b, const __nv_bfloat16* a,
+    const __nv_bfloat16* dt_bias, const __nv_bfloat16* a_log,
+    __nv_bfloat16* recurrent_state, __nv_bfloat16* output, int rows,
+    int key_heads, bool vector_decay, bool safe_decay, float decay_lower_bound) {
+    constexpr int columns_per_warp = 4;
+    constexpr int columns_per_block = 16;
+    constexpr int shards = KeyHeadDim / 32;
+    const int value_head = static_cast<int>(blockIdx.x);
+    const int lane = static_cast<int>(threadIdx.x);
+    const int column_base = static_cast<int>(blockIdx.y) * columns_per_block +
+        static_cast<int>(threadIdx.y) * columns_per_warp;
+    if (column_base >= ValueHeadDim) return;
+    const int key_width = key_heads * KeyHeadDim;
+    const int value_width = key_heads * ValueHeadDim;
+    const int qkv_width = 2 * key_width + value_width;
+    __nv_bfloat16* state = recurrent_state + static_cast<size_t>(value_head) *
+        KeyHeadDim * ValueHeadDim;
+    float state_registers[shards][columns_per_warp];
+#pragma unroll
+    for (int shard = 0; shard < shards; ++shard) {
+        const int key = shard * 32 + lane;
+#pragma unroll
+        for (int column = 0; column < columns_per_warp; ++column) {
+            state_registers[shard][column] = bf16_float(
+                state[static_cast<size_t>(key) * ValueHeadDim + column_base + column]);
+        }
+    }
+    for (int row = 0; row < rows; ++row) {
+        const __nv_bfloat16* current = qkv + static_cast<size_t>(row) * qkv_width;
+        const __nv_bfloat16* row_a = a + static_cast<size_t>(row) *
+            (vector_decay ? key_width : key_heads);
+        float q_values[shards], k_values[shards], decays[shards];
+        float scalar_decay = 0.0f;
+        if (!vector_decay) {
+            if (lane == 0) {
+                const float raw = bf16_float(row_a[value_head]) + bf16_float(dt_bias[value_head]);
+                scalar_decay = safe_decay
+                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) * raw) * decay_lower_bound)
+                    : expf(-expf(bf16_float(a_log[value_head])) * softplus(raw));
+            }
+            scalar_decay = __shfl_sync(0xffffffffu, scalar_decay, 0);
+        }
+#pragma unroll
+        for (int shard = 0; shard < shards; ++shard) {
+            const int key = shard * 32 + lane;
+            q_values[shard] = bf16_float(current[value_head * KeyHeadDim + key]);
+            k_values[shard] = bf16_float(current[key_width + value_head * KeyHeadDim + key]);
+            const int decay_index = value_head * KeyHeadDim + key;
+            decays[shard] = vector_decay
+                ? (safe_decay
+                    ? expf(sigmoid(expf(bf16_float(a_log[value_head])) *
+                        (bf16_float(row_a[decay_index]) + bf16_float(dt_bias[decay_index]))) * decay_lower_bound)
+                    : expf(-expf(bf16_float(a_log[value_head])) *
+                        softplus(bf16_float(row_a[decay_index]) + bf16_float(dt_bias[decay_index]))))
+                : scalar_decay;
+        }
+        const float beta = sigmoid(bf16_float(b[static_cast<size_t>(row) * key_heads + value_head]));
+#pragma unroll
+        for (int column = 0; column < columns_per_warp; ++column) {
+            float memory_partial = 0.0f;
+#pragma unroll
+            for (int shard = 0; shard < shards; ++shard) {
+                state_registers[shard][column] = bf16_float(__float2bfloat16(
+                    state_registers[shard][column] * decays[shard]));
+                memory_partial += state_registers[shard][column] * k_values[shard];
+            }
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                memory_partial += __shfl_down_sync(0xffffffffu, memory_partial, offset);
+            }
+            const float memory = __shfl_sync(0xffffffffu, memory_partial, 0);
+            const float value = bf16_float(current[2 * key_width +
+                value_head * ValueHeadDim + column_base + column]);
+            const float delta = (value - memory) * beta;
+            float result_partial = 0.0f;
+#pragma unroll
+            for (int shard = 0; shard < shards; ++shard) {
+                state_registers[shard][column] = bf16_float(__float2bfloat16(
+                    state_registers[shard][column] + k_values[shard] * delta));
+                result_partial += state_registers[shard][column] * q_values[shard];
+            }
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                result_partial += __shfl_down_sync(0xffffffffu, result_partial, offset);
+            }
+            if (lane == 0) output[static_cast<size_t>(row) * value_width +
+                value_head * ValueHeadDim + column_base + column] =
+                __float2bfloat16(result_partial / sqrtf(static_cast<float>(KeyHeadDim)));
+        }
+    }
+#pragma unroll
+    for (int shard = 0; shard < shards; ++shard) {
+        const int key = shard * 32 + lane;
+#pragma unroll
+        for (int column = 0; column < columns_per_warp; ++column) {
+            state[static_cast<size_t>(key) * ValueHeadDim + column_base + column] =
+                __float2bfloat16(state_registers[shard][column]);
+        }
     }
 }
 
@@ -858,12 +962,24 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
             return;
         }
         if (rows >= 64) {
-            const int tiles = (value_head_dim + 7) / 8;
+            const int tiles = (value_head_dim + 3) / 4;
             gated_delta_sequence_prepare_kernel<<<key_heads, 256, 0, stream>>>(
                 const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,
                 rows, conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
+            if (key_heads == value_heads && key_head_dim == 128 && value_head_dim == 128) {
+                const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
+                gated_delta_sequence_register_tile_kernel<128, 128><<<tile_grid, dim3(32, 4), 0, stream>>>(
+                    projected_qkv, projected_b, projected_a, dt_bias, a_log,
+                    recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
+                    decay_lower_bound);
+                gated_delta_sequence_norm_kernel<<<value_heads, 128, 0, stream>>>(
+                    output, projected_z, norm_weight, rows, value_head_dim, value_heads,
+                    eps, sigmoid_output_gate);
+                CELEG_KERNEL_DEBUG_SYNC(stream);
+                return;
+            }
             const dim3 state_grid(value_heads, tiles);
-            const dim3 state_block(32, 8);
+            const dim3 state_block(32, 4);
             switch (key_head_dim) {
                 case 32:
                     gated_delta_sequence_state_kernel<32><<<state_grid, state_block, 0, stream>>>(
