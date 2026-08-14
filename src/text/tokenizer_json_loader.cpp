@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 
 namespace celeg {
@@ -115,10 +116,6 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
             }
             definition.tokens[static_cast<size_t>(token.id)] = token.text;
             const bool is_special = item.contains("special") && item["special"].as_bool();
-            // Hugging Face's added-token matcher applies to every entry in
-            // `added_tokens`, not only entries marked special.  Keeping the
-            // full set here is required for exact prompt tokenization of
-            // control-like delimiters whose `special` flag is false.
             token.skip_on_decode = is_special;
             definition.special_tokens.push_back(std::move(token));
         }
