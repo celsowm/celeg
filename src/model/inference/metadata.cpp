@@ -3,6 +3,7 @@
 #include "support.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <type_traits>
 #include <unordered_set>
