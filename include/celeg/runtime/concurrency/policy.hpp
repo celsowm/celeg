@@ -29,6 +29,26 @@ enum class SchedulerPolicy : uint8_t {
     MaxUtilization,
 };
 
+// Backend-neutral scheduler semantics shared by every concurrent engine.
+// Backends choose their own defaults and keep only execution-specific knobs in
+// their derived option types; generic concepts must not drift independently.
+struct ConcurrentSchedulerOptions {
+    constexpr ConcurrentSchedulerOptions(
+        size_t active_requests,
+        size_t batched_tokens,
+        bool use_worker_thread = true,
+        bool use_prefix_cache = true)
+        : max_active_requests(active_requests),
+          max_batched_tokens(batched_tokens),
+          worker_thread(use_worker_thread),
+          prefix_cache(use_prefix_cache) {}
+
+    size_t max_active_requests;
+    size_t max_batched_tokens;
+    bool worker_thread;
+    bool prefix_cache;
+};
+
 class PagedBlockPool {
 public:
     PagedBlockPool(size_t pages, int page_tokens);

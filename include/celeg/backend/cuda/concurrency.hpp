@@ -15,21 +15,20 @@
 
 namespace celeg {
 
-struct ConcurrentEngineOptions {
-    int max_active_requests = 8;
-    int max_batched_tokens = 512;
+struct ConcurrentEngineOptions : ConcurrentSchedulerOptions {
+    ConcurrentEngineOptions()
+        : ConcurrentSchedulerOptions(8, 512, true, true) {}
+
     int prefill_chunk_tokens = 256;
     int page_tokens = 16;
     // Retained field name for C/C++ API compatibility; these are physical GPU pages.
     size_t logical_kv_pages = 0; // 0 = derive from max_active_requests * max_context.
     SchedulerPolicy scheduler_policy = SchedulerPolicy::GuaranteedNoEvict;
-    bool worker_thread = true;
     int idle_sleep_microseconds = 100;
     bool packed_decode = true;
     int packed_min_batch = 1;
     bool ragged_packed_prefill = true;
     int ragged_prefill_min_batch = 2;
-    bool prefix_cache = true;
     size_t prefix_cache_entries = 64;
 };
 

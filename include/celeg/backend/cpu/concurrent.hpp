@@ -13,16 +13,15 @@
 
 namespace celeg {
 
-struct CpuConcurrentEngineOptions {
-    size_t max_active_requests = 16;
-    size_t max_batched_tokens = 256;
+struct CpuConcurrentEngineOptions : ConcurrentSchedulerOptions {
+    CpuConcurrentEngineOptions()
+        : ConcurrentSchedulerOptions(16, 256, true, true) {}
+
     size_t max_prefill_batch = 16;
     size_t max_decode_batch = 16;
     size_t long_prefill_chunk_tokens = 256;
     size_t long_prefill_threshold = 32;
     bool decode_first = true;
-    bool worker_thread = true;
-    bool prefix_cache = true;
     size_t prefix_cache_max_entries = 256;
     size_t prefix_cache_max_bytes = 512ULL * 1024ULL * 1024ULL;
 };
