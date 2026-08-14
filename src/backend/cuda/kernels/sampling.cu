@@ -133,16 +133,22 @@ __device__ __forceinline__ uint64_t xorshift64star(uint64_t& state) {
     return state * 2685821657736338717ULL;
 }
 
-__global__ void sample_topk_kernel(const float* selected_values,
-                                   const int32_t* selected_indices,
-                                   int top_k,
-                                   float top_p,
-                                   uint64_t* rng_state,
-                                   int32_t* result) {
-    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+// Canonical stochastic choice over an already score-sorted top-k list.
+// All sampling paths use this primitive so top-p cutoff, RNG advancement and
+// boundary behavior cannot drift between standalone, fused, merged and packed
+// execution. Candidate ordering itself is established separately by the
+// deterministic top-k selection below.
+__device__ __forceinline__ int32_t sample_sorted_topk(
+    const float* selected_values,
+    const int32_t* selected_indices,
+    int top_k,
+    float top_p,
+    uint64_t* rng_state) {
     const float maximum = selected_values[0];
     float total = 0.0f;
-    for (int i = 0; i < top_k; ++i) total += expf(selected_values[i] - maximum);
+    for (int i = 0; i < top_k; ++i) {
+        total += expf(selected_values[i] - maximum);
+    }
 
     int cutoff = top_k;
     if (top_p < 1.0f) {
@@ -175,7 +181,18 @@ __global__ void sample_topk_kernel(const float* selected_values,
             break;
         }
     }
-    *result = selected_indices[chosen];
+    return selected_indices[chosen];
+}
+
+__global__ void sample_topk_kernel(const float* selected_values,
+                                   const int32_t* selected_indices,
+                                   int top_k,
+                                   float top_p,
+                                   uint64_t* rng_state,
+                                   int32_t* result) {
+    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+    *result = sample_sorted_topk(
+        selected_values, selected_indices, top_k, top_p, rng_state);
 }
 
 // Candidate ordering shared by the top-k selection below: higher score wins,
@@ -388,62 +405,27 @@ __global__ void sample_topk_merge_kernel(const float* partial_values,
     }
 
     if (threadIdx.x == 0) {
-        int chosen_token = selected_indices[0];
-        if (!greedy) {
-            const float maximum = selected_values[0];
-            float total = 0.0f;
-            for (int i = 0; i < ranks; ++i) total += expf(selected_values[i] - maximum);
-
-            int cutoff = ranks;
-            if (top_p < 1.0f) {
-                float cumulative = 0.0f;
-                for (int i = 0; i < ranks; ++i) {
-                    cumulative += expf(selected_values[i] - maximum);
-                    if (cumulative / total >= top_p) {
-                        cutoff = i + 1;
-                        break;
-                    }
-                }
-            }
-
-            float truncated_total = 0.0f;
-            for (int i = 0; i < cutoff; ++i) {
-                truncated_total += expf(selected_values[i] - maximum);
-            }
-            uint64_t state = *rng_state;
-            const uint64_t random_bits = xorshift64star(state);
-            *rng_state = state;
-            const double unit = (static_cast<double>(random_bits >> 11) + 0.5) *
-                                (1.0 / 9007199254740992.0);
-            const float target = static_cast<float>(unit) * truncated_total;
-            float cumulative = 0.0f;
-            int chosen = cutoff - 1;
-            for (int i = 0; i < cutoff; ++i) {
-                cumulative += expf(selected_values[i] - maximum);
-                if (target <= cumulative) {
-                    chosen = i;
-                    break;
-                }
-            }
-            chosen_token = selected_indices[chosen];
-        }
+        const int32_t chosen_token = greedy
+            ? selected_indices[0]
+            : sample_sorted_topk(
+                selected_values, selected_indices, ranks, top_p, rng_state);
         *result = chosen_token;
         if (chosen_token >= 0 && chosen_token < vocab) seen[chosen_token] = 1;
     }
 }
 
 __global__ void fused_sample_topk_kernel(const __nv_bfloat16* logits,
-                                                uint8_t* seen,
-                                                float* scores,
-                                                float* selected_values,
-                                                int32_t* selected_indices,
-                                                int vocab,
-                                                float temperature,
-                                                float repetition_penalty,
-                                                int top_k,
-                                                float top_p,
-                                                uint64_t* rng_state,
-                                                int32_t* result) {
+                                         uint8_t* seen,
+                                         float* scores,
+                                         float* selected_values,
+                                         int32_t* selected_indices,
+                                         int vocab,
+                                         float temperature,
+                                         float repetition_penalty,
+                                         int top_k,
+                                         float top_p,
+                                         uint64_t* rng_state,
+                                         int32_t* result) {
     __shared__ float best_values[256];
     __shared__ int best_indices[256];
     __shared__ float reduce_values[256];
@@ -463,49 +445,12 @@ __global__ void fused_sample_topk_kernel(const __nv_bfloat16* logits,
                       best_values, best_indices, reduce_values, reduce_indices);
 
     if (threadIdx.x == 0) {
-        const float maximum = selected_values[0];
-        float total = 0.0f;
-        for (int i = 0; i < top_k; ++i) {
-            total += expf(selected_values[i] - maximum);
-        }
-
-        int cutoff = top_k;
-        if (top_p < 1.0f) {
-            float cumulative = 0.0f;
-            for (int i = 0; i < top_k; ++i) {
-                cumulative += expf(selected_values[i] - maximum);
-                if (cumulative / total >= top_p) {
-                    cutoff = i + 1;
-                    break;
-                }
-            }
-        }
-
-        float truncated_total = 0.0f;
-        for (int i = 0; i < cutoff; ++i) {
-            truncated_total += expf(selected_values[i] - maximum);
-        }
-        uint64_t state = *rng_state;
-        const uint64_t random_bits = xorshift64star(state);
-        *rng_state = state;
-        const double unit = (static_cast<double>(random_bits >> 11) + 0.5) *
-                            (1.0 / 9007199254740992.0);
-        const float target = static_cast<float>(unit) * truncated_total;
-        float cumulative = 0.0f;
-        int chosen = cutoff - 1;
-        for (int i = 0; i < cutoff; ++i) {
-            cumulative += expf(selected_values[i] - maximum);
-            if (target <= cumulative) {
-                chosen = i;
-                break;
-            }
-        }
-        *result = selected_indices[chosen];
+        *result = sample_sorted_topk(
+            selected_values, selected_indices, top_k, top_p, rng_state);
         const int32_t token = *result;
         if (token >= 0 && token < vocab) seen[token] = 1;
     }
 }
-
 
 __global__ void packed_sample_topk_kernel(
     __nv_bfloat16* const* logits,
@@ -558,46 +503,11 @@ __global__ void packed_sample_topk_kernel(
     __syncthreads();
 
     if (threadIdx.x == 0) {
-        int chosen_token = row_selected_indices[0];
-        if (!greedy) {
-            const float maximum = row_selected_values[0];
-            float total = 0.0f;
-            for (int i = 0; i < top_k; ++i) {
-                total += expf(row_selected_values[i] - maximum);
-            }
-            int cutoff = top_k;
-            if (top_p < 1.0f) {
-                float cumulative = 0.0f;
-                for (int i = 0; i < top_k; ++i) {
-                    cumulative += expf(row_selected_values[i] - maximum);
-                    if (cumulative / total >= top_p) {
-                        cutoff = i + 1;
-                        break;
-                    }
-                }
-            }
-            float truncated_total = 0.0f;
-            for (int i = 0; i < cutoff; ++i) {
-                truncated_total += expf(row_selected_values[i] - maximum);
-            }
-            uint64_t state = *rng_state[row];
-            const uint64_t random_bits = xorshift64star(state);
-            *rng_state[row] = state;
-            const double unit =
-                (static_cast<double>(random_bits >> 11) + 0.5) *
-                (1.0 / 9007199254740992.0);
-            const float target = static_cast<float>(unit) * truncated_total;
-            float cumulative = 0.0f;
-            int chosen = cutoff - 1;
-            for (int i = 0; i < cutoff; ++i) {
-                cumulative += expf(row_selected_values[i] - maximum);
-                if (target <= cumulative) {
-                    chosen = i;
-                    break;
-                }
-            }
-            chosen_token = row_selected_indices[chosen];
-        }
+        const int32_t chosen_token = greedy
+            ? row_selected_indices[0]
+            : sample_sorted_topk(
+                row_selected_values, row_selected_indices, top_k, top_p,
+                rng_state[row]);
         result[row] = chosen_token;
         if (chosen_token >= 0 && chosen_token < vocab) {
             row_seen[chosen_token] = 1;
@@ -701,7 +611,6 @@ void launch_fused_sample_topk(const __nv_bfloat16* logits,
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
-
 
 void launch_packed_sample_topk(
     __nv_bfloat16* const* logits,
