@@ -63,8 +63,13 @@ CudaExecutionPlan CudaExecutionPlan::compile(
     CudaExecutionPlan plan;
     g_compile_count.fetch_add(1, std::memory_order_relaxed);
     plan.options_ = requested;
+    // Apply the resolved CELEG_MMQ_TENSOR_CORES override (already read once,
+    // at CudaModelOptions construction) on top of the hardware capability.
+    // nullopt means "auto": follow device support.
     device.mmq_tensor_core_enabled =
-        device.mmq_tensor_core_enabled && device.mmq_tensor_core_supported;
+        (requested.mmq_tensor_cores.has_value() ? *requested.mmq_tensor_cores
+                                                 : device.mmq_tensor_core_supported) &&
+        device.mmq_tensor_core_supported;
     plan.device_ = device;
     plan.max_context_ = max_context;
 
@@ -165,6 +170,15 @@ std::string CudaExecutionPlan::description() const {
         << device_.compute_major << device_.compute_minor
         << ", mmq-tensor-cores="
         << (device_.mmq_tensor_core_enabled ? "on" : "off")
+        << " (override=";
+    if (options_.mmq_tensor_cores.has_value()) {
+        out << (*options_.mmq_tensor_cores ? "on" : "off");
+    } else {
+        out << "auto";
+    }
+    out << ")"
+        << ", flash-attn=" << (options_.flash_attn ? "on" : "off")
+        << ", managed-weights=" << (options_.managed_weights ? "on" : "off")
         << ", fingerprint=" << fingerprint_;
     return out.str();
 }
