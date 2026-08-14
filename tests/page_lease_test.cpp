@@ -1,6 +1,7 @@
 #include "celeg/runtime/cache/page_lease.hpp"
 #include "support/assertions.hpp"
 
+#include <cstdint>
 #include <vector>
 
 int main() {
