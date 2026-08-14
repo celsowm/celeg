@@ -4,7 +4,9 @@
 #include "celeg/backend/cuda/runtime_types.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/detail/model/types.hpp"
+#include "celeg/detail/model/layer_state.hpp"
+#include "celeg/detail/model/linear_weights.hpp"
+#include "celeg/detail/model/shared_weights.hpp"
 
 #include <cstdint>
 #include <memory>

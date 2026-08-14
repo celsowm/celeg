@@ -5,7 +5,7 @@
 #include <celeg/backend/cuda/utils.cuh>
 
 #include <celeg/checkpoint/formats/gguf.hpp>
-#include <celeg/detail/model/types.hpp>
+#include <celeg/detail/model/linear_weights.hpp>
 
 namespace celeg {
 

@@ -17,7 +17,8 @@
 // celeg_cuda_backend. See docs/ARCHITECTURE_EVIDENCE.md section 1.1.
 
 #include "celeg/backend/cuda/weights_loader.hpp"
-#include "celeg/detail/model/types.hpp"
+#include "celeg/detail/model/device_weights.hpp"
+#include "celeg/detail/model/shared_weights.hpp"
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 

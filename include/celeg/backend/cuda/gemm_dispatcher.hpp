@@ -3,7 +3,8 @@
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/backend/cuda/execution_plan.hpp"
 #include "celeg/backend/cuda/runtime_types.hpp"
-#include "celeg/detail/model/types.hpp"
+#include "celeg/detail/model/gemm_plan.hpp"
+#include "celeg/detail/model/linear_weights.hpp"
 
 #include <cublasLt.h>
 #include <cublas_v2.h>

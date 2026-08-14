@@ -10,7 +10,7 @@ namespace celeg {
 namespace {
 
 // MoE router config / FFN device descriptors are provided inline by
-// celeg/detail/model/types.hpp (moe_router_config / moe_ffn_device) so the
+// celeg/detail/model/feed_forward_weights.hpp (moe_router_config / moe_ffn_device) so the
 // standalone paths and the packed executor share one definition.
 
 } // namespace

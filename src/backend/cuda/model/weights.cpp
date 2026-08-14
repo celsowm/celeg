@@ -1,4 +1,4 @@
-#include "celeg/detail/model/types.hpp"
+#include "celeg/detail/model/shared_weights.hpp"
 
 namespace celeg {
 

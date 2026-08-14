@@ -16,7 +16,8 @@
 #include "celeg/backend/cuda/packed/session.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
 #include "celeg/backend/cuda/moe/expert_residency.hpp"
-#include "celeg/detail/model/types.hpp"
+#include "celeg/detail/model/layer_state.hpp"
+#include "celeg/detail/model/shared_weights.hpp"
 #include "celeg/detail/model/resources.hpp"
 #include "celeg/model/session.hpp"
 

@@ -68,7 +68,13 @@ cc526705072351716837b2164bf366b531913d80f608191edc8180b00bdb3373  ./include/cele
 a0498f31d2a4247f29a942020e10cd8e538a91d75d8241d949b57c0b32e68a6c  ./include/celeg/detail/checkpoint/bootstrap.hpp
 2a68237bbd6c6bd82293317c769e49bed6c164fdba9a0699996b03c6d9e67dcf  ./include/celeg/detail/model/compiled_model.hpp
 0377f30992130fa3eabe434522e4e5995e1fbef4964f644fd6ca6fdd6cb4da9e  ./include/celeg/detail/model/resources.hpp
-57cd82e44c4ce313cae4d2c90bd80f04eef5717e09f79d861e3c1676e55e6c69  ./include/celeg/detail/model/types.hpp
+5f56372817a75258f9b6dee4d12a36fc10ab1341d5d15fa1217b7692f907bead  ./include/celeg/detail/model/gemm_plan.hpp
+a4adec87f2debf1b1a46a5938db52c94ffd444164229a320a5104b9de1935e77  ./include/celeg/detail/model/linear_weights.hpp
+90297150eb743983c8a7d3b1453afb4ba5ba0d8da0233ceaaf70994845bcfea1  ./include/celeg/detail/model/expert_weights.hpp
+5cbc0e364f1b077d2921331e9a74601775f86f108c79bcbf8b0b4d19f051c499  ./include/celeg/detail/model/feed_forward_weights.hpp
+b50d77434940a370fe684192c60a30343ffcea758009744cb145d807f8bf1ddb  ./include/celeg/detail/model/device_weights.hpp
+5ee30dc48d66cb2f43fe070fe49934c13f63fad7dc4f49fcd68151b0ba4fdfc0  ./include/celeg/detail/model/shared_weights.hpp
+2ce8f8a141b22cc38631078eeaa516a5bd5901df462e0e652bbc174279b8dffb  ./include/celeg/detail/model/layer_state.hpp
 c8f0ef048676990ed8ca64d2910d1ac21a9c29ba3f4e92257e87b4e6209de2f2  ./include/celeg/detail/runtime/concurrency/batch_planner.hpp
 10c7bdbcd4944f9e6d5938c711ebe608da2aa387962abb70cb94ebd91688cfc1  ./include/celeg/detail/runtime/concurrency/request_registry.hpp
 810f2ad88ce63de3e8e790e81a4be6599fb60d76d81677047e1140e841f88a2d  ./include/celeg/detail/runtime/concurrency/worker.hpp
