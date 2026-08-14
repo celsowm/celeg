@@ -1,7 +1,6 @@
 #pragma once
 
 #include "celeg/backend/cuda/utils.cuh"
-#include "celeg/model/resolved.hpp"
 #include "celeg/model/runtime_types.hpp"
 
 #include <cstdint>
@@ -17,7 +16,6 @@ public:
                         DeviceBuffer<std::int32_t>& topk_indices,
                         DeviceBuffer<float>& partial_values,
                         DeviceBuffer<std::int32_t>& partial_indices,
-                        const ExecutionTopology& shape,
                         int vocab_size,
                         const GenerationConfig& generation,
                         DeviceBuffer<std::uint64_t>& rng_state,

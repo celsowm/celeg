@@ -1,8 +1,7 @@
 #include "celeg/backend/cuda/sampler.hpp"
+#include "celeg/backend/cuda/sampling_state.hpp"
 
 #include "celeg/backend/cuda/kernels/kernels.cuh"
-
-#include <algorithm>
 
 namespace celeg {
 
@@ -13,7 +12,6 @@ void CudaSampler::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
                           DeviceBuffer<std::int32_t>& topk_indices,
                           DeviceBuffer<float>& partial_values,
                           DeviceBuffer<std::int32_t>& partial_indices,
-                          const ExecutionTopology& shape,
                           int vocab_size,
                           const GenerationConfig& generation,
                           DeviceBuffer<std::uint64_t>& rng_state,
@@ -35,8 +33,29 @@ void CudaSampler::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
         topk_values.data(), topk_indices.data(),
         partial_values.data(), partial_indices.data(), vocab_size,
         effective_temperature, generation.repetition_penalty,
-        effective_top_k, generation.greedy() ? 1.0f : generation.top_p,
+        effective_top_k, generation.top_p,
         rng_state.data(), sampled_device.data(), stream);
+}
+
+void CudaSamplingState::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
+                                int vocab_size,
+                                const GenerationConfig& generation,
+                                cudaStream_t stream) {
+    if (generation.forced_prefix &&
+        generation.forced_prefix->position < generation.forced_prefix->tokens.size()) {
+        const int32_t* token = generation.forced_prefix->tokens.data() +
+            generation.forced_prefix->position;
+        CELEG_CUDA(cudaMemcpyAsync(
+            sampled_device.data(), token, sizeof(*token),
+            cudaMemcpyHostToDevice, stream));
+        launch_mark_seen(sampled_device.data(), seen_tokens.data(),
+                         vocab_size, stream);
+        return;
+    }
+    CudaSampler::enqueue(
+        logits, seen_tokens, sampling_scores, topk_values, topk_indices,
+        partial_values, partial_indices, vocab_size, generation, rng_state,
+        sampled_device, stream);
 }
 
 } // namespace celeg

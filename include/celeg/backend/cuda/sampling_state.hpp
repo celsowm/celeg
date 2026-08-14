@@ -7,9 +7,9 @@
 
 namespace celeg {
 
-// Owns the device and pinned buffers that form one sampling session.  The
-// sampler consumes these buffers directly; this type deliberately contains
-// no policy or architecture dispatch.
+// Owns the buffers and execution policy that form one sampling session. The
+// compiled model supplies logits/configuration; this collaborator owns how a
+// token is selected and how its sampling state advances.
 class CudaSamplingState final {
 public:
     CudaSamplingState()
@@ -23,6 +23,11 @@ public:
         seen_tokens.reset(vocabulary_size);
         sampling_scores.reset(vocabulary_size);
     }
+
+    void enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
+                 int vocab_size,
+                 const GenerationConfig& generation,
+                 cudaStream_t stream);
 
     size_t bytes() const {
         return seen_tokens.bytes() + sampling_scores.bytes() + topk_values.bytes() +
