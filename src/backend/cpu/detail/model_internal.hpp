@@ -7,6 +7,7 @@
 #include "celeg/backend/cpu/prefix_cache.hpp"
 #include "celeg/backend/cpu/quantization.hpp"
 #include "celeg/backend/cpu/thread_pool.hpp"
+#include "celeg/detail/exhaustive_visit.hpp"
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/model/weights/roles.hpp"
@@ -405,10 +406,6 @@ struct CpuCompiledModel {
     CpuModelMemoryStats memory_stats() const;
 
     const CommonWeights& common_weights(size_t layer) const;
-    static const AttentionWeights* attention_operator(const WeightLayer& layer);
-    static const ConvolutionWeights* convolution_operator(const WeightLayer& layer);
-    static const GatedDeltaNetWeights* gated_delta_net_operator(const WeightLayer& layer);
-    static const Mamba2Weights* mamba2_operator(const WeightLayer& layer);
     AttentionState& attention_state(size_t layer);
     const AttentionState& attention_state(size_t layer) const;
     ConvolutionState& convolution_state(size_t layer);
@@ -448,6 +445,32 @@ struct CpuCompiledModel {
     CpuSessionState session_;
     int preferred_numa_node = -1;
 };
+
+// Exhaustive mixer dispatch for a compiled CPU layer. The operator carried by
+// a MoE layer is unwrapped, so handlers see the mixer regardless of whether the
+// layer also runs an expert feed-forward. Every mixer alternative must be
+// matched by a handler naming its concrete type; there is no fallback, so
+// adding a mixer turns every dispatch site that has not been updated into a
+// compile error. Handlers receive a non-null pointer to the active operator.
+template <typename LayerRef, typename... Handlers>
+decltype(auto) visit_operator_weights(LayerRef&& layer, Handlers&&... handlers) {
+    ExhaustiveHandlers<std::decay_t<Handlers>...> dispatch{
+        std::forward<Handlers>(handlers)...};
+    return std::visit(
+        [&dispatch](auto&& alternative) -> decltype(auto) {
+            using Alternative = std::remove_cvref_t<decltype(alternative)>;
+            if constexpr (std::is_same_v<Alternative, CpuCompiledModel::MoeWeights>) {
+                return std::visit(
+                    [&dispatch](auto&& mixer) -> decltype(auto) {
+                        return dispatch(&mixer);
+                    },
+                    alternative.operator_layer);
+            } else {
+                return dispatch(&alternative);
+            }
+        },
+        std::forward<LayerRef>(layer));
+}
 
 // Focused view used by token/chunk operators.  Operators that only need
 // linear execution, scratch storage, and session profiling no longer receive

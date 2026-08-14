@@ -2,6 +2,8 @@
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/phase_profile.hpp"
 
+#include <stdexcept>
+
 namespace celeg {
 
 PhaseProfile& decode_phase_profile();
@@ -10,7 +12,11 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
                                                             int layer_index) {
     const CompiledLayerProgram& semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer_index));
-    if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+    visit_layer(layer,
+      [&](AttentionLayer*) {
+        throw std::logic_error("attention layer routed to the non-attention mixer");
+      },
+      [&](GatedDeltaNetLayer* gated_delta) {
         // Recurrent Gated Delta execution is neither attention nor the
         // feed-forward block below. Attribute the complete neutral mixer so
         // decode profiles cannot hide its cost in the uninstrumented gap.
@@ -61,9 +67,8 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
                value_width);
         decode_phase_profile().end(DecodePhase::Other, stream_.get());
-        return;
-    }
-    if (Mamba2Layer* mamba = as_mamba2(layer)) {
+      },
+      [&](Mamba2Layer* mamba) {
         const Mamba2Spec& spec = mamba->spec;
         const int projection_width = 2 * spec.intermediate_size +
             2 * spec.group_count * spec.state_size + spec.num_heads;
@@ -83,32 +88,31 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
                         spec.intermediate_size, stream_.get());
         linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),
                1, resources_.program_.hidden, spec.intermediate_size);
-        return;
-    }
-    if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
+      },
+      [&](MlpOnlyLayer* mlp) {
         linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(),
                1, mlp->spec.intermediate_size, resources_.program_.hidden);
         launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
                      mlp->spec.intermediate_size, stream_.get());
         linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(),
                1, resources_.program_.hidden, mlp->spec.intermediate_size);
-        return;
-    }
-    ConvolutionLayer& convolution = *as_convolution(layer);
-    decode_phase_profile().begin(stream_.get());
-    linear(workspace_.normed_.data(), *convolution.conv_in,
-           workspace_.conv_projected_.data(), 1, 3 * resources_.program_.hidden,
-           resources_.program_.hidden);
-    launch_conv_decode_device(
-        workspace_.conv_projected_.data(), convolution.conv_weight,
-        convolution.conv_state.data(), workspace_.op_output_.data(),
-        resources_.program_.hidden, resources_.shape_.conv_cache,
-        position_device_.data(), stream_.get());
-    linear(workspace_.op_output_.data(), *convolution.conv_out,
-           workspace_.hidden_.data(), 1, resources_.program_.hidden,
-           resources_.program_.hidden,
-           resources_.options_.fused_residuals ? 1.0f : 0.0f);
-    decode_phase_profile().end(DecodePhase::Conv, stream_.get());
+      },
+      [&](ConvolutionLayer* convolution) {
+        decode_phase_profile().begin(stream_.get());
+        linear(workspace_.normed_.data(), *convolution->conv_in,
+               workspace_.conv_projected_.data(), 1, 3 * resources_.program_.hidden,
+               resources_.program_.hidden);
+        launch_conv_decode_device(
+            workspace_.conv_projected_.data(), convolution->conv_weight,
+            convolution->conv_state.data(), workspace_.op_output_.data(),
+            resources_.program_.hidden, resources_.shape_.conv_cache,
+            position_device_.data(), stream_.get());
+        linear(workspace_.op_output_.data(), *convolution->conv_out,
+               workspace_.hidden_.data(), 1, resources_.program_.hidden,
+               resources_.program_.hidden,
+               resources_.options_.fused_residuals ? 1.0f : 0.0f);
+        decode_phase_profile().end(DecodePhase::Conv, stream_.get());
+      });
 }
 
 } // namespace celeg

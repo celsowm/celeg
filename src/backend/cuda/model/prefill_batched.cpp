@@ -61,7 +61,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                        semantics.operator_norm.epsilon, stream_.get());
         prof.end(PrefillPhase::Norm, stream_.get());
 
-        if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+        visit_layer(layer,
+          [&](GatedDeltaNetLayer* gated_delta) {
             const GatedDeltaNetSpec& spec = gated_delta->spec;
             const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
                 spec.value_heads * spec.value_head_dim;
@@ -120,7 +121,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             const Mamba2Spec& spec = mamba->spec;
             const int projection_width = 2 * spec.intermediate_size +
                 2 * spec.group_count * spec.state_size + spec.num_heads;
@@ -144,7 +146,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             linear(workspace_.prefill_mamba_inner_.data(), *mamba->out,
                    workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    spec.intermediate_size);
-        } else if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
+          },
+          [&](MlpOnlyLayer* mlp) {
             const int intermediate = mlp->spec.intermediate_size;
             linear(workspace_.prefill_normed_.data(), *mlp->up,
                    workspace_.prefill_gate_up_.data(), rows, intermediate,
@@ -166,7 +169,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             linear(workspace_.prefill_activated_.data(), *mlp->down,
                    workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    intermediate);
-        } else if (AttentionLayer* attention = as_attention(layer)) {
+          },
+          [&](AttentionLayer* attention) {
             const AttentionSpec& layout = attention->layout;
             AttentionLayer* owner = attention;
             if (attention->kv_owner_layer >= 0) {
@@ -539,22 +543,22 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                          semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
             }
-        } else {
-            ConvolutionLayer& convolution = *as_convolution(layer);
+          },
+          [&](ConvolutionLayer* convolution) {
             prof.begin(stream_.get());
-            linear(workspace_.prefill_normed_.data(), *convolution.conv_in,
+            linear(workspace_.prefill_normed_.data(), *convolution->conv_in,
                    workspace_.prefill_conv_projected_.data(), rows,
                    3 * resources_.program_.hidden, resources_.program_.hidden);
             launch_conv_prefill(
-                workspace_.prefill_conv_projected_.data(), convolution.conv_weight,
-                convolution.conv_state.data(), workspace_.prefill_op_output_.data(),
+                workspace_.prefill_conv_projected_.data(), convolution->conv_weight,
+                convolution->conv_state.data(), workspace_.prefill_op_output_.data(),
                 rows, resources_.program_.hidden, resources_.shape_.conv_cache,
                 stream_.get());
-            linear(workspace_.prefill_op_output_.data(), *convolution.conv_out,
+            linear(workspace_.prefill_op_output_.data(), *convolution->conv_out,
                    workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                    resources_.program_.hidden, resources_.options_.fused_residuals ? 1.0f : 0.0f);
             prof.end(PrefillPhase::Conv, stream_.get());
-        }
+          });
 
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.post_attention_norm,

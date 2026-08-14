@@ -20,7 +20,8 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
     state.layer_buffers.reserve(resources_.layers_.size());
     for (Layer& layer : resources_.layers_) {
         SessionStore::SessionState::LayerBuffers buffers{};
-        if (AttentionLayer* attention = as_attention(layer)) {
+        visit_layer(layer,
+          [&](AttentionLayer* attention) {
             buffers.is_attention = true;
             buffers.owns_kv_cache = attention->key_cache.data() != nullptr ||
                 attention->key_cache_int8.data() != nullptr;
@@ -30,22 +31,27 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
             buffers.value_cache_int8 = attention->value_cache_int8.data();
             buffers.key_cache_scales = attention->key_cache_scales.data();
             buffers.value_cache_scales = attention->value_cache_scales.data();
-        } else if (ConvolutionLayer* convolution = as_convolution(layer)) {
+          },
+          [&](ConvolutionLayer* convolution) {
             buffers.conv_state = convolution->conv_state.data();
             buffers.conv_state_elements = convolution->conv_state.size();
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             buffers.is_mamba = true;
             buffers.conv_state = mamba->conv_state.data();
             buffers.conv_state_elements = mamba->conv_state.size();
             buffers.ssm_state = mamba->ssm_state.data();
             buffers.ssm_state_elements = mamba->ssm_state.size();
-        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+          },
+          [&](GatedDeltaNetLayer* gated_delta) {
             buffers.is_gated_delta = true;
             buffers.conv_state = gated_delta->conv_state.data();
             buffers.conv_state_elements = gated_delta->conv_state.size();
             buffers.recurrent_state = gated_delta->recurrent_state.data();
             buffers.recurrent_state_elements = gated_delta->recurrent_state.size();
-        }
+          },
+          // MLP-only blocks hold no persistent session state.
+          [](MlpOnlyLayer*) {});
         state.layer_buffers.push_back(buffers);
     }
     return state;

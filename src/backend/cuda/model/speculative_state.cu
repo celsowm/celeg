@@ -73,13 +73,22 @@ void CudaCompiledModel::snapshot_speculative_state() {
     for (size_t index = 0; index < resources_.layers_.size(); ++index) {
         SpeculativeLayerSnapshot& saved = speculative_snapshot_.layers[index];
         Layer& layer = resources_.layers_[index];
-        if (ConvolutionLayer* convolution = as_convolution(layer)) {
+        const auto clear_saved = [&saved]() {
+            saved.conv_state.reset(0);
+            saved.ssm_state.reset(0);
+            saved.recurrent_state.reset(0);
+        };
+        visit_layer(layer,
+          // Attention KV state is snapshotted through the KV cache, not here.
+          [&](AttentionLayer*) { clear_saved(); },
+          [&](ConvolutionLayer* convolution) {
             saved.conv_state.reset(convolution->conv_state.size());
             saved.ssm_state.reset(0);
             saved.recurrent_state.reset(0);
             copy_device(cudaMemcpyDeviceToDevice, saved.conv_state.data(),
                         convolution->conv_state.data(), convolution->conv_state.bytes(), stream);
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             saved.conv_state.reset(mamba->conv_state.size());
             saved.ssm_state.reset(mamba->ssm_state.size());
             saved.recurrent_state.reset(0);
@@ -87,7 +96,8 @@ void CudaCompiledModel::snapshot_speculative_state() {
                         mamba->conv_state.data(), mamba->conv_state.bytes(), stream);
             copy_device(cudaMemcpyDeviceToDevice, saved.ssm_state.data(),
                         mamba->ssm_state.data(), mamba->ssm_state.bytes(), stream);
-        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+          },
+          [&](GatedDeltaNetLayer* gated_delta) {
             saved.conv_state.reset(gated_delta->conv_state.size());
             saved.ssm_state.reset(0);
             saved.recurrent_state.reset(gated_delta->recurrent_state.size());
@@ -96,11 +106,9 @@ void CudaCompiledModel::snapshot_speculative_state() {
             copy_device(cudaMemcpyDeviceToDevice, saved.recurrent_state.data(),
                         gated_delta->recurrent_state.data(),
                         gated_delta->recurrent_state.bytes(), stream);
-        } else {
-            saved.conv_state.reset(0);
-            saved.ssm_state.reset(0);
-            saved.recurrent_state.reset(0);
-        }
+          },
+          // MLP-only blocks hold no speculative state.
+          [&](MlpOnlyLayer*) { clear_saved(); });
     }
     CELEG_CUDA(cudaStreamSynchronize(stream));
     speculative_snapshot_.valid = true;
@@ -142,21 +150,28 @@ void CudaCompiledModel::restore_speculative_state() {
     for (size_t index = 0; index < resources_.layers_.size(); ++index) {
         const SpeculativeLayerSnapshot& saved = speculative_snapshot_.layers[index];
         Layer& layer = resources_.layers_[index];
-        if (ConvolutionLayer* convolution = as_convolution(layer)) {
+        visit_layer(layer,
+          // Attention KV state is restored through the KV cache, not here.
+          [](AttentionLayer*) {},
+          [&](ConvolutionLayer* convolution) {
             copy_device(cudaMemcpyDeviceToDevice, convolution->conv_state.data(),
                         saved.conv_state.data(), convolution->conv_state.bytes(), stream);
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             copy_device(cudaMemcpyDeviceToDevice, mamba->conv_state.data(),
                         saved.conv_state.data(), mamba->conv_state.bytes(), stream);
             copy_device(cudaMemcpyDeviceToDevice, mamba->ssm_state.data(),
                         saved.ssm_state.data(), mamba->ssm_state.bytes(), stream);
-        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+          },
+          [&](GatedDeltaNetLayer* gated_delta) {
             copy_device(cudaMemcpyDeviceToDevice, gated_delta->conv_state.data(),
                         saved.conv_state.data(), gated_delta->conv_state.bytes(), stream);
             copy_device(cudaMemcpyDeviceToDevice, gated_delta->recurrent_state.data(),
                         saved.recurrent_state.data(),
                         gated_delta->recurrent_state.bytes(), stream);
-        }
+          },
+          // MLP-only blocks hold no speculative state.
+          [](MlpOnlyLayer*) {});
     }
     session_.position_ = speculative_snapshot_.position;
     session_.next_rope_position_ = speculative_snapshot_.next_rope_position;

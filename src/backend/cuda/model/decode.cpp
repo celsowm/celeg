@@ -53,7 +53,8 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
                        1, resources_.program_.hidden, semantics.operator_norm.epsilon,
                        stream_.get());
-        if (AttentionLayer* attention = as_attention(layer)) {
+        visit_layer(layer,
+          [&](AttentionLayer* attention) {
             const AttentionSpec& layout = attention->layout;
             AttentionLayer* owner = attention;
             if (attention->kv_owner_layer >= 0) {
@@ -157,7 +158,8 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                        semantics.execute_feed_forward ? 1.0f : 0.0f);
             launch_scale(workspace_.hidden_.data(), resources_.program_.hidden, semantics.residual.multiplier,
                          stream_.get());
-        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+          },
+          [&](GatedDeltaNetLayer* gated_delta) {
             const GatedDeltaNetSpec& spec = gated_delta->spec;
             const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
                 spec.value_heads * spec.value_head_dim;
@@ -203,7 +205,8 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
             linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    value_width);
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             const Mamba2Spec& spec = mamba->spec;
             linear(workspace_.normed_.data(), *mamba->in,
                    workspace_.mamba_projected_.data(), 1,
@@ -222,26 +225,27 @@ void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                             spec.intermediate_size, stream_.get());
             linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, spec.intermediate_size);
-        } else if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
+          },
+          [&](MlpOnlyLayer* mlp) {
             linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(),
                    1, mlp->spec.intermediate_size, resources_.program_.hidden);
             launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
                          mlp->spec.intermediate_size, stream_.get());
             linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, mlp->spec.intermediate_size);
-        } else {
-            ConvolutionLayer& convolution = *as_convolution(layer);
-            linear(workspace_.normed_.data(), *convolution.conv_in, workspace_.conv_projected_.data(),
+          },
+          [&](ConvolutionLayer* convolution) {
+            linear(workspace_.normed_.data(), *convolution->conv_in, workspace_.conv_projected_.data(),
                    1, 3 * resources_.program_.hidden, resources_.program_.hidden);
             launch_conv_decode(
-                workspace_.conv_projected_.data(), convolution.conv_weight,
-                convolution.conv_state.data(), workspace_.op_output_.data(),
+                workspace_.conv_projected_.data(), convolution->conv_weight,
+                convolution->conv_state.data(), workspace_.op_output_.data(),
                 resources_.program_.hidden, resources_.shape_.conv_cache, session_.position_,
                 stream_.get());
-            linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(),
+            linear(workspace_.op_output_.data(), *convolution->conv_out, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, resources_.program_.hidden,
                    resources_.options_.fused_residuals ? 1.0f : 0.0f);
-        }
+          });
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
@@ -313,7 +317,8 @@ void CudaCompiledModel::forward_token_paged_host(
         }
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm, workspace_.normed_.data(),
                        1, resources_.program_.hidden, semantics.operator_norm.epsilon, stream_.get());
-        if (AttentionLayer* attention = as_attention(layer)) {
+        visit_layer(layer,
+          [&](AttentionLayer* attention) {
             const AttentionSpec& layout = attention->layout;
             if (layout.uses_latent_state()) {
                 if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
@@ -559,7 +564,8 @@ void CudaCompiledModel::forward_token_paged_host(
             launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             }
-        } else if (GatedDeltaNetLayer* gated_delta = as_gated_delta_net(layer)) {
+          },
+          [&](GatedDeltaNetLayer* gated_delta) {
             const GatedDeltaNetSpec& spec = gated_delta->spec;
             const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
                 spec.value_heads * spec.value_head_dim;
@@ -605,7 +611,8 @@ void CudaCompiledModel::forward_token_paged_host(
             linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
                    workspace_.hidden_.data(), 1, resources_.program_.hidden,
                    value_width);
-        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+          },
+          [&](Mamba2Layer* mamba) {
             const Mamba2Spec& spec = mamba->spec;
             linear(workspace_.normed_.data(), *mamba->in, workspace_.mamba_projected_.data(), 1,
                    2 * spec.intermediate_size + 2 * spec.group_count * spec.state_size +
@@ -623,25 +630,26 @@ void CudaCompiledModel::forward_token_paged_host(
                             spec.intermediate_size, stream_.get());
             linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(), 1,
                    resources_.program_.hidden, spec.intermediate_size);
-        } else if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
+          },
+          [&](MlpOnlyLayer* mlp) {
             linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(), 1,
                    mlp->spec.intermediate_size, resources_.program_.hidden);
             launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
                          mlp->spec.intermediate_size, stream_.get());
             linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(), 1,
                    resources_.program_.hidden, mlp->spec.intermediate_size);
-        } else {
-            ConvolutionLayer& convolution = *as_convolution(layer);
-            linear(workspace_.normed_.data(), *convolution.conv_in, workspace_.conv_projected_.data(), 1,
+          },
+          [&](ConvolutionLayer* convolution) {
+            linear(workspace_.normed_.data(), *convolution->conv_in, workspace_.conv_projected_.data(), 1,
                    3 * resources_.program_.hidden, resources_.program_.hidden);
-            launch_conv_decode(workspace_.conv_projected_.data(), convolution.conv_weight,
-                               convolution.conv_state.data(), workspace_.op_output_.data(),
+            launch_conv_decode(workspace_.conv_projected_.data(), convolution->conv_weight,
+                               convolution->conv_state.data(), workspace_.op_output_.data(),
                                resources_.program_.hidden, resources_.shape_.conv_cache,
                                session_.position_, stream_.get());
-            linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(), 1,
+            linear(workspace_.op_output_.data(), *convolution->conv_out, workspace_.hidden_.data(), 1,
                    resources_.program_.hidden, resources_.program_.hidden,
                    resources_.options_.fused_residuals ? 1.0f : 0.0f);
-        }
+          });
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
