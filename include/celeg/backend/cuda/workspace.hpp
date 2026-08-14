@@ -83,6 +83,8 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_b_;
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_a_;
     DeviceBuffer<__nv_bfloat16> prefill_gated_delta_output_;
+    DeviceBuffer<__nv_bfloat16> prefill_mamba_projected_;
+    DeviceBuffer<__nv_bfloat16> prefill_mamba_inner_;
     DeviceBuffer<__nv_bfloat16> prefill_gate_up_;
     DeviceBuffer<__nv_bfloat16> prefill_activated_;
     DeviceBuffer<__nv_bfloat16> prefill_mlp_output_;

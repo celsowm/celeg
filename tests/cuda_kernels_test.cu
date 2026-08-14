@@ -159,6 +159,37 @@ int main() {
         for (size_t i = 0; i < batch_ss.size(); ++i) expect_near(to_float(batch_ss[i]), to_float(step_ss[i]), 0.20f);
     }
 
+    // Exercise the largest recurrent geometry in the cached hybrid fixture.
+    // This is intentionally a launch/synchronization guard: it catches
+    // topology-sized indexing errors independently of model scheduling.
+    {
+        constexpr int rows = 32, intermediate = 7680, state_size = 128,
+            heads = 96, head_dim = 80, groups = 8, kernel = 4;
+        constexpr int conv_dim = intermediate + 2 * groups * state_size;
+        constexpr int projection = 2 * intermediate + 2 * groups * state_size + heads;
+        std::vector<__nv_bfloat16> projected(static_cast<size_t>(rows) * projection, to_bf16(0.01f)),
+            conv_weight(static_cast<size_t>(conv_dim) * kernel, to_bf16(0.02f)),
+            conv_bias(conv_dim, to_bf16(0.01f)), dt_bias(heads, to_bf16(0.1f)),
+            a_log(heads, to_bf16(-0.2f)), d(heads, to_bf16(0.3f));
+        celeg::DeviceBuffer<__nv_bfloat16> dp(projected.size()), dw(conv_weight.size()),
+            db(conv_bias.size()), ddt(dt_bias.size()), da(a_log.size()), dd(d.size()),
+            conv_state(static_cast<size_t>(conv_dim) * kernel),
+            ssm_state(static_cast<size_t>(intermediate) * state_size),
+            inner(static_cast<size_t>(rows) * intermediate);
+        CELEG_CUDA(cudaMemcpy(dp.data(), projected.data(), dp.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dw.data(), conv_weight.data(), dw.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(db.data(), conv_bias.data(), db.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(ddt.data(), dt_bias.data(), ddt.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(da.data(), a_log.data(), da.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dd.data(), d.data(), dd.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemset(conv_state.data(), 0, conv_state.bytes()));
+        CELEG_CUDA(cudaMemset(ssm_state.data(), 0, ssm_state.bytes()));
+        celeg::launch_mamba2_prefill(dp.data(), dw.data(), db.data(), ddt.data(), da.data(), dd.data(),
+            conv_state.data(), ssm_state.data(), inner.data(), rows, intermediate, state_size,
+            heads, head_dim, groups, kernel, stream.get());
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    }
+
     // The sequence CUDA path is a parallel form of the neutral recurrent
     // operator.  Exercise grouped key/value heads, then compare its output
     // and both persisted state buffers with the CPU reference.

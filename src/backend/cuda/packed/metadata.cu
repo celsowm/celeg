@@ -27,8 +27,17 @@ void stage_packed_persistent_metadata(
                                  workspace.maximum_batch + row;
             Layer& layer = model.layers()[layer_index];
             if (as_mlp_only(layer)) {
-                throw std::runtime_error(
-                    "packed CUDA metadata does not support MlpOnly layers");
+                // MLP-only blocks have no session-persistent state.  Keep
+                // their neutral metadata slot explicitly empty so the common
+                // packed layout remains valid for hybrid schedules.
+                workspace.h_key_bf16.data()[index] = nullptr;
+                workspace.h_value_bf16.data()[index] = nullptr;
+                workspace.h_key_int8.data()[index] = nullptr;
+                workspace.h_value_int8.data()[index] = nullptr;
+                workspace.h_key_scales.data()[index] = nullptr;
+                workspace.h_value_scales.data()[index] = nullptr;
+                workspace.h_conv_states.data()[index] = nullptr;
+                continue;
             }
             if (auto* attention = as_attention(layer)) {
                 workspace.h_key_bf16.data()[index] = attention->key_cache.data();

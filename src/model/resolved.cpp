@@ -297,6 +297,8 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
                     2 * mixer.group_count * mixer.state_size);
                 ++result.mamba2_layer_count;
             } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                result.max_feed_forward_intermediate = std::max(
+                    result.max_feed_forward_intermediate, mixer.intermediate_size);
                 ++result.mlp_only_layer_count;
             } else {
                 static_assert(always_false_v<Mixer>, "unhandled mixer derivation variant");

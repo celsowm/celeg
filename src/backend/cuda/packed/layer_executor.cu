@@ -116,10 +116,33 @@ void PackedLayerExecutor::run_transformer_layers(
         PackedOperatorContext context{
             workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
         if (layer_program_.kind(layer_index) == PackedLayerKind::MlpOnly) {
-            throw std::runtime_error(
-                "packed CUDA execution requires tokenwise scheduling for sequential mixers");
-        }
-        if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
+            const auto* mlp = as_mlp_only(layer);
+            if (!mlp) {
+                throw std::logic_error("packed layer program disagrees with MLP-only binding");
+            }
+            const int intermediate = mlp->spec.intermediate_size;
+            if (intermediate <= 0 ||
+                intermediate > workspace_.shape_.max_feed_forward_intermediate) {
+                throw std::runtime_error("invalid packed MLP-only width at layer " +
+                                         std::to_string(layer_index));
+            }
+            linear(workspace_.normed.data(), *mlp->up, workspace_.gate_up.data(), rows,
+                   intermediate, workspace_.program_.hidden);
+            switch (mlp->spec.activation) {
+            case ActivationKind::Relu2:
+                launch_relu2(workspace_.gate_up.data(), workspace_.activated.data(),
+                             rows * intermediate, workspace_.stream.get());
+                break;
+            case ActivationKind::GeluTanh:
+                launch_gelu_tanh(workspace_.gate_up.data(), workspace_.activated.data(),
+                                 rows * intermediate, workspace_.stream.get());
+                break;
+            default:
+                throw std::runtime_error("packed CUDA does not implement MLP-only activation");
+            }
+            linear(workspace_.activated.data(), *mlp->down, workspace_.hidden.data(), rows,
+                   workspace_.program_.hidden, intermediate);
+        } else if (layer_program_.kind(layer_index) == PackedLayerKind::Attention) {
             const auto* attention = as_attention(layer);
             if (!attention) {
                 throw std::logic_error("packed layer program disagrees with layer binding");

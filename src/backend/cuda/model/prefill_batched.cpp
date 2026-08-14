@@ -120,6 +120,52 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             launch_scale(workspace_.prefill_hidden_.data(), rows * resources_.program_.hidden,
                          semantics.residual.multiplier, stream_.get());
             prof.end(PrefillPhase::AttnOut, stream_.get());
+        } else if (Mamba2Layer* mamba = as_mamba2(layer)) {
+            const Mamba2Spec& spec = mamba->spec;
+            const int projection_width = 2 * spec.intermediate_size +
+                2 * spec.group_count * spec.state_size + spec.num_heads;
+            linear(workspace_.prefill_normed_.data(), *mamba->in,
+                   workspace_.prefill_mamba_projected_.data(), rows, projection_width,
+                   resources_.program_.hidden);
+            launch_mamba2_prefill(
+                workspace_.prefill_mamba_projected_.data(), mamba->conv_weight,
+                mamba->conv_bias, mamba->dt_bias, mamba->a_log, mamba->d,
+                mamba->conv_state.data(), mamba->ssm_state.data(),
+                workspace_.prefill_mamba_inner_.data(), rows, spec.intermediate_size,
+                spec.state_size, spec.num_heads, spec.head_dim, spec.group_count,
+                spec.conv_kernel, stream_.get());
+            launch_rmsnorm(workspace_.prefill_mamba_inner_.data(), mamba->norm,
+                           workspace_.prefill_mamba_inner_.data(), rows,
+                           spec.intermediate_size, semantics.operator_norm.epsilon,
+                           stream_.get());
+            launch_multiply(workspace_.prefill_mamba_inner_.data(),
+                            workspace_.prefill_mamba_projected_.data(),
+                            rows * spec.intermediate_size, stream_.get());
+            linear(workspace_.prefill_mamba_inner_.data(), *mamba->out,
+                   workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
+                   spec.intermediate_size);
+        } else if (MlpOnlyLayer* mlp = as_mlp_only(layer)) {
+            const int intermediate = mlp->spec.intermediate_size;
+            linear(workspace_.prefill_normed_.data(), *mlp->up,
+                   workspace_.prefill_gate_up_.data(), rows, intermediate,
+                   resources_.program_.hidden);
+            switch (mlp->spec.activation) {
+            case ActivationKind::Relu2:
+                launch_relu2(workspace_.prefill_gate_up_.data(),
+                             workspace_.prefill_activated_.data(),
+                             rows * intermediate, stream_.get());
+                break;
+            case ActivationKind::GeluTanh:
+                launch_gelu_tanh(workspace_.prefill_gate_up_.data(),
+                                 workspace_.prefill_activated_.data(),
+                                 rows * intermediate, stream_.get());
+                break;
+            default:
+                throw std::runtime_error("CUDA prefill does not implement MLP-only activation");
+            }
+            linear(workspace_.prefill_activated_.data(), *mlp->down,
+                   workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
+                   intermediate);
         } else if (AttentionLayer* attention = as_attention(layer)) {
             const AttentionSpec& layout = attention->layout;
             AttentionLayer* owner = attention;
@@ -515,14 +561,15 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                            workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
+        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
+            !semantics.execute_feed_forward) {
             prof.begin(stream_.get());
             launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.prefill_residual_.data(),
                                 rows * resources_.program_.hidden, stream_.get());
             prof.end(PrefillPhase::Other, stream_.get());
         }
         prof.begin(stream_.get());
-        run_mlp_prefill(common_layer, rows, layer_idx);
+        if (semantics.execute_feed_forward) run_mlp_prefill(common_layer, rows, layer_idx);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.prefill_hidden_.data(), resources_.final_norm_,

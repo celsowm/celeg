@@ -149,6 +149,9 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     workspace_.prefill_gated_delta_b_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
     workspace_.prefill_gated_delta_a_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
     workspace_.prefill_gated_delta_output_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
+    workspace_.prefill_mamba_projected_.reserve(
+        r * resources_.shape_.maximum_mamba_projection_width());
+    workspace_.prefill_mamba_inner_.reserve(r * resources_.shape_.mamba2_intermediate);
     workspace_.prefill_gate_up_.reserve(r * 2 * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_activated_.reserve(r * resources_.shape_.max_feed_forward_intermediate);
     workspace_.prefill_mlp_output_.reserve(r * resources_.program_.hidden);

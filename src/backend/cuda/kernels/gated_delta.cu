@@ -966,6 +966,18 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
             gated_delta_sequence_prepare_kernel<<<key_heads, 256, 0, stream>>>(
                 const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,
                 rows, conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
+            if (key_heads == value_heads && key_head_dim == 64 && value_head_dim == 64) {
+                const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
+                gated_delta_sequence_register_tile_kernel<64, 64><<<tile_grid, dim3(32, 4), 0, stream>>>(
+                    projected_qkv, projected_b, projected_a, dt_bias, a_log,
+                    recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
+                    decay_lower_bound);
+                gated_delta_sequence_norm_kernel<<<value_heads, 128, 0, stream>>>(
+                    output, projected_z, norm_weight, rows, value_head_dim, value_heads,
+                    eps, sigmoid_output_gate);
+                CELEG_KERNEL_DEBUG_SYNC(stream);
+                return;
+            }
             if (key_heads == value_heads && key_head_dim == 128 && value_head_dim == 128) {
                 const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
                 gated_delta_sequence_register_tile_kernel<128, 128><<<tile_grid, dim3(32, 4), 0, stream>>>(

@@ -50,6 +50,20 @@ int main() {
                      cpu.layers[0].state_layout->persistent_elements == 16);
     CELEG_TEST_CHECK(cuda.layers.size() == cpu.layers.size());
 
+    // Standalone MLP blocks consume the same packed FFN scratch family as
+    // ordinary feed-forward layers, so their mixer width must contribute to
+    // the neutral execution topology's capacity.
+    celeg::ModelGraph mlp_only_graph;
+    mlp_only_graph.hidden = 8;
+    celeg::LayerSpec mlp_only_layer;
+    mlp_only_layer.mixer = celeg::MlpBlockSpec{64, celeg::ActivationKind::Relu2};
+    mlp_only_layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
+    mlp_only_graph.layers.push_back(std::move(mlp_only_layer));
+    const celeg::ExecutionTopology mlp_only_topology =
+        celeg::ExecutionTopology::derive(mlp_only_graph);
+    CELEG_TEST_CHECK(mlp_only_topology.mlp_only_layer_count == 1);
+    CELEG_TEST_CHECK(mlp_only_topology.max_feed_forward_intermediate == 64);
+
     celeg::ResolvedModel unsupported_pattern = model;
     std::get<celeg::AttentionSpec>(unsupported_pattern.graph.layers[0].mixer).pattern =
         celeg::BidirectionalPattern{};
