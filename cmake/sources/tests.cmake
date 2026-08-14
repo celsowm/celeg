@@ -28,7 +28,21 @@ function(celeg_register_attention_semantics_test)
     add_test(NAME attention_semantics_test COMMAND attention_semantics_test)
 endfunction()
 
+function(celeg_register_latent_prefill_path_test)
+    if(NOT CELEG_BUILD_TESTS)
+        return()
+    endif()
+    add_executable(latent_prefill_path_test
+        tests/latent_prefill_path_test.cpp)
+    target_include_directories(latent_prefill_path_test PRIVATE
+        include src/backend/cuda/model/prefill_batched/attention)
+    target_link_libraries(latent_prefill_path_test PRIVATE
+        celeg_base Threads::Threads)
+    add_test(NAME latent_prefill_path_test COMMAND latent_prefill_path_test)
+endfunction()
+
 # This manifest is included before targets are declared. Defer registration so
 # celeg_cpu_backend exists and the tests remain owned by the test manifest.
 cmake_language(DEFER CALL celeg_register_cpu_expert_cache_test)
 cmake_language(DEFER CALL celeg_register_attention_semantics_test)
+cmake_language(DEFER CALL celeg_register_latent_prefill_path_test)
