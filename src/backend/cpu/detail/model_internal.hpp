@@ -182,6 +182,8 @@ struct CpuWorkspace {
 struct CpuCompiledModel {
     struct BatchScratch;
     struct CommonWeights {
+        CommonWeights() : layer_scalar(1.0f) {}
+
         std::vector<float> operator_norm;
         std::vector<float> post_attention_norm;
         std::vector<float> pre_feed_forward_norm;
@@ -193,7 +195,7 @@ struct CpuCompiledModel {
         CpuLinearWeight mlp_up;
         CpuLinearWeight per_layer_input_gate;
         CpuLinearWeight per_layer_projection;
-        float layer_scalar = 1.0f;
+        float layer_scalar;
     };
     struct AttentionWeights {
         CommonWeights common;
