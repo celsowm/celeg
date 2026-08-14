@@ -16,10 +16,10 @@ double elapsed_ms(Clock::time_point start) {
 }
 
 void execute_cpu_gated_delta_token(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, CpuRecurrentStateView state_view, size_t layer,
     const CpuCompiledModel::GatedDeltaNetWeights& weights) {
-    auto& workspace = model.workspace_;
-    auto& shared = *model.shared;
+    auto& workspace = context.workspace;
+    auto& shared = context.shared;
     const GatedDeltaNetSpec& spec = weights.spec;
     if (spec.factorized_projections) {
         shared.linear.gemv(weights.q, workspace.normed.data(),
@@ -40,7 +40,7 @@ void execute_cpu_gated_delta_token(
                        workspace.gated_delta_b.data());
     shared.linear.gemv(weights.a, workspace.normed.data(),
                        workspace.gated_delta_a.data());
-    auto& state = model.gated_delta_net_state(layer);
+    auto& state = state_view.gated_delta_net(layer);
     cpu_gated_delta_net_decode(
         workspace.gated_delta_qkv.data(), workspace.gated_delta_z.data(),
         workspace.gated_delta_b.data(), workspace.gated_delta_a.data(),
@@ -56,10 +56,10 @@ void execute_cpu_gated_delta_token(
 }
 
 void execute_cpu_mamba2_token(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, CpuRecurrentStateView state_view, size_t layer,
     const CpuCompiledModel::Mamba2Weights& weights) {
-    auto& workspace = model.workspace_;
-    auto& shared = *model.shared;
+    auto& workspace = context.workspace;
+    auto& shared = context.shared;
     const auto& spec = shared.program.layers.at(layer).mamba2.value();
     const int inner = spec.intermediate_size;
     const int conv_dim = inner + 2 * spec.group_count * spec.state_size;
@@ -68,7 +68,7 @@ void execute_cpu_mamba2_token(
     const float* z = workspace.mamba_projected.data();
     const float* xbc = z + inner;
     const float* dt_raw = xbc + conv_dim;
-    auto& state = model.mamba2_state(layer);
+    auto& state = state_view.mamba2(layer);
     for (int channel = 0; channel < conv_dim; ++channel) {
         float* history = state.conv.data() +
             static_cast<size_t>(channel) * spec.conv_kernel;
@@ -116,27 +116,27 @@ void execute_cpu_mamba2_token(
 }
 
 void execute_cpu_short_convolution_token(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, CpuRecurrentStateView state_view, size_t layer,
     const CpuCompiledModel::ConvolutionWeights& weights) {
-    auto& workspace = model.workspace_;
-    auto& shared = *model.shared;
-    auto& state = model.convolution_state(layer);
+    auto& workspace = context.workspace;
+    auto& shared = context.shared;
+    auto& state = state_view.convolution(layer);
     shared.linear.gemv(weights.in, workspace.normed.data(),
                        workspace.conv_projected.data());
     cpu_conv_decode(workspace.conv_projected.data(), weights.weight_tap_major.data(),
                     state.state.data(), workspace.op_output.data(), shared.program.hidden,
-                    shared.shape.conv_cache, model.session_.position_value);
+                    shared.shape.conv_cache, context.session.position_value);
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());
 }
 
 void execute_cpu_gated_delta_chunk(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, CpuRecurrentStateView state_view, size_t layer,
     const CpuCompiledModel::GatedDeltaNetWeights& weights,
     size_t rows, bool& normed_q8_ready) {
-    auto& workspace = model.workspace_;
-    auto& shared = *model.shared;
-    CpuExecutionContext execution{shared, workspace, model.session_};
+    auto& workspace = context.workspace;
+    auto& shared = context.shared;
+    CpuExecutionContext& execution = context;
     const GatedDeltaNetSpec& spec = weights.spec;
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
 
@@ -173,10 +173,10 @@ void execute_cpu_gated_delta_chunk(
     cpu_chunk_layer_gemm(execution, weights.a, workspace.chunk_normed.data(),
                          workspace.chunk_gated_delta_a.data(), rows, hidden,
                          normed_q8_ready);
-    model.session_.prefill_profile.linear_ms += elapsed_ms(started);
+    context.session.prefill_profile.linear_ms += elapsed_ms(started);
 
     started = Clock::now();
-    auto& state = model.gated_delta_net_state(layer);
+    auto& state = state_view.gated_delta_net(layer);
     cpu_gated_delta_net_prefill(
         workspace.chunk_gated_delta_qkv.data(), workspace.chunk_gated_delta_z.data(),
         workspace.chunk_gated_delta_b.data(), workspace.chunk_gated_delta_a.data(),
@@ -187,43 +187,43 @@ void execute_cpu_gated_delta_chunk(
         shared.program.layers.at(layer).operator_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate);
-    model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
+    context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();
     cpu_chunk_layer_gemm(execution, weights.out, workspace.chunk_gated_delta_output.data(),
                          workspace.chunk_hidden.data(), rows, hidden,
                          normed_q8_ready);
-    model.session_.prefill_profile.linear_ms += elapsed_ms(started);
+    context.session.prefill_profile.linear_ms += elapsed_ms(started);
 }
 
 void execute_cpu_short_convolution_chunk(
-    CpuCompiledModel& model, size_t layer,
+    CpuExecutionContext& context, CpuRecurrentStateView state_view, size_t layer,
     const CpuCompiledModel::ConvolutionWeights& weights,
     size_t rows, bool& normed_q8_ready) {
-    auto& workspace = model.workspace_;
-    auto& shared = *model.shared;
-    CpuExecutionContext execution{shared, workspace, model.session_};
+    auto& workspace = context.workspace;
+    auto& shared = context.shared;
+    CpuExecutionContext& execution = context;
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
 
     auto started = Clock::now();
     cpu_chunk_layer_gemm(execution, weights.in, workspace.chunk_normed.data(),
                          workspace.chunk_conv.data(), rows, hidden,
                          normed_q8_ready);
-    model.session_.prefill_profile.linear_ms += elapsed_ms(started);
+    context.session.prefill_profile.linear_ms += elapsed_ms(started);
 
     started = Clock::now();
-    auto& state = model.convolution_state(layer);
+    auto& state = state_view.convolution(layer);
     cpu_conv_prefill(workspace.chunk_conv.data(), weights.weight_tap_major.data(),
                      state.state.data(), workspace.chunk_op.data(), rows,
                      shared.program.hidden, shared.shape.conv_cache,
-                     model.session_.position_value, shared.pool);
-    model.session_.prefill_profile.shortconv_ms += elapsed_ms(started);
+                     context.session.position_value, shared.pool);
+    context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();
     cpu_chunk_layer_gemm(execution, weights.out, workspace.chunk_op.data(),
                          workspace.chunk_hidden.data(), rows, hidden,
                          normed_q8_ready);
-    model.session_.prefill_profile.linear_ms += elapsed_ms(started);
+    context.session.prefill_profile.linear_ms += elapsed_ms(started);
 }
 
 }

@@ -481,6 +481,74 @@ struct CpuExecutionContext {
     CpuCompiledModel::CpuSessionState& session;
 };
 
+// Per-layer recurrent state handed to recurrent mixers. The mixers only need
+// their own layer state slot, so they receive the session state table instead
+// of the owning model.
+struct CpuRecurrentStateView {
+    std::vector<CpuCompiledModel::LayerState>& states;
+
+    explicit CpuRecurrentStateView(CpuCompiledModel::CpuSessionState& session)
+        : states(session.states) {}
+
+    CpuCompiledModel::ConvolutionState& convolution(size_t layer) const {
+        return std::get<CpuCompiledModel::ConvolutionState>(states.at(layer));
+    }
+    CpuCompiledModel::Mamba2State& mamba2(size_t layer) const {
+        return std::get<CpuCompiledModel::Mamba2State>(states.at(layer));
+    }
+    CpuCompiledModel::GatedDeltaNetState& gated_delta_net(size_t layer) const {
+        return std::get<CpuCompiledModel::GatedDeltaNetState>(states.at(layer));
+    }
+};
+
+// Attention KV services handed to attention operators. The KV page pools,
+// cache writes, and attention kernels are still owned by the model, so this
+// view forwards to it while exposing only the operations an attention operator
+// is entitled to use.
+class CpuAttentionStateView {
+public:
+    explicit CpuAttentionStateView(CpuCompiledModel& owner) : owner_(owner) {}
+
+    CpuCompiledModel::AttentionState& state(size_t layer) const {
+        return owner_.attention_state(layer);
+    }
+    void store_kv(CpuCompiledModel::AttentionState& state, int position,
+                  const float* key, const float* value) const {
+        owner_.store_kv(state, position, key, value);
+    }
+    void store_latent(CpuCompiledModel::AttentionState& state, int position,
+                      const float* key, const float* value,
+                      const float* rotary) const {
+        owner_.store_latent(state, position, key, value, rotary);
+    }
+    void run_attention(const CpuCompiledModel::AttentionState& state,
+                       const AttentionSpec& attention, const float* q,
+                       float* output, int sequence_length,
+                       std::span<const float> relative_bias = {}) const {
+        owner_.run_attention(state, attention, q, output, sequence_length,
+                             relative_bias);
+    }
+    void run_latent_attention(const CpuCompiledModel::AttentionState& state,
+                              const AttentionSpec& attention,
+                              const float* query_content, const float* query_rope,
+                              float* output, int sequence_length,
+                              int query_position = -1,
+                              std::span<const float> relative_bias = {}) const {
+        owner_.run_latent_attention(state, attention, query_content, query_rope,
+                                    output, sequence_length, query_position,
+                                    relative_bias);
+    }
+    void run_external_attention(const AttentionSpec& attention,
+                                const CpuExternalAttentionMemory& memory,
+                                const float* q, float* output,
+                                std::span<const float> relative_bias = {}) const {
+        owner_.run_external_attention(attention, memory, q, output, relative_bias);
+    }
+
+private:
+    CpuCompiledModel& owner_;
+};
+
 void validate_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions);
 void execute_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions,
                               std::span<const int32_t> tokens,

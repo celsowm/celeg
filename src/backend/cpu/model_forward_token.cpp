@@ -14,6 +14,8 @@ namespace celeg {
 void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                      const PromptEmbedding* embeddings) {
     CpuExecutionContext execution{*shared, workspace_, session_};
+    CpuRecurrentStateView recurrent_state{session_};
+    CpuAttentionStateView attention_state{*this};
     if (session_.position_value >= shared->max_context) {
         throw std::runtime_error("CPU context limit reached");
     }
@@ -80,17 +82,17 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         bool mixer_owns_layer = false;
         visit_operator_weights(layer_program,
           [&](const CpuCompiledModel::AttentionWeights* attention) {
-            execute_cpu_attention_token(execution, *this, index, *attention, semantics,
+            execute_cpu_attention_token(execution, attention_state, index, *attention, semantics,
                                         rope_position);
           },
           [&](const CpuCompiledModel::ConvolutionWeights* convolution) {
-            execute_cpu_short_convolution_token(*this, index, *convolution);
+            execute_cpu_short_convolution_token(execution, recurrent_state, index, *convolution);
           },
           [&](const CpuCompiledModel::GatedDeltaNetWeights* gated_delta) {
-            execute_cpu_gated_delta_token(*this, index, *gated_delta);
+            execute_cpu_gated_delta_token(execution, recurrent_state, index, *gated_delta);
           },
           [&](const CpuCompiledModel::Mamba2Weights* mamba) {
-            execute_cpu_mamba2_token(*this, index, *mamba);
+            execute_cpu_mamba2_token(execution, recurrent_state, index, *mamba);
             mixer_owns_layer = true;
           },
           [&](const CpuCompiledModel::MlpOnlyWeights* mlp) {
@@ -120,7 +122,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
             const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
-            execute_cpu_moe_token(*this, index, *moe, moe_semantics);
+            execute_cpu_moe_token(execution, index, *moe, moe_semantics);
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }

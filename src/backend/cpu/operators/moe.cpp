@@ -132,18 +132,18 @@ const CpuExpertWeights* acquire_expert(
 
 } // namespace
 
-void execute_cpu_moe_token(CpuCompiledModel& model, size_t layer,
+void execute_cpu_moe_token(CpuExecutionContext& context, size_t layer,
                            const CpuCompiledModel::MoeWeights& weights,
                            const MoeLayerProgram& semantics) {
-    auto& shared = *model.shared;
-    auto& workspace = model.workspace_;
+    auto& shared = context.shared;
+    auto& workspace = context.workspace;
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
     const int experts = semantics.router.expert_count;
     const int selected = semantics.router.experts_per_token;
     const int intermediate = semantics.routed.mlp.intermediate_size;
     prepare_expert_backing(shared, weights);
 
-    const bool profile = model.session_.phase == SessionPhase::Prefilling;
+    const bool profile = context.session.phase == SessionPhase::Prefilling;
     const auto router_started = Clock::now();
     workspace.moe_router_logits.resize(static_cast<size_t>(experts));
     workspace.moe_selected.resize(static_cast<size_t>(selected));
@@ -155,7 +155,7 @@ void execute_cpu_moe_token(CpuCompiledModel& model, size_t layer,
         semantics.router, workspace.moe_router_logits, weights.router_bias);
     std::copy(route.experts.begin(), route.experts.end(), workspace.moe_selected.begin());
     std::copy(route.weights.begin(), route.weights.end(), workspace.moe_weights.begin());
-    if (profile) model.session_.prefill_profile.moe_router_ms += elapsed_ms(router_started);
+    if (profile) context.session.prefill_profile.moe_router_ms += elapsed_ms(router_started);
 
     const auto expert_started = Clock::now();
     std::fill(workspace.mlp_output.begin(), workspace.mlp_output.begin() + hidden, 0.0f);
@@ -200,16 +200,16 @@ void execute_cpu_moe_token(CpuCompiledModel& model, size_t layer,
             workspace.mlp_output[d] += gate * workspace.shared_output[d];
         }
     }
-    if (profile) model.session_.prefill_profile.moe_expert_ms += elapsed_ms(expert_started);
+    if (profile) context.session.prefill_profile.moe_expert_ms += elapsed_ms(expert_started);
     (void)layer;
 }
 
-void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
+void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
                            const CpuCompiledModel::MoeWeights& weights,
                            const MoeLayerProgram& semantics,
                            size_t rows, bool& normed_q8_ready) {
-    auto& shared = *model.shared;
-    auto& workspace = model.workspace_;
+    auto& shared = context.shared;
+    auto& workspace = context.workspace;
     const size_t hidden = static_cast<size_t>(shared.program.hidden);
     const int experts = semantics.router.expert_count;
     const int selected = semantics.router.experts_per_token;
@@ -263,8 +263,8 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
         const int expert = workspace.moe_route_experts[route];
         workspace.moe_route_order[workspace.moe_group_cursor[static_cast<size_t>(expert)]++] = route;
     }
-    if (model.session_.phase == SessionPhase::Prefilling) {
-        model.session_.prefill_profile.moe_router_ms += elapsed_ms(router_started);
+    if (context.session.phase == SessionPhase::Prefilling) {
+        context.session.prefill_profile.moe_router_ms += elapsed_ms(router_started);
     }
 
     const auto expert_started = Clock::now();
@@ -362,8 +362,8 @@ void execute_cpu_moe_chunk(CpuCompiledModel& model, size_t layer,
             for (size_t d = 0; d < hidden; ++d) destination[d] += gate * source[d];
         });
     }
-    if (model.session_.phase == SessionPhase::Prefilling) {
-        model.session_.prefill_profile.moe_expert_ms += elapsed_ms(expert_started);
+    if (context.session.phase == SessionPhase::Prefilling) {
+        context.session.prefill_profile.moe_expert_ms += elapsed_ms(expert_started);
     }
     (void)layer;
 }

@@ -7,7 +7,7 @@ namespace celeg {
 
 void execute_cpu_attention_token(
     CpuExecutionContext& execution,
-    CpuCompiledModel& model,
+    CpuAttentionStateView attention_state,
     size_t index,
     const CpuCompiledModel::AttentionWeights& attention,
     const CompiledLayerProgram& semantics,
@@ -24,7 +24,7 @@ void execute_cpu_attention_token(
                 if (memory_it == execution.shared.external_attention_memory.end()) {
                     throw std::logic_error("external attention memory slot is not bound");
                 }
-                model.run_external_attention(layout, *memory_it->second, q,
+                attention_state.run_external_attention(layout, *memory_it->second, q,
                                        execution.workspace.op_output.data(),
                                        attention.relative_bias);
                 if (layout.output_gate.enabled()) {
@@ -113,11 +113,11 @@ void execute_cpu_attention_token(
                     layout, query_rope, key_rope,
                     execution.session.position_value, rope_position);
                 const int owner = execution.shared.layer_to_kv_owner.at(index);
-                CpuCompiledModel::AttentionState& state = model.attention_state(static_cast<size_t>(owner));
-                model.store_latent(state, execution.session.position_value,
+                CpuCompiledModel::AttentionState& state = attention_state.state(static_cast<size_t>(owner));
+                attention_state.store_latent(state, execution.session.position_value,
                              execution.workspace.latent_key.data(),
                              execution.workspace.latent_value.data(), key_rope);
-                model.run_latent_attention(state, layout, query_content, query_rope,
+                attention_state.run_latent_attention(state, layout, query_content, query_rope,
                                      execution.workspace.op_output.data(), execution.session.position_value + 1,
                                      execution.session.position_value, attention.relative_bias);
                 const float* output_input = execution.workspace.op_output.data();
@@ -161,11 +161,11 @@ void execute_cpu_attention_token(
             apply_cpu_attention_qk(layout, attention, q, k,
                                    execution.session.position_value, rope_position);
             const int owner = execution.shared.layer_to_kv_owner.at(index);
-            CpuCompiledModel::AttentionState& state = model.attention_state(static_cast<size_t>(owner));
+            CpuCompiledModel::AttentionState& state = attention_state.state(static_cast<size_t>(owner));
             if (!attention.k.segments.empty()) {
-                model.store_kv(state, execution.session.position_value, k, v);
+                attention_state.store_kv(state, execution.session.position_value, k, v);
             }
-            model.run_attention(state, layout, q, execution.workspace.op_output.data(),
+            attention_state.run_attention(state, layout, q, execution.workspace.op_output.data(),
                           execution.session.position_value + 1, attention.relative_bias);
             apply_cpu_attention_output_transform(
                 layout, execution.workspace.op_output.data(), v);

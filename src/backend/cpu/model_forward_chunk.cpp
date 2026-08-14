@@ -55,6 +55,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     const int base_position = session_.position_value;
     const size_t hidden = static_cast<size_t>(shared->program.hidden);
     CpuExecutionContext execution{*shared, workspace_, session_};
+    CpuRecurrentStateView recurrent_state{session_};
     workspace_.ensure_chunk(rows, shared->workspace_plan);
 
     auto scale = [&](std::vector<float>& values, size_t count, float factor) {
@@ -184,7 +185,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
 
         visit_operator_weights(layer_program,
           [&](const CpuCompiledModel::GatedDeltaNetWeights* gated_delta) {
-            execute_cpu_gated_delta_chunk(*this, index, *gated_delta, rows,
+            execute_cpu_gated_delta_chunk(execution, recurrent_state, index, *gated_delta, rows,
                                           normed_q8_ready);
           },
           [&](const CpuCompiledModel::Mamba2Weights*) {
@@ -194,7 +195,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             throw std::logic_error("CPU chunked prefill does not implement MLP-only blocks");
           },
           [&](const CpuCompiledModel::ConvolutionWeights* convolution) {
-            execute_cpu_short_convolution_chunk(*this, index, *convolution, rows,
+            execute_cpu_short_convolution_chunk(execution, recurrent_state, index, *convolution, rows,
                                                 normed_q8_ready);
           },
           [&](const CpuCompiledModel::AttentionWeights* attention) {
@@ -502,7 +503,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
             const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
-            execute_cpu_moe_chunk(*this, index, *moe, moe_semantics, rows,
+            execute_cpu_moe_chunk(execution, index, *moe, moe_semantics, rows,
                                   normed_q8_ready);
         } else {
             execute_cpu_dense_feed_forward_chunk(execution, index, common, rows,

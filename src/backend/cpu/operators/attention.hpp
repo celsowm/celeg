@@ -33,7 +33,7 @@ void apply_cpu_attention_output_gate(float* output, const float* gate,
 
 void execute_cpu_attention_token(
     CpuExecutionContext& execution,
-    CpuCompiledModel& model,
+    CpuAttentionStateView attention_state,
     size_t index,
     const CpuCompiledModel::AttentionWeights& attention,
     const CompiledLayerProgram& semantics,
