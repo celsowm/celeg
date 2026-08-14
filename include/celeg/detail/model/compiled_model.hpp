@@ -291,31 +291,6 @@ struct CudaCompiledModel {
     // Final norm + logits projection + softcap.
     void run_token_logits();
 
-    // ---- Batched prefill seams -------------------------------------------
-    void run_prefill_layers(int rows);
-    void run_prefill_layer(Layer& layer, int layer_index, int rows);
-    void run_prefill_mixer(Layer& layer, LayerCommon& common_layer,
-                           const CompiledLayerProgram& semantics, int rows);
-    void run_prefill_attention(AttentionLayer& attention, LayerCommon& common_layer,
-                               const CompiledLayerProgram& semantics, int rows);
-    void run_prefill_latent_attention(AttentionLayer& attention,
-                                      AttentionLayer& owner,
-                                      LayerCommon& common_layer,
-                                      const CompiledLayerProgram& semantics, int rows);
-    AttentionCapability prefill_attention_plan(AttentionLayer& attention,
-                                               const AttentionSpec& owner_layout,
-                                               int rows);
-    void store_and_attend_prefill(AttentionLayer& attention,
-                                  AttentionLayer& owner,
-                                  const AttentionCapability& plan, int rows);
-    void run_prefill_gated_delta(GatedDeltaNetLayer& gated_delta,
-                                 const CompiledLayerProgram& semantics, int rows);
-    void run_prefill_mamba2(Mamba2Layer& mamba, const CompiledLayerProgram& semantics,
-                            int rows);
-    void run_prefill_mlp_only(MlpOnlyLayer& mlp, int rows);
-    void run_prefill_convolution(ConvolutionLayer& convolution, int rows);
-    void run_prefill_logits(int rows);
-
     void enqueue_sampling();
     void enqueue_decode_forward();
     void enqueue_decode_attention(Layer& layer, LayerCommon& common_layer,
