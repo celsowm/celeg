@@ -41,7 +41,7 @@ struct CpuSchedulerDriver {
           runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
           base_model(path, context, std::move(model_options), {}, runtime_),
           admission(base_model, numa_placement, prefix_cache),
-          metrics_collector(metrics) {
+          metrics_collector(metrics, metrics_extras) {
         if (engine_options.max_active_requests == 0 ||
             engine_options.max_batched_tokens == 0 ||
             engine_options.max_prefill_batch == 0 ||
@@ -133,7 +133,7 @@ struct CpuSchedulerDriver {
             metrics_collector.record_decode_batch(tokens.size(), step_metrics);
             for (size_t index = 0; index < plan.size(); ++index) {
                 CpuRequestLifecycle::apply_decode_token(
-                    plan[index], tokens[index], now, metrics);
+                    plan[index], tokens[index], now, metrics, metrics_extras);
             }
             refresh_counts_locked();
         } catch (const std::exception& error) {
@@ -222,7 +222,7 @@ struct CpuSchedulerDriver {
                     final_chunk);
                 std::lock_guard lock(mutex);
                 metrics_collector.record_chunked_prefill(chunk_tokens, step_metrics);
-                CpuRequestLifecycle::observe_attention(request, metrics);
+                CpuRequestLifecycle::observe_attention(request, metrics_extras);
                 CpuRequestLifecycle::apply_prefill(request, chunk_tokens, metrics);
                 if (request->status == RequestStatus::Decoding) {
                     cache_completed_prefix_locked(*request);
@@ -250,7 +250,7 @@ struct CpuSchedulerDriver {
             std::lock_guard lock(mutex);
             metrics_collector.record_ragged_prefill(items.size(), step_metrics);
             for (const auto& request : plan) {
-                CpuRequestLifecycle::observe_attention(request, metrics);
+                CpuRequestLifecycle::observe_attention(request, metrics_extras);
                 const RequestStatus before = request->status;
                 CpuRequestLifecycle::apply_prefill(request, 1, metrics);
                 if (before != RequestStatus::Cancelled &&
@@ -329,7 +329,8 @@ struct CpuSchedulerDriver {
     std::unordered_map<RequestId, std::shared_ptr<Request>> requests;
     RequestId next_id = 1;
     uint64_t next_sequence = 1;
-    CpuConcurrentMetrics metrics;
+    ConcurrentMetrics metrics;
+    CpuConcurrentMetricsExtras metrics_extras;
     CpuMetricsCollector metrics_collector;
     std::string last_error_text;
     bool running = false;
@@ -371,7 +372,7 @@ RequestId CpuConcurrentEngine::submit(std::vector<int32_t> prompt,
         request->options = options;
         request->submitted_at = Clock::now();
         state_->requests.emplace(request->id, request);
-        ++state_->metrics.submitted_requests;
+        ++state_->metrics.submitted;
         state_->refresh_counts_locked();
     }
     state_->engine_worker.notify();
@@ -413,7 +414,7 @@ bool CpuConcurrentEngine::cancel(RequestId id) {
     if (is_terminal(request.status)) return false;
     if (request.status == RequestStatus::Queued) {
         request.status = RequestStatus::Cancelled;
-        ++state_->metrics.cancelled_requests;
+        ++state_->metrics.cancelled;
         state_->refresh_counts_locked();
     } else {
         // Active execution owns the session until the scheduler returns.
@@ -446,13 +447,18 @@ void CpuConcurrentEngine::stop() {
     state_->running = false;
 }
 
-CpuConcurrentMetrics CpuConcurrentEngine::metrics() const {
+ConcurrentMetrics CpuConcurrentEngine::metrics() const {
     std::lock_guard lock(state_->mutex);
-    CpuConcurrentMetrics result = state_->metrics;
+    ConcurrentMetrics result = state_->metrics;
     state_->admission.sync_prefix_metrics(result);
     result.active_requests = state_->active_count_locked();
     result.queued_requests = state_->queued_count_locked();
     return result;
+}
+
+CpuConcurrentMetricsExtras CpuConcurrentEngine::metrics_extras() const {
+    std::lock_guard lock(state_->mutex);
+    return state_->metrics_extras;
 }
 
 std::string CpuConcurrentEngine::backend_description() const {

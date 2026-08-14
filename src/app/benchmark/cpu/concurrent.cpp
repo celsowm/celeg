@@ -95,24 +95,34 @@ int main(int argc, char** argv) {
         const auto ended = std::chrono::steady_clock::now();
         const double wall_ms = std::chrono::duration<double, std::milli>(
             ended - started).count();
-        const celeg::CpuConcurrentMetrics metrics = engine.metrics();
+        const celeg::ConcurrentMetrics metrics = engine.metrics();
+        const celeg::CpuConcurrentMetricsExtras extras = engine.metrics_extras();
+        const double cumulative_prefill_ms =
+            metrics.cumulative_ragged_prefill_ms + extras.cumulative_direct_prefill_ms;
+        const double prefill_tokens_per_second = cumulative_prefill_ms > 0.0
+            ? static_cast<double>(metrics.prefill_tokens) * 1000.0 / cumulative_prefill_ms
+            : 0.0;
+        const double decode_tokens_per_second = metrics.cumulative_packed_decode_ms > 0.0
+            ? static_cast<double>(metrics.decoded_tokens) * 1000.0 /
+                  metrics.cumulative_packed_decode_ms
+            : 0.0;
 
         std::cout << std::fixed << std::setprecision(3)
                   << "backend=" << engine.backend_description() << '\n'
                   << "requests=" << requests << '\n'
                   << "prompt_tokens=" << tokens.size() << '\n'
-                  << "decode_tokens=" << metrics.decode_tokens << '\n'
+                  << "decode_tokens=" << metrics.decoded_tokens << '\n'
                   << "wall_ms=" << wall_ms << '\n'
                   << "aggregate_tokens_per_second="
-                  << (wall_ms > 0.0 ? metrics.decode_tokens * 1000.0 / wall_ms : 0.0) << '\n'
+                  << (wall_ms > 0.0 ? metrics.decoded_tokens * 1000.0 / wall_ms : 0.0) << '\n'
                   << "kernel_decode_tokens_per_second="
-                  << metrics.decode_tokens_per_second() << '\n'
+                  << decode_tokens_per_second << '\n'
                   << "prefill_tokens_per_second="
-                  << metrics.prefill_tokens_per_second() << '\n'
+                  << prefill_tokens_per_second << '\n'
                   << "average_ttft_ms=" << metrics.average_ttft_ms() << '\n'
                   << "average_itl_ms=" << metrics.average_itl_ms() << '\n'
-                  << "maximum_prefill_batch=" << metrics.maximum_prefill_batch << '\n'
-                  << "maximum_decode_batch=" << metrics.maximum_decode_batch << '\n'
+                  << "maximum_prefill_batch=" << metrics.maximum_ragged_prefill_batch << '\n'
+                  << "maximum_decode_batch=" << metrics.maximum_packed_batch << '\n'
                   << "ragged_prefill_steps=" << metrics.ragged_prefill_steps << '\n'
                   << "packed_decode_steps=" << metrics.packed_decode_steps << '\n';
         return 0;

@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
                   << "prefix_cache_partial_hits=" << metrics.prefix_cache_partial_hits << '\n'
                   << "prefix_reused_tokens=" << metrics.prefix_reused_tokens << '\n'
                   << "prefix_cow_pages=" << metrics.prefix_cow_pages << '\n'
-                  << "prefix_cow_bytes=" << metrics.prefix_cow_bytes << '\n';
+                  << "prefix_cow_bytes=" << metrics.prefix_cow_bytes_copied << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

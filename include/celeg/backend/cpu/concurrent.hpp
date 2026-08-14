@@ -1,6 +1,7 @@
 #pragma once
 
 #include "celeg/backend/cpu/model.hpp"
+#include "celeg/runtime/concurrency/metrics.hpp"
 #include "celeg/runtime/concurrency/policy.hpp"
 #include "celeg/runtime/request_types.hpp"
 
@@ -26,45 +27,15 @@ struct CpuConcurrentEngineOptions {
     size_t prefix_cache_max_bytes = 512ULL * 1024ULL * 1024ULL;
 };
 
-struct CpuConcurrentMetrics {
-    uint64_t submitted_requests = 0;
-    uint64_t completed_requests = 0;
-    uint64_t cancelled_requests = 0;
-    uint64_t failed_requests = 0;
-    uint64_t active_requests = 0;
-    uint64_t queued_requests = 0;
-
-    uint64_t prefill_tokens = 0;
-    uint64_t decode_tokens = 0;
-    uint64_t ragged_prefill_steps = 0;
-    uint64_t packed_decode_steps = 0;
+// CPU-only counters with no backend-neutral meaning yet (no CUDA equivalent
+// exists for chunked-prefill step accounting or CPU attention parallelism).
+// These live alongside the neutral `ConcurrentMetrics` snapshot instead of
+// duplicating it; see docs/SOLID_REVIEW_BACKENDS.md §4.1.
+struct CpuConcurrentMetricsExtras {
     uint64_t chunked_prefill_steps = 0;
-    uint64_t chunked_prefill_tokens = 0;
-    uint64_t maximum_prefill_batch = 0;
-    uint64_t maximum_decode_batch = 0;
     uint64_t maximum_prefill_chunk = 0;
-    uint64_t prefix_cache_hits = 0;
-    uint64_t prefix_cache_misses = 0;
-    uint64_t prefix_cache_partial_hits = 0;
-    uint64_t prefix_cache_inserts = 0;
-    uint64_t prefix_cache_evictions = 0;
-    uint64_t prefix_reused_tokens = 0;
-    uint64_t prefix_cow_pages = 0;
-    uint64_t prefix_cow_bytes = 0;
     uint64_t attention_parallel_calls = 0;
-
-    double cumulative_prefill_ms = 0.0;
-    double cumulative_decode_ms = 0.0;
-    double cumulative_scheduler_ms = 0.0;
-    double cumulative_ttft_ms = 0.0;
-    uint64_t ttft_samples = 0;
-    double cumulative_itl_ms = 0.0;
-    uint64_t itl_samples = 0;
-
-    double prefill_tokens_per_second() const;
-    double decode_tokens_per_second() const;
-    double average_ttft_ms() const;
-    double average_itl_ms() const;
+    double cumulative_direct_prefill_ms = 0.0;
 };
 
 struct CpuSchedulerDriver;
@@ -96,7 +67,8 @@ public:
     void start();
     void stop();
 
-    CpuConcurrentMetrics metrics() const;
+    ConcurrentMetrics metrics() const;
+    CpuConcurrentMetricsExtras metrics_extras() const;
     std::string backend_description() const;
     std::string last_error() const;
 

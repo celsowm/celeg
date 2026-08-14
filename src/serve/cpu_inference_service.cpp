@@ -78,19 +78,25 @@ bool CpuInferenceService::release(RequestId id) {
 ModelInfo CpuInferenceService::model_info() const { return model_info_; }
 
 ServingMetrics CpuInferenceService::metrics() const {
-    const CpuConcurrentMetrics snapshot = engine_.metrics();
+    const ConcurrentMetrics snapshot = engine_.metrics();
+    const CpuConcurrentMetricsExtras extras = engine_.metrics_extras();
     ServingMetrics result;
-    result.submitted_requests = snapshot.submitted_requests;
-    result.completed_requests = snapshot.completed_requests;
-    result.cancelled_requests = snapshot.cancelled_requests;
-    result.failed_requests = snapshot.failed_requests;
+    result.submitted_requests = snapshot.submitted;
+    result.completed_requests = snapshot.completed;
+    result.cancelled_requests = snapshot.cancelled;
+    result.failed_requests = snapshot.failed;
     result.active_requests = snapshot.active_requests;
     result.queued_requests = snapshot.queued_requests;
-    if (snapshot.cumulative_prefill_ms > 0.0) {
-        result.prefill_tokens_per_second = snapshot.prefill_tokens_per_second();
+    const double cumulative_prefill_ms =
+        snapshot.cumulative_ragged_prefill_ms + extras.cumulative_direct_prefill_ms;
+    if (cumulative_prefill_ms > 0.0) {
+        result.prefill_tokens_per_second =
+            static_cast<double>(snapshot.prefill_tokens) * 1000.0 / cumulative_prefill_ms;
     }
-    if (snapshot.cumulative_decode_ms > 0.0) {
-        result.decode_tokens_per_second = snapshot.decode_tokens_per_second();
+    if (snapshot.cumulative_packed_decode_ms > 0.0) {
+        result.decode_tokens_per_second =
+            static_cast<double>(snapshot.decoded_tokens) * 1000.0 /
+            snapshot.cumulative_packed_decode_ms;
     }
     if (snapshot.ttft_samples != 0) {
         result.average_ttft_ms = snapshot.average_ttft_ms();

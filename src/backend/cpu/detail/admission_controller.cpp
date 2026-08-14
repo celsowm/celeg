@@ -8,7 +8,7 @@
 namespace celeg {
 
 void CpuAdmissionController::sync_prefix_metrics(
-    CpuConcurrentMetrics& metrics) const {
+    ConcurrentMetrics& metrics) const {
     if (!prefix_cache_) return;
     const auto& source = prefix_cache_->metrics();
     metrics.prefix_cache_hits = source.hits;
@@ -18,14 +18,16 @@ void CpuAdmissionController::sync_prefix_metrics(
     metrics.prefix_cache_evictions = source.evictions;
     metrics.prefix_reused_tokens = source.reused_tokens;
     metrics.prefix_cow_pages = source.cow_pages;
-    metrics.prefix_cow_bytes = source.cow_bytes;
+    metrics.prefix_cow_bytes_copied = source.cow_bytes;
+    metrics.prefix_radix_lookups = source.radix_lookups;
+    metrics.prefix_radix_nodes = prefix_cache_->radix_nodes();
 }
 
 void CpuAdmissionController::admit(
     RequestMap& requests,
     const detail::BatchPlanner& planner,
     size_t maximum_active_requests,
-    CpuConcurrentMetrics& metrics) {
+    ConcurrentMetrics& metrics) {
     size_t active = 0;
     std::vector<std::shared_ptr<Request>> queued;
     for (const auto& [id, request] : requests) {
@@ -75,7 +77,7 @@ void CpuAdmissionController::admit(
         } catch (const std::exception& error) {
             request->status = RequestStatus::Failed;
             request->error = error.what();
-            ++metrics.failed_requests;
+            ++metrics.failed;
         }
     }
 }
