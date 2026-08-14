@@ -49,6 +49,10 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/text/tokenizer.cpp
     src/text/tokenizer_json_loader.cpp
     src/text/chat/template.cpp
+    src/text/chat/template/parser.cpp
+    src/text/chat/template/validation.cpp
+    src/text/chat/template/runtime.cpp
+    src/text/chat/template/tool_codec.cpp
     src/runtime/cache/host_expert_cache.cpp
     src/runtime/cache/prefix_radix.cpp
     src/runtime/cache/prefix_cache_index.cpp
