@@ -32,6 +32,9 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/architecture.cpp
     src/model/automatic_architecture.cpp
     src/model/inference.cpp
+    src/model/inference/global_facts.cpp
+    src/model/inference/layer_semantics.cpp
+    src/model/inference/layer_bindings.cpp
     src/model/inference/support.cpp
     src/model/inference/metadata.cpp
     src/model/inference/inventory.cpp
