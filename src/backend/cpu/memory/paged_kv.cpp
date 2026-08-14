@@ -2,6 +2,7 @@
 #include "celeg/backend/cpu/numa.hpp"
 #include "celeg/model/weights/quantization.hpp"
 #include "celeg/backend/cpu/isa.hpp"
+#include "celeg/runtime/checked_math.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -12,20 +13,6 @@
 namespace celeg {
 
 namespace {
-
-size_t checked_multiply(size_t a, size_t b, const char* what) {
-    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
-        throw std::overflow_error(what);
-    }
-    return a * b;
-}
-
-size_t round_up(size_t value, size_t alignment) {
-    if (value > std::numeric_limits<size_t>::max() - (alignment - 1)) {
-        throw std::overflow_error("CPU KV aligned allocation overflow");
-    }
-    return (value + alignment - 1) / alignment * alignment;
-}
 
 void* aligned_alloc_portable(size_t alignment, size_t size) {
 #if defined(_WIN32)
@@ -107,7 +94,8 @@ CpuKvPageId CpuKvPagePool::allocate(int requested_node) {
         throw std::logic_error("CPU KV free page has a non-zero reference count");
     }
     constexpr size_t alignment = 4096;
-    const size_t allocation_bytes = round_up(page_bytes_, alignment);
+    const size_t allocation_bytes = checked_round_up(
+        page_bytes_, alignment, "CPU KV aligned allocation overflow");
     if (!page.storage || page.storage_bytes != allocation_bytes ||
         (requested_node >= 0 && page.numa_node != requested_node)) {
         aligned_free_portable(page.storage);

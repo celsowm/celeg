@@ -1,22 +1,11 @@
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/runtime/cache/page_layout.hpp"
+#include "celeg/runtime/checked_math.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 
 namespace celeg {
-
-namespace {
-
-size_t checked_mul(size_t a, size_t b, const char* what) {
-    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
-        throw std::overflow_error(what);
-    }
-    return a * b;
-}
-
-} // namespace
 
 PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
                                            int page_tokens,
@@ -42,13 +31,15 @@ PhysicalPagedKvCache::PhysicalPagedKvCache(size_t page_count,
     max_pages_per_request_ =
         (max_context + page_tokens_ - 1) / page_tokens_;
 
-    const size_t vectors = checked_mul(page_count, layout_.page_vector_elements(),
-                                       "paged KV vector allocation overflow");
+    const size_t vectors = checked_multiply(
+        page_count, layout_.page_vector_elements(),
+        "paged KV vector allocation overflow");
     if (mode_ == KvCacheMode::Int8) {
         key_int8_.reset(vectors);
         value_int8_.reset(vectors);
-        const size_t scales = checked_mul(page_count, layout_.page_scale_elements(),
-                                          "paged KV scale allocation overflow");
+        const size_t scales = checked_multiply(
+            page_count, layout_.page_scale_elements(),
+            "paged KV scale allocation overflow");
         key_scales_.reset(scales);
         value_scales_.reset(scales);
     } else {

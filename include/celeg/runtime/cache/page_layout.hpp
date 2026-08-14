@@ -2,6 +2,7 @@
 
 #include "celeg/model/resolved.hpp"
 #include "celeg/model/program.hpp"
+#include "celeg/runtime/checked_math.hpp"
 
 #include <cstddef>
 #include <limits>
@@ -70,8 +71,10 @@ struct PageLayout {
                 // common stride preserves page-table and COW invariants.
                 layers.push_back({layer_width, 1, true, latent->latent_rank,
                                   rotary_width, vector_offset, scale_offset});
-                vector_offset += static_cast<size_t>(page_tokens) *
-                    static_cast<size_t>(layer_width);
+                vector_offset += checked_multiply(
+                    static_cast<size_t>(page_tokens),
+                    static_cast<size_t>(layer_width),
+                    "PageLayout latent vector overflow");
                 scale_offset += static_cast<size_t>(page_tokens);
                 continue;
             }
@@ -82,10 +85,14 @@ struct PageLayout {
             }
             layers.push_back({layer_kv_width, layer_kv_heads, false, 0, 0,
                               vector_offset, scale_offset});
-            vector_offset += static_cast<size_t>(page_tokens) *
-                static_cast<size_t>(layer_kv_width);
-            scale_offset += static_cast<size_t>(page_tokens) *
-                static_cast<size_t>(layer_kv_heads);
+            vector_offset += checked_multiply(
+                static_cast<size_t>(page_tokens),
+                static_cast<size_t>(layer_kv_width),
+                "PageLayout vector offset overflow");
+            scale_offset += checked_multiply(
+                static_cast<size_t>(page_tokens),
+                static_cast<size_t>(layer_kv_heads),
+                "PageLayout scale offset overflow");
         }
     }
 
@@ -93,13 +100,10 @@ struct PageLayout {
     size_t page_vector_elements() const {
         size_t total = 0;
         for (const Layer& layer : layers) {
-            const size_t layer_elements = checked_mul(
+            const size_t layer_elements = checked_multiply(
                 static_cast<size_t>(page_tokens), static_cast<size_t>(layer.kv_width),
                 "PageLayout layer/token overflow");
-            if (layer_elements > std::numeric_limits<size_t>::max() - total) {
-                throw std::overflow_error("PageLayout vector overflow");
-            }
-            total += layer_elements;
+            total = checked_add(total, layer_elements, "PageLayout vector overflow");
         }
         return total;
     }
@@ -108,13 +112,10 @@ struct PageLayout {
     size_t page_scale_elements() const {
         size_t total = 0;
         for (const Layer& layer : layers) {
-            const size_t layer_elements = checked_mul(
+            const size_t layer_elements = checked_multiply(
                 static_cast<size_t>(page_tokens), static_cast<size_t>(layer.kv_heads),
                 "PageLayout scale layer/token overflow");
-            if (layer_elements > std::numeric_limits<size_t>::max() - total) {
-                throw std::overflow_error("PageLayout scale overflow");
-            }
-            total += layer_elements;
+            total = checked_add(total, layer_elements, "PageLayout scale overflow");
         }
         return total;
     }
@@ -130,31 +131,29 @@ struct PageLayout {
     }
 
     size_t layer_vector_count(int layer, int used_tokens) const {
-        return static_cast<size_t>(used_tokens) *
-               static_cast<size_t>(layers.at(static_cast<size_t>(layer)).kv_width);
+        return checked_multiply(
+            static_cast<size_t>(used_tokens),
+            static_cast<size_t>(layers.at(static_cast<size_t>(layer)).kv_width),
+            "PageLayout layer vector count overflow");
     }
 
     size_t layer_scale_count(int layer, int used_tokens) const {
-        return static_cast<size_t>(used_tokens) *
-               static_cast<size_t>(layers.at(static_cast<size_t>(layer)).kv_heads);
+        return checked_multiply(
+            static_cast<size_t>(used_tokens),
+            static_cast<size_t>(layers.at(static_cast<size_t>(layer)).kv_heads),
+            "PageLayout layer scale count overflow");
     }
 
     // Flat vector-element offset of page `page` (i.e. the first element of
     // layer 0, token 0 of that page).
     size_t page_vector_offset(uint32_t page) const {
-        return static_cast<size_t>(page) * page_vector_elements();
+        return checked_multiply(static_cast<size_t>(page), page_vector_elements(),
+                                "PageLayout page vector offset overflow");
     }
 
     size_t page_scale_offset(uint32_t page) const {
-        return static_cast<size_t>(page) * page_scale_elements();
-    }
-
-private:
-    static size_t checked_mul(size_t a, size_t b, const char* what) {
-        if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
-            throw std::overflow_error(what);
-        }
-        return a * b;
+        return checked_multiply(static_cast<size_t>(page), page_scale_elements(),
+                                "PageLayout page scale offset overflow");
     }
 };
 
