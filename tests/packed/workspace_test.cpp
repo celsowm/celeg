@@ -49,11 +49,13 @@ int main() {
         celeg::SessionPhase phase = celeg::SessionPhase::Empty;
         int position = 0;
         bool local_kv = true;
+        celeg::SessionState identity;
         celeg::PackedSessionContext session;
-        session.phase_state = &phase;
-        session.position_state = &position;
-        session.max_context_value = 16;
-        session.local_kv_cache_available_state = &local_kv;
+        session.owner.session_identity = &identity;
+        session.session.phase_state = &phase;
+        session.session.position_state = &position;
+        session.immutable.max_context_value = 16;
+        session.session.local_kv_cache_available_state = &local_kv;
         const celeg::PackedBatchValidator validator;
         const auto prefill = validator.validate_session(
             session, celeg::PackedOperation::Prefill,
@@ -77,7 +79,6 @@ int main() {
         }
 
         celeg::PackedMetadataCache metadata_cache(2);
-        session.owner = reinterpret_cast<void*>(0x1);
         session.storage_generation_value = 7;
         const std::array<celeg::PackedSessionContext, 1> bound = {session};
         if (!metadata_cache.changed(bound)) {
@@ -107,12 +108,15 @@ int main() {
             throw std::runtime_error("packed compatibility key ignored residency identity");
         }
 
+        celeg::SessionState identity_a;
+        celeg::SessionState identity_b;
+        celeg::SessionState identity_c;
         celeg::PackedSessionContext compatible_a;
         celeg::PackedSessionContext compatible_b;
         celeg::PackedSessionContext incompatible;
-        compatible_a.owner = reinterpret_cast<void*>(0x10);
-        compatible_b.owner = reinterpret_cast<void*>(0x20);
-        incompatible.owner = reinterpret_cast<void*>(0x30);
+        compatible_a.owner.session_identity = &identity_a;
+        compatible_b.owner.session_identity = &identity_b;
+        incompatible.owner.session_identity = &identity_c;
         compatible_a.compatibility_key = same_compatibility;
         compatible_b.compatibility_key = same_compatibility;
         incompatible.compatibility_key = compatibility;

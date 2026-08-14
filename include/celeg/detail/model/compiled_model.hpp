@@ -327,11 +327,6 @@ struct CudaCompiledModel {
     CudaGraphExec& graph_for_attention(bool segmented);
 
     PackedSessionContext packed_session_context();
-    static bool packed_segmented_attention_callback(const void* owner,
-                                                    int host_position);
-    static void packed_expert_residency_callback(
-        void* owner, int layer, const int* sel_dev, int rows,
-        cudaStream_t stream, const float* route_scores_dev);
 
     CudaStream stream_;
     std::unique_ptr<GemmDispatcher> gemm_;

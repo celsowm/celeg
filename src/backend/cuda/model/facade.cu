@@ -1,7 +1,6 @@
 #include "celeg/detail/model/compiled_model.hpp"
 
 #include <functional>
-#include <stdexcept>
 
 namespace celeg {
 
@@ -19,30 +18,14 @@ CudaModel::CudaModel(const std::string& model_path,
 
 CudaModel::~CudaModel() = default;
 
-bool CudaCompiledModel::packed_segmented_attention_callback(
-    const void* owner, int host_position) {
-    return static_cast<const CudaCompiledModel*>(owner)->use_segmented_attention(host_position);
-}
-
-void CudaCompiledModel::packed_expert_residency_callback(
-    void* owner, int layer, const int* sel_dev, int rows,
-    cudaStream_t stream, const float* route_scores_dev) {
-    CudaCompiledModel& model = *static_cast<CudaCompiledModel*>(owner);
-    if (!model.resources_.weights_) return;
-    const CompiledLayerProgram& layer_program = model.resources_.program_.layers.at(
-        static_cast<size_t>(layer));
-    if (!layer_program.moe) {
-        throw std::invalid_argument("packed residency requested for a non-MoE layer");
-    }
-    model.resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
-        layer, sel_dev, rows, layer_program.moe->router.experts_per_token,
-        layer_program.moe->router.expert_count, stream, route_scores_dev,
-        &model.workspace_.residency_workspace_});
-}
-
 PackedSessionContext CudaCompiledModel::packed_session_context() {
     PackedSessionContext context;
-    context.owner = this;
+    context.owner = PackedExecutionServices{
+        &session_,
+        &resources_.plan_,
+        &resources_.program_,
+        resources_.weights_.get(),
+        &workspace_.residency_workspace_};
     context.storage_generation_value = storage_generation_;
     const uint64_t execution_plan_fingerprint = resources_.plan_.fingerprint();
     const uint64_t compiled_program_id = static_cast<uint64_t>(
@@ -73,30 +56,32 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
         options.lt_heuristics,
         options.attention_chunk_tokens,
         options.attention_auto_threshold};
-    context.phase_state = &session_.phase_;
-    context.position_state = &session_.position_;
-    context.max_context_value = max_context_;
-    context.local_kv_cache_available_state = &local_kv_cache_available_;
-    context.active_segmented_attention_state = &session_.active_segmented_attention_;
-    context.options_state = &resources_.options_;
-    context.generation_state = &session_.generation_;
-    context.shape_state = &resources_.shape_;
-    context.program_state = &resources_.program_;
-    context.weights_state = resources_.weights_;
-    context.logits_state = &workspace_.logits_;
-    context.seen_tokens_state = &sampling_.seen_tokens;
-    context.rng_state_buffer = &sampling_.rng_state;
-    context.sampled_device_state = &sampling_.sampled_device;
-    context.position_device_state = &position_device_;
-    context.sampled_host_state = &sampling_.sampled_host;
-    context.layers_state = &resources_.layers_;
-    context.metrics_state = &session_.metrics_;
-    context.weight_layout_state = resources_.weight_layout_.get();
-    context.embedding_weight = resources_.embedding_;
-    context.logits_weight_value = resources_.lm_head_ ? resources_.lm_head_ : resources_.embedding_;
-    context.final_norm_value = resources_.final_norm_;
-    context.segmented_attention = &CudaCompiledModel::packed_segmented_attention_callback;
-    context.ensure_expert_residency = &CudaCompiledModel::packed_expert_residency_callback;
+
+    context.session.phase_state = &session_.phase_;
+    context.session.position_state = &session_.position_;
+    context.session.local_kv_cache_available_state = &local_kv_cache_available_;
+    context.session.active_segmented_attention_state =
+        &session_.active_segmented_attention_;
+    context.session.generation_state = &session_.generation_;
+    context.session.logits_state = &workspace_.logits_;
+    context.session.seen_tokens_state = &sampling_.seen_tokens;
+    context.session.rng_state_buffer = &sampling_.rng_state;
+    context.session.sampled_device_state = &sampling_.sampled_device;
+    context.session.position_device_state = &position_device_;
+    context.session.sampled_host_state = &sampling_.sampled_host;
+    context.session.layers_state = &resources_.layers_;
+    context.session.metrics_state = &session_.metrics_;
+
+    context.immutable.max_context_value = max_context_;
+    context.immutable.options_state = &resources_.options_;
+    context.immutable.shape_state = &resources_.shape_;
+    context.immutable.program_state = &resources_.program_;
+    context.immutable.weights_state = resources_.weights_;
+    context.immutable.weight_layout_state = resources_.weight_layout_.get();
+    context.immutable.embedding_weight = resources_.embedding_;
+    context.immutable.logits_weight_value =
+        resources_.lm_head_ ? resources_.lm_head_ : resources_.embedding_;
+    context.immutable.final_norm_value = resources_.final_norm_;
     return context;
 }
 

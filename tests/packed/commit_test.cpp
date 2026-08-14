@@ -7,9 +7,8 @@
 
 namespace {
 
-bool no_segmented_attention(const void*, int) { return false; }
-
 celeg::PackedSessionContext make_session(
+    celeg::SessionState& identity,
     celeg::SessionPhase& phase,
     int& position,
     bool& local_kv,
@@ -18,16 +17,15 @@ celeg::PackedSessionContext make_session(
     celeg::RuntimeMetrics& metrics,
     celeg::PinnedBuffer<int32_t>& sampled_host) {
     celeg::PackedSessionContext session;
-    session.owner = reinterpret_cast<void*>(0x1);
-    session.phase_state = &phase;
-    session.position_state = &position;
-    session.max_context_value = 32;
-    session.local_kv_cache_available_state = &local_kv;
-    session.active_segmented_attention_state = &active_segmented;
-    session.generation_state = &generation;
-    session.metrics_state = &metrics;
-    session.sampled_host_state = &sampled_host;
-    session.segmented_attention = no_segmented_attention;
+    session.owner.session_identity = &identity;
+    session.session.phase_state = &phase;
+    session.session.position_state = &position;
+    session.immutable.max_context_value = 32;
+    session.session.local_kv_cache_available_state = &local_kv;
+    session.session.active_segmented_attention_state = &active_segmented;
+    session.session.generation_state = &generation;
+    session.session.metrics_state = &metrics;
+    session.session.sampled_host_state = &sampled_host;
     return session;
 }
 
@@ -35,6 +33,7 @@ celeg::PackedSessionContext make_session(
 
 int main() {
     try {
+        celeg::SessionState identity;
         celeg::SessionPhase phase = celeg::SessionPhase::Ready;
         int position = 4;
         bool local_kv = true;
@@ -43,7 +42,7 @@ int main() {
         celeg::RuntimeMetrics metrics;
         celeg::PinnedBuffer<int32_t> sampled_host(1);
         sampled_host.data()[0] = 9;
-        const auto session = make_session(phase, position, local_kv,
+        const auto session = make_session(identity, phase, position, local_kv,
                                           active_segmented, generation, metrics,
                                           sampled_host);
         const std::vector<celeg::PackedSessionContext> sessions{session};
