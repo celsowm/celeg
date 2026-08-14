@@ -9,7 +9,6 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -473,10 +472,11 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                         owner_layout.key_value_heads, owner_layout.head_dim,
                         layout.sliding_window_size(), stream_.get());
                 } else if (resources_.options_.fast_attention) {
-                    static const bool use_flash = []{
-                        const char* f = std::getenv("CELEG_FLASH_ATTN");
-                        return f != nullptr && f[0] != '\0' && f[0] != '0';
-                    }();
+                    // CELEG_FLASH_ATTN is resolved once into
+                    // CudaModelOptions::flash_attn at model-configuration
+                    // construction time (see runtime_types.hpp); execution
+                    // code just reads the resolved option.
+                    const bool use_flash = resources_.options_.flash_attn;
                     // The batched GEMM path is only valid for the narrow-head
                     // layouts it was tuned for.  With head_dim=128 its
                     // strided GQA batches can corrupt the KV state; use the
@@ -484,8 +484,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
                     // decode step sees a valid cache.  This is a kernel
                     // capability boundary, not an architecture dispatch.
                     const bool flash_supported = owner_layout.head_dim <= 128;
-                    if ((use_flash && flash_supported) ||
-                        (owner_layout.head_dim > 64 && flash_supported)) {
+                    if (flash_supported && (use_flash || owner_layout.head_dim > 64)) {
                         launch_gqa_prefill_flash(
                             workspace_.prefill_q_.data(),
                             owner->key_cache.data(), owner->value_cache.data(),

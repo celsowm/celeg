@@ -54,33 +54,6 @@ bool mmq_tensor_core_supported() {
     return supported;
 }
 
-bool mmq_tensor_core_enabled() {
-    // The randomized Q4_K/Q6_K reference suite (see cuda_gguf_kernels_test.cu)
-    // cross-checks the MMA prefill kernels exactly against the validated
-    // decode kernel, so tensor cores are the default whenever the GPU
-    // supports int8 mma.sync. CELEG_MMQ_TENSOR_CORES is left as an explicit
-    // override only so the same binary can still bisect a regression between
-    // the MMA and DP4A prefill kernels; it is not meant to be user-facing.
-    //
-    // This resolves once per (thread, device): every matmul launch used to
-    // pay a getenv() plus mmq_tensor_core_supported()'s mutex+map lookup, on
-    // the decode hot path that's ~one call per GEMM per layer per token. The
-    // thread_local pair below skips straight to the cached answer whenever
-    // the device hasn't changed since this thread last resolved it; a device
-    // switch (legal per mmq_tensor_core_supported()'s contract) just falls
-    // through to a full, still-correct re-resolution.
-    thread_local int cached_device = -1;
-    thread_local bool cached_enabled = false;
-    int device = 0;
-    if (cudaGetDevice(&device) != cudaSuccess) return false;
-    if (device == cached_device) return cached_enabled;
-
-    const char* setting = std::getenv("CELEG_MMQ_TENSOR_CORES");
-    cached_enabled = setting != nullptr ? setting[0] == '1' : mmq_tensor_core_supported();
-    cached_device = device;
-    return cached_enabled;
-}
-
 __global__ void quantize_q8_1_kernel(const __nv_bfloat16* __restrict__ x,
                                      int8_t* __restrict__ q8,
                                      float* __restrict__ scales,
@@ -709,8 +682,12 @@ CudaDeviceCapabilities discover_cuda_device_capabilities() {
         return result;
     }
     result.mmq_tensor_core_supported = mmq_tensor_core_supported();
-    result.mmq_tensor_core_enabled = mmq_tensor_core_enabled() &&
-                                      result.mmq_tensor_core_supported;
+    // Hardware-only default. The CELEG_MMQ_TENSOR_CORES user override lives
+    // in CudaModelOptions::mmq_tensor_cores (resolved once at model
+    // configuration construction) and is applied on top of this device
+    // capability by CudaExecutionPlan::compile(), which is the actual
+    // configuration/bootstrap boundary for execution policy.
+    result.mmq_tensor_core_enabled = result.mmq_tensor_core_supported;
     return result;
 }
 
@@ -755,9 +732,14 @@ void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
                     const float* q8_sums, const uint8_t* blocks,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
                     int output_stride, float beta, cudaStream_t stream) {
+    // Convenience overload with no explicit policy: default to whatever the
+    // device supports. Callers that need the resolved CELEG_MMQ_TENSOR_CORES
+    // override must go through CudaExecutionPlan::mmq_tensor_cores_enabled(),
+    // resolved once at bootstrap from CudaModelOptions::mmq_tensor_cores, and
+    // call launch_q4k_mmq_with_policy() directly.
     launch_q4k_mmq_with_policy(q8, q8_scales, q8_sums, blocks, y, m, n, k,
                                row_bytes, output_stride, beta,
-                               mmq_tensor_core_enabled(), stream);
+                               mmq_tensor_core_supported(), stream);
 }
 
 void launch_q6k_mmq_with_policy(const int8_t* q8, const float* q8_scales,
@@ -792,9 +774,11 @@ void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
                     const float* q8_sums, const uint8_t* blocks,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
                     int output_stride, float beta, cudaStream_t stream) {
+    // See launch_q4k_mmq() above: no explicit policy, so this defaults to
+    // device support only.
     launch_q6k_mmq_with_policy(q8, q8_scales, q8_sums, blocks, y, m, n, k,
                                row_bytes, output_stride, beta,
-                               mmq_tensor_core_enabled(), stream);
+                               mmq_tensor_core_supported(), stream);
 }
 
 } // namespace celeg
