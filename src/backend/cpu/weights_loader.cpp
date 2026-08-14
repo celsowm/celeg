@@ -413,11 +413,11 @@ void CpuCompiledModel::Shared::load_weights() {
         const ShortConvolutionSpec& convolution =
             layer_program.short_convolution.value();
         layer.in = load_matrix(source, reader.get(), writer.get(),
-            layer_name(index, "conv.in_proj.weight"),
+            tensor_name(weight_requests, TensorRole::ShortConvInput, index),
             {3 * program.hidden, program.hidden});
         const std::vector<float> channel_major =
             load_vector(source, reader.get(), writer.get(),
-            layer_name(index, "conv.conv.weight"),
+            tensor_name(weight_requests, TensorRole::ShortConvKernel, index),
             {program.hidden, 1, convolution.cache_length});
         layer.weight_tap_major.resize(channel_major.size());
         for (int tap = 0; tap < convolution.cache_length; ++tap) {
@@ -427,7 +427,7 @@ void CpuCompiledModel::Shared::load_weights() {
             }
         }
         layer.out = load_matrix(source, reader.get(), writer.get(),
-            layer_name(index, "conv.out_proj.weight"),
+            tensor_name(weight_requests, TensorRole::ShortConvOutput, index),
             {program.hidden, program.hidden});
         return layer;
     };

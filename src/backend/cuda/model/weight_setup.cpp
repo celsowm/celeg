@@ -686,13 +686,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             ConvolutionLayer convolution_layer;
             convolution_layer.common = common_layer;
             convolution_layer.conv_in = resources_.weight_loader_->load_linear_weight(
-                repo, layer_name(i, "conv.in_proj.weight"),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::ShortConvInput, i),
                 {3 * resources_.program_.hidden, resources_.program_.hidden});
             convolution_layer.conv_weight = resources_.weight_loader_->load_weight(
-                repo, layer_name(i, "conv.conv.weight"),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::ShortConvKernel, i),
                 {resources_.program_.hidden, 1, resources_.shape_.conv_cache});
             convolution_layer.conv_out = resources_.weight_loader_->load_linear_weight(
-                repo, layer_name(i, "conv.out_proj.weight"),
+                repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::ShortConvOutput, i),
                 {resources_.program_.hidden, resources_.program_.hidden});
             convolution_layer.conv_state.reset(
                 static_cast<size_t>(resources_.shape_.conv_cache) * resources_.program_.hidden);
