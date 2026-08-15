@@ -3,7 +3,7 @@
 // Shared GEMV kernel definitions for the m=1 (decode) path.
 //
 // Included by:
-//   - src/backend/cuda/runtime/gemm_dispatcher.cu  (BF16 decode GEMV)
+//   - src/backend/cuda/kernels/transform.cu       (BF16 decode GEMV)
 //   - src/backend/cuda/kernels/linear.cuh           (W8A16 decode GEMV)
 //   - src/app/benchmark/cuda/decode_gemv.cu          (isolated microbenchmark)
 //

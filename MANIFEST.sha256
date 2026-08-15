@@ -248,7 +248,7 @@ f69d3728b29f2d423de81035a1feda0d19436dddb46397d6e03b5ad3b16065a3  ./src/backend/
 ffef4cff7d93780c0f52e5e15f47b925243b73b2fdf97a2a37924953bb3db21e  ./src/backend/cuda/runtime/engine_facade.cpp
 80c888dc5399dae2afefeab0bbcdb354aa157b7a3b972db16fbe90b3c80ce9fc  ./src/backend/cuda/runtime/engine_internal.hpp
 4f355d34bc20f59d4137c834800b9c26676f83a0d0f94f393cafcd661ddc73ca  ./src/backend/cuda/runtime/engine.cpp
-a98ea0d03745881a23a4c7aa1a9fa3347ad7279eb7ddab63548c1880c4d20727  ./src/backend/cuda/runtime/gemm_dispatcher.cu
+7433f1eb21693e9183cdcd8d0aa3b16c7e1f64502fdd7d44716f8e4c69c0ff02  ./src/backend/cuda/runtime/gemm_dispatcher.cpp
 e0aed4268f90656457fa8cf5ac5806b0e3149a97663a5bfba52bc2e275806243  ./src/backend/cuda/runtime/prefill_scheduler.cpp
 213225d51e79c47990b191fd3d4d0ac93f549593a859b82a08eeeb59075a8763  ./src/backend/cuda/runtime/request_lifecycle.cpp
 a79829d465b4f7a97ece951c00b3cf7e9849582d59c0fca3a9dd5269f3cc0f70  ./src/checkpoint/bootstrap.cpp
