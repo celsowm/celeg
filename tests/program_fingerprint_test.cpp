@@ -46,8 +46,8 @@ int main() {
     expect_fingerprint_change(baseline, head_geometry);
 
     celeg::ResolvedModel rope = baseline;
-    std::get<celeg::AttentionSpec>(rope.graph.layers[0].mixer)
-        .rope_position()->theta = 500000.0;
+    std::get<celeg::AttentionSpec>(rope.graph.layers[0].mixer).position =
+        celeg::RopePositionSpec{500000.0, 1.0, {}};
     expect_fingerprint_change(baseline, rope);
 
     celeg::ResolvedModel feed_forward = baseline;
