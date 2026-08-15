@@ -429,13 +429,12 @@ public:
                     throw std::invalid_argument(
                         "external attention descriptor has no memory slot");
                 }
-                attention.sources.key_value = AttentionSourceKind::ExternalMemory;
-                attention.sources.memory_slot = integer_value(
-                    metadata, *descriptor_.attention_memory_slot);
-                if (attention.sources.memory_slot < 0) {
+                const int slot = integer_value(metadata, *descriptor_.attention_memory_slot);
+                if (slot < 0) {
                     throw std::invalid_argument(
                         "external attention descriptor has an invalid memory slot");
                 }
+                attention.key_value_source = ExternalMemorySource{slot};
             } else if (descriptor_.attention_key_value_source != "current_sequence") {
                 throw std::invalid_argument(
                     "descriptor has unsupported attention key/value source: " +

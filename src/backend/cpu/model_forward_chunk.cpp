@@ -221,7 +221,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         nullptr, position, rope_position);
                 });
                 const auto memory_it = shared->external_attention_memory.find(
-                    layout.sources.memory_slot);
+                    layout.external_memory_slot());
                 if (memory_it == shared->external_attention_memory.end()) {
                     throw std::logic_error("external attention memory slot is not bound");
                 }

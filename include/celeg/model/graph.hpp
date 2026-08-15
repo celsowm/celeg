@@ -148,21 +148,13 @@ struct AttentionStateStorageSpec {
     void validate(const AttentionStateSpec& state) const;
 };
 
-enum class AttentionSourceKind : uint8_t {
-    CurrentSequence,
-    ExternalMemory,
+struct CurrentSequenceSource {};
+
+struct ExternalMemorySource {
+    int slot = 0;
 };
 
-struct AttentionSourceSpec {
-    AttentionSourceKind query = AttentionSourceKind::CurrentSequence;
-    AttentionSourceKind key_value = AttentionSourceKind::CurrentSequence;
-    int memory_slot = -1;
-
-    bool self_attention() const {
-        return query == AttentionSourceKind::CurrentSequence &&
-               key_value == AttentionSourceKind::CurrentSequence;
-    }
-};
+using AttentionKeyValueSource = std::variant<CurrentSequenceSource, ExternalMemorySource>;
 
 enum class AttentionGateKind : uint8_t {
     None,
@@ -197,7 +189,7 @@ struct AttentionSpec {
     AttentionBiasSpec bias = NoAttentionBiasSpec{};
     AttentionStateSpec state = OrdinaryKvStateSpec{};
     AttentionStateStorageSpec state_storage;
-    AttentionSourceSpec sources;
+    AttentionKeyValueSource key_value_source = CurrentSequenceSource{};
     AttentionOutputTransformSpec output_transform = NoAttentionOutputTransformSpec{};
 
     int query_width() const { return query_heads * head_dim; }
@@ -261,7 +253,13 @@ struct AttentionSpec {
     bool uses_latent_state() const {
         return std::holds_alternative<LatentAttentionStateSpec>(state);
     }
-    bool uses_external_memory() const { return !sources.self_attention(); }
+    bool uses_external_memory() const {
+        return std::holds_alternative<ExternalMemorySource>(key_value_source);
+    }
+    int external_memory_slot() const {
+        const auto* external = std::get_if<ExternalMemorySource>(&key_value_source);
+        return external ? external->slot : -1;
+    }
     bool has_query_key_norm() const {
         return query_norm.has_value() || key_norm.has_value();
     }

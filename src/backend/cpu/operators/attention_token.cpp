@@ -21,7 +21,7 @@ void execute_cpu_attention_token(
                 apply_cpu_attention_qk(layout, attention, q, nullptr,
                                        execution.session.position_value, rope_position);
                 const auto memory_it = execution.shared.external_attention_memory.find(
-                    layout.sources.memory_slot);
+                    layout.external_memory_slot());
                 if (memory_it == execution.shared.external_attention_memory.end()) {
                     throw std::logic_error("external attention memory slot is not bound");
                 }

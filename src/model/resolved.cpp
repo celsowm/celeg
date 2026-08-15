@@ -156,8 +156,17 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
         << static_cast<int>(attention.state_storage.recurrent) << ':'
         << static_cast<int>(attention.state_storage.granularity) << ':'
         << attention.state_storage.paged;
-    out << ":source:" << static_cast<int>(attention.sources.query) << ':'
-        << static_cast<int>(attention.sources.key_value) << ':' << attention.sources.memory_slot;
+    out << ":source:";
+    std::visit([&out](const auto& source) {
+        using Source = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<Source, CurrentSequenceSource>) {
+            out << "current_sequence";
+        } else if constexpr (std::is_same_v<Source, ExternalMemorySource>) {
+            out << "external_memory:" << source.slot;
+        } else {
+            static_assert(always_false_v<Source>, "unhandled attention key/value source variant");
+        }
+    }, attention.key_value_source);
     out << ":transform:";
     std::visit([&out](const auto& transform) {
         using Transform = std::decay_t<decltype(transform)>;

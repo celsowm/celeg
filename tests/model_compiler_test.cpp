@@ -165,9 +165,8 @@ int main() {
     CELEG_TEST_CHECK(cuda_oversized_latent_rejected);
 
     celeg::ResolvedModel unsupported_source = model;
-    std::get<celeg::AttentionSpec>(unsupported_source.graph.layers[0].mixer).sources =
-        celeg::AttentionSourceSpec{celeg::AttentionSourceKind::CurrentSequence,
-                                   celeg::AttentionSourceKind::ExternalMemory, 0};
+    std::get<celeg::AttentionSpec>(unsupported_source.graph.layers[0].mixer).key_value_source =
+        celeg::ExternalMemorySource{0};
     const auto external_cpu = celeg::CpuModelCompiler{}.compile(unsupported_source);
     CELEG_TEST_CHECK(compiled_attention(external_cpu.layers[0]).uses_external_memory());
 
