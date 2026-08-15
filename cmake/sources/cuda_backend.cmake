@@ -73,5 +73,5 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/runtime/decode_scheduler.cpp
     src/backend/cuda/runtime/engine_control.cpp
     src/backend/cuda/runtime/engine_facade.cpp
-    src/backend/cuda/runtime/gemm_dispatcher.cu
+    src/backend/cuda/runtime/gemm_dispatcher.cpp
 )

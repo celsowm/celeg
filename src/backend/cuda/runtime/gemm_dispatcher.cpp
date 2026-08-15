@@ -2,7 +2,7 @@
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/backend/cuda/kernels/mmq.hpp"
 #include "celeg/backend/cuda/kernels/embedding.hpp"
-#include "celeg/backend/cuda/kernels/gemv_kernels.cuh"
+#include "../kernels/gemv_launch.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -10,19 +10,6 @@
 #include <utility>
 
 namespace celeg {
-namespace {
-
-void launch_bf16_gemv(const __nv_bfloat16* x, const __nv_bfloat16* weight,
-                      __nv_bfloat16* y, int n, int k, float beta,
-                      cudaStream_t stream) {
-    constexpr int warps_per_block = 8;
-    const dim3 grid(static_cast<unsigned>((n + warps_per_block - 1) / warps_per_block));
-    bf16_gemv_kernel<<<grid, warps_per_block * 32, 0, stream>>>(x, weight, y, n, k, beta);
-    CELEG_KERNEL_DEBUG_SYNC(stream);
-}
-
-} // namespace
-
 GemmDispatcher::GemmDispatcher(cudaStream_t stream,
                                const CudaModelOptions& options)
     : stream_(stream),
