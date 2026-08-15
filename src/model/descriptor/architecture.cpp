@@ -40,8 +40,8 @@ public:
         const int intermediate = integer_value(
             metadata, descriptor_.dimensions.at("intermediate"));
         const int physical_layer_count = integer_value(metadata, descriptor_.dimensions.at("layers"));
-        const int repeat_count = descriptor_.repeated_layers
-            ? integer_value(metadata, descriptor_.repeat_count) : 1;
+        const int repeat_count = descriptor_.repeat_count
+            ? integer_value(metadata, *descriptor_.repeat_count) : 1;
         if (physical_layer_count <= 0 || repeat_count <= 0) {
             throw std::invalid_argument("descriptor has invalid layer schedule");
         }

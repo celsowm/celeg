@@ -84,8 +84,7 @@ struct Descriptor {
     std::optional<Field> rope_scaling_long_factors;
     std::optional<Field> mrope_sections;
     std::optional<Field> mrope_interleaved;
-    bool repeated_layers = false;
-    Field repeat_count;
+    std::optional<Field> repeat_count;
     bool map_physical_layers = false;
     bool norm_after_physical_block = false;
     std::optional<AttentionVariant> full_attention_variant;

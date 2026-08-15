@@ -86,7 +86,6 @@ Descriptor parse_descriptor(const Json& value) {
     if (value.contains("layer_schedule")) {
         const Json& schedule = value.at("layer_schedule");
         if (schedule.contains("repeat")) {
-            result.repeated_layers = true;
             result.repeat_count = parse_field(schedule.at("repeat"));
         }
         result.map_physical_layers = optional_string(schedule, "physical_mapping") == "modulo";
