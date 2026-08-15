@@ -66,20 +66,6 @@ CompiledMixerProgram lower_mixer(const LayerSpec& layer) {
     }, layer.mixer);
 }
 
-CompiledFeedForward lower_feed_forward_kind(const LayerSpec& layer) {
-    return std::visit([](const auto& feed_forward) {
-        using FeedForward = std::decay_t<decltype(feed_forward)>;
-        if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-            return CompiledFeedForward::Dense;
-        } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-            return CompiledFeedForward::MixtureOfExperts;
-        } else {
-            static_assert(always_false_v<FeedForward>,
-                          "unhandled feed-forward compilation variant");
-        }
-    }, layer.feed_forward);
-}
-
 MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
     MoeLayerProgram semantic;
     semantic.router.expert_count = moe.num_experts;
@@ -122,6 +108,38 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
     return semantic;
 }
 
+CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden) {
+    CompiledFeedForwardProgram compiled;
+    if (!layer.execute_feed_forward) {
+        compiled.storage() = std::monostate{};
+        return compiled;
+    }
+
+    std::visit([&](const auto& feed_forward) {
+        using FeedForward = std::decay_t<decltype(feed_forward)>;
+        if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+            compiled.storage() = CompiledDenseFeedForwardProgram{
+                feed_forward.intermediate_size, feed_forward.activation};
+        } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+            compiled.storage() = lower_moe(feed_forward, hidden);
+        } else {
+            static_assert(always_false_v<FeedForward>,
+                          "unhandled feed-forward lowering variant");
+        }
+    }, layer.feed_forward);
+    return compiled;
+}
+
+void validate_mlp_only_source(const LayerSpec& layer,
+                              const MlpBlockSpec& mlp) {
+    std::visit([&](const auto& feed_forward) {
+        if (feed_forward.intermediate_size != mlp.intermediate_size) {
+            throw std::invalid_argument(
+                "MLP-only mixer and feed-forward widths do not agree");
+        }
+    }, layer.feed_forward);
+}
+
 } // namespace
 
 CompiledModelProgram build_model_program(const ResolvedModel& model) {
@@ -153,8 +171,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
 
         CompiledLayerProgram compiled;
         compiled.mixer = lower_mixer(layer);
-        compiled.feed_forward = lower_feed_forward_kind(layer);
-        compiled.execute_feed_forward = layer.execute_feed_forward;
+        compiled.feed_forward = lower_feed_forward(layer, model.graph.hidden);
         compiled.operator_norm = layer.operator_norm;
         compiled.post_attention_norm = layer.post_attention_norm;
         compiled.feed_forward_norm = layer.feed_forward_norm;
@@ -166,25 +183,8 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
             compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;
         }
 
-        std::visit([&](const auto& feed_forward) {
-            using FeedForward = std::decay_t<decltype(feed_forward)>;
-            compiled.feed_forward_intermediate = feed_forward.intermediate_size;
-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-                compiled.feed_forward_activation = feed_forward.activation;
-            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-                compiled.moe = lower_moe(feed_forward, model.graph.hidden);
-            } else {
-                static_assert(always_false_v<FeedForward>,
-                              "unhandled feed-forward lowering variant");
-            }
-        }, layer.feed_forward);
-
         if (const auto* mlp = compiled.mlp_only()) {
-            if (compiled.feed_forward_intermediate != mlp->intermediate_size) {
-                throw std::invalid_argument(
-                    "MLP-only mixer and feed-forward widths do not agree");
-            }
-            compiled.feed_forward_activation = mlp->activation;
+            validate_mlp_only_source(layer, *mlp);
         }
 
         for (std::size_t request_index = 0;
