@@ -15,10 +15,6 @@ celeg::CompiledModelProgram make_8b_a1b_program() {
     program.layers.resize(24);
     for (int index = 0; index < 24; ++index) {
         auto& layer = program.layers[static_cast<size_t>(index)];
-        layer.mixer = index < 6 ? celeg::CompiledMixer::Attention
-                                : celeg::CompiledMixer::ShortConvolution;
-        layer.feed_forward = index < 2 ? celeg::CompiledFeedForward::Dense
-                                       : celeg::CompiledFeedForward::MixtureOfExperts;
         if (index < 6) {
             celeg::AttentionSpec attention;
             attention.query_heads = 32;
@@ -26,8 +22,12 @@ celeg::CompiledModelProgram make_8b_a1b_program() {
             attention.head_dim = 64;
             attention.pattern = celeg::FullCausalPattern{};
             attention.position = celeg::RopePositionSpec{1.0e6, 1.0, {}};
-            layer.attention = attention;
+            layer.mixer = celeg::CompiledAttentionProgram{attention, {}};
+        } else {
+            layer.mixer = celeg::ShortConvolutionSpec{};
         }
+        layer.feed_forward = index < 2 ? celeg::CompiledFeedForward::Dense
+                                       : celeg::CompiledFeedForward::MixtureOfExperts;
         layer.feed_forward_intermediate = 1792;
         if (index >= 2) {
             celeg::MoeLayerProgram moe;
