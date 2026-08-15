@@ -18,29 +18,18 @@
 
 namespace celeg {
 
+// Independent identities only. CudaExecutionPlan::fingerprint() already mixes
+// every CudaModelOptions field (weight/kv-cache/gemm/attention modes, fusion
+// and autotune flags, MTP settings, workspace sizing, expert-offload config,
+// device capabilities, device_ordinal, max_context) -- duplicating those
+// fields here would let two independently-maintained representations of the
+// same plan drift apart. device_ordinal is kept because it is read directly
+// (not just compared) by executor placement checks.
 struct PackedCompatibilityKey {
     const SharedModelWeights* weights_identity = nullptr;
     uint64_t execution_plan_fingerprint = 0;
     uint64_t compiled_program_id = 0;
-    uint64_t expert_residency_fingerprint = 0;
     int device_ordinal = -1;
-    int max_context = 0;
-    uint8_t weight_mode = 0;
-    uint8_t kv_cache_mode = 0;
-    uint8_t gemm_backend = 0;
-    uint8_t attention_mode = 0;
-    bool fast_attention = false;
-    bool fused_projections = false;
-    bool fused_residuals = false;
-    bool cuda_graph = false;
-    bool lt_autotune = false;
-    bool allocate_local_kv_cache = false;
-    bool enable_mtp = false;
-    int mtp_speculative_tokens = 1;
-    size_t lt_workspace_bytes = 0;
-    int lt_heuristics = 0;
-    int attention_chunk_tokens = 0;
-    int attention_auto_threshold = 0;
 
     friend bool operator==(const PackedCompatibilityKey&,
                            const PackedCompatibilityKey&) = default;

@@ -28,31 +28,11 @@ PackedSessionContext CudaCompiledModel::packed_session_context() {
     const uint64_t compiled_program_id = static_cast<uint64_t>(
         std::hash<std::string>{}(resources_.program_.semantic_fingerprint));
     const int device_ordinal = resources_.plan_.device().device_ordinal;
-    const CudaModelOptions& options = resources_.options_;
     context.compatibility_key = PackedCompatibilityKey{
         resources_.weights_.get(),
         execution_plan_fingerprint,
         compiled_program_id,
-        static_cast<uint64_t>(std::hash<std::string>{}(
-            options.expert_offload.fingerprint())),
-        device_ordinal,
-        max_context_,
-        static_cast<uint8_t>(options.weight_mode),
-        static_cast<uint8_t>(options.kv_cache_mode),
-        static_cast<uint8_t>(options.gemm_backend),
-        static_cast<uint8_t>(options.attention_mode),
-        options.fast_attention,
-        options.fused_projections,
-        options.fused_residuals,
-        options.cuda_graph,
-        options.lt_autotune,
-        options.allocate_local_kv_cache,
-        options.enable_mtp,
-        options.mtp_speculative_tokens,
-        options.lt_workspace_bytes,
-        options.lt_heuristics,
-        options.attention_chunk_tokens,
-        options.attention_auto_threshold};
+        device_ordinal};
 
     context.session.phase_state = &session_.phase_;
     context.session.position_state = &session_.position_;

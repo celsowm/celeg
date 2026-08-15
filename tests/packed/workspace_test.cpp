@@ -96,15 +96,13 @@ int main() {
         celeg::PackedCompatibilityKey compatibility;
         compatibility.execution_plan_fingerprint = 11;
         compatibility.device_ordinal = 3;
-        compatibility.expert_residency_fingerprint = 17;
         const auto same_compatibility = compatibility;
         if (!(compatibility == same_compatibility)) {
             throw std::runtime_error("packed compatibility key is not value comparable");
         }
-        compatibility.expert_residency_fingerprint++;
         compatibility.execution_plan_fingerprint = 99;
         if (compatibility == same_compatibility) {
-            throw std::runtime_error("packed compatibility key ignored residency identity");
+            throw std::runtime_error("packed compatibility key ignored plan identity");
         }
 
         celeg::SessionState identity_a;
