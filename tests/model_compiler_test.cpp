@@ -225,14 +225,14 @@ int main() {
     catch (const std::invalid_argument&) { empty_region_rejected = true; }
     CELEG_TEST_CHECK(empty_region_rejected);
 
-    celeg::ResolvedModel unsupported = model;
-    auto& unsupported_moe = std::get<celeg::MixtureOfExpertsSpec>(
-        unsupported.graph.layers[1].feed_forward);
-    unsupported_moe.selection = celeg::MoeGroupedTopKSelectionSpec{2, 2, 1, 1};
-    bool backend_rejected = false;
-    try { (void)celeg::CpuModelCompiler{}.compile(unsupported); }
-    catch (const std::invalid_argument&) { backend_rejected = true; }
-    CELEG_TEST_CHECK(backend_rejected);
+    celeg::ResolvedModel invalid_grouped = model;
+    auto& invalid_grouped_moe = std::get<celeg::MixtureOfExpertsSpec>(
+        invalid_grouped.graph.layers[1].feed_forward);
+    invalid_grouped_moe.selection = celeg::MoeGroupedTopKSelectionSpec{2, 2, 0, 0};
+    bool invalid_grouped_rejected = false;
+    try { (void)celeg::CpuModelCompiler{}.compile(invalid_grouped); }
+    catch (const std::invalid_argument&) { invalid_grouped_rejected = true; }
+    CELEG_TEST_CHECK(invalid_grouped_rejected);
 
     celeg::CompiledModelProgram fused = cpu;
     std::get<celeg::MoeLayerProgram>(fused.layers[1].feed_forward)
