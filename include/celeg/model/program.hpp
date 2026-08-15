@@ -154,8 +154,16 @@ private:
 
 class CompiledFeedForwardIntermediateView {
 public:
+    using Fallback = int (*)(const void*);
+
     CompiledFeedForwardIntermediateView() = default;
-    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+    void bind(CompiledFeedForwardProgram& program,
+              const void* fallback_context = nullptr,
+              Fallback fallback = nullptr) {
+        program_ = &program;
+        fallback_context_ = fallback_context;
+        fallback_ = fallback;
+    }
     int value() const {
         if (!program_) return 0;
         if (const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
@@ -164,7 +172,7 @@ public:
         if (const auto* moe = std::get_if<MoeLayerProgram>(&program_->storage())) {
             return moe->routed.mlp.intermediate_size;
         }
-        return 0;
+        return fallback_ ? fallback_(fallback_context_) : 0;
     }
     operator int() const { return value(); }
     CompiledFeedForwardIntermediateView& operator=(int intermediate_size) {
@@ -182,12 +190,22 @@ public:
 
 private:
     CompiledFeedForwardProgram* program_ = nullptr;
+    const void* fallback_context_ = nullptr;
+    Fallback fallback_ = nullptr;
 };
 
 class CompiledFeedForwardActivationView {
 public:
+    using Fallback = ActivationKind (*)(const void*);
+
     CompiledFeedForwardActivationView() = default;
-    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+    void bind(CompiledFeedForwardProgram& program,
+              const void* fallback_context = nullptr,
+              Fallback fallback = nullptr) {
+        program_ = &program;
+        fallback_context_ = fallback_context;
+        fallback_ = fallback;
+    }
     ActivationKind value() const {
         if (program_) {
             if (const auto* dense =
@@ -195,7 +213,7 @@ public:
                 return dense->activation;
             }
         }
-        return ActivationKind::SwiGLU;
+        return fallback_ ? fallback_(fallback_context_) : ActivationKind::SwiGLU;
     }
     operator ActivationKind() const { return value(); }
     CompiledFeedForwardActivationView& operator=(ActivationKind activation) {
@@ -212,6 +230,8 @@ public:
 
 private:
     CompiledFeedForwardProgram* program_ = nullptr;
+    const void* fallback_context_ = nullptr;
+    Fallback fallback_ = nullptr;
 };
 
 class CompiledMoeView {
