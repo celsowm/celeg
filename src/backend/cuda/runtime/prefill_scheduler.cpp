@@ -55,9 +55,10 @@ bool CudaSchedulerDriver::run_prefill_work() {
             const PackedSessionContext context = packed_session_context(*item.lane->model);
             return std::any_of(context.program().layers.begin(), context.program().layers.end(),
                 [](const CompiledLayerProgram& layer) {
-                    return layer.attention.has_value() &&
+                    const AttentionSpec* attention = layer.attention();
+                    return attention &&
                         !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                            layer.attention->output_transform);
+                            attention->output_transform);
                 });
         });
     const bool use_packed_prefill = !has_embedded && engine_options_.packed_decode &&
