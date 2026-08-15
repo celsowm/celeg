@@ -90,7 +90,7 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
     const std::string lm_head_name = tensor_name(
         model.resources_.model_.weight_plan.requests,
         TensorRole::LanguageModelHead);
-    if (!model.resources_.model_.capabilities.tied_embeddings &&
+    if (!model.resources_.model_.graph.tied_embeddings &&
         repo.contains(lm_head_name)) {
         model.resources_.lm_head_ = model.resources_.weight_loader_->load_linear_weight(
             repo, lm_head_name,

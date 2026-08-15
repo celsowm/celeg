@@ -14,12 +14,12 @@ ResolvedModel resolve_architecture_stages(
     }
     ResolvedModel model;
     model.provenance = std::move(stages.provenance);
-    model.capabilities = stages.capabilities;
     CheckpointDimensions checkpoint_dimensions = stages.checkpoint_dimensions(checkpoint);
     NumericalPolicy numerical_policy = stages.numerical_policy(checkpoint);
     checkpoint_dimensions.validate();
     numerical_policy.validate();
     model.graph = stages.graph(checkpoint_dimensions, numerical_policy, checkpoint);
+    model.graph.tied_embeddings = stages.tied_embeddings;
     model.graph.validate();
     model.topology = compose_runtime_topology(std::move(checkpoint_dimensions), model.graph);
     model.topology.validate();

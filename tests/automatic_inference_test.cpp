@@ -315,7 +315,7 @@ int main() {
         hybrid_model.graph.layers[0].mixer));
     CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
         hybrid_model.graph.layers[1].mixer));
-    CELEG_TEST_CHECK(hybrid_model.capabilities.tied_embeddings);
+    CELEG_TEST_CHECK(hybrid_model.graph.tied_embeddings);
 
     auto conflicting = metadata();
     conflicting.values["n_embd"] = int64_t(9);

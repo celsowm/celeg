@@ -52,8 +52,6 @@ int main() {
 
     celeg::ResolvedModel model;
     model.provenance.identity = "fake-repository-boundary";
-    model.capabilities.supports_cpu = true;
-    model.capabilities.supports_cuda = true;
     celeg::LayerSpec layer;
     model.graph.hidden = 4;
     model.graph.final_norm = {1.0e-5f, celeg::NormWeightKind::Scale};

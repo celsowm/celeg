@@ -25,8 +25,6 @@ const celeg::CompiledAttentionStateLayout& compiled_attention_state(
 int main() {
     celeg::ResolvedModel model;
     model.provenance.identity = "compiler-fixture";
-    model.capabilities.supports_cpu = true;
-    model.capabilities.supports_cuda = true;
     celeg::LayerSpec attention_layer;
     celeg::AttentionSpec attention;
     attention.query_heads = 1;
@@ -244,11 +242,6 @@ int main() {
     }
     CELEG_TEST_CHECK(fused_rejected);
 
-    model.capabilities.supports_cpu = false;
-    bool rejected = false;
-    try { (void)celeg::CpuModelCompiler{}.compile(model); }
-    catch (const std::invalid_argument&) { rejected = true; }
-    CELEG_TEST_CHECK(rejected);
     std::cout << "model_compiler_test: ok\n";
     return 0;
 }

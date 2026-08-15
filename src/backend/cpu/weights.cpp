@@ -74,7 +74,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     native_checkpoint = native_storage != nullptr &&
                         native_storage->has_native_block_storage();
     runtime_topology = bootstrap.model.topology;
-    tie_word_embeddings = bootstrap.model.capabilities.tied_embeddings;
+    tie_word_embeddings = bootstrap.model.graph.tied_embeddings;
     program = CpuModelCompiler{}.compile(bootstrap.model);
     workspace_plan = CpuWorkspacePlan::from_topology(shape, program);
     model_identity = bootstrap.model.provenance.identity;

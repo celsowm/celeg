@@ -446,6 +446,7 @@ struct ModelGraph {
     float logits_divisor = 1.0f;
     float logits_multiplier = 1.0f;
     float final_logit_softcap = 0.0f;
+    bool tied_embeddings = false;
 
     void validate() const;
     std::string fingerprint() const;
@@ -462,13 +463,6 @@ struct ModelGraph {
 
 struct WeightPlan {
     std::vector<TensorRequest> requests;
-};
-
-struct ModelCapabilities {
-    bool supports_cpu = false;
-    bool supports_cuda = false;
-    bool supports_expert_offload = false;
-    bool tied_embeddings = false;
 };
 
 }

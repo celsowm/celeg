@@ -25,7 +25,7 @@ struct ArchitectureResolutionStages {
     std::function<ModelGraph(const CheckpointDimensions&, const NumericalPolicy&,
                              const CheckpointView&)> graph;
     std::function<void(ResolvedModel&, const CheckpointView&)> weights;
-    ModelCapabilities capabilities;
+    bool tied_embeddings = false;
     ModelProvenance provenance;
 };
 

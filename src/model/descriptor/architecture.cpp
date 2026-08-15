@@ -530,10 +530,9 @@ public:
             auto policy = descriptor_detail::create_naming_policy(descriptor_);
             build_weight_plan_from_graph(model, *policy);
         };
-        const bool tied_embeddings = descriptor_.tied_embeddings_field.has_value()
+        stages.tied_embeddings = descriptor_.tied_embeddings_field.has_value()
             ? boolean_value(metadata, descriptor_.tied_embeddings_field, descriptor_.tied_embeddings)
             : descriptor_.tied_embeddings;
-        stages.capabilities = {true, true, false, tied_embeddings};
         stages.provenance.architecture_id = descriptor_.id;
         stages.provenance.source_format = metadata.is_gguf() ? "gguf" : "safetensors";
         stages.provenance.checkpoint_profile_id = descriptor_.id;

@@ -7,9 +7,6 @@
 namespace celeg {
 
 CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) const {
-    if (!model.capabilities.supports_cuda) {
-        throw std::invalid_argument("resolved model does not support CUDA");
-    }
     CompiledModelProgram program = build_model_program(model);
     for (const auto& layer : program.layers) {
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);

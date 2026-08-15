@@ -36,7 +36,7 @@ ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) co
     facts.validate();
     ResolvedModel result;
     result.graph = GraphSynthesizer{}.synthesize(facts);
-    result.capabilities = {true, true, false, facts.tied_embeddings};
+    result.graph.tied_embeddings = facts.tied_embeddings;
     result.provenance.architecture_id = facts.resolution_mode;
     result.provenance.source_format = facts.source_format;
     result.provenance.checkpoint_profile_id = facts.resolution_mode;

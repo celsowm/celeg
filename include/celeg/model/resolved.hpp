@@ -150,7 +150,6 @@ struct ResolvedModel {
     ModelGraph graph;
     RuntimeTopology topology;
     WeightPlan weight_plan;
-    ModelCapabilities capabilities;
     ModelProvenance provenance;
 
     const ExecutionTopology& shape() const { return topology.exec; }

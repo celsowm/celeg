@@ -190,7 +190,7 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     inputs.options = resources.options_.expert_offload;
     inputs.gpu_free_bytes = free_bytes;
     inputs.non_expert_weight_bytes = estimate_non_expert_weights(
-        resources.dims_, resources.program_, resources.model_.capabilities.tied_embeddings) +
+        resources.dims_, resources.program_, resources.model_.graph.tied_embeddings) +
         (resources.options_.enable_mtp
             ? estimate_mtp_non_expert_weights(resources.dims_, resources.program_) : 0) +
         (64ull << 20);
