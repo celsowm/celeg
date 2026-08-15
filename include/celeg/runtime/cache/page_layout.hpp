@@ -53,7 +53,12 @@ struct PageLayout {
                 ? shape.layer_for_attention_slot[static_cast<size_t>(slot)] : slot;
             const AttentionSpec* attention = nullptr;
             if (model_layer >= 0 && model_layer < static_cast<int>(program.layers.size())) {
-                attention = program.layers.at(static_cast<size_t>(model_layer)).attention();
+                const auto& mixer =
+                    program.layers.at(static_cast<size_t>(model_layer)).mixer;
+                if (const auto* compiled =
+                        std::get_if<CompiledAttentionProgram>(&mixer)) {
+                    attention = &compiled->semantics;
+                }
             }
             if (!attention) {
                 throw std::invalid_argument("PageLayout requires an attention layout for every slot");

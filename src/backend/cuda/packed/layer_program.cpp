@@ -1,6 +1,7 @@
 #include "celeg/backend/cuda/packed/layer_program.hpp"
 
 #include <stdexcept>
+#include <type_traits>
 
 namespace celeg {
 
@@ -11,25 +12,22 @@ PackedLayerProgram PackedLayerProgram::compile(const CompiledModelProgram& progr
     std::vector<PackedLayerBinding> layers;
     layers.reserve(program.layers.size());
     for (const CompiledLayerProgram& layer : program.layers) {
-        switch (layer.mixer_kind()) {
-        case CompiledMixer::Attention:
-            layers.push_back({PackedLayerKind::Attention});
-            break;
-        case CompiledMixer::ShortConvolution:
-            layers.push_back({PackedLayerKind::ShortConvolution});
-            break;
-        case CompiledMixer::GatedDeltaNet:
-            layers.push_back({PackedLayerKind::GatedDeltaNet});
-            break;
-        case CompiledMixer::Mamba2:
-            layers.push_back({PackedLayerKind::Mamba2});
-            break;
-        case CompiledMixer::MlpOnly:
-            layers.push_back({PackedLayerKind::MlpOnly});
-            break;
-        default:
-            throw std::invalid_argument("packed layer program has unsupported mixer kind");
-        }
+        std::visit([&](const auto& mixer) {
+            using Mixer = std::decay_t<decltype(mixer)>;
+            if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
+                layers.push_back({PackedLayerKind::Attention});
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+                layers.push_back({PackedLayerKind::ShortConvolution});
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                layers.push_back({PackedLayerKind::GatedDeltaNet});
+            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                layers.push_back({PackedLayerKind::Mamba2});
+            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                layers.push_back({PackedLayerKind::MlpOnly});
+            } else {
+                static_assert(always_false_v<Mixer>, "unsupported compiled mixer variant");
+            }
+        }, layer.mixer);
     }
     return PackedLayerProgram(std::move(layers));
 }

@@ -15,7 +15,9 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
                        1, resources_.program_.hidden,
                        semantics.feed_forward_norm.epsilon,
                        stream_.get());
-        const int intermediate = semantics.feed_forward_intermediate;
+        const auto& dense_semantics =
+            std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
+        const int intermediate = dense_semantics.intermediate_size;
         if (resources_.options_.fused_projections) {
             linear(workspace_.normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.gate_up_.data(),
                    1, 2 * intermediate, resources_.program_.hidden);
@@ -29,7 +31,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             linear(workspace_.normed_.data(), w3, workspace_.gate_up_.data() + intermediate,
                    1, intermediate, resources_.program_.hidden);
         }
-        const bool gelu_tanh = semantics.feed_forward_activation == ActivationKind::GeluTanh;
+        const bool gelu_tanh = dense_semantics.activation == ActivationKind::GeluTanh;
         if (gelu_tanh) {
             launch_gated_gelu_tanh(workspace_.gate_up_.data(), workspace_.activated_.data(),
                                    intermediate, stream_.get());
@@ -68,7 +70,9 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         (void)moe;
         run_mlp_moe_prefill(common_layer, rows, layer);
     } else {
-        const int intermediate = semantics.feed_forward_intermediate;
+        const auto& dense_semantics =
+            std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
+        const int intermediate = dense_semantics.intermediate_size;
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
@@ -77,7 +81,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
                rows, 2 * intermediate, resources_.program_.hidden);
-        if (semantics.feed_forward_activation == ActivationKind::GeluTanh) {
+        if (dense_semantics.activation == ActivationKind::GeluTanh) {
             launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(),
                                    workspace_.prefill_activated_.data(),
                                    static_cast<int>(matrix_elements), stream_.get());
@@ -96,7 +100,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         linear(workspace_.prefill_normed_.data(), w3,
                workspace_.prefill_gate_up_.data() + matrix_elements,
                rows, intermediate, resources_.program_.hidden);
-        if (semantics.feed_forward_activation == ActivationKind::GeluTanh) {
+        if (dense_semantics.activation == ActivationKind::GeluTanh) {
             launch_gated_gelu_tanh(workspace_.prefill_gate_up_.data(), workspace_.prefill_activated_.data(),
                                    static_cast<int>(matrix_elements), stream_.get());
         } else {

@@ -14,12 +14,22 @@ double elapsed_ms(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
+const CompiledDenseFeedForwardProgram& dense_program(
+    const CpuCompiledModel::Shared& shared, size_t layer) {
+    const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
+        &shared.program.layers.at(layer).feed_forward);
+    if (!dense) {
+        throw std::logic_error("CPU dense FFN execution received non-dense semantics");
+    }
+    return *dense;
+}
+
 int intermediate_size(const CpuCompiledModel::Shared& shared, size_t layer) {
-    return shared.program.layers.at(layer).feed_forward_intermediate;
+    return dense_program(shared, layer).intermediate_size;
 }
 
 bool uses_gelu_tanh(const CpuCompiledModel::Shared& shared, size_t layer) {
-    return shared.program.layers.at(layer).feed_forward_activation == ActivationKind::GeluTanh;
+    return dense_program(shared, layer).activation == ActivationKind::GeluTanh;
 }
 
 } // namespace
@@ -29,10 +39,11 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
     auto& shared = context.shared;
     auto& workspace = context.workspace;
     const CompiledLayerProgram& semantics = shared.program.layers.at(layer);
-    const int intermediate = semantics.feed_forward_intermediate;
-    if (!semantics.mlp_only || semantics.mlp_only->activation != ActivationKind::Relu2) {
+    const auto* mlp = std::get_if<MlpBlockSpec>(&semantics.mixer);
+    if (!mlp || mlp->activation != ActivationKind::Relu2) {
         throw std::logic_error("CPU MLP-only execution received unsupported semantics");
     }
+    const int intermediate = mlp->intermediate_size;
     shared.linear.gemv(weights.common.mlp_up, workspace.normed.data(),
                        workspace.activated.data());
     cpu_relu2(workspace.activated.data(), workspace.activated.data(), intermediate);

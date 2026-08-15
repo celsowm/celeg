@@ -44,18 +44,19 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
             ? expert_bias[index] : 0.0f;
         scored[index] = {probabilities[index] + bias, static_cast<int>(index)};
     }
-    if (program.selection == MoeSelectionKind::GroupedTopK) {
+    if (const auto* grouped =
+            std::get_if<MoeGroupedTopKSelectionSpec>(&program.selection)) {
         std::vector<std::pair<float, int>> groups;
-        groups.reserve(static_cast<size_t>(program.group_count));
-        for (int group = 0; group < program.group_count; ++group) {
+        groups.reserve(static_cast<size_t>(grouped->group_count));
+        for (int group = 0; group < grouped->group_count; ++group) {
             std::vector<float> group_scores;
-            group_scores.reserve(static_cast<size_t>(program.experts_per_group));
-            const int first = group * program.experts_per_group;
-            for (int offset = 0; offset < program.experts_per_group; ++offset) {
+            group_scores.reserve(static_cast<size_t>(grouped->experts_per_group));
+            const int first = group * grouped->experts_per_group;
+            for (int offset = 0; offset < grouped->experts_per_group; ++offset) {
                 group_scores.push_back(probabilities[static_cast<size_t>(first + offset)]);
             }
-            const int score_count = std::min(program.group_score_top_k,
-                                             program.experts_per_group);
+            const int score_count = std::min(grouped->group_score_top_k,
+                                             grouped->experts_per_group);
             std::partial_sort(group_scores.begin(), group_scores.begin() + score_count,
                               group_scores.end(), std::greater<float>());
             float score = 0.0f;
@@ -63,17 +64,18 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
             groups.emplace_back(score, group);
         }
         std::partial_sort(groups.begin(),
-                          groups.begin() + program.groups_per_token,
+                          groups.begin() + grouped->groups_per_token,
                           groups.end(), [](const auto& left, const auto& right) {
             return left.first == right.first ? left.second < right.second
                                              : left.first > right.first;
         });
-        std::vector<bool> selected(static_cast<size_t>(program.group_count), false);
-        for (int index = 0; index < program.groups_per_token; ++index) {
+        std::vector<bool> selected(static_cast<size_t>(grouped->group_count), false);
+        for (int index = 0; index < grouped->groups_per_token; ++index) {
             selected[static_cast<size_t>(groups[static_cast<size_t>(index)].second)] = true;
         }
         for (auto& entry : scored) {
-            if (!selected[static_cast<size_t>(entry.second / program.experts_per_group)]) {
+            if (!selected[static_cast<size_t>(
+                    entry.second / grouped->experts_per_group)]) {
                 entry.first = -std::numeric_limits<float>::infinity();
             }
         }

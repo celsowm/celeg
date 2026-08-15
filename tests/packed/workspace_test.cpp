@@ -26,9 +26,9 @@ int main() {
         for (size_t index = 0; index < graph.layers.size(); ++index) {
             program.layers[index].mixer = celeg::CompiledAttentionProgram{
                 std::get<celeg::AttentionSpec>(graph.layers[index].mixer), {}};
-            program.layers[index].feed_forward = celeg::CompiledFeedForward::Dense;
-            program.layers[index].feed_forward_intermediate =
-                index == 0 ? 128 : 192;
+            program.layers[index].feed_forward =
+                celeg::CompiledDenseFeedForwardProgram{
+                    index == 0 ? 128 : 192, celeg::ActivationKind::SwiGLU};
         }
 
         const auto requirements = celeg::PackedWorkspaceRequirements::derive(

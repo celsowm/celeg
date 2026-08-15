@@ -28,9 +28,8 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
     allocate_celeg_resources();
     int maximum_experts = 0;
     for (const CompiledLayerProgram& layer : resources_.program_.layers) {
-        if (layer.moe) {
-            maximum_experts = std::max(maximum_experts,
-                                       layer.moe->router.expert_count);
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+            maximum_experts = std::max(maximum_experts, moe->router.expert_count);
         }
     }
     workspace_.residency_workspace_ = ExpertResidencyWorkspace{

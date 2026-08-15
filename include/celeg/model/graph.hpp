@@ -17,15 +17,6 @@ namespace celeg {
 template <typename T>
 inline constexpr bool always_false_v = false;
 
-enum class MixerKind : uint8_t {
-    Attention,
-    ShortConvolution,
-    GatedDeltaNet,
-    Mamba2,
-    MlpOnly,
-};
-enum class FeedForwardKind : uint8_t { Dense, MixtureOfExperts };
-
 enum class ActivationKind : uint8_t {
     SwiGLU,
     GeluTanh,
@@ -360,6 +351,29 @@ struct PerLayerInputSpec {
     bool enabled = false;
 };
 
+enum class MoeCombineOrder : uint8_t {
+    RoutedThenShared,
+    SharedThenRouted,
+};
+
+struct MoeTopKSelectionSpec {};
+
+struct MoeGroupedTopKSelectionSpec {
+    int group_count = 0;
+    int experts_per_group = 0;
+    int groups_per_token = 0;
+    int group_score_top_k = 0;
+};
+
+using MoeSelectionSpec = std::variant<
+    MoeTopKSelectionSpec,
+    MoeGroupedTopKSelectionSpec>;
+
+struct SharedExpertSpec {
+    int intermediate_size = 0;
+    MoeCombineOrder combine_order = MoeCombineOrder::RoutedThenShared;
+};
+
 struct MixtureOfExpertsSpec {
     int intermediate_size = 0;
     int num_experts = 0;
@@ -367,16 +381,8 @@ struct MixtureOfExpertsSpec {
     bool normalize_topk = false;
     bool use_expert_bias = false;
     float routed_scaling_factor = 1.0f;
-    // These fields describe semantics, not a checkpoint layout.  Families
-    // with ordinary top-K routing leave the grouped/shared fields at their
-    // defaults; the compiled program still records those defaults explicitly.
-    int routing_group_count = 0;
-    int routing_experts_per_group = 0;
-    int routing_groups_per_token = 0;
-    int routing_group_score_top_k = 0;
-    bool has_shared_expert = false;
-    int shared_intermediate_size = 0;
-    bool shared_before_routed = false;
+    MoeSelectionSpec selection = MoeTopKSelectionSpec{};
+    std::optional<SharedExpertSpec> shared;
     bool router_softmax = false;
 };
 
@@ -384,55 +390,30 @@ struct ResidualSpec {
     float multiplier = 1.0f;
 };
 
+using MixerSpec = std::variant<
+    AttentionSpec,
+    ShortConvolutionSpec,
+    GatedDeltaNetSpec,
+    Mamba2Spec,
+    MlpBlockSpec>;
+
+using FeedForwardSpec = std::variant<
+    std::monostate,
+    DenseFeedForwardSpec,
+    MixtureOfExpertsSpec>;
+
 struct LayerSpec {
     NormSpec operator_norm;
     NormSpec post_attention_norm;
     NormSpec pre_feed_forward_norm;
     NormSpec post_feed_forward_norm;
     NormSpec per_layer_input_norm;
-    std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec,
-                 Mamba2Spec, MlpBlockSpec> mixer;
+    MixerSpec mixer;
     NormSpec feed_forward_norm;
-    std::variant<DenseFeedForwardSpec, MixtureOfExpertsSpec> feed_forward;
+    FeedForwardSpec feed_forward;
     ResidualSpec residual;
     PerLayerInputSpec per_layer_input;
     float layer_scalar = 1.0f;
-    // Some hybrid schedules use a mixer-only layer.  This is an explicit
-    // semantic property resolved by the architecture, never inferred from
-    // the presence of a particular mixer type elsewhere in the model.
-    bool execute_feed_forward = true;
-
-    MixerKind mixer_kind() const {
-        return std::visit([](const auto& value) {
-            using Mixer = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
-                return MixerKind::Attention;
-            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
-                return MixerKind::ShortConvolution;
-            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
-                return MixerKind::GatedDeltaNet;
-            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
-                return MixerKind::Mamba2;
-            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
-                return MixerKind::MlpOnly;
-            } else {
-                static_assert(always_false_v<Mixer>, "unhandled mixer semantic variant");
-            }
-        }, mixer);
-    }
-    FeedForwardKind feed_forward_kind() const {
-        return std::visit([](const auto& value) {
-            using FeedForward = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-                return FeedForwardKind::Dense;
-            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-                return FeedForwardKind::MixtureOfExperts;
-            } else {
-                static_assert(always_false_v<FeedForward>,
-                              "unhandled feed-forward semantic variant");
-            }
-        }, feed_forward);
-    }
 };
 
 struct ModelGraph {
@@ -462,7 +443,9 @@ struct ModelGraph {
 
     bool has_moe() const {
         for (const LayerSpec& layer : layers) {
-            if (layer.feed_forward_kind() == FeedForwardKind::MixtureOfExperts) return true;
+            if (std::holds_alternative<MixtureOfExpertsSpec>(layer.feed_forward)) {
+                return true;
+            }
         }
         return false;
     }

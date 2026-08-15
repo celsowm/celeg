@@ -45,10 +45,10 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     };
     common.operator_norm = load_norm(TensorRole::AttentionInputNorm,
                                      layer_program.operator_norm);
-    if (!layer_program.execute_feed_forward) {
+    if (std::holds_alternative<std::monostate>(layer_program.feed_forward)) {
         common.ffn_norm = common.operator_norm;
-        if (layer_program.mixer == CompiledMixer::MlpOnly) {
-            const int intermediate = layer_program.feed_forward_intermediate;
+        if (const auto* mlp = std::get_if<MlpBlockSpec>(&layer_program.mixer)) {
+            const int intermediate = mlp->intermediate_size;
             common.mlp_up = load_matrix(source, reader, writer,
                 tensor_name(weight_requests, TensorRole::FfnUp, layer),
                 {intermediate, program.hidden});
@@ -68,10 +68,12 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         common.post_feed_forward_norm = load_norm(TensorRole::FfnOutputNorm,
                                                   layer_program.post_feed_forward_norm);
     }
-    const int intermediate = layer_program.feed_forward_intermediate;
-    if (intermediate <= 0) {
+    const auto* dense =
+        std::get_if<CompiledDenseFeedForwardProgram>(&layer_program.feed_forward);
+    if (!dense || dense->intermediate_size <= 0) {
         throw std::runtime_error("compiled dense layer has no FFN width");
     }
+    const int intermediate = dense->intermediate_size;
     common.w13 = load_concat(source, reader, writer,
         layer_name(layer, "feed_forward.w13.weight"), {
             {tensor_name(weight_requests, TensorRole::FfnGate, layer),
@@ -183,9 +185,10 @@ void CpuCompiledModel::Shared::load_weights() {
                                    const CompiledLayerProgram& layer_program)
         -> std::variant<AttentionWeights, ConvolutionWeights, GatedDeltaNetWeights,
                         Mamba2Weights, MlpOnlyWeights> {
-        if (layer_program.mixer == CompiledMixer::Attention) {
+        if (const auto* compiled_attention =
+                std::get_if<CompiledAttentionProgram>(&layer_program.mixer)) {
             AttentionWeights layer;
-            const AttentionSpec& attention = layer_program.attention.value();
+            const AttentionSpec& attention = compiled_attention->semantics;
             if (attention.uses_latent_state()) {
                 const auto& latent = *attention.latent_state();
                 if (latent.factorized) {
@@ -308,9 +311,10 @@ void CpuCompiledModel::Shared::load_weights() {
             return layer;
         }
 
-        if (layer_program.mixer == CompiledMixer::GatedDeltaNet) {
+        if (const auto* gated_delta =
+                std::get_if<GatedDeltaNetSpec>(&layer_program.mixer)) {
             GatedDeltaNetWeights layer;
-            layer.spec = layer_program.gated_delta_net.value();
+            layer.spec = *gated_delta;
             const auto& spec = layer.spec;
             const int key_width = spec.key_heads * spec.key_head_dim;
             const int value_width = spec.value_heads * spec.value_head_dim;
@@ -381,9 +385,9 @@ void CpuCompiledModel::Shared::load_weights() {
             return layer;
         }
 
-        if (layer_program.mixer == CompiledMixer::Mamba2) {
+        if (const auto* mamba = std::get_if<Mamba2Spec>(&layer_program.mixer)) {
             Mamba2Weights layer;
-            const auto& spec = layer_program.mamba2.value();
+            const auto& spec = *mamba;
             const int conv_dim = spec.intermediate_size + 2 * spec.group_count * spec.state_size;
             layer.in = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::Mamba2Input, index),
@@ -407,20 +411,25 @@ void CpuCompiledModel::Shared::load_weights() {
                 {program.hidden, spec.intermediate_size});
             return layer;
         }
-        if (layer_program.mixer == CompiledMixer::MlpOnly) return MlpOnlyWeights{};
+        if (std::holds_alternative<MlpBlockSpec>(layer_program.mixer)) {
+            return MlpOnlyWeights{};
+        }
 
+        const auto* convolution =
+            std::get_if<ShortConvolutionSpec>(&layer_program.mixer);
+        if (!convolution) {
+            throw std::logic_error("CPU weight loader received unknown mixer alternative");
+        }
         ConvolutionWeights layer;
-        const ShortConvolutionSpec& convolution =
-            layer_program.short_convolution.value();
         layer.in = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::ShortConvInput, index),
             {3 * program.hidden, program.hidden});
         const std::vector<float> channel_major =
             load_vector(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::ShortConvKernel, index),
-            {program.hidden, 1, convolution.cache_length});
+            {program.hidden, 1, convolution->cache_length});
         layer.weight_tap_major.resize(channel_major.size());
-        for (int tap = 0; tap < convolution.cache_length; ++tap) {
+        for (int tap = 0; tap < convolution->cache_length; ++tap) {
             for (int channel = 0; channel < program.hidden; ++channel) {
                 layer.weight_tap_major[static_cast<size_t>(tap) * program.hidden + channel] =
                     channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
@@ -437,7 +446,7 @@ void CpuCompiledModel::Shared::load_weights() {
         for (int index = 0; index < static_cast<int>(program.layers.size()); ++index) {
             const CompiledLayerProgram& layer_program = program.layers.at(
                 static_cast<size_t>(index));
-            if (layer_program.feed_forward != CompiledFeedForward::MixtureOfExperts) {
+            if (!std::holds_alternative<MoeLayerProgram>(layer_program.feed_forward)) {
                 CommonWeights common =
                     load_common(source, reader.get(), writer.get(), index);
                 auto layer = load_operator(index, layer_program);
@@ -458,8 +467,8 @@ void CpuCompiledModel::Shared::load_weights() {
             };
             const bool individual_expert_model =
                 has_request(TensorRole::MoeExpertGate, 0);
-            const MoeLayerProgram& moe_semantics =
-                program.layers.at(static_cast<size_t>(index)).moe.value();
+            const MoeLayerProgram& moe_semantics = std::get<MoeLayerProgram>(
+                program.layers.at(static_cast<size_t>(index)).feed_forward);
             const bool packed_expert_model = !individual_expert_model &&
                 moe_semantics.shared.has_value();
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
@@ -541,8 +550,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 layer.expert_w2.resize(static_cast<size_t>(moe_semantics.router.expert_count));
             }
             for (int expert = 0; expert < moe_semantics.router.expert_count; ++expert) {
-                const int moe_inter = program.layers.at(static_cast<size_t>(index))
-                    .moe->routed.mlp.intermediate_size;
+                const int moe_inter = moe_semantics.routed.mlp.intermediate_size;
                 if (moe_inter <= 0) {
                     throw std::runtime_error("compiled MoE layer has no expert width");
                 }
@@ -650,7 +658,8 @@ void CpuCompiledModel::Shared::load_weights() {
                 // proven that from the layer program; requiring dense MLP
                 // matrices here would reintroduce a backend-specific
                 // semantic assumption.
-                if (!program.layers[layer].execute_feed_forward) return;
+                if (std::holds_alternative<std::monostate>(
+                        program.layers[layer].feed_forward)) return;
                 require_matrix(common.w13, "layer " + std::to_string(layer) + ".w13");
                 require_matrix(common.w2, "layer " + std::to_string(layer) + ".w2");
             };
@@ -664,12 +673,16 @@ void CpuCompiledModel::Shared::load_weights() {
                 if (value.shared_w13.rows != 0) require_matrix(value.shared_w13, "shared_w13");
                 if (value.shared_w2.rows != 0) require_matrix(value.shared_w2, "shared_w2");
                 if (const auto* attention = std::get_if<AttentionWeights>(&value.operator_layer)) {
-                    check_attention(*attention, program.layers[layer].attention.value(),
+                    check_attention(*attention,
+                                    std::get<CompiledAttentionProgram>(
+                                        program.layers[layer].mixer).semantics,
                                     "layer " + std::to_string(layer) + ".attention");
                 }
             } else if constexpr (std::is_same_v<Value, AttentionWeights>) {
                 check_common(value.common);
-                check_attention(value, program.layers[layer].attention.value(),
+                check_attention(value,
+                                std::get<CompiledAttentionProgram>(
+                                    program.layers[layer].mixer).semantics,
                                 "layer " + std::to_string(layer) + ".attention");
             } else if constexpr (std::is_same_v<Value, ConvolutionWeights>) {
                 check_common(value.common);

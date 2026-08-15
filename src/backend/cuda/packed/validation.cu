@@ -131,9 +131,10 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     result.maximum_ffn_intermediate =
         static_cast<size_t>(shape.max_feed_forward_intermediate);
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (layer.moe) {
-            result.moe_intermediate = std::max(result.moe_intermediate,
-                static_cast<size_t>(layer.moe->routed.mlp.intermediate_size));
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+            result.moe_intermediate = std::max(
+                result.moe_intermediate,
+                static_cast<size_t>(moe->routed.mlp.intermediate_size));
         }
     }
     result.layer_slots = maximum_batch * static_cast<size_t>(shape.num_hidden_layers);

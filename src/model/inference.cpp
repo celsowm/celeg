@@ -72,12 +72,11 @@ void CanonicalModelFacts::validate() const {
          ++layer) {
         const LayerSpec& semantic_layer =
             graph.layers[static_cast<size_t>(layer)];
-        const MixerKind mixer = semantic_layer.mixer_kind();
         require(TensorRole::AttentionInputNorm, layer);
 
-        if (mixer == MixerKind::Attention) {
-            const AttentionSpec& attention =
-                std::get<AttentionSpec>(semantic_layer.mixer);
+        if (const auto* attention_ptr =
+                std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
+            const AttentionSpec& attention = *attention_ptr;
             if (attention.uses_latent_state()) {
                 if (attention.latent_state()->factorized) {
                     require(TensorRole::AttentionLatentQueryProjection, layer);
@@ -101,11 +100,11 @@ void CanonicalModelFacts::validate() const {
                     ? TensorRole::AttentionLatentOutput
                     : TensorRole::AttentionOutput,
                 layer);
-        } else if (mixer == MixerKind::ShortConvolution) {
+        } else if (std::holds_alternative<ShortConvolutionSpec>(semantic_layer.mixer)) {
             require(TensorRole::ShortConvInput, layer);
             require(TensorRole::ShortConvKernel, layer);
             require(TensorRole::ShortConvOutput, layer);
-        } else if (mixer == MixerKind::Mamba2) {
+        } else if (std::holds_alternative<Mamba2Spec>(semantic_layer.mixer)) {
             require(TensorRole::Mamba2Input, layer);
             require(TensorRole::Mamba2Conv, layer);
             require(TensorRole::Mamba2ConvBias, layer);
@@ -114,7 +113,7 @@ void CanonicalModelFacts::validate() const {
             require(TensorRole::Mamba2D, layer);
             require(TensorRole::Mamba2Norm, layer);
             require(TensorRole::Mamba2Output, layer);
-        } else if (mixer == MixerKind::GatedDeltaNet) {
+        } else if (std::holds_alternative<GatedDeltaNetSpec>(semantic_layer.mixer)) {
             const GatedDeltaNetSpec& spec =
                 std::get<GatedDeltaNetSpec>(semantic_layer.mixer);
             if (spec.factorized_projections) {
@@ -136,7 +135,7 @@ void CanonicalModelFacts::validate() const {
             require(TensorRole::GatedDeltaNetALog, layer);
             require(TensorRole::GatedDeltaNetNorm, layer);
             require(TensorRole::GatedDeltaNetOutput, layer);
-        } else if (mixer == MixerKind::MlpOnly) {
+        } else if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) {
             require(TensorRole::FfnUp, layer);
             require(TensorRole::FfnDown, layer);
         } else {
@@ -145,14 +144,13 @@ void CanonicalModelFacts::validate() const {
                 "automatic resolution has no binding contract for mixer");
         }
 
-        if (mixer != MixerKind::MlpOnly &&
-            semantic_layer.execute_feed_forward) {
+        if (!std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer) &&
+            !std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) {
             require(TensorRole::FfnInputNorm, layer);
-            if (semantic_layer.feed_forward_kind() ==
-                FeedForwardKind::MixtureOfExperts) {
+            if (const auto* moe_ptr =
+                    std::get_if<MixtureOfExpertsSpec>(&semantic_layer.feed_forward)) {
                 require(TensorRole::MoeRouter, layer);
-                const auto& moe = std::get<MixtureOfExpertsSpec>(
-                    semantic_layer.feed_forward);
+                const auto& moe = *moe_ptr;
                 for (int expert = 0; expert < moe.num_experts; ++expert) {
                     if (bindings.find(
                             TensorRole::MoeExpertGate,

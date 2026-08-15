@@ -127,7 +127,6 @@ public:
             semantic_layer.feed_forward_norm = {numerical_policy.norm_eps,
                                                  descriptor_.feed_forward_norm_kind};
             semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
-            semantic_layer.execute_feed_forward = true;
         }
         const std::vector<std::string> scheduled_mixer = mixer_schedule_values(metadata, descriptor_);
         if (!scheduled_mixer.empty() && scheduled_mixer.size() !=
@@ -154,7 +153,7 @@ public:
                 } else if (kind == "mlp_only" || kind == "MlpOnly" || kind == "-") {
                     graph.layers[static_cast<size_t>(layer)].mixer = MlpBlockSpec{
                         intermediate, descriptor_.feed_forward_activation};
-                    graph.layers[static_cast<size_t>(layer)].execute_feed_forward = false;
+                    graph.layers[static_cast<size_t>(layer)].feed_forward = std::monostate{};
                 } else if (kind != "full_attention" && kind != "attention" && kind != "*") {
                     throw std::invalid_argument("descriptor has unsupported mixer kind: " + kind);
                 }
@@ -199,6 +198,20 @@ public:
                 descriptor_.moe_routing_group_score_top_k.has_value()
                     ? integer_value(metadata, *descriptor_.moe_routing_group_score_top_k) : 0;
             for (int layer = dense_layers; layer < layer_count; ++layer) {
+                MoeSelectionSpec selection = MoeTopKSelectionSpec{};
+                if (routing_group_count > 0) {
+                    selection = MoeGroupedTopKSelectionSpec{
+                        routing_group_count,
+                        routing_experts_per_group,
+                        routing_groups_per_token,
+                        routing_group_score_top_k};
+                }
+                std::optional<SharedExpertSpec> shared;
+                if (shared_expert_intermediate > 0) {
+                    shared = SharedExpertSpec{
+                        shared_expert_intermediate,
+                        MoeCombineOrder::RoutedThenShared};
+                }
                 graph.layers[static_cast<size_t>(layer)].feed_forward = MixtureOfExpertsSpec{
                     .intermediate_size = moe_intermediate,
                     .num_experts = moe_experts,
@@ -206,13 +219,8 @@ public:
                     .normalize_topk = normalize_topk,
                     .use_expert_bias = use_expert_bias,
                     .routed_scaling_factor = routed_scaling_factor,
-                    .routing_group_count = routing_group_count,
-                    .routing_experts_per_group = routing_experts_per_group,
-                    .routing_groups_per_token = routing_groups_per_token,
-                    .routing_group_score_top_k = routing_group_score_top_k,
-                    .has_shared_expert = shared_expert_intermediate > 0,
-                    .shared_intermediate_size = shared_expert_intermediate,
-                    .shared_before_routed = false,
+                    .selection = std::move(selection),
+                    .shared = std::move(shared),
                     .router_softmax = router_softmax};
             }
         }
@@ -244,12 +252,12 @@ public:
             mamba_intermediate = mamba_heads * mamba_head_dim;
         }
         for (int layer = 0; layer < layer_count; ++layer) {
-            const MixerKind kind = graph.layers[static_cast<size_t>(layer)].mixer_kind();
-            if (kind == MixerKind::GatedDeltaNet) {
+            auto& mixer = graph.layers[static_cast<size_t>(layer)].mixer;
+            if (std::holds_alternative<GatedDeltaNetSpec>(mixer)) {
                 graph.layers[static_cast<size_t>(layer)].mixer =
                     GatedDeltaNetSpec{gated_conv_kernel, gated_key_dim, gated_value_dim,
                                       gated_key_heads, gated_value_heads};
-            } else if (kind == MixerKind::Mamba2) {
+            } else if (std::holds_alternative<Mamba2Spec>(mixer)) {
                 graph.layers[static_cast<size_t>(layer)].mixer =
                     Mamba2Spec{gated_conv_kernel, mamba_intermediate, mamba_state_size,
                                mamba_time_step_rank, mamba_heads, mamba_head_dim,
@@ -325,7 +333,8 @@ public:
             return scheduled_sliding[index];
         };
         for (int layer = 0; layer < layer_count; ++layer) {
-            if (graph.layers[static_cast<size_t>(layer)].mixer_kind() != MixerKind::Attention) {
+            if (!std::holds_alternative<AttentionSpec>(
+                    graph.layers[static_cast<size_t>(layer)].mixer)) {
                 continue;
             }
             const bool is_sliding = scheduled_is_sliding(layer);

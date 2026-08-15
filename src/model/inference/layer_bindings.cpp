@@ -526,46 +526,37 @@ void bind_mixer(CanonicalInferenceContext& context,
     const LayerSpec& semantic_layer =
         context.facts.graph.layers[static_cast<size_t>(layer)];
 
-    switch (semantic_layer.mixer_kind()) {
-    case MixerKind::Mamba2:
+    if (std::holds_alternative<Mamba2Spec>(semantic_layer.mixer)) {
         bind_mamba2(context, layer);
         return;
-
-    case MixerKind::GatedDeltaNet: {
-        const auto& spec =
-            std::get<GatedDeltaNetSpec>(semantic_layer.mixer);
-        if (spec.factorized_projections) {
+    }
+    if (const auto* spec =
+            std::get_if<GatedDeltaNetSpec>(&semantic_layer.mixer)) {
+        if (spec->factorized_projections) {
             bind_factorized_gated_delta(context, layer, index);
         } else {
             bind_fused_gated_delta(context, layer, layer_prefix);
         }
         return;
     }
-
-    case MixerKind::ShortConvolution:
+    if (std::holds_alternative<ShortConvolutionSpec>(semantic_layer.mixer)) {
         bind_short_convolution(context, layer);
         return;
-
-    case MixerKind::Attention: {
-        const auto& attention =
-            std::get<AttentionSpec>(semantic_layer.mixer);
-        if (attention.uses_latent_state() &&
-            attention.latent_state()->factorized) {
-            bind_latent_attention(context, layer, index, attention);
+    }
+    if (const auto* attention = std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
+        if (attention->uses_latent_state() &&
+            attention->latent_state()->factorized) {
+            bind_latent_attention(context, layer, index, *attention);
         } else {
             bind_standard_attention(
-                context,
-                layer,
-                index,
-                layer_prefix,
-                attention);
+                context, layer, index, layer_prefix, *attention);
         }
         return;
     }
-
-    case MixerKind::MlpOnly:
+    if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) {
         return;
     }
+    static_assert(std::variant_size_v<MixerSpec> == 5);
 }
 
 void bind_dense_ffn(CanonicalInferenceContext& context,
@@ -705,20 +696,21 @@ void bind_moe(CanonicalInferenceContext& context,
             expert);
     }
 
-    if (moe->shared_intermediate_size > 0) {
+    if (moe->shared) {
+        const int shared_intermediate = moe->shared->intermediate_size;
         const std::string shared = prefix + "shared_experts.";
         bind(
             TensorRole::MoeSharedGate,
             shared + "gate_proj.weight",
-            {moe->shared_intermediate_size, *m.hidden_size});
+            {shared_intermediate, *m.hidden_size});
         bind(
             TensorRole::MoeSharedUp,
             shared + "up_proj.weight",
-            {moe->shared_intermediate_size, *m.hidden_size});
+            {shared_intermediate, *m.hidden_size});
         bind(
             TensorRole::MoeSharedDown,
             shared + "down_proj.weight",
-            {*m.hidden_size, moe->shared_intermediate_size});
+            {*m.hidden_size, shared_intermediate});
     }
 }
 
@@ -733,13 +725,11 @@ void bind_feed_forward(CanonicalInferenceContext& context,
     const LayerSpec& semantic_layer =
         facts.graph.layers[static_cast<size_t>(layer)];
 
-    if (semantic_layer.mixer_kind() == MixerKind::MlpOnly) {
+    if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) {
         bind_mlp_only(context, layer, layer_intermediate);
         return;
     }
-    if (!semantic_layer.execute_feed_forward) {
-        return;
-    }
+    if (std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) return;
 
     const auto* ffn_norm = find_unique(
         input.inventory,
@@ -755,8 +745,7 @@ void bind_feed_forward(CanonicalInferenceContext& context,
         *ffn_norm,
         {});
 
-    if (semantic_layer.feed_forward_kind() ==
-        FeedForwardKind::MixtureOfExperts) {
+    if (std::holds_alternative<MixtureOfExpertsSpec>(semantic_layer.feed_forward)) {
         bind_moe(context, layer, index);
     } else {
         bind_dense_ffn(context, layer, layer_intermediate);

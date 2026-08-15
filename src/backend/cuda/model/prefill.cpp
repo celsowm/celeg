@@ -20,10 +20,10 @@ namespace {
 bool has_attention_output_transform(const CompiledModelProgram& program) {
     return std::any_of(program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            const AttentionSpec* attention = layer.attention();
-            return attention &&
+            const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
+            return compiled &&
                 !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                    attention->output_transform);
+                    compiled->semantics.output_transform);
         });
 }
 
@@ -65,20 +65,6 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
     // promote exactly one routed set at a time.
     if (resources_.options_.expert_offload.enabled() &&
         resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
-        prefill_chunk(tokens, true, true);
-        return;
-    }
-    const bool needs_sequential_adapter = std::any_of(
-        resources_.program_.layers.begin(), resources_.program_.layers.end(),
-        [](const CompiledLayerProgram& layer) {
-            // Packed recurrent execution preserves row order for each session
-            // and consumes a contiguous sequence in one topology-gated scan.
-            const CompiledMixer kind = layer.mixer_kind();
-            return layer.chunk_capability == CompiledChunkCapability::SequentialAdapter &&
-                kind != CompiledMixer::GatedDeltaNet &&
-                kind != CompiledMixer::Mamba2;
-        });
-    if (needs_sequential_adapter) {
         prefill_chunk(tokens, true, true);
         return;
     }

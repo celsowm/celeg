@@ -96,7 +96,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             mixer_owns_layer = true;
           },
           [&](const CpuCompiledModel::MlpOnlyWeights* mlp) {
-            if (semantics.execute_feed_forward) {
+            if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
                 throw std::logic_error(
                     "CPU MLP-only layer cannot also run a feed-forward block");
             }
@@ -115,13 +115,14 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
 
         // Mixer-only layers do not have the generic post-attention
         // normalization and dense FFN.
-        if (!semantics.execute_feed_forward) continue;
+        if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
 
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
                     shared->program.hidden, semantics.feed_forward_norm.epsilon);
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
-            const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
+            const MoeLayerProgram& moe_semantics =
+                std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
             execute_cpu_moe_token(execution, index, *moe, moe_semantics);
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;

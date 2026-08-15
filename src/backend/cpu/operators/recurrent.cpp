@@ -60,7 +60,8 @@ void execute_cpu_mamba2_token(
     const CpuCompiledModel::Mamba2Weights& weights) {
     auto& workspace = context.workspace;
     auto& shared = context.shared;
-    const auto& spec = shared.program.layers.at(layer).mamba2.value();
+    const auto& spec =
+        std::get<Mamba2Spec>(shared.program.layers.at(layer).mixer);
     const int inner = spec.intermediate_size;
     const int conv_dim = inner + 2 * spec.group_count * spec.state_size;
     shared.linear.gemv(weights.in, workspace.normed.data(),

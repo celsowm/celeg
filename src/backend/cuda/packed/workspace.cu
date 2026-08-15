@@ -11,7 +11,9 @@ namespace {
 int maximum_experts(const CompiledModelProgram& program) {
     int result = 1;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (layer.moe) result = std::max(result, layer.moe->router.expert_count);
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+            result = std::max(result, moe->router.expert_count);
+        }
     }
     return result;
 }
@@ -19,8 +21,8 @@ int maximum_experts(const CompiledModelProgram& program) {
 int maximum_experts_per_token(const CompiledModelProgram& program) {
     int result = 1;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (layer.moe) {
-            result = std::max(result, layer.moe->router.experts_per_token);
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+            result = std::max(result, moe->router.experts_per_token);
         }
     }
     return result;

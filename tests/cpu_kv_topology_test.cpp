@@ -25,12 +25,9 @@ int main() {
     celeg::CompiledModelProgram program;
     program.layers.resize(2);
     for (size_t index = 0; index < program.layers.size(); ++index) {
-        celeg::CompiledAttentionStateLayout state_layout;
+        celeg::CompiledOrdinaryKvStateLayout state_layout;
         state_layout.key_width = 4;
         state_layout.value_width = 4;
-        state_layout.key_elements = 4;
-        state_layout.value_elements = 4;
-        state_layout.persistent_elements = 8;
         program.layers[index].mixer = celeg::CompiledAttentionProgram{
             std::get<celeg::AttentionSpec>(graph.layers[index].mixer),
             state_layout};
@@ -55,13 +52,9 @@ int main() {
     const celeg::RuntimeTopology latent_shape =
         celeg::compose_runtime_topology({}, latent_graph);
 
-    celeg::CompiledAttentionStateLayout latent_state_layout;
-    latent_state_layout.kind = celeg::CompiledStateLayoutKind::Latent;
+    celeg::CompiledLatentStateLayout latent_state_layout;
     latent_state_layout.latent_width = 16;
     latent_state_layout.rotary_width = 4;
-    latent_state_layout.latent_elements = 16;
-    latent_state_layout.rotary_elements = 4;
-    latent_state_layout.persistent_elements = 20;
 
     celeg::CompiledModelProgram latent_program;
     latent_program.layers.resize(1);

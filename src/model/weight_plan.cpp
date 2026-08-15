@@ -156,7 +156,8 @@ void append_mixer(ResolvedModel& model, const LayerSpec& layer,
             append(TensorRole::Mamba2Norm, {mixer.intermediate_size});
             append(TensorRole::Mamba2Output, {hidden, mixer.intermediate_size});
         } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
-            // MLP-only layers have no mixer tensor.
+            append(TensorRole::FfnUp, {mixer.intermediate_size, hidden});
+            append(TensorRole::FfnDown, {hidden, mixer.intermediate_size});
         } else {
             static_assert(always_false_v<Mixer>, "unhandled mixer weight requirements");
         }
@@ -170,17 +171,17 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
         add_request(model, role, layer, expert, std::move(shape), physical_layer);
     };
     append(TensorRole::MoeRouter, -1, {moe.num_experts, hidden});
-    if (moe.has_shared_expert) {
+    if (moe.shared) {
         append(TensorRole::MoePackedGateUp, -1,
                {moe.num_experts, 2 * moe.intermediate_size, hidden});
         append(TensorRole::MoePackedDown, -1,
                {moe.num_experts, hidden, moe.intermediate_size});
         append(TensorRole::MoeSharedGate, -1,
-               {moe.shared_intermediate_size, hidden});
+               {moe.shared->intermediate_size, hidden});
         append(TensorRole::MoeSharedUp, -1,
-               {moe.shared_intermediate_size, hidden});
+               {moe.shared->intermediate_size, hidden});
         append(TensorRole::MoeSharedDown, -1,
-               {hidden, moe.shared_intermediate_size});
+               {hidden, moe.shared->intermediate_size});
         append(TensorRole::MoeSharedGateWeight, -1, {1, hidden});
     } else {
         for (int expert = 0; expert < moe.num_experts; ++expert) {
@@ -232,14 +233,17 @@ void build_weight_plan_from_graph(ResolvedModel& model,
         add_norm_request(model, TensorRole::AttentionInputNorm, layer_index,
                          layer.operator_norm, {graph.hidden}, physical_layer);
         append_mixer(model, layer, layer_index, physical_layer);
-        const bool mlp_only = layer.mixer_kind() == MixerKind::MlpOnly;
-        if (layer.execute_feed_forward && !mlp_only) {
+        const bool has_feed_forward =
+            !std::holds_alternative<std::monostate>(layer.feed_forward);
+        if (has_feed_forward) {
             add_norm_request(model, TensorRole::FfnInputNorm, layer_index,
                              layer.feed_forward_norm, {graph.hidden}, physical_layer);
         }
-        if (layer.execute_feed_forward || mlp_only) std::visit([&](const auto& feed_forward) {
+        std::visit([&](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+                return;
+            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
                 add_request(model, TensorRole::FfnGate, layer_index, -1,
                             {feed_forward.intermediate_size, graph.hidden}, physical_layer);
                 add_request(model, TensorRole::FfnUp, layer_index, -1,
@@ -248,11 +252,6 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                             {graph.hidden, feed_forward.intermediate_size}, physical_layer);
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
                 append_moe(model, feed_forward, layer_index, physical_layer);
-            } else if constexpr (std::is_same_v<FeedForward, MlpBlockSpec>) {
-                add_request(model, TensorRole::FfnUp, layer_index, -1,
-                            {feed_forward.intermediate_size, graph.hidden}, physical_layer);
-                add_request(model, TensorRole::FfnDown, layer_index, -1,
-                            {graph.hidden, feed_forward.intermediate_size}, physical_layer);
             } else {
                 static_assert(always_false_v<FeedForward>,
                               "unhandled feed-forward weight requirements");

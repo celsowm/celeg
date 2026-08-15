@@ -12,7 +12,8 @@ void execute_cpu_attention_token(
     const CpuCompiledModel::AttentionWeights& attention,
     const CompiledLayerProgram& semantics,
     const std::array<int32_t, 3>& rope_position) {
-    const AttentionSpec& layout = semantics.attention.value();
+    const AttentionSpec& layout =
+        std::get<CompiledAttentionProgram>(semantics.mixer).semantics;
             if (layout.uses_external_memory()) {
                 const int q_width = layout.query_width();
                 execution.shared.linear.gemv(attention.q, execution.workspace.normed.data(), execution.workspace.qkv.data());

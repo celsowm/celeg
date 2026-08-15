@@ -136,16 +136,20 @@ int main() {
             CELEG_TEST_CHECK(std::get<celeg::DenseFeedForwardSpec>(
                                  fixture_model.graph.layers[2].feed_forward).intermediate_size == 8);
             CELEG_TEST_CHECK(fixture_model.graph.layers[2].post_attention_norm.enabled());
-            CELEG_TEST_CHECK(compiled.layers[2].feed_forward_intermediate == 8);
+            CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
+                                 compiled.layers[2].feed_forward).intermediate_size == 8);
         } else {
             const auto& moe = std::get<celeg::MixtureOfExpertsSpec>(
                 fixture_model.graph.layers[2].feed_forward);
-            CELEG_TEST_CHECK(moe.routing_group_count == 2);
-            CELEG_TEST_CHECK(moe.routing_experts_per_group == 2);
-            CELEG_TEST_CHECK(moe.routing_groups_per_token == 1);
-            CELEG_TEST_CHECK(compiled.layers[2].moe.has_value());
-            CELEG_TEST_CHECK(compiled.layers[2].moe->router.selection ==
-                             celeg::MoeSelectionKind::GroupedTopK);
+            const auto& grouped = std::get<celeg::MoeGroupedTopKSelectionSpec>(
+                moe.selection);
+            CELEG_TEST_CHECK(grouped.group_count == 2);
+            CELEG_TEST_CHECK(grouped.experts_per_group == 2);
+            CELEG_TEST_CHECK(grouped.groups_per_token == 1);
+            const auto& compiled_moe = std::get<celeg::MoeLayerProgram>(
+                compiled.layers[2].feed_forward);
+            CELEG_TEST_CHECK(std::holds_alternative<celeg::MoeGroupedTopKSelectionSpec>(
+                compiled_moe.router.selection));
         }
     }
 

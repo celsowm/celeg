@@ -1,11 +1,26 @@
 #include "celeg/backend/cpu/compiler.hpp"
 #include "celeg/backend/cuda/compiler.hpp"
+#include "celeg/backend/moe_capabilities.hpp"
 #include "celeg/model/position.hpp"
 #include "support/assertions.hpp"
 
-#include <iostream>
 #include <cmath>
+#include <iostream>
 #include <stdexcept>
+
+namespace {
+
+const celeg::AttentionSpec& compiled_attention(
+    const celeg::CompiledLayerProgram& layer) {
+    return std::get<celeg::CompiledAttentionProgram>(layer.mixer).semantics;
+}
+
+const celeg::CompiledAttentionStateLayout& compiled_attention_state(
+    const celeg::CompiledLayerProgram& layer) {
+    return std::get<celeg::CompiledAttentionProgram>(layer.mixer).state_layout;
+}
+
+} // namespace
 
 int main() {
     celeg::ResolvedModel model;
@@ -19,45 +34,50 @@ int main() {
     attention.head_dim = 8;
     attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
     attention_layer.mixer = attention;
-    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
+    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{
+        16, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(attention_layer);
+
     celeg::LayerSpec convolution_layer;
     convolution_layer.mixer = celeg::ShortConvolutionSpec{3, 8, false};
     convolution_layer.feed_forward = celeg::MixtureOfExpertsSpec{
         16, 4, 2, true, true, 1.5f};
     model.graph.layers.push_back(convolution_layer);
     model.graph.hidden = 8;
-    model.weight_plan.requests.push_back({celeg::TensorRole::AttentionInputNorm, 0, -1, {}});
-    model.weight_plan.requests.push_back({celeg::TensorRole::AttentionOutput, 0, -1, {}});
-    model.weight_plan.requests.push_back({celeg::TensorRole::ShortConvInput, 1, -1, {}});
+    model.weight_plan.requests.push_back(
+        {celeg::TensorRole::AttentionInputNorm, 0, -1, {}});
+    model.weight_plan.requests.push_back(
+        {celeg::TensorRole::AttentionOutput, 0, -1, {}});
+    model.weight_plan.requests.push_back(
+        {celeg::TensorRole::ShortConvInput, 1, -1, {}});
 
     const auto cpu = celeg::CpuModelCompiler{}.compile(model);
     const auto cuda = celeg::CudaModelCompiler{}.compile(model);
     CELEG_TEST_CHECK(cpu.layers.size() == 2);
-    CELEG_TEST_CHECK(cpu.layers[0].mixer == celeg::CompiledMixer::Attention);
-    CELEG_TEST_CHECK(cpu.layers[1].mixer == celeg::CompiledMixer::ShortConvolution);
-    CELEG_TEST_CHECK(cpu.layers[1].feed_forward == celeg::CompiledFeedForward::MixtureOfExperts);
-    CELEG_TEST_CHECK(cpu.layers[0].chunk_capability ==
-                     celeg::CompiledChunkCapability::Native);
-    CELEG_TEST_CHECK(cpu.layers[1].moe.has_value());
-    CELEG_TEST_CHECK(cpu.layers[1].moe->router.expert_count == 4);
-    CELEG_TEST_CHECK(cpu.layers[1].moe->router.normalization ==
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledAttentionProgram>(
+        cpu.layers[0].mixer));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::ShortConvolutionSpec>(
+        cpu.layers[1].mixer));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::MoeLayerProgram>(
+        cpu.layers[1].feed_forward));
+    const auto& compiled_moe = std::get<celeg::MoeLayerProgram>(
+        cpu.layers[1].feed_forward);
+    CELEG_TEST_CHECK(compiled_moe.router.expert_count == 4);
+    CELEG_TEST_CHECK(compiled_moe.router.normalization ==
                      celeg::MoeNormalizationKind::SumSelected);
     CELEG_TEST_CHECK(cpu.layers[0].weight_request_indices.size() == 2);
-    CELEG_TEST_CHECK(cpu.layers[0].state_layout.has_value());
-    CELEG_TEST_CHECK(cpu.layers[0].state_layout->key_width == 8 &&
-                     cpu.layers[0].state_layout->value_width == 8 &&
-                     cpu.layers[0].state_layout->persistent_elements == 16);
+    const auto& ordinary_state = std::get<celeg::CompiledOrdinaryKvStateLayout>(
+        compiled_attention_state(cpu.layers[0]));
+    CELEG_TEST_CHECK(ordinary_state.key_width == 8 &&
+                     ordinary_state.value_width == 8 &&
+                     ordinary_state.persistent_elements() == 16);
     CELEG_TEST_CHECK(cuda.layers.size() == cpu.layers.size());
 
-    // Standalone MLP blocks consume the same packed FFN scratch family as
-    // ordinary feed-forward layers, so their mixer width must contribute to
-    // the neutral execution topology's capacity.
     celeg::ModelGraph mlp_only_graph;
     mlp_only_graph.hidden = 8;
     celeg::LayerSpec mlp_only_layer;
     mlp_only_layer.mixer = celeg::MlpBlockSpec{64, celeg::ActivationKind::Relu2};
-    mlp_only_layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
+    mlp_only_layer.feed_forward = std::monostate{};
     mlp_only_graph.layers.push_back(std::move(mlp_only_layer));
     const celeg::ExecutionTopology mlp_only_topology =
         celeg::ExecutionTopology::derive(mlp_only_graph);
@@ -69,7 +89,7 @@ int main() {
         celeg::BidirectionalPattern{};
     const auto bidirectional_cpu = celeg::CpuModelCompiler{}.compile(unsupported_pattern);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::BidirectionalPattern>(
-        bidirectional_cpu.layers[0].attention->pattern));
+        compiled_attention(bidirectional_cpu.layers[0]).pattern));
     bool cuda_pattern_rejected = false;
     try { (void)celeg::CudaModelCompiler{}.compile(unsupported_pattern); }
     catch (const std::invalid_argument&) { cuda_pattern_rejected = true; }
@@ -80,7 +100,7 @@ int main() {
         celeg::BlockSparsePattern{16, 2, 1};
     const auto sparse_cpu = celeg::CpuModelCompiler{}.compile(sparse_pattern);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::BlockSparsePattern>(
-        sparse_cpu.layers[0].attention->pattern));
+        compiled_attention(sparse_cpu.layers[0]).pattern));
     bool cuda_sparse_rejected = false;
     try { (void)celeg::CudaModelCompiler{}.compile(sparse_pattern); }
     catch (const std::invalid_argument&) { cuda_sparse_rejected = true; }
@@ -93,10 +113,10 @@ int main() {
     alibi_attention.bias = celeg::AlibiBiasSpec{{1.0f}};
     const auto alibi_cpu = celeg::CpuModelCompiler{}.compile(unsupported_position);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::AlibiBiasSpec>(
-        alibi_cpu.layers[0].attention->bias));
+        compiled_attention(alibi_cpu.layers[0]).bias));
     const auto cuda_alibi = celeg::CudaModelCompiler{}.compile(unsupported_position);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::AlibiBiasSpec>(
-        cuda_alibi.layers[0].attention->bias));
+        compiled_attention(cuda_alibi.layers[0]).bias));
 
     celeg::ResolvedModel unsupported_relative = model;
     auto& relative_attention =
@@ -105,7 +125,7 @@ int main() {
     relative_attention.bias = celeg::RelativePositionBiasSpec{32, 128, true};
     const auto cpu_relative = celeg::CpuModelCompiler{}.compile(unsupported_relative);
     CELEG_TEST_CHECK(std::holds_alternative<celeg::RelativePositionBiasSpec>(
-        cpu_relative.layers[0].attention->bias));
+        compiled_attention(cpu_relative.layers[0]).bias));
     bool cuda_relative_rejected = false;
     try { (void)celeg::CudaModelCompiler{}.compile(unsupported_relative); }
     catch (const std::invalid_argument&) { cuda_relative_rejected = true; }
@@ -121,12 +141,13 @@ int main() {
     std::get<celeg::AttentionSpec>(latent_state.graph.layers[0].mixer).state =
         celeg::LatentAttentionStateSpec{32, 16, 16, true};
     const auto latent_program = celeg::CpuModelCompiler{}.compile(latent_state);
-    CELEG_TEST_CHECK(latent_program.layers[0].state_layout->kind ==
-                     celeg::CompiledStateLayoutKind::Latent);
-    CELEG_TEST_CHECK(latent_program.layers[0].state_layout->latent_width == 64);
+    const auto& latent_layout = std::get<celeg::CompiledLatentStateLayout>(
+        compiled_attention_state(latent_program.layers[0]));
+    CELEG_TEST_CHECK(latent_layout.latent_width == 64);
     const auto cuda_latent = celeg::CudaModelCompiler{}.compile(latent_state);
-    CELEG_TEST_CHECK(cuda_latent.layers[0].state_layout->kind ==
-                     celeg::CompiledStateLayoutKind::Latent);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledLatentStateLayout>(
+        compiled_attention_state(cuda_latent.layers[0])));
+
     celeg::ResolvedModel latent_gate = latent_state;
     std::get<celeg::AttentionSpec>(latent_gate.graph.layers[0].mixer).output_gate.kind =
         celeg::AttentionGateKind::Sigmoid;
@@ -134,6 +155,7 @@ int main() {
     try { (void)celeg::CudaModelCompiler{}.compile(latent_gate); }
     catch (const std::invalid_argument&) { cuda_latent_gate_rejected = true; }
     CELEG_TEST_CHECK(cuda_latent_gate_rejected);
+
     celeg::ResolvedModel oversized_latent = latent_state;
     std::get<celeg::AttentionSpec>(oversized_latent.graph.layers[0].mixer).state =
         celeg::LatentAttentionStateSpec{513, 16, 16, true};
@@ -147,7 +169,7 @@ int main() {
         celeg::AttentionSourceSpec{celeg::AttentionSourceKind::CurrentSequence,
                                    celeg::AttentionSourceKind::ExternalMemory, 0};
     const auto external_cpu = celeg::CpuModelCompiler{}.compile(unsupported_source);
-    CELEG_TEST_CHECK(external_cpu.layers[0].attention->uses_external_memory());
+    CELEG_TEST_CHECK(compiled_attention(external_cpu.layers[0]).uses_external_memory());
 
     celeg::RopePositionSpec linear{10000.0, 1.0,
         {celeg::RopeScalingKind::Linear, 2.0, 32}};
@@ -183,13 +205,15 @@ int main() {
     (void)celeg::CudaModelCompiler{}.compile(cuda_long);
 
     celeg::MoeLayerProgram grouped;
-    grouped.router = {celeg::MoeRouterScoreKind::SoftmaxLogits,
-                      celeg::MoeSelectionKind::GroupedTopK,
-                      celeg::MoeNormalizationKind::None, 8, 2, 2, 4, 1, 2, false, 1.0f};
+    grouped.router.score = celeg::MoeRouterScoreKind::SoftmaxLogits;
+    grouped.router.selection = celeg::MoeGroupedTopKSelectionSpec{2, 4, 1, 2};
+    grouped.router.normalization = celeg::MoeNormalizationKind::None;
+    grouped.router.expert_count = 8;
+    grouped.router.experts_per_token = 2;
+    grouped.router.routed_scaling = 1.0f;
     grouped.routed.mlp = {celeg::MoeActivation::SwiGLU, 8, 16};
     grouped.routed.payload.regions = {{celeg::TensorRole::MoeExpertGate, 32},
                                       {celeg::TensorRole::MoeExpertUp, 32}};
-    grouped.residency.expert_count = 8;
     grouped.validate();
     const std::string grouped_fingerprint = grouped.fingerprint();
     grouped.router.experts_per_token = 3;
@@ -204,15 +228,15 @@ int main() {
     celeg::ResolvedModel unsupported = model;
     auto& unsupported_moe = std::get<celeg::MixtureOfExpertsSpec>(
         unsupported.graph.layers[1].feed_forward);
-    unsupported_moe.routing_group_count = 2;
-    unsupported_moe.routing_experts_per_group = 2;
+    unsupported_moe.selection = celeg::MoeGroupedTopKSelectionSpec{2, 2, 1, 1};
     bool backend_rejected = false;
     try { (void)celeg::CpuModelCompiler{}.compile(unsupported); }
     catch (const std::invalid_argument&) { backend_rejected = true; }
     CELEG_TEST_CHECK(backend_rejected);
 
     celeg::CompiledModelProgram fused = cpu;
-    fused.layers[1].moe->routed.payload.layout = celeg::MoePayloadLayout::Fused;
+    std::get<celeg::MoeLayerProgram>(fused.layers[1].feed_forward)
+        .routed.payload.layout = celeg::MoePayloadLayout::Fused;
     bool fused_rejected = false;
     try {
         celeg::validate_moe_backend_capabilities(fused, "cpu", {});

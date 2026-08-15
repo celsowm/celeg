@@ -166,21 +166,33 @@ void append_mixer(std::ostringstream& out, const LayerSpec& layer) {
 void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
     std::visit([&out](const auto& feed_forward) {
         using FeedForward = std::decay_t<decltype(feed_forward)>;
-        if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+            out << "none";
+        } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
             out << "dense:" << feed_forward.intermediate_size << ':'
                 << static_cast<int>(feed_forward.activation);
         } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
             out << "moe:" << feed_forward.intermediate_size << ':' << feed_forward.num_experts
                 << ':' << feed_forward.experts_per_token << ':' << feed_forward.normalize_topk
                 << ':' << feed_forward.use_expert_bias << ':'
-                << feed_forward.routed_scaling_factor << ':'
-                << feed_forward.routing_group_count << ':'
-                << feed_forward.routing_experts_per_group << ':'
-                << feed_forward.routing_groups_per_token << ':'
-                << feed_forward.routing_group_score_top_k << ':'
-                << feed_forward.has_shared_expert << ':'
-                << feed_forward.shared_intermediate_size << ':'
-                << feed_forward.shared_before_routed << ':' << feed_forward.router_softmax;
+                << feed_forward.routed_scaling_factor << ':';
+            std::visit([&out](const auto& selection) {
+                using Selection = std::decay_t<decltype(selection)>;
+                if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
+                    out << "top-k";
+                } else if constexpr (std::is_same_v<Selection, MoeGroupedTopKSelectionSpec>) {
+                    out << "grouped:" << selection.group_count << ':'
+                        << selection.experts_per_group << ':'
+                        << selection.groups_per_token << ':'
+                        << selection.group_score_top_k;
+                }
+            }, feed_forward.selection);
+            out << ":shared:" << feed_forward.shared.has_value();
+            if (feed_forward.shared) {
+                out << ':' << feed_forward.shared->intermediate_size << ':'
+                    << static_cast<int>(feed_forward.shared->combine_order);
+            }
+            out << ':' << feed_forward.router_softmax;
         } else {
             static_assert(always_false_v<FeedForward>,
                           "unhandled feed-forward fingerprint variant");
@@ -213,8 +225,7 @@ std::string ModelGraph::fingerprint() const {
         out << ":residual=" << layer.residual.multiplier << ":input="
             << layer.per_layer_input.input_size << ':'
             << static_cast<int>(layer.per_layer_input.activation) << ':'
-            << layer.per_layer_input.enabled << ":scalar=" << layer.layer_scalar
-            << ":execute=" << layer.execute_feed_forward << ';';
+            << layer.per_layer_input.enabled << ":scalar=" << layer.layer_scalar << ';';
     }
     return out.str();
 }
@@ -306,10 +317,10 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
         }, layer.mixer);
         std::visit([&](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-                result.max_feed_forward_intermediate = std::max(
-                    result.max_feed_forward_intermediate, feed_forward.intermediate_size);
-            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+                return;
+            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec> ||
+                                 std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
                 result.max_feed_forward_intermediate = std::max(
                     result.max_feed_forward_intermediate, feed_forward.intermediate_size);
             } else {
@@ -367,8 +378,9 @@ void ModelGraph::validate() const {
         }
         std::visit([](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec> ||
-                          std::is_same_v<FeedForward, MlpBlockSpec>) {
+            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+                return;
+            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
                 if (feed_forward.intermediate_size <= 0) {
                     throw std::runtime_error("dense layer has no positive FFN width");
                 }
@@ -382,23 +394,26 @@ void ModelGraph::validate() const {
                     feed_forward.routed_scaling_factor <= 0.0f) {
                     throw std::runtime_error("MoE layer has invalid routed scaling");
                 }
-                const bool grouped = feed_forward.routing_group_count > 0;
-                if (grouped != (feed_forward.routing_experts_per_group > 0 &&
-                                feed_forward.routing_groups_per_token > 0 &&
-                                feed_forward.routing_group_score_top_k > 0)) {
-                    throw std::runtime_error("MoE grouped routing fields are incomplete");
-                }
-                if (grouped &&
-                    (feed_forward.routing_group_count *
-                         feed_forward.routing_experts_per_group != feed_forward.num_experts ||
-                     feed_forward.routing_groups_per_token >
-                         feed_forward.routing_group_count ||
-                     feed_forward.routing_group_score_top_k >
-                         feed_forward.routing_experts_per_group)) {
-                    throw std::runtime_error("MoE grouped routing fields are inconsistent");
-                }
-                if (feed_forward.has_shared_expert &&
-                    feed_forward.shared_intermediate_size <= 0) {
+                std::visit([&](const auto& selection) {
+                    using Selection = std::decay_t<decltype(selection)>;
+                    if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
+                        return;
+                    } else if constexpr (std::is_same_v<Selection,
+                                                        MoeGroupedTopKSelectionSpec>) {
+                        if (selection.group_count <= 0 ||
+                            selection.experts_per_group <= 0 ||
+                            selection.groups_per_token <= 0 ||
+                            selection.group_score_top_k <= 0 ||
+                            selection.group_count * selection.experts_per_group !=
+                                feed_forward.num_experts ||
+                            selection.groups_per_token > selection.group_count ||
+                            selection.group_score_top_k > selection.experts_per_group) {
+                            throw std::runtime_error(
+                                "MoE grouped routing fields are inconsistent");
+                        }
+                    }
+                }, feed_forward.selection);
+                if (feed_forward.shared && feed_forward.shared->intermediate_size <= 0) {
                     throw std::runtime_error("MoE shared expert has no positive width");
                 }
             } else {
@@ -406,6 +421,10 @@ void ModelGraph::validate() const {
                               "unhandled feed-forward semantic validation variant");
             }
         }, layer.feed_forward);
+        if (const auto* mlp = std::get_if<MlpBlockSpec>(&layer.mixer);
+            mlp && mlp->intermediate_size <= 0) {
+            throw std::runtime_error("MLP-only layer has no positive width");
+        }
         if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
             if (attention->query_norm.enabled()) attention->query_norm.validate();
             if (attention->key_norm.enabled()) attention->key_norm.validate();

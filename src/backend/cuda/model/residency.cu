@@ -231,8 +231,8 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     const CompiledLayerProgram& layer_semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer));
-    const MoeLayerProgram& semantics = resources_.program_.layers.at(
-        static_cast<size_t>(layer)).moe.value();
+    const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
+        resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
                     1, resources_.program_.hidden, layer_semantics.feed_forward_norm.epsilon, stream_.get());
     // Router: BF16 normed hidden -> float -> top-K experts.
@@ -297,8 +297,8 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     const MoeFfnWeights& moe = *as_moe_ffn(common_layer.feed_forward);
     const CompiledLayerProgram& layer_semantics = resources_.program_.layers.at(
         static_cast<size_t>(layer));
-    const MoeLayerProgram& semantics = resources_.program_.layers.at(
-        static_cast<size_t>(layer)).moe.value();
+    const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
+        resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
     // Size the prefill scratch to the requested row count.
     workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.program_.hidden);
     workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);

@@ -197,7 +197,8 @@ struct CpuCompiledModel::BatchScratch {
                            workspace_.hidden.data());
               },
               [&](const AttentionWeights* attention) {
-                const AttentionSpec& layout = layer_semantics.attention.value();
+                const AttentionSpec& layout = std::get<CompiledAttentionProgram>(
+                    layer_semantics.mixer).semantics;
                 if (layout.uses_external_memory()) {
                     const size_t q_width = static_cast<size_t>(layout.query_width());
                     const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
@@ -334,7 +335,8 @@ struct CpuCompiledModel::BatchScratch {
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
             rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm, workspace_.normed.data(), hidden);
             if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
-                const MoeLayerProgram& semantics = shared.program.layers[index].moe.value();
+                const MoeLayerProgram& semantics =
+                    std::get<MoeLayerProgram>(shared.program.layers[index].feed_forward);
                 const int experts = semantics.router.expert_count;
                 const int selected = semantics.router.experts_per_token;
                 const int intermediate = semantics.routed.mlp.intermediate_size;
@@ -471,12 +473,15 @@ struct CpuCompiledModel::BatchScratch {
                     });
                 }
             } else {
-                const int intermediate = layer_semantics.feed_forward_intermediate;
+                const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
+                    &layer_semantics.feed_forward);
+                if (!dense) throw std::logic_error("packed dense layer has non-dense semantics");
+                const int intermediate = dense->intermediate_size;
                 layer_gemm(common.w13, workspace_.normed.data(), workspace_.gate_up.data());
                 rows_for([&](size_t row) {
                     const float* gate_up = workspace_.gate_up.data() + row * 2ULL * intermediate;
                     float* activated = workspace_.activated.data() + row * intermediate;
-                    if (layer_semantics.feed_forward_activation == ActivationKind::GeluTanh) {
+                    if (dense->activation == ActivationKind::GeluTanh) {
                         cpu_gated_gelu_tanh(gate_up, activated, intermediate);
                     } else {
                         cpu_swiglu(gate_up, activated, intermediate);

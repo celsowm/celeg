@@ -52,7 +52,8 @@ void CpuCompiledModel::allocate_state() {
           [&](const ConvolutionWeights*) { emplace_convolution_state(); },
           [&](const Mamba2Weights*) {
             Mamba2State state;
-            const auto& spec = shared->program.layers.at(index).mamba2.value();
+            const auto& spec = std::get<Mamba2Spec>(
+                shared->program.layers.at(index).mixer);
             state.conv.resize(static_cast<size_t>(spec.intermediate_size +
                               2 * spec.group_count * spec.state_size) *
                               static_cast<size_t>(spec.conv_kernel));

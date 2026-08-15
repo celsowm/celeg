@@ -68,8 +68,8 @@ int main(int argc, char** argv) {
 
         std::vector<int> moe_layer_ids;
         for (int layer = 0; layer < static_cast<int>(model.graph.layers.size()); ++layer) {
-            if (model.graph.layers.at(static_cast<size_t>(layer)).feed_forward_kind() ==
-                    celeg::FeedForwardKind::MixtureOfExperts) {
+            if (std::holds_alternative<celeg::MixtureOfExpertsSpec>(
+                    model.graph.layers.at(static_cast<size_t>(layer)).feed_forward)) {
                 moe_layer_ids.push_back(layer);
             }
         }

@@ -201,7 +201,8 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     for (size_t layer_index = 0; layer_index < state.layer_buffers.size(); ++layer_index) {
         const auto& layer = state.layer_buffers[layer_index];
         if (layer.is_attention && layer.owns_kv_cache) {
-            const AttentionSpec& layout = state.program.layers.at(layer_index).attention.value();
+            const AttentionSpec& layout = std::get<CompiledAttentionProgram>(
+                state.program.layers.at(layer_index).mixer).semantics;
             const size_t cache_elements = static_cast<size_t>(state.position) *
                 static_cast<size_t>(layout.key_value_width());
             const size_t scale_elements = static_cast<size_t>(state.position) *
@@ -281,7 +282,8 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     for (size_t layer_index = 0; layer_index < state.layer_buffers.size(); ++layer_index) {
         const auto& layer = state.layer_buffers[layer_index];
         if (layer.is_attention && layer.owns_kv_cache) {
-            const AttentionSpec& layout = state.program.layers.at(layer_index).attention.value();
+            const AttentionSpec& layout = std::get<CompiledAttentionProgram>(
+                state.program.layers.at(layer_index).mixer).semantics;
             const size_t cache_elements = static_cast<size_t>(header.position) *
                 static_cast<size_t>(layout.key_value_width());
             const size_t scale_elements = static_cast<size_t>(header.position) *

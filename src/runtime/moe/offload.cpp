@@ -67,9 +67,9 @@ const char* policy_name(ExpertCachePolicy policy) {
 std::size_t bytes_per_expert_bf16(const CompiledModelProgram& program) {
     int moe_intermediate = 0;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (layer.moe) {
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
             moe_intermediate = std::max(moe_intermediate,
-                layer.moe->routed.mlp.intermediate_size);
+                                        moe->routed.mlp.intermediate_size);
         }
     }
     const std::size_t gate_up = static_cast<std::size_t>(2) *
@@ -83,7 +83,7 @@ std::size_t bytes_per_expert_bf16(const CompiledModelProgram& program) {
 int moe_layer_count(const CompiledModelProgram& program) {
     int count = 0;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (layer.moe) ++count;
+        if (std::holds_alternative<MoeLayerProgram>(layer.feed_forward)) ++count;
     }
     return count;
 }
@@ -92,11 +92,12 @@ std::size_t kv_cache_bytes(const CompiledModelProgram& program, int context_toke
     if (context_tokens <= 0) return 0;
     std::size_t bytes = 0;
     for (const CompiledLayerProgram& layer : program.layers) {
-        const AttentionSpec* layout = layer.attention();
-        if (!layout) continue;
-        if (layout->kv_sharing.shared() && !layout->kv_sharing.publishes) continue;
+        const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
+        if (!compiled) continue;
+        const AttentionSpec& layout = compiled->semantics;
+        if (layout.kv_sharing.shared() && !layout.kv_sharing.publishes) continue;
         bytes += static_cast<std::size_t>(2) *
-            static_cast<std::size_t>(layout->key_value_width()) * kBf16Bytes *
+            static_cast<std::size_t>(layout.key_value_width()) * kBf16Bytes *
             static_cast<std::size_t>(context_tokens);
     }
     return bytes;
@@ -109,10 +110,11 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
     int max_experts = 0;
     int max_experts_per_token = 0;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (!layer.moe) continue;
-        max_experts = std::max(max_experts, layer.moe->router.expert_count);
+        const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
+        if (!moe) continue;
+        max_experts = std::max(max_experts, moe->router.expert_count);
         max_experts_per_token = std::max(max_experts_per_token,
-                                         layer.moe->router.experts_per_token);
+                                         moe->router.experts_per_token);
     }
 
     ExpertOffloadPlan plan;

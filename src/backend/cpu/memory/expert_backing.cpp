@@ -73,11 +73,14 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
 
     const auto moe_program = std::find_if(shared.program.layers.begin(),
                                            shared.program.layers.end(),
-        [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
+        [](const CompiledLayerProgram& layer) {
+            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
+        });
     if (moe_program == shared.program.layers.end()) {
         throw std::runtime_error("cannot create expert backing without MoE semantics");
     }
-    const int intermediate = moe_program->moe->routed.mlp.intermediate_size;
+    const int intermediate =
+        std::get<MoeLayerProgram>(moe_program->feed_forward).routed.mlp.intermediate_size;
     shared.expert_backing_store = std::make_unique<CpuExpertBackingStore>(
         shared.pack_file, shared.options.expert_cache_bytes,
         shared.program.hidden, intermediate);
@@ -100,10 +103,12 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
     if (!expert_backing_store) {
         throw std::logic_error("CPU disk-backed expert cache is not configured");
     }
-    if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
-        !program.layers[static_cast<size_t>(layer)].moe ||
-        expert < 0 || expert >= program.layers[static_cast<size_t>(layer)]
-            .moe->router.expert_count) {
+    if (layer < 0 || layer >= static_cast<int>(program.layers.size())) {
+        throw std::out_of_range("CPU expert cache request is out of range");
+    }
+    const auto* moe = std::get_if<MoeLayerProgram>(
+        &program.layers[static_cast<size_t>(layer)].feed_forward);
+    if (!moe || expert < 0 || expert >= moe->router.expert_count) {
         throw std::out_of_range("CPU expert cache request is out of range");
     }
 

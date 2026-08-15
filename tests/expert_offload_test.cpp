@@ -26,16 +26,16 @@ celeg::CompiledModelProgram make_8b_a1b_program() {
         } else {
             layer.mixer = celeg::ShortConvolutionSpec{};
         }
-        layer.feed_forward = index < 2 ? celeg::CompiledFeedForward::Dense
-                                       : celeg::CompiledFeedForward::MixtureOfExperts;
-        layer.feed_forward_intermediate = 1792;
-        if (index >= 2) {
+        if (index < 2) {
+            layer.feed_forward = celeg::CompiledDenseFeedForwardProgram{
+                1792, celeg::ActivationKind::SwiGLU};
+        } else {
             celeg::MoeLayerProgram moe;
             moe.router.expert_count = 32;
             moe.router.experts_per_token = 4;
             moe.routed.mlp.hidden_size = 2048;
             moe.routed.mlp.intermediate_size = 1792;
-            layer.moe = std::move(moe);
+            layer.feed_forward = std::move(moe);
         }
     }
     return program;

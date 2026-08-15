@@ -23,7 +23,8 @@ namespace {
 
 int last_full_attention_layer(const CompiledModelProgram& program) {
     for (int layer = static_cast<int>(program.layers.size()) - 1; layer >= 0; --layer) {
-        if (program.layers.at(static_cast<size_t>(layer)).mixer == CompiledMixer::Attention) {
+        if (std::holds_alternative<CompiledAttentionProgram>(
+                program.layers.at(static_cast<size_t>(layer)).mixer)) {
             return layer;
         }
     }
@@ -49,8 +50,8 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         throw std::runtime_error("MTP requires a full-attention target layer");
     }
     const AttentionSpec mtp_layout = [&]() {
-        AttentionSpec layout = resources.program_.layers.at(
-            static_cast<size_t>(full_layer)).attention.value();
+        AttentionSpec layout = std::get<CompiledAttentionProgram>(
+            resources.program_.layers.at(static_cast<size_t>(full_layer)).mixer).semantics;
         layout.kv_sharing = {};
         return layout;
     }();
@@ -74,11 +75,12 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     mtp.layers.reserve(static_cast<size_t>(mtp.layer_count));
     const auto moe_program = std::find_if(resources.program_.layers.begin(),
         resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
-            return layer.moe.has_value();
+            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
         });
     const auto dense_program = std::find_if(resources.program_.layers.begin(),
         resources.program_.layers.end(), [](const CompiledLayerProgram& layer) {
-            return layer.feed_forward == CompiledFeedForward::Dense;
+            return std::holds_alternative<CompiledDenseFeedForwardProgram>(
+                layer.feed_forward);
         });
 
     for (int index = 0; index < mtp.layer_count; ++index) {
@@ -92,8 +94,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             NormWeightKind::Scale);
 
         if (moe_program != resources.program_.layers.end()) {
-            const int E = moe_program->moe->router.expert_count;
-            const int inter = moe_program->moe->routed.mlp.intermediate_size;
+            const auto& moe_semantics =
+                std::get<MoeLayerProgram>(moe_program->feed_forward);
+            const int E = moe_semantics.router.expert_count;
+            const int inter = moe_semantics.routed.mlp.intermediate_size;
             MoeFfnWeights moe{};
             moe.router = resources.weight_loader_->load_router_weight_named(
                 repo, prefix + ".mlp.gate.weight", E, resources.program_.hidden);
@@ -105,8 +109,8 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                                       E * resources.program_.hidden, model.stream_.get());
             moe.router_float = router_float.data();
 
-            if (moe_program->moe->shared) {
-                const int shared = moe_program->moe->shared->mlp.intermediate_size;
+            if (moe_semantics.shared) {
+                const int shared = moe_semantics.shared->mlp.intermediate_size;
                 moe.shared_w13 = resources.weight_loader_->load_concat_linear_weight(
                     repo, prefix + ".mlp.shared_expert.w13.weight",
                     {{prefix + ".mlp.shared_expert.gate_proj.weight",
@@ -198,11 +202,14 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             }
             common_layer.feed_forward = moe;
         } else {
-            if (dense_program == resources.program_.layers.end() ||
-                dense_program->feed_forward_intermediate <= 0) {
+            if (dense_program == resources.program_.layers.end()) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
-            const int inter = dense_program->feed_forward_intermediate;
+            const int inter = std::get<CompiledDenseFeedForwardProgram>(
+                dense_program->feed_forward).intermediate_size;
+            if (inter <= 0) {
+                throw std::runtime_error("MTP requires a compiled dense FFN width");
+            }
             const LinearWeight* w13 = resources.weight_loader_->load_concat_linear_weight(
                 repo, prefix + ".mlp.w13.weight",
                 {{prefix + ".mlp.gate_proj.weight", {inter, resources.program_.hidden}},

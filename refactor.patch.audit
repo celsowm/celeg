@@ -1,0 +1,3021 @@
+diff --git a/include/celeg/backend/cuda/packed/session.hpp b/include/celeg/backend/cuda/packed/session.hpp
+index c09db9c..fb90b1f 100644
+--- a/include/celeg/backend/cuda/packed/session.hpp
++++ b/include/celeg/backend/cuda/packed/session.hpp
+@@ -95 +95,2 @@ inline void packed_ensure_expert_residency(
+-    if (!layer_program.moe) {
++    const auto* moe = std::get_if<MoeLayerProgram>(&layer_program.feed_forward);
++    if (!moe) {
+@@ -102,2 +103,2 @@ inline void packed_ensure_expert_residency(
+-        layer_program.moe->router.experts_per_token,
+-        layer_program.moe->router.expert_count,
++        moe->router.experts_per_token,
++        moe->router.expert_count,
+diff --git a/include/celeg/backend/moe_capabilities.hpp b/include/celeg/backend/moe_capabilities.hpp
+index 32eed4f..671878a 100644
+--- a/include/celeg/backend/moe_capabilities.hpp
++++ b/include/celeg/backend/moe_capabilities.hpp
+@@ -23,3 +23,4 @@ inline void validate_moe_backend_capabilities(
+-        if (!layer.moe) continue;
+-        const MoeLayerProgram& moe = *layer.moe;
+-        if (moe.router.selection == MoeSelectionKind::GroupedTopK &&
++        const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
++        if (!moe) continue;
++        if (std::holds_alternative<MoeGroupedTopKSelectionSpec>(
++                moe->router.selection) &&
+@@ -30 +31 @@ inline void validate_moe_backend_capabilities(
+-        if (moe.shared && !capabilities.shared_experts) {
++        if (moe->shared && !capabilities.shared_experts) {
+@@ -34 +35 @@ inline void validate_moe_backend_capabilities(
+-        if (moe.routed.payload.layout == MoePayloadLayout::Stacked &&
++        if (moe->routed.payload.layout == MoePayloadLayout::Stacked &&
+@@ -39 +40 @@ inline void validate_moe_backend_capabilities(
+-        if (moe.routed.payload.layout == MoePayloadLayout::Fused &&
++        if (moe->routed.payload.layout == MoePayloadLayout::Fused &&
+diff --git a/include/celeg/detail/model/feed_forward_weights.hpp b/include/celeg/detail/model/feed_forward_weights.hpp
+index f0293a7..eaeec61 100644
+--- a/include/celeg/detail/model/feed_forward_weights.hpp
++++ b/include/celeg/detail/model/feed_forward_weights.hpp
+@@ -88,4 +88,7 @@ inline celeg::MoeRouterConfig moe_router_config(const MoeLayerProgram& semantics
+-    cfg.group_count = semantics.router.group_count;
+-    cfg.experts_per_group = semantics.router.experts_per_group;
+-    cfg.groups_per_token = semantics.router.groups_per_token;
+-    cfg.group_score_top_k = semantics.router.group_score_top_k;
++    if (const auto* grouped = std::get_if<MoeGroupedTopKSelectionSpec>(
++            &semantics.router.selection)) {
++        cfg.group_count = grouped->group_count;
++        cfg.experts_per_group = grouped->experts_per_group;
++        cfg.groups_per_token = grouped->groups_per_token;
++        cfg.group_score_top_k = grouped->group_score_top_k;
++    }
+diff --git a/include/celeg/model/graph.hpp b/include/celeg/model/graph.hpp
+index 12bff1f..c11ddeb 100644
+--- a/include/celeg/model/graph.hpp
++++ b/include/celeg/model/graph.hpp
+@@ -20,9 +19,0 @@ inline constexpr bool always_false_v = false;
+-enum class MixerKind : uint8_t {
+-    Attention,
+-    ShortConvolution,
+-    GatedDeltaNet,
+-    Mamba2,
+-    MlpOnly,
+-};
+-enum class FeedForwardKind : uint8_t { Dense, MixtureOfExperts };
+-
+@@ -362,0 +354,23 @@ struct PerLayerInputSpec {
++enum class MoeCombineOrder : uint8_t {
++    RoutedThenShared,
++    SharedThenRouted,
++};
++
++struct MoeTopKSelectionSpec {};
++
++struct MoeGroupedTopKSelectionSpec {
++    int group_count = 0;
++    int experts_per_group = 0;
++    int groups_per_token = 0;
++    int group_score_top_k = 0;
++};
++
++using MoeSelectionSpec = std::variant<
++    MoeTopKSelectionSpec,
++    MoeGroupedTopKSelectionSpec>;
++
++struct SharedExpertSpec {
++    int intermediate_size = 0;
++    MoeCombineOrder combine_order = MoeCombineOrder::RoutedThenShared;
++};
++
+@@ -370,10 +384,2 @@ struct MixtureOfExpertsSpec {
+-    // These fields describe semantics, not a checkpoint layout.  Families
+-    // with ordinary top-K routing leave the grouped/shared fields at their
+-    // defaults; the compiled program still records those defaults explicitly.
+-    int routing_group_count = 0;
+-    int routing_experts_per_group = 0;
+-    int routing_groups_per_token = 0;
+-    int routing_group_score_top_k = 0;
+-    bool has_shared_expert = false;
+-    int shared_intermediate_size = 0;
+-    bool shared_before_routed = false;
++    MoeSelectionSpec selection = MoeTopKSelectionSpec{};
++    std::optional<SharedExpertSpec> shared;
+@@ -386,0 +393,12 @@ struct ResidualSpec {
++using MixerSpec = std::variant<
++    AttentionSpec,
++    ShortConvolutionSpec,
++    GatedDeltaNetSpec,
++    Mamba2Spec,
++    MlpBlockSpec>;
++
++using FeedForwardSpec = std::variant<
++    std::monostate,
++    DenseFeedForwardSpec,
++    MixtureOfExpertsSpec>;
++
+@@ -393,2 +411 @@ struct LayerSpec {
+-    std::variant<AttentionSpec, ShortConvolutionSpec, GatedDeltaNetSpec,
+-                 Mamba2Spec, MlpBlockSpec> mixer;
++    MixerSpec mixer;
+@@ -396 +413 @@ struct LayerSpec {
+-    std::variant<DenseFeedForwardSpec, MixtureOfExpertsSpec> feed_forward;
++    FeedForwardSpec feed_forward;
+@@ -400,36 +416,0 @@ struct LayerSpec {
+-    // Some hybrid schedules use a mixer-only layer.  This is an explicit
+-    // semantic property resolved by the architecture, never inferred from
+-    // the presence of a particular mixer type elsewhere in the model.
+-    bool execute_feed_forward = true;
+-
+-    MixerKind mixer_kind() const {
+-        return std::visit([](const auto& value) {
+-            using Mixer = std::decay_t<decltype(value)>;
+-            if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
+-                return MixerKind::Attention;
+-            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+-                return MixerKind::ShortConvolution;
+-            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+-                return MixerKind::GatedDeltaNet;
+-            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+-                return MixerKind::Mamba2;
+-            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+-                return MixerKind::MlpOnly;
+-            } else {
+-                static_assert(always_false_v<Mixer>, "unhandled mixer semantic variant");
+-            }
+-        }, mixer);
+-    }
+-    FeedForwardKind feed_forward_kind() const {
+-        return std::visit([](const auto& value) {
+-            using FeedForward = std::decay_t<decltype(value)>;
+-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+-                return FeedForwardKind::Dense;
+-            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+-                return FeedForwardKind::MixtureOfExperts;
+-            } else {
+-                static_assert(always_false_v<FeedForward>,
+-                              "unhandled feed-forward semantic variant");
+-            }
+-        }, feed_forward);
+-    }
+@@ -465 +446,3 @@ struct ModelGraph {
+-            if (layer.feed_forward_kind() == FeedForwardKind::MixtureOfExperts) return true;
++            if (std::holds_alternative<MixtureOfExpertsSpec>(layer.feed_forward)) {
++                return true;
++            }
+diff --git a/include/celeg/model/program.hpp b/include/celeg/model/program.hpp
+index 1ae082f..8ae2ede 100644
+--- a/include/celeg/model/program.hpp
++++ b/include/celeg/model/program.hpp
+@@ -10 +9,0 @@
+-#include <utility>
+@@ -16,2 +15,3 @@ namespace celeg {
+-enum class CompiledMixer : unsigned char {
+-    Attention, ShortConvolution, GatedDeltaNet, Mamba2, MlpOnly
++enum class MoeRouterScoreKind : unsigned char {
++    SigmoidProbabilities,
++    SoftmaxLogits,
+@@ -19,6 +18,0 @@ enum class CompiledMixer : unsigned char {
+-enum class CompiledFeedForward : unsigned char { Dense, MixtureOfExperts, None };
+-
+-// Neutral, immutable MoE semantics. These values are intentionally free of
+-// checkpoint names, architecture identity, CUDA handles, and cache policy.
+-enum class MoeRouterScoreKind : unsigned char { SigmoidProbabilities, SoftmaxLogits };
+-enum class MoeSelectionKind : unsigned char { TopK, GroupedTopK };
+@@ -28 +21,0 @@ enum class MoeActivation : unsigned char { SwiGLU, GeluTanh };
+-enum class MoeCombineOrder : unsigned char { RoutedThenShared, SharedThenRouted };
+@@ -39,0 +33 @@ struct ExpertPayloadSchema {
++    std::size_t elements() const;
+@@ -45 +39 @@ struct RouterProgram {
+-    MoeSelectionKind selection = MoeSelectionKind::TopK;
++    MoeSelectionSpec selection = MoeTopKSelectionSpec{};
+@@ -49,4 +42,0 @@ struct RouterProgram {
+-    int group_count = 0;
+-    int experts_per_group = 0;
+-    int groups_per_token = 0;
+-    int group_score_top_k = 0;
+@@ -76,4 +65,0 @@ struct SharedExpertProgram {
+-};
+-
+-struct MoeOutputProgram {
+-    bool has_shared_expert = false;
+@@ -83,5 +68,0 @@ struct MoeOutputProgram {
+-struct ExpertResidencyRequirements {
+-    int expert_count = 0;
+-    std::size_t payload_elements = 0;
+-};
+-
+@@ -92,2 +72,0 @@ struct MoeLayerProgram {
+-    MoeOutputProgram output;
+-    ExpertResidencyRequirements residency;
+@@ -106 +85 @@ struct CompiledDenseFeedForwardProgram {
+-using CompiledFeedForwardVariant = std::variant<
++using CompiledFeedForwardProgram = std::variant<
+@@ -111,173 +89,0 @@ using CompiledFeedForwardVariant = std::variant<
+-// The variant is the only stored post-mixer feed-forward identity. The legacy
+-// enum remains only as a derived compatibility tag, never as independent state.
+-class CompiledFeedForwardProgram : public CompiledFeedForwardVariant {
+-public:
+-    using CompiledFeedForwardVariant::operator=;
+-
+-    CompiledFeedForwardProgram();
+-    CompiledFeedForwardProgram(const CompiledFeedForwardProgram&) = default;
+-    CompiledFeedForwardProgram(CompiledFeedForwardProgram&&) = default;
+-    CompiledFeedForwardProgram& operator=(const CompiledFeedForwardProgram&) = default;
+-    CompiledFeedForwardProgram& operator=(CompiledFeedForwardProgram&&) = default;
+-    CompiledFeedForwardProgram& operator=(CompiledFeedForward kind);
+-
+-    CompiledFeedForwardVariant& storage() { return *this; }
+-    const CompiledFeedForwardVariant& storage() const { return *this; }
+-    bool enabled() const { return !std::holds_alternative<std::monostate>(storage()); }
+-    void validate() const;
+-};
+-
+-CompiledFeedForward compiled_feed_forward_kind(const CompiledFeedForwardProgram& program);
+-bool operator==(const CompiledFeedForwardProgram& program, CompiledFeedForward kind);
+-bool operator==(CompiledFeedForward kind, const CompiledFeedForwardProgram& program);
+-bool operator!=(const CompiledFeedForwardProgram& program, CompiledFeedForward kind);
+-bool operator!=(CompiledFeedForward kind, const CompiledFeedForwardProgram& program);
+-
+-class CompiledFeedForwardEnabledView {
+-public:
+-    CompiledFeedForwardEnabledView() = default;
+-    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+-    operator bool() const { return program_ && program_->enabled(); }
+-    CompiledFeedForwardEnabledView& operator=(bool enabled) {
+-        if (!program_) throw std::logic_error("compiled feed-forward enabled view is not bound");
+-        if (!enabled) {
+-            program_->storage() = std::monostate{};
+-        } else if (!program_->enabled()) {
+-            program_->storage() = CompiledDenseFeedForwardProgram{};
+-        }
+-        return *this;
+-    }
+-
+-private:
+-    CompiledFeedForwardProgram* program_ = nullptr;
+-};
+-
+-class CompiledFeedForwardIntermediateView {
+-public:
+-    using Fallback = int (*)(const void*);
+-
+-    CompiledFeedForwardIntermediateView() = default;
+-    void bind(CompiledFeedForwardProgram& program,
+-              const void* fallback_context = nullptr,
+-              Fallback fallback = nullptr) {
+-        program_ = &program;
+-        fallback_context_ = fallback_context;
+-        fallback_ = fallback;
+-    }
+-    int value() const {
+-        if (!program_) return 0;
+-        if (const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+-            return dense->intermediate_size;
+-        }
+-        if (const auto* moe = std::get_if<MoeLayerProgram>(&program_->storage())) {
+-            return moe->routed.mlp.intermediate_size;
+-        }
+-        return fallback_ ? fallback_(fallback_context_) : 0;
+-    }
+-    operator int() const { return value(); }
+-    CompiledFeedForwardIntermediateView& operator=(int intermediate_size) {
+-        if (!program_) throw std::logic_error("compiled feed-forward width view is not bound");
+-        if (auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+-            dense->intermediate_size = intermediate_size;
+-        } else if (auto* moe = std::get_if<MoeLayerProgram>(&program_->storage())) {
+-            moe->routed.mlp.intermediate_size = intermediate_size;
+-        } else {
+-            program_->storage() = CompiledDenseFeedForwardProgram{
+-                intermediate_size, ActivationKind::SwiGLU};
+-        }
+-        return *this;
+-    }
+-
+-private:
+-    CompiledFeedForwardProgram* program_ = nullptr;
+-    const void* fallback_context_ = nullptr;
+-    Fallback fallback_ = nullptr;
+-};
+-
+-class CompiledFeedForwardActivationView {
+-public:
+-    using Fallback = ActivationKind (*)(const void*);
+-
+-    CompiledFeedForwardActivationView() = default;
+-    void bind(CompiledFeedForwardProgram& program,
+-              const void* fallback_context = nullptr,
+-              Fallback fallback = nullptr) {
+-        program_ = &program;
+-        fallback_context_ = fallback_context;
+-        fallback_ = fallback;
+-    }
+-    ActivationKind value() const {
+-        if (program_) {
+-            if (const auto* dense =
+-                    std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+-                return dense->activation;
+-            }
+-        }
+-        return fallback_ ? fallback_(fallback_context_) : ActivationKind::SwiGLU;
+-    }
+-    operator ActivationKind() const { return value(); }
+-    CompiledFeedForwardActivationView& operator=(ActivationKind activation) {
+-        if (!program_) throw std::logic_error("compiled feed-forward activation view is not bound");
+-        if (auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+-            dense->activation = activation;
+-        } else if (std::holds_alternative<std::monostate>(program_->storage())) {
+-            program_->storage() = CompiledDenseFeedForwardProgram{0, activation};
+-        } else {
+-            throw std::logic_error("MoE activation is part of the MoE semantic program");
+-        }
+-        return *this;
+-    }
+-
+-private:
+-    CompiledFeedForwardProgram* program_ = nullptr;
+-    const void* fallback_context_ = nullptr;
+-    Fallback fallback_ = nullptr;
+-};
+-
+-class CompiledMoeView {
+-public:
+-    CompiledMoeView() = default;
+-    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+-    MoeLayerProgram* get() {
+-        return program_ ? std::get_if<MoeLayerProgram>(&program_->storage()) : nullptr;
+-    }
+-    const MoeLayerProgram* get() const {
+-        return program_ ? std::get_if<MoeLayerProgram>(&program_->storage()) : nullptr;
+-    }
+-    MoeLayerProgram* operator()() { return get(); }
+-    const MoeLayerProgram* operator()() const { return get(); }
+-    bool has_value() const { return get() != nullptr; }
+-    explicit operator bool() const { return has_value(); }
+-    MoeLayerProgram& value() {
+-        MoeLayerProgram* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    const MoeLayerProgram& value() const {
+-        const MoeLayerProgram* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    MoeLayerProgram* operator->() { return &value(); }
+-    const MoeLayerProgram* operator->() const { return &value(); }
+-    MoeLayerProgram& operator*() { return value(); }
+-    const MoeLayerProgram& operator*() const { return value(); }
+-    CompiledMoeView& operator=(const MoeLayerProgram& value) {
+-        if (!program_) throw std::logic_error("compiled MoE view is not bound");
+-        program_->storage() = value;
+-        return *this;
+-    }
+-    CompiledMoeView& operator=(MoeLayerProgram&& value) {
+-        if (!program_) throw std::logic_error("compiled MoE view is not bound");
+-        program_->storage() = std::move(value);
+-        return *this;
+-    }
+-    void reset() {
+-        if (!program_) throw std::logic_error("compiled MoE view is not bound");
+-        program_->storage() = std::monostate{};
+-    }
+-
+-private:
+-    CompiledFeedForwardProgram* program_ = nullptr;
+-};
+-
+@@ -300,4 +106,11 @@ struct PerLayerInputPlan {
+-enum class CompiledStateLayoutKind : uint8_t {
+-    OrdinaryKv,
+-    Latent,
+-};
++inline std::size_t compiled_state_scalar_bytes(StateScalarType scalar) {
++    switch (scalar) {
++    case StateScalarType::FP32: return sizeof(float);
++    case StateScalarType::FP16:
++    case StateScalarType::BF16: return sizeof(uint16_t);
++    case StateScalarType::FP8:
++    case StateScalarType::INT8: return sizeof(uint8_t);
++    case StateScalarType::INT4: return 1;
++    }
++    throw std::invalid_argument("invalid compiled state scalar type");
++}
+@@ -305,2 +118 @@ enum class CompiledStateLayoutKind : uint8_t {
+-struct CompiledAttentionStateLayout {
+-    CompiledStateLayoutKind kind = CompiledStateLayoutKind::OrdinaryKv;
++struct CompiledOrdinaryKvStateLayout {
+@@ -308,0 +121,16 @@ struct CompiledAttentionStateLayout {
++    AttentionStateStorageSpec storage;
++
++    std::size_t persistent_elements() const {
++        return static_cast<std::size_t>(key_width) +
++               static_cast<std::size_t>(value_width);
++    }
++    std::size_t persistent_bytes() const {
++        return static_cast<std::size_t>(key_width) *
++                   compiled_state_scalar_bytes(storage.key) +
++               static_cast<std::size_t>(value_width) *
++                   compiled_state_scalar_bytes(storage.value);
++    }
++    void validate() const;
++};
++
++struct CompiledLatentStateLayout {
+@@ -311,5 +138,0 @@ struct CompiledAttentionStateLayout {
+-    std::size_t key_elements = 0;
+-    std::size_t value_elements = 0;
+-    std::size_t latent_elements = 0;
+-    std::size_t rotary_elements = 0;
+-    std::size_t persistent_elements = 0;
+@@ -318,10 +141,3 @@ struct CompiledAttentionStateLayout {
+-    std::size_t scalar_bytes(StateScalarType scalar) const {
+-        switch (scalar) {
+-        case StateScalarType::FP32: return sizeof(float);
+-        case StateScalarType::FP16:
+-        case StateScalarType::BF16: return sizeof(uint16_t);
+-        case StateScalarType::FP8:
+-        case StateScalarType::INT8: return sizeof(uint8_t);
+-        case StateScalarType::INT4: return 1;
+-        }
+-        throw std::invalid_argument("invalid compiled state scalar type");
++    std::size_t persistent_elements() const {
++        return static_cast<std::size_t>(latent_width) +
++               static_cast<std::size_t>(rotary_width);
+@@ -329 +144,0 @@ struct CompiledAttentionStateLayout {
+-
+@@ -331,4 +146,4 @@ struct CompiledAttentionStateLayout {
+-        return key_elements * scalar_bytes(storage.key) +
+-               value_elements * scalar_bytes(storage.value) +
+-               latent_elements * scalar_bytes(storage.latent) +
+-               rotary_elements * scalar_bytes(storage.rotary);
++        return static_cast<std::size_t>(latent_width) *
++                   compiled_state_scalar_bytes(storage.latent) +
++               static_cast<std::size_t>(rotary_width) *
++                   compiled_state_scalar_bytes(storage.rotary);
+@@ -336 +150,0 @@ struct CompiledAttentionStateLayout {
+-
+@@ -339,0 +154,4 @@ struct CompiledAttentionStateLayout {
++using CompiledAttentionStateLayout = std::variant<
++    CompiledOrdinaryKvStateLayout,
++    CompiledLatentStateLayout>;
++
+@@ -345 +163 @@ struct CompiledAttentionProgram {
+-using CompiledMixerVariant = std::variant<
++using CompiledMixerProgram = std::variant<
+@@ -352,201 +169,0 @@ using CompiledMixerVariant = std::variant<
+-// The variant is the only stored mixer identity. Assignment from the legacy
+-// CompiledMixer enum is intentionally factory-like: it selects a default
+-// alternative but does not store a second tag.
+-class CompiledMixerProgram : public CompiledMixerVariant {
+-public:
+-    using CompiledMixerVariant::CompiledMixerVariant;
+-    using CompiledMixerVariant::operator=;
+-
+-    CompiledMixerProgram() = default;
+-    CompiledMixerProgram(const CompiledMixerProgram&) = default;
+-    CompiledMixerProgram(CompiledMixerProgram&&) = default;
+-    CompiledMixerProgram& operator=(const CompiledMixerProgram&) = default;
+-    CompiledMixerProgram& operator=(CompiledMixerProgram&&) = default;
+-    CompiledMixerProgram& operator=(CompiledMixer kind);
+-
+-    CompiledMixerVariant& storage() { return *this; }
+-    const CompiledMixerVariant& storage() const { return *this; }
+-};
+-
+-CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer);
+-bool operator==(const CompiledMixerProgram& mixer, CompiledMixer kind);
+-bool operator==(CompiledMixer kind, const CompiledMixerProgram& mixer);
+-bool operator!=(const CompiledMixerProgram& mixer, CompiledMixer kind);
+-bool operator!=(CompiledMixer kind, const CompiledMixerProgram& mixer);
+-
+-// Optional-like views preserve the compact consumer API without duplicating
+-// semantic state. They only point into CompiledLayerProgram::mixer.
+-template <typename T>
+-class CompiledMixerView {
+-public:
+-    CompiledMixerView() = default;
+-
+-    void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
+-
+-    T* get() {
+-        return mixer_ ? std::get_if<T>(&mixer_->storage()) : nullptr;
+-    }
+-    const T* get() const {
+-        return mixer_ ? std::get_if<T>(&mixer_->storage()) : nullptr;
+-    }
+-    T* operator()() { return get(); }
+-    const T* operator()() const { return get(); }
+-    bool has_value() const { return get() != nullptr; }
+-    explicit operator bool() const { return has_value(); }
+-    T& value() {
+-        T* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    const T& value() const {
+-        const T* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    T* operator->() { return &value(); }
+-    const T* operator->() const { return &value(); }
+-    T& operator*() { return value(); }
+-    const T& operator*() const { return value(); }
+-
+-    CompiledMixerView& operator=(const T& value) {
+-        if (!mixer_) throw std::logic_error("compiled mixer view is not bound");
+-        mixer_->storage() = value;
+-        return *this;
+-    }
+-    CompiledMixerView& operator=(T&& value) {
+-        if (!mixer_) throw std::logic_error("compiled mixer view is not bound");
+-        mixer_->storage() = std::move(value);
+-        return *this;
+-    }
+-
+-private:
+-    CompiledMixerProgram* mixer_ = nullptr;
+-};
+-
+-class CompiledAttentionView {
+-public:
+-    CompiledAttentionView() = default;
+-
+-    void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
+-
+-    AttentionSpec* get() {
+-        auto* result = mixer_
+-            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
+-        return result ? &result->semantics : nullptr;
+-    }
+-    const AttentionSpec* get() const {
+-        const auto* result = mixer_
+-            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
+-        return result ? &result->semantics : nullptr;
+-    }
+-    AttentionSpec* operator()() { return get(); }
+-    const AttentionSpec* operator()() const { return get(); }
+-    bool has_value() const { return get() != nullptr; }
+-    explicit operator bool() const { return has_value(); }
+-    AttentionSpec& value() {
+-        AttentionSpec* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    const AttentionSpec& value() const {
+-        const AttentionSpec* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    AttentionSpec* operator->() { return &value(); }
+-    const AttentionSpec* operator->() const { return &value(); }
+-    AttentionSpec& operator*() { return value(); }
+-    const AttentionSpec& operator*() const { return value(); }
+-
+-    CompiledAttentionView& operator=(const AttentionSpec& semantics) {
+-        if (!mixer_) throw std::logic_error("compiled attention view is not bound");
+-        if (auto* current = get()) {
+-            *current = semantics;
+-        } else {
+-            mixer_->storage() = CompiledAttentionProgram{semantics, {}};
+-        }
+-        return *this;
+-    }
+-    CompiledAttentionView& operator=(AttentionSpec&& semantics) {
+-        if (!mixer_) throw std::logic_error("compiled attention view is not bound");
+-        if (auto* current = get()) {
+-            *current = std::move(semantics);
+-        } else {
+-            mixer_->storage() = CompiledAttentionProgram{std::move(semantics), {}};
+-        }
+-        return *this;
+-    }
+-
+-private:
+-    CompiledMixerProgram* mixer_ = nullptr;
+-};
+-
+-class CompiledAttentionStateLayoutView {
+-public:
+-    CompiledAttentionStateLayoutView() = default;
+-
+-    void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
+-
+-    CompiledAttentionStateLayout* get() {
+-        auto* result = mixer_
+-            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
+-        return result ? &result->state_layout : nullptr;
+-    }
+-    const CompiledAttentionStateLayout* get() const {
+-        const auto* result = mixer_
+-            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
+-        return result ? &result->state_layout : nullptr;
+-    }
+-    CompiledAttentionStateLayout* operator()() { return get(); }
+-    const CompiledAttentionStateLayout* operator()() const { return get(); }
+-    bool has_value() const { return get() != nullptr; }
+-    explicit operator bool() const { return has_value(); }
+-    CompiledAttentionStateLayout& value() {
+-        CompiledAttentionStateLayout* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    const CompiledAttentionStateLayout& value() const {
+-        const CompiledAttentionStateLayout* result = get();
+-        if (!result) throw std::bad_optional_access();
+-        return *result;
+-    }
+-    CompiledAttentionStateLayout* operator->() { return &value(); }
+-    const CompiledAttentionStateLayout* operator->() const { return &value(); }
+-    CompiledAttentionStateLayout& operator*() { return value(); }
+-    const CompiledAttentionStateLayout& operator*() const { return value(); }
+-
+-    CompiledAttentionStateLayoutView& operator=(
+-        const CompiledAttentionStateLayout& layout) {
+-        if (!mixer_) throw std::logic_error("compiled state-layout view is not bound");
+-        if (auto* current = get()) {
+-            *current = layout;
+-        } else {
+-            mixer_->storage() = CompiledAttentionProgram{{}, layout};
+-        }
+-        return *this;
+-    }
+-    CompiledAttentionStateLayoutView& operator=(
+-        CompiledAttentionStateLayout&& layout) {
+-        if (!mixer_) throw std::logic_error("compiled state-layout view is not bound");
+-        if (auto* current = get()) {
+-            *current = std::move(layout);
+-        } else {
+-            mixer_->storage() = CompiledAttentionProgram{{}, std::move(layout)};
+-        }
+-        return *this;
+-    }
+-
+-private:
+-    CompiledMixerProgram* mixer_ = nullptr;
+-};
+-
+-enum class CompiledChunkCapability : uint8_t {
+-    Native,
+-    SequentialAdapter,
+-    Unsupported,
+-};
+-
+-// Immutable execution description produced before a backend starts serving.
+-// Mixer and post-mixer feed-forward variants are the semantic sources of truth;
+-// compatibility members below are non-owning views into those variants.
+@@ -555,7 +171,0 @@ struct CompiledLayerProgram {
+-    CompiledAttentionView attention;
+-    CompiledAttentionStateLayoutView state_layout;
+-    CompiledMixerView<ShortConvolutionSpec> short_convolution;
+-    CompiledMixerView<GatedDeltaNetSpec> gated_delta_net;
+-    CompiledMixerView<Mamba2Spec> mamba2;
+-    CompiledMixerView<MlpBlockSpec> mlp_only;
+-
+@@ -563,6 +172,0 @@ struct CompiledLayerProgram {
+-    CompiledFeedForwardEnabledView execute_feed_forward;
+-    CompiledFeedForwardIntermediateView feed_forward_intermediate;
+-    CompiledFeedForwardActivationView feed_forward_activation;
+-    CompiledMoeView moe;
+-
+-    CompiledChunkCapability chunk_capability = CompiledChunkCapability::Native;
+@@ -575,15 +178,0 @@ struct CompiledLayerProgram {
+-
+-    CompiledLayerProgram();
+-    CompiledLayerProgram(const CompiledLayerProgram& other);
+-    CompiledLayerProgram(CompiledLayerProgram&& other);
+-    CompiledLayerProgram& operator=(const CompiledLayerProgram& other);
+-    CompiledLayerProgram& operator=(CompiledLayerProgram&& other);
+-
+-    CompiledMixer mixer_kind() const { return compiled_mixer_kind(mixer); }
+-    CompiledFeedForward feed_forward_kind() const {
+-        return compiled_feed_forward_kind(feed_forward);
+-    }
+-
+-private:
+-    void bind_mixer_views();
+-    void bind_feed_forward_views();
+@@ -613 +202 @@ CompiledModelProgram build_model_program(const ResolvedModel& model);
+-} // namespace celeg
+\ No newline at end of file
++} // namespace celeg
+diff --git a/include/celeg/runtime/cache/page_layout.hpp b/include/celeg/runtime/cache/page_layout.hpp
+index 7850e6c..71ab0e9 100644
+--- a/include/celeg/runtime/cache/page_layout.hpp
++++ b/include/celeg/runtime/cache/page_layout.hpp
+@@ -56 +56,6 @@ struct PageLayout {
+-                attention = program.layers.at(static_cast<size_t>(model_layer)).attention();
++                const auto& mixer =
++                    program.layers.at(static_cast<size_t>(model_layer)).mixer;
++                if (const auto* compiled =
++                        std::get_if<CompiledAttentionProgram>(&mixer)) {
++                    attention = &compiled->semantics;
++                }
+diff --git a/src/backend/cpu/memory/expert_backing.cpp b/src/backend/cpu/memory/expert_backing.cpp
+index 68f52ad..093c958 100644
+--- a/src/backend/cpu/memory/expert_backing.cpp
++++ b/src/backend/cpu/memory/expert_backing.cpp
+@@ -76 +76,3 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
+-        [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
++        [](const CompiledLayerProgram& layer) {
++            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
++        });
+@@ -80 +82,2 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
+-    const int intermediate = moe_program->moe->routed.mlp.intermediate_size;
++    const int intermediate =
++        std::get<MoeLayerProgram>(moe_program->feed_forward).routed.mlp.intermediate_size;
+@@ -103,4 +106,6 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
+-    if (layer < 0 || layer >= static_cast<int>(program.layers.size()) ||
+-        !program.layers[static_cast<size_t>(layer)].moe ||
+-        expert < 0 || expert >= program.layers[static_cast<size_t>(layer)]
+-            .moe->router.expert_count) {
++    if (layer < 0 || layer >= static_cast<int>(program.layers.size())) {
++        throw std::out_of_range("CPU expert cache request is out of range");
++    }
++    const auto* moe = std::get_if<MoeLayerProgram>(
++        &program.layers[static_cast<size_t>(layer)].feed_forward);
++    if (!moe || expert < 0 || expert >= moe->router.expert_count) {
+diff --git a/src/backend/cpu/model.cpp b/src/backend/cpu/model.cpp
+index 7dac624..d1d763c 100644
+--- a/src/backend/cpu/model.cpp
++++ b/src/backend/cpu/model.cpp
+@@ -20 +20,2 @@ bool requires_sequential_attention_transform(const CompiledModelProgram& program
+-            const AttentionSpec* attention = layer.attention();
++            const auto* attention =
++                std::get_if<CompiledAttentionProgram>(&layer.mixer);
+@@ -23 +24 @@ bool requires_sequential_attention_transform(const CompiledModelProgram& program
+-                    attention->output_transform);
++                    attention->semantics.output_transform);
+diff --git a/src/backend/cpu/model_forward_chunk.cpp b/src/backend/cpu/model_forward_chunk.cpp
+index 6c32cb5..32d69aa 100644
+--- a/src/backend/cpu/model_forward_chunk.cpp
++++ b/src/backend/cpu/model_forward_chunk.cpp
+@@ -45 +45,2 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
+-            return layer.chunk_capability != CompiledChunkCapability::Native;
++            return std::holds_alternative<GatedDeltaNetSpec>(layer.mixer) ||
++                   std::holds_alternative<Mamba2Spec>(layer.mixer);
+@@ -202 +203,2 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
+-            const AttentionSpec& layout = semantics.attention.value();
++            const AttentionSpec& layout =
++                std::get<CompiledAttentionProgram>(semantics.mixer).semantics;
+@@ -505 +507,2 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
+-            const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
++            const MoeLayerProgram& moe_semantics =
++                std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
+diff --git a/src/backend/cpu/model_forward_token.cpp b/src/backend/cpu/model_forward_token.cpp
+index c30b7c4..2752266 100644
+--- a/src/backend/cpu/model_forward_token.cpp
++++ b/src/backend/cpu/model_forward_token.cpp
+@@ -99 +99 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
+-            if (semantics.execute_feed_forward) {
++            if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+@@ -118 +118 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
+-        if (!semantics.execute_feed_forward) continue;
++        if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
+@@ -124 +124,2 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
+-            const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
++            const MoeLayerProgram& moe_semantics =
++                std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
+diff --git a/src/backend/cpu/model_state.cpp b/src/backend/cpu/model_state.cpp
+index 9ff71b5..8f383ef 100644
+--- a/src/backend/cpu/model_state.cpp
++++ b/src/backend/cpu/model_state.cpp
+@@ -55 +55,2 @@ void CpuCompiledModel::allocate_state() {
+-            const auto& spec = shared->program.layers.at(index).mamba2.value();
++            const auto& spec = std::get<Mamba2Spec>(
++                shared->program.layers.at(index).mixer);
+diff --git a/src/backend/cpu/operators/attention_token.cpp b/src/backend/cpu/operators/attention_token.cpp
+index 2c15475..e0e961d 100644
+--- a/src/backend/cpu/operators/attention_token.cpp
++++ b/src/backend/cpu/operators/attention_token.cpp
+@@ -15 +15,2 @@ void execute_cpu_attention_token(
+-    const AttentionSpec& layout = semantics.attention.value();
++    const AttentionSpec& layout =
++        std::get<CompiledAttentionProgram>(semantics.mixer).semantics;
+diff --git a/src/backend/cpu/operators/feed_forward.cpp b/src/backend/cpu/operators/feed_forward.cpp
+index 0f10546..6022dab 100644
+--- a/src/backend/cpu/operators/feed_forward.cpp
++++ b/src/backend/cpu/operators/feed_forward.cpp
+@@ -16,0 +17,10 @@ double elapsed_ms(Clock::time_point start) {
++const CompiledDenseFeedForwardProgram& dense_program(
++    const CpuCompiledModel::Shared& shared, size_t layer) {
++    const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
++        &shared.program.layers.at(layer).feed_forward);
++    if (!dense) {
++        throw std::logic_error("CPU dense FFN execution received non-dense semantics");
++    }
++    return *dense;
++}
++
+@@ -18 +28 @@ int intermediate_size(const CpuCompiledModel::Shared& shared, size_t layer) {
+-    return shared.program.layers.at(layer).feed_forward_intermediate;
++    return dense_program(shared, layer).intermediate_size;
+@@ -22 +32 @@ bool uses_gelu_tanh(const CpuCompiledModel::Shared& shared, size_t layer) {
+-    return shared.program.layers.at(layer).feed_forward_activation == ActivationKind::GeluTanh;
++    return dense_program(shared, layer).activation == ActivationKind::GeluTanh;
+@@ -32,2 +42,2 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
+-    const int intermediate = semantics.feed_forward_intermediate;
+-    if (!semantics.mlp_only || semantics.mlp_only->activation != ActivationKind::Relu2) {
++    const auto* mlp = std::get_if<MlpBlockSpec>(&semantics.mixer);
++    if (!mlp || mlp->activation != ActivationKind::Relu2) {
+@@ -35,0 +46 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
++    const int intermediate = mlp->intermediate_size;
+diff --git a/src/backend/cpu/operators/moe.cpp b/src/backend/cpu/operators/moe.cpp
+index e5e3e42..ce415a6 100644
+--- a/src/backend/cpu/operators/moe.cpp
++++ b/src/backend/cpu/operators/moe.cpp
+@@ -47 +47,2 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-    if (program.selection == MoeSelectionKind::GroupedTopK) {
++    if (const auto* grouped =
++            std::get_if<MoeGroupedTopKSelectionSpec>(&program.selection)) {
+@@ -49,2 +50,2 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-        groups.reserve(static_cast<size_t>(program.group_count));
+-        for (int group = 0; group < program.group_count; ++group) {
++        groups.reserve(static_cast<size_t>(grouped->group_count));
++        for (int group = 0; group < grouped->group_count; ++group) {
+@@ -52,3 +53,3 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-            group_scores.reserve(static_cast<size_t>(program.experts_per_group));
+-            const int first = group * program.experts_per_group;
+-            for (int offset = 0; offset < program.experts_per_group; ++offset) {
++            group_scores.reserve(static_cast<size_t>(grouped->experts_per_group));
++            const int first = group * grouped->experts_per_group;
++            for (int offset = 0; offset < grouped->experts_per_group; ++offset) {
+@@ -57,2 +58,2 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-            const int score_count = std::min(program.group_score_top_k,
+-                                             program.experts_per_group);
++            const int score_count = std::min(grouped->group_score_top_k,
++                                             grouped->experts_per_group);
+@@ -66 +67 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-                          groups.begin() + program.groups_per_token,
++                          groups.begin() + grouped->groups_per_token,
+@@ -71,2 +72,2 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-        std::vector<bool> selected(static_cast<size_t>(program.group_count), false);
+-        for (int index = 0; index < program.groups_per_token; ++index) {
++        std::vector<bool> selected(static_cast<size_t>(grouped->group_count), false);
++        for (int index = 0; index < grouped->groups_per_token; ++index) {
+@@ -76 +77,2 @@ CpuMoeRoute route_cpu_moe(const RouterProgram& program,
+-            if (!selected[static_cast<size_t>(entry.second / program.experts_per_group)]) {
++            if (!selected[static_cast<size_t>(
++                    entry.second / grouped->experts_per_group)]) {
+diff --git a/src/backend/cpu/operators/recurrent.cpp b/src/backend/cpu/operators/recurrent.cpp
+index b4c916e..2db1593 100644
+--- a/src/backend/cpu/operators/recurrent.cpp
++++ b/src/backend/cpu/operators/recurrent.cpp
+@@ -63 +63,2 @@ void execute_cpu_mamba2_token(
+-    const auto& spec = shared.program.layers.at(layer).mamba2.value();
++    const auto& spec =
++        std::get<Mamba2Spec>(shared.program.layers.at(layer).mixer);
+diff --git a/src/backend/cpu/packed/api.cpp b/src/backend/cpu/packed/api.cpp
+index 7799c3a..b1fccb2 100644
+--- a/src/backend/cpu/packed/api.cpp
++++ b/src/backend/cpu/packed/api.cpp
+@@ -17,7 +17,11 @@ bool requires_sequential_execution(const CompiledModelProgram& program) {
+-            const AttentionSpec* attention = layer.attention();
+-            return layer.chunk_capability != CompiledChunkCapability::Native ||
+-                (attention &&
+-                 (!std::holds_alternative<NoAttentionOutputTransformSpec>(
+-                      attention->output_transform) ||
+-                  (attention->latent_state() &&
+-                   attention->latent_state()->factorized)));
++            if (std::holds_alternative<GatedDeltaNetSpec>(layer.mixer) ||
++                std::holds_alternative<Mamba2Spec>(layer.mixer)) {
++                return true;
++            }
++            const auto* attention =
++                std::get_if<CompiledAttentionProgram>(&layer.mixer);
++            return attention &&
++                (!std::holds_alternative<NoAttentionOutputTransformSpec>(
++                     attention->semantics.output_transform) ||
++                 (attention->semantics.latent_state() &&
++                  attention->semantics.latent_state()->factorized));
+diff --git a/src/backend/cpu/packed/execution.cpp b/src/backend/cpu/packed/execution.cpp
+index 07dd18c..c8046d2 100644
+--- a/src/backend/cpu/packed/execution.cpp
++++ b/src/backend/cpu/packed/execution.cpp
+@@ -200 +200,2 @@ struct CpuCompiledModel::BatchScratch {
+-                const AttentionSpec& layout = layer_semantics.attention.value();
++                const AttentionSpec& layout = std::get<CompiledAttentionProgram>(
++                    layer_semantics.mixer).semantics;
+@@ -337 +338,2 @@ struct CpuCompiledModel::BatchScratch {
+-                const MoeLayerProgram& semantics = shared.program.layers[index].moe.value();
++                const MoeLayerProgram& semantics =
++                    std::get<MoeLayerProgram>(shared.program.layers[index].feed_forward);
+@@ -474 +476,4 @@ struct CpuCompiledModel::BatchScratch {
+-                const int intermediate = layer_semantics.feed_forward_intermediate;
++                const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
++                    &layer_semantics.feed_forward);
++                if (!dense) throw std::logic_error("packed dense layer has non-dense semantics");
++                const int intermediate = dense->intermediate_size;
+@@ -479 +484 @@ struct CpuCompiledModel::BatchScratch {
+-                    if (layer_semantics.feed_forward_activation == ActivationKind::GeluTanh) {
++                    if (dense->activation == ActivationKind::GeluTanh) {
+diff --git a/src/backend/cpu/runtime/kv_topology.cpp b/src/backend/cpu/runtime/kv_topology.cpp
+index ae1ae03..f20cada 100644
+--- a/src/backend/cpu/runtime/kv_topology.cpp
++++ b/src/backend/cpu/runtime/kv_topology.cpp
+@@ -4,0 +5 @@
++#include <type_traits>
+@@ -6,0 +8 @@ namespace celeg {
++namespace {
+@@ -8,7 +10,25 @@ namespace celeg {
+-CpuStatePageLayout lower_cpu_state_page_layout(const CompiledAttentionStateLayout& state) {
+-    if (state.kind == CompiledStateLayoutKind::OrdinaryKv) {
+-        return CpuStatePageLayout{
+-            state.key_elements, state.value_elements, 0, 0};
+-    }
+-    return CpuStatePageLayout{
+-        0, 0, state.latent_elements, state.rotary_elements};
++const CompiledAttentionProgram* attention_program(
++    const CompiledLayerProgram& layer) {
++    return std::get_if<CompiledAttentionProgram>(&layer.mixer);
++}
++
++} // namespace
++
++CpuStatePageLayout lower_cpu_state_page_layout(
++    const CompiledAttentionStateLayout& state) {
++    return std::visit([](const auto& layout) -> CpuStatePageLayout {
++        using Layout = std::decay_t<decltype(layout)>;
++        if constexpr (std::is_same_v<Layout, CompiledOrdinaryKvStateLayout>) {
++            return {
++                static_cast<std::size_t>(layout.key_width),
++                static_cast<std::size_t>(layout.value_width), 0, 0};
++        } else if constexpr (std::is_same_v<Layout, CompiledLatentStateLayout>) {
++            return {
++                0, 0,
++                static_cast<std::size_t>(layout.latent_width),
++                static_cast<std::size_t>(layout.rotary_width)};
++        } else {
++            static_assert(always_false_v<Layout>,
++                          "unhandled CPU state-page layout");
++        }
++    }, state);
+@@ -26,4 +46,4 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-        if (const AttentionSpec* attention = layer.attention();
+-            attention && attention->kv_sharing.shared()) {
+-            shared_group_count = std::max(shared_group_count,
+-                                          attention->kv_sharing.group + 1);
++        if (const auto* compiled = attention_program(layer);
++            compiled && compiled->semantics.kv_sharing.shared()) {
++            shared_group_count = std::max(
++                shared_group_count, compiled->semantics.kv_sharing.group + 1);
+@@ -39 +59 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-        const AttentionSpec* attention = compiled.attention();
++        const auto* attention = attention_program(compiled);
+@@ -41,2 +61,2 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-        if (attention->kv_sharing.publishes) {
+-            shared_owner[static_cast<size_t>(attention->kv_sharing.group)] = layer;
++        if (attention->semantics.kv_sharing.publishes) {
++            shared_owner[static_cast<size_t>(attention->semantics.kv_sharing.group)] = layer;
+@@ -50 +70 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-        const AttentionSpec* attention = compiled.attention();
++        const auto* attention = attention_program(compiled);
+@@ -52,4 +71,0 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-        const CompiledAttentionStateLayout* compiled_state = compiled.state_layout();
+-        if (!compiled_state) {
+-            throw std::runtime_error("compiled attention layer has no state layout");
+-        }
+@@ -57,3 +73,4 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-            lower_cpu_state_page_layout(*compiled_state);
+-        if (attention->kv_sharing.shared() && !attention->kv_sharing.publishes) {
+-            const int group = attention->kv_sharing.group;
++            lower_cpu_state_page_layout(attention->state_layout);
++        if (attention->semantics.kv_sharing.shared() &&
++            !attention->semantics.kv_sharing.publishes) {
++            const int group = attention->semantics.kv_sharing.group;
+@@ -71,4 +88,3 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
+-            options.kv_cache_mode, options.kv_page_tokens,
+-            state_layout));
+-        if (attention->kv_sharing.shared()) {
+-            shared_pool[static_cast<size_t>(attention->kv_sharing.group)] =
++            options.kv_cache_mode, options.kv_page_tokens, state_layout));
++        if (attention->semantics.kv_sharing.shared()) {
++            shared_pool[static_cast<size_t>(attention->semantics.kv_sharing.group)] =
+diff --git a/src/backend/cpu/weights_loader.cpp b/src/backend/cpu/weights_loader.cpp
+index 108f6df..ac98fe3 100644
+--- a/src/backend/cpu/weights_loader.cpp
++++ b/src/backend/cpu/weights_loader.cpp
+@@ -48 +48 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
+-    if (!layer_program.execute_feed_forward) {
++    if (std::holds_alternative<std::monostate>(layer_program.feed_forward)) {
+@@ -50,2 +50,2 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
+-        if (layer_program.mixer == CompiledMixer::MlpOnly) {
+-            const int intermediate = layer_program.feed_forward_intermediate;
++        if (const auto* mlp = std::get_if<MlpBlockSpec>(&layer_program.mixer)) {
++            const int intermediate = mlp->intermediate_size;
+@@ -71,2 +71,3 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
+-    const int intermediate = layer_program.feed_forward_intermediate;
+-    if (intermediate <= 0) {
++    const auto* dense =
++        std::get_if<CompiledDenseFeedForwardProgram>(&layer_program.feed_forward);
++    if (!dense || dense->intermediate_size <= 0) {
+@@ -74,0 +76 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
++    const int intermediate = dense->intermediate_size;
+@@ -186 +188,2 @@ void CpuCompiledModel::Shared::load_weights() {
+-        if (layer_program.mixer == CompiledMixer::Attention) {
++        if (const auto* compiled_attention =
++                std::get_if<CompiledAttentionProgram>(&layer_program.mixer)) {
+@@ -188 +191 @@ void CpuCompiledModel::Shared::load_weights() {
+-            const AttentionSpec& attention = layer_program.attention.value();
++            const AttentionSpec& attention = compiled_attention->semantics;
+@@ -311 +314,2 @@ void CpuCompiledModel::Shared::load_weights() {
+-        if (layer_program.mixer == CompiledMixer::GatedDeltaNet) {
++        if (const auto* gated_delta =
++                std::get_if<GatedDeltaNetSpec>(&layer_program.mixer)) {
+@@ -313 +317 @@ void CpuCompiledModel::Shared::load_weights() {
+-            layer.spec = layer_program.gated_delta_net.value();
++            layer.spec = *gated_delta;
+@@ -384 +388 @@ void CpuCompiledModel::Shared::load_weights() {
+-        if (layer_program.mixer == CompiledMixer::Mamba2) {
++        if (const auto* mamba = std::get_if<Mamba2Spec>(&layer_program.mixer)) {
+@@ -386 +390 @@ void CpuCompiledModel::Shared::load_weights() {
+-            const auto& spec = layer_program.mamba2.value();
++            const auto& spec = *mamba;
+@@ -410 +414,3 @@ void CpuCompiledModel::Shared::load_weights() {
+-        if (layer_program.mixer == CompiledMixer::MlpOnly) return MlpOnlyWeights{};
++        if (std::holds_alternative<MlpBlockSpec>(layer_program.mixer)) {
++            return MlpOnlyWeights{};
++        }
+@@ -411,0 +418,5 @@ void CpuCompiledModel::Shared::load_weights() {
++        const auto* convolution =
++            std::get_if<ShortConvolutionSpec>(&layer_program.mixer);
++        if (!convolution) {
++            throw std::logic_error("CPU weight loader received unknown mixer alternative");
++        }
+@@ -413,2 +423,0 @@ void CpuCompiledModel::Shared::load_weights() {
+-        const ShortConvolutionSpec& convolution =
+-            layer_program.short_convolution.value();
+@@ -421 +430 @@ void CpuCompiledModel::Shared::load_weights() {
+-            {program.hidden, 1, convolution.cache_length});
++            {program.hidden, 1, convolution->cache_length});
+@@ -423 +432 @@ void CpuCompiledModel::Shared::load_weights() {
+-        for (int tap = 0; tap < convolution.cache_length; ++tap) {
++        for (int tap = 0; tap < convolution->cache_length; ++tap) {
+@@ -440 +449 @@ void CpuCompiledModel::Shared::load_weights() {
+-            if (layer_program.feed_forward != CompiledFeedForward::MixtureOfExperts) {
++            if (!std::holds_alternative<MoeLayerProgram>(layer_program.feed_forward)) {
+@@ -461,2 +470,2 @@ void CpuCompiledModel::Shared::load_weights() {
+-            const MoeLayerProgram& moe_semantics =
+-                program.layers.at(static_cast<size_t>(index)).moe.value();
++            const MoeLayerProgram& moe_semantics = std::get<MoeLayerProgram>(
++                program.layers.at(static_cast<size_t>(index)).feed_forward);
+@@ -544,2 +553 @@ void CpuCompiledModel::Shared::load_weights() {
+-                const int moe_inter = program.layers.at(static_cast<size_t>(index))
+-                    .moe->routed.mlp.intermediate_size;
++                const int moe_inter = moe_semantics.routed.mlp.intermediate_size;
+@@ -653 +661,2 @@ void CpuCompiledModel::Shared::load_weights() {
+-                if (!program.layers[layer].execute_feed_forward) return;
++                if (std::holds_alternative<std::monostate>(
++                        program.layers[layer].feed_forward)) return;
+@@ -667 +676,3 @@ void CpuCompiledModel::Shared::load_weights() {
+-                    check_attention(*attention, program.layers[layer].attention.value(),
++                    check_attention(*attention,
++                                    std::get<CompiledAttentionProgram>(
++                                        program.layers[layer].mixer).semantics,
+@@ -672 +683,3 @@ void CpuCompiledModel::Shared::load_weights() {
+-                check_attention(value, program.layers[layer].attention.value(),
++                check_attention(value,
++                                std::get<CompiledAttentionProgram>(
++                                    program.layers[layer].mixer).semantics,
+diff --git a/src/backend/cuda/compiler.cpp b/src/backend/cuda/compiler.cpp
+index 4cb3925..497da65 100644
+--- a/src/backend/cuda/compiler.cpp
++++ b/src/backend/cuda/compiler.cpp
+@@ -15 +15,4 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-        if (layer.attention && layer.attention->uses_external_memory()) {
++        const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
++        if (!compiled) continue;
++        const AttentionSpec& attention = compiled->semantics;
++        if (attention.uses_external_memory()) {
+@@ -19 +22 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-        if (layer.attention && !layer.attention->has_causal_pattern()) {
++        if (!attention.has_causal_pattern()) {
+@@ -23,3 +26,2 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-        if (layer.attention &&
+-            !layer.attention->rope_position() &&
+-            !std::holds_alternative<NoPositionEncodingSpec>(layer.attention->position)) {
++        if (!attention.rope_position() &&
++            !std::holds_alternative<NoPositionEncodingSpec>(attention.position)) {
+@@ -29,2 +31 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-        if (layer.attention &&
+-            std::holds_alternative<RelativePositionBiasSpec>(layer.attention->bias)) {
++        if (std::holds_alternative<RelativePositionBiasSpec>(attention.bias)) {
+@@ -34,2 +35,2 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-        if (layer.attention && layer.attention->uses_latent_state()) {
+-            const auto& latent = *layer.attention->latent_state();
++        if (attention.uses_latent_state()) {
++            const auto& latent = *attention.latent_state();
+@@ -40,2 +41,2 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-            if ((layer.attention->output_gate.enabled() && !latent.factorized) ||
+-                layer.attention->multi_axis_position()) {
++            if ((attention.output_gate.enabled() && !latent.factorized) ||
++                attention.multi_axis_position()) {
+@@ -46,3 +47,3 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
+-        if (layer.attention && layer.attention->rope_position() &&
+-            layer.attention->rope_position()->scaling.kind == RopeScalingKind::Long) {
+-            const auto& scaling = layer.attention->rope_position()->scaling;
++        if (attention.rope_position() &&
++            attention.rope_position()->scaling.kind == RopeScalingKind::Long) {
++            const auto& scaling = attention.rope_position()->scaling;
+diff --git a/src/backend/cuda/model/attention_execution.cu b/src/backend/cuda/model/attention_execution.cu
+index 82f06b6..8711e5f 100644
+--- a/src/backend/cuda/model/attention_execution.cu
++++ b/src/backend/cuda/model/attention_execution.cu
+@@ -224 +224 @@ void CudaCompiledModel::enqueue_decode_attention(
+-                           semantics.execute_feed_forward ? 1.0f : 0.0f);
++                           std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+@@ -426 +426 @@ void CudaCompiledModel::enqueue_decode_attention(
+-                       semantics.execute_feed_forward ? 1.0f : 0.0f);
++                       std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+diff --git a/src/backend/cuda/model/decode.cpp b/src/backend/cuda/model/decode.cpp
+index 28170bb..90305b7 100644
+--- a/src/backend/cuda/model/decode.cpp
++++ b/src/backend/cuda/model/decode.cpp
+@@ -75 +75 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
+-        !semantics.execute_feed_forward) {
++        std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+@@ -79 +79 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
+-    if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_index);
++    if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) run_mlp_decode(common_layer, layer_index);
+@@ -455 +455 @@ void CudaCompiledModel::run_token_latent_attention_paged(
+-               semantics.execute_feed_forward ? 1.0f : 0.0f);
++               std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+@@ -578 +578 @@ void CudaCompiledModel::run_token_attention(
+-               semantics.execute_feed_forward ? 1.0f : 0.0f);
++               std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+diff --git a/src/backend/cuda/model/dense_mlp_execution.cu b/src/backend/cuda/model/dense_mlp_execution.cu
+index a180772..f0e71b9 100644
+--- a/src/backend/cuda/model/dense_mlp_execution.cu
++++ b/src/backend/cuda/model/dense_mlp_execution.cu
+@@ -18 +18,3 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
+-        const int intermediate = semantics.feed_forward_intermediate;
++        const auto& dense_semantics =
++            std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
++        const int intermediate = dense_semantics.intermediate_size;
+@@ -32 +34 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
+-        const bool gelu_tanh = semantics.feed_forward_activation == ActivationKind::GeluTanh;
++        const bool gelu_tanh = dense_semantics.activation == ActivationKind::GeluTanh;
+@@ -71 +73,3 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
+-        const int intermediate = semantics.feed_forward_intermediate;
++        const auto& dense_semantics =
++            std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
++        const int intermediate = dense_semantics.intermediate_size;
+@@ -80 +84 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
+-        if (semantics.feed_forward_activation == ActivationKind::GeluTanh) {
++        if (dense_semantics.activation == ActivationKind::GeluTanh) {
+@@ -99 +103 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
+-        if (semantics.feed_forward_activation == ActivationKind::GeluTanh) {
++        if (dense_semantics.activation == ActivationKind::GeluTanh) {
+diff --git a/src/backend/cuda/model/execution.cu b/src/backend/cuda/model/execution.cu
+index 6525d63..c4a0790 100644
+--- a/src/backend/cuda/model/execution.cu
++++ b/src/backend/cuda/model/execution.cu
+@@ -76 +76 @@ void CudaCompiledModel::enqueue_decode_forward() {
+-            !semantics.execute_feed_forward) {
++            std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+@@ -83 +83 @@ void CudaCompiledModel::enqueue_decode_forward() {
+-        if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_idx);
++        if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) run_mlp_decode(common_layer, layer_idx);
+diff --git a/src/backend/cuda/model/expert_setup.cpp b/src/backend/cuda/model/expert_setup.cpp
+index 505bf80..31c61fe 100644
+--- a/src/backend/cuda/model/expert_setup.cpp
++++ b/src/backend/cuda/model/expert_setup.cpp
+@@ -26,3 +26 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-    for (int layer = 0; layer < static_cast<int>(program.layers.size()); ++layer) {
+-        // input_layernorm is present for every operator. FFN and split norms
+-        // are accounted for only when the compiled layer actually executes them.
++    for (const CompiledLayerProgram& layer : program.layers) {
+@@ -30,3 +28 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        const CompiledLayerProgram& layer_program = program.layers.at(
+-            static_cast<size_t>(layer));
+-        if (layer_program.execute_feed_forward) {
++        if (!std::holds_alternative<std::monostate>(layer.feed_forward)) {
+@@ -35 +31 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        if (layer_program.post_attention_norm.enabled()) {
++        if (layer.post_attention_norm.enabled()) {
+@@ -38 +34 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        if (layer_program.post_feed_forward_norm.enabled()) {
++        if (layer.post_feed_forward_norm.enabled()) {
+@@ -42,3 +38,4 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        if (layer_program.mixer == CompiledMixer::Attention) {
+-            const AttentionSpec& attention = layer_program.attention.value();
+-            bytes += bf16_bytes(static_cast<std::size_t>(attention.query_projection_width()) * program.hidden);
++        if (const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
++            const AttentionSpec& attention = compiled->semantics;
++            bytes += bf16_bytes(static_cast<std::size_t>(
++                attention.query_projection_width()) * program.hidden);
+@@ -46 +43,2 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-                bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.key_value_width()) * program.hidden);
++                bytes += bf16_bytes(2ull * static_cast<std::size_t>(
++                    attention.key_value_width()) * program.hidden);
+@@ -48 +46,2 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) * attention.query_width());
++            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) *
++                                attention.query_width());
+@@ -52,4 +51,5 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        } else if (layer_program.mixer == CompiledMixer::GatedDeltaNet) {
+-            const GatedDeltaNetSpec& spec = layer_program.gated_delta_net.value();
+-            const std::size_t key_width = static_cast<std::size_t>(spec.key_heads) * spec.key_head_dim;
+-            const std::size_t value_width = static_cast<std::size_t>(spec.value_heads) * spec.value_head_dim;
++        } else if (const auto* spec = std::get_if<GatedDeltaNetSpec>(&layer.mixer)) {
++            const std::size_t key_width = static_cast<std::size_t>(spec->key_heads) *
++                                          spec->key_head_dim;
++            const std::size_t value_width = static_cast<std::size_t>(spec->value_heads) *
++                                            spec->value_head_dim;
+@@ -59 +59,2 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-            bytes += bf16_bytes(2ull * static_cast<std::size_t>(spec.value_heads) * program.hidden);
++            bytes += bf16_bytes(2ull * static_cast<std::size_t>(spec->value_heads) *
++                                program.hidden);
+@@ -61,3 +62,3 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-            bytes += bf16_bytes(qkv_width * spec.conv_kernel +
+-                                2ull * static_cast<std::size_t>(spec.value_heads) +
+-                                static_cast<std::size_t>(spec.value_head_dim));
++            bytes += bf16_bytes(qkv_width * spec->conv_kernel +
++                                2ull * static_cast<std::size_t>(spec->value_heads) +
++                                static_cast<std::size_t>(spec->value_head_dim));
+@@ -66 +67 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        if (layer_program.moe) {
++        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+@@ -68 +69 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-                layer_program.moe->router.expert_count) * program.hidden;
++                moe->router.expert_count) * program.hidden;
+@@ -70 +71 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-            if (layer_program.moe->shared) {
++            if (moe->shared) {
+@@ -72 +73 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-                    layer_program.moe->shared->mlp.intermediate_size);
++                    moe->shared->mlp.intermediate_size);
+@@ -75,4 +76,5 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-        } else if (layer_program.feed_forward == CompiledFeedForward::Dense) {
+-            const int intermediate = layer_program.feed_forward_intermediate;
+-            if (intermediate <= 0) {
+-                throw std::runtime_error("compiled dense layer has no FFN width for weight estimate");
++        } else if (const auto* dense =
++                       std::get_if<CompiledDenseFeedForwardProgram>(&layer.feed_forward)) {
++            if (dense->intermediate_size <= 0) {
++                throw std::runtime_error(
++                    "compiled dense layer has no FFN width for weight estimate");
+@@ -80 +82,2 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
+-            bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) * program.hidden);
++            bytes += bf16_bytes(3ull * static_cast<std::size_t>(
++                dense->intermediate_size) * program.hidden);
+@@ -89,3 +91,0 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-    const auto bf16_bytes = [](std::size_t elements) {
+-        return elements * sizeof(__nv_bfloat16);
+-    };
+@@ -94 +94,2 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-            if (program.layers.at(static_cast<size_t>(layer)).mixer == CompiledMixer::Attention) {
++            if (std::holds_alternative<CompiledAttentionProgram>(
++                    program.layers.at(static_cast<size_t>(layer)).mixer)) {
+@@ -103,5 +104,4 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-    const AttentionSpec& attention = program.layers.at(
+-        static_cast<size_t>(full_attention_layer)).attention.value();
+-    const auto moe_layer = std::find_if(program.layers.begin(), program.layers.end(),
+-        [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
+-    const auto dense_layer = std::find_if(program.layers.begin(), program.layers.end(),
++    const AttentionSpec& attention = std::get<CompiledAttentionProgram>(
++        program.layers.at(static_cast<size_t>(full_attention_layer)).mixer).semantics;
++    const auto moe_layer = std::find_if(
++        program.layers.begin(), program.layers.end(),
+@@ -109 +109,7 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-            return layer.feed_forward == CompiledFeedForward::Dense;
++            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
++        });
++    const auto dense_layer = std::find_if(
++        program.layers.begin(), program.layers.end(),
++        [](const CompiledLayerProgram& layer) {
++            return std::holds_alternative<CompiledDenseFeedForwardProgram>(
++                layer.feed_forward);
+@@ -112 +118 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-    bytes += bf16_bytes(3ull * program.hidden); // two pre-fc norms and final norm
++    bytes += bf16_bytes(3ull * program.hidden);
+@@ -114,3 +120,5 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-        bytes += bf16_bytes(2ull * program.hidden); // input and post-attention norms
+-        bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * program.hidden);
+-        bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * program.hidden);
++        bytes += bf16_bytes(2ull * program.hidden);
++        bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) *
++                            program.hidden);
++        bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) *
++                            program.hidden);
+@@ -118 +126,3 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-        if (attention.has_query_key_norm()) bytes += bf16_bytes(2ull * attention.head_dim);
++        if (attention.has_query_key_norm()) {
++            bytes += bf16_bytes(2ull * static_cast<size_t>(attention.head_dim));
++        }
+@@ -120 +130,2 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-            const int experts = moe_layer->moe->router.expert_count;
++            const auto& moe = std::get<MoeLayerProgram>(moe_layer->feed_forward);
++            const int experts = moe.router.expert_count;
+@@ -123,3 +134,2 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-            if (moe_layer->moe->shared) {
+-                const size_t shared = static_cast<size_t>(
+-                    moe_layer->moe->shared->mlp.intermediate_size);
++            if (moe.shared) {
++                const size_t shared = static_cast<size_t>(moe.shared->mlp.intermediate_size);
+@@ -129,2 +139 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-            if (dense_layer == program.layers.end() ||
+-                dense_layer->feed_forward_intermediate <= 0) {
++            if (dense_layer == program.layers.end()) {
+@@ -133,2 +142,7 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
+-            bytes += bf16_bytes(3ull * static_cast<std::size_t>(
+-                dense_layer->feed_forward_intermediate) * program.hidden);
++            const int intermediate = std::get<CompiledDenseFeedForwardProgram>(
++                dense_layer->feed_forward).intermediate_size;
++            if (intermediate <= 0) {
++                throw std::runtime_error("MTP requires a compiled dense FFN width");
++            }
++            bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) *
++                                program.hidden);
+@@ -161,2 +175,3 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
+-        if (!layer.moe) continue;
+-        maximum_experts = std::max(maximum_experts, layer.moe->router.expert_count);
++        const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
++        if (!moe) continue;
++        maximum_experts = std::max(maximum_experts, moe->router.expert_count);
+@@ -164 +179 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
+-            maximum_moe_intermediate, layer.moe->routed.mlp.intermediate_size);
++            maximum_moe_intermediate, moe->routed.mlp.intermediate_size);
+@@ -190,2 +205,2 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
+-                if (resources.program_.layers.at(static_cast<size_t>(layer)).mixer ==
+-                    CompiledMixer::Attention) {
++                if (std::holds_alternative<CompiledAttentionProgram>(
++                        resources.program_.layers.at(static_cast<size_t>(layer)).mixer)) {
+@@ -198,2 +213,3 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
+-            const AttentionSpec& attention = resources.program_.layers.at(
+-                static_cast<size_t>(full_attention_layer)).attention.value();
++            const AttentionSpec& attention = std::get<CompiledAttentionProgram>(
++                resources.program_.layers.at(
++                    static_cast<size_t>(full_attention_layer)).mixer).semantics;
+diff --git a/src/backend/cuda/model/mtp_weight_setup.cpp b/src/backend/cuda/model/mtp_weight_setup.cpp
+index 25878fc..149468f 100644
+--- a/src/backend/cuda/model/mtp_weight_setup.cpp
++++ b/src/backend/cuda/model/mtp_weight_setup.cpp
+@@ -26 +26,2 @@ int last_full_attention_layer(const CompiledModelProgram& program) {
+-        if (program.layers.at(static_cast<size_t>(layer)).mixer == CompiledMixer::Attention) {
++        if (std::holds_alternative<CompiledAttentionProgram>(
++                program.layers.at(static_cast<size_t>(layer)).mixer)) {
+@@ -52,2 +53,2 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-        AttentionSpec layout = resources.program_.layers.at(
+-            static_cast<size_t>(full_layer)).attention.value();
++        AttentionSpec layout = std::get<CompiledAttentionProgram>(
++            resources.program_.layers.at(static_cast<size_t>(full_layer)).mixer).semantics;
+@@ -77 +78 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-            return layer.moe.has_value();
++            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
+@@ -81 +82,2 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-            return layer.feed_forward == CompiledFeedForward::Dense;
++            return std::holds_alternative<CompiledDenseFeedForwardProgram>(
++                layer.feed_forward);
+@@ -95,2 +97,4 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-            const int E = moe_program->moe->router.expert_count;
+-            const int inter = moe_program->moe->routed.mlp.intermediate_size;
++            const auto& moe_semantics =
++                std::get<MoeLayerProgram>(moe_program->feed_forward);
++            const int E = moe_semantics.router.expert_count;
++            const int inter = moe_semantics.routed.mlp.intermediate_size;
+@@ -108,2 +112,2 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-            if (moe_program->moe->shared) {
+-                const int shared = moe_program->moe->shared->mlp.intermediate_size;
++            if (moe_semantics.shared) {
++                const int shared = moe_semantics.shared->mlp.intermediate_size;
+@@ -201,2 +205,6 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-            if (dense_program == resources.program_.layers.end() ||
+-                dense_program->feed_forward_intermediate <= 0) {
++            if (dense_program == resources.program_.layers.end()) {
++                throw std::runtime_error("MTP requires a compiled dense FFN width");
++            }
++            const int inter = std::get<CompiledDenseFeedForwardProgram>(
++                dense_program->feed_forward).intermediate_size;
++            if (inter <= 0) {
+@@ -205 +212,0 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
+-            const int inter = dense_program->feed_forward_intermediate;
+diff --git a/src/backend/cuda/model/paged_prefill.cpp b/src/backend/cuda/model/paged_prefill.cpp
+index 15477d8..5b71c0a 100644
+--- a/src/backend/cuda/model/paged_prefill.cpp
++++ b/src/backend/cuda/model/paged_prefill.cpp
+@@ -29,3 +29,4 @@ void CudaCompiledModel::prefill_chunk_paged(
+-            const AttentionSpec* attention = layer.attention();
+-            if (!attention) return false;
+-            const RopePositionSpec* rope = attention->rope_position();
++            const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
++            if (!compiled) return false;
++            const AttentionSpec& attention = compiled->semantics;
++            const RopePositionSpec* rope = attention.rope_position();
+@@ -33 +34 @@ void CudaCompiledModel::prefill_chunk_paged(
+-                       attention->output_transform) ||
++                       attention.output_transform) ||
+diff --git a/src/backend/cuda/model/persistence.cu b/src/backend/cuda/model/persistence.cu
+index 71866e1..d5ea1b6 100644
+--- a/src/backend/cuda/model/persistence.cu
++++ b/src/backend/cuda/model/persistence.cu
+@@ -204 +204,2 @@ void SessionStore::save(const std::string& path, SessionState& state) {
+-            const AttentionSpec& layout = state.program.layers.at(layer_index).attention.value();
++            const AttentionSpec& layout = std::get<CompiledAttentionProgram>(
++                state.program.layers.at(layer_index).mixer).semantics;
+@@ -284 +285,2 @@ void SessionStore::load(const std::string& path, SessionState& state) {
+-            const AttentionSpec& layout = state.program.layers.at(layer_index).attention.value();
++            const AttentionSpec& layout = std::get<CompiledAttentionProgram>(
++                state.program.layers.at(layer_index).mixer).semantics;
+diff --git a/src/backend/cuda/model/prefill.cpp b/src/backend/cuda/model/prefill.cpp
+index aabfd12..867aae0 100644
+--- a/src/backend/cuda/model/prefill.cpp
++++ b/src/backend/cuda/model/prefill.cpp
+@@ -23,2 +23,2 @@ bool has_attention_output_transform(const CompiledModelProgram& program) {
+-            const AttentionSpec* attention = layer.attention();
+-            return attention &&
++            const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
++            return compiled &&
+@@ -26 +26 @@ bool has_attention_output_transform(const CompiledModelProgram& program) {
+-                    attention->output_transform);
++                    compiled->semantics.output_transform);
+@@ -71,14 +70,0 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
+-    const bool needs_sequential_adapter = std::any_of(
+-        resources_.program_.layers.begin(), resources_.program_.layers.end(),
+-        [](const CompiledLayerProgram& layer) {
+-            // Packed recurrent execution preserves row order for each session
+-            // and consumes a contiguous sequence in one topology-gated scan.
+-            const CompiledMixer kind = layer.mixer_kind();
+-            return layer.chunk_capability == CompiledChunkCapability::SequentialAdapter &&
+-                kind != CompiledMixer::GatedDeltaNet &&
+-                kind != CompiledMixer::Mamba2;
+-        });
+-    if (needs_sequential_adapter) {
+-        prefill_chunk(tokens, true, true);
+-        return;
+-    }
+diff --git a/src/backend/cuda/model/prefill_batched.cpp b/src/backend/cuda/model/prefill_batched.cpp
+index fab0eac..c9fd46e 100644
+--- a/src/backend/cuda/model/prefill_batched.cpp
++++ b/src/backend/cuda/model/prefill_batched.cpp
+@@ -92 +92 @@ void run_layer(
+-        !semantics.execute_feed_forward) {
++        std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+@@ -102 +102 @@ void run_layer(
+-    if (semantics.execute_feed_forward) {
++    if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+diff --git a/src/backend/cuda/model/residency.cu b/src/backend/cuda/model/residency.cu
+index 6b864ed..9ad0e77 100644
+--- a/src/backend/cuda/model/residency.cu
++++ b/src/backend/cuda/model/residency.cu
+@@ -234,2 +234,2 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
+-    const MoeLayerProgram& semantics = resources_.program_.layers.at(
+-        static_cast<size_t>(layer)).moe.value();
++    const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
++        resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
+@@ -300,2 +300,2 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
+-    const MoeLayerProgram& semantics = resources_.program_.layers.at(
+-        static_cast<size_t>(layer)).moe.value();
++    const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
++        resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
+diff --git a/src/backend/cuda/model/resources.cpp b/src/backend/cuda/model/resources.cpp
+index fbdf828..7673cce 100644
+--- a/src/backend/cuda/model/resources.cpp
++++ b/src/backend/cuda/model/resources.cpp
+@@ -77,4 +77,5 @@ void CudaCompiledModel::allocate_celeg_resources() {
+-            if (!layer.moe) continue;
+-            E = std::max(E, layer.moe->router.expert_count);
+-            K = std::max(K, layer.moe->router.experts_per_token);
+-            inter = std::max(inter, layer.moe->routed.mlp.intermediate_size);
++            const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
++            if (!moe) continue;
++            E = std::max(E, moe->router.expert_count);
++            K = std::max(K, moe->router.experts_per_token);
++            inter = std::max(inter, moe->routed.mlp.intermediate_size);
+diff --git a/src/backend/cuda/model/setup.cpp b/src/backend/cuda/model/setup.cpp
+index 0e123fe..96ae9e7 100644
+--- a/src/backend/cuda/model/setup.cpp
++++ b/src/backend/cuda/model/setup.cpp
+@@ -31,3 +31,2 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
+-        if (layer.moe) {
+-            maximum_experts = std::max(maximum_experts,
+-                                       layer.moe->router.expert_count);
++        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
++            maximum_experts = std::max(maximum_experts, moe->router.expert_count);
+diff --git a/src/backend/cuda/model/weight_setup.cpp b/src/backend/cuda/model/weight_setup.cpp
+index 6f0aa28..865114d 100644
+--- a/src/backend/cuda/model/weight_setup.cpp
++++ b/src/backend/cuda/model/weight_setup.cpp
+@@ -70 +70,2 @@ void CudaCompiledModel::load_checkpoint_weights(
+-        const bool mixer_only_layer = !semantic_layer.execute_feed_forward;
++        const bool mixer_only_layer =
++            std::holds_alternative<std::monostate>(semantic_layer.feed_forward);
+@@ -110,7 +111,5 @@ void CudaCompiledModel::load_checkpoint_weights(
+-        } else if (semantic_layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
+-            // Mixture-of-experts feed-forward for this layer.
+-            if (!semantic_layer.moe) {
+-                throw std::runtime_error("compiled MoE layer has no router program");
+-            }
+-            const int E = semantic_layer.moe->router.expert_count;
+-            const int inter = semantic_layer.moe->routed.mlp.intermediate_size;
++        } else if (const auto* moe_program =
++                       std::get_if<MoeLayerProgram>(&semantic_layer.feed_forward)) {
++            const MoeLayerProgram& moe_semantics = *moe_program;
++            const int E = moe_semantics.router.expert_count;
++            const int inter = moe_semantics.routed.mlp.intermediate_size;
+@@ -118 +117 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            if (semantic_layer.moe->router.has_expert_bias) {
++            if (moe_semantics.router.has_expert_bias) {
+@@ -148,2 +147,2 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            if (semantic_layer.moe->shared) {
+-                const int shared_inter = semantic_layer.moe->shared->mlp.intermediate_size;
++            if (moe_semantics.shared) {
++                const int shared_inter = moe_semantics.shared->mlp.intermediate_size;
+@@ -188 +187 @@ void CudaCompiledModel::load_checkpoint_weights(
+-                    semantic_layer.moe->shared.has_value();
++                    moe_semantics.shared.has_value();
+@@ -304 +303 @@ void CudaCompiledModel::load_checkpoint_weights(
+-                if (!individual_expert_model && semantic_layer.moe->shared) {
++                if (!individual_expert_model && moe_semantics.shared) {
+@@ -331,2 +330,3 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            const int intermediate = semantic_layer.feed_forward_intermediate;
+-            if (intermediate <= 0) {
++            const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
++                &semantic_layer.feed_forward);
++            if (!dense || dense->intermediate_size <= 0) {
+@@ -334,0 +335 @@ void CudaCompiledModel::load_checkpoint_weights(
++            const int intermediate = dense->intermediate_size;
+@@ -349,2 +350,2 @@ void CudaCompiledModel::load_checkpoint_weights(
+-        const CompiledMixer layer_type = semantic_layer.mixer_kind();
+-        if (layer_type == CompiledMixer::Attention) {
++        if (const auto* compiled_attention =
++                std::get_if<CompiledAttentionProgram>(&semantic_layer.mixer)) {
+@@ -353,4 +354 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            if (!semantic_layer.attention) {
+-                throw std::runtime_error("compiled attention layer has no layout");
+-            }
+-            attention_layer.layout = *semantic_layer.attention;
++            attention_layer.layout = compiled_attention->semantics;
+@@ -531 +529,2 @@ void CudaCompiledModel::load_checkpoint_weights(
+-        } else if (layer_type == CompiledMixer::GatedDeltaNet) {
++        } else if (const auto* gated_delta =
++                       std::get_if<GatedDeltaNetSpec>(&semantic_layer.mixer)) {
+@@ -534,4 +533 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            if (!semantic_layer.gated_delta_net) {
+-                throw std::runtime_error("compiled GatedDeltaNet layer has no layout");
+-            }
+-            gated_delta_layer.spec = *semantic_layer.gated_delta_net;
++            gated_delta_layer.spec = *gated_delta;
+@@ -634 +630,2 @@ void CudaCompiledModel::load_checkpoint_weights(
+-        } else if (layer_type == CompiledMixer::Mamba2) {
++        } else if (const auto* mamba =
++                       std::get_if<Mamba2Spec>(&semantic_layer.mixer)) {
+@@ -637,4 +634 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            if (!semantic_layer.mamba2) {
+-                throw std::runtime_error("compiled Mamba2 layer has no layout");
+-            }
+-            mamba_layer.spec = *semantic_layer.mamba2;
++            mamba_layer.spec = *mamba;
+@@ -672 +666,2 @@ void CudaCompiledModel::load_checkpoint_weights(
+-        } else if (layer_type == CompiledMixer::MlpOnly) {
++        } else if (const auto* mlp =
++                       std::get_if<MlpBlockSpec>(&semantic_layer.mixer)) {
+@@ -675,4 +670 @@ void CudaCompiledModel::load_checkpoint_weights(
+-            if (!semantic_layer.mlp_only) {
+-                throw std::runtime_error("compiled MLP-only layer has no semantics");
+-            }
+-            mlp_layer.spec = semantic_layer.mlp_only.value();
++            mlp_layer.spec = *mlp;
+diff --git a/src/backend/cuda/packed/layer_program.cpp b/src/backend/cuda/packed/layer_program.cpp
+index 159755a..0371105 100644
+--- a/src/backend/cuda/packed/layer_program.cpp
++++ b/src/backend/cuda/packed/layer_program.cpp
+@@ -3,0 +4 @@
++#include <type_traits>
+@@ -14,19 +15,16 @@ PackedLayerProgram PackedLayerProgram::compile(const CompiledModelProgram& progr
+-        switch (layer.mixer_kind()) {
+-        case CompiledMixer::Attention:
+-            layers.push_back({PackedLayerKind::Attention});
+-            break;
+-        case CompiledMixer::ShortConvolution:
+-            layers.push_back({PackedLayerKind::ShortConvolution});
+-            break;
+-        case CompiledMixer::GatedDeltaNet:
+-            layers.push_back({PackedLayerKind::GatedDeltaNet});
+-            break;
+-        case CompiledMixer::Mamba2:
+-            layers.push_back({PackedLayerKind::Mamba2});
+-            break;
+-        case CompiledMixer::MlpOnly:
+-            layers.push_back({PackedLayerKind::MlpOnly});
+-            break;
+-        default:
+-            throw std::invalid_argument("packed layer program has unsupported mixer kind");
+-        }
++        std::visit([&](const auto& mixer) {
++            using Mixer = std::decay_t<decltype(mixer)>;
++            if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
++                layers.push_back({PackedLayerKind::Attention});
++            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
++                layers.push_back({PackedLayerKind::ShortConvolution});
++            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
++                layers.push_back({PackedLayerKind::GatedDeltaNet});
++            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
++                layers.push_back({PackedLayerKind::Mamba2});
++            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
++                layers.push_back({PackedLayerKind::MlpOnly});
++            } else {
++                static_assert(always_false_v<Mixer>, "unsupported compiled mixer variant");
++            }
++        }, layer.mixer);
+diff --git a/src/backend/cuda/packed/operators.cu b/src/backend/cuda/packed/operators.cu
+index 31b1efc..80e19ee 100644
+--- a/src/backend/cuda/packed/operators.cu
++++ b/src/backend/cuda/packed/operators.cu
+@@ -521 +521,6 @@ void PackedDenseFfnExecutor::run(
+-    const int intermediate = semantics.feed_forward_intermediate;
++    const auto* dense_semantics =
++        std::get_if<CompiledDenseFeedForwardProgram>(&semantics.feed_forward);
++    if (!dense_semantics) {
++        throw std::logic_error("packed dense executor received non-dense semantics");
++    }
++    const int intermediate = dense_semantics->intermediate_size;
+@@ -574 +579,5 @@ void PackedMoeExecutor::run(
+-    const MoeRouterConfig cfg = moe_router_config(semantics.moe.value());
++    const auto* moe_semantics = std::get_if<MoeLayerProgram>(&semantics.feed_forward);
++    if (!moe_semantics) {
++        throw std::logic_error("packed MoE executor received non-MoE semantics");
++    }
++    const MoeRouterConfig cfg = moe_router_config(*moe_semantics);
+@@ -595 +604 @@ void PackedMoeExecutor::run(
+-    const MoeFfnDevice device = moe_ffn_device(*moe, semantics.moe.value());
++    const MoeFfnDevice device = moe_ffn_device(*moe, *moe_semantics);
+@@ -598 +607 @@ void PackedMoeExecutor::run(
+-                   semantics.moe->router.experts_per_token, w.moe_gu_scratch.data(),
++                   moe_semantics->router.experts_per_token, w.moe_gu_scratch.data(),
+diff --git a/src/backend/cuda/packed/validation.cu b/src/backend/cuda/packed/validation.cu
+index 6387aa5..8ea4153 100644
+--- a/src/backend/cuda/packed/validation.cu
++++ b/src/backend/cuda/packed/validation.cu
+@@ -134,3 +134,4 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
+-        if (layer.moe) {
+-            result.moe_intermediate = std::max(result.moe_intermediate,
+-                static_cast<size_t>(layer.moe->routed.mlp.intermediate_size));
++        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
++            result.moe_intermediate = std::max(
++                result.moe_intermediate,
++                static_cast<size_t>(moe->routed.mlp.intermediate_size));
+diff --git a/src/backend/cuda/packed/workspace.cu b/src/backend/cuda/packed/workspace.cu
+index adf94ff..2759aba 100644
+--- a/src/backend/cuda/packed/workspace.cu
++++ b/src/backend/cuda/packed/workspace.cu
+@@ -14 +14,3 @@ int maximum_experts(const CompiledModelProgram& program) {
+-        if (layer.moe) result = std::max(result, layer.moe->router.expert_count);
++        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
++            result = std::max(result, moe->router.expert_count);
++        }
+@@ -22,2 +24,2 @@ int maximum_experts_per_token(const CompiledModelProgram& program) {
+-        if (layer.moe) {
+-            result = std::max(result, layer.moe->router.experts_per_token);
++        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
++            result = std::max(result, moe->router.experts_per_token);
+diff --git a/src/backend/cuda/runtime/prefill_scheduler.cpp b/src/backend/cuda/runtime/prefill_scheduler.cpp
+index f08f01a..83e9838 100644
+--- a/src/backend/cuda/runtime/prefill_scheduler.cpp
++++ b/src/backend/cuda/runtime/prefill_scheduler.cpp
+@@ -58,2 +58,3 @@ bool CudaSchedulerDriver::run_prefill_work() {
+-                    const AttentionSpec* attention = layer.attention();
+-                    return attention &&
++                    const auto* compiled =
++                        std::get_if<CompiledAttentionProgram>(&layer.mixer);
++                    return compiled &&
+@@ -61 +62 @@ bool CudaSchedulerDriver::run_prefill_work() {
+-                            attention->output_transform);
++                            compiled->semantics.output_transform);
+diff --git a/src/model/descriptor/architecture.cpp b/src/model/descriptor/architecture.cpp
+index a98fa77..eb19376 100644
+--- a/src/model/descriptor/architecture.cpp
++++ b/src/model/descriptor/architecture.cpp
+@@ -130 +129,0 @@ public:
+-            semantic_layer.execute_feed_forward = true;
+@@ -157 +156 @@ public:
+-                    graph.layers[static_cast<size_t>(layer)].execute_feed_forward = false;
++                    graph.layers[static_cast<size_t>(layer)].feed_forward = std::monostate{};
+@@ -201,0 +201,14 @@ public:
++                MoeSelectionSpec selection = MoeTopKSelectionSpec{};
++                if (routing_group_count > 0) {
++                    selection = MoeGroupedTopKSelectionSpec{
++                        routing_group_count,
++                        routing_experts_per_group,
++                        routing_groups_per_token,
++                        routing_group_score_top_k};
++                }
++                std::optional<SharedExpertSpec> shared;
++                if (shared_expert_intermediate > 0) {
++                    shared = SharedExpertSpec{
++                        shared_expert_intermediate,
++                        MoeCombineOrder::RoutedThenShared};
++                }
+@@ -209,7 +222,2 @@ public:
+-                    .routing_group_count = routing_group_count,
+-                    .routing_experts_per_group = routing_experts_per_group,
+-                    .routing_groups_per_token = routing_groups_per_token,
+-                    .routing_group_score_top_k = routing_group_score_top_k,
+-                    .has_shared_expert = shared_expert_intermediate > 0,
+-                    .shared_intermediate_size = shared_expert_intermediate,
+-                    .shared_before_routed = false,
++                    .selection = std::move(selection),
++                    .shared = std::move(shared),
+@@ -247,2 +255,2 @@ public:
+-            const MixerKind kind = graph.layers[static_cast<size_t>(layer)].mixer_kind();
+-            if (kind == MixerKind::GatedDeltaNet) {
++            auto& mixer = graph.layers[static_cast<size_t>(layer)].mixer;
++            if (std::holds_alternative<GatedDeltaNetSpec>(mixer)) {
+@@ -252 +260 @@ public:
+-            } else if (kind == MixerKind::Mamba2) {
++            } else if (std::holds_alternative<Mamba2Spec>(mixer)) {
+@@ -328 +336,2 @@ public:
+-            if (graph.layers[static_cast<size_t>(layer)].mixer_kind() != MixerKind::Attention) {
++            if (!std::holds_alternative<AttentionSpec>(
++                    graph.layers[static_cast<size_t>(layer)].mixer)) {
+diff --git a/src/model/descriptor/graph_builder.cpp b/src/model/descriptor/graph_builder.cpp
+index 7df12d7..5c3b5c3 100644
+--- a/src/model/descriptor/graph_builder.cpp
++++ b/src/model/descriptor/graph_builder.cpp
+@@ -74,2 +74,2 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
+-        if (layer.mixer_kind() == MixerKind::Attention) {
+-            AttentionSpec attention = std::get<AttentionSpec>(layer.mixer);
++        if (const auto* current_attention = std::get_if<AttentionSpec>(&layer.mixer)) {
++            AttentionSpec attention = *current_attention;
+diff --git a/src/model/inference.cpp b/src/model/inference.cpp
+index c44f0ef..79a82db 100644
+--- a/src/model/inference.cpp
++++ b/src/model/inference.cpp
+@@ -75 +74,0 @@ void CanonicalModelFacts::validate() const {
+-        const MixerKind mixer = semantic_layer.mixer_kind();
+@@ -78,3 +77,3 @@ void CanonicalModelFacts::validate() const {
+-        if (mixer == MixerKind::Attention) {
+-            const AttentionSpec& attention =
+-                std::get<AttentionSpec>(semantic_layer.mixer);
++        if (const auto* attention_ptr =
++                std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
++            const AttentionSpec& attention = *attention_ptr;
+@@ -104 +103 @@ void CanonicalModelFacts::validate() const {
+-        } else if (mixer == MixerKind::ShortConvolution) {
++        } else if (std::holds_alternative<ShortConvolutionSpec>(semantic_layer.mixer)) {
+@@ -108 +107 @@ void CanonicalModelFacts::validate() const {
+-        } else if (mixer == MixerKind::Mamba2) {
++        } else if (std::holds_alternative<Mamba2Spec>(semantic_layer.mixer)) {
+@@ -117 +116 @@ void CanonicalModelFacts::validate() const {
+-        } else if (mixer == MixerKind::GatedDeltaNet) {
++        } else if (std::holds_alternative<GatedDeltaNetSpec>(semantic_layer.mixer)) {
+@@ -139 +138 @@ void CanonicalModelFacts::validate() const {
+-        } else if (mixer == MixerKind::MlpOnly) {
++        } else if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) {
+@@ -148,2 +147,2 @@ void CanonicalModelFacts::validate() const {
+-        if (mixer != MixerKind::MlpOnly &&
+-            semantic_layer.execute_feed_forward) {
++        if (!std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer) &&
++            !std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) {
+@@ -151,2 +150,2 @@ void CanonicalModelFacts::validate() const {
+-            if (semantic_layer.feed_forward_kind() ==
+-                FeedForwardKind::MixtureOfExperts) {
++            if (const auto* moe_ptr =
++                    std::get_if<MixtureOfExpertsSpec>(&semantic_layer.feed_forward)) {
+@@ -154,2 +153 @@ void CanonicalModelFacts::validate() const {
+-                const auto& moe = std::get<MixtureOfExpertsSpec>(
+-                    semantic_layer.feed_forward);
++                const auto& moe = *moe_ptr;
+diff --git a/src/model/inference/global_facts.cpp b/src/model/inference/global_facts.cpp
+index 8713285..94414ec 100644
+--- a/src/model/inference/global_facts.cpp
++++ b/src/model/inference/global_facts.cpp
+@@ -165 +164,0 @@ void initialize_graph(CanonicalInferenceContext& context) {
+-        semantic_layer.execute_feed_forward = true;
+@@ -167,0 +167,14 @@ void initialize_graph(CanonicalInferenceContext& context) {
++            MoeSelectionSpec selection = MoeTopKSelectionSpec{};
++            if (context.total_routing_groups > 0) {
++                selection = MoeGroupedTopKSelectionSpec{
++                    context.total_routing_groups,
++                    context.experts_per_group,
++                    context.groups_per_token,
++                    context.group_score_top_k};
++            }
++            std::optional<SharedExpertSpec> shared;
++            if (context.shared_expert_intermediate > 0) {
++                shared = SharedExpertSpec{
++                    context.shared_expert_intermediate,
++                    MoeCombineOrder::RoutedThenShared};
++            }
+@@ -175,8 +188,2 @@ void initialize_graph(CanonicalInferenceContext& context) {
+-                .routing_group_count = context.total_routing_groups,
+-                .routing_experts_per_group = context.experts_per_group,
+-                .routing_groups_per_token = context.groups_per_token,
+-                .routing_group_score_top_k = context.group_score_top_k,
+-                .has_shared_expert =
+-                    context.shared_expert_intermediate > 0,
+-                .shared_intermediate_size =
+-                    context.shared_expert_intermediate,
++                .selection = std::move(selection),
++                .shared = std::move(shared),
+diff --git a/src/model/inference/layer_bindings.cpp b/src/model/inference/layer_bindings.cpp
+index 492b550..5193796 100644
+--- a/src/model/inference/layer_bindings.cpp
++++ b/src/model/inference/layer_bindings.cpp
+@@ -529,2 +529 @@ void bind_mixer(CanonicalInferenceContext& context,
+-    switch (semantic_layer.mixer_kind()) {
+-    case MixerKind::Mamba2:
++    if (std::holds_alternative<Mamba2Spec>(semantic_layer.mixer)) {
+@@ -533,5 +532,4 @@ void bind_mixer(CanonicalInferenceContext& context,
+-
+-    case MixerKind::GatedDeltaNet: {
+-        const auto& spec =
+-            std::get<GatedDeltaNetSpec>(semantic_layer.mixer);
+-        if (spec.factorized_projections) {
++    }
++    if (const auto* spec =
++            std::get_if<GatedDeltaNetSpec>(&semantic_layer.mixer)) {
++        if (spec->factorized_projections) {
+@@ -544,2 +542 @@ void bind_mixer(CanonicalInferenceContext& context,
+-
+-    case MixerKind::ShortConvolution:
++    if (std::holds_alternative<ShortConvolutionSpec>(semantic_layer.mixer)) {
+@@ -548,7 +545,5 @@ void bind_mixer(CanonicalInferenceContext& context,
+-
+-    case MixerKind::Attention: {
+-        const auto& attention =
+-            std::get<AttentionSpec>(semantic_layer.mixer);
+-        if (attention.uses_latent_state() &&
+-            attention.latent_state()->factorized) {
+-            bind_latent_attention(context, layer, index, attention);
++    }
++    if (const auto* attention = std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
++        if (attention->uses_latent_state() &&
++            attention->latent_state()->factorized) {
++            bind_latent_attention(context, layer, index, *attention);
+@@ -557,5 +552 @@ void bind_mixer(CanonicalInferenceContext& context,
+-                context,
+-                layer,
+-                index,
+-                layer_prefix,
+-                attention);
++                context, layer, index, layer_prefix, *attention);
+@@ -565,2 +556 @@ void bind_mixer(CanonicalInferenceContext& context,
+-
+-    case MixerKind::MlpOnly:
++    if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) {
+@@ -568,0 +559 @@ void bind_mixer(CanonicalInferenceContext& context,
++    static_assert(std::variant_size_v<MixerSpec> == 5);
+@@ -708 +699,2 @@ void bind_moe(CanonicalInferenceContext& context,
+-    if (moe->shared_intermediate_size > 0) {
++    if (moe->shared) {
++        const int shared_intermediate = moe->shared->intermediate_size;
+@@ -713 +705 @@ void bind_moe(CanonicalInferenceContext& context,
+-            {moe->shared_intermediate_size, *m.hidden_size});
++            {shared_intermediate, *m.hidden_size});
+@@ -717 +709 @@ void bind_moe(CanonicalInferenceContext& context,
+-            {moe->shared_intermediate_size, *m.hidden_size});
++            {shared_intermediate, *m.hidden_size});
+@@ -721 +713 @@ void bind_moe(CanonicalInferenceContext& context,
+-            {*m.hidden_size, moe->shared_intermediate_size});
++            {*m.hidden_size, shared_intermediate});
+@@ -736 +728 @@ void bind_feed_forward(CanonicalInferenceContext& context,
+-    if (semantic_layer.mixer_kind() == MixerKind::MlpOnly) {
++    if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) {
+@@ -740,3 +732 @@ void bind_feed_forward(CanonicalInferenceContext& context,
+-    if (!semantic_layer.execute_feed_forward) {
+-        return;
+-    }
++    if (std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) return;
+@@ -758,2 +748 @@ void bind_feed_forward(CanonicalInferenceContext& context,
+-    if (semantic_layer.feed_forward_kind() ==
+-        FeedForwardKind::MixtureOfExperts) {
++    if (std::holds_alternative<MixtureOfExpertsSpec>(semantic_layer.feed_forward)) {
+diff --git a/src/model/inference/layer_semantics.cpp b/src/model/inference/layer_semantics.cpp
+index 81b5af8..c6dd4df 100644
+--- a/src/model/inference/layer_semantics.cpp
++++ b/src/model/inference/layer_semantics.cpp
+@@ -132 +132 @@ void infer_fused_gated_delta(
+-    semantic_layer.execute_feed_forward = has_ffn;
++    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
+@@ -207 +207 @@ void infer_factorized_gated_delta(
+-    semantic_layer.execute_feed_forward = has_ffn;
++    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
+@@ -309 +309 @@ void infer_latent_attention(
+-    semantic_layer.execute_feed_forward = has_ffn;
++    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
+@@ -400 +400 @@ void infer_mamba2(
+-    semantic_layer.execute_feed_forward = false;
++    semantic_layer.feed_forward = std::monostate{};
+@@ -494 +494 @@ void infer_standard_attention(
+-    semantic_layer.execute_feed_forward = has_ffn;
++    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
+@@ -626 +626 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
+-                semantic_layer.execute_feed_forward = has_ffn;
++                if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
+@@ -639 +639 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
+-            semantic_layer.execute_feed_forward = false;
++            semantic_layer.feed_forward = std::monostate{};
+@@ -657,2 +657,2 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
+-            if (graph.layers[static_cast<size_t>(layer)].mixer_kind() ==
+-                MixerKind::Attention) {
++            if (std::holds_alternative<AttentionSpec>(
++                    graph.layers[static_cast<size_t>(layer)].mixer)) {
+diff --git a/src/model/program.cpp b/src/model/program.cpp
+index 21e19e9..2dc6d93 100644
+--- a/src/model/program.cpp
++++ b/src/model/program.cpp
+@@ -6,0 +7 @@
++#include <numeric>
+@@ -10 +10,0 @@
+-#include <utility>
+@@ -13 +12,0 @@ namespace celeg {
+-
+@@ -46,0 +46,13 @@ std::string fingerprint_text(const std::string& text) {
++void validate_feed_forward(const CompiledFeedForwardProgram& program) {
++    std::visit([](const auto& value) {
++        using FeedForward = std::decay_t<decltype(value)>;
++        if constexpr (!std::is_same_v<FeedForward, std::monostate>) {
++            value.validate();
++        }
++    }, program);
++}
++
++void validate_attention_state_layout(const CompiledAttentionStateLayout& layout) {
++    std::visit([](const auto& state) { state.validate(); }, layout);
++}
++
+@@ -56,0 +69,11 @@ void ExpertPayloadSchema::validate() const {
++std::size_t ExpertPayloadSchema::elements() const {
++    std::size_t total = 0;
++    for (const ExpertPayloadRegion& region : regions) {
++        if (region.elements > std::numeric_limits<std::size_t>::max() - total) {
++            throw std::overflow_error("MoE payload element count overflows size_t");
++        }
++        total += region.elements;
++    }
++    return total;
++}
++
+@@ -73,11 +96,21 @@ void RouterProgram::validate() const {
+-    if (selection == MoeSelectionKind::GroupedTopK &&
+-        (group_count <= 0 || experts_per_group <= 0 ||
+-         group_count * experts_per_group != expert_count ||
+-         groups_per_token <= 0 || groups_per_token > group_count ||
+-         group_score_top_k <= 0 || group_score_top_k > experts_per_group)) {
+-        throw std::invalid_argument("invalid grouped MoE selection program");
+-    }
+-    if (selection == MoeSelectionKind::TopK &&
+-        (group_count != 0 || experts_per_group != 0)) {
+-        throw std::invalid_argument("ordinary MoE selection cannot have groups");
+-    }
++    std::visit([&](const auto& selection_program) {
++        using Selection = std::decay_t<decltype(selection_program)>;
++        if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
++            return;
++        } else if constexpr (std::is_same_v<Selection, MoeGroupedTopKSelectionSpec>) {
++            if (selection_program.group_count <= 0 ||
++                selection_program.experts_per_group <= 0 ||
++                selection_program.group_count * selection_program.experts_per_group !=
++                    expert_count ||
++                selection_program.groups_per_token <= 0 ||
++                selection_program.groups_per_token > selection_program.group_count ||
++                selection_program.group_score_top_k <= 0 ||
++                selection_program.group_score_top_k >
++                    selection_program.experts_per_group) {
++                throw std::invalid_argument("invalid grouped MoE selection program");
++            }
++        } else {
++            static_assert(always_false_v<Selection>,
++                          "unhandled MoE selection program");
++        }
++    }, selection);
+@@ -89 +121,0 @@ std::string RouterProgram::fingerprint() const {
+-    append_field(out, selection);
+@@ -93,4 +124,0 @@ std::string RouterProgram::fingerprint() const {
+-    append_field(out, group_count);
+-    append_field(out, experts_per_group);
+-    append_field(out, groups_per_token);
+-    append_field(out, group_score_top_k);
+@@ -98,0 +127,12 @@ std::string RouterProgram::fingerprint() const {
++    std::visit([&](const auto& selection_program) {
++        using Selection = std::decay_t<decltype(selection_program)>;
++        if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
++            out << "top-k;";
++        } else if constexpr (std::is_same_v<Selection, MoeGroupedTopKSelectionSpec>) {
++            out << "grouped-top-k;";
++            append_field(out, selection_program.group_count);
++            append_field(out, selection_program.experts_per_group);
++            append_field(out, selection_program.groups_per_token);
++            append_field(out, selection_program.group_score_top_k);
++        }
++    }, selection);
+@@ -108,27 +147,0 @@ void ExpertMlpProgram::validate() const {
+-void CompiledAttentionStateLayout::validate() const {
+-    if (key_width < 0 || value_width < 0 || latent_width < 0 || rotary_width < 0 ||
+-        persistent_elements == 0 ||
+-        persistent_elements != key_elements + value_elements +
+-            latent_elements + rotary_elements) {
+-        throw std::invalid_argument("invalid compiled attention state layout");
+-    }
+-    if (kind == CompiledStateLayoutKind::OrdinaryKv &&
+-        (key_width <= 0 || value_width <= 0 || latent_width != 0 || rotary_width != 0 ||
+-         key_elements == 0 || value_elements == 0 || latent_elements != 0 ||
+-         rotary_elements != 0)) {
+-        throw std::invalid_argument("ordinary KV state layout has invalid widths");
+-    }
+-    if (kind == CompiledStateLayoutKind::Latent &&
+-        (latent_width <= 0 || latent_elements == 0)) {
+-        throw std::invalid_argument("latent state layout has no persistent latent width");
+-    }
+-    (void)scalar_bytes(storage.key);
+-    (void)scalar_bytes(storage.value);
+-    (void)scalar_bytes(storage.latent);
+-    (void)scalar_bytes(storage.rotary);
+-    (void)scalar_bytes(storage.recurrent);
+-    if (persistent_bytes() == 0) {
+-        throw std::invalid_argument("compiled attention state has zero byte size");
+-    }
+-}
+-
+@@ -151,6 +163,0 @@ void MoeLayerProgram::validate() const {
+-    if (output.has_shared_expert != shared.has_value()) {
+-        throw std::invalid_argument("MoE shared-output flag does not match program");
+-    }
+-    if (residency.expert_count != router.expert_count) {
+-        throw std::invalid_argument("MoE residency expert count mismatch");
+-    }
+@@ -163,6 +170,6 @@ std::string MoeLayerProgram::fingerprint() const {
+-    if (shared) out << shared->mlp.fingerprint();
+-    out << ';';
+-    append_field(out, output.has_shared_expert);
+-    append_field(out, output.combine_order);
+-    append_field(out, residency.expert_count);
+-    append_field(out, residency.payload_elements);
++    if (shared) {
++        out << shared->mlp.fingerprint() << ';';
++        append_field(out, shared->combine_order);
++    } else {
++        out << "no-shared;";
++    }
+@@ -178,77 +184,0 @@ void CompiledDenseFeedForwardProgram::validate() const {
+-CompiledFeedForwardProgram::CompiledFeedForwardProgram()
+-    : CompiledFeedForwardVariant(CompiledDenseFeedForwardProgram{}) {}
+-
+-CompiledFeedForwardProgram& CompiledFeedForwardProgram::operator=(
+-    CompiledFeedForward kind) {
+-    switch (kind) {
+-    case CompiledFeedForward::Dense:
+-        if (!std::holds_alternative<CompiledDenseFeedForwardProgram>(storage())) {
+-            storage() = CompiledDenseFeedForwardProgram{};
+-        }
+-        break;
+-    case CompiledFeedForward::MixtureOfExperts:
+-        if (!std::holds_alternative<MoeLayerProgram>(storage())) {
+-            storage() = MoeLayerProgram{};
+-        }
+-        break;
+-    case CompiledFeedForward::None:
+-        storage() = std::monostate{};
+-        break;
+-    }
+-    return *this;
+-}
+-
+-CompiledFeedForward compiled_feed_forward_kind(
+-    const CompiledFeedForwardProgram& program) {
+-    return std::visit([](const auto& value) {
+-        using FeedForward = std::decay_t<decltype(value)>;
+-        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+-            return CompiledFeedForward::None;
+-        } else if constexpr (
+-            std::is_same_v<FeedForward, CompiledDenseFeedForwardProgram>) {
+-            return CompiledFeedForward::Dense;
+-        } else if constexpr (std::is_same_v<FeedForward, MoeLayerProgram>) {
+-            return CompiledFeedForward::MixtureOfExperts;
+-        } else {
+-            static_assert(always_false_v<FeedForward>,
+-                          "unhandled compiled feed-forward variant");
+-        }
+-    }, program.storage());
+-}
+-
+-void CompiledFeedForwardProgram::validate() const {
+-    std::visit([](const auto& value) {
+-        using FeedForward = std::decay_t<decltype(value)>;
+-        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+-            return;
+-        } else if constexpr (
+-            std::is_same_v<FeedForward, CompiledDenseFeedForwardProgram> ||
+-            std::is_same_v<FeedForward, MoeLayerProgram>) {
+-            value.validate();
+-        } else {
+-            static_assert(always_false_v<FeedForward>,
+-                          "unhandled compiled feed-forward validation variant");
+-        }
+-    }, storage());
+-}
+-
+-bool operator==(const CompiledFeedForwardProgram& program,
+-                CompiledFeedForward kind) {
+-    return compiled_feed_forward_kind(program) == kind;
+-}
+-
+-bool operator==(CompiledFeedForward kind,
+-                const CompiledFeedForwardProgram& program) {
+-    return program == kind;
+-}
+-
+-bool operator!=(const CompiledFeedForwardProgram& program,
+-                CompiledFeedForward kind) {
+-    return !(program == kind);
+-}
+-
+-bool operator!=(CompiledFeedForward kind,
+-                const CompiledFeedForwardProgram& program) {
+-    return !(program == kind);
+-}
+-
+@@ -282,6 +212,3 @@ PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
+-    if (model.graph.layers.empty()) {
+-        throw std::invalid_argument("per-layer input requires resolved layer specifications");
+-    }
+-    result.activation = model.graph.layers.front().per_layer_input.activation;
+-    result.norm_epsilon = model.graph.layers.front().per_layer_input_norm.epsilon;
+-    for (const LayerSpec& layer : model.graph.layers) {
++    result.activation = graph.layers.front().per_layer_input.activation;
++    result.norm_epsilon = graph.layers.front().per_layer_input_norm.epsilon;
++    for (const LayerSpec& layer : graph.layers) {
+@@ -318,17 +245,8 @@ void PerLayerInputPlan::validate() const {
+-CompiledMixerProgram& CompiledMixerProgram::operator=(CompiledMixer kind) {
+-    switch (kind) {
+-    case CompiledMixer::Attention:
+-        storage() = CompiledAttentionProgram{};
+-        break;
+-    case CompiledMixer::ShortConvolution:
+-        storage() = ShortConvolutionSpec{};
+-        break;
+-    case CompiledMixer::GatedDeltaNet:
+-        storage() = GatedDeltaNetSpec{};
+-        break;
+-    case CompiledMixer::Mamba2:
+-        storage() = Mamba2Spec{};
+-        break;
+-    case CompiledMixer::MlpOnly:
+-        storage() = MlpBlockSpec{};
+-        break;
++void CompiledOrdinaryKvStateLayout::validate() const {
++    if (key_width <= 0 || value_width <= 0 || persistent_elements() == 0) {
++        throw std::invalid_argument("ordinary KV state layout has invalid widths");
++    }
++    (void)compiled_state_scalar_bytes(storage.key);
++    (void)compiled_state_scalar_bytes(storage.value);
++    if (persistent_bytes() == 0) {
++        throw std::invalid_argument("compiled ordinary KV state has zero byte size");
+@@ -336,94 +253,0 @@ CompiledMixerProgram& CompiledMixerProgram::operator=(CompiledMixer kind) {
+-    return *this;
+-}
+-
+-CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer) {
+-    return std::visit([](const auto& value) {
+-        using Mixer = std::decay_t<decltype(value)>;
+-        if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
+-            return CompiledMixer::Attention;
+-        } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+-            return CompiledMixer::ShortConvolution;
+-        } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+-            return CompiledMixer::GatedDeltaNet;
+-        } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+-            return CompiledMixer::Mamba2;
+-        } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+-            return CompiledMixer::MlpOnly;
+-        } else {
+-            static_assert(always_false_v<Mixer>, "unhandled compiled mixer variant");
+-        }
+-    }, mixer.storage());
+-}
+-
+-bool operator==(const CompiledMixerProgram& mixer, CompiledMixer kind) {
+-    return compiled_mixer_kind(mixer) == kind;
+-}
+-
+-bool operator==(CompiledMixer kind, const CompiledMixerProgram& mixer) {
+-    return mixer == kind;
+-}
+-
+-bool operator!=(const CompiledMixerProgram& mixer, CompiledMixer kind) {
+-    return !(mixer == kind);
+-}
+-
+-bool operator!=(CompiledMixer kind, const CompiledMixerProgram& mixer) {
+-    return !(mixer == kind);
+-}
+-
+-void CompiledLayerProgram::bind_mixer_views() {
+-    attention.bind(mixer);
+-    state_layout.bind(mixer);
+-    short_convolution.bind(mixer);
+-    gated_delta_net.bind(mixer);
+-    mamba2.bind(mixer);
+-    mlp_only.bind(mixer);
+-}
+-
+-void CompiledLayerProgram::bind_feed_forward_views() {
+-    execute_feed_forward.bind(feed_forward);
+-    feed_forward_intermediate.bind(
+-        feed_forward, this, [](const void* context) {
+-            const auto& layer =
+-                *static_cast<const CompiledLayerProgram*>(context);
+-            const MlpBlockSpec* mlp = layer.mlp_only();
+-            return mlp ? mlp->intermediate_size : 0;
+-        });
+-    feed_forward_activation.bind(
+-        feed_forward, this, [](const void* context) {
+-            const auto& layer =
+-                *static_cast<const CompiledLayerProgram*>(context);
+-            const MlpBlockSpec* mlp = layer.mlp_only();
+-            return mlp ? mlp->activation : ActivationKind::SwiGLU;
+-        });
+-    moe.bind(feed_forward);
+-}
+-
+-CompiledLayerProgram::CompiledLayerProgram() {
+-    bind_mixer_views();
+-    bind_feed_forward_views();
+-}
+-
+-CompiledLayerProgram::CompiledLayerProgram(const CompiledLayerProgram& other)
+-    : CompiledLayerProgram() {
+-    *this = other;
+-}
+-
+-CompiledLayerProgram::CompiledLayerProgram(CompiledLayerProgram&& other)
+-    : CompiledLayerProgram() {
+-    *this = std::move(other);
+-}
+-
+-CompiledLayerProgram& CompiledLayerProgram::operator=(
+-    const CompiledLayerProgram& other) {
+-    if (this == &other) return *this;
+-    mixer = other.mixer;
+-    feed_forward = other.feed_forward;
+-    chunk_capability = other.chunk_capability;
+-    weight_request_indices = other.weight_request_indices;
+-    operator_norm = other.operator_norm;
+-    post_attention_norm = other.post_attention_norm;
+-    feed_forward_norm = other.feed_forward_norm;
+-    post_feed_forward_norm = other.post_feed_forward_norm;
+-    residual = other.residual;
+-    return *this;
+@@ -432,13 +256,9 @@ CompiledLayerProgram& CompiledLayerProgram::operator=(
+-CompiledLayerProgram& CompiledLayerProgram::operator=(
+-    CompiledLayerProgram&& other) {
+-    if (this == &other) return *this;
+-    mixer = std::move(other.mixer);
+-    feed_forward = std::move(other.feed_forward);
+-    chunk_capability = other.chunk_capability;
+-    weight_request_indices = std::move(other.weight_request_indices);
+-    operator_norm = std::move(other.operator_norm);
+-    post_attention_norm = std::move(other.post_attention_norm);
+-    feed_forward_norm = std::move(other.feed_forward_norm);
+-    post_feed_forward_norm = std::move(other.post_feed_forward_norm);
+-    residual = std::move(other.residual);
+-    return *this;
++void CompiledLatentStateLayout::validate() const {
++    if (latent_width <= 0 || rotary_width < 0 || persistent_elements() == 0) {
++        throw std::invalid_argument("latent state layout has invalid widths");
++    }
++    (void)compiled_state_scalar_bytes(storage.latent);
++    (void)compiled_state_scalar_bytes(storage.rotary);
++    if (persistent_bytes() == 0) {
++        throw std::invalid_argument("compiled latent state has zero byte size");
++    }
+@@ -448,6 +268,3 @@ bool CompiledModelProgram::has_moe() const {
+-    for (const auto& layer : layers) {
+-        if (std::holds_alternative<MoeLayerProgram>(layer.feed_forward.storage())) {
+-            return true;
+-        }
+-    }
+-    return false;
++    return std::any_of(layers.begin(), layers.end(), [](const auto& layer) {
++        return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
++    });
+@@ -471,8 +287,0 @@ void CompiledModelProgram::validate() const {
+-        switch (layer.chunk_capability) {
+-        case CompiledChunkCapability::Native:
+-        case CompiledChunkCapability::SequentialAdapter:
+-        case CompiledChunkCapability::Unsupported:
+-            break;
+-        default:
+-            throw std::invalid_argument("invalid compiled chunk capability");
+-        }
+@@ -487,2 +296,4 @@ void CompiledModelProgram::validate() const {
+-        if (const auto* state = layer.state_layout()) state->validate();
+-        layer.feed_forward.validate();
++        if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
++            validate_attention_state_layout(attention->state_layout);
++        }
++        validate_feed_forward(layer.feed_forward);
+@@ -495 +306 @@ void CompiledModelProgram::validate() const {
+-} // namespace celeg
+\ No newline at end of file
++} // namespace celeg
+diff --git a/src/model/program_builder.cpp b/src/model/program_builder.cpp
+index 9349ac9..c07d655 100644
+--- a/src/model/program_builder.cpp
++++ b/src/model/program_builder.cpp
+@@ -10 +9,0 @@ namespace celeg {
+-
+@@ -15,3 +14 @@ CompiledAttentionStateLayout lower_attention_state_layout(
+-    CompiledAttentionStateLayout state_layout;
+-    state_layout.storage = attention.state_storage;
+-    std::visit([&](const auto& state) {
++    return std::visit([&](const auto& state) -> CompiledAttentionStateLayout {
+@@ -20,7 +17,6 @@ CompiledAttentionStateLayout lower_attention_state_layout(
+-            state_layout.kind = CompiledStateLayoutKind::OrdinaryKv;
+-            state_layout.key_width = attention.key_value_width();
+-            state_layout.value_width = attention.key_value_width();
+-            state_layout.key_elements =
+-                static_cast<std::size_t>(state_layout.key_width);
+-            state_layout.value_elements =
+-                static_cast<std::size_t>(state_layout.value_width);
++            CompiledOrdinaryKvStateLayout layout{
++                attention.key_value_width(),
++                attention.key_value_width(),
++                attention.state_storage};
++            layout.validate();
++            return layout;
+@@ -28,8 +24,9 @@ CompiledAttentionStateLayout lower_attention_state_layout(
+-            state_layout.kind = CompiledStateLayoutKind::Latent;
+-            state_layout.latent_width = 2 * state.latent_rank;
+-            state_layout.rotary_width = state.decoupled_rope
+-                ? state.rope_head_dim : 0;
+-            state_layout.latent_elements =
+-                static_cast<std::size_t>(state_layout.latent_width);
+-            state_layout.rotary_elements =
+-                static_cast<std::size_t>(state_layout.rotary_width);
++            CompiledLatentStateLayout layout{
++                2 * state.latent_rank,
++                state.decoupled_rope ? state.rope_head_dim : 0,
++                attention.state_storage};
++            layout.validate();
++            return layout;
++        } else {
++            static_assert(always_false_v<State>,
++                          "unhandled attention state lowering variant");
+@@ -38,5 +34,0 @@ CompiledAttentionStateLayout lower_attention_state_layout(
+-    state_layout.persistent_elements = state_layout.key_elements +
+-        state_layout.value_elements + state_layout.latent_elements +
+-        state_layout.rotary_elements;
+-    state_layout.validate();
+-    return state_layout;
+@@ -80,6 +72 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
+-    semantic.router.selection = moe.routing_group_count > 0
+-        ? MoeSelectionKind::GroupedTopK : MoeSelectionKind::TopK;
+-    semantic.router.group_count = moe.routing_group_count;
+-    semantic.router.experts_per_group = moe.routing_experts_per_group;
+-    semantic.router.groups_per_token = moe.routing_groups_per_token;
+-    semantic.router.group_score_top_k = moe.routing_group_score_top_k;
++    semantic.router.selection = moe.selection;
+@@ -96,4 +83,2 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
+-    semantic.output.has_shared_expert = moe.has_shared_expert;
+-    semantic.output.combine_order = moe.shared_before_routed
+-        ? MoeCombineOrder::SharedThenRouted : MoeCombineOrder::RoutedThenShared;
+-    if (moe.has_shared_expert) {
++
++    if (moe.shared) {
+@@ -102,3 +87,2 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
+-                             moe.shared_intermediate_size > 0
+-                                 ? moe.shared_intermediate_size
+-                                 : moe.intermediate_size}};
++                             moe.shared->intermediate_size},
++            moe.shared->combine_order};
+@@ -106,2 +89,0 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
+-    semantic.residency.expert_count = moe.num_experts;
+-    semantic.residency.payload_elements = 3 * expert_matrix_elements;
+@@ -112,7 +94 @@ CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden
+-    CompiledFeedForwardProgram compiled;
+-    if (!layer.execute_feed_forward) {
+-        compiled.storage() = std::monostate{};
+-        return compiled;
+-    }
+-
+-    std::visit([&](const auto& feed_forward) {
++    return std::visit([&](const auto& feed_forward) -> CompiledFeedForwardProgram {
+@@ -120,2 +96,4 @@ CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden
+-        if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+-            compiled.storage() = CompiledDenseFeedForwardProgram{
++        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
++            return std::monostate{};
++        } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
++            return CompiledDenseFeedForwardProgram{
+@@ -124 +102 @@ CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden
+-            compiled.storage() = lower_moe(feed_forward, hidden);
++            return lower_moe(feed_forward, hidden);
+@@ -130,11 +107,0 @@ CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden
+-    return compiled;
+-}
+-
+-void validate_mlp_only_source(const LayerSpec& layer,
+-                              const MlpBlockSpec& mlp) {
+-    std::visit([&](const auto& feed_forward) {
+-        if (feed_forward.intermediate_size != mlp.intermediate_size) {
+-            throw std::invalid_argument(
+-                "MLP-only mixer and feed-forward widths do not agree");
+-        }
+-    }, layer.feed_forward);
+@@ -181,9 +147,0 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
+-        if (layer.mixer_kind() == MixerKind::GatedDeltaNet ||
+-            layer.mixer_kind() == MixerKind::Mamba2) {
+-            compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;
+-        }
+-
+-        if (const auto* mlp = compiled.mlp_only()) {
+-            validate_mlp_only_source(layer, *mlp);
+-        }
+-
+@@ -210 +168 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
+-} // namespace celeg
+\ No newline at end of file
++} // namespace celeg
+diff --git a/src/model/resolved.cpp b/src/model/resolved.cpp
+index 738e793..21a65c8 100644
+--- a/src/model/resolved.cpp
++++ b/src/model/resolved.cpp
+@@ -169 +169,3 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
+-        if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
++        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
++            out << "none";
++        } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+@@ -176,8 +178,18 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
+-                << feed_forward.routed_scaling_factor << ':'
+-                << feed_forward.routing_group_count << ':'
+-                << feed_forward.routing_experts_per_group << ':'
+-                << feed_forward.routing_groups_per_token << ':'
+-                << feed_forward.routing_group_score_top_k << ':'
+-                << feed_forward.has_shared_expert << ':'
+-                << feed_forward.shared_intermediate_size << ':'
+-                << feed_forward.shared_before_routed << ':' << feed_forward.router_softmax;
++                << feed_forward.routed_scaling_factor << ':';
++            std::visit([&out](const auto& selection) {
++                using Selection = std::decay_t<decltype(selection)>;
++                if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
++                    out << "top-k";
++                } else if constexpr (std::is_same_v<Selection, MoeGroupedTopKSelectionSpec>) {
++                    out << "grouped:" << selection.group_count << ':'
++                        << selection.experts_per_group << ':'
++                        << selection.groups_per_token << ':'
++                        << selection.group_score_top_k;
++                }
++            }, feed_forward.selection);
++            out << ":shared:" << feed_forward.shared.has_value();
++            if (feed_forward.shared) {
++                out << ':' << feed_forward.shared->intermediate_size << ':'
++                    << static_cast<int>(feed_forward.shared->combine_order);
++            }
++            out << ':' << feed_forward.router_softmax;
+@@ -216,2 +228 @@ std::string ModelGraph::fingerprint() const {
+-            << layer.per_layer_input.enabled << ":scalar=" << layer.layer_scalar
+-            << ":execute=" << layer.execute_feed_forward << ';';
++            << layer.per_layer_input.enabled << ":scalar=" << layer.layer_scalar << ';';
+@@ -309,4 +320,4 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
+-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+-                result.max_feed_forward_intermediate = std::max(
+-                    result.max_feed_forward_intermediate, feed_forward.intermediate_size);
+-            } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
++            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
++                return;
++            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec> ||
++                                 std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
+@@ -370,2 +381,3 @@ void ModelGraph::validate() const {
+-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec> ||
+-                          std::is_same_v<FeedForward, MlpBlockSpec>) {
++            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
++                return;
++            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+@@ -385,17 +397,20 @@ void ModelGraph::validate() const {
+-                const bool grouped = feed_forward.routing_group_count > 0;
+-                if (grouped != (feed_forward.routing_experts_per_group > 0 &&
+-                                feed_forward.routing_groups_per_token > 0 &&
+-                                feed_forward.routing_group_score_top_k > 0)) {
+-                    throw std::runtime_error("MoE grouped routing fields are incomplete");
+-                }
+-                if (grouped &&
+-                    (feed_forward.routing_group_count *
+-                         feed_forward.routing_experts_per_group != feed_forward.num_experts ||
+-                     feed_forward.routing_groups_per_token >
+-                         feed_forward.routing_group_count ||
+-                     feed_forward.routing_group_score_top_k >
+-                         feed_forward.routing_experts_per_group)) {
+-                    throw std::runtime_error("MoE grouped routing fields are inconsistent");
+-                }
+-                if (feed_forward.has_shared_expert &&
+-                    feed_forward.shared_intermediate_size <= 0) {
++                std::visit([&](const auto& selection) {
++                    using Selection = std::decay_t<decltype(selection)>;
++                    if constexpr (std::is_same_v<Selection, MoeTopKSelectionSpec>) {
++                        return;
++                    } else if constexpr (std::is_same_v<Selection,
++                                                        MoeGroupedTopKSelectionSpec>) {
++                        if (selection.group_count <= 0 ||
++                            selection.experts_per_group <= 0 ||
++                            selection.groups_per_token <= 0 ||
++                            selection.group_score_top_k <= 0 ||
++                            selection.group_count * selection.experts_per_group !=
++                                feed_forward.num_experts ||
++                            selection.groups_per_token > selection.group_count ||
++                            selection.group_score_top_k > selection.experts_per_group) {
++                            throw std::runtime_error(
++                                "MoE grouped routing fields are inconsistent");
++                        }
++                    }
++                }, feed_forward.selection);
++                if (feed_forward.shared && feed_forward.shared->intermediate_size <= 0) {
+@@ -408,0 +424,4 @@ void ModelGraph::validate() const {
++        if (const auto* mlp = std::get_if<MlpBlockSpec>(&layer.mixer);
++            mlp && mlp->intermediate_size <= 0) {
++            throw std::runtime_error("MLP-only layer has no positive width");
++        }
+diff --git a/src/model/weight_plan.cpp b/src/model/weight_plan.cpp
+index ca23beb..0e3e884 100644
+--- a/src/model/weight_plan.cpp
++++ b/src/model/weight_plan.cpp
+@@ -159 +159,2 @@ void append_mixer(ResolvedModel& model, const LayerSpec& layer,
+-            // MLP-only layers have no mixer tensor.
++            append(TensorRole::FfnUp, {mixer.intermediate_size, hidden});
++            append(TensorRole::FfnDown, {hidden, mixer.intermediate_size});
+@@ -173 +174 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
+-    if (moe.has_shared_expert) {
++    if (moe.shared) {
+@@ -179 +180 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
+-               {moe.shared_intermediate_size, hidden});
++               {moe.shared->intermediate_size, hidden});
+@@ -181 +182 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
+-               {moe.shared_intermediate_size, hidden});
++               {moe.shared->intermediate_size, hidden});
+@@ -183 +184 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
+-               {hidden, moe.shared_intermediate_size});
++               {hidden, moe.shared->intermediate_size});
+@@ -235,2 +236,3 @@ void build_weight_plan_from_graph(ResolvedModel& model,
+-        const bool mlp_only = layer.mixer_kind() == MixerKind::MlpOnly;
+-        if (layer.execute_feed_forward && !mlp_only) {
++        const bool has_feed_forward =
++            !std::holds_alternative<std::monostate>(layer.feed_forward);
++        if (has_feed_forward) {
+@@ -240 +242 @@ void build_weight_plan_from_graph(ResolvedModel& model,
+-        if (layer.execute_feed_forward || mlp_only) std::visit([&](const auto& feed_forward) {
++        std::visit([&](const auto& feed_forward) {
+@@ -242 +244,3 @@ void build_weight_plan_from_graph(ResolvedModel& model,
+-            if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
++            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
++                return;
++            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+@@ -251,5 +254,0 @@ void build_weight_plan_from_graph(ResolvedModel& model,
+-            } else if constexpr (std::is_same_v<FeedForward, MlpBlockSpec>) {
+-                add_request(model, TensorRole::FfnUp, layer_index, -1,
+-                            {feed_forward.intermediate_size, graph.hidden}, physical_layer);
+-                add_request(model, TensorRole::FfnDown, layer_index, -1,
+-                            {graph.hidden, feed_forward.intermediate_size}, physical_layer);
+diff --git a/src/runtime/moe/offload.cpp b/src/runtime/moe/offload.cpp
+index 7d2c9f0..df4fbaa 100644
+--- a/src/runtime/moe/offload.cpp
++++ b/src/runtime/moe/offload.cpp
+@@ -70 +70 @@ std::size_t bytes_per_expert_bf16(const CompiledModelProgram& program) {
+-        if (layer.moe) {
++        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
+@@ -72 +72 @@ std::size_t bytes_per_expert_bf16(const CompiledModelProgram& program) {
+-                layer.moe->routed.mlp.intermediate_size);
++                                        moe->routed.mlp.intermediate_size);
+@@ -86 +86 @@ int moe_layer_count(const CompiledModelProgram& program) {
+-        if (layer.moe) ++count;
++        if (std::holds_alternative<MoeLayerProgram>(layer.feed_forward)) ++count;
+@@ -95,3 +95,4 @@ std::size_t kv_cache_bytes(const CompiledModelProgram& program, int context_toke
+-        const AttentionSpec* layout = layer.attention();
+-        if (!layout) continue;
+-        if (layout->kv_sharing.shared() && !layout->kv_sharing.publishes) continue;
++        const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
++        if (!compiled) continue;
++        const AttentionSpec& layout = compiled->semantics;
++        if (layout.kv_sharing.shared() && !layout.kv_sharing.publishes) continue;
+@@ -99 +100 @@ std::size_t kv_cache_bytes(const CompiledModelProgram& program, int context_toke
+-            static_cast<std::size_t>(layout->key_value_width()) * kBf16Bytes *
++            static_cast<std::size_t>(layout.key_value_width()) * kBf16Bytes *
+@@ -112,2 +113,3 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
+-        if (!layer.moe) continue;
+-        max_experts = std::max(max_experts, layer.moe->router.expert_count);
++        const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
++        if (!moe) continue;
++        max_experts = std::max(max_experts, moe->router.expert_count);
+@@ -115 +117 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
+-                                         layer.moe->router.experts_per_token);
++                                         moe->router.experts_per_token);
+diff --git a/src/tools/pack_experts.cpp b/src/tools/pack_experts.cpp
+index bee62db..db72cf4 100644
+--- a/src/tools/pack_experts.cpp
++++ b/src/tools/pack_experts.cpp
+@@ -71,2 +71,2 @@ int main(int argc, char** argv) {
+-            if (model.graph.layers.at(static_cast<size_t>(layer)).feed_forward_kind() ==
+-                    celeg::FeedForwardKind::MixtureOfExperts) {
++            if (std::holds_alternative<celeg::MixtureOfExpertsSpec>(
++                    model.graph.layers.at(static_cast<size_t>(layer)).feed_forward)) {
+diff --git a/tests/architecture_resolution_test.cpp b/tests/architecture_resolution_test.cpp
+index 7841e56..54f602e 100644
+--- a/tests/architecture_resolution_test.cpp
++++ b/tests/architecture_resolution_test.cpp
+@@ -139 +139,2 @@ int main() {
+-            CELEG_TEST_CHECK(compiled.layers[2].feed_forward_intermediate == 8);
++            CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
++                                 compiled.layers[2].feed_forward).intermediate_size == 8);
+@@ -143,6 +144,9 @@ int main() {
+-            CELEG_TEST_CHECK(moe.routing_group_count == 2);
+-            CELEG_TEST_CHECK(moe.routing_experts_per_group == 2);
+-            CELEG_TEST_CHECK(moe.routing_groups_per_token == 1);
+-            CELEG_TEST_CHECK(compiled.layers[2].moe.has_value());
+-            CELEG_TEST_CHECK(compiled.layers[2].moe->router.selection ==
+-                             celeg::MoeSelectionKind::GroupedTopK);
++            const auto& grouped = std::get<celeg::MoeGroupedTopKSelectionSpec>(
++                moe.selection);
++            CELEG_TEST_CHECK(grouped.group_count == 2);
++            CELEG_TEST_CHECK(grouped.experts_per_group == 2);
++            CELEG_TEST_CHECK(grouped.groups_per_token == 1);
++            const auto& compiled_moe = std::get<celeg::MoeLayerProgram>(
++                compiled.layers[2].feed_forward);
++            CELEG_TEST_CHECK(std::holds_alternative<celeg::MoeGroupedTopKSelectionSpec>(
++                compiled_moe.router.selection));
+diff --git a/tests/automatic_inference_test.cpp b/tests/automatic_inference_test.cpp
+index 04a7cd4..caa869d 100644
+--- a/tests/automatic_inference_test.cpp
++++ b/tests/automatic_inference_test.cpp
+@@ -282 +282,2 @@ int main() {
+-    CELEG_TEST_CHECK(model.graph.layers.front().mixer_kind() == celeg::MixerKind::Attention);
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
++        model.graph.layers.front().mixer));
+@@ -315,3 +316,4 @@ int main() {
+-    CELEG_TEST_CHECK(hybrid_model.graph.layers[0].mixer_kind() ==
+-                     celeg::MixerKind::ShortConvolution);
+-    CELEG_TEST_CHECK(hybrid_model.graph.layers[1].mixer_kind() == celeg::MixerKind::Attention);
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::ShortConvolutionSpec>(
++        hybrid_model.graph.layers[0].mixer));
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
++        hybrid_model.graph.layers[1].mixer));
+@@ -380,2 +382,4 @@ int main() {
+-    CELEG_TEST_CHECK(ling_model.graph.layers[0].mixer_kind() == celeg::MixerKind::GatedDeltaNet);
+-    CELEG_TEST_CHECK(ling_model.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::GatedDeltaNetSpec>(
++        ling_model.graph.layers[0].mixer));
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
++        ling_model.graph.layers[3].mixer));
+@@ -384,4 +388,4 @@ int main() {
+-    CELEG_TEST_CHECK(ling_model.graph.layers[0].feed_forward_kind() ==
+-                     celeg::FeedForwardKind::Dense);
+-    CELEG_TEST_CHECK(ling_model.graph.layers[1].feed_forward_kind() ==
+-                     celeg::FeedForwardKind::MixtureOfExperts);
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::DenseFeedForwardSpec>(
++        ling_model.graph.layers[0].feed_forward));
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::MixtureOfExpertsSpec>(
++        ling_model.graph.layers[1].feed_forward));
+diff --git a/tests/cpu_kv_topology_test.cpp b/tests/cpu_kv_topology_test.cpp
+index 6826162..7ec5780 100644
+--- a/tests/cpu_kv_topology_test.cpp
++++ b/tests/cpu_kv_topology_test.cpp
+@@ -28 +28 @@ int main() {
+-        celeg::CompiledAttentionStateLayout state_layout;
++        celeg::CompiledOrdinaryKvStateLayout state_layout;
+@@ -31,3 +30,0 @@ int main() {
+-        state_layout.key_elements = 4;
+-        state_layout.value_elements = 4;
+-        state_layout.persistent_elements = 8;
+@@ -58,2 +55 @@ int main() {
+-    celeg::CompiledAttentionStateLayout latent_state_layout;
+-    latent_state_layout.kind = celeg::CompiledStateLayoutKind::Latent;
++    celeg::CompiledLatentStateLayout latent_state_layout;
+@@ -62,3 +57,0 @@ int main() {
+-    latent_state_layout.latent_elements = 16;
+-    latent_state_layout.rotary_elements = 4;
+-    latent_state_layout.persistent_elements = 20;
+diff --git a/tests/cpu_moe_route_test.cpp b/tests/cpu_moe_route_test.cpp
+index 4dac402..acb3cce 100644
+--- a/tests/cpu_moe_route_test.cpp
++++ b/tests/cpu_moe_route_test.cpp
+@@ -28 +28 @@ int main() {
+-    grouped.selection = celeg::MoeSelectionKind::GroupedTopK;
++    grouped.selection = celeg::MoeGroupedTopKSelectionSpec{2, 3, 1, 2};
+@@ -32,4 +31,0 @@ int main() {
+-    grouped.group_count = 2;
+-    grouped.experts_per_group = 3;
+-    grouped.groups_per_token = 1;
+-    grouped.group_score_top_k = 2;
+diff --git a/tests/cuda_kernels_test.cu b/tests/cuda_kernels_test.cu
+index ada050d..1d32b02 100644
+--- a/tests/cuda_kernels_test.cu
++++ b/tests/cuda_kernels_test.cu
+@@ -37,18 +37,7 @@ std::vector<TestShape> registered_model_shapes() {
+-        const std::vector<celeg::CompiledMixer> mixers = model == 0
+-            ? std::vector<celeg::CompiledMixer>{
+-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution}
+-            : std::vector<celeg::CompiledMixer>{
+-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::Attention,
+-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
+-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution};
++        const std::vector<bool> attention_layers = model == 0
++            ? std::vector<bool>{
++                false, false, true, false, true, false, true,
++                false, true, false, true, false, true, false}
++            : std::vector<bool>{
++                false, false, true, false, false, true, false, false,
++                true, false, true, false, true, false, true, false};
+@@ -57,2 +46,2 @@ std::vector<TestShape> registered_model_shapes() {
+-        graph.layers.resize(mixers.size());
+-        for (size_t index = 0; index < mixers.size(); ++index) {
++        graph.layers.resize(attention_layers.size());
++        for (size_t index = 0; index < attention_layers.size(); ++index) {
+@@ -60 +49 @@ std::vector<TestShape> registered_model_shapes() {
+-            if (mixers[index] == celeg::CompiledMixer::Attention) {
++            if (attention_layers[index]) {
+@@ -79,4 +68,2 @@ std::vector<TestShape> registered_model_shapes() {
+-            compiled.mixer = mixers[index];
+-            compiled.feed_forward = celeg::CompiledFeedForward::Dense;
+-            compiled.feed_forward_intermediate =
+-                model == 0 ? 2560 : 12288;
++            compiled.feed_forward = celeg::CompiledDenseFeedForwardProgram{
++                model == 0 ? 2560 : 12288, celeg::ActivationKind::SwiGLU};
+@@ -85 +72,9 @@ std::vector<TestShape> registered_model_shapes() {
+-                compiled.attention = *attention;
++                celeg::CompiledOrdinaryKvStateLayout state_layout;
++                state_layout.key_width = attention->key_value_width();
++                state_layout.value_width = attention->key_value_width();
++                state_layout.storage = attention->state_storage;
++                compiled.mixer = celeg::CompiledAttentionProgram{
++                    *attention, state_layout};
++            } else {
++                compiled.mixer = std::get<celeg::ShortConvolutionSpec>(
++                    graph.layers[index].mixer);
+@@ -89 +83,0 @@ std::vector<TestShape> registered_model_shapes() {
+-        continue;
+diff --git a/tests/expert_offload_test.cpp b/tests/expert_offload_test.cpp
+index 87ed892..67c8569 100644
+--- a/tests/expert_offload_test.cpp
++++ b/tests/expert_offload_test.cpp
+@@ -29,4 +29,4 @@ celeg::CompiledModelProgram make_8b_a1b_program() {
+-        layer.feed_forward = index < 2 ? celeg::CompiledFeedForward::Dense
+-                                       : celeg::CompiledFeedForward::MixtureOfExperts;
+-        layer.feed_forward_intermediate = 1792;
+-        if (index >= 2) {
++        if (index < 2) {
++            layer.feed_forward = celeg::CompiledDenseFeedForwardProgram{
++                1792, celeg::ActivationKind::SwiGLU};
++        } else {
+@@ -38 +38 @@ celeg::CompiledModelProgram make_8b_a1b_program() {
+-            layer.moe = std::move(moe);
++            layer.feed_forward = std::move(moe);
+diff --git a/tests/model_compiler_test.cpp b/tests/model_compiler_test.cpp
+index 16bdf2b..d160872 100644
+--- a/tests/model_compiler_test.cpp
++++ b/tests/model_compiler_test.cpp
+@@ -2,0 +3 @@
++#include "celeg/backend/moe_capabilities.hpp"
+@@ -6 +6,0 @@
+-#include <iostream>
+@@ -7,0 +8 @@
++#include <iostream>
+@@ -9,0 +11,14 @@
++namespace {
++
++const celeg::AttentionSpec& compiled_attention(
++    const celeg::CompiledLayerProgram& layer) {
++    return std::get<celeg::CompiledAttentionProgram>(layer.mixer).semantics;
++}
++
++const celeg::CompiledAttentionStateLayout& compiled_attention_state(
++    const celeg::CompiledLayerProgram& layer) {
++    return std::get<celeg::CompiledAttentionProgram>(layer.mixer).state_layout;
++}
++
++} // namespace
++
+@@ -22 +37,2 @@ int main() {
+-    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
++    attention_layer.feed_forward = celeg::DenseFeedForwardSpec{
++        16, celeg::ActivationKind::SwiGLU};
+@@ -23,0 +40 @@ int main() {
++
+@@ -30,3 +47,6 @@ int main() {
+-    model.weight_plan.requests.push_back({celeg::TensorRole::AttentionInputNorm, 0, -1, {}});
+-    model.weight_plan.requests.push_back({celeg::TensorRole::AttentionOutput, 0, -1, {}});
+-    model.weight_plan.requests.push_back({celeg::TensorRole::ShortConvInput, 1, -1, {}});
++    model.weight_plan.requests.push_back(
++        {celeg::TensorRole::AttentionInputNorm, 0, -1, {}});
++    model.weight_plan.requests.push_back(
++        {celeg::TensorRole::AttentionOutput, 0, -1, {}});
++    model.weight_plan.requests.push_back(
++        {celeg::TensorRole::ShortConvInput, 1, -1, {}});
+@@ -37,8 +57,10 @@ int main() {
+-    CELEG_TEST_CHECK(cpu.layers[0].mixer == celeg::CompiledMixer::Attention);
+-    CELEG_TEST_CHECK(cpu.layers[1].mixer == celeg::CompiledMixer::ShortConvolution);
+-    CELEG_TEST_CHECK(cpu.layers[1].feed_forward == celeg::CompiledFeedForward::MixtureOfExperts);
+-    CELEG_TEST_CHECK(cpu.layers[0].chunk_capability ==
+-                     celeg::CompiledChunkCapability::Native);
+-    CELEG_TEST_CHECK(cpu.layers[1].moe.has_value());
+-    CELEG_TEST_CHECK(cpu.layers[1].moe->router.expert_count == 4);
+-    CELEG_TEST_CHECK(cpu.layers[1].moe->router.normalization ==
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledAttentionProgram>(
++        cpu.layers[0].mixer));
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::ShortConvolutionSpec>(
++        cpu.layers[1].mixer));
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::MoeLayerProgram>(
++        cpu.layers[1].feed_forward));
++    const auto& compiled_moe = std::get<celeg::MoeLayerProgram>(
++        cpu.layers[1].feed_forward);
++    CELEG_TEST_CHECK(compiled_moe.router.expert_count == 4);
++    CELEG_TEST_CHECK(compiled_moe.router.normalization ==
+@@ -47,4 +69,5 @@ int main() {
+-    CELEG_TEST_CHECK(cpu.layers[0].state_layout.has_value());
+-    CELEG_TEST_CHECK(cpu.layers[0].state_layout->key_width == 8 &&
+-                     cpu.layers[0].state_layout->value_width == 8 &&
+-                     cpu.layers[0].state_layout->persistent_elements == 16);
++    const auto& ordinary_state = std::get<celeg::CompiledOrdinaryKvStateLayout>(
++        compiled_attention_state(cpu.layers[0]));
++    CELEG_TEST_CHECK(ordinary_state.key_width == 8 &&
++                     ordinary_state.value_width == 8 &&
++                     ordinary_state.persistent_elements() == 16);
+@@ -53,3 +75,0 @@ int main() {
+-    // Standalone MLP blocks consume the same packed FFN scratch family as
+-    // ordinary feed-forward layers, so their mixer width must contribute to
+-    // the neutral execution topology's capacity.
+@@ -60 +80 @@ int main() {
+-    mlp_only_layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
++    mlp_only_layer.feed_forward = std::monostate{};
+@@ -72 +92 @@ int main() {
+-        bidirectional_cpu.layers[0].attention->pattern));
++        compiled_attention(bidirectional_cpu.layers[0]).pattern));
+@@ -83 +103 @@ int main() {
+-        sparse_cpu.layers[0].attention->pattern));
++        compiled_attention(sparse_cpu.layers[0]).pattern));
+@@ -96 +116 @@ int main() {
+-        alibi_cpu.layers[0].attention->bias));
++        compiled_attention(alibi_cpu.layers[0]).bias));
+@@ -99 +119 @@ int main() {
+-        cuda_alibi.layers[0].attention->bias));
++        compiled_attention(cuda_alibi.layers[0]).bias));
+@@ -108 +128 @@ int main() {
+-        cpu_relative.layers[0].attention->bias));
++        compiled_attention(cpu_relative.layers[0]).bias));
+@@ -124,3 +144,3 @@ int main() {
+-    CELEG_TEST_CHECK(latent_program.layers[0].state_layout->kind ==
+-                     celeg::CompiledStateLayoutKind::Latent);
+-    CELEG_TEST_CHECK(latent_program.layers[0].state_layout->latent_width == 64);
++    const auto& latent_layout = std::get<celeg::CompiledLatentStateLayout>(
++        compiled_attention_state(latent_program.layers[0]));
++    CELEG_TEST_CHECK(latent_layout.latent_width == 64);
+@@ -128,2 +148,3 @@ int main() {
+-    CELEG_TEST_CHECK(cuda_latent.layers[0].state_layout->kind ==
+-                     celeg::CompiledStateLayoutKind::Latent);
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledLatentStateLayout>(
++        compiled_attention_state(cuda_latent.layers[0])));
++
+@@ -136,0 +158 @@ int main() {
++
+@@ -150 +172 @@ int main() {
+-    CELEG_TEST_CHECK(external_cpu.layers[0].attention->uses_external_memory());
++    CELEG_TEST_CHECK(compiled_attention(external_cpu.layers[0]).uses_external_memory());
+@@ -186,3 +208,6 @@ int main() {
+-    grouped.router = {celeg::MoeRouterScoreKind::SoftmaxLogits,
+-                      celeg::MoeSelectionKind::GroupedTopK,
+-                      celeg::MoeNormalizationKind::None, 8, 2, 2, 4, 1, 2, false, 1.0f};
++    grouped.router.score = celeg::MoeRouterScoreKind::SoftmaxLogits;
++    grouped.router.selection = celeg::MoeGroupedTopKSelectionSpec{2, 4, 1, 2};
++    grouped.router.normalization = celeg::MoeNormalizationKind::None;
++    grouped.router.expert_count = 8;
++    grouped.router.experts_per_token = 2;
++    grouped.router.routed_scaling = 1.0f;
+@@ -192 +216,0 @@ int main() {
+-    grouped.residency.expert_count = 8;
+@@ -207,2 +231 @@ int main() {
+-    unsupported_moe.routing_group_count = 2;
+-    unsupported_moe.routing_experts_per_group = 2;
++    unsupported_moe.selection = celeg::MoeGroupedTopKSelectionSpec{2, 2, 1, 1};
+@@ -215 +238,2 @@ int main() {
+-    fused.layers[1].moe->routed.payload.layout = celeg::MoePayloadLayout::Fused;
++    std::get<celeg::MoeLayerProgram>(fused.layers[1].feed_forward)
++        .routed.payload.layout = celeg::MoePayloadLayout::Fused;
+diff --git a/tests/packed/workspace_test.cpp b/tests/packed/workspace_test.cpp
+index 9d92758..9132a0e 100644
+--- a/tests/packed/workspace_test.cpp
++++ b/tests/packed/workspace_test.cpp
+@@ -29,3 +29,3 @@ int main() {
+-            program.layers[index].feed_forward = celeg::CompiledFeedForward::Dense;
+-            program.layers[index].feed_forward_intermediate =
+-                index == 0 ? 128 : 192;
++            program.layers[index].feed_forward =
++                celeg::CompiledDenseFeedForwardProgram{
++                    index == 0 ? 128 : 192, celeg::ActivationKind::SwiGLU};
+diff --git a/tests/program_fingerprint_test.cpp b/tests/program_fingerprint_test.cpp
+index f0e3651..020c022 100644
+--- a/tests/program_fingerprint_test.cpp
++++ b/tests/program_fingerprint_test.cpp
+@@ -45,9 +45,4 @@ int main() {
+-    CELEG_TEST_CHECK(compiled.layers[0].mixer_kind() ==
+-                     celeg::CompiledMixer::Attention);
+-    CELEG_TEST_CHECK(compiled.layers[0].attention() != nullptr);
+-    CELEG_TEST_CHECK(compiled.layers[0].state_layout() != nullptr);
+-    CELEG_TEST_CHECK(compiled.layers[0].mamba2() == nullptr);
+-    CELEG_TEST_CHECK(compiled.layers[0].feed_forward_kind() ==
+-                     celeg::CompiledFeedForward::Dense);
+-    CELEG_TEST_CHECK(compiled.layers[0].execute_feed_forward);
+-    CELEG_TEST_CHECK(compiled.layers[0].feed_forward_intermediate == 16);
++    CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledAttentionProgram>(
++        compiled.layers[0].mixer));
++    CELEG_TEST_CHECK(!std::holds_alternative<celeg::Mamba2Spec>(
++        compiled.layers[0].mixer));
+@@ -55 +50,3 @@ int main() {
+-        compiled.layers[0].feed_forward.storage()));
++        compiled.layers[0].feed_forward));
++    CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
++        compiled.layers[0].feed_forward).intermediate_size == 16);
+@@ -58,8 +55,12 @@ int main() {
+-    CELEG_TEST_CHECK(copied.layers[0].attention() != nullptr);
+-    CELEG_TEST_CHECK(copied.layers[0].attention() != compiled.layers[0].attention());
+-    copied.layers[0].attention()->head_dim = 16;
+-    CELEG_TEST_CHECK(compiled.layers[0].attention()->head_dim == 8);
+-    CELEG_TEST_CHECK(copied.layers[0].attention()->head_dim == 16);
+-    copied.layers[0].feed_forward_intermediate = 32;
+-    CELEG_TEST_CHECK(compiled.layers[0].feed_forward_intermediate == 16);
+-    CELEG_TEST_CHECK(copied.layers[0].feed_forward_intermediate == 32);
++    auto& copied_attention = std::get<celeg::CompiledAttentionProgram>(
++        copied.layers[0].mixer).semantics;
++    copied_attention.head_dim = 16;
++    CELEG_TEST_CHECK(std::get<celeg::CompiledAttentionProgram>(
++        compiled.layers[0].mixer).semantics.head_dim == 8);
++    CELEG_TEST_CHECK(copied_attention.head_dim == 16);
++    std::get<celeg::CompiledDenseFeedForwardProgram>(
++        copied.layers[0].feed_forward).intermediate_size = 32;
++    CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
++        compiled.layers[0].feed_forward).intermediate_size == 16);
++    CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
++        copied.layers[0].feed_forward).intermediate_size == 32);
+@@ -68,3 +69,4 @@ int main() {
+-    CELEG_TEST_CHECK(moved.layers[0].attention() != nullptr);
+-    CELEG_TEST_CHECK(moved.layers[0].attention()->head_dim == 16);
+-    CELEG_TEST_CHECK(moved.layers[0].feed_forward_intermediate == 32);
++    CELEG_TEST_CHECK(std::get<celeg::CompiledAttentionProgram>(
++        moved.layers[0].mixer).semantics.head_dim == 16);
++    CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
++        moved.layers[0].feed_forward).intermediate_size == 32);
+@@ -73,7 +75,2 @@ int main() {
+-    no_feed_forward.graph.layers[0].execute_feed_forward = false;
+-    const auto no_feed_forward_program =
+-        celeg::build_model_program(no_feed_forward);
+-    CELEG_TEST_CHECK(no_feed_forward_program.layers[0].feed_forward_kind() ==
+-                     celeg::CompiledFeedForward::None);
+-    CELEG_TEST_CHECK(!no_feed_forward_program.layers[0].execute_feed_forward);
+-    CELEG_TEST_CHECK(!no_feed_forward_program.layers[0].moe.has_value());
++    no_feed_forward.graph.layers[0].feed_forward = std::monostate{};
++    const auto no_feed_forward_program = celeg::build_model_program(no_feed_forward);
+@@ -81 +78 @@ int main() {
+-        no_feed_forward_program.layers[0].feed_forward.storage()));
++        no_feed_forward_program.layers[0].feed_forward));
+@@ -86,7 +83 @@ int main() {
+-    mlp_only_layer.feed_forward = celeg::CompiledFeedForward::None;
+-    CELEG_TEST_CHECK(!mlp_only_layer.execute_feed_forward);
+-    CELEG_TEST_CHECK(mlp_only_layer.feed_forward_kind() ==
+-                     celeg::CompiledFeedForward::None);
+-    CELEG_TEST_CHECK(mlp_only_layer.feed_forward_intermediate == 24);
+-    CELEG_TEST_CHECK(mlp_only_layer.feed_forward_activation ==
+-                     celeg::ActivationKind::GeluTanh);
++    mlp_only_layer.feed_forward = std::monostate{};
+@@ -94 +85,4 @@ int main() {
+-        mlp_only_layer.feed_forward.storage()));
++        mlp_only_layer.feed_forward));
++    const auto& mlp = std::get<celeg::MlpBlockSpec>(mlp_only_layer.mixer);
++    CELEG_TEST_CHECK(mlp.intermediate_size == 24);
++    CELEG_TEST_CHECK(mlp.activation == celeg::ActivationKind::GeluTanh);
+@@ -97,3 +91,3 @@ int main() {
+-    CELEG_TEST_CHECK(copied_mlp_only.feed_forward_intermediate == 24);
+-    CELEG_TEST_CHECK(copied_mlp_only.feed_forward_activation ==
+-                     celeg::ActivationKind::GeluTanh);
++    const auto& copied_mlp = std::get<celeg::MlpBlockSpec>(copied_mlp_only.mixer);
++    CELEG_TEST_CHECK(copied_mlp.intermediate_size == 24);
++    CELEG_TEST_CHECK(copied_mlp.activation == celeg::ActivationKind::GeluTanh);
+@@ -102,2 +96,6 @@ int main() {
+-    moe_model.graph.layers[0].feed_forward = celeg::MixtureOfExpertsSpec{
+-        16, 4, 2, true, false, 1.0f};
++    celeg::MixtureOfExpertsSpec moe;
++    moe.intermediate_size = 16;
++    moe.num_experts = 4;
++    moe.experts_per_token = 2;
++    moe.normalize_topk = true;
++    moe_model.graph.layers[0].feed_forward = moe;
+@@ -105,4 +102,0 @@ int main() {
+-    CELEG_TEST_CHECK(moe_program.layers[0].feed_forward_kind() ==
+-                     celeg::CompiledFeedForward::MixtureOfExperts);
+-    CELEG_TEST_CHECK(moe_program.layers[0].moe.has_value());
+-    CELEG_TEST_CHECK(moe_program.layers[0].moe->router.expert_count == 4);
+@@ -110 +104,3 @@ int main() {
+-        moe_program.layers[0].feed_forward.storage()));
++        moe_program.layers[0].feed_forward));
++    CELEG_TEST_CHECK(std::get<celeg::MoeLayerProgram>(
++        moe_program.layers[0].feed_forward).router.expert_count == 4);
+@@ -136 +132 @@ int main() {
+-}
+\ No newline at end of file
++}

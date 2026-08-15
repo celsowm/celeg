@@ -42,7 +42,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     const bool has_sequential_only_layer = std::any_of(
         shared->program.layers.begin(), shared->program.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            return layer.chunk_capability != CompiledChunkCapability::Native;
+            return std::holds_alternative<GatedDeltaNetSpec>(layer.mixer) ||
+                   std::holds_alternative<Mamba2Spec>(layer.mixer);
         });
     if (has_sequential_only_layer) {
         for (size_t i = 0; i < tokens.size(); ++i) {
@@ -199,7 +200,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                                 normed_q8_ready);
           },
           [&](const CpuCompiledModel::AttentionWeights* attention) {
-            const AttentionSpec& layout = semantics.attention.value();
+            const AttentionSpec& layout =
+                std::get<CompiledAttentionProgram>(semantics.mixer).semantics;
             if (layout.uses_external_memory()) {
                 const size_t q_width = static_cast<size_t>(layout.query_width());
                 linear_started = Clock::now();
@@ -502,7 +504,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         normed_q8_ready = false;
 
         if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
-            const MoeLayerProgram& moe_semantics = shared->program.layers[index].moe.value();
+            const MoeLayerProgram& moe_semantics =
+                std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
             execute_cpu_moe_chunk(execution, index, *moe, moe_semantics, rows,
                                   normed_q8_ready);
         } else {

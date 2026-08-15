@@ -14,13 +14,17 @@ namespace {
 bool requires_sequential_execution(const CompiledModelProgram& program) {
     return std::any_of(program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            const AttentionSpec* attention = layer.attention();
-            return layer.chunk_capability != CompiledChunkCapability::Native ||
-                (attention &&
-                 (!std::holds_alternative<NoAttentionOutputTransformSpec>(
-                      attention->output_transform) ||
-                  (attention->latent_state() &&
-                   attention->latent_state()->factorized)));
+            if (std::holds_alternative<GatedDeltaNetSpec>(layer.mixer) ||
+                std::holds_alternative<Mamba2Spec>(layer.mixer)) {
+                return true;
+            }
+            const auto* attention =
+                std::get_if<CompiledAttentionProgram>(&layer.mixer);
+            return attention &&
+                (!std::holds_alternative<NoAttentionOutputTransformSpec>(
+                     attention->semantics.output_transform) ||
+                 (attention->semantics.latent_state() &&
+                  attention->semantics.latent_state()->factorized));
         });
 }
 

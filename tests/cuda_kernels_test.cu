@@ -34,30 +34,19 @@ std::vector<TestShape> registered_model_shapes() {
         TestShape result;
         auto& shape = result.topology;
         const int query_heads = model == 0 ? 16 : 32;
-        const std::vector<celeg::CompiledMixer> mixers = model == 0
-            ? std::vector<celeg::CompiledMixer>{
-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution}
-            : std::vector<celeg::CompiledMixer>{
-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::Attention,
-                celeg::CompiledMixer::ShortConvolution, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution,
-                celeg::CompiledMixer::Attention, celeg::CompiledMixer::ShortConvolution};
+        const std::vector<bool> attention_layers = model == 0
+            ? std::vector<bool>{
+                false, false, true, false, true, false, true,
+                false, true, false, true, false, true, false}
+            : std::vector<bool>{
+                false, false, true, false, false, true, false, false,
+                true, false, true, false, true, false, true, false};
         celeg::ModelGraph graph;
         graph.hidden = model == 0 ? 1024 : 2048;
-        graph.layers.resize(mixers.size());
-        for (size_t index = 0; index < mixers.size(); ++index) {
+        graph.layers.resize(attention_layers.size());
+        for (size_t index = 0; index < attention_layers.size(); ++index) {
             auto& layer = graph.layers[index];
-            if (mixers[index] == celeg::CompiledMixer::Attention) {
+            if (attention_layers[index]) {
                 celeg::AttentionSpec attention;
                 attention.query_heads = query_heads;
                 attention.key_value_heads = 8;
@@ -76,17 +65,22 @@ std::vector<TestShape> registered_model_shapes() {
         result.program.layers.resize(graph.layers.size());
         for (size_t index = 0; index < graph.layers.size(); ++index) {
             auto& compiled = result.program.layers[index];
-            compiled.mixer = mixers[index];
-            compiled.feed_forward = celeg::CompiledFeedForward::Dense;
-            compiled.feed_forward_intermediate =
-                model == 0 ? 2560 : 12288;
+            compiled.feed_forward = celeg::CompiledDenseFeedForwardProgram{
+                model == 0 ? 2560 : 12288, celeg::ActivationKind::SwiGLU};
             if (const auto* attention = std::get_if<celeg::AttentionSpec>(
                     &graph.layers[index].mixer)) {
-                compiled.attention = *attention;
+                celeg::CompiledOrdinaryKvStateLayout state_layout;
+                state_layout.key_width = attention->key_value_width();
+                state_layout.value_width = attention->key_value_width();
+                state_layout.storage = attention->state_storage;
+                compiled.mixer = celeg::CompiledAttentionProgram{
+                    *attention, state_layout};
+            } else {
+                compiled.mixer = std::get<celeg::ShortConvolutionSpec>(
+                    graph.layers[index].mixer);
             }
         }
         shapes.push_back(std::move(result));
-        continue;
     }
     if (shapes.empty()) {
         std::cerr << "registered_model_shapes: no model shapes registered\n";

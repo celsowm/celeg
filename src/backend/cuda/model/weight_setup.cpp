@@ -67,7 +67,8 @@ void CudaCompiledModel::load_checkpoint_weights(
         LayerCommon common_layer;
         const CompiledLayerProgram& semantic_layer = resources_.program_.layers.at(
             static_cast<size_t>(i));
-        const bool mixer_only_layer = !semantic_layer.execute_feed_forward;
+        const bool mixer_only_layer =
+            std::holds_alternative<std::monostate>(semantic_layer.feed_forward);
         const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
             const std::string name = spec.weightless()
                 ? std::string{} : tensor_name(resources_.model_.weight_plan.requests, role, i);
@@ -107,15 +108,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             // The compiled layer program, rather than the mixer identity,
             // determines whether a generic post-mixer FFN exists.
             common_layer.feed_forward = DenseFfnWeights{};
-        } else if (semantic_layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
-            // Mixture-of-experts feed-forward for this layer.
-            if (!semantic_layer.moe) {
-                throw std::runtime_error("compiled MoE layer has no router program");
-            }
-            const int E = semantic_layer.moe->router.expert_count;
-            const int inter = semantic_layer.moe->routed.mlp.intermediate_size;
+        } else if (const auto* moe_program =
+                       std::get_if<MoeLayerProgram>(&semantic_layer.feed_forward)) {
+            const MoeLayerProgram& moe_semantics = *moe_program;
+            const int E = moe_semantics.router.expert_count;
+            const int inter = moe_semantics.routed.mlp.intermediate_size;
             const float* expert_bias = nullptr;
-            if (semantic_layer.moe->router.has_expert_bias) {
+            if (moe_semantics.router.has_expert_bias) {
                 // Checkpoint naming varies across otherwise equivalent MoE
                 // layouts. Resolve the neutral role from the repository
                 // evidence instead of coupling CUDA loading to one spelling.
@@ -145,8 +144,8 @@ void CudaCompiledModel::load_checkpoint_weights(
             moe_weights.expert_bias = expert_bias;
             moe_weights.router_float = router_float.data();
 
-            if (semantic_layer.moe->shared) {
-                const int shared_inter = semantic_layer.moe->shared->mlp.intermediate_size;
+            if (moe_semantics.shared) {
+                const int shared_inter = moe_semantics.shared->mlp.intermediate_size;
                 moe_weights.shared_w13 = resources_.weight_loader_->load_concat_linear_weight(
                     repo, layer_name(i, "shared_expert.w13.weight"),
                     {
@@ -185,7 +184,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                                request.layer == i && request.expert == 0;
                     });
                 const bool packed_expert_model = !individual_expert_model &&
-                    semantic_layer.moe->shared.has_value();
+                    moe_semantics.shared.has_value();
                 const bool named_expert_model = !packed_expert_model &&
                     (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
                      repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed")));
@@ -301,7 +300,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                         return request.role == TensorRole::MoeExpertGate &&
                                request.layer == i && request.expert == 0;
                     });
-                if (!individual_expert_model && semantic_layer.moe->shared) {
+                if (!individual_expert_model && moe_semantics.shared) {
                     moe_weights.gate_up = resources_.weight_loader_->load_expert_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::MoePackedGateUp, i),
@@ -328,10 +327,12 @@ void CudaCompiledModel::load_checkpoint_weights(
 
             common_layer.feed_forward = moe_weights;
         } else {
-            const int intermediate = semantic_layer.feed_forward_intermediate;
-            if (intermediate <= 0) {
+            const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
+                &semantic_layer.feed_forward);
+            if (!dense || dense->intermediate_size <= 0) {
                 throw std::runtime_error("compiled dense layer has no FFN width");
             }
+            const int intermediate = dense->intermediate_size;
             const LinearWeight* w13 = resources_.weight_loader_->load_concat_linear_weight(
                 repo, layer_name(i, "feed_forward.w13.weight"),
                 {
@@ -346,14 +347,11 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
-        const CompiledMixer layer_type = semantic_layer.mixer_kind();
-        if (layer_type == CompiledMixer::Attention) {
+        if (const auto* compiled_attention =
+                std::get_if<CompiledAttentionProgram>(&semantic_layer.mixer)) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
-            if (!semantic_layer.attention) {
-                throw std::runtime_error("compiled attention layer has no layout");
-            }
-            attention_layer.layout = *semantic_layer.attention;
+            attention_layer.layout = compiled_attention->semantics;
             std::string query_name;
             const AttentionSpec& layout = attention_layer.layout;
             if (const auto* alibi = std::get_if<AlibiBiasSpec>(&layout.bias)) {
@@ -528,13 +526,11 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
             if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
             resources_.layers_.emplace_back(std::move(attention_layer));
-        } else if (layer_type == CompiledMixer::GatedDeltaNet) {
+        } else if (const auto* gated_delta =
+                       std::get_if<GatedDeltaNetSpec>(&semantic_layer.mixer)) {
             GatedDeltaNetLayer gated_delta_layer;
             gated_delta_layer.common = common_layer;
-            if (!semantic_layer.gated_delta_net) {
-                throw std::runtime_error("compiled GatedDeltaNet layer has no layout");
-            }
-            gated_delta_layer.spec = *semantic_layer.gated_delta_net;
+            gated_delta_layer.spec = *gated_delta;
             const GatedDeltaNetSpec& spec = gated_delta_layer.spec;
             const int key_width = spec.key_heads * spec.key_head_dim;
             const int value_width = spec.value_heads * spec.value_head_dim;
@@ -631,13 +627,11 @@ void CudaCompiledModel::load_checkpoint_weights(
             gated_delta_layer.recurrent_state.reset(static_cast<size_t>(spec.value_heads) *
                 spec.key_head_dim * spec.value_head_dim);
             resources_.layers_.emplace_back(std::move(gated_delta_layer));
-        } else if (layer_type == CompiledMixer::Mamba2) {
+        } else if (const auto* mamba =
+                       std::get_if<Mamba2Spec>(&semantic_layer.mixer)) {
             Mamba2Layer mamba_layer;
             mamba_layer.common = common_layer;
-            if (!semantic_layer.mamba2) {
-                throw std::runtime_error("compiled Mamba2 layer has no layout");
-            }
-            mamba_layer.spec = *semantic_layer.mamba2;
+            mamba_layer.spec = *mamba;
             const Mamba2Spec& spec = mamba_layer.spec;
             const int conv_dim = spec.intermediate_size +
                 2 * spec.group_count * spec.state_size;
@@ -669,13 +663,11 @@ void CudaCompiledModel::load_checkpoint_weights(
             mamba_layer.conv_state.reset(static_cast<size_t>(conv_dim) * spec.conv_kernel);
             mamba_layer.ssm_state.reset(static_cast<size_t>(spec.intermediate_size) * spec.state_size);
             resources_.layers_.emplace_back(std::move(mamba_layer));
-        } else if (layer_type == CompiledMixer::MlpOnly) {
+        } else if (const auto* mlp =
+                       std::get_if<MlpBlockSpec>(&semantic_layer.mixer)) {
             MlpOnlyLayer mlp_layer;
             mlp_layer.common = common_layer;
-            if (!semantic_layer.mlp_only) {
-                throw std::runtime_error("compiled MLP-only layer has no semantics");
-            }
-            mlp_layer.spec = semantic_layer.mlp_only.value();
+            mlp_layer.spec = *mlp;
             mlp_layer.up = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
                 {mlp_layer.spec.intermediate_size, resources_.program_.hidden});

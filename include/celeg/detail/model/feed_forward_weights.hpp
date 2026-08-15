@@ -85,10 +85,13 @@ inline celeg::MoeRouterConfig moe_router_config(const MoeLayerProgram& semantics
     cfg.softmax = semantics.router.score == MoeRouterScoreKind::SoftmaxLogits;
     cfg.use_expert_bias = semantics.router.has_expert_bias;
     cfg.routed_scaling_factor = semantics.router.routed_scaling;
-    cfg.group_count = semantics.router.group_count;
-    cfg.experts_per_group = semantics.router.experts_per_group;
-    cfg.groups_per_token = semantics.router.groups_per_token;
-    cfg.group_score_top_k = semantics.router.group_score_top_k;
+    if (const auto* grouped = std::get_if<MoeGroupedTopKSelectionSpec>(
+            &semantics.router.selection)) {
+        cfg.group_count = grouped->group_count;
+        cfg.experts_per_group = grouped->experts_per_group;
+        cfg.groups_per_token = grouped->groups_per_token;
+        cfg.group_score_top_k = grouped->group_score_top_k;
+    }
     return cfg;
 }
 

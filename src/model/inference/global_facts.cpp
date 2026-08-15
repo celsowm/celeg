@@ -162,9 +162,22 @@ void initialize_graph(CanonicalInferenceContext& context) {
         semantic_layer.residual.multiplier =
             numerical_policy.residual_multiplier;
         semantic_layer.mixer = AttentionSpec{};
-        semantic_layer.execute_feed_forward = true;
 
         if (context.has_moe && layer >= context.dense_start) {
+            MoeSelectionSpec selection = MoeTopKSelectionSpec{};
+            if (context.total_routing_groups > 0) {
+                selection = MoeGroupedTopKSelectionSpec{
+                    context.total_routing_groups,
+                    context.experts_per_group,
+                    context.groups_per_token,
+                    context.group_score_top_k};
+            }
+            std::optional<SharedExpertSpec> shared;
+            if (context.shared_expert_intermediate > 0) {
+                shared = SharedExpertSpec{
+                    context.shared_expert_intermediate,
+                    MoeCombineOrder::RoutedThenShared};
+            }
             semantic_layer.feed_forward = MixtureOfExpertsSpec{
                 .intermediate_size = context.moe_intermediate,
                 .num_experts = context.num_experts,
@@ -172,14 +185,8 @@ void initialize_graph(CanonicalInferenceContext& context) {
                 .normalize_topk = context.normalize_topk,
                 .use_expert_bias = context.use_expert_bias,
                 .routed_scaling_factor = context.routed_scaling_factor,
-                .routing_group_count = context.total_routing_groups,
-                .routing_experts_per_group = context.experts_per_group,
-                .routing_groups_per_token = context.groups_per_token,
-                .routing_group_score_top_k = context.group_score_top_k,
-                .has_shared_expert =
-                    context.shared_expert_intermediate > 0,
-                .shared_intermediate_size =
-                    context.shared_expert_intermediate,
+                .selection = std::move(selection),
+                .shared = std::move(shared),
                 .router_softmax = context.moe_router_softmax};
         } else {
             semantic_layer.feed_forward = DenseFeedForwardSpec{

@@ -129,7 +129,7 @@ void infer_fused_gated_delta(
         -5.0f,
         false,
         false};
-    semantic_layer.execute_feed_forward = has_ffn;
+    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
 void infer_factorized_gated_delta(
@@ -204,7 +204,7 @@ void infer_factorized_gated_delta(
         m.recurrent_decay_lower_bound.value_or(-5.0f),
         true,
         true};
-    semantic_layer.execute_feed_forward = has_ffn;
+    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
 void infer_latent_attention(
@@ -306,7 +306,7 @@ void infer_latent_attention(
                   static_cast<float>(nope + rope));
 
     semantic_layer.mixer = std::move(attention);
-    semantic_layer.execute_feed_forward = has_ffn;
+    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
 void infer_mamba2(
@@ -397,7 +397,7 @@ void infer_mamba2(
         chunk_size,
         true,
         false};
-    semantic_layer.execute_feed_forward = false;
+    semantic_layer.feed_forward = std::monostate{};
 }
 
 void infer_standard_attention(
@@ -491,7 +491,7 @@ void infer_standard_attention(
     }
 
     semantic_layer.mixer = std::move(attention);
-    semantic_layer.execute_feed_forward = has_ffn;
+    if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
 } // namespace
@@ -623,7 +623,7 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
                     *m.shortconv_cache,
                     *m.hidden_size,
                     false};
-                semantic_layer.execute_feed_forward = has_ffn;
+                if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
                 continue;
             }
             if (!has_ffn) {
@@ -636,7 +636,7 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
                 context.intermediate_sizes.at(
                     static_cast<size_t>(layer)),
                 ActivationKind::Relu2};
-            semantic_layer.execute_feed_forward = false;
+            semantic_layer.feed_forward = std::monostate{};
             continue;
         }
 
@@ -654,8 +654,8 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
     } else {
         int attention_head_dim = 0;
         for (int layer = 0; layer < context.layer_count; ++layer) {
-            if (graph.layers[static_cast<size_t>(layer)].mixer_kind() ==
-                MixerKind::Attention) {
+            if (std::holds_alternative<AttentionSpec>(
+                    graph.layers[static_cast<size_t>(layer)].mixer)) {
                 attention_head_dim = std::get<AttentionSpec>(
                     graph.layers[static_cast<size_t>(layer)].mixer)
                                          .head_dim;

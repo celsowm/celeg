@@ -23,61 +23,64 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
     if (!tied_embeddings) bytes += bytes;
     bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
 
-    for (int layer = 0; layer < static_cast<int>(program.layers.size()); ++layer) {
-        // input_layernorm is present for every operator. FFN and split norms
-        // are accounted for only when the compiled layer actually executes them.
+    for (const CompiledLayerProgram& layer : program.layers) {
         bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
-        const CompiledLayerProgram& layer_program = program.layers.at(
-            static_cast<size_t>(layer));
-        if (layer_program.execute_feed_forward) {
+        if (!std::holds_alternative<std::monostate>(layer.feed_forward)) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
-        if (layer_program.post_attention_norm.enabled()) {
+        if (layer.post_attention_norm.enabled()) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
-        if (layer_program.post_feed_forward_norm.enabled()) {
+        if (layer.post_feed_forward_norm.enabled()) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
 
-        if (layer_program.mixer == CompiledMixer::Attention) {
-            const AttentionSpec& attention = layer_program.attention.value();
-            bytes += bf16_bytes(static_cast<std::size_t>(attention.query_projection_width()) * program.hidden);
+        if (const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
+            const AttentionSpec& attention = compiled->semantics;
+            bytes += bf16_bytes(static_cast<std::size_t>(
+                attention.query_projection_width()) * program.hidden);
             if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
-                bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.key_value_width()) * program.hidden);
+                bytes += bf16_bytes(2ull * static_cast<std::size_t>(
+                    attention.key_value_width()) * program.hidden);
             }
-            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) * attention.query_width());
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) *
+                                attention.query_width());
             if (attention.has_query_key_norm()) {
                 bytes += bf16_bytes(2ull * static_cast<std::size_t>(attention.head_dim));
             }
-        } else if (layer_program.mixer == CompiledMixer::GatedDeltaNet) {
-            const GatedDeltaNetSpec& spec = layer_program.gated_delta_net.value();
-            const std::size_t key_width = static_cast<std::size_t>(spec.key_heads) * spec.key_head_dim;
-            const std::size_t value_width = static_cast<std::size_t>(spec.value_heads) * spec.value_head_dim;
+        } else if (const auto* spec = std::get_if<GatedDeltaNetSpec>(&layer.mixer)) {
+            const std::size_t key_width = static_cast<std::size_t>(spec->key_heads) *
+                                          spec->key_head_dim;
+            const std::size_t value_width = static_cast<std::size_t>(spec->value_heads) *
+                                            spec->value_head_dim;
             const std::size_t qkv_width = 2ull * key_width + value_width;
             bytes += bf16_bytes(qkv_width * program.hidden);
             bytes += bf16_bytes(value_width * program.hidden);
-            bytes += bf16_bytes(2ull * static_cast<std::size_t>(spec.value_heads) * program.hidden);
+            bytes += bf16_bytes(2ull * static_cast<std::size_t>(spec->value_heads) *
+                                program.hidden);
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden) * value_width);
-            bytes += bf16_bytes(qkv_width * spec.conv_kernel +
-                                2ull * static_cast<std::size_t>(spec.value_heads) +
-                                static_cast<std::size_t>(spec.value_head_dim));
+            bytes += bf16_bytes(qkv_width * spec->conv_kernel +
+                                2ull * static_cast<std::size_t>(spec->value_heads) +
+                                static_cast<std::size_t>(spec->value_head_dim));
         }
 
-        if (layer_program.moe) {
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
             const std::size_t router_elements = static_cast<std::size_t>(
-                layer_program.moe->router.expert_count) * program.hidden;
+                moe->router.expert_count) * program.hidden;
             bytes += bf16_bytes(router_elements) + router_elements * sizeof(float);
-            if (layer_program.moe->shared) {
+            if (moe->shared) {
                 const std::size_t shared = static_cast<std::size_t>(
-                    layer_program.moe->shared->mlp.intermediate_size);
+                    moe->shared->mlp.intermediate_size);
                 bytes += bf16_bytes(3ull * shared * program.hidden + program.hidden);
             }
-        } else if (layer_program.feed_forward == CompiledFeedForward::Dense) {
-            const int intermediate = layer_program.feed_forward_intermediate;
-            if (intermediate <= 0) {
-                throw std::runtime_error("compiled dense layer has no FFN width for weight estimate");
+        } else if (const auto* dense =
+                       std::get_if<CompiledDenseFeedForwardProgram>(&layer.feed_forward)) {
+            if (dense->intermediate_size <= 0) {
+                throw std::runtime_error(
+                    "compiled dense layer has no FFN width for weight estimate");
             }
-            bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) * program.hidden);
+            bytes += bf16_bytes(3ull * static_cast<std::size_t>(
+                dense->intermediate_size) * program.hidden);
         }
     }
     return bytes;
@@ -86,12 +89,10 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
 std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
                                             const CompiledModelProgram& program) {
     if (dims.mtp_num_hidden_layers <= 0) return 0;
-    const auto bf16_bytes = [](std::size_t elements) {
-        return elements * sizeof(__nv_bfloat16);
-    };
     const int full_attention_layer = [&]() {
         for (int layer = static_cast<int>(program.layers.size()) - 1; layer >= 0; --layer) {
-            if (program.layers.at(static_cast<size_t>(layer)).mixer == CompiledMixer::Attention) {
+            if (std::holds_alternative<CompiledAttentionProgram>(
+                    program.layers.at(static_cast<size_t>(layer)).mixer)) {
                 return layer;
             }
         }
@@ -100,38 +101,51 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
     if (full_attention_layer < 0) {
         throw std::runtime_error("MTP requires a full-attention target layer");
     }
-    const AttentionSpec& attention = program.layers.at(
-        static_cast<size_t>(full_attention_layer)).attention.value();
-    const auto moe_layer = std::find_if(program.layers.begin(), program.layers.end(),
-        [](const CompiledLayerProgram& layer) { return layer.moe.has_value(); });
-    const auto dense_layer = std::find_if(program.layers.begin(), program.layers.end(),
+    const AttentionSpec& attention = std::get<CompiledAttentionProgram>(
+        program.layers.at(static_cast<size_t>(full_attention_layer)).mixer).semantics;
+    const auto moe_layer = std::find_if(
+        program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            return layer.feed_forward == CompiledFeedForward::Dense;
+            return std::holds_alternative<MoeLayerProgram>(layer.feed_forward);
+        });
+    const auto dense_layer = std::find_if(
+        program.layers.begin(), program.layers.end(),
+        [](const CompiledLayerProgram& layer) {
+            return std::holds_alternative<CompiledDenseFeedForwardProgram>(
+                layer.feed_forward);
         });
     std::size_t bytes = bf16_bytes(2ull * program.hidden * program.hidden);
-    bytes += bf16_bytes(3ull * program.hidden); // two pre-fc norms and final norm
+    bytes += bf16_bytes(3ull * program.hidden);
     for (int layer = 0; layer < dims.mtp_num_hidden_layers; ++layer) {
-        bytes += bf16_bytes(2ull * program.hidden); // input and post-attention norms
-        bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) * program.hidden);
-        bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) * program.hidden);
+        bytes += bf16_bytes(2ull * program.hidden);
+        bytes += bf16_bytes(static_cast<size_t>(attention.query_projection_width()) *
+                            program.hidden);
+        bytes += bf16_bytes(2ull * static_cast<size_t>(attention.key_value_width()) *
+                            program.hidden);
         bytes += bf16_bytes(static_cast<size_t>(program.hidden) * attention.query_width());
-        if (attention.has_query_key_norm()) bytes += bf16_bytes(2ull * attention.head_dim);
+        if (attention.has_query_key_norm()) {
+            bytes += bf16_bytes(2ull * static_cast<size_t>(attention.head_dim));
+        }
         if (moe_layer != program.layers.end()) {
-            const int experts = moe_layer->moe->router.expert_count;
+            const auto& moe = std::get<MoeLayerProgram>(moe_layer->feed_forward);
+            const int experts = moe.router.expert_count;
             bytes += bf16_bytes(static_cast<size_t>(experts) * program.hidden);
             bytes += static_cast<size_t>(experts) * program.hidden * sizeof(float);
-            if (moe_layer->moe->shared) {
-                const size_t shared = static_cast<size_t>(
-                    moe_layer->moe->shared->mlp.intermediate_size);
+            if (moe.shared) {
+                const size_t shared = static_cast<size_t>(moe.shared->mlp.intermediate_size);
                 bytes += bf16_bytes(3ull * shared * program.hidden + program.hidden);
             }
         } else {
-            if (dense_layer == program.layers.end() ||
-                dense_layer->feed_forward_intermediate <= 0) {
+            if (dense_layer == program.layers.end()) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
-            bytes += bf16_bytes(3ull * static_cast<std::size_t>(
-                dense_layer->feed_forward_intermediate) * program.hidden);
+            const int intermediate = std::get<CompiledDenseFeedForwardProgram>(
+                dense_layer->feed_forward).intermediate_size;
+            if (intermediate <= 0) {
+                throw std::runtime_error("MTP requires a compiled dense FFN width");
+            }
+            bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) *
+                                program.hidden);
         }
     }
     return bytes;
@@ -158,10 +172,11 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     int maximum_experts = 0;
     int maximum_moe_intermediate = 0;
     for (const CompiledLayerProgram& layer : resources.program_.layers) {
-        if (!layer.moe) continue;
-        maximum_experts = std::max(maximum_experts, layer.moe->router.expert_count);
+        const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
+        if (!moe) continue;
+        maximum_experts = std::max(maximum_experts, moe->router.expert_count);
         maximum_moe_intermediate = std::max(
-            maximum_moe_intermediate, layer.moe->routed.mlp.intermediate_size);
+            maximum_moe_intermediate, moe->routed.mlp.intermediate_size);
     }
 
     size_t free_bytes = 0;
@@ -187,16 +202,17 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
         const int full_attention_layer = [&]() {
             for (int layer = static_cast<int>(resources.program_.layers.size()) - 1;
                  layer >= 0; --layer) {
-                if (resources.program_.layers.at(static_cast<size_t>(layer)).mixer ==
-                    CompiledMixer::Attention) {
+                if (std::holds_alternative<CompiledAttentionProgram>(
+                        resources.program_.layers.at(static_cast<size_t>(layer)).mixer)) {
                     return layer;
                 }
             }
             return -1;
         }();
         if (full_attention_layer >= 0) {
-            const AttentionSpec& attention = resources.program_.layers.at(
-                static_cast<size_t>(full_attention_layer)).attention.value();
+            const AttentionSpec& attention = std::get<CompiledAttentionProgram>(
+                resources.program_.layers.at(
+                    static_cast<size_t>(full_attention_layer)).mixer).semantics;
             inputs.extra_kv_reservation_bytes = static_cast<size_t>(
                 resources.dims_.mtp_num_hidden_layers) * 2ull *
                 static_cast<size_t>(attention.key_value_width()) *

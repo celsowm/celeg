@@ -518,7 +518,12 @@ void PackedDenseFfnExecutor::run(
         static_cast<size_t>(layer_index));
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
                    rows, context.program.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
-    const int intermediate = semantics.feed_forward_intermediate;
+    const auto* dense_semantics =
+        std::get_if<CompiledDenseFeedForwardProgram>(&semantics.feed_forward);
+    if (!dense_semantics) {
+        throw std::logic_error("packed dense executor received non-dense semantics");
+    }
+    const int intermediate = dense_semantics->intermediate_size;
     if (intermediate <= 0 || intermediate > context.shape.max_feed_forward_intermediate) {
         throw std::runtime_error("invalid packed dense FFN width at layer " +
                                  std::to_string(layer_index));
@@ -571,7 +576,11 @@ void PackedMoeExecutor::run(
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
                               rows * context.program.hidden, w.stream.get());
 
-    const MoeRouterConfig cfg = moe_router_config(semantics.moe.value());
+    const auto* moe_semantics = std::get_if<MoeLayerProgram>(&semantics.feed_forward);
+    if (!moe_semantics) {
+        throw std::logic_error("packed MoE executor received non-MoE semantics");
+    }
+    const MoeRouterConfig cfg = moe_router_config(*moe_semantics);
     MoeRouterDevice router;
     router.router_weight = moe->router_float;
     router.expert_bias = moe->expert_bias;
@@ -592,10 +601,10 @@ void PackedMoeExecutor::run(
     }
 
     w.moe_output_accum.zero_async(w.stream.get());
-    const MoeFfnDevice device = moe_ffn_device(*moe, semantics.moe.value());
+    const MoeFfnDevice device = moe_ffn_device(*moe, *moe_semantics);
     launch_moe_ffn(device, w.moe_sel.data(), w.moe_routing_w.data(),
                    w.normed.data(), w.moe_output_accum.data(), rows,
-                   semantics.moe->router.experts_per_token, w.moe_gu_scratch.data(),
+                   moe_semantics->router.experts_per_token, w.moe_gu_scratch.data(),
                    w.moe_act_scratch.data(), w.stream.get());
     launch_finalize_moe_output(w.moe_output_accum.data(), w.moe_output.data(),
                                rows * context.program.hidden, w.stream.get());

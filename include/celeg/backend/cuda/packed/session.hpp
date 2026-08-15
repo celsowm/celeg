@@ -92,15 +92,16 @@ inline void packed_ensure_expert_residency(
     }
     const CompiledLayerProgram& layer_program = services.program->layers.at(
         static_cast<size_t>(layer));
-    if (!layer_program.moe) {
+    const auto* moe = std::get_if<MoeLayerProgram>(&layer_program.feed_forward);
+    if (!moe) {
         throw std::invalid_argument("packed residency requested for a non-MoE layer");
     }
     services.weights->residency_coordinator->ensure(ExpertResidencyRequest{
         layer,
         selected_device,
         rows,
-        layer_program.moe->router.experts_per_token,
-        layer_program.moe->router.expert_count,
+        moe->router.experts_per_token,
+        moe->router.expert_count,
         stream,
         route_scores_device,
         services.residency_workspace});

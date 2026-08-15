@@ -73,14 +73,14 @@ void CudaCompiledModel::enqueue_decode_forward() {
                            semantics.post_attention_norm.epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
-            !semantics.execute_feed_forward) {
+            std::holds_alternative<std::monostate>(semantics.feed_forward)) {
             decode_phase_profile().begin(stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                                 resources_.program_.hidden, stream_.get());
             decode_phase_profile().end(DecodePhase::Other, stream_.get());
         }
         decode_phase_profile().begin(stream_.get());
-        if (semantics.execute_feed_forward) run_mlp_decode(common_layer, layer_idx);
+        if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) run_mlp_decode(common_layer, layer_idx);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),
                                resources_.program_.norm_after_layers.end(), layer_idx)) {
             launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_,

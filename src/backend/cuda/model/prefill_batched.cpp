@@ -89,7 +89,7 @@ void run_layer(
 
     if (!model.resources_.options_.fused_residuals ||
         common_layer.post_attention_norm ||
-        !semantics.execute_feed_forward) {
+        std::holds_alternative<std::monostate>(semantics.feed_forward)) {
         prof.begin(model.stream_.get());
         launch_residual_add(
             workspace.prefill_hidden_.data(),
@@ -99,7 +99,7 @@ void run_layer(
     }
 
     prof.begin(model.stream_.get());
-    if (semantics.execute_feed_forward) {
+    if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
         model.run_mlp_prefill(common_layer, rows, layer_index);
     }
     if (std::binary_search(

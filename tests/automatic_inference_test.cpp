@@ -279,7 +279,8 @@ int main() {
     CELEG_TEST_CHECK(model.graph.layers[0].residual.multiplier == 0.5f);
     CELEG_TEST_CHECK(model.graph.logits_divisor == 2.0f);
     CELEG_TEST_CHECK(model.graph.layers.size() == 2);
-    CELEG_TEST_CHECK(model.graph.layers.front().mixer_kind() == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
+        model.graph.layers.front().mixer));
     CELEG_TEST_CHECK(std::holds_alternative<celeg::OrthogonalizeCurrentValueSpec>(
         std::get<celeg::AttentionSpec>(model.graph.layers.front().mixer).output_transform));
     CELEG_TEST_CHECK(celeg::explain_resolution(checkpoint).failures.empty());
@@ -312,9 +313,10 @@ int main() {
     hybrid_checkpoint.repository = hybrid_gguf_repository();
     const celeg::ResolvedModel hybrid_model =
         catalog.select(hybrid_checkpoint.metadata).resolve(hybrid_checkpoint);
-    CELEG_TEST_CHECK(hybrid_model.graph.layers[0].mixer_kind() ==
-                     celeg::MixerKind::ShortConvolution);
-    CELEG_TEST_CHECK(hybrid_model.graph.layers[1].mixer_kind() == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::ShortConvolutionSpec>(
+        hybrid_model.graph.layers[0].mixer));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
+        hybrid_model.graph.layers[1].mixer));
     CELEG_TEST_CHECK(hybrid_model.capabilities.tied_embeddings);
 
     auto conflicting = metadata();
@@ -377,14 +379,16 @@ int main() {
         std::fprintf(stderr, "ling failure: %s\n", error.what());
         return 1;
     }
-    CELEG_TEST_CHECK(ling_model.graph.layers[0].mixer_kind() == celeg::MixerKind::GatedDeltaNet);
-    CELEG_TEST_CHECK(ling_model.graph.layers[3].mixer_kind() == celeg::MixerKind::Attention);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::GatedDeltaNetSpec>(
+        ling_model.graph.layers[0].mixer));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
+        ling_model.graph.layers[3].mixer));
     CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(ling_model.graph.layers[3].mixer)
                          .latent_state()->factorized);
-    CELEG_TEST_CHECK(ling_model.graph.layers[0].feed_forward_kind() ==
-                     celeg::FeedForwardKind::Dense);
-    CELEG_TEST_CHECK(ling_model.graph.layers[1].feed_forward_kind() ==
-                     celeg::FeedForwardKind::MixtureOfExperts);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::DenseFeedForwardSpec>(
+        ling_model.graph.layers[0].feed_forward));
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::MixtureOfExpertsSpec>(
+        ling_model.graph.layers[1].feed_forward));
     CELEG_TEST_CHECK(celeg::explain_resolution(ling_checkpoint).failures.empty());
     return 0;
 }

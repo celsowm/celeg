@@ -71,8 +71,8 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
             layer.pre_feed_forward_norm = {epsilon, descriptor.feed_forward_norm_kind};
             layer.post_feed_forward_norm = {post_epsilon, descriptor.feed_forward_norm_kind};
         }
-        if (layer.mixer_kind() == MixerKind::Attention) {
-            AttentionSpec attention = std::get<AttentionSpec>(layer.mixer);
+        if (const auto* current_attention = std::get_if<AttentionSpec>(&layer.mixer)) {
+            AttentionSpec attention = *current_attention;
             apply_rope_pairing(attention.position, rope_pairing);
             if (has_explicit_query_scale) {
                 attention.query_scale = explicit_query_scale;

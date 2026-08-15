@@ -7,39 +7,31 @@
 #include <utility>
 
 namespace celeg {
-
 namespace {
 
 CompiledAttentionStateLayout lower_attention_state_layout(
     const AttentionSpec& attention) {
-    CompiledAttentionStateLayout state_layout;
-    state_layout.storage = attention.state_storage;
-    std::visit([&](const auto& state) {
+    return std::visit([&](const auto& state) -> CompiledAttentionStateLayout {
         using State = std::decay_t<decltype(state)>;
         if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
-            state_layout.kind = CompiledStateLayoutKind::OrdinaryKv;
-            state_layout.key_width = attention.key_value_width();
-            state_layout.value_width = attention.key_value_width();
-            state_layout.key_elements =
-                static_cast<std::size_t>(state_layout.key_width);
-            state_layout.value_elements =
-                static_cast<std::size_t>(state_layout.value_width);
+            CompiledOrdinaryKvStateLayout layout{
+                attention.key_value_width(),
+                attention.key_value_width(),
+                attention.state_storage};
+            layout.validate();
+            return layout;
         } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
-            state_layout.kind = CompiledStateLayoutKind::Latent;
-            state_layout.latent_width = 2 * state.latent_rank;
-            state_layout.rotary_width = state.decoupled_rope
-                ? state.rope_head_dim : 0;
-            state_layout.latent_elements =
-                static_cast<std::size_t>(state_layout.latent_width);
-            state_layout.rotary_elements =
-                static_cast<std::size_t>(state_layout.rotary_width);
+            CompiledLatentStateLayout layout{
+                2 * state.latent_rank,
+                state.decoupled_rope ? state.rope_head_dim : 0,
+                attention.state_storage};
+            layout.validate();
+            return layout;
+        } else {
+            static_assert(always_false_v<State>,
+                          "unhandled attention state lowering variant");
         }
     }, attention.state);
-    state_layout.persistent_elements = state_layout.key_elements +
-        state_layout.value_elements + state_layout.latent_elements +
-        state_layout.rotary_elements;
-    state_layout.validate();
-    return state_layout;
 }
 
 CompiledMixerProgram lower_mixer(const LayerSpec& layer) {
@@ -77,12 +69,7 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
         : MoeRouterScoreKind::SigmoidProbabilities;
     semantic.router.has_expert_bias = moe.use_expert_bias;
     semantic.router.routed_scaling = moe.routed_scaling_factor;
-    semantic.router.selection = moe.routing_group_count > 0
-        ? MoeSelectionKind::GroupedTopK : MoeSelectionKind::TopK;
-    semantic.router.group_count = moe.routing_group_count;
-    semantic.router.experts_per_group = moe.routing_experts_per_group;
-    semantic.router.groups_per_token = moe.routing_groups_per_token;
-    semantic.router.group_score_top_k = moe.routing_group_score_top_k;
+    semantic.router.selection = moe.selection;
     semantic.routed.mlp.hidden_size = hidden;
     semantic.routed.mlp.intermediate_size = moe.intermediate_size;
 
@@ -93,49 +80,29 @@ MoeLayerProgram lower_moe(const MixtureOfExpertsSpec& moe, int hidden) {
         {TensorRole::MoeExpertGate, expert_matrix_elements},
         {TensorRole::MoeExpertUp, expert_matrix_elements},
         {TensorRole::MoeExpertDown, expert_matrix_elements}};
-    semantic.output.has_shared_expert = moe.has_shared_expert;
-    semantic.output.combine_order = moe.shared_before_routed
-        ? MoeCombineOrder::SharedThenRouted : MoeCombineOrder::RoutedThenShared;
-    if (moe.has_shared_expert) {
+
+    if (moe.shared) {
         semantic.shared = SharedExpertProgram{
             ExpertMlpProgram{MoeActivation::SwiGLU, hidden,
-                             moe.shared_intermediate_size > 0
-                                 ? moe.shared_intermediate_size
-                                 : moe.intermediate_size}};
+                             moe.shared->intermediate_size},
+            moe.shared->combine_order};
     }
-    semantic.residency.expert_count = moe.num_experts;
-    semantic.residency.payload_elements = 3 * expert_matrix_elements;
     return semantic;
 }
 
 CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden) {
-    CompiledFeedForwardProgram compiled;
-    if (!layer.execute_feed_forward) {
-        compiled.storage() = std::monostate{};
-        return compiled;
-    }
-
-    std::visit([&](const auto& feed_forward) {
+    return std::visit([&](const auto& feed_forward) -> CompiledFeedForwardProgram {
         using FeedForward = std::decay_t<decltype(feed_forward)>;
-        if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
-            compiled.storage() = CompiledDenseFeedForwardProgram{
+        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+            return std::monostate{};
+        } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec>) {
+            return CompiledDenseFeedForwardProgram{
                 feed_forward.intermediate_size, feed_forward.activation};
         } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-            compiled.storage() = lower_moe(feed_forward, hidden);
+            return lower_moe(feed_forward, hidden);
         } else {
             static_assert(always_false_v<FeedForward>,
                           "unhandled feed-forward lowering variant");
-        }
-    }, layer.feed_forward);
-    return compiled;
-}
-
-void validate_mlp_only_source(const LayerSpec& layer,
-                              const MlpBlockSpec& mlp) {
-    std::visit([&](const auto& feed_forward) {
-        if (feed_forward.intermediate_size != mlp.intermediate_size) {
-            throw std::invalid_argument(
-                "MLP-only mixer and feed-forward widths do not agree");
         }
     }, layer.feed_forward);
 }
@@ -177,15 +144,6 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         compiled.feed_forward_norm = layer.feed_forward_norm;
         compiled.post_feed_forward_norm = layer.post_feed_forward_norm;
         compiled.residual = layer.residual;
-
-        if (layer.mixer_kind() == MixerKind::GatedDeltaNet ||
-            layer.mixer_kind() == MixerKind::Mamba2) {
-            compiled.chunk_capability = CompiledChunkCapability::SequentialAdapter;
-        }
-
-        if (const auto* mlp = compiled.mlp_only()) {
-            validate_mlp_only_source(layer, *mlp);
-        }
 
         for (std::size_t request_index = 0;
              request_index < model.weight_plan.requests.size(); ++request_index) {

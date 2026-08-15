@@ -74,10 +74,11 @@ void CudaCompiledModel::allocate_celeg_resources() {
         int K = 1;
         int inter = 1;
         for (const CompiledLayerProgram& layer : resources_.program_.layers) {
-            if (!layer.moe) continue;
-            E = std::max(E, layer.moe->router.expert_count);
-            K = std::max(K, layer.moe->router.experts_per_token);
-            inter = std::max(inter, layer.moe->routed.mlp.intermediate_size);
+            const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward);
+            if (!moe) continue;
+            E = std::max(E, moe->router.expert_count);
+            K = std::max(K, moe->router.experts_per_token);
+            inter = std::max(inter, moe->routed.mlp.intermediate_size);
         }
         workspace_.moe_hidden_float_.reset(static_cast<size_t>(resources_.program_.hidden));
         workspace_.moe_sel_.reset(static_cast<size_t>(K));
