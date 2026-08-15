@@ -12,6 +12,40 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+static LONG WINAPI diagnostic_vectored_handler(EXCEPTION_POINTERS* info) {
+    fprintf(stderr, "DIAGNOSTIC CRASH exception 0x%08lX at 0x%p\n",
+            info->ExceptionRecord->ExceptionCode,
+            info->ExceptionRecord->ExceptionAddress);
+    void* stack[64];
+    const unsigned short frames =
+        CaptureStackBackTrace(0, 64, stack, nullptr);
+    SymInitialize(GetCurrentProcess(), nullptr, TRUE);
+    for (unsigned short i = 0; i < frames; ++i) {
+        char buf[sizeof(SYMBOL_INFO) + 256];
+        SYMBOL_INFO* sym = reinterpret_cast<SYMBOL_INFO*>(buf);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = 255;
+        DWORD64 disp = 0;
+        if (SymFromAddr(GetCurrentProcess(),
+                        reinterpret_cast<DWORD64>(stack[i]), &disp, sym)) {
+            fprintf(stderr, "#%u %s+0x%llx\n", i, sym->Name,
+                    static_cast<unsigned long long>(disp));
+        } else {
+            fprintf(stderr, "#%u %p\n", i, stack[i]);
+        }
+    }
+    fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+#include <vector>
+
 namespace {
 
 struct Tensor {
@@ -106,6 +140,9 @@ void compare_logits(const std::vector<float>& expected,
 }
 
 int main() {
+#if defined(_WIN32)
+    AddVectoredExceptionHandler(1, diagnostic_vectored_handler);
+#endif
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / "celeg-granite-cpu-test";
     write_checkpoint(directory);

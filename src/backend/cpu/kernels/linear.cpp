@@ -60,7 +60,7 @@ void CpuLinearEngine::gemv(const Q4GroupMatrix& weight, const float* input,
     const size_t row_bytes = weight.packed_values_per_row();
     const size_t grain = std::max<size_t>(1, weight.rows / std::max<size_t>(1, pool_->size() * 8));
     if (dynamic_q8_) {
-        thread_local Q8ActivationBatch scratch;
+        Q8ActivationBatch scratch;
         scratch.cols = weight.cols;
         scratch.groups = weight.groups_per_row;
         scratch.values.resize(scratch.cols);

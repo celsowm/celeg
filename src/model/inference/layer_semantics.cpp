@@ -36,9 +36,14 @@ AttentionSpec make_attention(
     attention.query_heads = query_heads;
     attention.key_value_heads = key_value_heads;
     attention.head_dim = head_dim;
-    attention.query_norm = {
-        query_key_norm ? *metadata.norm_epsilon : 0.0f,
-        query_key_norm ? NormWeightKind::Scale : NormWeightKind::None};
+    const auto optional_qk_norm = [&]() -> std::optional<NormSpec> {
+        if (!query_key_norm || !std::isfinite(*metadata.norm_epsilon) ||
+            *metadata.norm_epsilon <= 0.0f) {
+            return std::nullopt;
+        }
+        return NormSpec{*metadata.norm_epsilon, NormWeightKind::Scale};
+    };
+    attention.query_norm = optional_qk_norm();
     attention.key_norm = attention.query_norm;
     attention.pattern = FullCausalPattern{};
     attention.query_scale = 1.0f;
@@ -283,8 +288,8 @@ void infer_latent_attention(
     attention.query_heads = heads;
     attention.key_value_heads = 1;
     attention.head_dim = value_dim;
-    attention.query_norm = {0.0f, NormWeightKind::None};
-    attention.key_norm = {0.0f, NormWeightKind::None};
+    attention.query_norm = std::nullopt;
+    attention.key_norm = std::nullopt;
     attention.output_gate = {
         AttentionGateKind::Sigmoid,
         false,
