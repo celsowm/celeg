@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace celeg {
@@ -150,6 +151,18 @@ struct CompiledAttentionStateLayout {
     void validate() const;
 };
 
+struct CompiledAttentionProgram {
+    AttentionSpec semantics;
+    CompiledAttentionStateLayout state_layout;
+};
+
+using CompiledMixerProgram = std::variant<
+    CompiledAttentionProgram,
+    ShortConvolutionSpec,
+    GatedDeltaNetSpec,
+    Mamba2Spec,
+    MlpBlockSpec>;
+
 enum class CompiledChunkCapability : uint8_t {
     Native,
     SequentialAdapter,
@@ -157,30 +170,38 @@ enum class CompiledChunkCapability : uint8_t {
 };
 
 // Immutable execution description produced before a backend starts serving.
-// It contains no checkpoint or architecture probing state, so decode can use
-// direct indices and function selection instead of format/architecture tests.
+// The mixer variant is the single source of truth for mixer identity and
+// payload, so contradictory states such as "Attention + Mamba2 payload" are
+// unrepresentable.
 struct CompiledLayerProgram {
-    CompiledMixer mixer;
-    CompiledFeedForward feed_forward;
+    CompiledMixerProgram mixer;
+    CompiledFeedForward feed_forward = CompiledFeedForward::Dense;
     bool execute_feed_forward = true;
     CompiledChunkCapability chunk_capability = CompiledChunkCapability::Native;
-    std::optional<AttentionSpec> attention;
-    std::optional<ShortConvolutionSpec> short_convolution;
-    std::optional<GatedDeltaNetSpec> gated_delta_net;
-    std::optional<Mamba2Spec> mamba2;
     int feed_forward_intermediate = 0;
     ActivationKind feed_forward_activation = ActivationKind::SwiGLU;
     std::vector<std::size_t> weight_request_indices;
     std::optional<MoeLayerProgram> moe;
-    std::optional<CompiledAttentionStateLayout> state_layout;
     NormSpec operator_norm;
     NormSpec post_attention_norm;
     NormSpec feed_forward_norm;
     NormSpec post_feed_forward_norm;
     ResidualSpec residual;
-    // MLP-only mixer semantics are needed by the backend even though this
-    // mixer has no separate operator payload.
-    std::optional<MlpBlockSpec> mlp_only;
+
+    CompiledMixer mixer_kind() const;
+
+    AttentionSpec* attention();
+    const AttentionSpec* attention() const;
+    CompiledAttentionStateLayout* state_layout();
+    const CompiledAttentionStateLayout* state_layout() const;
+    ShortConvolutionSpec* short_convolution();
+    const ShortConvolutionSpec* short_convolution() const;
+    GatedDeltaNetSpec* gated_delta_net();
+    const GatedDeltaNetSpec* gated_delta_net() const;
+    Mamba2Spec* mamba2();
+    const Mamba2Spec* mamba2() const;
+    MlpBlockSpec* mlp_only();
+    const MlpBlockSpec* mlp_only() const;
 };
 
 struct CompiledModelProgram {
