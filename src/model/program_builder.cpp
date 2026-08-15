@@ -1,5 +1,7 @@
 #include "celeg/model/program.hpp"
 
+#include "program_fingerprint.hpp"
+
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -194,11 +196,7 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         program.layers.push_back(std::move(compiled));
     }
 
-    // ModelGraph owns the complete backend-neutral execution semantics and
-    // already maintains the canonical serialization for them. Reusing it here
-    // prevents the compiled-program identity from silently omitting newly
-    // added mixer, normalization, position, residual, or output semantics.
-    program.semantic_fingerprint = model.graph.fingerprint();
+    program.semantic_fingerprint = detail::program_semantic_fingerprint(model.graph);
     program.validate();
     return program;
 }
