@@ -142,12 +142,12 @@ public:
     CpuModel(CpuModel&&) noexcept;
     CpuModel& operator=(CpuModel&&) noexcept;
 
-    CpuInferenceSession& session() { return session_view_; }
-    const CpuInferenceSession& session() const { return session_view_; }
-    CpuDiagnostics& diagnostics() { return diagnostics_view_; }
-    const CpuDiagnostics& diagnostics() const { return diagnostics_view_; }
-    CpuPersistence& persistence() { return persistence_view_; }
-    const CpuPersistence& persistence() const { return persistence_view_; }
+    CpuInferenceSession session() { return CpuInferenceSession(*this); }
+    CpuInferenceSession session() const { return CpuInferenceSession(const_cast<CpuModel&>(*this)); }
+    CpuDiagnostics diagnostics() { return CpuDiagnostics(*this); }
+    CpuDiagnostics diagnostics() const { return CpuDiagnostics(const_cast<CpuModel&>(*this)); }
+    CpuPersistence persistence() { return CpuPersistence(*this); }
+    CpuPersistence persistence() const { return CpuPersistence(const_cast<CpuModel&>(*this)); }
 
     std::unique_ptr<CpuModel> clone_session() const;
     std::unique_ptr<CpuModel> clone_session_on_node(int numa_node) const;
@@ -196,9 +196,6 @@ private:
                                 bool ready_for_decode);
 
     std::unique_ptr<CpuCompiledModel> state_;
-    CpuInferenceSession session_view_;
-    CpuDiagnostics diagnostics_view_;
-    CpuPersistence persistence_view_;
 };
 
 const char* cpu_kv_cache_mode_name(CpuKvCacheMode mode);

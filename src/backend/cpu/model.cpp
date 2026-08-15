@@ -48,33 +48,17 @@ CpuModel::CpuModel(const std::string& path, int context,
           std::make_shared<CpuCompiledModel::Shared>(
               path, context, std::move(options),
               runtime ? std::move(runtime) : create_builtin_runtime_context()),
-          generation, -1)),
-      session_view_(*this),
-      diagnostics_view_(*this),
-      persistence_view_(*this) {}
+          generation, -1)) {}
 
 CpuModel::CpuModel(std::unique_ptr<CpuCompiledModel> impl)
-    : state_(std::move(impl)),
-      session_view_(*this),
-      diagnostics_view_(*this),
-      persistence_view_(*this) {
+    : state_(std::move(impl)) {
     if (!state_) throw std::invalid_argument("CPU model implementation is required");
 }
 
 CpuModel::~CpuModel() = default;
 
-CpuModel::CpuModel(CpuModel&& other) noexcept
-    : state_(std::move(other.state_)),
-      session_view_(*this),
-      diagnostics_view_(*this),
-      persistence_view_(*this) {}
-
-CpuModel& CpuModel::operator=(CpuModel&& other) noexcept {
-    if (this != &other) {
-        state_ = std::move(other.state_);
-    }
-    return *this;
-}
+CpuModel::CpuModel(CpuModel&&) noexcept = default;
+CpuModel& CpuModel::operator=(CpuModel&&) noexcept = default;
 
 std::unique_ptr<CpuModel> CpuModel::clone_session() const {
     return clone_session_on_node(-1);
