@@ -11,10 +11,7 @@ CudaModel::CudaModel(const std::string& model_path,
                    std::shared_ptr<const RuntimeContext> runtime)
     : state_(std::make_unique<CudaCompiledModel>(model_path, max_context,
                                    std::move(options), std::move(generation),
-                                   std::move(runtime))),
-      session_view_(*this),
-      diagnostics_view_(*this),
-      persistence_view_(*this) {}
+                                   std::move(runtime))) {}
 
 CudaModel::~CudaModel() = default;
 

@@ -105,18 +105,15 @@ public:
     CudaModel(CudaModel&&) = delete;
     CudaModel& operator=(CudaModel&&) = delete;
 
-    CudaInferenceSession& session() { return session_view_; }
-    const CudaInferenceSession& session() const { return session_view_; }
-    CudaModelDiagnostics& diagnostics() { return diagnostics_view_; }
-    const CudaModelDiagnostics& diagnostics() const { return diagnostics_view_; }
-    SessionPersistence& persistence() { return persistence_view_; }
-    const SessionPersistence& persistence() const { return persistence_view_; }
+    CudaInferenceSession session() { return CudaInferenceSession(*this); }
+    CudaInferenceSession session() const { return CudaInferenceSession(const_cast<CudaModel&>(*this)); }
+    CudaModelDiagnostics diagnostics() { return CudaModelDiagnostics(*this); }
+    CudaModelDiagnostics diagnostics() const { return CudaModelDiagnostics(const_cast<CudaModel&>(*this)); }
+    SessionPersistence persistence() { return SessionPersistence(*this); }
+    SessionPersistence persistence() const { return SessionPersistence(const_cast<CudaModel&>(*this)); }
 
 private:
     std::unique_ptr<CudaCompiledModel> state_;
-    CudaInferenceSession session_view_;
-    CudaModelDiagnostics diagnostics_view_;
-    SessionPersistence persistence_view_;
 };
 
 }
