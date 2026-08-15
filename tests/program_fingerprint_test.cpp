@@ -47,6 +47,12 @@ int main() {
     CELEG_TEST_CHECK(compiled.layers[0].attention() != nullptr);
     CELEG_TEST_CHECK(compiled.layers[0].state_layout() != nullptr);
     CELEG_TEST_CHECK(compiled.layers[0].mamba2() == nullptr);
+    CELEG_TEST_CHECK(compiled.layers[0].feed_forward_kind() ==
+                     celeg::CompiledFeedForward::Dense);
+    CELEG_TEST_CHECK(compiled.layers[0].execute_feed_forward);
+    CELEG_TEST_CHECK(compiled.layers[0].feed_forward_intermediate == 16);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::CompiledDenseFeedForwardProgram>(
+        compiled.layers[0].feed_forward.storage()));
 
     celeg::CompiledModelProgram copied = compiled;
     CELEG_TEST_CHECK(copied.layers[0].attention() != nullptr);
@@ -54,10 +60,36 @@ int main() {
     copied.layers[0].attention()->head_dim = 16;
     CELEG_TEST_CHECK(compiled.layers[0].attention()->head_dim == 8);
     CELEG_TEST_CHECK(copied.layers[0].attention()->head_dim == 16);
+    copied.layers[0].feed_forward_intermediate = 32;
+    CELEG_TEST_CHECK(compiled.layers[0].feed_forward_intermediate == 16);
+    CELEG_TEST_CHECK(copied.layers[0].feed_forward_intermediate == 32);
 
     celeg::CompiledModelProgram moved = std::move(copied);
     CELEG_TEST_CHECK(moved.layers[0].attention() != nullptr);
     CELEG_TEST_CHECK(moved.layers[0].attention()->head_dim == 16);
+    CELEG_TEST_CHECK(moved.layers[0].feed_forward_intermediate == 32);
+
+    celeg::ResolvedModel no_feed_forward = baseline;
+    no_feed_forward.graph.layers[0].execute_feed_forward = false;
+    const auto no_feed_forward_program =
+        celeg::build_model_program(no_feed_forward);
+    CELEG_TEST_CHECK(no_feed_forward_program.layers[0].feed_forward_kind() ==
+                     celeg::CompiledFeedForward::None);
+    CELEG_TEST_CHECK(!no_feed_forward_program.layers[0].execute_feed_forward);
+    CELEG_TEST_CHECK(!no_feed_forward_program.layers[0].moe.has_value());
+    CELEG_TEST_CHECK(std::holds_alternative<std::monostate>(
+        no_feed_forward_program.layers[0].feed_forward.storage()));
+
+    celeg::ResolvedModel moe_model = baseline;
+    moe_model.graph.layers[0].feed_forward = celeg::MixtureOfExpertsSpec{
+        16, 4, 2, true, false, 1.0f};
+    const auto moe_program = celeg::build_model_program(moe_model);
+    CELEG_TEST_CHECK(moe_program.layers[0].feed_forward_kind() ==
+                     celeg::CompiledFeedForward::MixtureOfExperts);
+    CELEG_TEST_CHECK(moe_program.layers[0].moe.has_value());
+    CELEG_TEST_CHECK(moe_program.layers[0].moe->router.expert_count == 4);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::MoeLayerProgram>(
+        moe_program.layers[0].feed_forward.storage()));
 
     celeg::ResolvedModel head_geometry = baseline;
     std::get<celeg::AttentionSpec>(head_geometry.graph.layers[0].mixer).head_dim = 16;
