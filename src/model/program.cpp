@@ -382,8 +382,20 @@ void CompiledLayerProgram::bind_mixer_views() {
 
 void CompiledLayerProgram::bind_feed_forward_views() {
     execute_feed_forward.bind(feed_forward);
-    feed_forward_intermediate.bind(feed_forward);
-    feed_forward_activation.bind(feed_forward);
+    feed_forward_intermediate.bind(
+        feed_forward, this, [](const void* context) {
+            const auto& layer =
+                *static_cast<const CompiledLayerProgram*>(context);
+            const MlpBlockSpec* mlp = layer.mlp_only();
+            return mlp ? mlp->intermediate_size : 0;
+        });
+    feed_forward_activation.bind(
+        feed_forward, this, [](const void* context) {
+            const auto& layer =
+                *static_cast<const CompiledLayerProgram*>(context);
+            const MlpBlockSpec* mlp = layer.mlp_only();
+            return mlp ? mlp->activation : ActivationKind::SwiGLU;
+        });
     moe.bind(feed_forward);
 }
 
