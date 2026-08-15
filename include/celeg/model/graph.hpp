@@ -155,7 +155,6 @@ struct AttentionStateStorageSpec {
     StateScalarType value = StateScalarType::BF16;
     StateScalarType latent = StateScalarType::BF16;
     StateScalarType rotary = StateScalarType::BF16;
-    StateScalarType recurrent = StateScalarType::FP32;
     StateQuantizationGranularity granularity = StateQuantizationGranularity::PerTensor;
     bool paged = true;
 

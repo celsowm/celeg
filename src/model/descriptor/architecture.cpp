@@ -422,8 +422,6 @@ public:
             attention.state_storage.value = parse_state_scalar(descriptor_.state_value_storage);
             attention.state_storage.latent = parse_state_scalar(descriptor_.state_latent_storage);
             attention.state_storage.rotary = parse_state_scalar(descriptor_.state_rotary_storage);
-            attention.state_storage.recurrent = parse_state_scalar(
-                descriptor_.state_recurrent_storage);
             attention.state_storage.granularity = parse_state_granularity(
                 descriptor_.state_storage_granularity);
             attention.state_storage.paged = descriptor_.state_paged;

@@ -140,7 +140,6 @@ struct Descriptor {
     std::string state_value_storage = "bf16";
     std::string state_latent_storage = "bf16";
     std::string state_rotary_storage = "bf16";
-    std::string state_recurrent_storage = "fp32";
     std::string state_storage_granularity = "per_tensor";
     bool state_paged = true;
     std::optional<Field> latent_rank;

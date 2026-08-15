@@ -185,8 +185,6 @@ Descriptor parse_descriptor(const Json& value) {
                 state, "latent_storage", result.state_latent_storage);
             result.state_rotary_storage = optional_string(
                 state, "rotary_storage", result.state_rotary_storage);
-            result.state_recurrent_storage = optional_string(
-                state, "recurrent_storage", result.state_recurrent_storage);
             result.state_storage_granularity = optional_string(
                 state, "storage_granularity", result.state_storage_granularity);
             result.state_paged = optional_bool(state, "paged", result.state_paged);

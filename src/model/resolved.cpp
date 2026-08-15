@@ -167,7 +167,6 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
         << static_cast<int>(attention.state_storage.value) << ':'
         << static_cast<int>(attention.state_storage.latent) << ':'
         << static_cast<int>(attention.state_storage.rotary) << ':'
-        << static_cast<int>(attention.state_storage.recurrent) << ':'
         << static_cast<int>(attention.state_storage.granularity) << ':'
         << attention.state_storage.paged;
     out << ":source:";
@@ -557,7 +556,6 @@ void AttentionStateStorageSpec::validate(const AttentionStateSpec& state) const 
     validate_scalar(value);
     validate_scalar(latent);
     validate_scalar(rotary);
-    validate_scalar(recurrent);
     validate_granularity(granularity);
     if (const auto* latent_state = std::get_if<LatentAttentionStateSpec>(&state)) {
         if (latent_state->latent_rank <= 0 || latent_state->rope_head_dim < 0 ||
