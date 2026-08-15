@@ -88,7 +88,7 @@ class DevCliTest(unittest.TestCase):
             vcvars.touch()
             env = {"PATH": str(root)}
 
-            with mock.patch.object(dev, "find_vswhere", return_value=vswhere):
+            with mock.patch.object(dev.dev_environment, "find_vswhere", return_value=vswhere):
                 found = dev.discover_vcvars(env, lambda *_args, **_kwargs: completed(str(root / "VS")))
             self.assertEqual(found, vcvars.resolve())
 
