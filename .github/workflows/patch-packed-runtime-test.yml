@@ -20,26 +20,7 @@ jobs:
       - name: Gate driver-dependent packed test
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('CMakeLists.txt')
-          text = path.read_text()
-          old = '''        add_executable(packed_commit_test tests/packed/commit_test.cpp)
-        target_link_libraries(packed_commit_test PRIVATE celeg_cuda_backend)
-        target_include_directories(packed_commit_test PRIVATE include tests)
-        add_test(NAME packed_commit_test COMMAND packed_commit_test)
-'''
-          new = '''        add_executable(packed_commit_test tests/packed/commit_test.cpp)
-        target_link_libraries(packed_commit_test PRIVATE celeg_cuda_backend)
-        target_include_directories(packed_commit_test PRIVATE include tests)
-        if(CELEG_RUN_CUDA_TESTS)
-            add_test(NAME packed_commit_test COMMAND packed_commit_test)
-        endif()
-'''
-          if text.count(old) != 1:
-              raise SystemExit('expected packed_commit_test registration not found exactly once')
-          path.write_text(text.replace(old, new))
-          PY
+          python3 -c "from pathlib import Path; p=Path('CMakeLists.txt'); s=p.read_text(); old='        add_test(NAME packed_commit_test COMMAND packed_commit_test)'; new='        if(CELEG_RUN_CUDA_TESTS)\\n            add_test(NAME packed_commit_test COMMAND packed_commit_test)\\n        endif()'; assert s.count(old) == 1; p.write_text(s.replace(old, new))"
           rm .github/workflows/patch-packed-runtime-test.yml
           git diff --check
           git config user.name "github-actions[bot]"
