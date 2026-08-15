@@ -3,6 +3,7 @@
 #include "support/assertions.hpp"
 
 #include <iostream>
+#include <utility>
 
 namespace {
 
@@ -46,6 +47,17 @@ int main() {
     CELEG_TEST_CHECK(compiled.layers[0].attention() != nullptr);
     CELEG_TEST_CHECK(compiled.layers[0].state_layout() != nullptr);
     CELEG_TEST_CHECK(compiled.layers[0].mamba2() == nullptr);
+
+    celeg::CompiledModelProgram copied = compiled;
+    CELEG_TEST_CHECK(copied.layers[0].attention() != nullptr);
+    CELEG_TEST_CHECK(copied.layers[0].attention() != compiled.layers[0].attention());
+    copied.layers[0].attention()->head_dim = 16;
+    CELEG_TEST_CHECK(compiled.layers[0].attention()->head_dim == 8);
+    CELEG_TEST_CHECK(copied.layers[0].attention()->head_dim == 16);
+
+    celeg::CompiledModelProgram moved = std::move(copied);
+    CELEG_TEST_CHECK(moved.layers[0].attention() != nullptr);
+    CELEG_TEST_CHECK(moved.layers[0].attention()->head_dim == 16);
 
     celeg::ResolvedModel head_geometry = baseline;
     std::get<celeg::AttentionSpec>(head_geometry.graph.layers[0].mixer).head_dim = 16;
