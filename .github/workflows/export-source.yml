@@ -1,0 +1,20 @@
+name: Export source workspace
+
+"on":
+  push:
+    branches:
+      - semantic-state-cleanup-work
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove git metadata
+        run: rm -rf .git
+      - name: Upload source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: celeg-source
+          path: .
+          include-hidden-files: true
