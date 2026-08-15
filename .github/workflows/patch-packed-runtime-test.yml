@@ -1,0 +1,49 @@
+name: Patch packed runtime test registration
+
+"on":
+  push:
+    branches:
+      - refactor-clean-semantics-final
+    paths:
+      - .github/workflows/patch-packed-runtime-test.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gate driver-dependent packed test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('CMakeLists.txt')
+          text = path.read_text()
+          old = '''        add_executable(packed_commit_test tests/packed/commit_test.cpp)
+        target_link_libraries(packed_commit_test PRIVATE celeg_cuda_backend)
+        target_include_directories(packed_commit_test PRIVATE include tests)
+        add_test(NAME packed_commit_test COMMAND packed_commit_test)
+'''
+          new = '''        add_executable(packed_commit_test tests/packed/commit_test.cpp)
+        target_link_libraries(packed_commit_test PRIVATE celeg_cuda_backend)
+        target_include_directories(packed_commit_test PRIVATE include tests)
+        if(CELEG_RUN_CUDA_TESTS)
+            add_test(NAME packed_commit_test COMMAND packed_commit_test)
+        endif()
+'''
+          if text.count(old) != 1:
+              raise SystemExit('expected packed_commit_test registration not found exactly once')
+          path.write_text(text.replace(old, new))
+          PY
+          rm .github/workflows/patch-packed-runtime-test.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: gate packed commit runtime test"
+          git push origin HEAD:refactor-clean-semantics-final
