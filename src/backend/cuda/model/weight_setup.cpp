@@ -346,7 +346,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.feed_forward = DenseFfnWeights{w13, w2};
         }
 
-        const CompiledMixer layer_type = semantic_layer.mixer;
+        const CompiledMixer layer_type = semantic_layer.mixer_kind();
         if (layer_type == CompiledMixer::Attention) {
             AttentionLayer attention_layer;
             attention_layer.common = common_layer;
