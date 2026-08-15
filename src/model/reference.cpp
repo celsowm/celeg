@@ -149,11 +149,13 @@ bool latent_key_allowed(const AttentionPatternSpec& pattern,
             return key_block <= query_block &&
                    (key_block < value.global_blocks ||
                     key_block >= query_block - value.local_blocks + 1);
-        } else {
+        } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
             const int query_block = query_position / value.block_size;
             const int key_block = key_position / value.block_size;
             return key_block <= query_block &&
                    (key_block < value.max_selected_blocks || key_block == query_block);
+        } else {
+            static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
     }, pattern);
 }

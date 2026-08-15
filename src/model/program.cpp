@@ -134,6 +134,9 @@ std::string RouterProgram::fingerprint() const {
             append_field(out, selection_program.experts_per_group);
             append_field(out, selection_program.groups_per_token);
             append_field(out, selection_program.group_score_top_k);
+        } else {
+            static_assert(always_false_v<Selection>,
+                          "unhandled MoE selection program");
         }
     }, selection);
     return fingerprint_text(out.str());

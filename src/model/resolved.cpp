@@ -246,6 +246,9 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
                         << selection.experts_per_group << ':'
                         << selection.groups_per_token << ':'
                         << selection.group_score_top_k;
+                } else {
+                    static_assert(always_false_v<Selection>,
+                                  "unhandled MoE selection variant");
                 }
             }, feed_forward.selection);
             out << ":shared:" << feed_forward.shared.has_value();
@@ -479,6 +482,9 @@ void ModelGraph::validate() const {
                             throw std::runtime_error(
                                 "MoE grouped routing fields are inconsistent");
                         }
+                    } else {
+                        static_assert(always_false_v<Selection>,
+                                      "unhandled MoE selection variant");
                     }
                 }, feed_forward.selection);
                 if (feed_forward.shared && feed_forward.shared->intermediate_size <= 0) {
