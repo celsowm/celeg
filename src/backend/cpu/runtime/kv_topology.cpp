@@ -44,9 +44,9 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
     int shared_group_count = 0;
     for (const CompiledLayerProgram& layer : program.layers) {
         if (const auto* compiled = attention_program(layer);
-            compiled && compiled->semantics.kv_sharing.shared()) {
+            compiled && kv_sharing_shared(compiled->semantics.kv_sharing)) {
             shared_group_count = std::max(
-                shared_group_count, compiled->semantics.kv_sharing.group + 1);
+                shared_group_count, kv_sharing_group(compiled->semantics.kv_sharing) + 1);
         }
     }
     std::vector<int> shared_owner(static_cast<size_t>(shared_group_count), -1);
@@ -58,8 +58,8 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
             program.layers[static_cast<size_t>(layer)];
         const auto* attention = attention_program(compiled);
         if (!attention) continue;
-        if (attention->semantics.kv_sharing.publishes) {
-            shared_owner[static_cast<size_t>(attention->semantics.kv_sharing.group)] = layer;
+        if (kv_sharing_publishes(attention->semantics.kv_sharing)) {
+            shared_owner[static_cast<size_t>(kv_sharing_group(attention->semantics.kv_sharing))] = layer;
         }
     }
 
@@ -71,9 +71,8 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
         if (!attention) continue;
         const CpuStatePageLayout state_layout =
             lower_cpu_state_page_layout(attention->state_layout);
-        if (attention->semantics.kv_sharing.shared() &&
-            !attention->semantics.kv_sharing.publishes) {
-            const int group = attention->semantics.kv_sharing.group;
+        if (std::holds_alternative<SharedKvConsumer>(attention->semantics.kv_sharing)) {
+            const int group = kv_sharing_group(attention->semantics.kv_sharing);
             if (group < 0 || group >= static_cast<int>(shared_pool.size()) ||
                 shared_pool[static_cast<size_t>(group)] < 0) {
                 throw std::runtime_error("shared KV consumer has no owner pool");
@@ -86,8 +85,8 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
         result.layer_to_pool[index] = static_cast<int>(result.pools.size());
         result.pools.push_back(std::make_shared<CpuKvPagePool>(
             options.kv_cache_mode, options.kv_page_tokens, state_layout));
-        if (attention->semantics.kv_sharing.shared()) {
-            shared_pool[static_cast<size_t>(attention->semantics.kv_sharing.group)] =
+        if (kv_sharing_shared(attention->semantics.kv_sharing)) {
+            shared_pool[static_cast<size_t>(kv_sharing_group(attention->semantics.kv_sharing))] =
                 result.layer_to_pool[index];
             result.layer_to_owner[index] = layer;
         } else {

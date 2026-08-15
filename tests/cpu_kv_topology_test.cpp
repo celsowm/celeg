@@ -19,8 +19,10 @@ int main() {
         layer.mixer = attention;
         layer.feed_forward = celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
     }
-    std::get<celeg::AttentionSpec>(graph.layers[0].mixer).kv_sharing = {0, true};
-    std::get<celeg::AttentionSpec>(graph.layers[1].mixer).kv_sharing = {0, false};
+    std::get<celeg::AttentionSpec>(graph.layers[0].mixer).kv_sharing =
+        celeg::SharedKvPublisher{0};
+    std::get<celeg::AttentionSpec>(graph.layers[1].mixer).kv_sharing =
+        celeg::SharedKvConsumer{0};
     const celeg::RuntimeTopology shape = celeg::compose_runtime_topology({}, graph);
 
     celeg::CompiledModelProgram program;

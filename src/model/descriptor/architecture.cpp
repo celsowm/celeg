@@ -457,7 +457,9 @@ public:
                         }
                     }
                 }
-                attention.kv_sharing = KvSharingSpec{group, publishes};
+                attention.kv_sharing = publishes
+                    ? KvSharingSpec{SharedKvPublisher{group}}
+                    : KvSharingSpec{SharedKvConsumer{group}};
             }
             if (layer_rope_theta == 0.0) {
                 attention.position = NoPositionEncodingSpec{};

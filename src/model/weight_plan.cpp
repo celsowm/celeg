@@ -77,7 +77,7 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         if (attention.query_norm.has_value()) {
             append(TensorRole::AttentionQueryNorm, {attention.head_dim});
         }
-        if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
+        if (!std::holds_alternative<SharedKvConsumer>(attention.kv_sharing)) {
             append(TensorRole::AttentionKey, {key_value_width, hidden});
             append(TensorRole::AttentionValue, {key_value_width, hidden});
             if (attention.key_norm.has_value()) {

@@ -349,7 +349,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                 }
                 const auto& latent = *layout.latent_state();
                 const bool owns_latent_state =
-                    !layout.kv_sharing.shared() || layout.kv_sharing.publishes;
+                    !std::holds_alternative<SharedKvConsumer>(layout.kv_sharing);
                 if (latent.factorized) {
                     attention_layer.latent_query_projection = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
@@ -432,11 +432,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                             static_cast<size_t>(max_context_) * latent.rope_head_dim);
                     }
                 }
-                if (layout.kv_sharing.publishes) {
-                    shared_owner[static_cast<size_t>(layout.kv_sharing.group)] = i;
+                if (kv_sharing_publishes(layout.kv_sharing)) {
+                    shared_owner[static_cast<size_t>(kv_sharing_group(layout.kv_sharing))] = i;
                     attention_layer.kv_owner_layer = i;
                 }
-                if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
+                if (!kv_sharing_shared(layout.kv_sharing)) attention_layer.kv_owner_layer = i;
                 resources_.layers_.emplace_back(std::move(attention_layer));
                 continue;
             }
@@ -451,7 +451,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                                       TensorRole::AttentionGate, i),
                     {layout.query_width(), resources_.program_.hidden});
             }
-            if (!layout.kv_sharing.shared() || layout.kv_sharing.publishes) {
+            if (!std::holds_alternative<SharedKvConsumer>(layout.kv_sharing)) {
                 attention_layer.key = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKey, i),
                     {layout.key_value_width(), resources_.program_.hidden});
@@ -459,13 +459,13 @@ void CudaCompiledModel::load_checkpoint_weights(
                     repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionValue, i),
                     {layout.key_value_width(), resources_.program_.hidden});
             } else {
-                if (layout.kv_sharing.group < 0 ||
-                    layout.kv_sharing.group >= static_cast<int>(shared_owner.size()) ||
-                    shared_owner[static_cast<size_t>(layout.kv_sharing.group)] < 0) {
+                if (kv_sharing_group(layout.kv_sharing) < 0 ||
+                    kv_sharing_group(layout.kv_sharing) >= static_cast<int>(shared_owner.size()) ||
+                    shared_owner[static_cast<size_t>(kv_sharing_group(layout.kv_sharing))] < 0) {
                     throw std::runtime_error("CUDA shared KV consumer has no owner");
                 }
                 attention_layer.kv_owner_layer =
-                    shared_owner[static_cast<size_t>(layout.kv_sharing.group)];
+                    shared_owner[static_cast<size_t>(kv_sharing_group(layout.kv_sharing))];
             }
             attention_layer.out = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionOutput, i),
@@ -499,11 +499,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.value_cache.reset(cache_elements);
                 }
             }
-            if (layout.kv_sharing.publishes) {
-                shared_owner[static_cast<size_t>(layout.kv_sharing.group)] = i;
+            if (kv_sharing_publishes(layout.kv_sharing)) {
+                shared_owner[static_cast<size_t>(kv_sharing_group(layout.kv_sharing))] = i;
                 attention_layer.kv_owner_layer = i;
             }
-            if (!layout.kv_sharing.shared()) attention_layer.kv_owner_layer = i;
+            if (!kv_sharing_shared(layout.kv_sharing)) attention_layer.kv_owner_layer = i;
             resources_.layers_.emplace_back(std::move(attention_layer));
         } else if (const auto* gated_delta =
                        std::get_if<GatedDeltaNetSpec>(&semantic_layer.mixer)) {

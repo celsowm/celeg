@@ -20,7 +20,7 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
             const AttentionSpec& layout = attention->layout;
             if (layout.uses_latent_state()) {
                 const bool owns_latent_state =
-                    !layout.kv_sharing.shared() || layout.kv_sharing.publishes;
+                    !std::holds_alternative<SharedKvConsumer>(layout.kv_sharing);
                 if (!owns_latent_state) continue;
                 const auto& latent = *layout.latent_state();
                 if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {

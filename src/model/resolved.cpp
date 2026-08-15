@@ -77,8 +77,20 @@ void append_position(std::ostringstream& out, const PositionSpec& position) {
 
 void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
     out << attention.query_heads << ':' << attention.key_value_heads << ':'
-        << attention.head_dim << ':' << attention.kv_sharing.group << ':'
-        << attention.kv_sharing.publishes << ':' << attention.query_scale << ':';
+        << attention.head_dim << ':';
+    std::visit([&out](const auto& sharing) {
+        using Sharing = std::decay_t<decltype(sharing)>;
+        if constexpr (std::is_same_v<Sharing, PrivateKv>) {
+            out << "private:";
+        } else if constexpr (std::is_same_v<Sharing, SharedKvPublisher>) {
+            out << "publisher:" << sharing.group << ':';
+        } else if constexpr (std::is_same_v<Sharing, SharedKvConsumer>) {
+            out << "consumer:" << sharing.group << ':';
+        } else {
+            static_assert(always_false_v<Sharing>, "unhandled kv sharing variant");
+        }
+    }, attention.kv_sharing);
+    out << attention.query_scale << ':';
     append_optional_norm(out, attention.query_norm);
     append_optional_norm(out, attention.key_norm);
     append_position(out, attention.position);

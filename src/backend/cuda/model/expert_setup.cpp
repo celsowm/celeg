@@ -39,7 +39,7 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
             const AttentionSpec& attention = compiled->semantics;
             bytes += bf16_bytes(static_cast<std::size_t>(
                 attention.query_projection_width()) * program.hidden);
-            if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
+            if (!std::holds_alternative<SharedKvConsumer>(attention.kv_sharing)) {
                 bytes += bf16_bytes(2ull * static_cast<std::size_t>(
                     attention.key_value_width()) * program.hidden);
             }

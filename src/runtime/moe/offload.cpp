@@ -93,7 +93,7 @@ std::size_t kv_cache_bytes(const CompiledModelProgram& program, int context_toke
         const auto* compiled = std::get_if<CompiledAttentionProgram>(&layer.mixer);
         if (!compiled) continue;
         const AttentionSpec& layout = compiled->semantics;
-        if (layout.kv_sharing.shared() && !layout.kv_sharing.publishes) continue;
+        if (std::holds_alternative<SharedKvConsumer>(layout.kv_sharing)) continue;
         bytes += static_cast<std::size_t>(2) *
             static_cast<std::size_t>(layout.key_value_width()) * kBf16Bytes *
             static_cast<std::size_t>(context_tokens);

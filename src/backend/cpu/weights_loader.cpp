@@ -264,7 +264,7 @@ void CpuCompiledModel::Shared::load_weights() {
                 tensor_name(weight_requests, TensorRole::AttentionQuery, index),
                 {attention.query_projection_width(), program.hidden});
             if (!attention.uses_external_memory() &&
-                (!attention.kv_sharing.shared() || attention.kv_sharing.publishes)) {
+                !std::holds_alternative<SharedKvConsumer>(attention.kv_sharing)) {
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionKey, index),
                     {attention.key_value_width(), program.hidden});

@@ -47,12 +47,31 @@ using AttentionPatternSpec = std::variant<FullCausalPattern, SlidingWindowPatter
                                          BidirectionalPattern, PrefixLmPattern,
                                          BlockSparsePattern, DynamicSparsePattern>;
 
-struct KvSharingSpec {
-    int group = -1;
-    bool publishes = false;
+struct PrivateKv {};
 
-    bool shared() const { return group >= 0; }
+struct SharedKvPublisher {
+    int group = 0;
 };
+
+struct SharedKvConsumer {
+    int group = 0;
+};
+
+using KvSharingSpec = std::variant<PrivateKv, SharedKvPublisher, SharedKvConsumer>;
+
+inline bool kv_sharing_shared(const KvSharingSpec& spec) {
+    return !std::holds_alternative<PrivateKv>(spec);
+}
+
+inline bool kv_sharing_publishes(const KvSharingSpec& spec) {
+    return std::holds_alternative<SharedKvPublisher>(spec);
+}
+
+inline int kv_sharing_group(const KvSharingSpec& spec) {
+    if (const auto* publisher = std::get_if<SharedKvPublisher>(&spec)) return publisher->group;
+    if (const auto* consumer = std::get_if<SharedKvConsumer>(&spec)) return consumer->group;
+    return -1;
+}
 
 struct OrdinaryKvStateSpec {
     bool quantizable = true;
