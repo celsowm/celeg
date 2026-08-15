@@ -672,9 +672,10 @@ void CudaCompiledModel::load_checkpoint_weights(
         } else if (layer_type == CompiledMixer::MlpOnly) {
             MlpOnlyLayer mlp_layer;
             mlp_layer.common = common_layer;
-            mlp_layer.spec = MlpBlockSpec{
-                semantic_layer.feed_forward_intermediate,
-                semantic_layer.feed_forward_activation};
+            if (!semantic_layer.mlp_only) {
+                throw std::runtime_error("compiled MLP-only layer has no semantics");
+            }
+            mlp_layer.spec = semantic_layer.mlp_only.value();
             mlp_layer.up = resources_.weight_loader_->load_linear_weight(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::FfnUp, i),
                 {mlp_layer.spec.intermediate_size, resources_.program_.hidden});
