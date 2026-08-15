@@ -26,11 +26,11 @@ void CudaCompiledModel::prefill_chunk_paged(
     const bool needs_semantic_attention_path = std::any_of(
         resources_.program_.layers.begin(), resources_.program_.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            if (!layer.attention.has_value()) return false;
-            const AttentionSpec& attention = *layer.attention;
-            const RopePositionSpec* rope = attention.rope_position();
+            const AttentionSpec* attention = layer.attention();
+            if (!attention) return false;
+            const RopePositionSpec* rope = attention->rope_position();
             return !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                       attention.output_transform) ||
+                       attention->output_transform) ||
                    (rope && rope->pairing != RopePairingKind::SplitHalf);
         });
     if (needs_semantic_attention_path) {
