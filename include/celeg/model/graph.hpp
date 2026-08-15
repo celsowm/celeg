@@ -156,24 +156,18 @@ struct ExternalMemorySource {
 
 using AttentionKeyValueSource = std::variant<CurrentSequenceSource, ExternalMemorySource>;
 
-enum class AttentionGateKind : uint8_t {
-    None,
-    Sigmoid,
-};
-
 enum class AttentionGateGranularity : uint8_t {
     OutputWise,
     HeadWise,
     ElementWise,
 };
 
-struct AttentionOutputGateSpec {
-    AttentionGateKind kind = AttentionGateKind::None;
+struct SigmoidAttentionGateSpec {
     bool packed_with_query = false;
     AttentionGateGranularity granularity = AttentionGateGranularity::OutputWise;
-
-    bool enabled() const { return kind != AttentionGateKind::None; }
 };
+
+using AttentionOutputGateSpec = std::optional<SigmoidAttentionGateSpec>;
 
 struct AttentionSpec {
     int query_heads = 0;
@@ -194,12 +188,12 @@ struct AttentionSpec {
 
     int query_width() const { return query_heads * head_dim; }
     int output_gate_width() const {
-        if (!output_gate.enabled() || output_gate.packed_with_query) return 0;
-        return output_gate.granularity == AttentionGateGranularity::HeadWise
+        if (!output_gate.has_value() || output_gate->packed_with_query) return 0;
+        return output_gate->granularity == AttentionGateGranularity::HeadWise
             ? query_heads : query_width();
     }
     int query_projection_width() const {
-        return output_gate.enabled() && output_gate.packed_with_query
+        return output_gate.has_value() && output_gate->packed_with_query
             ? query_width() * 2 : query_width();
     }
     int key_value_width() const { return key_value_heads * head_dim; }

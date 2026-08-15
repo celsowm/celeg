@@ -115,9 +115,13 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
     }, attention.pattern);
-    out << ":gate:" << static_cast<int>(attention.output_gate.kind) << ':'
-        << attention.output_gate.packed_with_query << ':'
-        << static_cast<int>(attention.output_gate.granularity);
+    out << ":gate:";
+    if (attention.output_gate.has_value()) {
+        out << "sigmoid:" << attention.output_gate->packed_with_query << ':'
+            << static_cast<int>(attention.output_gate->granularity);
+    } else {
+        out << "none";
+    }
     out << ":bias:";
     std::visit([&out](const auto& bias) {
         using Bias = std::decay_t<decltype(bias)>;
@@ -474,13 +478,15 @@ void ModelGraph::validate() const {
         if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
             if (attention->query_norm) attention->query_norm->validate();
             if (attention->key_norm) attention->key_norm->validate();
-            switch (attention->output_gate.granularity) {
-            case AttentionGateGranularity::OutputWise:
-            case AttentionGateGranularity::HeadWise:
-            case AttentionGateGranularity::ElementWise:
-                break;
-            default:
-                throw std::runtime_error("invalid attention gate granularity");
+            if (attention->output_gate.has_value()) {
+                switch (attention->output_gate->granularity) {
+                case AttentionGateGranularity::OutputWise:
+                case AttentionGateGranularity::HeadWise:
+                case AttentionGateGranularity::ElementWise:
+                    break;
+                default:
+                    throw std::runtime_error("invalid attention gate granularity");
+                }
             }
         }
     }

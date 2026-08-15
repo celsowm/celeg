@@ -233,10 +233,10 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         workspace_.chunk_op.data() + row * q_width,
                         attention->relative_bias);
                 });
-                if (layout.output_gate.enabled()) {
+                if (layout.output_gate.has_value()) {
                     for (size_t row = 0; row < rows; ++row) {
                         const float* gate = nullptr;
-                        if (layout.output_gate.packed_with_query) {
+                        if (layout.output_gate->packed_with_query) {
                             gate = workspace_.chunk_qkv.data() + row * layout.query_projection_width() + q_width;
                         } else {
                             if (row == 0) {
@@ -412,7 +412,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                             workspace_.chunk_attention_gate.data() +
                                 row * static_cast<size_t>(layout.latent_output_width()),
                             static_cast<size_t>(layout.latent_output_width()),
-                            layout.output_gate.granularity,
+                            layout.output_gate->granularity,
                             layout.query_heads, latent.value_head_dim);
                     });
                 }
@@ -468,13 +468,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   CpuAttentionPattern::lower(layout.pattern),
                                   CpuAttentionBias::lower(layout.bias, attention->relative_bias,
                                                           layout.query_heads));
-            if (layout.output_gate.enabled()) {
-                if (!layout.output_gate.packed_with_query) {
+            if (layout.output_gate.has_value()) {
+                if (!layout.output_gate->packed_with_query) {
                     layer_gemm(attention->gate, workspace_.chunk_normed.data(),
                                workspace_.chunk_attention_gate.data());
                 }
                 for (size_t row = 0; row < rows; ++row) {
-                    const float* gate = layout.output_gate.packed_with_query
+                    const float* gate = layout.output_gate->packed_with_query
                         ? workspace_.chunk_qkv.data() + row * q_projection_width + q_width
                         : workspace_.chunk_attention_gate.data() + row * q_width;
                     float* output = workspace_.chunk_op.data() + row * q_width;

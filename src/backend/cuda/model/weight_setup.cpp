@@ -445,7 +445,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             attention_layer.query = resources_.weight_loader_->load_linear_weight(
                 repo, query_name,
                 {layout.query_projection_width(), resources_.program_.hidden});
-            if (layout.output_gate.enabled() && !layout.output_gate.packed_with_query) {
+            if (layout.output_gate.has_value() && !layout.output_gate->packed_with_query) {
                 attention_layer.gate = resources_.weight_loader_->load_linear_weight(
                     repo, tensor_name(resources_.model_.weight_plan.requests,
                                       TensorRole::AttentionGate, i),

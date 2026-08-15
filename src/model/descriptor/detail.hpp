@@ -129,7 +129,7 @@ struct Descriptor {
     bool query_norm_enabled = false;
     bool key_norm_enabled = false;
     std::optional<NormWeightKind> embedding_post_norm_kind;
-    AttentionGateKind attention_gate_kind = AttentionGateKind::None;
+    bool attention_gate_sigmoid = false;
     bool attention_gate_packed_with_query = false;
     std::optional<Field> orthogonalize_current_value;
     std::optional<Field> orthogonalize_current_value_minimum_norm_squared;

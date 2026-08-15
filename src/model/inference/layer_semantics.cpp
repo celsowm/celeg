@@ -290,8 +290,7 @@ void infer_latent_attention(
     attention.head_dim = value_dim;
     attention.query_norm = std::nullopt;
     attention.key_norm = std::nullopt;
-    attention.output_gate = {
-        AttentionGateKind::Sigmoid,
+    attention.output_gate = SigmoidAttentionGateSpec{
         false,
         head_wise_gate
             ? AttentionGateGranularity::HeadWise
@@ -489,8 +488,7 @@ void infer_standard_attention(
         shape_is(
             *query,
             {2 * attention.query_width(), *m.hidden_size})) {
-        attention.output_gate = {
-            AttentionGateKind::Sigmoid,
+        attention.output_gate = SigmoidAttentionGateSpec{
             true,
             AttentionGateGranularity::ElementWise};
     }

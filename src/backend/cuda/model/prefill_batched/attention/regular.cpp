@@ -10,8 +10,8 @@ void require_regular_attention_bindings(const AttentionLayer& attention) {
         throw std::logic_error(
             "CUDA prefill attention must bind key/value together");
     }
-    if (layout.output_gate.enabled() &&
-        !layout.output_gate.packed_with_query &&
+    if (layout.output_gate.has_value() &&
+        !layout.output_gate->packed_with_query &&
         !attention.gate) {
         throw std::logic_error(
             "CUDA prefill attention is missing its output gate binding");
@@ -33,8 +33,8 @@ void run_regular_attention(
     const AttentionSpec& owner_layout = owner.layout;
     const int hidden = model.resources_.program_.hidden;
     const int query_projection_width = attention.query->rows;
-    const bool output_gate = layout.output_gate.enabled();
-    const bool gate_packed = output_gate && layout.output_gate.packed_with_query;
+    const bool output_gate = layout.output_gate.has_value();
+    const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
 
     prof.begin(model.stream_.get());
     {

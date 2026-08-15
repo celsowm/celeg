@@ -157,8 +157,8 @@ Descriptor parse_descriptor(const Json& value) {
         }
         if (attention.contains("output_gate")) {
             const std::string gate = attention.at("output_gate").as_string();
-            if (gate == "none") result.attention_gate_kind = AttentionGateKind::None;
-            else if (gate == "sigmoid") result.attention_gate_kind = AttentionGateKind::Sigmoid;
+            if (gate == "none") result.attention_gate_sigmoid = false;
+            else if (gate == "sigmoid") result.attention_gate_sigmoid = true;
             else throw std::invalid_argument("descriptor has unsupported attention output gate: " + gate);
         }
         result.attention_gate_packed_with_query = optional_bool(

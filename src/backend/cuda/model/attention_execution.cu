@@ -119,7 +119,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                     linear(workspace_.normed_.data(), *attention->gate,
                            workspace_.attention_gate_.data(), 1, layout.output_gate_width(),
                            resources_.program_.hidden);
-                    if (layout.output_gate.granularity == AttentionGateGranularity::HeadWise) {
+                    if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
                         launch_sigmoid_multiply_headwise(workspace_.latent_decompressed_.data(),
                             workspace_.attention_gate_.data(), 1, layout.query_heads,
                             latent.value_head_dim, stream_.get());
@@ -136,7 +136,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                                  semantics.residual.multiplier, stream_.get());
                     return;
                 }
-                if (layout.output_gate.enabled() || layout.multi_axis_position()) {
+                if (layout.output_gate.has_value() || layout.multi_axis_position()) {
                     throw std::invalid_argument(
                         "CUDA latent attention does not support query gates or M-RoPE yet");
                 }
@@ -228,7 +228,7 @@ void CudaCompiledModel::enqueue_decode_attention(
             } else {
             __nv_bfloat16* q = workspace_.qkv_output_.data();
             const int query_projection_width = attention->query->rows;
-            const bool output_gate = layout.output_gate.enabled();
+            const bool output_gate = layout.output_gate.has_value();
             __nv_bfloat16* k = q + query_projection_width;
             __nv_bfloat16* v = k + layout.key_value_width();
             decode_phase_profile().begin(stream_.get());
@@ -407,7 +407,7 @@ void CudaCompiledModel::enqueue_decode_attention(
             }
             if (output_gate) {
                 const __nv_bfloat16* gate = q + layout.query_width();
-                if (!layout.output_gate.packed_with_query) {
+                if (!layout.output_gate->packed_with_query) {
                     linear(workspace_.normed_.data(), *attention->gate,
                            workspace_.attention_gate_.data(), 1,
                            layout.query_width(), resources_.program_.hidden);

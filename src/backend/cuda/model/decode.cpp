@@ -320,7 +320,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
         throw std::invalid_argument(
             "CUDA latent attention requires BF16 paged state storage");
     }
-    if (layout.output_gate.enabled() || layout.multi_axis_position()) {
+    if (layout.output_gate.has_value() || layout.multi_axis_position()) {
         throw std::invalid_argument(
             "CUDA latent attention does not support query gates or M-RoPE yet");
     }
@@ -440,7 +440,7 @@ void CudaCompiledModel::run_token_attention(
 
     __nv_bfloat16* q = workspace_.qkv_output_.data();
     const int query_projection_width = attention.query->rows;
-    const bool output_gate = layout.output_gate.enabled();
+    const bool output_gate = layout.output_gate.has_value();
     __nv_bfloat16* k = q + query_projection_width;
     __nv_bfloat16* v = k + layout.key_value_width();
     {
@@ -504,7 +504,7 @@ void CudaCompiledModel::run_token_attention(
 
     if (output_gate) {
         const __nv_bfloat16* gate = q + layout.query_width();
-        if (!layout.output_gate.packed_with_query) {
+        if (!layout.output_gate->packed_with_query) {
             linear(workspace_.normed_.data(), *attention.gate,
                    workspace_.attention_gate_.data(), 1,
                    layout.query_width(), resources_.program_.hidden);

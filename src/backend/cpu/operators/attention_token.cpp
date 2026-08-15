@@ -28,7 +28,7 @@ void execute_cpu_attention_token(
                 attention_state.run_external_attention(layout, *memory_it->second, q,
                                        execution.workspace.op_output.data(),
                                        attention.relative_bias);
-                if (layout.output_gate.enabled()) {
+                if (layout.output_gate.has_value()) {
                     execution.shared.linear.gemv(attention.gate,
                                                  execution.workspace.normed.data(),
                                                  execution.workspace.attention_gate.data());
@@ -142,7 +142,7 @@ void execute_cpu_attention_token(
                     apply_cpu_attention_output_gate(execution.workspace.latent_decompressed.data(),
                         execution.workspace.attention_gate.data(),
                         static_cast<size_t>(layout.latent_output_width()),
-                        layout.output_gate.granularity,
+                        layout.output_gate->granularity,
                         layout.query_heads, latent.value_head_dim);
                 }
                 execution.shared.linear.gemv(attention.out, output_input,
@@ -170,9 +170,9 @@ void execute_cpu_attention_token(
                           execution.session.position_value + 1, attention.relative_bias);
             apply_cpu_attention_output_transform(
                 layout, execution.workspace.op_output.data(), v);
-            if (layout.output_gate.enabled()) {
+            if (layout.output_gate.has_value()) {
                 const float* gate = nullptr;
-                if (layout.output_gate.packed_with_query) {
+                if (layout.output_gate->packed_with_query) {
                     gate = q + q_width;
                 } else {
                     execution.shared.linear.gemv(attention.gate,

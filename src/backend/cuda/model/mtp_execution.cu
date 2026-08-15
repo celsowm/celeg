@@ -205,7 +205,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     case AttentionAlgorithm::Gemm:
         throw UnsupportedAttentionCapability(attention_plan);
     }
-    if (layout.output_gate.enabled()) {
+    if (layout.output_gate.has_value()) {
         launch_sigmoid_multiply(workspace_.op_output_.data(),
                                 q + layout.query_width(),
                                 layout.query_width(), stream);

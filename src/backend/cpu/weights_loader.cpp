@@ -295,7 +295,7 @@ void CpuCompiledModel::Shared::load_weights() {
             if (attention.key_norm && attention.key_norm->weight_kind == NormWeightKind::OnePlusScale) {
                 for (float& value : layer.k_norm) value += 1.0f;
             }
-            if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {
+            if (attention.output_gate.has_value() && !attention.output_gate->packed_with_query) {
                 layer.gate = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionGate, index),
                     {attention.query_width(), program.hidden});
@@ -644,7 +644,7 @@ void CpuCompiledModel::Shared::load_weights() {
             require_matrix(attention.q, label + ".q");
             require_matrix(attention.k, label + ".k");
             require_matrix(attention.v, label + ".v");
-            if (semantics.output_gate.enabled() && !semantics.output_gate.packed_with_query) {
+            if (semantics.output_gate.has_value() && !semantics.output_gate->packed_with_query) {
                 require_matrix(attention.gate, label + ".gate");
             }
         }

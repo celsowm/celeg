@@ -397,8 +397,11 @@ public:
                 : std::nullopt;
             attention.pattern = FullCausalPattern{};
             attention.query_scale = numerical_policy.attention_multiplier;
-            attention.output_gate = {descriptor_.attention_gate_kind,
-                                     descriptor_.attention_gate_packed_with_query};
+            attention.output_gate = descriptor_.attention_gate_sigmoid
+                ? std::optional<SigmoidAttentionGateSpec>{SigmoidAttentionGateSpec{
+                      descriptor_.attention_gate_packed_with_query,
+                      AttentionGateGranularity::OutputWise}}
+                : std::nullopt;
             if (descriptor_.attention_state_kind == "latent") {
                 if (!descriptor_.latent_rank.has_value()) {
                     throw std::invalid_argument("latent attention descriptor has no latent rank");

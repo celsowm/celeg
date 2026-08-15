@@ -223,7 +223,7 @@ struct CpuCompiledModel::BatchScratch {
                             workspace_.qkv.data() + row * q_projection_width,
                             workspace_.op_output.data() + row * q_width,
                             attention->relative_bias);
-                        if (layout.output_gate.enabled()) {
+                        if (layout.output_gate.has_value()) {
                             apply_cpu_attention_output_gate(
                                 workspace_.op_output.data() + row * q_width,
                                 workspace_.qkv.data() + row * q_projection_width + q_width,
@@ -233,7 +233,7 @@ struct CpuCompiledModel::BatchScratch {
                     layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 } else if (layout.uses_latent_state()) {
                     const auto& latent = *layout.latent_state();
-                    if (layout.output_gate.enabled()) {
+                    if (layout.output_gate.has_value()) {
                         throw std::invalid_argument("latent attention query gating is not supported");
                     }
                     const size_t content_width = static_cast<size_t>(layout.latent_query_content_width());
@@ -284,7 +284,7 @@ struct CpuCompiledModel::BatchScratch {
                 } else {
                 const size_t q_width = static_cast<size_t>(layout.query_width());
                 const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
-            const bool attention_output_gate = layout.output_gate.enabled() ||
+            const bool attention_output_gate = layout.output_gate.has_value() ||
                     q_projection_width == 2 * q_width;
                 const size_t kv_width = static_cast<size_t>(layout.key_value_width());
                 layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());

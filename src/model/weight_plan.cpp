@@ -86,7 +86,7 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         }
         append(TensorRole::AttentionOutput, {hidden, query_width});
     }
-    if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {
+    if (attention.output_gate.has_value() && !attention.output_gate->packed_with_query) {
         append(TensorRole::AttentionGate,
                {attention.output_gate_width(), hidden});
     }

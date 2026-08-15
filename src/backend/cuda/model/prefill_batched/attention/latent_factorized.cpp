@@ -152,7 +152,7 @@ void run_factorized_latent_attention(
         workspace.prefill_normed_.data(), *attention.gate,
         workspace.prefill_attention_gate_.data(),
         rows, layout.output_gate_width(), hidden);
-    if (layout.output_gate.granularity == AttentionGateGranularity::HeadWise) {
+    if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
         launch_sigmoid_multiply_headwise(
             workspace.prefill_latent_decompressed_.data(),
             workspace.prefill_attention_gate_.data(),

@@ -38,7 +38,7 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
                 throw std::invalid_argument(
                     "CUDA latent attention currently supports latent ranks up to 512");
             }
-            if ((attention.output_gate.enabled() && !latent.factorized) ||
+            if ((attention.output_gate.has_value() && !latent.factorized) ||
                 attention.multi_axis_position()) {
                 throw std::invalid_argument(
                     "CUDA latent attention does not support query gates or M-RoPE yet");

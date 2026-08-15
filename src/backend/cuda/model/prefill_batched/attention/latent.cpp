@@ -21,7 +21,7 @@ void run_latent_attention(
             model, attention, owner, common_layer, semantics, rows);
         return;
     case LatentPrefillPath::Projected:
-        if (layout.output_gate.enabled() || layout.multi_axis_position()) {
+        if (layout.output_gate.has_value() || layout.multi_axis_position()) {
             throw std::invalid_argument(
                 "CUDA projected latent attention does not support query gates or M-RoPE yet");
         }
