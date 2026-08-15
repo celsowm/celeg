@@ -109,11 +109,11 @@ std::vector<int> infer_intermediate_sizes(
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".feed_forward.w1.weight");
         }
-        if (!ffn_up && context.has_moe && layer >= context.dense_start) {
+        if (!ffn_up && context.moe && layer >= context.dense_start) {
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".mlp.experts.0.gate_proj.weight");
         }
-        if (!ffn_up && context.has_moe && layer >= context.dense_start) {
+        if (!ffn_up && context.moe && layer >= context.dense_start) {
             ffn_up = input.inventory.find(
                 "model.layers." + index +
                 ".mlp.experts.0.gate_proj.weight_packed");
@@ -163,31 +163,18 @@ void initialize_graph(CanonicalInferenceContext& context) {
             numerical_policy.residual_multiplier;
         semantic_layer.mixer = AttentionSpec{};
 
-        if (context.has_moe && layer >= context.dense_start) {
-            MoeSelectionSpec selection = MoeTopKSelectionSpec{};
-            if (context.total_routing_groups > 0) {
-                selection = MoeGroupedTopKSelectionSpec{
-                    context.total_routing_groups,
-                    context.experts_per_group,
-                    context.groups_per_token,
-                    context.group_score_top_k};
-            }
-            std::optional<SharedExpertSpec> shared;
-            if (context.shared_expert_intermediate > 0) {
-                shared = SharedExpertSpec{
-                    context.shared_expert_intermediate,
-                    MoeCombineOrder::RoutedThenShared};
-            }
+        if (context.moe && layer >= context.dense_start) {
+            const CanonicalMoeFacts& moe = *context.moe;
             semantic_layer.feed_forward = MixtureOfExpertsSpec{
-                .intermediate_size = context.moe_intermediate,
-                .num_experts = context.num_experts,
-                .experts_per_token = context.experts_per_token,
-                .normalize_topk = context.normalize_topk,
-                .use_expert_bias = context.use_expert_bias,
-                .routed_scaling_factor = context.routed_scaling_factor,
-                .selection = std::move(selection),
-                .shared = std::move(shared),
-                .router_softmax = context.moe_router_softmax};
+                .intermediate_size = moe.intermediate_size,
+                .num_experts = moe.num_experts,
+                .experts_per_token = moe.experts_per_token,
+                .normalize_topk = moe.normalize_topk,
+                .use_expert_bias = moe.use_expert_bias,
+                .routed_scaling_factor = moe.routed_scaling_factor,
+                .selection = moe.selection,
+                .shared = moe.shared,
+                .router_softmax = moe.router_softmax};
         } else {
             semantic_layer.feed_forward = DenseFeedForwardSpec{
                 context.intermediate_sizes.at(
@@ -233,51 +220,63 @@ CanonicalInferenceContext initialize_canonical_facts(
             "first dense layer is outside the layer schedule");
     }
 
-    context.num_experts = m.moe_experts.value_or(0);
-    context.experts_per_token =
-        m.moe_experts_per_token.value_or(0);
-    context.has_moe =
-        context.num_experts > 0 &&
-        context.experts_per_token > 0 &&
+    const int num_experts = m.moe_experts.value_or(0);
+    const int experts_per_token = m.moe_experts_per_token.value_or(0);
+    const bool has_moe =
+        num_experts > 0 &&
+        experts_per_token > 0 &&
         context.dense_start < context.layer_count;
-    context.moe_intermediate = m.moe_intermediate.value_or(0);
-    context.shared_expert_intermediate =
-        m.moe_shared_intermediate.value_or(0);
-    context.normalize_topk =
-        m.moe_normalize_topk.value_or(false);
-    context.use_expert_bias =
-        m.moe_expert_bias.value_or(false);
-    context.routed_scaling_factor =
-        m.moe_routed_scaling.value_or(1.0f);
-    context.moe_router_softmax =
-        m.moe_score_function.value_or("sigmoid") == "softmax";
-    context.routing_groups = m.moe_routing_groups.value_or(0);
-    context.total_routing_groups =
-        m.moe_total_routing_groups.value_or(context.routing_groups);
-    context.groups_per_token = context.routing_groups;
-    context.group_score_top_k =
-        m.moe_group_score_top_k.value_or(0);
 
-    if (context.has_moe && context.total_routing_groups > 0) {
-        if (context.num_experts % context.total_routing_groups != 0) {
-            fail(
-                ResolutionFailureKind::ConflictingMetadata,
-                "MoE expert count is not divisible by routing group count");
+    if (has_moe) {
+        const int routing_groups = m.moe_routing_groups.value_or(0);
+        const int total_routing_groups =
+            m.moe_total_routing_groups.value_or(routing_groups);
+        const int groups_per_token = routing_groups;
+        const int group_score_top_k = m.moe_group_score_top_k.value_or(0);
+
+        MoeSelectionSpec selection = MoeTopKSelectionSpec{};
+        if (total_routing_groups > 0) {
+            if (num_experts % total_routing_groups != 0) {
+                fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "MoE expert count is not divisible by routing group count");
+            }
+            const int experts_per_group = num_experts / total_routing_groups;
+            if (groups_per_token <= 0 ||
+                groups_per_token > total_routing_groups) {
+                fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "invalid number of selected MoE routing groups");
+            }
+            if (group_score_top_k <= 0 ||
+                group_score_top_k > experts_per_group) {
+                fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "invalid MoE routing group score width");
+            }
+            selection = MoeGroupedTopKSelectionSpec{
+                total_routing_groups, experts_per_group,
+                groups_per_token, group_score_top_k};
         }
-        context.experts_per_group =
-            context.num_experts / context.total_routing_groups;
-        if (context.groups_per_token <= 0 ||
-            context.groups_per_token > context.total_routing_groups) {
-            fail(
-                ResolutionFailureKind::ConflictingMetadata,
-                "invalid number of selected MoE routing groups");
+
+        std::optional<SharedExpertSpec> shared;
+        const int shared_expert_intermediate =
+            m.moe_shared_intermediate.value_or(0);
+        if (shared_expert_intermediate > 0) {
+            shared = SharedExpertSpec{
+                shared_expert_intermediate, MoeCombineOrder::RoutedThenShared};
         }
-        if (context.group_score_top_k <= 0 ||
-            context.group_score_top_k > context.experts_per_group) {
-            fail(
-                ResolutionFailureKind::ConflictingMetadata,
-                "invalid MoE routing group score width");
-        }
+
+        context.moe = CanonicalMoeFacts{
+            num_experts,
+            experts_per_token,
+            m.moe_intermediate.value_or(0),
+            std::move(selection),
+            std::move(shared),
+            m.moe_normalize_topk.value_or(false),
+            m.moe_expert_bias.value_or(false),
+            m.moe_routed_scaling.value_or(1.0f),
+            m.moe_score_function.value_or("sigmoid") == "softmax"};
     }
 
     auto& checkpoint = context.facts.checkpoint;

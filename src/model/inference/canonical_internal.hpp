@@ -2,9 +2,22 @@
 
 #include "celeg/model/inference.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace celeg::inference_detail {
+
+struct CanonicalMoeFacts {
+    int num_experts = 0;
+    int experts_per_token = 0;
+    int intermediate_size = 0;
+    MoeSelectionSpec selection = MoeTopKSelectionSpec{};
+    std::optional<SharedExpertSpec> shared;
+    bool normalize_topk = false;
+    bool use_expert_bias = false;
+    float routed_scaling_factor = 1.0f;
+    bool router_softmax = false;
+};
 
 struct CanonicalInferenceContext {
     explicit CanonicalInferenceContext(const InferenceInput& source)
@@ -17,20 +30,7 @@ struct CanonicalInferenceContext {
 
     int layer_count = 0;
     int dense_start = 0;
-    int num_experts = 0;
-    int experts_per_token = 0;
-    bool has_moe = false;
-    int moe_intermediate = 0;
-    int shared_expert_intermediate = 0;
-    bool normalize_topk = false;
-    bool use_expert_bias = false;
-    float routed_scaling_factor = 1.0f;
-    bool moe_router_softmax = false;
-    int routing_groups = 0;
-    int total_routing_groups = 0;
-    int groups_per_token = 0;
-    int group_score_top_k = 0;
-    int experts_per_group = 0;
+    std::optional<CanonicalMoeFacts> moe;
 };
 
 CanonicalInferenceContext initialize_canonical_facts(const InferenceInput& input);

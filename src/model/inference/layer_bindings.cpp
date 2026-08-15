@@ -655,16 +655,17 @@ void bind_moe(CanonicalInferenceContext& context,
         });
     };
 
+    const int num_experts = context.moe->num_experts;
     bind(
         TensorRole::MoeRouter,
         prefix + "gate.weight",
-        {context.num_experts, *m.hidden_size});
+        {num_experts, *m.hidden_size});
     const std::string bias_name = prefix + "gate.expert_bias";
     if (has_tensor(bias_name)) {
         bind(
             TensorRole::MoeRouterBias,
             bias_name,
-            {context.num_experts});
+            {num_experts});
     }
 
     const auto* moe = std::get_if<MixtureOfExpertsSpec>(
@@ -677,7 +678,7 @@ void bind_moe(CanonicalInferenceContext& context,
     }
 
     const int expert_intermediate = moe->intermediate_size;
-    for (int expert = 0; expert < context.num_experts; ++expert) {
+    for (int expert = 0; expert < num_experts; ++expert) {
         const std::string expert_prefix =
             prefix + "experts." + std::to_string(expert) + ".";
         bind(

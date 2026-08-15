@@ -569,7 +569,7 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
              has_tensor(
                  "model.layers." + std::to_string(layer) +
                  ".feed_forward.w1.weight") ||
-             (context.has_moe &&
+             (context.moe &&
               has_tensor(
                   model_layer_prefix +
                   "mlp.experts.0.gate_proj.weight")));
