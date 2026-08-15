@@ -210,12 +210,14 @@ PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     result.context_scale = 1.0f / std::sqrt(static_cast<float>(graph.hidden));
     result.residual_scale = kPerLayerResidualScale;
     result.activation = graph.layers.front().per_layer_input.activation;
-    result.norm_epsilon = graph.layers.front().per_layer_input_norm.epsilon;
+    result.norm_epsilon = graph.layers.front().per_layer_input_norm
+        ? graph.layers.front().per_layer_input_norm->epsilon : 0.0f;
     for (const LayerSpec& layer : graph.layers) {
         if (!layer.per_layer_input.enabled ||
             layer.per_layer_input.input_size != result.input_size ||
             layer.per_layer_input.activation != result.activation ||
-            layer.per_layer_input_norm.epsilon != result.norm_epsilon) {
+            (layer.per_layer_input_norm ? layer.per_layer_input_norm->epsilon : 0.0f)
+                != result.norm_epsilon) {
             throw std::invalid_argument("inconsistent per-layer input specification");
         }
     }

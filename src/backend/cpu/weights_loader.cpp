@@ -33,7 +33,7 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         static_cast<size_t>(layer));
     const int hidden = program.hidden;
     const auto load_norm = [&](TensorRole role, const NormSpec& spec) {
-        if (!spec.enabled() || spec.weightless()) {
+        if (spec.weightless()) {
             return std::vector<float>(static_cast<size_t>(hidden), 1.0f);
         }
         std::vector<float> values = load_vector(source, reader, writer,
@@ -58,15 +58,15 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         }
         return common;
     }
-    if (layer_program.post_attention_norm.enabled()) {
+    if (layer_program.post_attention_norm) {
         common.post_attention_norm = load_norm(TensorRole::AttentionPostNorm,
-                                               layer_program.post_attention_norm);
+                                               *layer_program.post_attention_norm);
     }
     common.ffn_norm = load_norm(TensorRole::FfnInputNorm,
-                                layer_program.feed_forward_norm);
-    if (layer_program.post_feed_forward_norm.enabled()) {
+                                *layer_program.feed_forward_norm);
+    if (layer_program.post_feed_forward_norm) {
         common.post_feed_forward_norm = load_norm(TensorRole::FfnOutputNorm,
-                                                  layer_program.post_feed_forward_norm);
+                                                  *layer_program.post_feed_forward_norm);
     }
     const auto* dense =
         std::get_if<CompiledDenseFeedForwardProgram>(&layer_program.feed_forward);
@@ -275,24 +275,24 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionOutput, index),
                 {program.hidden, attention.query_width()});
-            layer.q_norm = attention.query_norm.enabled()
-                ? (attention.query_norm.weightless()
+            layer.q_norm = attention.query_norm.has_value()
+                ? (attention.query_norm->weightless()
                     ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
                     : load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionQueryNorm, index),
                         {attention.head_dim}))
                 : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
-            layer.k_norm = attention.key_norm.enabled()
-                ? (attention.key_norm.weightless()
+            layer.k_norm = attention.key_norm.has_value()
+                ? (attention.key_norm->weightless()
                     ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
                     : load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
                         {attention.head_dim}))
                 : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
-            if (attention.query_norm.weight_kind == NormWeightKind::OnePlusScale) {
+            if (attention.query_norm && attention.query_norm->weight_kind == NormWeightKind::OnePlusScale) {
                 for (float& value : layer.q_norm) value += 1.0f;
             }
-            if (attention.key_norm.weight_kind == NormWeightKind::OnePlusScale) {
+            if (attention.key_norm && attention.key_norm->weight_kind == NormWeightKind::OnePlusScale) {
                 for (float& value : layer.k_norm) value += 1.0f;
             }
             if (attention.output_gate.enabled() && !attention.output_gate.packed_with_query) {

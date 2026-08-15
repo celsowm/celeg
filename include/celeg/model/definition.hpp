@@ -8,6 +8,9 @@
 
 namespace celeg {
 
+template <typename T>
+inline constexpr bool always_false_v = false;
+
 struct TransformerDimensions {
     int hidden_size = 0;
     int intermediate_size = 0;
@@ -21,29 +24,46 @@ struct TransformerDimensions {
     void validate() const;
 };
 
-enum class RopeScalingKind : uint8_t {
-    None,
-    Linear,
-    DynamicNtk,
-    Yarn,
-    Long,
-    Llama3Frequency,
+struct NoRopeScaling {};
+
+struct LinearRopeScaling {
+    double factor = 1.0;
 };
 
-struct RopeScalingSpec {
-    RopeScalingKind kind = RopeScalingKind::None;
+struct DynamicNtkRopeScaling {
     double factor = 1.0;
     int original_context = 0;
+};
+
+struct YarnRopeScaling {
+    double factor = 1.0;
     double attention_factor = 1.0;
     double beta_fast = 0.0;
     double beta_slow = 0.0;
-    double low_frequency_factor = 1.0;
-    double high_frequency_factor = 1.0;
+};
+
+struct LongRopeScaling {
+    int original_context = 0;
     std::vector<float> short_factors;
     std::vector<float> long_factors;
-
-    void validate(int rotary_dimension) const;
 };
+
+struct Llama3FrequencyScaling {
+    double factor = 1.0;
+    int original_context = 0;
+    double low_frequency_factor = 1.0;
+    double high_frequency_factor = 1.0;
+};
+
+using RopeScalingSpec = std::variant<
+    NoRopeScaling,
+    LinearRopeScaling,
+    DynamicNtkRopeScaling,
+    YarnRopeScaling,
+    LongRopeScaling,
+    Llama3FrequencyScaling>;
+
+void validate_rope_scaling(const RopeScalingSpec& scaling, int rotary_dimension);
 
 enum class RopePairingKind : uint8_t {
     SplitHalf,

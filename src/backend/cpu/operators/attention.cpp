@@ -19,10 +19,10 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     if (rope == nullptr) {
         if (layout.has_query_key_norm()) {
             cpu_qk_norm_only(query, weights.q_norm.data(), layout.query_heads,
-                             layout.head_dim, layout.query_norm.epsilon);
+                             layout.head_dim, layout.query_norm->epsilon);
             if (has_key) {
                 cpu_qk_norm_only(key, weights.k_norm.data(), layout.key_value_heads,
-                                 layout.head_dim, layout.key_norm.epsilon);
+                                 layout.head_dim, layout.key_norm->epsilon);
             }
             for (int i = 0; i < q_width; ++i) query[i] *= layout.query_scale;
             return;
@@ -37,20 +37,20 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
         if (const auto* multi = layout.multi_axis_position()) {
             cpu_qk_norm_rope_mrope(query, weights.q_norm.data(), layout.query_heads,
                 layout.head_dim, rope_position, multi->sections, multi->interleaved,
-                *rope, layout.query_norm.epsilon);
+                *rope, layout.query_norm->epsilon);
             if (has_key) {
                 cpu_qk_norm_rope_mrope(key, weights.k_norm.data(), layout.key_value_heads,
                     layout.head_dim, rope_position, multi->sections, multi->interleaved,
-                    *rope, layout.key_norm.epsilon);
+                    *rope, layout.key_norm->epsilon);
             }
         } else {
             cpu_qk_norm_rope(query, weights.q_norm.data(), layout.query_heads,
                              layout.head_dim, scalar_position,
-                             *rope, layout.query_norm.epsilon);
+                             *rope, layout.query_norm->epsilon);
             if (has_key) {
                 cpu_qk_norm_rope(key, weights.k_norm.data(), layout.key_value_heads,
                                  layout.head_dim, scalar_position,
-                                 *rope, layout.key_norm.epsilon);
+                                 *rope, layout.key_norm->epsilon);
             }
         }
         const float query_scale = layout.query_scale * rope_attention_scale(*rope, scalar_position);

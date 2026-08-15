@@ -14,9 +14,6 @@
 
 namespace celeg {
 
-template <typename T>
-inline constexpr bool always_false_v = false;
-
 enum class ActivationKind : uint8_t {
     SwiGLU,
     GeluTanh,
@@ -171,8 +168,8 @@ struct AttentionSpec {
     int query_heads = 0;
     int key_value_heads = 0;
     int head_dim = 0;
-    NormSpec query_norm;
-    NormSpec key_norm;
+    std::optional<NormSpec> query_norm;
+    std::optional<NormSpec> key_norm;
     AttentionPatternSpec pattern = FullCausalPattern{};
     KvSharingSpec kv_sharing;
     float query_scale = 1.0f;
@@ -247,7 +244,7 @@ struct AttentionSpec {
     }
     bool uses_external_memory() const { return !sources.self_attention(); }
     bool has_query_key_norm() const {
-        return query_norm.enabled() || key_norm.enabled();
+        return query_norm.has_value() || key_norm.has_value();
     }
     int latent_query_projection_width() const {
         const auto* latent = latent_state();
@@ -383,12 +380,12 @@ using FeedForwardSpec = std::variant<
 
 struct LayerSpec {
     NormSpec operator_norm;
-    NormSpec post_attention_norm;
-    NormSpec pre_feed_forward_norm;
-    NormSpec post_feed_forward_norm;
-    NormSpec per_layer_input_norm;
+    std::optional<NormSpec> post_attention_norm;
+    std::optional<NormSpec> pre_feed_forward_norm;
+    std::optional<NormSpec> post_feed_forward_norm;
+    std::optional<NormSpec> per_layer_input_norm;
     MixerSpec mixer;
-    NormSpec feed_forward_norm;
+    std::optional<NormSpec> feed_forward_norm;
     FeedForwardSpec feed_forward;
     ResidualSpec residual;
     PerLayerInputSpec per_layer_input;

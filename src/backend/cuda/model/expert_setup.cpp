@@ -28,10 +28,10 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
         if (!std::holds_alternative<std::monostate>(layer.feed_forward)) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
-        if (layer.post_attention_norm.enabled()) {
+        if (layer.post_attention_norm.has_value()) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
-        if (layer.post_feed_forward_norm.enabled()) {
+        if (layer.post_feed_forward_norm.has_value()) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
 

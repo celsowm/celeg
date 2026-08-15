@@ -42,7 +42,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     if (common_layer.post_attention_norm) {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                       semantics.post_attention_norm.epsilon, stream_.get());
+                       semantics.post_attention_norm->epsilon, stream_.get());
     }
     if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
         std::holds_alternative<std::monostate>(semantics.feed_forward)) {
@@ -486,7 +486,7 @@ void CudaCompiledModel::run_token_attention(
         launch_dynamic_qk_norm_rope(
             q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
-            session_.position_, 1.0f, 0.0f, layout.query_norm.epsilon, true,
+            session_.position_, 1.0f, 0.0f, layout.query_norm->epsilon, true,
             CudaRopeScaling{}, stream_.get());
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
@@ -586,7 +586,7 @@ void CudaCompiledModel::run_token_mamba2(Mamba2Layer& mamba,
                        spec.state_size, spec.num_heads, spec.head_dim,
                        spec.group_count, spec.conv_kernel, stream_.get());
     const float epsilon = kv.paged() ? semantics.operator_norm.epsilon
-                                     : semantics.post_attention_norm.epsilon;
+                                     : semantics.post_attention_norm->epsilon;
     launch_rmsnorm(workspace_.mamba_inner_.data(), mamba.norm,
                    workspace_.op_output_.data(), 1, spec.intermediate_size,
                    epsilon, stream_.get());

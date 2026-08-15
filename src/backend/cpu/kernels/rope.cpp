@@ -80,7 +80,7 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
     if (g_has_avx2_fma) {
         if (rope.pairing == RopePairingKind::SplitHalf &&
-            rope.rotary_fraction == 1.0 && rope.scaling.kind == RopeScalingKind::None) {
+            rope.rotary_fraction == 1.0 && std::holds_alternative<NoRopeScaling>(rope.scaling)) {
             cpu_qk_norm_rope_avx2(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
             return;
         }
@@ -88,7 +88,7 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
 #elif defined(_MSC_VER) && CELEG_CPU_X86
     if (g_has_avx2_fma) {
         if (rope.pairing == RopePairingKind::SplitHalf &&
-            rope.rotary_fraction == 1.0 && rope.scaling.kind == RopeScalingKind::None) {
+            rope.rotary_fraction == 1.0 && std::holds_alternative<NoRopeScaling>(rope.scaling)) {
             detail::cpu_qk_norm_rope_avx2_msvc(data, norm_weight, cos_vals.data(), sin_vals.data(), heads, head_dim, eps);
             return;
         }

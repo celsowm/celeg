@@ -42,7 +42,7 @@ int main() {
     for (auto& layer : resolved.graph.layers) {
         layer.mixer = celeg::AttentionSpec{};
         layer.per_layer_input = {4, celeg::ActivationKind::GeluTanh, true};
-        layer.per_layer_input_norm.epsilon = 1.0e-5f;
+        layer.per_layer_input_norm = celeg::NormSpec{1.0e-5f};
         layer.feed_forward = celeg::DenseFeedForwardSpec{
             16, celeg::ActivationKind::SwiGLU};
     }

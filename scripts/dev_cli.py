@@ -39,6 +39,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="on",
         help="Register and run tests that require a visible CUDA device",
     )
+    parser.add_argument(
+        "--asan",
+        action="store_true",
+        help="Configure CELEG_ASAN=ON (AddressSanitizer) for CPU builds only",
+    )
     args = parser.parse_args(argv)
     if args.jobs < 1:
         parser.error("--jobs must be positive")

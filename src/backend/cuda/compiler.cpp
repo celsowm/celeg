@@ -45,8 +45,8 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
             }
         }
         if (attention.rope_position() &&
-            attention.rope_position()->scaling.kind == RopeScalingKind::Long) {
-            const auto& scaling = attention.rope_position()->scaling;
+            std::holds_alternative<LongRopeScaling>(attention.rope_position()->scaling)) {
+            const auto& scaling = std::get<LongRopeScaling>(attention.rope_position()->scaling);
             if (scaling.short_factors.empty() ||
                 scaling.short_factors.size() != scaling.long_factors.size() ||
                 scaling.short_factors.size() > 128) {

@@ -83,6 +83,8 @@ def configure_command(
     serve = env_value(environment.values, "CELEG_ENABLE_SERVE")
     if serve:
         command.append(f"-DCELEG_ENABLE_SERVE={serve}")
+    if getattr(args, "asan", False):
+        command.append("-DCELEG_ASAN=ON")
     return command
 
 

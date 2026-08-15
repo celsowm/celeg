@@ -19,8 +19,7 @@ void CudaCompiledModel::enqueue_decode_attention(
     AttentionLayer* attention = as_attention(layer);
     if (!attention) throw std::logic_error("CUDA layer is not attention");
             const AttentionSpec& layout = attention->layout;
-            const float qk_norm_epsilon = layout.query_norm.enabled()
-                ? layout.query_norm.epsilon : layout.key_norm.epsilon;
+            const float qk_norm_epsilon = layout.query_norm->epsilon;
             AttentionLayer* owner = attention;
             if (attention->kv_owner_layer >= 0) {
                 owner = as_attention(resources_.layers_.at(

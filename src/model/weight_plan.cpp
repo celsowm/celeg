@@ -19,11 +19,11 @@ void add_request(ResolvedModel& model, TensorRole role, int layer, int expert,
 }
 
 void add_norm_request(ResolvedModel& model, TensorRole role, int layer,
-                      const NormSpec& spec, std::vector<int64_t> shape,
+                      const std::optional<NormSpec>& spec, std::vector<int64_t> shape,
                       int physical_layer) {
-    if (!spec.enabled() || spec.weightless()) return;
+    if (!spec || spec->weightless()) return;
     add_request(model, role, layer, -1, std::move(shape), physical_layer,
-                spec.weight_kind);
+                spec->weight_kind);
 }
 
 void append_attention(ResolvedModel& model, const AttentionSpec& attention,
@@ -74,13 +74,13 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         const int key_value_width = attention.key_value_width();
         append(TensorRole::AttentionQuery,
                {attention.query_projection_width(), hidden});
-        if (attention.query_norm.enabled()) {
+        if (attention.query_norm.has_value()) {
             append(TensorRole::AttentionQueryNorm, {attention.head_dim});
         }
         if (!attention.kv_sharing.shared() || attention.kv_sharing.publishes) {
             append(TensorRole::AttentionKey, {key_value_width, hidden});
             append(TensorRole::AttentionValue, {key_value_width, hidden});
-            if (attention.key_norm.enabled()) {
+            if (attention.key_norm.has_value()) {
                 append(TensorRole::AttentionKeyNorm, {attention.head_dim});
             }
         }
@@ -231,7 +231,7 @@ void build_weight_plan_from_graph(ResolvedModel& model,
             ? layer_index
             : dimensions.checkpoint_layer_for_layer.at(static_cast<size_t>(layer_index));
         add_norm_request(model, TensorRole::AttentionInputNorm, layer_index,
-                         layer.operator_norm, {graph.hidden}, physical_layer);
+                         std::optional<NormSpec>{layer.operator_norm}, {graph.hidden}, physical_layer);
         append_mixer(model, layer, layer_index, physical_layer);
         const bool has_feed_forward =
             !std::holds_alternative<std::monostate>(layer.feed_forward);

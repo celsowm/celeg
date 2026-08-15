@@ -114,13 +114,13 @@ std::string position_kind_value(const CheckpointMetadata& metadata,
     return field.fallback_expression.empty() ? "rope" : field.fallback_expression;
 }
 
-RopeScalingKind parse_scaling_kind(std::string_view value) {
-    if (value.empty() || value == "none") return RopeScalingKind::None;
-    if (value == "linear") return RopeScalingKind::Linear;
-    if (value == "dynamic_ntk") return RopeScalingKind::DynamicNtk;
-    if (value == "yarn") return RopeScalingKind::Yarn;
-    if (value == "long" || value == "longrope") return RopeScalingKind::Long;
-    if (value == "llama3_frequency") return RopeScalingKind::Llama3Frequency;
+RopeScalingSpec parse_scaling_kind(std::string_view value) {
+    if (value.empty() || value == "none") return NoRopeScaling{};
+    if (value == "linear") return LinearRopeScaling{};
+    if (value == "dynamic_ntk") return DynamicNtkRopeScaling{};
+    if (value == "yarn") return YarnRopeScaling{};
+    if (value == "long" || value == "longrope") return LongRopeScaling{};
+    if (value == "llama3_frequency") return Llama3FrequencyScaling{};
     throw std::invalid_argument("descriptor has unsupported RoPE scaling kind: " +
                                 std::string(value));
 }

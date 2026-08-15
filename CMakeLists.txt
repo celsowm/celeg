@@ -66,6 +66,22 @@ if(MSVC)
     endif()
 endif()
 
+# AddressSanitizer instrumentation for debugging memory-corruption bugs.
+# Applies to C/C++ translation units only (MSVC's /fsanitize=address is
+# incompatible with CUDA host compilation), so it must be used with
+# CELEG_ENABLE_CUDA=OFF. Enabled via `-DCELEG_ASAN=ON` or `python
+# scripts/dev.py verify --asan`.
+option(CELEG_ASAN "Build C/C++ targets with AddressSanitizer (/fsanitize=address)" OFF)
+if(CELEG_ASAN)
+    if(CELEG_ENABLE_CUDA)
+        message(FATAL_ERROR "CELEG_ASAN is incompatible with CELEG_ENABLE_CUDA=ON")
+    endif()
+    add_compile_options(
+        $<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/fsanitize=address>
+        $<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/Zi>)
+    add_link_options(/fsanitize=address)
+endif()
+
 add_library(celeg_base ${CELEG_BASE_RUNTIME_SOURCES})
 target_include_directories(celeg_base PUBLIC include)
 target_compile_definitions(celeg_base PUBLIC

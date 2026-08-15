@@ -80,7 +80,7 @@ void run_regular_attention(
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            layout.query_norm.epsilon,
+            layout.query_norm->epsilon,
             layout.has_query_key_norm(),
             lower_cuda_rope_scaling(*rope), model.stream_.get());
     } else if (layout.has_query_key_norm()) {
@@ -89,7 +89,7 @@ void run_regular_attention(
             attention.key ? workspace.prefill_k_.data() : nullptr,
             attention.q_norm, attention.k_norm,
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
-            1.0f, 0.0f, layout.query_norm.epsilon, true,
+            1.0f, 0.0f, layout.query_norm->epsilon, true,
             CudaRopeScaling{}, model.stream_.get());
     }
     launch_scale(

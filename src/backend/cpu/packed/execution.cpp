@@ -329,7 +329,7 @@ struct CpuCompiledModel::BatchScratch {
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_attention_norm.enabled()) {
+            if (layer_semantics.post_attention_norm.has_value()) {
                 rmsnorm_rows_inplace(workspace_.hidden.data(), common.post_attention_norm, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
@@ -495,7 +495,7 @@ struct CpuCompiledModel::BatchScratch {
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_feed_forward_norm.enabled()) {
+            if (layer_semantics.post_feed_forward_norm.has_value()) {
                 rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);

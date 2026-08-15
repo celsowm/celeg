@@ -70,7 +70,7 @@ void CudaCompiledModel::enqueue_decode_forward() {
         if (common_layer.post_attention_norm) {
             launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           semantics.post_attention_norm.epsilon, stream_.get());
+                           semantics.post_attention_norm->epsilon, stream_.get());
         }
         if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
             std::holds_alternative<std::monostate>(semantics.feed_forward)) {

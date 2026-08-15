@@ -22,26 +22,46 @@ struct CudaRopeScaling {
 };
 
 inline CudaRopeScaling lower_cuda_rope_scaling(const RopePositionSpec& rope) {
-    CudaRopeScaling result;
-    result.kind = static_cast<int>(rope.scaling.kind);
-    result.factor = static_cast<float>(rope.scaling.factor);
-    result.original_context = rope.scaling.original_context;
-    result.attention_factor = static_cast<float>(rope.scaling.attention_factor);
-    result.beta_fast = static_cast<float>(rope.scaling.beta_fast);
-    result.beta_slow = static_cast<float>(rope.scaling.beta_slow);
-    result.low_frequency_factor = static_cast<float>(rope.scaling.low_frequency_factor);
-    result.high_frequency_factor = static_cast<float>(rope.scaling.high_frequency_factor);
-    if (rope.scaling.kind == RopeScalingKind::Long) {
-        if (rope.scaling.short_factors.size() != rope.scaling.long_factors.size() ||
-            rope.scaling.short_factors.size() > 128) {
-            throw std::invalid_argument("LongRoPE factors exceed CUDA lowering capacity");
+    CudaRopeScaling result{};
+    std::visit([&](const auto& scaling) {
+        using Scaling = std::decay_t<decltype(scaling)>;
+        if constexpr (std::is_same_v<Scaling, NoRopeScaling>) {
+            result.kind = 0;
+        } else if constexpr (std::is_same_v<Scaling, LinearRopeScaling>) {
+            result.kind = 1;
+            result.factor = static_cast<float>(scaling.factor);
+        } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
+            result.kind = 2;
+            result.factor = static_cast<float>(scaling.factor);
+            result.original_context = scaling.original_context;
+        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+            result.kind = 3;
+            result.factor = static_cast<float>(scaling.factor);
+            result.attention_factor = static_cast<float>(scaling.attention_factor);
+            result.beta_fast = static_cast<float>(scaling.beta_fast);
+            result.beta_slow = static_cast<float>(scaling.beta_slow);
+        } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
+            result.kind = 4;
+            result.original_context = scaling.original_context;
+            if (scaling.short_factors.size() != scaling.long_factors.size() ||
+                scaling.short_factors.size() > 128) {
+                throw std::invalid_argument("LongRoPE factors exceed CUDA lowering capacity");
+            }
+            result.factor_count = static_cast<int>(scaling.short_factors.size());
+            for (int i = 0; i < result.factor_count; ++i) {
+                result.short_factors[i] = static_cast<float>(scaling.short_factors[i]);
+                result.long_factors[i] = static_cast<float>(scaling.long_factors[i]);
+            }
+        } else if constexpr (std::is_same_v<Scaling, Llama3FrequencyScaling>) {
+            result.kind = 5;
+            result.factor = static_cast<float>(scaling.factor);
+            result.original_context = scaling.original_context;
+            result.low_frequency_factor = static_cast<float>(scaling.low_frequency_factor);
+            result.high_frequency_factor = static_cast<float>(scaling.high_frequency_factor);
+        } else {
+            static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
         }
-        result.factor_count = static_cast<int>(rope.scaling.short_factors.size());
-        for (int i = 0; i < result.factor_count; ++i) {
-            result.short_factors[i] = static_cast<float>(rope.scaling.short_factors[i]);
-            result.long_factors[i] = static_cast<float>(rope.scaling.long_factors[i]);
-        }
-    }
+    }, rope.scaling);
     return result;
 }
 

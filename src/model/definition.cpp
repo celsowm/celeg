@@ -18,47 +18,71 @@ void TransformerDimensions::validate() const {
     }
 }
 
-void RopeScalingSpec::validate(int rotary_dimension) const {
+void validate_rope_scaling(const RopeScalingSpec& scaling, int rotary_dimension) {
     if (rotary_dimension <= 0 || (rotary_dimension % 2) != 0) {
         throw std::invalid_argument("RoPE rotary dimension must be positive and even");
     }
-    if (kind != RopeScalingKind::None && (!(factor > 0.0) || !std::isfinite(factor))) {
-        throw std::invalid_argument("RoPE scaling factor must be positive");
-    }
-    if ((kind == RopeScalingKind::Linear || kind == RopeScalingKind::DynamicNtk ||
-         kind == RopeScalingKind::Yarn || kind == RopeScalingKind::Long ||
-         kind == RopeScalingKind::Llama3Frequency) && original_context <= 0) {
-        throw std::invalid_argument("scaled RoPE requires an original context length");
-    }
-    if (!std::isfinite(attention_factor) || attention_factor <= 0.0) {
-        throw std::invalid_argument("RoPE attention factor must be positive");
-    }
-    if (kind == RopeScalingKind::Yarn &&
-        (!std::isfinite(beta_fast) || !std::isfinite(beta_slow) ||
-         beta_fast < 0.0 || beta_slow < 0.0 || beta_fast > beta_slow)) {
-        throw std::invalid_argument("invalid YaRN beta range");
-    }
-    if (kind == RopeScalingKind::Llama3Frequency &&
-        (!(low_frequency_factor > 0.0) || !(high_frequency_factor > 0.0) ||
-         !std::isfinite(low_frequency_factor) || !std::isfinite(high_frequency_factor))) {
-        throw std::invalid_argument("invalid Llama-3 RoPE frequency factors");
-    }
-    if (kind == RopeScalingKind::Long) {
-        if (short_factors.size() != static_cast<size_t>(rotary_dimension / 2) ||
-            long_factors.size() != static_cast<size_t>(rotary_dimension / 2)) {
-            throw std::invalid_argument("LongRoPE factors must match rotary dimension");
-        }
-        for (float value : short_factors) {
-            if (!(value > 0.0f) || !std::isfinite(value)) {
-                throw std::invalid_argument("invalid LongRoPE short factor");
+    std::visit([&](const auto& value) {
+        using Scaling = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Scaling, NoRopeScaling>) {
+            return;
+        } else if constexpr (std::is_same_v<Scaling, LinearRopeScaling>) {
+            if (!(value.factor > 0.0) || !std::isfinite(value.factor)) {
+                throw std::invalid_argument("RoPE scaling factor must be positive");
             }
-        }
-        for (float value : long_factors) {
-            if (!(value > 0.0f) || !std::isfinite(value)) {
-                throw std::invalid_argument("invalid LongRoPE long factor");
+        } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
+            if (!(value.factor > 0.0) || !std::isfinite(value.factor)) {
+                throw std::invalid_argument("RoPE scaling factor must be positive");
             }
+            if (value.original_context <= 0) {
+                throw std::invalid_argument("scaled RoPE requires an original context length");
+            }
+        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+            if (!(value.factor > 0.0) || !std::isfinite(value.factor)) {
+                throw std::invalid_argument("RoPE scaling factor must be positive");
+            }
+            if (!std::isfinite(value.attention_factor) || value.attention_factor <= 0.0) {
+                throw std::invalid_argument("RoPE attention factor must be positive");
+            }
+            if (!std::isfinite(value.beta_fast) || !std::isfinite(value.beta_slow) ||
+                value.beta_fast < 0.0 || value.beta_slow < 0.0 ||
+                value.beta_fast > value.beta_slow) {
+                throw std::invalid_argument("invalid YaRN beta range");
+            }
+        } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
+            if (value.original_context <= 0) {
+                throw std::invalid_argument("scaled RoPE requires an original context length");
+            }
+            if (value.short_factors.size() != static_cast<size_t>(rotary_dimension / 2) ||
+                value.long_factors.size() != static_cast<size_t>(rotary_dimension / 2)) {
+                throw std::invalid_argument("LongRoPE factors must match rotary dimension");
+            }
+            for (float v : value.short_factors) {
+                if (!(v > 0.0f) || !std::isfinite(v)) {
+                    throw std::invalid_argument("invalid LongRoPE short factor");
+                }
+            }
+            for (float v : value.long_factors) {
+                if (!(v > 0.0f) || !std::isfinite(v)) {
+                    throw std::invalid_argument("invalid LongRoPE long factor");
+                }
+            }
+        } else if constexpr (std::is_same_v<Scaling, Llama3FrequencyScaling>) {
+            if (!(value.factor > 0.0) || !std::isfinite(value.factor)) {
+                throw std::invalid_argument("RoPE scaling factor must be positive");
+            }
+            if (value.original_context <= 0) {
+                throw std::invalid_argument("scaled RoPE requires an original context length");
+            }
+            if (!(value.low_frequency_factor > 0.0) || !(value.high_frequency_factor > 0.0) ||
+                !std::isfinite(value.low_frequency_factor) ||
+                !std::isfinite(value.high_frequency_factor)) {
+                throw std::invalid_argument("invalid Llama-3 RoPE frequency factors");
+            }
+        } else {
+            static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
         }
-    }
+    }, scaling);
 }
 
 void RopePositionSpec::validate(int head_dimension) const {
@@ -68,7 +92,7 @@ void RopePositionSpec::validate(int head_dimension) const {
         throw std::invalid_argument("invalid RoPE position specification");
     }
     const int rotary_dimension = static_cast<int>(head_dimension * rotary_fraction);
-    scaling.validate(rotary_dimension);
+    validate_rope_scaling(scaling, rotary_dimension);
 }
 
 void MultiAxisRopeSpec::validate(int head_dimension) const {

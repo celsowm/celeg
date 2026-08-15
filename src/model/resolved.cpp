@@ -16,17 +16,42 @@ void append_norm(std::ostringstream& out, const NormSpec& norm) {
     out << norm.epsilon << ':' << static_cast<int>(norm.weight_kind) << ';';
 }
 
+void append_optional_norm(std::ostringstream& out, const std::optional<NormSpec>& norm) {
+    if (norm) {
+        out << '1' << ':';
+        append_norm(out, *norm);
+    } else {
+        out << '0' << ';';
+    }
+}
+
 void append_rope(std::ostringstream& out, const RopePositionSpec& rope) {
     out << rope.theta << ':' << rope.rotary_fraction << ':'
-        << static_cast<int>(rope.pairing) << ':'
-        << static_cast<int>(rope.scaling.kind) << ':' << rope.scaling.factor << ':'
-        << rope.scaling.original_context << ':' << rope.scaling.attention_factor << ':'
-        << rope.scaling.beta_fast << ':' << rope.scaling.beta_slow << ':'
-        << rope.scaling.low_frequency_factor << ':' << rope.scaling.high_frequency_factor;
-    out << ":short=";
-    for (float value : rope.scaling.short_factors) out << value << ',';
-    out << ":long=";
-    for (float value : rope.scaling.long_factors) out << value << ',';
+        << static_cast<int>(rope.pairing) << ':';
+    std::visit([&out](const auto& scaling) {
+        using Scaling = std::decay_t<decltype(scaling)>;
+        if constexpr (std::is_same_v<Scaling, NoRopeScaling>) {
+            out << "none";
+        } else if constexpr (std::is_same_v<Scaling, LinearRopeScaling>) {
+            out << "linear:" << scaling.factor;
+        } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
+            out << "dynamic_ntk:" << scaling.factor << ':' << scaling.original_context;
+        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+            out << "yarn:" << scaling.factor << ':' << scaling.attention_factor << ':'
+                << scaling.beta_fast << ':' << scaling.beta_slow;
+        } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
+            out << "long:" << scaling.original_context << ":short=";
+            for (float value : scaling.short_factors) out << value << ',';
+            out << ":long=";
+            for (float value : scaling.long_factors) out << value << ',';
+        } else if constexpr (std::is_same_v<Scaling, Llama3FrequencyScaling>) {
+            out << "llama3:" << scaling.factor << ':' << scaling.original_context << ':'
+                << scaling.low_frequency_factor << ':' << scaling.high_frequency_factor;
+        } else {
+            static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
+        }
+    }, rope.scaling);
+    out << ';';
 }
 
 void append_position(std::ostringstream& out, const PositionSpec& position) {
@@ -54,8 +79,8 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
     out << attention.query_heads << ':' << attention.key_value_heads << ':'
         << attention.head_dim << ':' << attention.kv_sharing.group << ':'
         << attention.kv_sharing.publishes << ':' << attention.query_scale << ':';
-    append_norm(out, attention.query_norm);
-    append_norm(out, attention.key_norm);
+    append_optional_norm(out, attention.query_norm);
+    append_optional_norm(out, attention.key_norm);
     append_position(out, attention.position);
     out << "pattern:";
     std::visit([&out](const auto& pattern) {
@@ -215,12 +240,12 @@ std::string ModelGraph::fingerprint() const {
         << final_logit_softcap << ":layers=";
     for (const LayerSpec& layer : layers) {
         append_norm(out, layer.operator_norm);
-        append_norm(out, layer.post_attention_norm);
-        append_norm(out, layer.pre_feed_forward_norm);
-        append_norm(out, layer.post_feed_forward_norm);
-        append_norm(out, layer.per_layer_input_norm);
+        append_optional_norm(out, layer.post_attention_norm);
+        append_optional_norm(out, layer.pre_feed_forward_norm);
+        append_optional_norm(out, layer.post_feed_forward_norm);
+        append_optional_norm(out, layer.per_layer_input_norm);
         append_mixer(out, layer);
-        append_norm(out, layer.feed_forward_norm);
+        append_optional_norm(out, layer.feed_forward_norm);
         append_feed_forward(out, layer);
         out << ":residual=" << layer.residual.multiplier << ":input="
             << layer.per_layer_input.input_size << ':'
@@ -369,10 +394,10 @@ void ModelGraph::validate() const {
             throw std::runtime_error("resolved model graph has invalid layer policy");
         }
         layer.operator_norm.validate();
-        if (layer.feed_forward_norm.enabled()) layer.feed_forward_norm.validate();
-        if (layer.post_attention_norm.enabled()) layer.post_attention_norm.validate();
-        if (layer.pre_feed_forward_norm.enabled()) layer.pre_feed_forward_norm.validate();
-        if (layer.post_feed_forward_norm.enabled()) layer.post_feed_forward_norm.validate();
+        if (layer.feed_forward_norm) layer.feed_forward_norm->validate();
+        if (layer.post_attention_norm) layer.post_attention_norm->validate();
+        if (layer.pre_feed_forward_norm) layer.pre_feed_forward_norm->validate();
+        if (layer.post_feed_forward_norm) layer.post_feed_forward_norm->validate();
         if (layer.per_layer_input.enabled && layer.per_layer_input.input_size <= 0) {
             throw std::runtime_error("enabled per-layer input has invalid width");
         }
@@ -426,8 +451,8 @@ void ModelGraph::validate() const {
             throw std::runtime_error("MLP-only layer has no positive width");
         }
         if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
-            if (attention->query_norm.enabled()) attention->query_norm.validate();
-            if (attention->key_norm.enabled()) attention->key_norm.validate();
+            if (attention->query_norm) attention->query_norm->validate();
+            if (attention->key_norm) attention->key_norm->validate();
             switch (attention->output_gate.granularity) {
             case AttentionGateGranularity::OutputWise:
             case AttentionGateGranularity::HeadWise:
@@ -505,8 +530,10 @@ void AttentionStateStorageSpec::validate(const AttentionStateSpec& state) const 
         }
         if (latent_state->factorized &&
             (latent_state->query_rank <= 0 || latent_state->value_head_dim <= 0 ||
-             !latent_state->query_latent_norm.enabled() ||
-             !latent_state->key_latent_norm.enabled())) {
+             !std::isfinite(latent_state->query_latent_norm.epsilon) ||
+             latent_state->query_latent_norm.epsilon <= 0.0f ||
+             !std::isfinite(latent_state->key_latent_norm.epsilon) ||
+             latent_state->key_latent_norm.epsilon <= 0.0f)) {
             throw std::runtime_error("invalid factorized latent attention projections");
         }
     }

@@ -13,7 +13,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
     } else {
         launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
                        1, resources_.program_.hidden,
-                       semantics.feed_forward_norm.epsilon,
+                       semantics.feed_forward_norm->epsilon,
                        stream_.get());
         const auto& dense_semantics =
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
@@ -49,7 +49,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             if (split_output) {
                 launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
                                workspace_.mlp_output_.data(), 1, resources_.program_.hidden,
-                               semantics.post_feed_forward_norm.epsilon,
+                               semantics.post_feed_forward_norm->epsilon,
                                stream_.get());
             }
             launch_scale(workspace_.mlp_output_.data(), resources_.program_.hidden,
@@ -76,7 +76,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
         launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
                        workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
-                       semantics.feed_forward_norm.epsilon,
+                       semantics.feed_forward_norm->epsilon,
                        stream_.get());
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
@@ -118,7 +118,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         if (split_output) {
             launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
                            workspace_.prefill_mlp_output_.data(), rows, resources_.program_.hidden,
-                           semantics.post_feed_forward_norm.epsilon,
+                           semantics.post_feed_forward_norm->epsilon,
                            stream_.get());
         }
         launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.program_.hidden,

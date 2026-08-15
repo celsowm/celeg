@@ -12,7 +12,8 @@ int main() {
         attention.query_heads = 2;
         attention.key_value_heads = 1;
         attention.head_dim = 4;
-        attention.query_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+        attention.query_norm = std::optional<celeg::NormSpec>{
+            celeg::NormSpec{1.0e-5f, celeg::NormWeightKind::Scale}};
         attention.key_norm = attention.query_norm;
         attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
         layer.mixer = attention;

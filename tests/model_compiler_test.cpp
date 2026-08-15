@@ -172,26 +172,25 @@ int main() {
     CELEG_TEST_CHECK(compiled_attention(external_cpu.layers[0]).uses_external_memory());
 
     celeg::RopePositionSpec linear{10000.0, 1.0,
-        {celeg::RopeScalingKind::Linear, 2.0, 32}};
+        celeg::LinearRopeScaling{2.0}};
     const double base_frequency = celeg::rope_frequency(
         celeg::RopePositionSpec{10000.0, 1.0, {}}, 2, 8, 64);
     CELEG_TEST_CHECK(std::abs(celeg::rope_frequency(linear, 2, 8, 64) -
                              base_frequency / 2.0) < 1.0e-12);
     celeg::RopePositionSpec dynamic{10000.0, 1.0,
-        {celeg::RopeScalingKind::DynamicNtk, 2.0, 32}};
+        celeg::DynamicNtkRopeScaling{2.0, 32}};
     CELEG_TEST_CHECK(celeg::rope_frequency(dynamic, 1, 8, 16) !=
                      celeg::rope_frequency(dynamic, 1, 8, 64));
     celeg::RopePositionSpec long_rope{10000.0, 1.0,
-        {celeg::RopeScalingKind::Long, 2.0, 32, 1.0, 0.0, 0.0, 1.0, 1.0,
-         {1.0f, 2.0f, 3.0f, 4.0f}, {2.0f, 3.0f, 4.0f, 5.0f}}};
+        celeg::LongRopeScaling{32, {1.0f, 2.0f, 3.0f, 4.0f}, {2.0f, 3.0f, 4.0f, 5.0f}}};
     CELEG_TEST_CHECK(celeg::rope_frequency(long_rope, 2, 8, 16) !=
                      celeg::rope_frequency(long_rope, 2, 8, 64));
     celeg::RopePositionSpec yarn_rope{10000.0, 1.0,
-        {celeg::RopeScalingKind::Yarn, 2.0, 32, 1.25, 1.0, 4.0}};
+        celeg::YarnRopeScaling{2.0, 1.25, 1.0, 4.0}};
     CELEG_TEST_CHECK(celeg::rope_frequency(yarn_rope, 0, 8, 64) !=
                      celeg::rope_frequency(yarn_rope, 3, 8, 64));
     celeg::RopePositionSpec llama3_rope{10000.0, 1.0,
-        {celeg::RopeScalingKind::Llama3Frequency, 2.0, 32, 1.0, 1.0, 1.0, 8.0}};
+        celeg::Llama3FrequencyScaling{2.0, 32, 1.0, 8.0}};
     CELEG_TEST_CHECK(celeg::rope_frequency(llama3_rope, 0, 8, 64) !=
                      celeg::rope_frequency(llama3_rope, 3, 8, 64));
     celeg::ResolvedModel cuda_yarn = model;

@@ -76,23 +76,43 @@ public:
             static_cast<size_t>(layer_count)) {
             throw std::invalid_argument("descriptor RoPE schedule length does not match layer schedule");
         }
-        RopeScalingSpec scaling;
-        scaling.kind = parse_scaling_kind(scaling_kind_value(metadata, descriptor_));
-        scaling.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
-        scaling.original_context = scaling_integer_value(
-            metadata, descriptor_.rope_scaling_original_context);
-        scaling.attention_factor = scaling_number_value(
-            metadata, descriptor_.rope_scaling_attention_factor, 1.0);
-        scaling.beta_fast = scaling_number_value(metadata, descriptor_.rope_scaling_beta_fast, 0.0);
-        scaling.beta_slow = scaling_number_value(metadata, descriptor_.rope_scaling_beta_slow, 0.0);
-        scaling.low_frequency_factor = scaling_number_value(
-            metadata, descriptor_.rope_scaling_low_frequency_factor, 1.0);
-        scaling.high_frequency_factor = scaling_number_value(
-            metadata, descriptor_.rope_scaling_high_frequency_factor, 1.0);
-        scaling.short_factors = scaling_factor_values(
-            metadata, descriptor_.rope_scaling_short_factors);
-        scaling.long_factors = scaling_factor_values(
-            metadata, descriptor_.rope_scaling_long_factors);
+        const std::string scaling_kind = scaling_kind_value(metadata, descriptor_);
+        RopeScalingSpec scaling = parse_scaling_kind(scaling_kind);
+        std::visit([&](auto& value) {
+            using Scaling = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Scaling, NoRopeScaling>) {
+                return;
+            } else if constexpr (std::is_same_v<Scaling, LinearRopeScaling>) {
+                value.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
+            } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
+                value.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
+                value.original_context = scaling_integer_value(
+                    metadata, descriptor_.rope_scaling_original_context);
+            } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+                value.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
+                value.attention_factor = scaling_number_value(
+                    metadata, descriptor_.rope_scaling_attention_factor, 1.0);
+                value.beta_fast = scaling_number_value(metadata, descriptor_.rope_scaling_beta_fast, 0.0);
+                value.beta_slow = scaling_number_value(metadata, descriptor_.rope_scaling_beta_slow, 0.0);
+            } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
+                value.original_context = scaling_integer_value(
+                    metadata, descriptor_.rope_scaling_original_context);
+                value.short_factors = scaling_factor_values(
+                    metadata, descriptor_.rope_scaling_short_factors);
+                value.long_factors = scaling_factor_values(
+                    metadata, descriptor_.rope_scaling_long_factors);
+            } else if constexpr (std::is_same_v<Scaling, Llama3FrequencyScaling>) {
+                value.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
+                value.original_context = scaling_integer_value(
+                    metadata, descriptor_.rope_scaling_original_context);
+                value.low_frequency_factor = scaling_number_value(
+                    metadata, descriptor_.rope_scaling_low_frequency_factor, 1.0);
+                value.high_frequency_factor = scaling_number_value(
+                    metadata, descriptor_.rope_scaling_high_frequency_factor, 1.0);
+            } else {
+                static_assert(always_false_v<Scaling>, "unhandled RoPE scaling variant");
+            }
+        }, scaling);
         const double rotary_fraction = descriptor_.rotary_fraction.has_value()
             ? number_value(metadata, *descriptor_.rotary_fraction) : 1.0;
         numerical_policy.embedding_multiplier = static_cast<float>(
@@ -124,7 +144,7 @@ public:
                 intermediate, descriptor_.feed_forward_activation};
             semantic_layer.operator_norm = {numerical_policy.norm_eps,
                                              descriptor_.operator_norm_kind};
-            semantic_layer.feed_forward_norm = {numerical_policy.norm_eps,
+            semantic_layer.feed_forward_norm = NormSpec{numerical_policy.norm_eps,
                                                  descriptor_.feed_forward_norm_kind};
             semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
         }
@@ -367,12 +387,14 @@ public:
             attention.query_heads = layer_query_heads;
             attention.key_value_heads = scheduled_layer_kv_heads;
             attention.head_dim = layer_head_dim;
-            attention.query_norm = {descriptor_.query_norm_enabled
-                ? numerical_policy.norm_eps : 0.0f,
-                descriptor_.query_norm_kind};
-            attention.key_norm = {descriptor_.key_norm_enabled
-                ? numerical_policy.norm_eps : 0.0f,
-                descriptor_.key_norm_kind};
+            attention.query_norm = descriptor_.query_norm_enabled
+                ? std::optional<NormSpec>{NormSpec{numerical_policy.norm_eps,
+                                                   descriptor_.query_norm_kind}}
+                : std::nullopt;
+            attention.key_norm = descriptor_.key_norm_enabled
+                ? std::optional<NormSpec>{NormSpec{numerical_policy.norm_eps,
+                                                   descriptor_.key_norm_kind}}
+                : std::nullopt;
             attention.pattern = FullCausalPattern{};
             attention.query_scale = numerical_policy.attention_multiplier;
             attention.output_gate = {descriptor_.attention_gate_kind,

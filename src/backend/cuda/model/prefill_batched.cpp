@@ -79,7 +79,7 @@ void run_layer(
         launch_rmsnorm(
             workspace.prefill_hidden_.data(), common_layer.post_attention_norm,
             workspace.prefill_hidden_.data(),
-            rows, hidden, semantics.post_attention_norm.epsilon,
+            rows, hidden, semantics.post_attention_norm->epsilon,
             model.stream_.get());
     }
 

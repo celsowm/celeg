@@ -104,7 +104,7 @@ void run_factorized_latent_attention(
             nullptr, nullptr,
             rows, layout.query_heads, 1, latent.rope_head_dim, nullptr,
             static_cast<float>(rope->theta), 1.0f,
-            layout.query_norm.epsilon, false,
+            layout.query_norm->epsilon, false,
             rope->pairing, lower_cuda_rope_scaling(*rope), model.stream_.get());
     }
     prof.end(PrefillPhase::RopeKv, model.stream_.get());

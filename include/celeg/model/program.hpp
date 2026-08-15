@@ -172,9 +172,9 @@ struct CompiledLayerProgram {
     CompiledFeedForwardProgram feed_forward;
     std::vector<std::size_t> weight_request_indices;
     NormSpec operator_norm;
-    NormSpec post_attention_norm;
-    NormSpec feed_forward_norm;
-    NormSpec post_feed_forward_norm;
+    std::optional<NormSpec> post_attention_norm;
+    std::optional<NormSpec> feed_forward_norm;
+    std::optional<NormSpec> post_feed_forward_norm;
     ResidualSpec residual;
 };
 

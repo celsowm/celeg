@@ -178,7 +178,7 @@ std::vector<float> scaling_factor_values(const CheckpointMetadata& metadata,
                                          const std::optional<Field>& field);
 std::string position_kind_value(const CheckpointMetadata& metadata,
                                 const Descriptor& descriptor);
-RopeScalingKind parse_scaling_kind(std::string_view value);
+RopeScalingSpec parse_scaling_kind(std::string_view value);
 StateScalarType parse_state_scalar(std::string_view value);
 StateQuantizationGranularity parse_state_granularity(std::string_view value);
 std::string scaling_kind_value(const CheckpointMetadata& metadata,

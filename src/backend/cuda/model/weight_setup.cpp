@@ -76,15 +76,15 @@ void CudaCompiledModel::load_checkpoint_weights(
             {resources_.program_.hidden}, semantic_layer.operator_norm.weight_kind);
         if (!mixer_only_layer) {
             common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
-                                              semantic_layer.feed_forward_norm);
+                                              *semantic_layer.feed_forward_norm);
         }
-        if (!mixer_only_layer && semantic_layer.post_attention_norm.enabled()) {
+        if (!mixer_only_layer && semantic_layer.post_attention_norm.has_value()) {
             common_layer.post_attention_norm = load_norm(
-                TensorRole::AttentionPostNorm, semantic_layer.post_attention_norm);
+                TensorRole::AttentionPostNorm, *semantic_layer.post_attention_norm);
         }
-        if (!mixer_only_layer && semantic_layer.post_feed_forward_norm.enabled()) {
+        if (!mixer_only_layer && semantic_layer.post_feed_forward_norm.has_value()) {
             common_layer.post_feed_forward_norm = load_norm(
-                TensorRole::FfnOutputNorm, semantic_layer.post_feed_forward_norm);
+                TensorRole::FfnOutputNorm, *semantic_layer.post_feed_forward_norm);
         }
         if (resources_.program_.per_layer_input.enabled) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(
@@ -472,14 +472,14 @@ void CudaCompiledModel::load_checkpoint_weights(
                 {resources_.program_.hidden, layout.query_width()});
             if (layout.has_query_key_norm()) {
                 attention_layer.q_norm = resources_.weight_loader_->load_rms_norm_weight(
-                    repo, layout.query_norm.weightless() ? std::string{} :
+                    repo, layout.query_norm->weightless() ? std::string{} :
                         tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionQueryNorm, i),
-                    {layout.head_dim}, layout.query_norm.weight_kind);
+                    {layout.head_dim}, layout.query_norm->weight_kind);
                 if (attention_layer.key) {
                     attention_layer.k_norm = resources_.weight_loader_->load_rms_norm_weight(
-                    repo, layout.key_norm.weightless() ? std::string{} :
+                    repo, layout.key_norm->weightless() ? std::string{} :
                         tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKeyNorm, i),
-                        {layout.head_dim}, layout.key_norm.weight_kind);
+                        {layout.head_dim}, layout.key_norm->weight_kind);
                 }
             }
 

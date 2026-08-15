@@ -78,7 +78,7 @@ void project_attention_qkv(PackedOperatorContext& context,
             attention.k_norm, rows, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            layout.query_norm.epsilon, layout.has_query_key_norm(),
+            layout.query_norm->epsilon, layout.has_query_key_norm(),
             rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
@@ -516,7 +516,7 @@ void PackedDenseFfnExecutor::run(
     const CompiledLayerProgram& semantics = reference.program().layers.at(
         static_cast<size_t>(layer_index));
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.program.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
+                   rows, context.program.hidden, semantics.feed_forward_norm->epsilon, w.stream.get());
     const auto* dense_semantics =
         std::get_if<CompiledDenseFeedForwardProgram>(&semantics.feed_forward);
     if (!dense_semantics) {
@@ -571,7 +571,7 @@ void PackedMoeExecutor::run(
     const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward);
     if (!moe) throw std::logic_error("packed MoE layer has no MoE FFN binding");
     launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.program.hidden, semantics.feed_forward_norm.epsilon, w.stream.get());
+                   rows, context.program.hidden, semantics.feed_forward_norm->epsilon, w.stream.get());
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
                               rows * context.program.hidden, w.stream.get());
 
