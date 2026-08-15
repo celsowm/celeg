@@ -24,11 +24,14 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
     bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
 
     for (int layer = 0; layer < static_cast<int>(program.layers.size()); ++layer) {
-        // input_layernorm and the FFN input norm are present in all normal
-        // decoder blocks. Split-norm families add two more vectors below.
-        bytes += bf16_bytes(2ull * static_cast<std::size_t>(program.hidden));
+        // input_layernorm is present for every operator. FFN and split norms
+        // are accounted for only when the compiled layer actually executes them.
+        bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         const CompiledLayerProgram& layer_program = program.layers.at(
             static_cast<size_t>(layer));
+        if (layer_program.execute_feed_forward) {
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
+        }
         if (layer_program.post_attention_norm.enabled()) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
@@ -69,10 +72,10 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
                     layer_program.moe->shared->mlp.intermediate_size);
                 bytes += bf16_bytes(3ull * shared * program.hidden + program.hidden);
             }
-        } else {
+        } else if (layer_program.feed_forward == CompiledFeedForward::Dense) {
             const int intermediate = layer_program.feed_forward_intermediate;
             if (intermediate <= 0) {
-                throw std::runtime_error("compiled layer has no FFN width for weight estimate");
+                throw std::runtime_error("compiled dense layer has no FFN width for weight estimate");
             }
             bytes += bf16_bytes(3ull * static_cast<std::size_t>(intermediate) * program.hidden);
         }
@@ -127,7 +130,7 @@ std::size_t estimate_mtp_non_expert_weights(const CheckpointDimensions& dims,
                 dense_layer->feed_forward_intermediate <= 0) {
                 throw std::runtime_error("MTP requires a compiled dense FFN width");
             }
-            bytes += bf16_bytes(3ull * static_cast<size_t>(
+            bytes += bf16_bytes(3ull * static_cast<std::size_t>(
                 dense_layer->feed_forward_intermediate) * program.hidden);
         }
     }
