@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 namespace celeg {
 
@@ -231,7 +232,7 @@ void PerLayerInputPlan::validate() const {
     }
 }
 
-CompiledMixer CompiledLayerProgram::mixer_kind() const {
+CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer) {
     return std::visit([](const auto& value) {
         using Mixer = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
@@ -250,56 +251,81 @@ CompiledMixer CompiledLayerProgram::mixer_kind() const {
     }, mixer);
 }
 
-AttentionSpec* CompiledLayerProgram::attention() {
-    auto* value = std::get_if<CompiledAttentionProgram>(&mixer);
-    return value ? &value->semantics : nullptr;
+bool operator==(const CompiledMixerProgram& mixer, CompiledMixer kind) {
+    return compiled_mixer_kind(mixer) == kind;
 }
 
-const AttentionSpec* CompiledLayerProgram::attention() const {
-    const auto* value = std::get_if<CompiledAttentionProgram>(&mixer);
-    return value ? &value->semantics : nullptr;
+bool operator==(CompiledMixer kind, const CompiledMixerProgram& mixer) {
+    return mixer == kind;
 }
 
-CompiledAttentionStateLayout* CompiledLayerProgram::state_layout() {
-    auto* value = std::get_if<CompiledAttentionProgram>(&mixer);
-    return value ? &value->state_layout : nullptr;
+bool operator!=(const CompiledMixerProgram& mixer, CompiledMixer kind) {
+    return !(mixer == kind);
 }
 
-const CompiledAttentionStateLayout* CompiledLayerProgram::state_layout() const {
-    const auto* value = std::get_if<CompiledAttentionProgram>(&mixer);
-    return value ? &value->state_layout : nullptr;
+bool operator!=(CompiledMixer kind, const CompiledMixerProgram& mixer) {
+    return !(mixer == kind);
 }
 
-ShortConvolutionSpec* CompiledLayerProgram::short_convolution() {
-    return std::get_if<ShortConvolutionSpec>(&mixer);
+void CompiledLayerProgram::bind_mixer_views() {
+    attention.bind(mixer);
+    state_layout.bind(mixer);
+    short_convolution.bind(mixer);
+    gated_delta_net.bind(mixer);
+    mamba2.bind(mixer);
+    mlp_only.bind(mixer);
 }
 
-const ShortConvolutionSpec* CompiledLayerProgram::short_convolution() const {
-    return std::get_if<ShortConvolutionSpec>(&mixer);
+CompiledLayerProgram::CompiledLayerProgram() {
+    bind_mixer_views();
 }
 
-GatedDeltaNetSpec* CompiledLayerProgram::gated_delta_net() {
-    return std::get_if<GatedDeltaNetSpec>(&mixer);
+CompiledLayerProgram::CompiledLayerProgram(const CompiledLayerProgram& other)
+    : CompiledLayerProgram() {
+    *this = other;
 }
 
-const GatedDeltaNetSpec* CompiledLayerProgram::gated_delta_net() const {
-    return std::get_if<GatedDeltaNetSpec>(&mixer);
+CompiledLayerProgram::CompiledLayerProgram(CompiledLayerProgram&& other)
+    : CompiledLayerProgram() {
+    *this = std::move(other);
 }
 
-Mamba2Spec* CompiledLayerProgram::mamba2() {
-    return std::get_if<Mamba2Spec>(&mixer);
+CompiledLayerProgram& CompiledLayerProgram::operator=(
+    const CompiledLayerProgram& other) {
+    if (this == &other) return *this;
+    mixer = other.mixer;
+    feed_forward = other.feed_forward;
+    execute_feed_forward = other.execute_feed_forward;
+    chunk_capability = other.chunk_capability;
+    feed_forward_intermediate = other.feed_forward_intermediate;
+    feed_forward_activation = other.feed_forward_activation;
+    weight_request_indices = other.weight_request_indices;
+    moe = other.moe;
+    operator_norm = other.operator_norm;
+    post_attention_norm = other.post_attention_norm;
+    feed_forward_norm = other.feed_forward_norm;
+    post_feed_forward_norm = other.post_feed_forward_norm;
+    residual = other.residual;
+    return *this;
 }
 
-const Mamba2Spec* CompiledLayerProgram::mamba2() const {
-    return std::get_if<Mamba2Spec>(&mixer);
-}
-
-MlpBlockSpec* CompiledLayerProgram::mlp_only() {
-    return std::get_if<MlpBlockSpec>(&mixer);
-}
-
-const MlpBlockSpec* CompiledLayerProgram::mlp_only() const {
-    return std::get_if<MlpBlockSpec>(&mixer);
+CompiledLayerProgram& CompiledLayerProgram::operator=(
+    CompiledLayerProgram&& other) {
+    if (this == &other) return *this;
+    mixer = std::move(other.mixer);
+    feed_forward = other.feed_forward;
+    execute_feed_forward = other.execute_feed_forward;
+    chunk_capability = other.chunk_capability;
+    feed_forward_intermediate = other.feed_forward_intermediate;
+    feed_forward_activation = other.feed_forward_activation;
+    weight_request_indices = std::move(other.weight_request_indices);
+    moe = std::move(other.moe);
+    operator_norm = std::move(other.operator_norm);
+    post_attention_norm = std::move(other.post_attention_norm);
+    feed_forward_norm = std::move(other.feed_forward_norm);
+    post_feed_forward_norm = std::move(other.post_feed_forward_norm);
+    residual = std::move(other.residual);
+    return *this;
 }
 
 bool CompiledModelProgram::has_moe() const {
