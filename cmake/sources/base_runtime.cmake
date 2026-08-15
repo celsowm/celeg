@@ -46,7 +46,6 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/model/program_builder.cpp
     src/model/program_fingerprint.cpp
     src/model/weight_plan.cpp
-    src/backend/moe_capabilities.cpp
     src/composition/builtin_runtime.cpp
     src/model/execution/runtime_types.cpp
     src/model/weights/quantization.cpp
