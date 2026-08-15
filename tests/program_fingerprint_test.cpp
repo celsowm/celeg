@@ -80,6 +80,24 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<std::monostate>(
         no_feed_forward_program.layers[0].feed_forward.storage()));
 
+    celeg::CompiledLayerProgram mlp_only_layer;
+    mlp_only_layer.mixer = celeg::MlpBlockSpec{
+        24, celeg::ActivationKind::GeluTanh};
+    mlp_only_layer.feed_forward = celeg::CompiledFeedForward::None;
+    CELEG_TEST_CHECK(!mlp_only_layer.execute_feed_forward);
+    CELEG_TEST_CHECK(mlp_only_layer.feed_forward_kind() ==
+                     celeg::CompiledFeedForward::None);
+    CELEG_TEST_CHECK(mlp_only_layer.feed_forward_intermediate == 24);
+    CELEG_TEST_CHECK(mlp_only_layer.feed_forward_activation ==
+                     celeg::ActivationKind::GeluTanh);
+    CELEG_TEST_CHECK(std::holds_alternative<std::monostate>(
+        mlp_only_layer.feed_forward.storage()));
+
+    celeg::CompiledLayerProgram copied_mlp_only = mlp_only_layer;
+    CELEG_TEST_CHECK(copied_mlp_only.feed_forward_intermediate == 24);
+    CELEG_TEST_CHECK(copied_mlp_only.feed_forward_activation ==
+                     celeg::ActivationKind::GeluTanh);
+
     celeg::ResolvedModel moe_model = baseline;
     moe_model.graph.layers[0].feed_forward = celeg::MixtureOfExpertsSpec{
         16, 4, 2, true, false, 1.0f};
