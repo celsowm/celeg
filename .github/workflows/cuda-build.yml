@@ -20,7 +20,7 @@ jobs:
       - name: Build and verify
         run: python3 scripts/dev.py verify --backend cpu --build-type Release --jobs 2
       - name: Inspect VNNI code generation
-        run: BUILD_DIR=out/linux-cpu-release ./scripts/cpu_vnni_check.sh
+        run: BUILD_DIR=out/linux-cpu-release bash ./scripts/cpu_vnni_check.sh
       - name: Verify no CUDA dependency
         run: |
           if ldd out/linux-cpu-release/libceleg_cpu.so | grep -Ei 'cuda|cublas'; then
