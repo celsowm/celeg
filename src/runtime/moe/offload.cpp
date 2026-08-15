@@ -92,11 +92,11 @@ std::size_t kv_cache_bytes(const CompiledModelProgram& program, int context_toke
     if (context_tokens <= 0) return 0;
     std::size_t bytes = 0;
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (!layer.attention) continue;
-        const AttentionSpec& layout = *layer.attention;
-        if (layout.kv_sharing.shared() && !layout.kv_sharing.publishes) continue;
+        const AttentionSpec* layout = layer.attention();
+        if (!layout) continue;
+        if (layout->kv_sharing.shared() && !layout->kv_sharing.publishes) continue;
         bytes += static_cast<std::size_t>(2) *
-            static_cast<std::size_t>(layout.key_value_width()) * kBf16Bytes *
+            static_cast<std::size_t>(layout->key_value_width()) * kBf16Bytes *
             static_cast<std::size_t>(context_tokens);
     }
     return bytes;
