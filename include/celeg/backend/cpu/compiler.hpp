@@ -1,5 +1,6 @@
 #pragma once
 
+#include "celeg/backend/moe_capabilities.hpp"
 #include "celeg/model/program.hpp"
 
 namespace celeg {
