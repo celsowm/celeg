@@ -25,15 +25,15 @@ int main() {
     celeg::CompiledModelProgram program;
     program.layers.resize(2);
     for (size_t index = 0; index < program.layers.size(); ++index) {
-        auto& layer = program.layers[index];
-        layer.mixer = celeg::CompiledMixer::Attention;
-        layer.attention = std::get<celeg::AttentionSpec>(graph.layers[index].mixer);
-        layer.state_layout = celeg::CompiledAttentionStateLayout{};
-        layer.state_layout->key_width = 4;
-        layer.state_layout->value_width = 4;
-        layer.state_layout->key_elements = 4;
-        layer.state_layout->value_elements = 4;
-        layer.state_layout->persistent_elements = 8;
+        celeg::CompiledAttentionStateLayout state_layout;
+        state_layout.key_width = 4;
+        state_layout.value_width = 4;
+        state_layout.key_elements = 4;
+        state_layout.value_elements = 4;
+        state_layout.persistent_elements = 8;
+        program.layers[index].mixer = celeg::CompiledAttentionProgram{
+            std::get<celeg::AttentionSpec>(graph.layers[index].mixer),
+            state_layout};
     }
 
     const celeg::CpuKvTopology topology =
@@ -54,17 +54,20 @@ int main() {
         celeg::DenseFeedForwardSpec{16, celeg::ActivationKind::SwiGLU};
     const celeg::RuntimeTopology latent_shape =
         celeg::compose_runtime_topology({}, latent_graph);
+
+    celeg::CompiledAttentionStateLayout latent_state_layout;
+    latent_state_layout.kind = celeg::CompiledStateLayoutKind::Latent;
+    latent_state_layout.latent_width = 16;
+    latent_state_layout.rotary_width = 4;
+    latent_state_layout.latent_elements = 16;
+    latent_state_layout.rotary_elements = 4;
+    latent_state_layout.persistent_elements = 20;
+
     celeg::CompiledModelProgram latent_program;
     latent_program.layers.resize(1);
-    latent_program.layers[0].mixer = celeg::CompiledMixer::Attention;
-    latent_program.layers[0].attention = latent_attention;
-    latent_program.layers[0].state_layout = celeg::CompiledAttentionStateLayout{};
-    latent_program.layers[0].state_layout->kind = celeg::CompiledStateLayoutKind::Latent;
-    latent_program.layers[0].state_layout->latent_width = 16;
-    latent_program.layers[0].state_layout->rotary_width = 4;
-    latent_program.layers[0].state_layout->latent_elements = 16;
-    latent_program.layers[0].state_layout->rotary_elements = 4;
-    latent_program.layers[0].state_layout->persistent_elements = 20;
+    latent_program.layers[0].mixer = celeg::CompiledAttentionProgram{
+        latent_attention, latent_state_layout};
+
     const celeg::CpuKvTopology latent_topology =
         celeg::build_cpu_kv_topology(latent_shape.exec, latent_program,
                                      celeg::CpuModelOptions{});
