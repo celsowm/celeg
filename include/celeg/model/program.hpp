@@ -7,7 +7,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace celeg {
@@ -202,20 +201,6 @@ struct CompiledModelProgram {
     bool has_moe() const;
     void validate() const;
 };
-
-struct MoeBackendCapabilities {
-    bool grouped_selection = false;
-    bool shared_experts = false;
-    bool stacked_payload = false;
-    bool fused_payload = false;
-};
-
-// Backend compilers call this after generic semantic compilation and before
-// allocating backend state.  Unsupported semantics therefore fail with a
-// useful diagnostic instead of reaching a decode loop.
-void validate_moe_backend_capabilities(const CompiledModelProgram& program,
-                                       std::string_view backend,
-                                       MoeBackendCapabilities capabilities);
 
 CompiledModelProgram build_model_program(const ResolvedModel& model);
 
