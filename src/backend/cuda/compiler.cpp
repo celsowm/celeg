@@ -1,5 +1,7 @@
 #include "celeg/backend/cuda/compiler.hpp"
 
+#include "celeg/backend/moe_capabilities.hpp"
+
 #include <stdexcept>
 
 namespace celeg {
