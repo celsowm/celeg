@@ -268,19 +268,48 @@ void CompiledModelProgram::validate() const {
                 throw std::invalid_argument("compiled layer has invalid weight index");
             }
         }
-        const bool has_mixer_spec =
-            layer.attention.has_value() || layer.short_convolution.has_value() ||
-            layer.gated_delta_net.has_value() || layer.mamba2.has_value();
-        if (layer.mixer == CompiledMixer::MlpOnly) {
-            if (has_mixer_spec || !layer.mlp_only) {
-                throw std::invalid_argument("MLP-only layer has invalid mixer semantics");
+
+        const int mixer_payload_count =
+            static_cast<int>(layer.attention.has_value()) +
+            static_cast<int>(layer.short_convolution.has_value()) +
+            static_cast<int>(layer.gated_delta_net.has_value()) +
+            static_cast<int>(layer.mamba2.has_value()) +
+            static_cast<int>(layer.mlp_only.has_value());
+        if (mixer_payload_count != 1) {
+            throw std::invalid_argument(
+                "compiled layer must have exactly one mixer semantic payload");
+        }
+        switch (layer.mixer) {
+        case CompiledMixer::Attention:
+            if (!layer.attention) {
+                throw std::invalid_argument(
+                    "compiled attention layer has no attention semantics");
             }
-        } else if (!has_mixer_spec || layer.mlp_only) {
-            throw std::invalid_argument("compiled mixer has no semantic specification");
+            break;
+        case CompiledMixer::ShortConvolution:
+            if (!layer.short_convolution) {
+                throw std::invalid_argument(
+                    "compiled convolution layer has no convolution semantics");
+            }
+            break;
+        case CompiledMixer::GatedDeltaNet:
+            if (!layer.gated_delta_net) {
+                throw std::invalid_argument(
+                    "compiled GatedDeltaNet layer has no semantics");
+            }
+            break;
+        case CompiledMixer::Mamba2:
+            if (!layer.mamba2) {
+                throw std::invalid_argument("compiled Mamba2 layer has no semantics");
+            }
+            break;
+        case CompiledMixer::MlpOnly:
+            if (!layer.mlp_only) {
+                throw std::invalid_argument("MLP-only layer has no mixer semantics");
+            }
+            break;
         }
-        if (layer.mixer == CompiledMixer::Attention && !layer.attention) {
-            throw std::invalid_argument("compiled attention layer has no attention semantics");
-        }
+
         if (layer.attention && !layer.state_layout) {
             throw std::invalid_argument("compiled attention layer has no state layout");
         }
@@ -288,15 +317,6 @@ void CompiledModelProgram::validate() const {
             throw std::invalid_argument("non-attention layer has an attention state layout");
         }
         if (layer.state_layout) layer.state_layout->validate();
-        if (layer.mixer == CompiledMixer::ShortConvolution && !layer.short_convolution) {
-            throw std::invalid_argument("compiled convolution layer has no convolution semantics");
-        }
-        if (layer.mixer == CompiledMixer::GatedDeltaNet && !layer.gated_delta_net) {
-            throw std::invalid_argument("compiled GatedDeltaNet layer has no semantics");
-        }
-        if (layer.mixer == CompiledMixer::Mamba2 && !layer.mamba2) {
-            throw std::invalid_argument("compiled Mamba2 layer has no semantics");
-        }
         if (layer.feed_forward_intermediate <= 0) {
             throw std::invalid_argument("compiled layer has no FFN width");
         }
