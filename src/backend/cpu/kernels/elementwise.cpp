@@ -51,7 +51,7 @@ void cpu_swiglu_avx2(const float* gate_up, float* output, size_t count) {
 }
 #endif
 
-} // namespace
+}
 
 void cpu_rmsnorm(const float* input, const float* weight, float* output,
                  size_t width, float eps) {
@@ -145,4 +145,4 @@ void cpu_gelu_tanh(float* data, size_t count) {
     }
 }
 
-} // namespace celeg
+}

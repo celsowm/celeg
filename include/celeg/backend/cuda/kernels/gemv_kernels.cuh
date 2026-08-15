@@ -1,27 +1,14 @@
 #pragma once
 
-// Shared GEMV kernel definitions for the m=1 (decode) path.
-//
-// Included by:
-//   - src/backend/cuda/kernels/transform.cu       (BF16 decode GEMV)
-//   - src/backend/cuda/kernels/linear.cuh           (W8A16 decode GEMV)
-//   - src/app/benchmark/cuda/decode_gemv.cu          (isolated microbenchmark)
-//
-// Defining these once eliminates copy-drift: the benchmark used to carry a
-// hand-mirrored copy of each kernel that could silently diverge from the
-// production code.
 
 #include <cuda_bf16.h>
 
-// Warp reduce (sum) via shuffle. Static so multiple TUs get independent copies.
 static __inline__ __device__ float gemv_warp_sum(float value) {
     for (int offset = 16; offset > 0; offset >>= 1)
         value += __shfl_down_sync(0xffffffffu, value, offset);
     return value;
 }
 
-// BF16 weight x BF16 activation GEMV (m=1 decode). One warp per output row,
-// 2-wide __nv_bfloat162 loads for coalesced 16-byte accesses.
 static __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                  const __nv_bfloat16* __restrict__ weight,
                                  __nv_bfloat16* __restrict__ y,
@@ -56,10 +43,6 @@ static __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
     }
 }
 
-// INT8 weight x BF16 activation GEMV (W8A16). Supports m=1 (decode) and
-// m>1 (batched). One warp per output row. Vectorized: char4 weight loads
-// (4 int8 per 4-byte read) + __nv_bfloat162 activation loads for 4 elements
-// per lane iteration, keeping both memory paths fully coalesced.
 static __global__ void w8a16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                    const int8_t* __restrict__ weight,
                                    const float* __restrict__ scales,
@@ -94,7 +77,6 @@ static __global__ void w8a16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
         }
         sum = gemv_warp_sum(sum);
 
-        // Scalar tail for k not divisible by 4.
         const int tail_start = k4 * 4;
         float tail = 0.0f;
         for (int column = tail_start + lane; column < k; column += 32) {

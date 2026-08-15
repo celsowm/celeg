@@ -35,8 +35,6 @@ Q4GroupMatrix quantize_float_groupwise_q4(const float* data,
                                            size_t group_size);
 void dequantize_q4_row(const Q4GroupMatrix& matrix, size_t row, float* output);
 
-// Dynamically quantized activation used by VNNI/I8MM-style kernels. Each
-// group has an independent FP32 scale and signed INT8 values.
 struct Q8GroupVector {
     uint32_t elements = 0;
     uint32_t group_size = 32;
@@ -52,10 +50,6 @@ Q8GroupVector quantize_float_groupwise_q8(const float* data,
                                            size_t elements,
                                            size_t group_size);
 
-// Quantize into caller-owned storage. Lets a batch of activation rows live in
-// one contiguous allocation instead of one Q8GroupVector (three heap vectors)
-// per row, which is what the GEMM path needs. `values` holds `elements` bytes;
-// `scales` and `sums` hold ceil(elements / group_size) entries each.
 void quantize_float_groupwise_q8_into(const float* data,
                                        size_t elements,
                                        size_t group_size,
@@ -105,4 +99,4 @@ private:
     std::unique_ptr<CpuPackReaderState> state_;
 };
 
-} // namespace celeg
+}

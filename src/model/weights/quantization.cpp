@@ -34,7 +34,7 @@ float read_finite_bf16(const std::byte* data, size_t index) {
     return value;
 }
 
-} // namespace
+}
 
 float bf16_bits_to_float(uint16_t bits) {
     const uint32_t word = static_cast<uint32_t>(bits) << 16;
@@ -46,7 +46,6 @@ float bf16_bits_to_float(uint16_t bits) {
 uint16_t float_to_bf16_bits(float value) {
     uint32_t word = 0;
     std::memcpy(&word, &value, sizeof(word));
-    // Round-to-nearest-even before truncating the lower 16 bits.
     const uint32_t lsb = (word >> 16) & 1U;
     word += 0x7FFFU + lsb;
     return static_cast<uint16_t>(word >> 16);
@@ -126,7 +125,7 @@ int decode_int4(uint8_t nibble) {
                         : static_cast<int>(nibble);
 }
 
-} // namespace
+}
 
 void quantize_bf16_rows_int4_into(const std::byte* data,
                                   size_t rows,
@@ -204,4 +203,4 @@ std::vector<float> dequantize_int4_rows(const Int4RowwisePack& pack) {
     return output;
 }
 
-} // namespace celeg
+}

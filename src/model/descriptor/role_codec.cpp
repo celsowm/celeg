@@ -94,4 +94,4 @@ TensorRole parse_role(std::string_view name) {
     return it->second;
 }
 
-} // namespace celeg::descriptor_detail
+}

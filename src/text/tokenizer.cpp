@@ -123,8 +123,6 @@ int category(uint32_t cp) {
     if (is_space_cp(cp)) return 0;
     if (is_number_cp(cp)) return 2;
     if (is_punctuation_or_symbol_cp(cp)) return 3;
-    // Remaining assigned Unicode code points are treated as letters/marks.
-    // This captures the model's multilingual scripts without an ICU runtime.
     return 1;
 }
 
@@ -150,7 +148,7 @@ std::string pair_key(const std::string& a, const std::string& b) {
     return out;
 }
 
-} // namespace
+}
 
 BpeTokenizer::BpeTokenizer(const TokenizerDefinition& definition) {
     load_definition(definition);
@@ -210,8 +208,6 @@ std::vector<std::string> BpeTokenizer::pretokenize_byte_level_regex(
             size_t punctuation = i;
             if (kind == 0) punctuation += len;
             const auto [punctuation_cp, punctuation_len] = next_cp(text, punctuation);
-            // A single optional leading character belongs to a following
-            // letter run; punctuation otherwise follows the `++` branch.
             if (kind == 3 && punctuation_cp == cp && punctuation_len == len &&
                 punctuation + punctuation_len < text.size() &&
                 category(next_cp(text, punctuation + punctuation_len).first) == 1) {
@@ -307,7 +303,6 @@ void BpeTokenizer::load_definition(const TokenizerDefinition& definition) {
         merge_rank_[pair_key(line.substr(0, sep), line.substr(sep + 1))] = rank++;
     }
 
-    // Special (CONTROL, type == 3) tokens drive verbatim matching in encode().
     for (const TokenizerSpecialToken& definition_token : definition.special_tokens) {
         SpecialToken token{definition_token.text, definition_token.id};
         specials_.push_back(token);
@@ -339,7 +334,6 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
     }
     size_t i = 0;
     while (i < text.size()) {
-        // GPT-2 contractions.
         if (text[i] == '\'' ) {
             static constexpr std::string_view suffixes[] = {"'s", "'t", "'re", "'ve", "'m", "'ll", "'d"};
             bool matched = false;
@@ -361,7 +355,6 @@ std::vector<std::string> BpeTokenizer::pretokenize(std::string_view text) const 
 
         const auto [cp, len] = next_cp(text, i);
         if (is_space_cp(cp)) {
-            // A single ASCII space is attached to the following non-space group, matching GPT-2's optional leading space.
             if (cp == ' ' && i + len < text.size()) {
                     const auto [next, _] = next_cp(text, i + len);
                     if (!is_space_cp(next)) {
@@ -562,9 +555,6 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
         std::string normalized;
         for (size_t offset = 0; offset < text.size();) {
             const auto [cp, len] = next_cp(text, offset);
-            // A SentencePiece-style tokenizer.json uses a Replace normalizer for the ASCII
-            // space only. Newlines, tabs, and other whitespace remain bytes
-            // and therefore take the configured byte-fallback path.
             if (cp == ' ') append_utf8(normalized, 0x2581);
             else normalized.append(text.substr(offset, len));
             offset += len;
@@ -703,4 +693,4 @@ std::string BpeTokenizer::decode_token(int32_t id, bool skip_special) const {
     return byte_decode(token);
 }
 
-} // namespace celeg
+}

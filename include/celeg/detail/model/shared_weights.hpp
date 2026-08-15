@@ -1,13 +1,5 @@
 #pragma once
 
-// Process-wide shared weight arena and expert residency/offload state.
-//
-// This is the widest of the model implementation headers: it is where weight
-// ownership meets expert offload planning, the host expert cache and the
-// residency coordinator. Only components that manage weight lifetime
-// (`WeightLoader`, residency, expert sources) should include it — the
-// forward pass binds views from `linear_weights.hpp` / `layer_state.hpp`
-// instead.
 
 #include "celeg/detail/model/device_weights.hpp"
 #include "celeg/backend/cuda/moe/offload.hpp"
@@ -38,9 +30,6 @@ struct ResidencyController {
 
 class CudaExpertSource;
 
-// Process-wide shared weight arena. Multiple CudaModel sessions on the same
-// device + checkpoint + weight_mode share one instance to avoid duplicate
-// GPU allocations.
 struct SharedModelWeights {
     std::mutex mutex;
     std::string residency_fingerprint;
@@ -64,4 +53,4 @@ struct SharedModelWeights {
     size_t memory_bytes() const;
 };
 
-} // namespace celeg
+}

@@ -66,4 +66,4 @@ T read_le(std::span<const std::byte> bytes, size_t& offset) {
     return static_cast<T>(bits);
 }
 
-} // namespace celeg::binary
+}

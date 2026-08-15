@@ -6,9 +6,6 @@
 
 namespace celeg {
 
-// Applies the complete Q/K positional and normalization semantics shared by
-// token, chunk, and packed CPU attention execution. Projection kernels remain
-// owned by the caller because their layout differs between execution modes.
 void apply_cpu_attention_qk(const AttentionSpec& layout,
                             const CpuCompiledModel::AttentionWeights& weights,
                             float* query,
@@ -39,4 +36,4 @@ void execute_cpu_attention_token(
     const CompiledLayerProgram& semantics,
     const std::array<int32_t, 3>& rope_position);
 
-} // namespace celeg
+}

@@ -33,4 +33,4 @@ void run_latent_attention(
     throw std::logic_error("unreachable latent prefill path");
 }
 
-} // namespace celeg::prefill_detail
+}

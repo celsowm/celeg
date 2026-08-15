@@ -1,24 +1,3 @@
-// Phase 1.3: regression test for the explicit MoE quantization policy.
-//
-// Before Phase 1.1 / 1.2, the runtime silently accepted any global WeightMode
-// against a MoE checkpoint and built a session that crashed mid-construction
-// when model setup tried to cast the (null) BF16 router pointer. The Phase 1
-// contract (plan section 1.2) is:
-//   * safetensors + MoE + --weight-mode bf16  -> supported (dense + MoE BF16)
-//   * safetensors + MoE + --weight-mode int8   -> REJECTED at model construction
-//                                                with a clear diagnostic, since
-//                                                experts have no INT8/INT4 kernel
-//                                                and a "silently dense-quantized
-//                                                with BF16 experts" report would
-//                                                be misleading.
-//   * safetensors + MoE + --weight-mode int4   -> rejected for the same reason.
-//   * GGUF      + MoE + --weight-mode native   -> supported (Q4_K/Q6_K experts).
-//
-// This test simulates the construction-time decision in isolation by exercising
-// the helper introduced in PR 2 (`celeg::check_moe_quantization_policy`) against
-// the four combinations above and asserting that the supported pairs pass while
-// the unsupported pairs throw `std::invalid_argument` whose message mentions
-// the offending weight mode and the word "MoE".
 
 #include "celeg/backend/cuda/weight_policy.hpp"
 
@@ -40,37 +19,31 @@ void expect_rejected(celeg::WeightMode mode, bool is_moe,
         message = e.what();
     }
     CELEG_TEST_CHECK(threw);
-    // The diagnostic must name MoE and the weight mode so the user can act.
     CELEG_TEST_CHECK(message.find("MoE") != std::string::npos);
     CELEG_TEST_CHECK(message.find(why_must_mention) != std::string::npos);
 }
 
 void expect_accepted(celeg::WeightMode mode, bool is_moe) {
-    celeg::check_moe_quantization_policy(mode, is_moe);  // must not throw.
+    celeg::check_moe_quantization_policy(mode, is_moe);
 }
 
 void expect_not_moe_short_circuits() {
-    // Non-MoE models never reach the MoE policy check; any mode is fine.
     for (auto mode : {celeg::WeightMode::Bf16, celeg::WeightMode::Int8,
                       celeg::WeightMode::Int4, celeg::WeightMode::NativeGguf}) {
         celeg::check_moe_quantization_policy(mode, /*is_moe=*/false);
     }
 }
 
-} // namespace
+}
 
 int main() {
-    // Dense (non-MoE): every mode is acceptable.
     expect_not_moe_short_circuits();
 
-    // MoE + safetensors BF16: supported.
     expect_accepted(celeg::WeightMode::Bf16, /*is_moe=*/true);
 
-    // MoE + safetensors INT8 / INT4: rejected.
     expect_rejected(celeg::WeightMode::Int8, /*is_moe=*/true, "int8");
     expect_rejected(celeg::WeightMode::Int4, /*is_moe=*/true, "int4");
 
-    // MoE + NativeGguf: supported (Q4_K / Q6_K experts).
     expect_accepted(celeg::WeightMode::NativeGguf, /*is_moe=*/true);
 
     return 0;

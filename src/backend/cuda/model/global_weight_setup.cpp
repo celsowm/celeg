@@ -20,16 +20,12 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
     return cuda_tensor_name(requests, role, layer);
 }
 
-} // namespace
+}
 
 void CudaWeightSetup::load(CudaCompiledModel& model,
                            const std::string& model_path,
                            const detail::ModelBootstrap& bootstrap,
                            LayerLoader load_layers) {
-    // CELEG_CUDA_MANAGED_WEIGHTS is resolved once into
-    // CudaModelOptions::managed_weights at model-configuration construction
-    // time (see runtime_types.hpp); weight setup just reads the resolved
-    // option instead of calling getenv() itself.
     CudaManagedWeightAllocationScope managed_scope(
         model.resources_.options_.managed_weights);
     model.resources_.weights_ = WeightLoader::acquire(
@@ -41,9 +37,6 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
     model.resources_.weight_loader_ = std::make_unique<WeightLoader>(
         model.resources_.weights_, model.resources_.options_.weight_mode);
 
-    // Keep the shared checkpoint locked while global resources and all layer
-    // views are assembled. Other sessions can then reuse an immutable,
-    // completely initialized weight set.
     std::unique_lock<std::mutex> shared_weights_lock(model.resources_.weights_->mutex);
     model.resources_.weights_->repo = bootstrap.checkpoint.repository;
     const IWeightRepository& repo = *model.resources_.weights_->repo;
@@ -107,4 +100,4 @@ void CudaWeightSetup::load(CudaCompiledModel& model,
     load_layers(repo);
 }
 
-} // namespace celeg
+}

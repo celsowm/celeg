@@ -111,4 +111,4 @@ bool CpuInferenceService::step() { return engine_.step(); }
 void CpuInferenceService::start() { engine_.start(); }
 void CpuInferenceService::stop() { engine_.stop(); }
 
-} // namespace celeg::serve
+}

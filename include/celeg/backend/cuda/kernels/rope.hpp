@@ -17,8 +17,6 @@ struct CudaRopeScaling {
     float low_frequency_factor = 1.0f;
     float high_frequency_factor = 1.0f;
     int factor_count = 0;
-    // LongRoPE factors are resolved once while compiling the backend record.
-    // The bounded tables avoid per-token allocation or host lookup.
     float short_factors[128]{};
     float long_factors[128]{};
 };
@@ -47,8 +45,6 @@ inline CudaRopeScaling lower_cuda_rope_scaling(const RopePositionSpec& rope) {
     return result;
 }
 
-// Generic per-layer RoPE/QK normalization. The table-free form is required
-// when layers have different head dimensions, rotary fractions, or bases.
 void launch_dynamic_qk_norm_rope(
     __nv_bfloat16* q, __nv_bfloat16* k,
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
@@ -78,4 +74,4 @@ void launch_dynamic_qk_norm_rope_prefill(
     CudaRopeScaling scaling,
     cudaStream_t stream);
 
-} // namespace celeg
+}

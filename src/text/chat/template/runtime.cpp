@@ -228,8 +228,6 @@ TemplateValue message_values(std::span<const ChatMessage> messages) {
                     std::get<ValueObject>(call_value["function"].value);
                 callable["arguments"] = call_value["arguments"];
             } catch (const std::exception&) {
-                // Request-side validation owns JSON correctness. Direct
-                // callers still get deterministic rendering of raw text.
             }
             calls.emplace_back(std::move(call_value));
         }
@@ -1214,7 +1212,7 @@ private:
     const std::vector<TemplateNode>& nodes_;
 };
 
-} // namespace
+}
 
 std::string render_program(
     const std::vector<TemplateNode>& nodes,
@@ -1233,7 +1231,7 @@ std::string render_program(
         bos_token);
 }
 
-} // namespace celeg::chat_template_detail
+}
 
 namespace celeg {
 
@@ -1258,4 +1256,4 @@ std::string InteractionRenderProgram::render(
         bos_token);
 }
 
-} // namespace celeg
+}

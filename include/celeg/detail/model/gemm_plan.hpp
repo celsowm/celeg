@@ -1,10 +1,5 @@
 #pragma once
 
-// cuBLASLt plan state.
-//
-// This is the narrowest layer of the CUDA model implementation headers: it
-// depends only on cuBLASLt itself and knows nothing about weights, layers or
-// session state. `GemmDispatcher` owns the plan cache keyed by `MatmulKey`.
 
 #include <cublasLt.h>
 
@@ -12,9 +7,6 @@
 
 namespace celeg {
 
-// ---------------------------------------------------------------------------
-// GEMM plan keys (cuBLASLt).
-// ---------------------------------------------------------------------------
 
 struct MatmulKey {
     int m = 0;
@@ -35,9 +27,6 @@ struct MatmulKeyHash {
     }
 };
 
-// Cached cuBLASLt matmul plan for one (m, n, k) shape. Holds the operation
-// descriptor, matrix layouts, selected algorithm, and workspace size.
-// Destroyed via RAII in the dtor.
 struct LtPlan {
     cublasLtMatmulDesc_t operation = nullptr;
     cublasLtMatrixLayout_t a = nullptr;
@@ -57,4 +46,4 @@ struct LtPlan {
     }
 };
 
-} // namespace celeg
+}

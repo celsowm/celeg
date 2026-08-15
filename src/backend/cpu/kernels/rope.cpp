@@ -56,7 +56,7 @@ void cpu_qk_norm_rope_avx2(float* data, const float* norm_weight,
 }
 #endif
 
-} // namespace
+}
 
 void cpu_qk_norm_rope(float* data, const float* norm_weight,
                       int heads, int head_dim, int position,
@@ -180,7 +180,7 @@ void validate_mrope(int head_dim, const std::array<int, 3>& sections,
     }
 }
 
-} // namespace
+}
 
 void cpu_qk_norm_rope_mrope(float* data, const float* norm_weight,
                             int heads, int head_dim,
@@ -254,4 +254,4 @@ void cpu_rope_mrope(float* data, int heads, int head_dim,
     }
 }
 
-} // namespace celeg
+}

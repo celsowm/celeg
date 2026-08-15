@@ -96,4 +96,4 @@ std::shared_ptr<const RuntimeContext> create_builtin_runtime_context() {
     return context;
 }
 
-} // namespace celeg
+}

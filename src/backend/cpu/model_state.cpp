@@ -71,9 +71,6 @@ void CpuCompiledModel::allocate_state() {
                 spec.key_head_dim * spec.value_head_dim);
             session_.states.emplace_back(std::move(state));
           },
-          // MLP-only blocks carry no mixer state; they keep an empty
-          // convolution slot so session state stays index-parallel with the
-          // layer list and snapshot counts remain stable.
           [&](const MlpOnlyWeights*) { emplace_convolution_state(); });
     }
 }
@@ -459,4 +456,4 @@ CpuModelMemoryStats CpuCompiledModel::memory_stats() const {
     return stats;
 }
 
-} // namespace celeg
+}

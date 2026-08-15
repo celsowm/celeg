@@ -11,9 +11,6 @@
 namespace celeg {
 
 namespace {
-// as a fallback when a concatenation mixes quant formats (e.g. attention q/k/v
-// where value projection is Q6_K while query/key are Q4_K) and cannot stay
-// packed. The block decode mirrors the device kernel in gguf_kernels.cu.
 struct Q4KHost { __half d; __half dmin; uint8_t scales[12]; uint8_t qs[128]; };
 struct Q5KHost { __half d; __half dmin; uint8_t scales[12]; uint8_t qh[32]; uint8_t qs[128]; };
 struct Q2KHost { uint8_t scales[16]; uint8_t qs[64]; __half d; __half dmin; };
@@ -172,11 +169,11 @@ void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
         }
     }
 }
-} // namespace
+}
 
 void dequantize_gguf_to_bf16(const HostTensorView& tensor,
                              std::vector<__nv_bfloat16>& out) {
     dequantize_gguf_to_bf16_impl(tensor, out);
 }
 
-} // namespace celeg
+}

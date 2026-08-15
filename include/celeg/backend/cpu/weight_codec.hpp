@@ -13,9 +13,6 @@ namespace celeg {
 
 class IWeightRepository;
 
-// Converts repository tensors into the CPU backend's resident weight formats.
-// Pack-file I/O is deliberately part of this boundary: model assembly should
-// not know whether a tensor came from a checkpoint or the local packed cache.
 class CpuWeightCodec {
 public:
     CpuWeightCodec(IWeightRepository* source, CpuPackReader* reader,
@@ -38,4 +35,4 @@ private:
     size_t group_size_ = 32;
 };
 
-} // namespace celeg
+}

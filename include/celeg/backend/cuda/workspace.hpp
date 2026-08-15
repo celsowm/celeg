@@ -11,10 +11,6 @@
 
 namespace celeg {
 
-// Concrete storage owned by one CUDA model execution.  Keeping transient
-// buffers and expert-residency state here prevents the model facade from
-// becoming the owner of backend mechanics while retaining direct data access
-// in the kernel hot path.
 struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> hidden_;
     DeviceBuffer<__nv_bfloat16> residual_;
@@ -142,4 +138,4 @@ struct CudaWorkspace {
     ExpertResidencyWorkspace residency_workspace_;
 };
 
-} // namespace celeg
+}

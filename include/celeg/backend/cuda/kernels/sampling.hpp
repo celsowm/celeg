@@ -46,8 +46,6 @@ void launch_fused_sample_topk(const __nv_bfloat16* logits,
                               int32_t* result,
                               cudaStream_t stream);
 
-// Packed multi-session decode helpers. Pointer arrays contain one persistent
-// session allocation per packed row; activations stay contiguous by batch.
 void launch_packed_sample_topk(
     __nv_bfloat16* const* logits,
     uint8_t* const* seen,
@@ -63,4 +61,4 @@ void launch_packed_sample_topk(
     int32_t* result,
     cudaStream_t stream);
 
-} // namespace celeg
+}

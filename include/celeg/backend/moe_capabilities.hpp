@@ -45,4 +45,4 @@ inline void validate_moe_backend_capabilities(
     }
 }
 
-} // namespace celeg
+}

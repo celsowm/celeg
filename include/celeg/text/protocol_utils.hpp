@@ -8,8 +8,6 @@
 
 namespace celeg {
 
-// Protocol-neutral JSON string quoting. Bytes forming valid UTF-8 are kept
-// intact; JSON controls are escaped explicitly and no parser is hidden here.
 inline std::string json_quote(std::string_view value) {
     static constexpr char hex[] = "0123456789abcdef";
     std::string out;
@@ -54,4 +52,4 @@ inline std::string remove_tagged_blocks(std::string_view text,
     return result;
 }
 
-} // namespace celeg
+}

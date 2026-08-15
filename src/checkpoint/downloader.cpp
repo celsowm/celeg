@@ -66,7 +66,7 @@ std::string format_bytes(size_t bytes) {
     return ss.str();
 }
 
-} // namespace
+}
 
 #if defined(_WIN32)
 
@@ -105,9 +105,6 @@ std::filesystem::path resume_path_for(const std::filesystem::path& blob_path) {
     std::error_code ec;
     if (std::filesystem::exists(canonical, ec)) return canonical;
 
-    // huggingface_hub uses a random suffix for interrupted blobs. Reuse its
-    // largest matching partial instead of making a second multi-gigabyte
-    // transfer when switching to the native downloader.
     const std::string prefix = blob_path.filename().string() + ".";
     constexpr std::string_view suffix = ".incomplete";
     std::filesystem::path best = canonical;
@@ -169,7 +166,7 @@ std::vector<TreeFile> list_repo_files(const std::string& repo_id,
     return files;
 }
 
-} // namespace
+}
 
 std::filesystem::path default_hf_cache_dir() {
     const char* env = std::getenv("HF_HUB_CACHE");
@@ -347,7 +344,6 @@ std::filesystem::path resolve_hf_gguf(
                     return c;
             }
         }
-        // Prefer a Q4_K_M shard, else the first .gguf found.
         for (const auto& c : candidates) {
             if (contains_case_insensitive(c.filename().string(), "Q4_K_M"))
                 return c;
@@ -359,7 +355,7 @@ std::filesystem::path resolve_hf_gguf(
         + ". Run: celeg-download " + repo_id);
 }
 
-#else // !_WIN32
+#else
 
 std::filesystem::path default_hf_cache_dir() {
     const char* env = std::getenv("HF_HUB_CACHE");
@@ -447,4 +443,4 @@ std::filesystem::path resolve_hf_gguf(
 
 #endif
 
-} // namespace celeg
+}

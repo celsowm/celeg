@@ -9,11 +9,8 @@
 namespace celeg {
 namespace {
 
-// MoE router config / FFN device descriptors are provided inline by
-// celeg/detail/model/feed_forward_weights.hpp (moe_router_config / moe_ffn_device) so the
-// standalone paths and the packed executor share one definition.
 
-} // namespace
+}
 
 void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     request.validate();
@@ -59,10 +56,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
     CELEG_CUDA(cudaStreamWaitEvent(transfer, ffn_done_event.get(), 0));
     CELEG_CUDA(cudaStreamWaitEvent(transfer, prefetch_done_event.get(), 0));
 
-    // Device-side residency check: reads sel_dev + expert_slot_dev_ on GPU,
-    // outputs a compact list of cold experts. This avoids D2H-copying the
-    // full selection and router scores; only the (typically tiny) cold list
-    // is transferred back.
     const int cold_count = cache->resolve_on_device(
         sel_dev, route_scores_dev, rows, K, transfer,
         cold_expert_host, cold_scores_host, active_expert_host);
@@ -71,7 +64,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
         cache->pin_active(expert);
     }
 
-    // Release any leases for completed transfers
     for (auto it = controller->inflight_transfers.begin(); it != controller->inflight_transfers.end(); ) {
         cudaError_t status = cudaEventQuery(it->event->get());
         if (status == cudaSuccess) {
@@ -83,12 +75,8 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
         }
     }
 
-    // Touch resident experts and promote cold ones.
     if (cold_count == 0) {
-        // The device resolver proved that every selected pointer is resident.
-        // Do not copy the full selection back to the host on this hot path.
     } else {
-        // Promote cold experts. The cold list has unique expert indices.
         const float default_score = ExpertLayerCache::kUnseen;
         loaded_leases.clear();
         loaded_leases.resize(static_cast<size_t>(cold_count));
@@ -97,7 +85,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
             const int e = cold_expert_host[static_cast<size_t>(i)];
             cache->record_miss();
 
-            // Record usage stats (miss)
             if (!usage_profile_path.empty() && layer >= 0 && static_cast<size_t>(layer) < usage_stats.layers.size()) {
                 auto& entry = usage_stats.layers[static_cast<size_t>(layer)][static_cast<size_t>(e)];
                 entry.selection_count++;
@@ -105,7 +92,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
             }
 
             if (host_expert_cache && expert_io_manager) {
-                // Async parallel load using ExpertIoManager!
                 futures.push_back(expert_io_manager->submit([this, layer, e, &lease_dest = loaded_leases[static_cast<size_t>(i)]]() {
                     SharedModelWeights& weights = *weights_;
                     ExpertHostLease lease = weights.host_expert_cache->acquire(layer, e, [this, layer, e](std::span<std::byte> payload) {
@@ -121,12 +107,10 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
         }
 
 
-        // Wait for all async loads to complete!
         for (auto& f : futures) {
             f.get();
         }
 
-        // Promote loaded experts sequentially
         for (int i = 0; i < cold_count; ++i) {
             const int e = cold_expert_host[static_cast<size_t>(i)];
             float score = default_score;
@@ -149,7 +133,6 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
                     controller->inflight_transfers.push_back({std::move(lease), std::move(ev)});
                 }
             } else if (host_expert_cache) {
-                // Sync fallback (if no io_manager is present)
                 ExpertHostLease lease = host_expert_cache->acquire(layer, e, [this, layer, e](std::span<std::byte> payload) {
                     SharedModelWeights& weights = *weights_;
                     if (!weights.expert_source) {
@@ -169,36 +152,24 @@ void CudaExpertResidencyCoordinator::ensure(ExpertResidencyRequest request) {
                 ev->record(transfer);
                 controller->inflight_transfers.push_back({std::move(lease), std::move(ev)});
             } else {
-                // Host-resident mode
                 cache->ensure_resident(e, transfer, score);
                 cache->pin_active(e, score);
             }
         }
-        // Publish all pointer and slot changes once after the promotion batch.
         cache->sync_residency_tables(transfer);
         if (host_expert_cache) {
-            // Disk-backed sources live in a global bounded host cache.  The
-            // transfer must finish before the compute stream can use the GPU
-            // slots, so release these leases immediately instead of retaining
-            // them in one controller per layer until that layer is revisited.
             CELEG_CUDA(cudaStreamSynchronize(transfer));
             controller->inflight_transfers.clear();
         }
 
     }
-    // Admission can change slots, so apply the active-batch protection after
-    // cold experts have been published as well as on the all-resident path.
     for (const int expert : active_expert_host) {
         cache->pin_active(expert);
     }
 
-    // Compute stream must wait for the on-demand promotions to land before the
-    // FFN reads the pointer table.
     CELEG_CUDA(cudaEventRecord(promote_done_event.get(), transfer));
     CELEG_CUDA(cudaStreamWaitEvent(compute_stream, promote_done_event.get(), 0));
 
-    // Speculatively prefetch experts so they are GPU-resident before the *next*
-    // token's FFN. Reuses host buffers to avoid per-call allocation.
     if (expert_offload_plan.prefetch_experts > 0 && route_scores_dev != nullptr) {
         const int E = num_experts;
         const int take = std::min<int>(
@@ -235,7 +206,6 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
         resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
     launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
                     1, resources_.program_.hidden, layer_semantics.feed_forward_norm.epsilon, stream_.get());
-    // Router: BF16 normed hidden -> float -> top-K experts.
     launch_cast_bf16_to_float(workspace_.normed_.data(), workspace_.moe_hidden_float_.data(),
                                resources_.program_.hidden, stream_.get());
     const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
@@ -250,14 +220,11 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     launch_moe_router(rdev, cfg, workspace_.moe_router_scratch_.data(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
-    // Promote any cold experts selected by the router before the FFN reads them.
     resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
         layer, workspace_.moe_sel_.data(), 1, semantics.router.experts_per_token,
         semantics.router.expert_count, stream_.get(),
         workspace_.moe_router_scratch_.data(), &workspace_.residency_workspace_});
 
-    // Expert FFN: accumulate the routing-weighted expert outputs into the
-    // FP32 output accumulator and then cast into the BF16 workspace_.moe_output_.
     workspace_.moe_output_accum_.zero_async(stream_.get());
     const celeg::MoeFfnDevice fdev = moe_ffn_device(moe, semantics);
     launch_moe_ffn(fdev, workspace_.moe_sel_.data(), workspace_.moe_routing_w_.data(),
@@ -287,7 +254,6 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
-    // Residual add into the hidden state.
     launch_residual_add(workspace_.hidden_.data(), workspace_.moe_output_.data(),
                          resources_.program_.hidden, stream_.get());
 }
@@ -299,7 +265,6 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         static_cast<size_t>(layer));
     const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
         resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
-    // Size the prefill scratch to the requested row count.
     workspace_.moe_pf_hidden_float_.reserve(static_cast<size_t>(rows) * resources_.program_.hidden);
     workspace_.moe_pf_sel_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);
     workspace_.moe_pf_routing_w_.reserve(static_cast<size_t>(rows) * semantics.router.experts_per_token);
@@ -330,9 +295,6 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     launch_moe_router(rdev, cfg, workspace_.moe_pf_router_scratch_.data(), stream_.get());
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
 
-    // Standalone and packed prefill use the same residency transaction. The
-    // coordinator owns source reads, bounded admission, publication, and
-    // completion ordering; the FFN sees one stable pointer table.
     resources_.weights_->residency_coordinator->ensure(ExpertResidencyRequest{
         layer, workspace_.moe_pf_sel_.data(), rows, semantics.router.experts_per_token,
         semantics.router.expert_count, stream_.get(), nullptr,
@@ -375,4 +337,4 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
                         rows * resources_.program_.hidden, stream_.get());
 }
 
-} // namespace celeg
+}

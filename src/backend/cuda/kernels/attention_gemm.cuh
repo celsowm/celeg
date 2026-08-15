@@ -1,28 +1,4 @@
-// Causal prefill attention expressed as batched GEMM instead of hand-written
-// kernels: cuBLAS computes QK^T and PV via cublasGemmStridedBatchedEx (with
-// stride 0 on the KV operand to broadcast across a GQA group), with a parallel
-// causal softmax kernel in between.
-//
-// This is the fast prefill path -- it reaches tensor cores, which the scalar
-// per-token kernels in the other leaves cannot. It costs O(rows^2) scratch for
-// the score/probability matrices, so callers fall back to
-// launch_gqa_prefill_segmented above a row-count ceiling.
-//
-// The only leaf that touches cuBLAS.
 
-// ---------------------------------------------------------------------------
-// Flash attention prefill kernel.
-//
-// Tiled online-softmax (flash-attention v1) that keeps Q/K/V in shared memory
-// and avoids materializing the full [heads, rows, rows] score matrix. For
-// head_dim=64 the cuBLAS batched GEMM path is inefficient (k=64 is too skinny
-// for tensor cores, and 16 separate cuBLAS calls add launch overhead). This
-// kernel fuses QK^T → softmax → PV in a single kernel launch per attention
-// layer, with shared-memory tiling for data reuse.
-//
-// Tiling: Br=64 query rows per block, Bc=64 KV columns per tile. One block
-// per (q_tile, q_head). 256 threads (8 warps), each warp handles 8 rows.
-// ---------------------------------------------------------------------------
 
 __device__ __forceinline__ float warp_xor_max(float val) {
     for (int o = 16; o > 0; o >>= 1)
@@ -50,13 +26,6 @@ __global__ void flash_attn_prefill_kernel(
     constexpr int kWarps = kThreads / 32;
     constexpr int kRowsPerWarp = Br / kWarps;
     constexpr int kMaxAccPerLane = 4;
-    // s_k's QK^T read has every lane in a warp read the same `d` at row
-    // `col == lane`, i.e. stride head_dim across lanes. For every head_dim
-    // celeg supports (64/128) that stride is a multiple of the 32-bank cycle,
-    // so all 32 lanes land in the same bank without this pad -- a 32-way
-    // serialized conflict on the kernel's hottest loop. s_q's read in the same
-    // loop is a broadcast (every lane reads the same address) so it needs no
-    // padding, and s_v's read is already lane-contiguous.
     constexpr int kKPad = 8;
 
     const int q_tile = blockIdx.x;
@@ -210,11 +179,6 @@ void launch_gqa_prefill_flash(const GqaPrefillFlashArgs& args) {
     constexpr int Br = 64;
     constexpr int Bc = 64;
     constexpr int kKPad = 8;
-    // row_acc[][kMaxAccPerLane] in the kernel gives each lane 4 float slots
-    // for its strided (d = lane, lane+32, lane+64, lane+96) accumulation, so
-    // head_dim above 128 would index past the array. Every caller currently
-    // gates on this externally (head_dim <= 128); assert it here too so a new
-    // caller fails loudly instead of silently corrupting registers.
     if (head_dim > 128) {
         throw std::invalid_argument(
             "launch_gqa_prefill_flash: head_dim exceeds the kernel's supported maximum (128)");
@@ -227,12 +191,6 @@ void launch_gqa_prefill_flash(const GqaPrefillFlashArgs& args) {
          static_cast<size_t>(Bc) * (head_dim + kKPad) +
          static_cast<size_t>(Bc) * head_dim) * sizeof(__nv_bfloat16) +
         static_cast<size_t>(Br) * Bc * sizeof(float);
-    // cudaFuncSetAttribute is a driver call, issued once per attention layer
-    // per prefill chunk if unconditional -- cheap in isolation, but pure
-    // overhead once a given device has already been configured for at least
-    // this many bytes. Cache the configured size per device (mirrors
-    // mmq_tensor_core_supported()'s per-device cache, for the same reason:
-    // callers may legally switch the current CUDA device between calls).
     static std::mutex smem_mutex;
     static std::unordered_map<int, size_t> configured_smem_bytes_by_device;
     int device = 0;
@@ -257,26 +215,7 @@ void launch_gqa_prefill_flash(const GqaPrefillFlashArgs& args) {
     CELEG_KERNEL_CHECK();
 }
 
-// ---------------------------------------------------------------------------
-// Batched-GEMM causal prefill attention.
-//
-// The per-(row,head) kernels above compute one scalar dot product per KV
-// token per thread-block, with no tensor cores - fine for decode (one query
-// against a long KV history) but the wrong shape for prefill, where every
-// row attends to a *different* prefix of the *same* rows. That is exactly
-// the shape cuBLAS batched GEMM wants: for each head, QK^T and softmax(.)V
-// are dense matrix multiplies. This path computes raw scores with one
-// strided-batched GEMM per KV-head group (broadcasting the shared K/V
-// across the q_heads/kv_heads queries in that GQA group via strideB/strideA
-// = 0), a causal softmax kernel, then a second strided-batched GEMM for the
-// value contraction. Two cuBLAS calls per KV head instead of one scalar
-// dot product per KV token per row.
-// ---------------------------------------------------------------------------
 
-// One block per (head, row). Reduces over the causal prefix [0, row] twice
-// (max, then sum of exp) using the existing block_max/block_sum reductions,
-// then writes a full-width BF16 probability row (zero past `row`) so the
-// following dense PV GEMM naturally ignores masked positions.
 __global__ void causal_softmax_kernel(const float* __restrict__ scores,
                                       __nv_bfloat16* __restrict__ probs,
                                       int rows, int q_heads, int sliding_window) {

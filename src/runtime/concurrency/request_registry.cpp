@@ -16,8 +16,6 @@ RequestRegistry::RequestId RequestRegistry::create(
     request->prompt = std::move(prompt);
     request->submitted_at = submitted_at;
     requests_.emplace(id, std::move(request));
-    // Insert into the priority-ordered set: highest priority first, then
-    // lowest ID first (FIFO within same priority).
     admission_queue_.insert({-requests_[id]->options.priority, id});
     return id;
 }
@@ -63,4 +61,4 @@ bool RequestRegistry::erase(RequestId id) {
     return true;
 }
 
-} // namespace celeg::detail
+}

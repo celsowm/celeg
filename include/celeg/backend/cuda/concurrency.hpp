@@ -21,8 +21,7 @@ struct ConcurrentEngineOptions : ConcurrentSchedulerOptions {
 
     int prefill_chunk_tokens = 256;
     int page_tokens = 16;
-    // Retained field name for C/C++ API compatibility; these are physical GPU pages.
-    size_t logical_kv_pages = 0; // 0 = derive from max_active_requests * max_context.
+    size_t logical_kv_pages = 0;
     SchedulerPolicy scheduler_policy = SchedulerPolicy::GuaranteedNoEvict;
     int idle_sleep_microseconds = 100;
     bool packed_decode = true;
@@ -34,9 +33,6 @@ struct ConcurrentEngineOptions : ConcurrentSchedulerOptions {
 
 struct CudaSchedulerDriver;
 
-// Stable serving facade. Scheduling, request ownership, worker lifecycle and
-// CUDA execution live behind CudaSchedulerDriver and can evolve independently
-// of callers.
 class ConcurrentEngine {
 public:
     using RequestId = celeg::RequestId;
@@ -59,12 +55,8 @@ public:
     PollResult poll(RequestId id, size_t max_tokens = 0);
     RequestStatus status(RequestId id) const;
 
-    // Frees the request record. Only valid once the request has reached a
-    // terminal status; returns false otherwise or if the id is unknown.
     bool release(RequestId id);
 
-    // Executes one scheduler iteration. Useful for embedding the runtime in an
-    // external event loop. Returns true when useful work was performed.
     bool step();
     void start();
     void stop();
@@ -77,4 +69,4 @@ private:
     std::unique_ptr<CudaSchedulerDriver> state_;
 };
 
-} // namespace celeg
+}

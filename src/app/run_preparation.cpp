@@ -18,7 +18,7 @@ bool is_gguf_repo(std::string_view repo, std::string_view quant_tag) {
     return !repo.empty() && (repo.ends_with("-GGUF") || !quant_tag.empty());
 }
 
-} // namespace
+}
 
 PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat) {
     if (inputs.model.empty() == inputs.repo.empty()) {
@@ -87,4 +87,4 @@ GenerationConfig generation_config(const RunInputs& inputs) {
     return generation;
 }
 
-} // namespace celeg::app
+}

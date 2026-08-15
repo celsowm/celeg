@@ -21,9 +21,6 @@ struct ChatRoleCapabilities {
 struct ChatCapabilities {
     bool vision = false;
     bool video = false;
-    // Token text whose single occurrence is replaced by visual embeddings.
-    // It belongs to the resolved interaction contract, not to protocol
-    // mapping or a backend.
     std::string image_marker = "<|image|>";
     std::string video_marker = "<|video|>";
     bool assistant_tool_calls = false;
@@ -32,4 +29,4 @@ struct ChatCapabilities {
     ChatRoleCapabilities roles;
 };
 
-} // namespace celeg
+}

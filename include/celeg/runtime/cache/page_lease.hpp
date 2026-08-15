@@ -6,9 +6,6 @@
 
 namespace celeg {
 
-// Move-only ownership guard for a retained page vector. The lease deliberately
-// knows only how to release; callers perform backend-specific retain/clone
-// operations before constructing it and can transfer ownership explicitly.
 template <typename PageId>
 class PageLease {
 public:
@@ -47,7 +44,7 @@ public:
     }
     void reset() noexcept {
         if (!pages_.empty() && release_) {
-            try { release_(pages_); } catch (...) { /* no-throw destructor */ }
+            try { release_(pages_); } catch (...) {  }
         }
         pages_.clear();
         release_ = {};
@@ -58,4 +55,4 @@ private:
     Release release_;
 };
 
-} // namespace celeg
+}

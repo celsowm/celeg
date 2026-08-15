@@ -141,4 +141,4 @@ float CpuAttentionBias::score(int query_head, int query_position,
         static_cast<float>(std::abs(query_position - key_position));
 }
 
-} // namespace celeg
+}

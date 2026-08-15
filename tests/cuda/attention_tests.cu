@@ -16,7 +16,6 @@
 namespace celeg::cuda_test {
 
 void run_attention_tests(celeg::CudaStream& stream) {
-// Strict Q/K RMSNorm + RoPE matches the host BF16 reference.
 {
     std::vector<__nv_bfloat16> q = {
         to_bf16(1.0f), to_bf16(2.0f), to_bf16(3.0f), to_bf16(4.0f)};
@@ -43,7 +42,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     }
 }
 
-// Strict GQA rounds probabilities to BF16 before value accumulation.
 {
     std::vector<float> qf = {1, 0, 1, 0};
     std::vector<float> kf = {1, 0, 0, 1};
@@ -73,7 +71,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     for (int i = 0; i < 4; ++i) expect_near(to_float(output[i]), expected[i], 0.01f);
 }
 
-// ALiBi changes the score before softmax and is lowered on the CUDA path.
 {
     const std::vector<float> qf = {1, 0};
     const std::vector<float> kf = {1, 0, 0, 1};
@@ -111,8 +108,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     expect_near(to_float(output[1]), (s0 * 4 + s1 * 8) / denominator, 0.02f);
 }
 
-// Latent attention keeps [latent key | decoupled rotary key] in the paged
-// key pool and reads only the latent prefix from the value pool.
 {
     constexpr int latent_rank = 2;
     constexpr int rotary_width = 2;
@@ -192,7 +187,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     expect_near(to_float(host_output[1]), (s0 * 4.0f + 8.0f) / denominator, 0.03f);
 }
 
-// Causal short-convolution state and C gate.
 {
     constexpr int hidden = 2;
     constexpr int cache = 3;
@@ -223,7 +217,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
 
 
 
-// Batched causal convolution matches sequential decode and leaves the same ring state.
 {
     constexpr int rows = 4;
     constexpr int hidden = 2;
@@ -266,9 +259,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     }
 }
 
-// Ragged ShortConv advances every request span in order without a host
-// token-wave loop.  Its outputs and independent ring states match
-// sequential decode for unequal spans and nonzero positions.
 {
     constexpr int requests = 2;
     constexpr int hidden = 2;
@@ -325,7 +315,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     }
 }
 
-// Batched strict GQA produces the same output as decoding each prefix.
 {
     constexpr int rows = 2;
     constexpr int q_heads = 2;
@@ -365,7 +354,6 @@ void run_attention_tests(celeg::CudaStream& stream) {
     }
 }
 
-// INT8 KV cache quantizes per token/head and remains close to BF16 GQA.
 {
     constexpr int rows = 2;
     constexpr int q_heads = 2;
@@ -427,4 +415,4 @@ void run_attention_tests(celeg::CudaStream& stream) {
 
 }
 
-} // namespace celeg::cuda_test
+}

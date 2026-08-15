@@ -13,18 +13,9 @@ enum class LinearKernelKind : uint8_t {
     W4A16,
     Q4kMmq,
     Q6kMmq,
-    // Phase 1.4: when --weight-mode is native, checkpoint tensors stay in their
-    // on-disk Q4_K / Q6_K formats and the dispatch path dequantizes on the
-    // fly via MMQ. Not every linear weight is GGUF-quantized in a real
-    // checkpoint (conv / norm are BF16), so the plan truthfully reports
-    // "mixed BF16 + native GGUF MMQ" rather than falsely labeling the whole
-    // model as BF16 / cuBLASLt. The per-tensor decision happens in
-    // GemmDispatcher at run time from LinearWeight::kind.
     MixedBf16AndGgufMmq,
 };
 
-// Immutable, validated runtime plan. User-facing options are compiled once at
-// construction so hot paths do not repeatedly reinterpret configuration.
 class CudaExecutionPlan {
 public:
     static CudaExecutionPlan compile(
@@ -55,4 +46,4 @@ private:
     uint64_t fingerprint_ = 0;
 };
 
-} // namespace celeg
+}

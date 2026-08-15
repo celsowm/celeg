@@ -7,4 +7,4 @@ namespace celeg {
 
 TokenizerData read_gguf_tokenizer_data(const GgufFile& file);
 
-} // namespace celeg
+}

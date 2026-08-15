@@ -7,9 +7,6 @@
 
 namespace celeg {
 
-// Scheduler-facing abstraction over KV page ownership. It deliberately omits
-// device pointers and kernels, allowing admission/prefix policies to be tested
-// without a CUDA runtime.
 class IKvPageAllocator {
 public:
     virtual ~IKvPageAllocator() = default;
@@ -27,4 +24,4 @@ public:
     virtual size_t page_bytes() const = 0;
 };
 
-} // namespace celeg
+}

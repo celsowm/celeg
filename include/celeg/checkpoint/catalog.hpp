@@ -34,4 +34,4 @@ std::shared_ptr<const CheckpointFormatCatalog>
 create_builtin_checkpoint_format_catalog();
 void add_builtin_checkpoint_formats(CheckpointFormatCatalog& catalog);
 
-} // namespace celeg
+}

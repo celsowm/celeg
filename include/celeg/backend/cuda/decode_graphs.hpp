@@ -6,10 +6,6 @@
 
 namespace celeg {
 
-// Owns the specialized decode graph instances and their capture lifecycle.
-// The compiled model supplies the operation to capture; this collaborator
-// guarantees begin/end/abort symmetry and keeps graph-state transitions out of
-// the model coordinator.
 class CudaDecodeGraphs final {
 public:
     CudaGraphExec& select(bool segmented) {
@@ -47,4 +43,4 @@ public:
     CudaGraphExec segmented_decode;
 };
 
-} // namespace celeg
+}

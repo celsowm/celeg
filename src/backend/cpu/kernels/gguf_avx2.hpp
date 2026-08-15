@@ -14,6 +14,6 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
 void cpu_quantize_q8k_avx2(const float* input, size_t cols,
                            CpuQ8KBlock* output);
 
-} // namespace celeg::detail
+}
 
 #endif

@@ -56,7 +56,7 @@ void validate_attention_state_layout(const CompiledAttentionStateLayout& layout)
     std::visit([](const auto& state) { state.validate(); }, layout);
 }
 
-} // namespace
+}
 
 void ExpertPayloadSchema::validate() const {
     for (const ExpertPayloadRegion& region : regions) {
@@ -303,4 +303,4 @@ void CompiledModelProgram::validate() const {
     }
 }
 
-} // namespace celeg
+}

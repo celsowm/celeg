@@ -13,12 +13,6 @@ namespace celeg {
 
 TensorInventory::TensorInventory(std::vector<TensorInventoryEntry> entries)
     : entries_(std::move(entries)) {
-    // compressed-tensors pack-quantized checkpoints expose the logical
-    // matrix as three sidecars (`_packed`, `_scale`, `_shape`) and omit the
-    // unsuffixed name.  Resolution reasons about logical weights, while the
-    // repository/loader resolves the sidecars later.  Add only a derived
-    // inventory identity here; no source tensor is fabricated in the
-    // repository itself.
     std::unordered_map<std::string, const TensorInventoryEntry*> by_name;
     by_name.reserve(entries_.size());
     for (const auto& entry : entries_) by_name.emplace(entry.name, &entry);
@@ -99,4 +93,4 @@ InferenceInput build_inference_input(const CheckpointView& checkpoint) {
             build_tensor_inventory(*checkpoint.repository), checkpoint.metadata.source_format};
 }
 
-} // namespace celeg
+}

@@ -56,4 +56,4 @@ void launch_w4a16_linear(const __nv_bfloat16* x, const uint8_t* weight,
                         int m, int n, int k, float beta,
                         cudaStream_t stream);
 
-} // namespace celeg
+}

@@ -229,4 +229,4 @@ void CudaSchedulerDriver::complete_prefill_locked(Request& request, Lane& lane) 
     request.status = RequestStatus::Decoding;
 }
 
-} // namespace celeg
+}

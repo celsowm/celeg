@@ -29,12 +29,10 @@ int64_t read_i64(const std::byte* source) {
 
 int centered_nibble(uint8_t packed, int half) {
     const int value = (packed >> (half * 4)) & 0x0f;
-    // compressed-tensors stores symmetric INT4 values as unsigned nibbles
-    // shifted by the zero code (8), not as two's-complement nibbles.
     return value - 8;
 }
 
-} // namespace
+}
 
 void PackedInt4Matrix::validate() const {
     if (rows <= 0 || cols <= 0 || group_size <= 0 || cols % group_size != 0 ||
@@ -106,8 +104,6 @@ PackedInt4Matrix load_packed_int4_matrix(
     result.cols = cols;
     result.group_size = group_size;
     result.values.resize(static_cast<size_t>(rows) * result.packed_cols());
-    // Each I32 packs eight nibbles.  The host is little-endian for the
-    // safetensors payload, so copying its bytes preserves low-nibble order.
     std::memcpy(result.values.data(), packed.data, result.values.size());
     result.scales.resize(static_cast<size_t>(rows) * groups);
     for (size_t index = 0; index < result.scales.size(); ++index) {
@@ -136,4 +132,4 @@ std::vector<float> dequantize_packed_int4(const PackedInt4Matrix& matrix) {
     return result;
 }
 
-} // namespace celeg
+}

@@ -1,7 +1,3 @@
-// ALiBi lowering.  This is intentionally a small, explicit online-softmax
-// implementation: ALiBi changes every score, so routing it through the
-// bias-free kernels would silently produce the wrong model.  The ordinary
-// kernels remain on their existing fast paths.
 
 __device__ __forceinline__ float alibi_score(float dot, float scale,
                                              const float* slopes,

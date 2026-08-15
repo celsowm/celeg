@@ -65,9 +65,6 @@ private:
     int max_queue_depth_ = 0;
 };
 
-// Backend-neutral host staging storage. The allocator is injected so CUDA
-// can provide pinned/mapped memory, while ordinary tests and CPU-linked
-// builds use malloc. Payload interpretation stays in the source adapter.
 class HostExpertCache final : public IHostExpertCache {
 public:
     using HostAllocateFn = void* (*)(std::size_t);
@@ -83,8 +80,6 @@ public:
 
     using LoaderFn = std::function<void(std::span<std::byte> payload)>;
 
-    // Acquires a lease. If the expert is missing, invokes loader_fn while other
-    // concurrent waiters coalesce and wait on the same load.
     ExpertHostLease acquire(int layer, int expert, const LoaderFn& loader_fn);
 
     void release_slot(int slot_idx);
@@ -179,4 +174,4 @@ private:
     int choose_victim_slot();
 };
 
-} // namespace celeg
+}

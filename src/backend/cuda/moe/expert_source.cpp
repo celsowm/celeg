@@ -43,4 +43,4 @@ void CudaExpertSource::read(int layer, int expert,
     reader.read(location.w2, down);
 }
 
-} // namespace celeg
+}

@@ -9,4 +9,4 @@ public:
     CompiledModelProgram compile(const ResolvedModel& model) const;
 };
 
-} // namespace celeg
+}

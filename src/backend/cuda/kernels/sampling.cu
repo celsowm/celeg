@@ -133,11 +133,6 @@ __device__ __forceinline__ uint64_t xorshift64star(uint64_t& state) {
     return state * 2685821657736338717ULL;
 }
 
-// Canonical stochastic choice over an already score-sorted top-k list.
-// All sampling paths use this primitive so top-p cutoff, RNG advancement and
-// boundary behavior cannot drift between standalone, fused, merged and packed
-// execution. Candidate ordering itself is established separately by the
-// deterministic top-k selection below.
 __device__ __forceinline__ int32_t sample_sorted_topk(
     const float* selected_values,
     const int32_t* selected_indices,
@@ -195,41 +190,11 @@ __global__ void sample_topk_kernel(const float* selected_values,
         selected_values, selected_indices, top_k, top_p, rng_state);
 }
 
-// Candidate ordering shared by the top-k selection below: higher score wins,
-// and on an exact tie the lower vocabulary index wins. This is the ordering the
-// original single-threaded insertion sort produced, and callers (and the
-// determinism tests) depend on it, so any parallel selection must reproduce it
-// exactly rather than merely picking "a" maximum.
 __device__ __forceinline__ bool sampling_candidate_better(float va, int ia,
                                                           float vb, int ib) {
     return va > vb || (va == vb && ia < ib);
 }
 
-// Block-parallel ordered top-k selection over scores[0, vocab).
-//
-// This replaced a single-threaded (`threadIdx.x == 0`) insertion sort over the
-// whole vocabulary. Benchmark measurements show that one loop was
-// 5.47 ms of an 8.34 ms decode step -- 66% of decode, more than every GEMM in
-// the model combined -- because one lane walked 65536 dependent global loads
-// with no parallelism to hide the latency.
-//
-// Strategy: every thread reduces its own strided slice to a single best
-// candidate, then each rank is drained by a block-wide argmax over those
-// blockDim.x candidates. Only the thread that owned the winner has to refill,
-// and it rescans just its own slice (vocab/blockDim.x elements) for its
-// next-best strictly below what was just emitted. So the serial work per rank
-// is one slice, not the whole vocabulary.
-//
-// Ordering is descending score, ties broken by *lower* vocabulary index --
-// identical to what the insertion sort produced. Callers depend on this, so it
-// is asserted directly in cuda_kernels_test.cu rather than left implicit.
-//
-// `best_*` / `reduce_*` are caller-provided shared scratch, blockDim.x wide.
-// blockDim.x must be a power of two (the reduction halves it).
-// `index_base` is added to the emitted index only (never to the comparisons
-// or the refill-ownership arithmetic), so a caller reducing a slice
-// `scores + base` of a larger array can recover absolute indices without
-// changing any of the ordering/refill logic below.
 __device__ void block_select_topk(const float* scores, int vocab, int ranks,
                                   float* out_values, int32_t* out_indices,
                                   float* best_values, int* best_indices,
@@ -268,8 +233,6 @@ __device__ void block_select_topk(const float* scores, int vocab, int ranks,
             out_values[rank] = won_value;
             out_indices[rank] = won_index == INT_MAX ? INT_MAX : won_index + index_base;
         }
-        // Refill only the owning thread; thread t owns vocabulary indices
-        // t, t+stride, ..., so ownership is recoverable from the index alone.
         if (rank + 1 < ranks && won_index != INT_MAX &&
             threadIdx.x == won_index % stride) {
             float nv = -FLT_MAX;
@@ -288,14 +251,6 @@ __device__ void block_select_topk(const float* scores, int vocab, int ranks,
     }
 }
 
-// Stage 1 of the grid-parallel top-k path: each block scores and reduces one
-// contiguous slice of the vocabulary [start, end) to its own local top
-// `ranks` candidates (same temperature/repetition-penalty adjustment and the
-// same block_select_topk ordering as the single-block path), writing them to
-// partial_values/partial_indices[blockIdx.x * ranks .. +ranks). Splitting the
-// O(vocab/blockDim.x) scan across gridDim.x blocks spreads it across that
-// many SMs instead of just one, which matters because the single-block path
-// only ever occupies one SM regardless of how wide it is.
 __global__ void sample_topk_partial_kernel(const __nv_bfloat16* logits,
                                            const uint8_t* seen,
                                            float* scores,
@@ -333,16 +288,6 @@ __global__ void sample_topk_partial_kernel(const __nv_bfloat16* logits,
                       best_values, best_indices, reduce_values, reduce_indices, start);
 }
 
-// Stage 2: merges the gridDim.x(stage1) * ranks partial candidates (a couple
-// hundred to low thousands of entries, an order of magnitude smaller than
-// vocab) into the final ordered top-k and samples from it. Candidate values
-// and vocabulary indices live in separate arrays here (unlike
-// block_select_topk, where index == array position), so this does its own
-// small-scale destructive block-parallel argmax over a shared-memory copy
-// instead of reusing block_select_topk directly. Vocabulary indices are
-// globally unique across stage-1 partitions (they cover disjoint vocab
-// ranges), so removing a winner by index match never removes more than one
-// candidate.
 __global__ void sample_topk_merge_kernel(const float* partial_values,
                                          const int32_t* partial_indices,
                                          int candidate_count,
@@ -588,10 +533,6 @@ void launch_fused_sample_topk(const __nv_bfloat16* logits,
                               uint64_t* rng_state,
                               int32_t* result,
                               cudaStream_t stream) {
-    // Below the threshold a single 256-thread block already finishes the
-    // scan quickly and a second kernel launch would only add overhead, so
-    // only split large vocabularies (where kSamplingPartialBlocks actually
-    // buys meaningfully more parallelism than one block) across the grid.
     constexpr int kPartialThreshold = kSamplingPartialBlocks * 256 * 4;
     if (vocab >= kPartialThreshold) {
         const int candidate_count = kSamplingPartialBlocks * top_k;
@@ -635,4 +576,4 @@ void launch_packed_sample_topk(
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace celeg
+}

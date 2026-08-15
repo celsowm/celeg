@@ -38,7 +38,7 @@ int64_t read_i64(const std::byte* source) {
     return value;
 }
 
-} // namespace
+}
 
 void PackedInt8Matrix::validate() const {
     if (rows <= 0 || cols <= 0 || values.size() != static_cast<size_t>(rows) * cols ||
@@ -126,4 +126,4 @@ PackedInt8Matrix load_packed_int8_matrix(
     return result;
 }
 
-} // namespace celeg
+}

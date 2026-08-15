@@ -15,8 +15,6 @@
 
 namespace {
 
-// Minimal little-endian GGUF v3 writer used to synthesize a self-contained
-// fixture so the test does not depend on any downloaded checkpoint.
 struct GgufWriter {
     std::vector<std::byte> buf;
 
@@ -41,39 +39,34 @@ struct GgufWriter {
 
 std::filesystem::path write_fixture() {
     GgufWriter w;
-    w.put<uint32_t>(0x46554747u);  // magic "GGUF"
-    w.put<uint32_t>(3);            // version
-    w.put<uint64_t>(1);            // tensor count
-    w.put<uint64_t>(4);            // kv count
+    w.put<uint32_t>(0x46554747u);
+    w.put<uint32_t>(3);
+    w.put<uint64_t>(1);
+    w.put<uint64_t>(4);
 
-    // KV: general.architecture = "lfm2" (string)
     w.put_str("general.architecture");
     w.put<uint32_t>(8);
     w.put_str("lfm2");
-    // KV: lfm2.block_count = 14 (u32)
     w.put_str("lfm2.block_count");
     w.put<uint32_t>(4);
     w.put<uint32_t>(14);
-    // KV: lfm2.rope.freq_base = 1e6 (f32)
     w.put_str("lfm2.rope.freq_base");
     w.put<uint32_t>(6);
     w.put<float>(1000000.0f);
-    // KV: lfm2.attention.head_count_kv = [0,0,8] (i32 array)
     w.put_str("lfm2.attention.head_count_kv");
-    w.put<uint32_t>(9);            // array
-    w.put<uint32_t>(5);            // element kind i32
-    w.put<uint64_t>(3);            // count
+    w.put<uint32_t>(9);
+    w.put<uint32_t>(5);
+    w.put<uint64_t>(3);
     w.put<int32_t>(0);
     w.put<int32_t>(0);
     w.put<int32_t>(8);
 
-    // Tensor info: "token_embd.weight" F32, dims [4, 2] (GGUF order = cols,rows)
     w.put_str("token_embd.weight");
-    w.put<uint32_t>(2);            // ndim
-    w.put<uint64_t>(4);            // dim0 (cols)
-    w.put<uint64_t>(2);            // dim1 (rows)
-    w.put<int32_t>(0);            // type F32
-    w.put<uint64_t>(0);           // offset
+    w.put<uint32_t>(2);
+    w.put<uint64_t>(4);
+    w.put<uint64_t>(2);
+    w.put<int32_t>(0);
+    w.put<uint64_t>(0);
 
     w.align(32);
     const float payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -105,14 +98,12 @@ void test_fixture() {
         CELEG_TEST_CHECK(g.contains_tensor("token_embd.weight"));
         const celeg::GgufTensorView t = g.tensor("token_embd.weight");
         CELEG_TEST_CHECK(t.type == celeg::GgmlType::F32);
-        // HF shape is reversed GGUF dims: [rows=2, cols=4].
         CELEG_TEST_CHECK((t.shape == std::vector<int64_t>{2, 4}));
         CELEG_TEST_CHECK(t.element_count == 8);
         CELEG_TEST_CHECK(t.bytes == 8 * sizeof(float));
         const float* data = reinterpret_cast<const float*>(t.data);
         CELEG_TEST_CHECK(data[0] == 1.0f && data[7] == 8.0f);
 
-        // Missing key / tensor should throw.
         bool threw = false;
         try { g.u32("does.not.exist"); } catch (const std::exception&) { threw = true; }
         CELEG_TEST_CHECK(threw);
@@ -144,7 +135,7 @@ void test_real_file_optional() {
     std::cout << "test_real_file PASS (" << g.tensor_count() << " tensors)\n";
 }
 
-} // namespace
+}
 
 int main() {
 #if defined(_WIN32)

@@ -142,4 +142,4 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     return result;
 }
 
-} // namespace celeg
+}

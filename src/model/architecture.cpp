@@ -77,4 +77,4 @@ std::vector<std::string_view> ArchitectureCatalog::ids() const {
     return result;
 }
 
-} // namespace celeg
+}

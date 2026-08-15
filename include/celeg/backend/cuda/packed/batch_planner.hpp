@@ -13,9 +13,6 @@ struct PackedAttentionBatchPlan {
     int chunks = 0;
 };
 
-// Owns the host/device metadata lifecycle and the segmented-attention
-// workspace decision for one packed executor. It does not validate session
-// lifecycle or execute model layers.
 class PackedAttentionBatchPlanner {
 public:
     PackedAttentionBatchPlanner(PackedWorkspace& workspace,
@@ -35,4 +32,4 @@ private:
     PackedMetadataCache& metadata_cache_;
 };
 
-} // namespace celeg
+}

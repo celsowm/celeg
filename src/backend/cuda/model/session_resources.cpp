@@ -85,13 +85,8 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
     CELEG_CUDA(cudaMemcpyAsync(sampling_.rng_state.data(), &seed, sizeof(seed),
                              cudaMemcpyHostToDevice, stream_.get()));
     sampling_.seen_tokens.zero_async(stream_.get());
-    // Zero convolution state (running buffer that must start empty).  KV
-    // caches are intentionally NOT zeroed here: attention only reads
-    // positions 0..position_ and every used slot is overwritten before
-    // becoming visible after the position reset above.
     for (Layer& layer : resources_.layers_) {
         visit_layer(layer,
-          // KV caches are not zeroed here, as described above.
           [](AttentionLayer*) {},
           [&](ConvolutionLayer* convolution) {
             convolution->conv_state.zero_async(stream_.get());
@@ -104,12 +99,8 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
             mamba->conv_state.zero_async(stream_.get());
             mamba->ssm_state.zero_async(stream_.get());
           },
-          // MLP-only blocks hold no session state.
           [](MlpOnlyLayer*) {});
     }
-    // Prime the FFN-done, router-done and prefetch-done events so the offload
-    // transfer stream can start promoting experts on the first layer of the
-    // next forward pass.
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
     CELEG_CUDA(cudaEventRecord(workspace_.router_done_event_.get(), stream_.get()));
     CELEG_CUDA(cudaEventRecord(workspace_.prefetch_done_event_.get(), stream_.get()));
@@ -186,5 +177,5 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
 void CudaCompiledModel::release_prefill_workspace() {
 }
 
-} // namespace celeg
+}
 

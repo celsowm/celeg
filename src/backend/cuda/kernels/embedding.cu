@@ -105,9 +105,6 @@ __global__ void embedding_int8_batch_kernel(const int32_t* tokens,
     out[index] = __float2bfloat16(value);
 }
 
-// Weight-only symmetric per-output-channel INT8. Eight warps compute eight
-// output rows for one activation row. The decode path (m=1) is therefore a
-// true GEMV; prefill reuses the same kernel across activation rows.
 
 __global__ void embedding_int4_value_kernel(int32_t token,
                                              const uint8_t* table,
@@ -154,12 +151,7 @@ __global__ void embedding_int4_batch_kernel(const int32_t* tokens,
         static_cast<float>(unpack_int4(row, column)) * scales[token]);
 }
 
-// Weight-only symmetric per-output-channel INT4. The packed matrix keeps two
-// signed values per byte. Eight warps compute eight output rows per block.
-// Shared-memory activation staging: the activation tile is loaded once per
-// block and shared across all 8 warps, halving global-memory traffic versus
-// the naive per-warp load when m > 1 (multi-row prefill).
-} // namespace
+}
 
 void launch_embedding(int32_t token, const __nv_bfloat16* table,
                       __nv_bfloat16* out, int hidden, cudaStream_t stream) {
@@ -262,4 +254,4 @@ void launch_embedding_int4_batch(const int32_t* tokens, int rows,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace celeg
+}

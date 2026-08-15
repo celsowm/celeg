@@ -23,4 +23,4 @@ public:
                         cudaStream_t stream);
 };
 
-} // namespace celeg
+}

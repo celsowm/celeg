@@ -43,7 +43,7 @@ public:
     }
 };
 
-} // namespace
+}
 namespace {
 
 struct Image {
@@ -595,7 +595,7 @@ private:
     float epsilon_ = 1e-6f;
 };
 
-} // namespace
+}
 
 VisualEmbeddingProvider make_gguf_visual_embedding_provider(
     const std::filesystem::path& projector_path) {
@@ -606,4 +606,4 @@ std::unique_ptr<IVisionProviderFactory> make_gguf_vision_provider_factory() {
     return std::make_unique<GgufProjectionProviderFactory>();
 }
 
-} // namespace celeg
+}

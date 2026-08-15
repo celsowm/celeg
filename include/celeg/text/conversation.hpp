@@ -57,4 +57,4 @@ inline void validate_conversation(std::span<const ChatMessage> messages) {
     }
 }
 
-} // namespace celeg
+}

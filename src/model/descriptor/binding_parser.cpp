@@ -23,4 +23,4 @@ std::vector<BindingPattern> parse_bindings(const Json& object) {
     return result;
 }
 
-} // namespace celeg::descriptor_detail
+}

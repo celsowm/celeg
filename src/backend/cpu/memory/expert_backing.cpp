@@ -57,9 +57,6 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
     std::lock_guard lock(shared.expert_pack_mutex);
     if (shared.expert_backing_store) return;
 
-    // Native GGUF matrices already point into the memory-mapped checkpoint and
-    // let the OS page cache provide SSD-backed demand paging without copying
-    // every expert into owned RAM.
     if (shared.native_checkpoint) return;
     if (!shared.options.use_pack_cache || shared.pack_file.empty()) {
         throw std::invalid_argument(
@@ -115,4 +112,4 @@ CpuCompiledModel::Shared::acquire_expert(int layer, int expert) {
     return expert_backing_store->acquire(ExpertKey{layer, expert});
 }
 
-} // namespace celeg
+}

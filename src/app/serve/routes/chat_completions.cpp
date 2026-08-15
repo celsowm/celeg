@@ -17,9 +17,7 @@ namespace celeg::app::serve {
 namespace {
 
 namespace protocol = celeg::serve::protocol;
-// Large enough for typical base64-encoded images while bounding per-request memory.
 constexpr std::size_t kMaxRequestBodyBytes = 32 * 1024 * 1024;
-// Context trimming is performed before submission, after exact tokenization.
 using celeg::serve::GenerateEvent;
 using celeg::serve::GenerateRequest;
 using celeg::serve::FinishReason;
@@ -38,14 +36,11 @@ std::string new_request_id() {
     return "chatcmpl-" + std::to_string(counter.fetch_add(1) + 1);
 }
 
-// Detaches the HTTP-facing watcher after a client disconnect mid-stream. The
-// dispatcher owns cancellation and drains the request to a terminal state
-// without touching the now-invalid HttpResponse.
 void forget_after_abort(GenerationDispatcher& dispatcher, RequestId id) {
     dispatcher.cancel(id);
 }
 
-} // namespace
+}
 
 void register_chat_completions_route(uWS::App& app,
                                      GenerationDispatcher& dispatcher,
@@ -206,4 +201,4 @@ void register_chat_completions_route(uWS::App& app,
     });
 }
 
-} // namespace celeg::app::serve
+}

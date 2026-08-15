@@ -48,8 +48,6 @@ int main() {
     }
     CELEG_TEST_CHECK(maximum < 1e-5f);
 
-    // Chunk prefill must be equivalent to independently evaluated causal
-    // queries, while using a single parallel region for the whole chunk.
     constexpr int base = 11;
     constexpr size_t query_rows = 5;
     std::vector<float> query_chunk(query_rows * query.size());
@@ -74,8 +72,6 @@ int main() {
     }
     CELEG_TEST_CHECK(chunk_maximum < 1e-5f);
 
-    // Non-causal and prefix-LM patterns use the complete committed chunk as
-    // their horizon while retaining each row's logical query position.
     std::vector<float> bidirectional_output(query_rows * query.size());
     const celeg::CpuAttentionPattern bidirectional =
         celeg::CpuAttentionPattern::lower(celeg::BidirectionalPattern{});

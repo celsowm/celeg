@@ -37,4 +37,4 @@ CanonicalInferenceContext initialize_canonical_facts(const InferenceInput& input
 void infer_layer_semantics(CanonicalInferenceContext& context);
 void bind_canonical_tensors(CanonicalInferenceContext& context);
 
-} // namespace celeg::inference_detail
+}

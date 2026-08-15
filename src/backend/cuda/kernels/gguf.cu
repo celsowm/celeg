@@ -15,15 +15,6 @@ __device__ __forceinline__ float warp_reduce_sum(float v) {
     return v;
 }
 
-// ---------------------------------------------------------------------------
-// Q4_K super-block (256 elements, 144 bytes):
-//   half   d;              // super-block scale for quantized scales
-//   half   dmin;           // super-block scale for quantized mins
-//   uint8  scales[12];     // 8 x (6-bit scale, 6-bit min), packed
-//   uint8  qs[128];        // 256 x 4-bit quants
-// Sub-block layout: 8 sub-blocks of 32 elements each.
-// Dequant: y = d*sc[j]*q - dmin*m[j], q in [0,15].
-// ---------------------------------------------------------------------------
 struct BlockQ4K {
     __half d;
     __half dmin;
@@ -31,36 +22,21 @@ struct BlockQ4K {
     uint8_t qs[128];
 };
 
-// Decodes the 6-bit scale/min for sub-block j (0..7) from the packed 12 bytes.
-// Delegates to the shared gguf_blocks helper (identical on CPU and CUDA).
-// (q4k_scale_min brought in via `using` above.)
 
-// Returns the dequantized value at logical index `col` (0..255) of one Q4_K
-// super-block.
 __device__ __forceinline__ float q4k_value(const BlockQ4K* blk, int col) {
     const float d = __half2float(blk->d);
     const float dmin = __half2float(blk->dmin);
-    const int sub = col >> 5;          // sub-block 0..7
-    const int within = col & 31;       // 0..31
+    const int sub = col >> 5;
+    const int within = col & 31;
     uint8_t sc, m;
     q4k_scale_min(sub, blk->scales, sc, m);
-    // qs is laid out as two nibbles per byte, low nibble for the first 32-wide
-    // half of a 64-element group, high nibble for the second.
-    const int group = sub >> 1;        // 0..3, each spans 64 elems / 32 bytes
+    const int group = sub >> 1;
     const uint8_t* qs = blk->qs + group * 32;
     const uint8_t byte = qs[within];
     const int q = (sub & 1) ? (byte >> 4) : (byte & 0xF);
     return d * sc * static_cast<float>(q) - dmin * m;
 }
 
-// ---------------------------------------------------------------------------
-// Q6_K super-block (256 elements, 210 bytes):
-//   uint8  ql[128];        // lower 4 bits
-//   uint8  qh[64];         // upper 2 bits
-//   int8   scales[16];     // per 16-element sub-block scale
-//   half   d;              // super-block scale
-// Dequant: y = d * scales[is] * (q - 32), q the 6-bit unsigned value.
-// ---------------------------------------------------------------------------
 struct BlockQ6K {
     uint8_t ql[128];
     uint8_t qh[64];
@@ -68,20 +44,14 @@ struct BlockQ6K {
     __half d;
 };
 
-// Returns the dequantized value at logical index `col` (0..255) of one Q6_K
-// super-block. Mirrors ggml's dequantize_row_q6_K layout.
 __device__ __forceinline__ float q6k_value(const BlockQ6K* blk, int col) {
     const float d = __half2float(blk->d);
-    // The 256 elements are processed in two halves of 128. Within each half,
-    // ql spans 64 bytes and qh spans 32 bytes, arranged in 4 groups of 32.
-    const int half = col >> 7;          // 0 or 1
-    const int idx = col & 127;          // 0..127 inside the half
-    const int n = idx & 31;             // position within a 32-wide lane group
-    const int grp = idx >> 5;           // 0..3
+    const int half = col >> 7;
+    const int idx = col & 127;
+    const int n = idx & 31;
+    const int grp = idx >> 5;
     const uint8_t* ql = blk->ql + half * 64;
     const uint8_t* qh = blk->qh + half * 32;
-    // Reconstruct the 6-bit value following the ggml packing:
-    //   is  = 8*half + ... ; the scale sub-block index.
     int q;
     if (grp == 0) {
         q = (ql[n] & 0xF) | (((qh[n] >> 0) & 3) << 4);
@@ -92,8 +62,6 @@ __device__ __forceinline__ float q6k_value(const BlockQ6K* blk, int col) {
     } else {
         q = (ql[n + 32] >> 4) | (((qh[n] >> 6) & 3) << 4);
     }
-    // Scale sub-block index: 16 scales, one per 16 elements. Within a half the
-    // scale index is 8*half + (grp*2 + (n >= 16 ? 1 : 0)).
     const int is = half * 8 + grp * 2 + (n >> 4);
     return d * static_cast<float>(blk->scales[is]) * static_cast<float>(q - 32);
 }
@@ -121,7 +89,6 @@ __global__ void gguf_gemv_kernel(const __nv_bfloat16* __restrict__ x,
         const __nv_bfloat16* input =
             x + static_cast<size_t>(activation_row) * k;
         float sum = 0.0f;
-        // Each lane strides over the 256 elements of every super-block.
         for (int b = 0; b < blocks_per_row; ++b) {
             const BlockT* blk =
                 reinterpret_cast<const BlockT*>(row_blocks) + b;
@@ -224,9 +191,6 @@ __global__ void gguf_embedding_batch_kernel(const int32_t* tokens, int rows,
                                           col % kSuperBlock));
 }
 
-// Dequantizes an entire quantized matrix [n, k] to BF16 (row-major). Used for
-// the embedding lookup table so token gather can reuse the BF16 fast path.
-// Launched as a flat 1D grid over the n*k elements (row-major).
 template <typename BlockT, float (*ValueFn)(const BlockT*, int)>
 __global__ void gguf_dequant_kernel(const uint8_t* __restrict__ blocks,
                                     __nv_bfloat16* __restrict__ out,
@@ -246,7 +210,7 @@ __global__ void gguf_dequant_kernel(const uint8_t* __restrict__ blocks,
     out[idx] = __float2bfloat16(v);
 }
 
-} // namespace
+}
 
 void launch_gguf_linear_segment(const __nv_bfloat16* x, const uint8_t* blocks,
                                 GgmlType type, __nv_bfloat16* y,
@@ -340,4 +304,4 @@ void launch_gguf_dequant(const uint8_t* blocks, GgmlType type,
     }
 }
 
-} // namespace celeg
+}

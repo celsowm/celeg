@@ -10,38 +10,11 @@
 #include <stdexcept>
 #include <vector>
 
-// Host-driven single-token execution.
-//
-// `forward_token_host` (contiguous per-layer KV) and `forward_token_paged_host`
-// (physical page pool) used to be two ~300-400 line copies of the same per-layer
-// program.  They are now two entry points that differ only in their prologue,
-// their epilogue and one `TokenKvPolicy` value; everything between the operator
-// norm and the feed-forward block is executed once, here.
-//
-// The file is organized along the execution seams named in
-// docs/SOLID_REVIEW_BACKENDS.md §5.1:
-//
-//     layer iteration                 run_token_layers / run_token_layer
-//     mixer execution                 run_token_mixer + run_token_<mixer>
-//     attention capability selection  token_attention_plan
-//     KV access policy                store_and_attend_token_{contiguous,paged}
-//     feed-forward execution          run_mlp_decode (pre-existing)
-//     state transition                the entry points' epilogues
-//
-// Where the two KV policies genuinely diverge today, the divergence is an
-// explicit, commented `kv.paged()` branch rather than a duplicated function, so
-// the remaining capability gaps are visible instead of hidden in a second copy.
 
 namespace celeg {
 
-// ---------------------------------------------------------------------------
-// Layer iteration
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::run_token_layers(const TokenKvPolicy& kv) {
-    // resources_.layers_ holds exactly one entry per hidden layer (see
-    // configure_layer_weights), so iterating the container and indexing the
-    // compiled program stay in step.
     int layer_index = 0;
     for (Layer& layer : resources_.layers_) {
         run_token_layer(layer, layer_index, kv);
@@ -85,9 +58,6 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Mixer execution
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::run_token_mixer(Layer& layer, LayerCommon& common_layer,
                                         const CompiledLayerProgram& semantics,
@@ -110,9 +80,6 @@ void CudaCompiledModel::run_token_mixer(Layer& layer, LayerCommon& common_layer,
       });
 }
 
-// ---------------------------------------------------------------------------
-// Attention capability selection
-// ---------------------------------------------------------------------------
 
 AttentionCapability CudaCompiledModel::token_attention_plan(
     AttentionLayer& attention, const AttentionSpec& owner_layout,
@@ -125,19 +92,12 @@ AttentionCapability CudaCompiledModel::token_attention_plan(
     request.bias = attention.alibi_slopes.data()
         ? AttentionPositionBias::Alibi : AttentionPositionBias::None;
     request.fast_attention = resources_.options_.fast_attention;
-    // Segmented decode exists only for device-counter launches.  The
-    // host-scalar contiguous path has no segmented (and no ALiBi) kernel, which
-    // the capability matrix records; asking for one there would be rejected by
-    // name rather than silently served by the unbiased kernel.
     request.segmented_attention =
         kv.paged() && use_segmented_attention(session_.position_);
     request.head_dim = owner_layout.head_dim;
     return require_attention_capability(request);
 }
 
-// ---------------------------------------------------------------------------
-// KV access policy
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::store_and_attend_token_contiguous(
     AttentionLayer& attention, AttentionLayer& owner, const AttentionCapability& plan,
@@ -160,7 +120,6 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         .kv_heads = owner_layout.key_value_heads,
         .head_dim = owner_layout.head_dim,
         .sliding_window = layout.sliding_window_size()};
-    // Host-scalar contiguous decode: the kernel takes the KV length directly.
     const AttentionExtent extent{.seq_len = session_.position_ + 1};
     switch (plan.algorithm) {
     case AttentionAlgorithm::Online:
@@ -351,9 +310,6 @@ void CudaCompiledModel::store_and_attend_token_paged(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Attention
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::run_token_latent_attention_paged(
     AttentionLayer& attention, LayerCommon& common_layer,
@@ -465,10 +421,6 @@ void CudaCompiledModel::run_token_attention(
 
     if (layout.uses_latent_state()) {
         if (!kv.paged()) {
-            // Latent (MLA) attention was only ever implemented for the paged
-            // host path.  Latent layers never load AttentionLayer::query, so
-            // the contiguous host path used to dereference a null weight here
-            // instead of reporting the gap.  Reject it by name.
             throw std::invalid_argument(
                 "CUDA latent attention is not implemented for contiguous host token "
                 "execution");
@@ -504,17 +456,6 @@ void CudaCompiledModel::run_token_attention(
     }
     }
 
-    // Position encoding.  Two pre-existing asymmetries between the two KV
-    // policies are preserved here as explicit branches instead of being hidden
-    // in a second copy of the function:
-    //
-    //   * M-RoPE (multi-axis positions) is implemented only for the contiguous
-    //     host path; paged serving silently applies scalar RoPE to a multi-axis
-    //     layer today.
-    //   * QK-norm without RoPE is applied only on the paged path; the
-    //     contiguous path skips it.
-    //
-    // Both are capability gaps in the *other* path, not deliberate policy.
     if (const auto* rope = layout.rope_position()) {
         const auto* multi = kv.paged() ? nullptr : layout.multi_axis_position();
         if (multi) {
@@ -580,10 +521,6 @@ void CudaCompiledModel::run_token_attention(
                  semantics.residual.multiplier, stream_.get());
 }
 
-// ---------------------------------------------------------------------------
-// Non-attention mixers.  These do not touch the KV cache, so the two host
-// token paths share them verbatim.
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
                                               const CompiledLayerProgram& semantics) {
@@ -648,12 +585,6 @@ void CudaCompiledModel::run_token_mamba2(Mamba2Layer& mamba,
                        workspace_.mamba_inner_.data(), spec.intermediate_size,
                        spec.state_size, spec.num_heads, spec.head_dim,
                        spec.group_count, spec.conv_kernel, stream_.get());
-    // NOTE: pre-existing divergence, preserved bit-for-bit.  The contiguous
-    // host path normalizes the Mamba2 inner state with the *post-attention*
-    // norm epsilon while the paged host path, batched prefill and the
-    // graph-capturable decode path all use the operator-norm epsilon.  Only one
-    // of these can be right; fixing it is a numerical change and therefore out
-    // of scope for this structural refactor.
     const float epsilon = kv.paged() ? semantics.operator_norm.epsilon
                                      : semantics.post_attention_norm.epsilon;
     launch_rmsnorm(workspace_.mamba_inner_.data(), mamba.norm,
@@ -688,9 +619,6 @@ void CudaCompiledModel::run_token_convolution(ConvolutionLayer& convolution) {
            resources_.options_.fused_residuals ? 1.0f : 0.0f);
 }
 
-// ---------------------------------------------------------------------------
-// Logits
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::run_token_logits() {
     launch_rmsnorm(workspace_.hidden_.data(), resources_.final_norm_, workspace_.normed_.data(),
@@ -707,9 +635,6 @@ void CudaCompiledModel::run_token_logits() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Entry points: prologue, shared layer program, epilogue
-// ---------------------------------------------------------------------------
 
 void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,
                                            const float* raw_embedding,
@@ -775,9 +700,6 @@ void CudaCompiledModel::forward_token_paged_host(
         token, workspace_.hidden_.data(), resources_.program_.hidden, stream_.get());
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  resources_.program_.embedding_transform.multiplier, stream_.get());
-    // NOTE: pre-existing divergence, preserved bit-for-bit.  Unlike the
-    // contiguous path, paged serving does not apply
-    // `embedding_transform.post_norm` here.
     initialize_per_layer_input_host(token);
 
     TokenKvPolicy kv;
@@ -795,4 +717,4 @@ void CudaCompiledModel::forward_token_paged_host(
                                cudaMemcpyHostToDevice, stream_.get()));
 }
 
-} // namespace celeg
+}

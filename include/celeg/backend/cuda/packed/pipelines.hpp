@@ -6,9 +6,6 @@ namespace celeg {
 
 struct PackedDecodeExecutorImpl;
 
-// Decode and ragged-prefill are separate orchestration collaborators. They
-// share the executor's preallocated state but own distinct validation,
-// launch/completion sequencing entry points.
 class PackedDecodePipeline {
 public:
     explicit PackedDecodePipeline(PackedDecodeExecutorImpl& state);
@@ -32,4 +29,4 @@ private:
     PackedDecodeExecutorImpl* state_;
 };
 
-} // namespace celeg
+}

@@ -370,7 +370,6 @@ class CudaGraphExec {
 public:
     CudaGraphExec() = default;
     ~CudaGraphExec() {
-        // A live capture must be ended by the owner before destruction.
         reset();
     }
 
@@ -389,7 +388,6 @@ public:
         cudaGraph_t discarded = nullptr;
         (void)cudaStreamEndCapture(stream, &discarded);
         if (discarded) cudaGraphDestroy(discarded);
-        // Clear a possible sticky capture error before the stream is reused.
         (void)cudaGetLastError();
         capturing_ = false;
     }
@@ -428,4 +426,4 @@ private:
     bool capturing_ = false;
 };
 
-} // namespace celeg
+}

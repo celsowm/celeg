@@ -26,4 +26,4 @@ struct CpuTopology {
 
 CpuTopology detect_cpu_topology();
 
-} // namespace celeg
+}

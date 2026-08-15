@@ -35,4 +35,4 @@ inline TensorSpec final_norm(const ModelGraph& graph) {
             {"model.norm.weight", "model.final_norm.weight"}, {graph.hidden}, false};
 }
 
-} // namespace celeg::weights
+}

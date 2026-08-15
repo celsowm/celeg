@@ -38,4 +38,4 @@ void run_attention(
         model, attention, owner, common_layer, semantics, rows);
 }
 
-} // namespace celeg::prefill_detail
+}

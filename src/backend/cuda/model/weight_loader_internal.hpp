@@ -26,4 +26,4 @@ inline size_t checked_element_count(const std::vector<int64_t>& shape) {
     return count;
 }
 
-} // namespace celeg::cuda_loader_detail
+}

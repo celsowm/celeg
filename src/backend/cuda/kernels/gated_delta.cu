@@ -37,12 +37,6 @@ __global__ void interleave_gated_delta_qkv_kernel(
     }
 }
 
-// For long, contiguous prefill sequences, time remains sequential but each
-// state value column is independent.  Prepare q/k in one ordered block per
-// key head, execute independent value-column tiles in parallel, then normalize
-// each value head in an ordered block.  Key/value grouping is expressed by the
-// neutral topology: every value head reads its owning key head, while each
-// convolution channel remains uniquely owned by this prepare block.
 __global__ void gated_delta_sequence_prepare_kernel(
     __nv_bfloat16* qkv, const __nv_bfloat16* conv_weight,
     __nv_bfloat16* conv_state, int rows, int conv_kernel, int key_head_dim,
@@ -255,9 +249,6 @@ __global__ void gated_delta_sequence_norm_kernel(
     }
 }
 
-// A 128x128 recurrent matrix is common enough to justify a neutral shape
-// specialization. Each warp owns four value columns, retaining their state
-// for a contiguous prefill sequence and reusing q/k across those columns.
 template <int KeyHeadDim, int ValueHeadDim>
 __global__ void gated_delta_sequence_register_tile_kernel(
     const __nv_bfloat16* qkv, const __nv_bfloat16* b, const __nv_bfloat16* a,
@@ -478,10 +469,6 @@ __global__ void gated_delta_net_kernel(
     }
 }
 
-// Time is sequential for a recurrent token, but channels and heads within a
-// token are independent.  Keep the scalar kernel above as the general
-// multi-row fallback; use these parallel stages for the single-token decode
-// path.
 __global__ void gated_delta_conv_kernel(
     __nv_bfloat16* qkv, const __nv_bfloat16* conv_weight,
     __nv_bfloat16* conv_state, int qkv_width, int conv_kernel) {
@@ -590,13 +577,6 @@ __global__ void gated_delta_recurrent_kernel(
     }
 }
 
-// A token's recurrent state evolves sequentially, but a one-to-one key/value
-// head topology has no cross-block data dependency.  Fuse convolution, q/k
-// normalization, state update, and output normalization into that one block.
-// This removes two launches for each recurrent layer without attaching the
-// implementation to a checkpoint identity.  Grouped-query layouts retain the
-// generic path below because more than one value head would otherwise update
-// the same key-channel convolution history.
 template <int KeyHeadDim, int ValueHeadDim>
 __global__ __launch_bounds__(ValueHeadDim)
 void gated_delta_fused_register_state_kernel(
@@ -915,7 +895,7 @@ __global__ void gated_delta_fused_single_head_kernel(
     }
 }
 
-} // namespace
+}
 
 void launch_interleave_gated_delta_qkv(const __nv_bfloat16* q,
                                        const __nv_bfloat16* k,
@@ -1063,4 +1043,4 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace celeg
+}

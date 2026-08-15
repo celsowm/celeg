@@ -43,10 +43,10 @@ private:
     std::unordered_map<TensorRole, std::vector<std::string>> bindings_;
 };
 
-} // namespace
+}
 
 std::unique_ptr<ITensorNamingPolicy> create_naming_policy(const Descriptor& descriptor) {
     return std::make_unique<DescriptorNamingPolicy>(descriptor);
 }
 
-} // namespace celeg::descriptor_detail
+}

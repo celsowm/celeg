@@ -13,11 +13,6 @@
 #include <type_traits>
 #include <vector>
 
-// The online-softmax attention kernel below is AVX2/FMA.  GCC and Clang need
-// the target attribute to emit those instructions from a generically compiled
-// translation unit; MSVC accepts the intrinsics directly, so it only needs the
-// runtime capability check.  Without this the whole attention inner loop fell
-// back to scalar code on MSVC builds.
 #if defined(__x86_64__) || defined(__i386__)
 #define CELEG_CPU_HAS_AVX2_KERNEL 1
 #define CELEG_CPU_AVX2_TARGET __attribute__((target("avx2,fma")))
@@ -460,5 +455,5 @@ void cpu_latent_attention_decode_paged(
 }
 
 
-} // namespace celeg
+}
 

@@ -1,8 +1,3 @@
-// Phase 0 task 0.3: validate the numerical comparison utilities that future
-// Phase 15 quantization-quality and CPU/CUDA parity tests will rely on. The
-// test exercises the comparison functions on synthetic vectors that mimic
-// small logits / weight rows; it does not require a GPU or a real checkpoint.
-// See docs/ARCHITECTURE_EVIDENCE.md and docs/EXTENDING_ARCHITECTURES.md.
 
 #include "support/numerical_compare.hpp"
 
@@ -36,7 +31,6 @@ void run_identical_vectors_pass() {
     if (std::fabs(r.top_k_agreement - 1.0) > kEps) {
         throw std::runtime_error("identical top_k_agreement != 1");
     }
-    // require_within with the trivial thresholds must succeed.
     require_within(r, /*min_cosine=*/0.999, /*max_rmse=*/1e-9,
                    /*max_abs=*/1e-9, /*min_top_k_agreement=*/1.0, /*top_k=*/2);
 }
@@ -64,10 +58,6 @@ void run_zero_vector_rejected() {
 }
 
 void run_quantization_tolerance_applied() {
-    // Simulate a BF16 matrix row vs an INT8-quantized approximation. The
-    // cosine similarity should be high but not exactly 1; the error metrics
-    // must stay inside the documented INT8 tolerance class from section 0.3
-    // (cosine >= 0.999, rmse <= 0.05, max_abs <= 0.25).
     const std::vector<float> reference = {
         0.10f, -0.20f,  0.50f,  0.80f, -0.40f,
         0.30f,  0.60f, -0.10f,  0.20f,  0.70f,
@@ -82,8 +72,6 @@ void run_quantization_tolerance_applied() {
 }
 
 void run_tolerance_violation_reported() {
-    // A clearly different vector must trip require_within's checks. Pick the
-    // sign-flipped copy so cosine_similarity goes strongly negative.
     const std::vector<float> a = {0.1f, -0.2f, 0.5f, 0.8f, -0.4f};
     std::vector<float> b(a.size());
     for (std::size_t i = 0; i < a.size(); ++i) b[i] = -a[i];
@@ -102,9 +90,6 @@ void run_tolerance_violation_reported() {
 }
 
 void run_top_k_agreement_partial() {
-    // Differ by swapping ranks 2 and 3 within the top-3: top_k_agreement(3)
-    // should be 2/3. Top-3 indices of a: {3,2,5} (values 0.8,0.5,0.6).
-    // b swaps positions to make {3,5,2}: 2 still inside top-3, just reordered.
     const std::vector<float> a = {0.1f, -0.2f, 0.5f, 0.8f, -0.4f, 0.6f};
     const std::vector<float> b = {0.1f, -0.2f, 0.45f, 0.81f, -0.4f, 0.61f};
     const double k3 = top_k_agreement(a, b, 3);
@@ -112,13 +97,11 @@ void run_top_k_agreement_partial() {
         throw std::runtime_error(
             "top_k_agreement(3) should be 1.0 for the same top indices");
     }
-    // Now make b so that one top-k entry exits entirely.
     std::vector<float> c(a.size());
     for (std::size_t i = 0; i < a.size(); ++i) c[i] = a[i];
-    c[2] = -1.0f;  // demote original index 2 out of the top-3
-    c[4] = 0.7f;  // promote original index 4 in
+    c[2] = -1.0f;
+    c[4] = 0.7f;
     const double k3b = top_k_agreement(a, c, 3);
-    // a top-3: {3,2(0.5),5(0.6)}; c top-3: {3,5,4(0.7)} -> intersection {3,5} = 2/3.
     if (std::fabs(k3b - (2.0 / 3.0)) > 1e-9) {
         throw std::runtime_error(
             "top_k_agreement partial mismatch: got " +
@@ -126,7 +109,7 @@ void run_top_k_agreement_partial() {
     }
 }
 
-} // namespace
+}
 
 int main() {
     try {

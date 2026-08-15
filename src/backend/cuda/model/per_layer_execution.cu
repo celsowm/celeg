@@ -61,4 +61,4 @@ void CudaCompiledModel::run_per_layer_input_prefill(const LayerCommon& common_la
                         rows * resources_.program_.hidden, stream_.get());
 }
 
-} // namespace celeg
+}

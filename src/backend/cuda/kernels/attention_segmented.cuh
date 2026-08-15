@@ -1,18 +1,4 @@
-// Single-session attention split into fixed-size KV chunks: a partial kernel
-// computes a per-chunk streaming softmax (max, denominator, weighted sum), then
-// a reduce kernel rescales and combines the chunks.
-//
-// This trades one extra kernel launch and a scratch buffer for parallelism
-// across the KV axis, which is what long contexts need -- a single-pass kernel
-// gives only q_heads blocks of work regardless of sequence length.
-//
-// The decode reduce kernel is shared by the bf16 and int8 partial kernels: the
-// partials it consumes are plain floats, so the KV cache precision has already
-// been erased by the time it runs.
 
-// Warp-only variant: one warp (blockDim.x == 32) per (query_head, chunk).
-// This is the actual hot decode-attention path once a context crosses
-// attention_auto_threshold (segmented mode); see warp_broadcast_sum above.
 __global__ void gqa_decode_segment_partial_kernel(
     const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
     const __nv_bfloat16* value_cache, const int32_t* position,
@@ -80,7 +66,6 @@ __global__ void gqa_decode_segment_partial_kernel(
     }
 }
 
-// Warp-only variant of the segmented partial kernel for int8 KV cache.
 __global__ void gqa_decode_segment_partial_int8_kernel(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,
@@ -181,10 +166,6 @@ __global__ void gqa_decode_segment_reduce_kernel(
     }
 }
 
-// Prefill counterpart of gqa_decode_segment_partial_kernel: adds a `row`
-// axis (each row is causally clamped to seq_len = row + 1) so the same
-// chunked online-softmax accumulation can run for every query position in
-// a batched prefill instead of one query at a time.
 __global__ void gqa_prefill_segment_partial_kernel(
     const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
     const __nv_bfloat16* value_cache, int rows, int q_heads, int kv_heads,

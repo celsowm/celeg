@@ -10,8 +10,6 @@
 
 namespace celeg {
 
-// Pure CPU batch-selection policy. It observes request state, applies the
-// shared priority/FIFO policy, and never mutates a request or owns a session.
 class CpuBatchScheduler {
 public:
     using Request = CpuConcurrentRequest;
@@ -23,4 +21,4 @@ public:
         const RequestMap& requests, const detail::BatchPlanner& planner, size_t limit);
 };
 
-} // namespace celeg
+}

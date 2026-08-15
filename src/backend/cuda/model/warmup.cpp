@@ -25,9 +25,6 @@ void CudaCompiledModel::warmup_decode_gemms() {
         throw std::runtime_error("compiled layer map is empty");
     }
     if (!attention_layer) {
-        // Pure recurrent models have no attention GEMM to warm up. Exercise
-        // the first sequential mixer instead so its projections and stateful
-        // kernel are initialized before the first request.
         launch_rmsnorm(workspace_.hidden_.data(),
                        common(resources_.layers_.front()).operator_norm,
                        workspace_.normed_.data(), 1, resources_.program_.hidden,
@@ -132,5 +129,5 @@ void CudaCompiledModel::warmup_prefill_attention_gemm() {
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 }
 
-} // namespace celeg
+}
 

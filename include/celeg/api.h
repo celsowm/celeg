@@ -111,9 +111,6 @@ typedef struct celeg_engine_options {
     celeg_generation_options generation;
 } celeg_engine_options;
 
-// Backend-neutral engine creation. The payload is owned and
-// validated by the selected backend factory; the core API does not interpret
-// backend-specific bytes.
 typedef struct celeg_cpu_backend_options {
     uint32_t struct_size;
     celeg_cpu_model_config model;

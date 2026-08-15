@@ -4,7 +4,6 @@
 #include <iostream>
 
 int main() {
-    // CPU populates the backend-neutral ConcurrentMetrics snapshot directly.
     celeg::ConcurrentMetrics metrics;
     metrics.prefill_tokens = 100;
     metrics.cumulative_ragged_prefill_ms = 50.0;
@@ -22,8 +21,6 @@ int main() {
     CELEG_TEST_CHECK(std::abs(metrics.average_ttft_ms() - 15.0) < 1e-9);
     CELEG_TEST_CHECK(std::abs(metrics.average_itl_ms() - 8.0) < 1e-9);
 
-    // CPU-only counters with no backend-neutral meaning live in the small
-    // extension struct instead of a full duplicate metrics aggregate.
     celeg::CpuConcurrentMetricsExtras extras;
     extras.chunked_prefill_steps = 2;
     extras.cumulative_direct_prefill_ms = 512.0;

@@ -509,4 +509,4 @@ std::unique_ptr<IArchitecture> make_descriptor_architecture(Descriptor descripto
     return std::make_unique<DescriptorArchitecture>(std::move(descriptor));
 }
 
-} // namespace celeg::descriptor_detail
+}

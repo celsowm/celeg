@@ -26,7 +26,7 @@ void write_security_headers(uWS::HttpResponse<false>* res) {
         ->writeHeader("Cross-Origin-Resource-Policy", "same-origin");
 }
 
-} // namespace
+}
 
 void register_chat_ui_routes(uWS::App& app, const std::filesystem::path& asset_dir) {
     const auto index_html = std::make_shared<const std::string>(
@@ -69,4 +69,4 @@ void register_chat_ui_routes(uWS::App& app, const std::filesystem::path& asset_d
     });
 }
 
-} // namespace celeg::app::serve
+}

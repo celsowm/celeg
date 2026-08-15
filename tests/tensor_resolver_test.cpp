@@ -21,10 +21,6 @@ public:
     std::unordered_map<std::string, celeg::HostTensorView> tensors;
 };
 
-// A minimal naming policy exercising the generic TensorResolver mechanism.
-// Concrete checkpoint naming policies live at the importer boundary.
-// module; this test only needs to prove TensorResolver resolves a role
-// through whatever ITensorNamingPolicy it is given.
 class TestNamingPolicy final : public celeg::ITensorNamingPolicy {
 public:
     std::vector<std::string> candidates(const celeg::TensorRequest& request) const override {

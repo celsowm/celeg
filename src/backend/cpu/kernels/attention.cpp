@@ -89,4 +89,4 @@ void cpu_gqa_decode_bf16(const float* q, const uint16_t* key_cache,
     }
 }
 
-} // namespace celeg
+}

@@ -124,4 +124,4 @@ void run_regular_attention(
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
-} // namespace celeg::prefill_detail
+}

@@ -64,4 +64,4 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
     return &stored;
 }
 
-} // namespace celeg
+}

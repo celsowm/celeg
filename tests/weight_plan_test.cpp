@@ -13,7 +13,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 int main() {
     try {

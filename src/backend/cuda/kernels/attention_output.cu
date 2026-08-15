@@ -60,7 +60,7 @@ __global__ void orthogonalize_current_value_kernel(
     }
 }
 
-} // namespace
+}
 
 void launch_orthogonalize_current_value(
     __nv_bfloat16* output,
@@ -92,4 +92,4 @@ void launch_orthogonalize_current_value(
     CELEG_CUDA(cudaGetLastError());
 }
 
-} // namespace celeg
+}

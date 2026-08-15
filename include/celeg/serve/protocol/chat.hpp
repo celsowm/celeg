@@ -9,9 +9,6 @@
 
 namespace celeg::serve::protocol {
 
-// OpenAI /v1/chat/completions request/response DTOs. Field names match the
-// JSON wire format exactly so Glaze's automatic reflection can (de)serialize
-// them without glz::meta specializations.
 
 struct FunctionDefinitionDto {
     std::string name;
@@ -128,7 +125,6 @@ struct ChatCompletionResponse {
     Usage usage;
 };
 
-// Server-Sent Events chunk for stream=true, one per "data: " line.
 struct ChatCompletionChunkDelta {
     std::optional<std::string> role;
     std::optional<std::string> content;
@@ -173,9 +169,6 @@ struct ModelListDto {
     std::vector<ModelDto> data;
 };
 
-// /tokenize DTOs, modeled after vLLM/SGLang's endpoint of the same name:
-// either "prompt" (raw text) or "messages" (rendered through the chat
-// template) is supplied, and the response reports the resulting token ids.
 struct TokenizeRequest {
     std::optional<std::string> prompt;
     std::optional<std::vector<ChatMessageDto>> messages;
@@ -189,4 +182,4 @@ struct TokenizeResponse {
     std::size_t max_model_len = 0;
 };
 
-} // namespace celeg::serve::protocol
+}

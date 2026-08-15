@@ -178,4 +178,4 @@ void CanonicalModelFacts::validate() const {
     }
 }
 
-} // namespace celeg
+}

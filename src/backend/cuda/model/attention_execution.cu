@@ -431,4 +431,4 @@ void CudaCompiledModel::enqueue_decode_attention(
             }
 }
 
-} // namespace celeg
+}

@@ -92,7 +92,7 @@ private:
     std::unordered_map<std::string, std::vector<int64_t>> shapes_;
 };
 
-} // namespace
+}
 
 int main() {
     const auto runtime = celeg::create_builtin_runtime_context();

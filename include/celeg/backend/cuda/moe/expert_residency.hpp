@@ -14,9 +14,6 @@ namespace celeg {
 
 struct SharedModelWeights;
 
-// Scratch and completion objects are owned by one compiled-model workspace.
-// Keeping them together makes the residency transaction a typed operation
-// instead of a parameter list that can silently get out of sync.
 struct ExpertResidencyWorkspace {
     CudaEvent* router_done = nullptr;
     CudaEvent* ffn_done = nullptr;
@@ -138,9 +135,6 @@ public:
     void touch(int expert);
     void touch(int expert, float score);
 
-    // Admission and active-batch protection are separate operations. The
-    // residency coordinator calls this only after the router's active set is
-    // known; direct cache users can admit an entry without pinning it forever.
     void pin_active(int expert, float score = -1.0e30f);
 
     void record_hit() { ++hits_; }
@@ -261,4 +255,4 @@ private:
     void sync_expert_slot_to_device(cudaStream_t stream = nullptr);
 };
 
-} // namespace celeg
+}

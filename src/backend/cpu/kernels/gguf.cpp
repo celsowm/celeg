@@ -203,7 +203,7 @@ void quantize_q8k_scalar(const float* input, size_t cols, CpuQ8KBlock* output) {
     }
 }
 
-} // namespace
+}
 
 size_t CpuGgufMatrix::row_bytes() const {
     const GgmlTypeTrait trait = ggml_type_trait(type);
@@ -568,4 +568,4 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
     }
 }
 
-} // namespace celeg
+}

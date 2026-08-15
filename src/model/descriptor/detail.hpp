@@ -212,4 +212,4 @@ ActivationKind parse_activation_kind(std::string_view value);
 NormWeightKind parse_norm_weight_kind(std::string_view value);
 std::unique_ptr<ITensorNamingPolicy> create_naming_policy(const Descriptor& descriptor);
 
-} // namespace celeg::descriptor_detail
+}

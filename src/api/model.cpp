@@ -73,4 +73,4 @@ const char* celeg_model_last_error(const celeg_model* model) {
     return model ? model->error.c_str() : celeg::api::global_error.c_str();
 }
 
-} // extern "C"
+}

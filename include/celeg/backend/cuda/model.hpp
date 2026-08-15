@@ -18,8 +18,6 @@ class CudaModel;
 struct CudaCompiledModel;
 struct PackedSessionContext;
 
-// Narrow interface for token-processing operations. New C++ callers should
-// depend on this view instead of the complete CudaModel surface.
 class CudaInferenceSession {
 public:
     void reset(bool allocate_local_kv = true);
@@ -50,7 +48,6 @@ private:
     CudaModel* owner_;
 };
 
-// Read-only operational and benchmarking surface.
 class CudaModelDiagnostics {
 public:
     std::vector<float> copy_logits() const;
@@ -62,15 +59,12 @@ public:
     bool cuda_graph_ready() const;
     int vocab_size() const;
 
-    // MoE expert-offload residency stats (aggregate across all MoE layers):
-    // GPU-resident experts per layer, host-resident experts per layer, and the
-    // decode-time cache hit rate (hits / (hits + misses)).
     struct ExpertOffloadStats {
         int experts_per_layer = 0;
         int host_experts_per_layer = 0;
         uint64_t hits = 0;
         uint64_t misses = 0;
-        double hit_rate = 0.0;  // in [0,1]; -1 if offload disabled
+        double hit_rate = 0.0;
     };
     ExpertOffloadStats expert_offload_stats() const;
 
@@ -80,7 +74,6 @@ private:
     CudaModel* owner_;
 };
 
-// Persistence and deterministic prefix-state boundary.
 class SessionPersistence {
 public:
     void save_session(const std::string& path) const;
@@ -94,9 +87,6 @@ private:
     CudaModel* owner_;
 };
 
-// Thin runtime facade. The implementation, CUDA resources and model
-// topology live in CudaCompiledModel; focused clients can use session(), diagnostics() and
-// persistence() to avoid depending on the complete model implementation.
 class CudaModel {
     friend class CudaInferenceSession;
     friend class CudaModelDiagnostics;
@@ -129,4 +119,4 @@ private:
     SessionPersistence persistence_view_;
 };
 
-} // namespace celeg
+}

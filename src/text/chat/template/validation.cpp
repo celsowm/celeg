@@ -239,7 +239,7 @@ void validate_nodes(
     }
 }
 
-} // namespace
+}
 
 void validate_program(
     const std::vector<TemplateNode>& nodes,
@@ -249,4 +249,4 @@ void validate_program(
     validate_nodes(nodes, origin, macros);
 }
 
-} // namespace celeg::chat_template_detail
+}

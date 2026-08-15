@@ -98,7 +98,7 @@ void write_checkpoint(const std::filesystem::path& directory) {
     }
 }
 
-} // namespace
+}
 
 int main() {
     const std::filesystem::path directory =
@@ -153,9 +153,6 @@ int main() {
         celeg::ConcurrentEngineOptions engine_options;
         engine_options.max_active_requests = 2;
         engine_options.max_batched_tokens = 16;
-        // Keep this Granite acceptance test on the ordinary scheduler path;
-        // packed/ragged scheduling has dedicated backend tests and requires
-        // model-specific alignment assumptions.
         engine_options.prefill_chunk_tokens = 1;
         engine_options.page_tokens = 4;
         engine_options.worker_thread = false;

@@ -18,10 +18,6 @@
 
 namespace celeg {
 
-// Immutable identity of every execution-relevant choice shared by a packed
-// batch. This is produced when a compiled model binds its resources; packed
-// validation only compares values and never reconstructs compatibility from
-// mutable option objects.
 struct PackedCompatibilityKey {
     const SharedModelWeights* weights_identity = nullptr;
     uint64_t execution_plan_fingerprint = 0;
@@ -50,10 +46,6 @@ struct PackedCompatibilityKey {
                            const PackedCompatibilityKey&) = default;
 };
 
-// Typed services required by packed execution. This value is copied with a
-// packed lane, but all pointees remain owned by the compiled CUDA model. The
-// session identity is deliberately typed: metadata staging and duplicate-lane
-// detection never need an opaque model pointer.
 struct PackedExecutionServices {
     const SessionState* session_identity = nullptr;
     const CudaExecutionPlan* execution_plan = nullptr;
@@ -107,9 +99,6 @@ inline void packed_ensure_expert_residency(
         services.residency_workspace});
 }
 
-// Stable, read-only resources visible to packed execution. These are bound
-// once when the context is produced and remain valid until the owning model is
-// destroyed; storage_generation_value below tracks replaceable session storage.
 struct PackedImmutableView {
     int max_context_value = 0;
     const CudaModelOptions* options_state = nullptr;
@@ -122,8 +111,6 @@ struct PackedImmutableView {
     const __nv_bfloat16* final_norm_value = nullptr;
 };
 
-// Mutable request/session state that packed execution is allowed to update.
-// The view owns nothing; all pointees are model/session-owned storage.
 struct PackedSessionStateView {
     SessionPhase* phase_state = nullptr;
     int* position_state = nullptr;
@@ -140,9 +127,6 @@ struct PackedSessionStateView {
     RuntimeMetrics* metrics_state = nullptr;
 };
 
-// Operation-specific, non-owning context for one lane in a packed decode or
-// ragged-prefill batch. The three sub-objects make the lifetime and mutation
-// boundary explicit instead of exposing one monolithic pointer bag.
 struct PackedSessionContext {
     using SegmentedAttentionFn = bool (*)(const PackedExecutionServices&, int);
     using ExpertResidencyFn = void (*)(const PackedExecutionServices&, int,
@@ -150,9 +134,6 @@ struct PackedSessionContext {
                                        const float*);
 
     PackedExecutionServices owner;
-    // Monotonic generation for the session-owned cache/state allocations.
-    // Session identity alone is insufficient because reset may replace a
-    // buffer while retaining the same owning SessionState object.
     uint64_t storage_generation_value = 0;
     PackedCompatibilityKey compatibility_key;
     PackedImmutableView immutable;
@@ -209,4 +190,4 @@ struct PackedSessionContext {
     const __nv_bfloat16* final_norm() const { return immutable.final_norm_value; }
 };
 
-} // namespace celeg
+}

@@ -15,8 +15,6 @@ struct Int8RowwisePack {
 
 
 struct Int4RowwisePack {
-    // Two signed 4-bit values per byte, low nibble first. Values are stored
-    // in two's-complement form and quantized to the symmetric range [-7, 7].
     std::vector<uint8_t> values;
     std::vector<float> scales;
     size_t rows = 0;
@@ -54,4 +52,4 @@ void quantize_bf16_rows_int4_into(const std::byte* data,
 
 std::vector<float> dequantize_int4_rows(const Int4RowwisePack& pack);
 
-} // namespace celeg
+}

@@ -78,4 +78,4 @@ private:
     bool stopping_ = false;
 };
 
-} // namespace celeg
+}

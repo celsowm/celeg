@@ -46,9 +46,6 @@ struct InferenceProposal {
     friend bool operator==(const InferenceProposal&, const InferenceProposal&) = default;
 };
 
-// A checkpoint fact may be global or explicitly scoped to logical layers.
-// The importer preserves the distinction so semantic solving can decide
-// whether a scalar is broadcastable and whether a schedule is complete.
 template <typename T>
 struct LayerScopedValue {
     std::optional<T> global;
@@ -100,8 +97,6 @@ private:
     std::vector<EvidenceItem> evidence_;
 };
 
-// Deterministically combines proposals for one fact. Equal-value proposals
-// are merged; equally valid contradictory proposals fail closed.
 class FactSolver {
 public:
     template <typename T>
@@ -159,8 +154,6 @@ struct NormalizedModelMetadata {
     std::optional<RopePairingKind> rope_pairing;
     std::vector<EvidenceItem> evidence;
     std::optional<bool> feed_forward_auto_adjust;
-    // Optional semantic facts used by hybrid routed checkpoints. These are
-    // deliberately named by capability, not by a checkpoint family.
     std::optional<int> first_dense_layer;
     std::optional<int> recurrent_conv_kernel;
     std::optional<int> recurrent_key_heads;
@@ -195,8 +188,6 @@ struct TensorInventoryEntry {
     TensorDType dtype = TensorDType::Unknown;
 };
 
-// Immutable after construction. It indexes only checkpoint facts; semantic
-// TensorRole assignment belongs to the binding solver.
 class TensorInventory {
 public:
     TensorInventory() = default;
@@ -239,10 +230,6 @@ struct InferenceInput {
     CheckpointSourceFormat source_format = CheckpointSourceFormat::Safetensors;
 };
 
-// Canonical facts are the only input accepted by automatic semantic
-// synthesis. They contain no backend types, report objects, or raw metadata
-// aliases. Tensor spelling is retained only at this checkpoint boundary so
-// the weight plan can address the source repository.
 struct CanonicalModelFacts {
     CheckpointDimensions checkpoint;
     NumericalPolicy numerical_policy;
@@ -288,4 +275,4 @@ public:
     ResolvedModel assemble(const CanonicalModelFacts& facts) const;
 };
 
-} // namespace celeg
+}

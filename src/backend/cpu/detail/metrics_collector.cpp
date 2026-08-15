@@ -44,4 +44,4 @@ void CpuMetricsCollector::record_prefill_tokens(size_t tokens) {
     metrics_.lane_prefill_tokens += tokens;
 }
 
-} // namespace celeg
+}

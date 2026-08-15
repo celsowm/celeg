@@ -130,4 +130,4 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
     run_per_layer_input_prefill(common_layer, rows, layer);
 }
 
-} // namespace celeg
+}

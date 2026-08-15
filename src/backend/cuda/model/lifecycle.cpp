@@ -17,5 +17,5 @@ CudaCompiledModel::~CudaCompiledModel() {
     }
 }
 
-} // namespace celeg
+}
 

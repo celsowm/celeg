@@ -45,4 +45,4 @@ private:
     std::unordered_map<std::string, Entry> entries_;
 };
 
-} // namespace celeg
+}

@@ -7,9 +7,6 @@
 
 namespace celeg {
 
-// Request-local state. It is deliberately backend-neutral; KV and device
-// buffers are owned by the selected backend and referenced by operation
-// contexts rather than embedded in this type.
 struct SessionState {
     explicit SessionState(GenerationConfig generation_config = {})
         : generation_(std::move(generation_config)) {}
@@ -22,4 +19,4 @@ struct SessionState {
     RuntimeMetrics metrics_;
 };
 
-} // namespace celeg
+}

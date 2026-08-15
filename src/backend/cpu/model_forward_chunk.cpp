@@ -26,7 +26,7 @@ void parallel_rows(CpuThreadPool& pool, size_t rows, const Body& body) {
         for (size_t row = begin; row < end; ++row) body(row);
     });
 }
-} // namespace
+}
 
 void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                      bool compute_logits,
@@ -590,4 +590,4 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     }
 }
 
-} // namespace celeg
+}

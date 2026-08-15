@@ -16,7 +16,7 @@ inline void require(bool condition, const char* expression,
     }
 }
 
-} // namespace celeg::test
+}
 
 #define CELEG_TEST_CHECK(condition) \
     ::celeg::test::require(static_cast<bool>(condition), #condition, __FILE__, __LINE__)

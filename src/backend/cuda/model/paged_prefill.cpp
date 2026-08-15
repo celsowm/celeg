@@ -96,4 +96,4 @@ void CudaCompiledModel::prefill_chunk_paged(
     }
 }
 
-} // namespace celeg
+}

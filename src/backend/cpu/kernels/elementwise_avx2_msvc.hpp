@@ -12,4 +12,4 @@ void cpu_qk_norm_rope_avx2_msvc(float* data, const float* norm_weight,
                                 const float* cos_vals, const float* sin_vals,
                                 int heads, int head_dim, float eps);
 
-} // namespace celeg::detail
+}

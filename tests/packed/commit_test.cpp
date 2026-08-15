@@ -29,7 +29,7 @@ celeg::PackedSessionContext make_session(
     return session;
 }
 
-} // namespace
+}
 
 int main() {
     try {

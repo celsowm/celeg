@@ -14,9 +14,6 @@ struct PackedLayerBinding {
     PackedLayerKind kind;
 };
 
-// Immutable operator schedule compiled from the resolved neutral topology.
-// Runtime execution validates concrete layer bindings against this schedule;
-// it does not rediscover architecture behavior from checkpoint identity.
 class PackedLayerProgram {
 public:
     static PackedLayerProgram compile(const CompiledModelProgram& program);
@@ -31,4 +28,4 @@ private:
     std::vector<PackedLayerBinding> layers_;
 };
 
-} // namespace celeg
+}

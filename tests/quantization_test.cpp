@@ -34,7 +34,6 @@ int main() {
         CELEG_TEST_CHECK(std::abs(restored[i] - source[i]) <= tolerance);
     }
 
-    // Concatenated destination with a non-zero row offset.
     std::vector<int8_t> values(4 * 4, 0);
     std::vector<float> scales(4, 0.0f);
     celeg::quantize_bf16_rows_into(
@@ -44,7 +43,6 @@ int main() {
     CELEG_TEST_CHECK(values[4 + 3] == 127);
 
 
-    // INT4 uses symmetric per-row scaling and supports odd column counts.
     {
         const std::vector<float> source4 = {
             -3.0f, -1.0f, 0.0f, 1.0f, 3.0f,
@@ -56,11 +54,11 @@ int main() {
         }
         const auto int4 = celeg::quantize_bf16_rows_int4(
             reinterpret_cast<const std::byte*>(bits.data()), 2, 5);
-        CELEG_TEST_CHECK(int4.values.size() == 6); // 2 rows * ceil(5 / 2)
+        CELEG_TEST_CHECK(int4.values.size() == 6);
         CELEG_TEST_CHECK(int4.scales.size() == 2);
-        CELEG_TEST_CHECK(int4.values[0] == 0xe9U); // [-7, -2]
-        CELEG_TEST_CHECK(int4.values[1] == 0x20U); // [0, 2]
-        CELEG_TEST_CHECK(int4.values[2] == 0x07U); // [7, padding]
+        CELEG_TEST_CHECK(int4.values[0] == 0xe9U);
+        CELEG_TEST_CHECK(int4.values[1] == 0x20U);
+        CELEG_TEST_CHECK(int4.values[2] == 0x07U);
         const auto restored4 = celeg::dequantize_int4_rows(int4);
         for (size_t i = 0; i < source4.size(); ++i) {
             const size_t row = i / 5;
@@ -77,8 +75,6 @@ int main() {
         CELEG_TEST_CHECK(scales4[1] > 0.0f && scales4[2] > 0.0f);
     }
 
-    // Invalid checkpoint values must fail rather than silently producing a
-    // corrupt quantized matrix.
     {
         const uint16_t nan_bits = celeg::float_to_bf16_bits(
             std::numeric_limits<float>::quiet_NaN());

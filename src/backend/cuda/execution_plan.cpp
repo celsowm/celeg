@@ -63,9 +63,6 @@ CudaExecutionPlan CudaExecutionPlan::compile(
     CudaExecutionPlan plan;
     g_compile_count.fetch_add(1, std::memory_order_relaxed);
     plan.options_ = requested;
-    // Apply the resolved CELEG_MMQ_TENSOR_CORES override (already read once,
-    // at CudaModelOptions construction) on top of the hardware capability.
-    // nullopt means "auto": follow device support.
     device.mmq_tensor_core_enabled =
         (requested.mmq_tensor_cores.has_value() ? *requested.mmq_tensor_cores
                                                  : device.mmq_tensor_core_supported) &&
@@ -73,10 +70,6 @@ CudaExecutionPlan CudaExecutionPlan::compile(
     plan.device_ = device;
     plan.max_context_ = max_context;
 
-    // MoE expert offload resolves residency at decode time using host-roundtrip
-    // reads of the router output and cross-stream event synchronization, neither
-    // of which is capturable into a CUDA graph. Force graph capture off when
-    // offload is enabled.
     if (requested.expert_offload.enabled()) {
         plan.options_.cuda_graph = false;
     }
@@ -94,10 +87,6 @@ CudaExecutionPlan CudaExecutionPlan::compile(
             plan.linear_kernel_ = LinearKernelKind::W4A16;
             break;
         case WeightMode::NativeGguf:
-            // Phase 1.4: a native-GGUF weight mode mixes BF16 (norms/conv) and
-            // GGUF MMQ (linear blocks). Do not report this path as plain
-            // BF16 cuBLASLt; the per-tensor dispatcher switches to MMQ for
-            // the GGUF-quantized tensors at run time.
             plan.linear_kernel_ = LinearKernelKind::MixedBf16AndGgufMmq;
             break;
     }
@@ -106,9 +95,6 @@ CudaExecutionPlan CudaExecutionPlan::compile(
             (max_context + requested.attention_chunk_tokens - 1) /
             requested.attention_chunk_tokens;
     }
-    // Stable process-local identity for compatibility checks. Every field
-    // that changes dispatch, workspace, numerics, residency, or device policy
-    // participates in this fingerprint.
     std::size_t hash = 1469598103934665603ULL;
     const auto mix = [&hash](auto value) {
         hash ^= std::hash<std::decay_t<decltype(value)>>{}(value);
@@ -183,4 +169,4 @@ std::string CudaExecutionPlan::description() const {
     return out.str();
 }
 
-} // namespace celeg
+}

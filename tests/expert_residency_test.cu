@@ -21,11 +21,11 @@ struct Problem {
     int inter = 16;
     int experts = 6;
     int K = 4;
-    std::vector<__nv_bfloat16> gate_up;   // [E * 2*inter * hidden]
-    std::vector<__nv_bfloat16> down;      // [E * hidden * inter]
-    std::vector<__nv_bfloat16> hidden_vec; // [rows * hidden]
-    std::vector<int> sel;                 // [rows * K]
-    std::vector<float> wts;               // [rows * K]
+    std::vector<__nv_bfloat16> gate_up;
+    std::vector<__nv_bfloat16> down;
+    std::vector<__nv_bfloat16> hidden_vec;
+    std::vector<int> sel;
+    std::vector<float> wts;
 };
 
 Problem build() {
@@ -39,14 +39,12 @@ Problem build() {
     p.hidden_vec.resize(static_cast<size_t>(p.rows) * p.hidden);
     for (size_t i = 0; i < p.hidden_vec.size(); ++i)
         p.hidden_vec[i] = to_bf16(std::sin(static_cast<float>(i) * 0.3f) + 0.5f);
-    // Deterministic expert selection: each token picks 4 distinct experts.
     p.sel = {0, 2, 4, 5,  1, 3, 5, 0,  2, 4, 1, 3};
     p.wts = {0.4f, 0.3f, 0.2f, 0.1f,  0.25f, 0.25f, 0.25f, 0.25f,
              0.5f, 0.2f, 0.2f, 0.1f};
     return p;
 }
 
-// Runs launch_moe_ffn with a fully-contiguous device layout (baseline).
 std::vector<__nv_bfloat16> run_contiguous(const Problem& p, celeg::CudaStream& stream) {
     celeg::DeviceBuffer<__nv_bfloat16> d_gate_up(p.gate_up.size());
     celeg::DeviceBuffer<__nv_bfloat16> d_down(p.down.size());
@@ -86,9 +84,6 @@ std::vector<__nv_bfloat16> run_contiguous(const Problem& p, celeg::CudaStream& s
     return out;
 }
 
-// Runs launch_moe_ffn through the residency layer with `capacity` GPU-resident
-// experts (the rest served from host-mapped memory), so it exercises both the
-// GPU cache pointers and the host-mapped fallback pointers in one kernel.
 std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
                                        const std::vector<int>& resident,
                                        celeg::CudaStream& stream) {
@@ -97,7 +92,6 @@ std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
     const size_t gate_up_bytes = gate_up_per_expert * sizeof(__nv_bfloat16);
     const size_t down_bytes = down_per_expert * sizeof(__nv_bfloat16);
 
-    // Host expert store: register each expert's bytes and get device pointers.
     celeg::HostExpertStore store;
     std::vector<const __nv_bfloat16*> gu_host(p.experts);
     std::vector<const __nv_bfloat16*> dw_host(p.experts);
@@ -145,7 +139,6 @@ std::vector<__nv_bfloat16> run_offload(const Problem& p, int capacity,
     return out;
 }
 
-// Runtime check that is NOT compiled out under NDEBUG (unlike assert).
 bool g_failed = false;
 void check(bool cond, const char* what) {
     if (!cond) {
@@ -154,11 +147,6 @@ void check(bool cond, const char* what) {
     }
 }
 
-// Both paths read the same BF16 expert bytes and run the same kernel, so the
-// only difference is the non-deterministic BF16 atomic accumulation order in
-// moe_ffn_kernel (BF16 addition is non-associative). Compare against the
-// magnitude of the reference rather than requiring bit-exact equality; a real
-// routing/residency bug would send a wrong expert and blow well past this.
 void check_close(const std::vector<__nv_bfloat16>& a,
                  const std::vector<__nv_bfloat16>& b, const char* what) {
     check(a.size() == b.size(), "size mismatch");
@@ -174,11 +162,8 @@ void check_close(const std::vector<__nv_bfloat16>& a,
     check(rel < 0.05f, what);
 }
 
-} // namespace
+}
 
-// Drives the exact model-level path used by the compiled model when offload is
-// enabled: build an offloaded MoeFfnWeights with indirect pointer tables from
-// an ExpertLayerCache, resolve it through moe_ffn_device(), and run the kernel.
 std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
                                              const std::vector<int>& resident,
                                              celeg::CudaStream& stream) {
@@ -250,24 +235,19 @@ int main() {
 
         const std::vector<__nv_bfloat16> baseline = run_contiguous(p, stream);
 
-        // All experts host-mapped (capacity 0 would allocate no slots; use a
-        // small cache and seed a subset so both paths fire).
         const std::vector<__nv_bfloat16> partial =
             run_offload(p, /*capacity=*/3, /*resident=*/{0, 3, 5}, stream);
         check_close(baseline, partial, "partial cache (mixed cache+host)");
 
-        // All experts resident in cache.
         const std::vector<__nv_bfloat16> full =
             run_offload(p, /*capacity=*/p.experts,
                         /*resident=*/{0, 1, 2, 3, 4, 5}, stream);
         check_close(baseline, full, "full cache");
 
-        // CudaModel-level path: MoeFfnWeights + moe_ffn_device() indirection.
         const std::vector<__nv_bfloat16> model_off =
             run_model_offload(p, /*capacity=*/3, /*resident=*/{0, 3, 5}, stream);
         check_close(baseline, model_off, "model-level offload (moe_ffn_device)");
 
-        // Promotion/eviction bookkeeping.
         {
             const size_t gu_bytes =
                 static_cast<size_t>(2) * p.inter * p.hidden * sizeof(__nv_bfloat16);
@@ -291,7 +271,6 @@ int main() {
             check(cache.resident(4) && cache.expert_slot(4) == 0, "promote expert 4 -> slot 0");
             check(cache.resident(1) && cache.expert_slot(1) == 1, "promote expert 1 -> slot 1");
             check(!cache.resident(0), "expert 0 host-resident");
-            // Evict then re-promote a different expert into slot 0.
             cache.evict(0, stream.get());
             CELEG_CUDA(cudaStreamSynchronize(stream.get()));
             check(!cache.resident(4), "expert 4 evicted");
@@ -300,7 +279,6 @@ int main() {
             check(cache.resident(2) && cache.slot_expert(0) == 2, "promote expert 2 -> slot 0");
         }
 
-        // ensure_resident / LRU promotion semantics.
         {
             const size_t gu_bytes =
                 static_cast<size_t>(2) * p.inter * p.hidden * sizeof(__nv_bfloat16);
@@ -324,7 +302,6 @@ int main() {
                   "ensure_resident no-op when already resident");
             check(cache.resident(3), "expert 3 resident after ensure_resident");
             check(cache.ensure_resident(1, stream.get()), "ensure_resident promotes expert 1");
-            // Capacity 2 full; promoting a new expert evicts the LRU (expert 3).
             check(cache.ensure_resident(5, stream.get()), "ensure_resident promotes expert 5");
             check(!cache.resident(3), "LRU victim expert 3 evicted");
             check(cache.resident(1) && cache.resident(5), "experts 1 and 5 resident");

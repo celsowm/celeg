@@ -14,10 +14,6 @@
 namespace celeg {
 namespace {
 
-// A whole batch of Q8-quantized activation rows in three contiguous slabs.
-// The previous shape -- std::vector<Q8GroupVector>, i.e. three heap vectors
-// per row -- cost hundreds of allocations per GEMM call and scattered the
-// rows across memory that the microkernel then re-reads once per output row.
 struct Q8ActivationBatch {
     std::vector<int8_t> values;
     std::vector<float> scales;
@@ -45,7 +41,7 @@ void quantize_gguf_rows(CpuThreadPool& pool, CpuIsa isa, const float* input,
     });
 }
 
-} // namespace
+}
 
 CpuLinearEngine::CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool)
     : isa_(isa), pool_(&pool), dot_(select_q4_dot_kernel(isa)),
@@ -64,8 +60,6 @@ void CpuLinearEngine::gemv(const Q4GroupMatrix& weight, const float* input,
     const size_t row_bytes = weight.packed_values_per_row();
     const size_t grain = std::max<size_t>(1, weight.rows / std::max<size_t>(1, pool_->size() * 8));
     if (dynamic_q8_) {
-        // Decode issues one GEMV per projection per layer per token, so the
-        // activation scratch is reused instead of reallocated on every call.
         thread_local Q8ActivationBatch scratch;
         scratch.cols = weight.cols;
         scratch.groups = weight.groups_per_row;
@@ -74,9 +68,6 @@ void CpuLinearEngine::gemv(const Q4GroupMatrix& weight, const float* input,
         scratch.sums.resize(scratch.groups);
         quantize_float_groupwise_q8_into(input, weight.cols, weight.group_size,
             scratch.values.data(), scratch.scales.data(), scratch.sums.data());
-        // Bind the scratch through automatic-storage locals. A thread_local is
-        // never captured by a lambda -- the body would resolve it against each
-        // *worker* thread's own (empty) instance instead of this one.
         const int8_t* const activation_values = scratch.values.data();
         const float* const activation_scales = scratch.scales.data();
         const int32_t* const activation_sums = scratch.sums.data();
@@ -114,8 +105,6 @@ void CpuLinearEngine::gemm(const Q4GroupMatrix& weight, const float* input,
         batch.values.resize(rows * batch.cols);
         batch.scales.resize(rows * batch.groups);
         batch.sums.resize(rows * batch.groups);
-        // Quantization is per-row independent, so run it on the pool instead of
-        // serially on the calling thread ahead of the parallel GEMM.
         const size_t quantize_grain =
             std::max<size_t>(1, rows / std::max<size_t>(1, pool_->size() * 4));
         pool_->parallel_for(0, rows, quantize_grain, [&](size_t begin, size_t end) {
@@ -127,18 +116,10 @@ void CpuLinearEngine::gemm(const Q4GroupMatrix& weight, const float* input,
             }
         });
     }
-    // A tile of output rows is held in L1 while the activation batch streams
-    // past it once.  The activation-row loop must be the OUTER one: with the
-    // output row outermost the whole activation batch is re-read once per
-    // output row (tens of GB per prefill chunk, which saturates L3), whereas
-    // this order re-reads it once per tile.  The packed weight tile is only
-    // `output_tile * row_bytes` and stays resident across the sweep.
     constexpr size_t output_tile = 8;
     const size_t tiles = (static_cast<size_t>(weight.rows) + output_tile - 1) / output_tile;
     const size_t grain = std::max<size_t>(1, tiles / std::max<size_t>(1, pool_->size() * 4));
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
-    // Every MSVC x86 ISA selection maps to the AVX2 Q4xQ8 kernel, so the
-    // four-lane microkernel applies whenever dynamic Q8 activations are in use.
     const bool use_dot4 =
         dynamic_q8_ && weight.group_size == 32 && (weight.cols % 32) == 0;
 #endif
@@ -417,8 +398,6 @@ void CpuLinearEngine::gemm_gguf(std::span<const CpuQ8KBlock> activation,
     size_t output_offset = 0;
     for (const CpuLinearMatrix& segment : weight.segments) {
         const CpuGgufMatrix& matrix = std::get<CpuGgufMatrix>(segment);
-        // Q4_K/Q6_K rows are small enough that a 16-row tile stays resident
-        // in L1 while amortizing thread-pool scheduling across prefill rows.
         constexpr size_t output_tile = 16;
         const size_t tiles =
             (static_cast<size_t>(matrix.rows) + output_tile - 1) / output_tile;
@@ -467,8 +446,6 @@ void CpuLinearEngine::gemm_grouped(std::span<const CpuGroupedGemmJob> jobs,
     if (jobs.empty()) return;
     if (!input || !output) throw std::invalid_argument("null grouped CPU GEMM buffer");
 
-    // Routed experts can share shape and use one native GGUF segment. Keep an
-    // unusual or mixed layout correct through the ordinary GEMM path.
     const CpuLinearWeight* first = jobs.front().weight;
     if (!first) throw std::invalid_argument("grouped CPU GEMM has null weight");
     first->validate();
@@ -569,7 +546,6 @@ void CpuLinearEngine::embedding(const CpuLinearWeight& table, int32_t token,
 
 void CpuLinearEngine::gemv_raw(const float* weight, const float* input,
                                float* output, int n, int k) const {
-    // Parallelize over output rows. Each row is a dot product of k elements.
     const size_t grain = std::max<size_t>(1, static_cast<size_t>(n) /
                                            std::max<size_t>(1, pool_->size() * 4));
     pool_->parallel_for(0, static_cast<size_t>(n), grain, [&](size_t begin, size_t end) {
@@ -590,9 +566,6 @@ void CpuLinearEngine::gemv_raw(const float* weight, const float* input,
 
 void CpuLinearEngine::gemm_raw(const float* weight, const float* input,
                                float* output, size_t rows, int n, int k) const {
-    // The router is small in its output dimension but is evaluated for every
-    // prefill row. Parallelizing rows avoids nested thread-pool calls and
-    // keeps each worker's input/output contiguous.
     const size_t grain = std::max<size_t>(1, rows /
                                            std::max<size_t>(1, pool_->size() * 2));
     pool_->parallel_for(0, rows, grain, [&](size_t begin, size_t end) {
@@ -616,4 +589,4 @@ void CpuLinearEngine::gemm_raw(const float* weight, const float* input,
     });
 }
 
-} // namespace celeg
+}

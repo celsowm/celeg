@@ -77,7 +77,7 @@ void apply_tokenizer_config(TokenizerDefinition& definition, const std::string& 
     }
 }
 
-} // namespace
+}
 
 TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
     const Json root = Json::parse_file(path);
@@ -209,4 +209,4 @@ TokenizerDefinition resolve_tokenizer_definition(
     return definition;
 }
 
-} // namespace celeg
+}

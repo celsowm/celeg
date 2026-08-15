@@ -35,7 +35,7 @@ void expect_fingerprint_change(const celeg::ResolvedModel& baseline,
     CELEG_TEST_CHECK(original.semantic_fingerprint != modified.semantic_fingerprint);
 }
 
-} // namespace
+}
 
 int main() {
     const celeg::ResolvedModel baseline = make_model();

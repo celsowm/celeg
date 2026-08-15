@@ -37,4 +37,4 @@ std::vector<ProbeCondition> parse_probe_conditions(const Json& value) {
     return result;
 }
 
-} // namespace celeg::descriptor_detail
+}

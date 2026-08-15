@@ -22,4 +22,4 @@ inline LatentPrefillPath latent_prefill_path(const AttentionSpec& layout) {
         : LatentPrefillPath::Projected;
 }
 
-} // namespace celeg::prefill_detail
+}

@@ -76,10 +76,6 @@ CELEG_GGUF_AVX2_TARGET int horizontal_sum_128(__m128i values) {
     return _mm_cvtsi128_si32(values);
 }
 
-// Dot 32 unsigned 4/6-bit values against signed Q8_K values.  Keeping the
-// packed values in bytes is important: expanding every element to epi32
-// costs several times more instructions than the maddubs/madd pair used by
-// ggml's AVX2 kernels.
 CELEG_GGUF_AVX2_TARGET int dot_u8_i8_32(const uint8_t* weights,
                                       const int8_t* activation,
                                       bool high_nibble) {
@@ -137,7 +133,7 @@ void scale_min(const BlockQ4K& block, int sub, uint8_t& scale,
     }
 }
 
-} // namespace
+}
 
 CELEG_GGUF_AVX2_TARGET
 void cpu_quantize_q8k_avx2(const float* input, size_t cols,
@@ -375,6 +371,6 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
 
 #undef CELEG_GGUF_AVX2_TARGET
 
-} // namespace celeg::detail
+}
 
 #endif

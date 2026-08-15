@@ -1,14 +1,3 @@
-// Single-session attention over one contiguous KV cache, scanned in one pass.
-//
-// Two strategies, each in a bf16 and an int8-KV-cache flavour:
-//   * strict: the exact three-pass reference (max, denominator, weighted sum)
-//     with bf16 rounding at each step, kept bit-comparable to the CPU path.
-//   * online: single-pass streaming softmax, one warp per (row, head).
-//
-// The `mode` parameter selects where the sequence length comes from, which is
-// what lets the same kernel serve decode and the scalar prefill fallback:
-//   0 = host-supplied seq_len, 1 = device position pointer, 2 = prefill (the
-//   causal prefix of the block's own row).
 
 __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
                                          const __nv_bfloat16* key_cache,
@@ -90,9 +79,6 @@ __global__ void gqa_decode_strict_kernel(const __nv_bfloat16* q,
     }
 }
 
-// Warp-only online-softmax decode/prefill-fallback attention. One warp (32
-// lanes, blockDim.x == 32) per (query_row, query_head): see
-// warp_broadcast_sum above for why this has no __syncthreads() at all.
 __global__ void gqa_decode_online_kernel(const __nv_bfloat16* q,
                                          const __nv_bfloat16* key_cache,
                                          const __nv_bfloat16* value_cache,
@@ -227,8 +213,6 @@ __global__ void gqa_decode_strict_int8_kernel(
     }
 }
 
-// Warp-only variant of gqa_decode_online_kernel for int8 KV cache; see
-// warp_broadcast_sum above for the no-__syncthreads() reduction strategy.
 __global__ void gqa_decode_online_int8_kernel(
     const __nv_bfloat16* q, const int8_t* key_cache,
     const int8_t* value_cache, const float* key_scales,

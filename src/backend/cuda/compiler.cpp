@@ -58,4 +58,4 @@ CompiledModelProgram CudaModelCompiler::compile(const ResolvedModel& model) cons
     return program;
 }
 
-} // namespace celeg
+}

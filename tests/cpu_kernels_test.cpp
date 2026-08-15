@@ -75,7 +75,6 @@ int main() {
         }
     }
 
-    // Validate the M>1 path and flattened two-dimensional scheduler.
     constexpr size_t batch = 5;
     std::vector<float> batch_input(batch * cols);
     for (size_t b = 0; b < batch; ++b) {
@@ -104,8 +103,6 @@ int main() {
         }
     }
 
-    // Compressed-tensors expert gate/up projections remain two row-contiguous
-    // internal-Q4 segments.  The logical weight must execute like one matrix.
     const size_t split_rows = 13;
     const auto q4_first = celeg::quantize_float_groupwise_q4(
         weights.data(), split_rows, cols, 32);
@@ -163,7 +160,6 @@ int main() {
 
     const int hidden = 4, cache = 3;
     const float bcx[12] = {1,1,1,1, 2,2,2,2, 3,3,3,3};
-    // Tap-major: [tap][channel].
     const float conv_weight[12] = {1,1,1,1, 0,0,0,0, 0,0,0,0};
     float state[12]{}; float conv_out[4]{};
     celeg::cpu_conv_decode(bcx, conv_weight, state, conv_out, hidden, cache, 0);
@@ -189,8 +185,6 @@ int main() {
         CELEG_TEST_CHECK(std::abs(state_batched[i] - state_reference[i]) < 1e-6f);
     }
 
-    // GatedDeltaNet prefill must be exactly the same recurrent computation as
-    // feeding the same sequence through decode one token at a time.
     constexpr int gdn_kernel = 3;
     constexpr int gdn_key_dim = 3;
     constexpr int gdn_value_dim = 2;

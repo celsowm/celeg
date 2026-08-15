@@ -128,7 +128,7 @@ void compare_logits(const std::vector<float>& expected,
     }
 }
 
-} // namespace
+}
 
 int main() {
     const std::filesystem::path directory =

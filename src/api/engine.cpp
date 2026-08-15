@@ -86,4 +86,4 @@ const char* celeg_engine_last_error(const celeg_engine* engine) {
     return engine ? engine->error.c_str() : celeg::api::global_error.c_str();
 }
 
-} // extern "C"
+}

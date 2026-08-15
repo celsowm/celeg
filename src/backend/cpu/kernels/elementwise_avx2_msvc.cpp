@@ -108,6 +108,6 @@ void cpu_qk_norm_rope_avx2_msvc(float* data, const float* norm_weight,
     }
 }
 
-} // namespace celeg::detail
+}
 
 #endif

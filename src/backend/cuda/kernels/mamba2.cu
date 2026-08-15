@@ -36,7 +36,6 @@ __global__ void mamba2_step_kernel(
     __nv_bfloat16* state = ssm_state + static_cast<size_t>(channel) * state_size;
     const __nv_bfloat16* b = nullptr;
     const __nv_bfloat16* c = nullptr;
-    // B and C are stored in the convolution output after the x channels.
     b = xbc + intermediate + group * state_size;
     c = xbc + intermediate + group_count * state_size + group * state_size;
     float output = 0.0f;
@@ -156,4 +155,4 @@ void launch_mamba2_prefill(const __nv_bfloat16* projected,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-} // namespace celeg
+}

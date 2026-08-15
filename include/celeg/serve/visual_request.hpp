@@ -44,8 +44,6 @@ inline void materialize_visual_prompt(GenerateRequest& request,
             throw std::invalid_argument("visual provider returned an empty embedding");
         }
         if (embedding.rope_positions.empty() && embedding.token_count() > 1) {
-            // Providers without M-RoPE metadata retain the old scalar behavior.
-            // The local positions also define the logical span of the image.
         } else if (!embedding.rope_positions.empty() &&
                    embedding.rope_positions.size() != embedding.token_count()) {
             throw std::invalid_argument("visual provider returned invalid M-RoPE positions");
@@ -95,4 +93,4 @@ inline void materialize_visual_prompt(GenerateRequest& request,
     request.images.clear();
 }
 
-} // namespace celeg::serve
+}

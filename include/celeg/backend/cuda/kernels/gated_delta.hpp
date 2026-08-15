@@ -28,4 +28,4 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                             bool safe_decay, float decay_lower_bound,
                             bool sigmoid_output_gate, cudaStream_t stream);
 
-} // namespace celeg
+}

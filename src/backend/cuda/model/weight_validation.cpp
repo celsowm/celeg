@@ -40,4 +40,4 @@ void LinearWeight::validate_storage() const {
     }
 }
 
-} // namespace celeg
+}

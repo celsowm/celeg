@@ -160,7 +160,7 @@ void deallocate_pinned_host(void* pointer) {
     if (pointer) cudaFreeHost(pointer);
 }
 
-} // namespace
+}
 
 void configure_cuda_expert_resources(CudaCompiledModel& model) {
     CudaModelResources& resources = model.resources_;
@@ -270,4 +270,4 @@ void configure_cuda_expert_resources(CudaCompiledModel& model) {
     std::fprintf(stderr, "%s", workspace.expert_offload_plan_.report().c_str());
 }
 
-} // namespace celeg
+}

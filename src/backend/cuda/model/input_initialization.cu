@@ -75,4 +75,4 @@ void CudaCompiledModel::initialize_per_layer_input_batch(const int32_t* tokens, 
                  plan.residual_scale, stream_.get());
 }
 
-} // namespace celeg
+}

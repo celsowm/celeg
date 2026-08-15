@@ -21,4 +21,4 @@ GemmDispatcher& PackedGemmRuntime::dispatcher() {
     return *dispatcher_;
 }
 
-} // namespace celeg
+}

@@ -26,4 +26,4 @@ void CpuExternalAttentionMemory::clear() noexcept {
     token_count_ = 0;
 }
 
-} // namespace celeg
+}

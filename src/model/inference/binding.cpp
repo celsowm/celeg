@@ -70,4 +70,4 @@ TensorRoleBindings BindingSolver::solve(
     return result;
 }
 
-} // namespace celeg
+}

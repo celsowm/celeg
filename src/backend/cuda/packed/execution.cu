@@ -42,9 +42,6 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
           metadata_cache_(maximum_batch),
           batch_planner_(*this, metadata_cache_),
           layer_executor_(*this, layer_program_, plan_, gemm_) {
-        // Segmented attention workspace is part of the executor's fixed
-        // capacity contract. Allocate it before request execution so the
-        // scheduler never grows device storage on the hot path.
         ensure_segmented_workspace(
             static_cast<int>(maximum_batch), plan_.attention_chunks());
         decode_pipeline_ = std::make_unique<PackedDecodePipeline>(*this);
@@ -295,8 +292,6 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
         CELEG_CUDA(cudaMemcpyAsync(sampled.data(), explicit_tokens.data(),
                                  static_cast<size_t>(rows) * sizeof(int32_t),
                                  cudaMemcpyHostToDevice, stream.get()));
-        // Reuse the request pointer table by expanding only the seen-token
-        // pointers for this launch: repeated writes set the same byte to one.
         for (int request = 0; request < requests; ++request) {
             std::fill_n(h_flat_seen.data() + h_span_offsets.data()[request],
                         h_span_counts.data()[request], h_seen.data()[request]);
@@ -361,9 +356,6 @@ struct PackedDecodeExecutorImpl : PackedWorkspace {
 
         const auto gpu_done = std::chrono::steady_clock::now();
         const auto commit_started = gpu_done;
-        // Host-visible session state is committed only after the completion
-        // event succeeds. A launch failure therefore cannot leave a lane
-        // advanced while its device state is incomplete.
         commit_packed_prefill(models,
                               explicit_tokens,
                               std::span<const int32_t>(h_final_rows.data(), requests),
@@ -484,4 +476,4 @@ PackedDecodeMetrics PackedDecodeExecutor::metrics() const {
     return state_->metric;
 }
 
-} // namespace celeg
+}

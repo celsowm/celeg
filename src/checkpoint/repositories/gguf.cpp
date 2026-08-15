@@ -26,4 +26,4 @@ std::vector<std::string> GgufRepository::names() const {
     return tensors_->names();
 }
 
-} // namespace celeg
+}

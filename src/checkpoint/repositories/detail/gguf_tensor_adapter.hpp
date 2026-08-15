@@ -14,4 +14,4 @@ public:
                                        const GgufTensorReference& reference);
 };
 
-} // namespace celeg
+}

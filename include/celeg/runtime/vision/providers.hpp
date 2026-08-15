@@ -50,4 +50,4 @@ std::unique_ptr<IVisionProviderFactory> make_gguf_vision_provider_factory();
 std::unique_ptr<IVisionProviderFactory> make_safetensor_vision_provider_factory();
 std::unique_ptr<IVisionProviderFactory> make_patch_vision_provider_factory();
 
-} // namespace celeg
+}

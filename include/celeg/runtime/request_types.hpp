@@ -32,4 +32,4 @@ struct PollResult {
     std::string error;
 };
 
-} // namespace celeg
+}

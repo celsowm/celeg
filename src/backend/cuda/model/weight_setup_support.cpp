@@ -37,4 +37,4 @@ std::unique_ptr<IWeightLayout> make_cuda_embedding_layout(
     }
 }
 
-} // namespace celeg
+}

@@ -7,8 +7,6 @@
 
 namespace celeg::detail {
 
-// Owns only background-thread lifecycle. Scheduling remains supplied by a
-// callback, which makes the worker independently testable.
 class EngineWorker {
 public:
     EngineWorker() = default;
@@ -34,4 +32,4 @@ private:
     bool work_pending_ = false;
 };
 
-} // namespace celeg::detail
+}

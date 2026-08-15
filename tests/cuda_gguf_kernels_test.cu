@@ -34,12 +34,9 @@ bool close(float a, float b) {
     return std::abs(a - b) <= 0.05f * std::max(1.0f, std::abs(b));
 }
 
-} // namespace
+}
 
 int main() {
-    // The tensor-core prefill path is opt-in in production but must always be
-    // covered here. An explicit environment setting still wins, so the same
-    // binary can bisect a failure between the MMA and DP4A prefill kernels.
     if (std::getenv("CELEG_MMQ_TENSOR_CORES") == nullptr) {
 #if defined(_WIN32)
         _putenv_s("CELEG_MMQ_TENSOR_CORES", "1");
@@ -51,13 +48,11 @@ int main() {
     constexpr int q4_bytes = 144;
     constexpr int q6_bytes = 210;
     std::vector<uint8_t> q4(q4_bytes, 0);
-    // d=1, dmin=0, all sub-block scales=1, all nibbles=1 => every value is 1.
-    q4[0] = 0x00; q4[1] = 0x3c; // half(1.0)
+    q4[0] = 0x00; q4[1] = 0x3c;
     q4[2] = 0x00; q4[3] = 0x00;
     for (int i = 4; i < 16; ++i) q4[i] = 1;
     for (int i = 16; i < q4_bytes; ++i) q4[i] = 0x11;
     std::vector<uint8_t> q6(q6_bytes, 0);
-    // Zero scales make every Q6_K value exactly zero regardless of packed q.
 
     uint8_t* d_q4 = nullptr;
     uint8_t* d_q6 = nullptr;
@@ -85,7 +80,6 @@ int main() {
     check(cudaMemcpy(&y, d_y, sizeof(y), cudaMemcpyDeviceToHost), "copy y q6");
     if (!close(host_bf16(y), 1536.0f)) return 3;
 
-    // Exercise the m>1 path and row-local embedding gather.
     std::vector<__nv_bfloat16> hy(2, __float2bfloat16(0.0f));
     celeg::launch_gguf_linear_segment(d_x, d_q4, celeg::GgmlType::Q4_K, d_y,
                                     2, 1, k, q4_bytes, 1, 0.0f, nullptr);
@@ -93,9 +87,6 @@ int main() {
     check(cudaMemcpy(gemm_y.data(), d_y, 2 * sizeof(y), cudaMemcpyDeviceToHost), "copy y gemm");
     if (!close(host_bf16(gemm_y[0]), 512.0f) || !close(host_bf16(gemm_y[1]), 512.0f)) return 4;
 
-    // Native MMQ must use its tiled prefill path for m > 1. Exercise both
-    // block formats with a deterministic matrix before the randomized decode
-    // coverage below: this catches row-stride, tile-tail and beta regressions.
     {
         constexpr int blocks_per_row = k / celeg::kMmqQ8_1BlockSize;
         int8_t* d_prefill_q8 = nullptr;
@@ -124,8 +115,6 @@ int main() {
         cudaFree(d_prefill_sums); cudaFree(d_prefill_scales); cudaFree(d_prefill_q8);
     }
 
-    // Exercise the 16x16 integer-Tensor-Core prefill tile. The deterministic
-    // rows make an incorrect WMMA orientation immediately visible.
     {
         constexpr int tensor_rows = 16;
         constexpr int tensor_blocks_per_row = k / celeg::kMmqQ8_1BlockSize;
@@ -200,8 +189,6 @@ int main() {
         cudaFree(d_tensor_x); cudaFree(d_tensor_q6); cudaFree(d_tensor_q4);
     }
 
-    // Exercise the dispatcher with disjoint GGUF segments. Every segment
-    // owns a separate output range, so each must receive the caller's beta.
     celeg::CudaModelOptions dispatcher_options;
     celeg::GemmDispatcher dispatcher(nullptr, dispatcher_options);
     celeg::LinearWeight segmented;
@@ -238,8 +225,6 @@ int main() {
     if (!close(host_bf16(segmented_y[0]), 518.0f) ||
         !close(host_bf16(segmented_y[1]), 6.0f)) return 10;
 
-    // A plan compiled for a different device must be rejected before any
-    // kernel launch; capability state is device-scoped, not process-global.
     celeg::CudaDeviceCapabilities wrong_device =
         celeg::discover_cuda_device_capabilities();
     wrong_device.device_ordinal += 1;
@@ -281,27 +266,16 @@ int main() {
     check(cudaMemcpy(hy.data(), d_embed, 2 * sizeof(*d_embed), cudaMemcpyDeviceToHost), "copy embed");
     if (!close(host_bf16(hy[0]), 1.0f)) return 5;
 
-    // MMQ (Q8_1 x __dp4a) correctness: dequantize a randomized multi-super-
-    // block Q4_K row via the already-validated launch_gguf_dequant (same
-    // q4k_value math the whole model pipeline depends on) for a float
-    // reference, then compare launch_q4k_mmq's int8-quantized-activation
-    // result against a plain double-precision dot product of that
-    // reference weight with the unquantized activation. int8 quantization
-    // is lossy, so the tolerance here is a relative error bound, not
-    // bit-exactness.
     {
         std::mt19937 rng(12345);
         std::uniform_int_distribution<int> byte_dist(0, 255);
         constexpr int mmq_n = 16;
         constexpr int mmq_m = 16;
-        constexpr int mmq_k = 512; // 2 super-blocks
+        constexpr int mmq_k = 512;
         constexpr int mmq_super_blocks = mmq_k / 256;
         const size_t mmq_row_bytes = static_cast<size_t>(mmq_super_blocks) * q4_bytes;
         std::vector<uint8_t> mmq_weight(static_cast<size_t>(mmq_n) * mmq_row_bytes);
         for (auto& byte : mmq_weight) byte = static_cast<uint8_t>(byte_dist(rng));
-        // Keep d/dmin (the first 4 bytes of every super-block) in a sane
-        // magnitude range instead of arbitrary half bit patterns (which can
-        // land on inf/nan and blow up the reference dot product).
         for (int row = 0; row < mmq_n; ++row) {
             for (int sb = 0; sb < mmq_super_blocks; ++sb) {
                 uint8_t* blk = mmq_weight.data() +
@@ -371,10 +345,6 @@ int main() {
         check(cudaMemcpy(mmq_y.data(), d_mmq_y, mmq_y.size() * sizeof(__nv_bfloat16),
                          cudaMemcpyDeviceToHost), "copy mmq y");
 
-        // Replay the same data one activation row at a time. m == 1 always
-        // takes the long-validated decode kernel, so this is the reference the
-        // prefill kernels must reproduce: it consumes the identical Q8_1
-        // activations, which the float reference below does not.
         __nv_bfloat16* d_decode_y = nullptr;
         check(cudaMalloc(reinterpret_cast<void**>(&d_decode_y),
                          static_cast<size_t>(mmq_m) * mmq_n * sizeof(__nv_bfloat16)),
@@ -392,7 +362,6 @@ int main() {
                          cudaMemcpyDeviceToHost), "copy decode y");
 
         for (int activation_row = 0; activation_row < mmq_m; ++activation_row) {
-        // Per-block activation quantization step, used for the noise bound.
         std::vector<double> block_step(mmq_blocks_per_row);
         for (int block = 0; block < mmq_blocks_per_row; ++block) {
             float absmax = 0.0f;
@@ -408,9 +377,6 @@ int main() {
             const float mmq_value = host_bf16(mmq_y[
                 static_cast<size_t>(activation_row) * mmq_n + row]);
 
-            // Primary assertion: the prefill kernels must reproduce the decode
-            // kernel on identical Q8_1 input. Only the float accumulation order
-            // and the final bf16 rounding may differ.
             const float decode_value = host_bf16(decode_y[
                 static_cast<size_t>(activation_row) * mmq_n + row]);
             if (std::abs(mmq_value - decode_value) >
@@ -422,13 +388,6 @@ int main() {
                 return 11;
             }
 
-            // Secondary assertion: agreement with the unquantized-activation
-            // dot product. Random Q4_K weights cancel heavily, so the result
-            // can be orders of magnitude smaller than the individual terms.
-            // Bounding by a fraction of the result would then only measure
-            // Q8_1 noise; bound by that noise directly instead. Each element
-            // carries at most step/2 of activation error, and the signs are
-            // independent, so the errors add in quadrature.
             double reference = 0.0;
             double noise_variance = 0.0;
             for (int i = 0; i < mmq_k; ++i) {
@@ -439,9 +398,6 @@ int main() {
                 const double term = weight * block_step[i / celeg::kMmqQ8_1BlockSize] * 0.5;
                 noise_variance += term * term;
             }
-            // Three sigma, plus the bf16 rounding of the stored result. A real
-            // layout or scale bug produces an error proportional to the full
-            // term magnitude, which is far outside this band.
             const double tolerance = std::max(1.0, 3.0 * std::sqrt(noise_variance) +
                                                    0.01 * std::abs(reference));
             if (std::abs(mmq_value - reference) > tolerance) {
@@ -460,10 +416,6 @@ int main() {
         cudaFree(d_mmq_activation); cudaFree(d_mmq_dequant); cudaFree(d_mmq_weight);
     }
 
-    // Same randomized cross-check for Q6_K. Its prefill kernels split every
-    // 32-element activation block across two scale sub-blocks and fold the -32
-    // weight offset through the activation sums, which is exactly the kind of
-    // arithmetic the constant-valued cases above cannot distinguish.
     {
         std::mt19937 rng(6789);
         std::uniform_int_distribution<int> byte_dist(0, 255);
@@ -476,9 +428,6 @@ int main() {
 
         std::vector<uint8_t> weight(static_cast<size_t>(mmq_n) * mmq_row_bytes);
         for (auto& byte : weight) byte = static_cast<uint8_t>(byte_dist(rng));
-        // d is the last two bytes of a Q6_K super-block. Arbitrary half bit
-        // patterns can be inf/nan, so pin it to a sane magnitude; ql/qh/scales
-        // stay fully random.
         for (int row = 0; row < mmq_n; ++row) {
             for (int sb = 0; sb < mmq_super_blocks; ++sb) {
                 uint8_t* blk = weight.data() +

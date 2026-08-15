@@ -20,4 +20,4 @@ std::unique_ptr<IWeightLayout> make_cuda_embedding_layout(
 
 void configure_cuda_expert_resources(CudaCompiledModel& model);
 
-} // namespace celeg
+}

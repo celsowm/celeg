@@ -86,7 +86,7 @@ void concurrent_misses_coalesce() {
     }
 }
 
-} // namespace
+}
 
 int main() {
     try {

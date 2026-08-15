@@ -56,4 +56,4 @@ struct ToolParseResult {
     std::size_t consumed_bytes = 0;
 };
 
-} // namespace celeg
+}

@@ -75,9 +75,6 @@ PrefixRadixIndex::longest_prefix(const std::vector<int32_t>& tokens) const {
         node = it->second.get();
         ++depth;
         if (!node->terminal_ids.empty()) {
-            // Multiple cache records may exist at one prefix. The engine keeps
-            // entries unique, but selecting the newest ID is deterministic and
-            // makes the index robust to transitional duplicates.
             best = Match{node->terminal_ids.back(), depth};
         }
     }
@@ -90,4 +87,4 @@ void PrefixRadixIndex::clear() {
     nodes_ = 1;
 }
 
-} // namespace celeg
+}

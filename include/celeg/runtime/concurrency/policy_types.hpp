@@ -22,4 +22,4 @@ inline bool select_segmented_attention(AttentionMode mode,
     return false;
 }
 
-} // namespace celeg
+}

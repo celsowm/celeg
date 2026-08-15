@@ -8,9 +8,6 @@
 
 namespace celeg {
 
-// Canonical frequency transform shared by position-aware lowerings.  The
-// position argument is deliberately part of the function: dynamic NTK and
-// long-context policies are position-dependent, not merely alternate bases.
 inline double rope_frequency(const RopePositionSpec& spec, int pair,
                              int rotary_dimension, int position) {
     if (pair < 0 || pair >= rotary_dimension / 2 || rotary_dimension <= 0 ||
@@ -80,4 +77,4 @@ inline float rope_attention_scale(const RopePositionSpec& spec, int position) {
     return static_cast<float>(spec.scaling.attention_factor);
 }
 
-} // namespace celeg
+}

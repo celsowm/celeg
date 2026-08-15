@@ -11,8 +11,6 @@
 namespace celeg {
 namespace {
 
-// Mirrors gguf.cu's BlockQ4K layout (super-block layout is GGUF's on-disk
-// format, not something this file gets to choose).
 struct BlockQ4K {
     __half d;
     __half dmin;
@@ -24,17 +22,10 @@ using celeg::gguf_blocks::q4k_scale_min;
 
 constexpr int kSuperBlock = 256;
 constexpr int kSubBlocksPerSuperBlock = kSuperBlock / kMmqQ8_1BlockSize;
-// A prefill tile keeps one GGUF weight row in registers while accumulating
-// several activation rows. The previous kernel launched one block for every
-// (activation,row-of-W) pair, which was acceptable for decode but made native
-// prefill overwhelmingly launch- and weight-read-bound.
 constexpr int kMmqPrefillTileRows = 8;
 constexpr int kMmqTensorCoreTile = 16;
 
 bool mmq_tensor_core_supported() {
-    // int8 mma.sync (nvcuda::wmma with signed-char fragments) requires
-    // sm_72+. The result is cached by device, not process-wide: callers may
-    // legally switch the current CUDA device between model operations.
     int device = 0;
     if (cudaGetDevice(&device) != cudaSuccess) return false;
     static std::mutex mutex;
@@ -130,12 +121,6 @@ __global__ void q4k_mmq_kernel(const int8_t* __restrict__ q8,
             int dot = 0;
 #pragma unroll
             for (int g = 0; g < kMmqQ8_1BlockSize; g += 4) {
-                // Four Q4_K values occupy exactly four consecutive bytes.
-                // Select their high or low nibbles with one packed load and
-                // mask rather than constructing the DP4A operand byte by
-                // byte.  GGUF's super-block layout guarantees this range is
-                // in bounds; memcpy also keeps the load valid for every
-                // alignment produced by a checkpoint payload.
                 uint32_t packed_bytes = 0;
                 memcpy(&packed_bytes, qs + g, sizeof(packed_bytes));
                 const int packed_w = static_cast<int>(
@@ -160,22 +145,6 @@ __global__ void q4k_mmq_kernel(const int8_t* __restrict__ q8,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Q6_K MMQ: same __dp4a strategy as Q4_K, adapted for the Q6_K super-block.
-//
-// Q6_K super-block (256 elements, 210 bytes):
-//   uint8  ql[128];      // lower 4 bits of each 6-bit value
-//   uint8  qh[64];       // upper 2 bits, 4 elements packed per byte
-//   int8   scales[16];   // per 16-element sub-block scale
-//   half   d;            // super-block scale
-// Dequant: y = d * scales[is] * (q - 32), q is 6-bit unsigned (0..63).
-//
-// Each 32-element Q8_1 activation block spans two Q6_K scale sub-blocks
-// (16 elements each), so the dot product must be split into two halves
-// with separate scale application. The -32 weight offset is folded in via
-// the per-16-element activation sum, computed alongside the dp4a using
-// __dp4a(0x01010101, packed_a, sum).
-// ---------------------------------------------------------------------------
 
 struct BlockQ6K {
     uint8_t ql[128];
@@ -216,8 +185,8 @@ __global__ void q6k_mmq_kernel(const int8_t* __restrict__ q8,
             const BlockQ6K* blk =
                 reinterpret_cast<const BlockQ6K*>(row_blocks) + superblock;
 
-            const int half = within >> 2;        // 0 or 1
-            const int grp = within & 3;           // 0..3
+            const int half = within >> 2;
+            const int grp = within & 3;
             const int is_lo = half * 8 + grp * 2;
             const int is_hi = is_lo + 1;
             const float d = __half2float(blk->d);
@@ -345,9 +314,6 @@ __global__ void q4k_mmq_prefill_kernel(
             if (activation_base + r < m) {
                 const size_t activation_offset =
                     static_cast<size_t>(activation_base + r) * sub_blocks_total + sub;
-                // q8_sums holds the sum of the *quantized* int8 activations, so
-                // the min correction is on the same scale as the dot product:
-                // the activation delta multiplies both terms.
                 acc[r] += q8_scales[activation_offset] *
                           (weight_scale * static_cast<float>(dots[r]) -
                            weight_min * q8_sums[activation_offset]);
@@ -368,16 +334,6 @@ __global__ void q4k_mmq_prefill_kernel(
     }
 }
 
-// Ampere path for real prefill. Each warp owns a 16x16 output tile and uses
-// integer tensor cores for each 32-wide GGUF sub-block; WarpsPerBlock warps
-// share one block, all covering the same 16 activation rows (blockIdx.y), so
-// the 16x32 activation tile is loaded once per block and reused by every
-// warp instead of being reloaded per output tile. This keeps enough resident
-// warps per SM to hide wmma/global-load latency instead of running one warp
-// (32 threads) per block. Q4_K's scale/min are per 32 values, so the two
-// k=16 MMA results are combined before applying the floating-point
-// dequantization correction. The raw GGUF blocks remain the only persistent
-// weight storage.
 template <int WarpsPerBlock>
 __global__ void q4k_mmq_tensor_core_kernel(
     const int8_t* __restrict__ q8, const float* __restrict__ q8_scales,
@@ -415,8 +371,6 @@ __global__ void q4k_mmq_tensor_core_kernel(
                 const uint8_t byte = block->qs[(within >> 1) * 32 + column];
                 value = (within & 1) ? (byte >> 4) : (byte & 0xF);
             }
-            // B is [K,N] in column-major form for C=A*B. Its leading
-            // dimension is the full 32-wide GGUF sub-block, not N.
             weight_tile[warp][output * kMmqQ8_1BlockSize + column] = static_cast<int8_t>(value);
         }
         __syncthreads();
@@ -444,11 +398,6 @@ __global__ void q4k_mmq_tensor_core_kernel(
                 q4k_scale_min(sub & 7, block->scales, scale, minimum);
                 const size_t activation_offset =
                     static_cast<size_t>(activation_base + row) * (k / kMmqQ8_1BlockSize) + sub;
-                // store_matrix_sync used mem_row_major with ldm=16, so the
-                // accumulator tile is indexed [row][output] — the same order
-                // this loop derives from `index`. The activation delta scales
-                // both the dot product and the min correction, because
-                // q8_sums holds the sum of the quantized int8 activations.
                 accumulated[index / 32] += q8_scales[activation_offset] *
                     (__half2float(block->d) * static_cast<float>(scale) *
                          static_cast<float>(dot_lo_tile[warp][index] + dot_hi_tile[warp][index]) -
@@ -560,8 +509,6 @@ __global__ void q6k_mmq_tensor_core_kernel(
                 const int scale_lo_index = half * 8 + group * 2;
                 const size_t activation_offset =
                     static_cast<size_t>(activation_base + row) * (k / kMmqQ8_1BlockSize) + sub;
-                // Q6_K changes scale every 16 elements, so derive the two raw
-                // activation sums locally from the shared Q8 tile.
                 int sum_lo = 0, sum_hi = 0;
 #pragma unroll
                 for (int cidx = 0; cidx < 16; ++cidx) {
@@ -666,7 +613,7 @@ __global__ void q6k_mmq_prefill_kernel(
     }
 }
 
-} // namespace
+}
 
 CudaDeviceCapabilities discover_cuda_device_capabilities() {
     CudaDeviceCapabilities result;
@@ -682,11 +629,6 @@ CudaDeviceCapabilities discover_cuda_device_capabilities() {
         return result;
     }
     result.mmq_tensor_core_supported = mmq_tensor_core_supported();
-    // Hardware-only default. The CELEG_MMQ_TENSOR_CORES user override lives
-    // in CudaModelOptions::mmq_tensor_cores (resolved once at model
-    // configuration construction) and is applied on top of this device
-    // capability by CudaExecutionPlan::compile(), which is the actual
-    // configuration/bootstrap boundary for execution policy.
     result.mmq_tensor_core_enabled = result.mmq_tensor_core_supported;
     return result;
 }
@@ -732,11 +674,6 @@ void launch_q4k_mmq(const int8_t* q8, const float* q8_scales,
                     const float* q8_sums, const uint8_t* blocks,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
                     int output_stride, float beta, cudaStream_t stream) {
-    // Convenience overload with no explicit policy: default to whatever the
-    // device supports. Callers that need the resolved CELEG_MMQ_TENSOR_CORES
-    // override must go through CudaExecutionPlan::mmq_tensor_cores_enabled(),
-    // resolved once at bootstrap from CudaModelOptions::mmq_tensor_cores, and
-    // call launch_q4k_mmq_with_policy() directly.
     launch_q4k_mmq_with_policy(q8, q8_scales, q8_sums, blocks, y, m, n, k,
                                row_bytes, output_stride, beta,
                                mmq_tensor_core_supported(), stream);
@@ -774,11 +711,9 @@ void launch_q6k_mmq(const int8_t* q8, const float* q8_scales,
                     const float* q8_sums, const uint8_t* blocks,
                     __nv_bfloat16* y, int m, int n, int k, size_t row_bytes,
                     int output_stride, float beta, cudaStream_t stream) {
-    // See launch_q4k_mmq() above: no explicit policy, so this defaults to
-    // device support only.
     launch_q6k_mmq_with_policy(q8, q8_scales, q8_sums, blocks, y, m, n, k,
                                row_bytes, output_stride, beta,
                                mmq_tensor_core_supported(), stream);
 }
 
-} // namespace celeg
+}

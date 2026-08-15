@@ -7,9 +7,6 @@
 
 namespace celeg {
 
-// Owns the buffers and execution policy that form one sampling session. The
-// compiled model supplies logits/configuration; this collaborator owns how a
-// token is selected and how its sampling state advances.
 class CudaSamplingState final {
 public:
     CudaSamplingState()
@@ -40,7 +37,6 @@ public:
     DeviceBuffer<float> sampling_scores;
     DeviceBuffer<float> topk_values;
     DeviceBuffer<int32_t> topk_indices;
-    // Scratch for the grid-parallel top-k merge in launch_fused_sample_topk.
     DeviceBuffer<float> partial_values;
     DeviceBuffer<int32_t> partial_indices;
     DeviceBuffer<uint64_t> rng_state;
@@ -48,4 +44,4 @@ public:
     PinnedBuffer<int32_t> sampled_host;
 };
 
-} // namespace celeg
+}

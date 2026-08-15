@@ -59,4 +59,4 @@ void cpu_conv_prefill(const float* projected_bcx, const float* weight,
     });
 }
 
-} // namespace celeg
+}

@@ -122,7 +122,7 @@ std::vector<float> dequantize_matrix(const CpuGgufMatrix& matrix) {
     return values;
 }
 
-} // namespace
+}
 
 CpuWeightCodec::CpuWeightCodec(IWeightRepository* source, CpuPackReader* reader,
                                CpuPackWriter* writer, size_t group_size)
@@ -353,4 +353,4 @@ std::vector<float> CpuWeightCodec::vector(
     return result;
 }
 
-} // namespace celeg
+}

@@ -49,4 +49,4 @@ private:
     size_t nodes_ = 1;
 };
 
-} // namespace celeg
+}

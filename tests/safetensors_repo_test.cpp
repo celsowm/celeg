@@ -24,7 +24,7 @@ void write_shard(const std::filesystem::path& path,
     }
 }
 
-} // namespace
+}
 
 int main() {
  try {
@@ -34,10 +34,9 @@ int main() {
         std::filesystem::remove(entry.path());
     }
 
-    // Two shards: shard_0 holds "a" and "b"; shard_1 holds "c".
-    const uint16_t a_vals[2] = {0x3f80, 0x4000}; // 1.0, 2.0
-    const uint16_t b_vals[1] = {0x4040};          // 3.0
-    const uint16_t c_vals[3] = {0x4080, 0x40a0, 0x40c0}; // 4,5,6
+    const uint16_t a_vals[2] = {0x3f80, 0x4000};
+    const uint16_t b_vals[1] = {0x4040};
+    const uint16_t c_vals[3] = {0x4080, 0x40a0, 0x40c0};
     {
         const std::string header =
             R"({"a":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]},"b":{"dtype":"BF16","shape":[1],"data_offsets":[4,6]}})";
@@ -58,7 +57,6 @@ int main() {
         out.write(reinterpret_cast<const char*>(c_vals), sizeof(c_vals));
     }
 
-    // Index mapping tensors to shards.
     const std::string index =
         R"({"metadata":{},"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00001-of-00002.safetensors","c":"model-00002-of-00002.safetensors"}})";
     std::ofstream index_out(dir / "model.safetensors.index.json");
@@ -88,7 +86,6 @@ int main() {
         CELEG_TEST_CHECK(std::memcmp(tc.data, c_vals, 6) == 0);
     }
 
-    // Single-file backward compatibility via directory with model.safetensors.
     const auto single_dir = std::filesystem::temp_directory_path() / "celeg_repo_single";
     std::filesystem::create_directories(single_dir);
     write_shard(single_dir / "model.safetensors",
@@ -103,7 +100,6 @@ int main() {
         CELEG_TEST_CHECK(std::memcmp(tx.data, a_vals, 4) == 0);
     }
 
-    // Missing shard must be detected at construction.
     bool rejected = false;
     try {
         const std::string bad_index =

@@ -134,7 +134,7 @@ std::filesystem::path executable_directory(const char* argv0) {
     return std::filesystem::absolute(argv0).parent_path();
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     try {
@@ -237,8 +237,6 @@ int main(int argc, char** argv) {
             engine_options.max_active_requests = args.max_active_requests;
             engine_options.max_batched_tokens = args.max_batched_tokens;
             engine_options.prefill_chunk_tokens = args.prefill_chunk_tokens;
-            // GatedDeltaNet and MlpOnly still require tokenwise scheduling;
-            // Mamba2 has a packed state-preserving path.
             if (topology.exec.gated_delta_net_layer_count > 0 ||
                 topology.exec.mlp_only_layer_count > 0) {
                 engine_options.packed_decode = false;

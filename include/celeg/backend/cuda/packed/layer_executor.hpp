@@ -9,9 +9,6 @@
 
 namespace celeg {
 
-// Lowers the compiled layer vocabulary into packed numerical operators. It
-// owns layer dispatch and residual/norm/FFN sequencing, but not batch
-// admission, metadata lifecycle, or host-visible state commits.
 class PackedLayerExecutor {
 public:
     PackedLayerExecutor(PackedWorkspace& workspace,
@@ -62,4 +59,4 @@ private:
     PackedGemmRuntime& gemm_;
 };
 
-} // namespace celeg
+}

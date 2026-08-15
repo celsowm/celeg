@@ -50,7 +50,7 @@ std::string inferred_delimited_source() {
            "{% if add_generation_prompt %}<|im_start|>assistant\\n{% endif %}";
 }
 
-} // namespace
+}
 
 ResolvedInteraction resolve_interaction(
     const CheckpointMetadata& metadata,
@@ -215,11 +215,8 @@ std::string render_chat(
         options);
 }
 
-} // namespace celeg
+}
 
-// Some isolated tokenizer targets compile template.cpp directly instead of
-// linking celeg_base. Keep this translation unit self-contained while the
-// implementation remains split by responsibility in private source fragments.
 #include "template/parser.cpp"
 #include "template/validation.cpp"
 #include "template/runtime.cpp"

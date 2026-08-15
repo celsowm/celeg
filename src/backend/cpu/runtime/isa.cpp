@@ -48,7 +48,7 @@ uint64_t xgetbv0() {
 }
 #endif
 
-} // namespace
+}
 
 const char* cpu_isa_name(CpuIsa isa) {
     switch (isa) {
@@ -87,10 +87,6 @@ bool cpu_isa_compiled(CpuIsa isa) {
 #if ((defined(__GNUC__) || defined(__clang__)) && \
      (defined(__x86_64__) || defined(__i386__))) || \
     (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86)))
-            // AVX2/FMA kernels exist on both toolchains: GCC/Clang via
-            // per-function __attribute__((target(...))) multiversioning in
-            // the focused kernel translation units, MSVC via dedicated AVX2
-            // translation units since it has no per-function target attribute.
             return true;
 #else
             return false;
@@ -99,10 +95,6 @@ bool cpu_isa_compiled(CpuIsa isa) {
         case CpuIsa::Avx512Vnni:
 #if (defined(__GNUC__) || defined(__clang__)) && \
     (defined(__x86_64__) || defined(__i386__))
-            // AVX-VNNI / AVX-512-VNNI kernels are GCC/Clang-only for now;
-            // porting them to MSVC would need its own dedicated TU the same
-            // way AVX2 does, but no test hardware here has this ISA to
-            // validate against.
             return true;
 #else
             return false;
@@ -124,9 +116,6 @@ bool cpu_isa_compiled(CpuIsa isa) {
 }
 
 CpuIsa CpuCapabilities::best_isa() const {
-    // Highest ISA with an executable microkernel in this release. Hardware
-    // capabilities such as AMX/SME2 remain visible in summary(), but auto must
-    // never select a diagnostic-only backend.
     if (avx512f && avx512_vnni && cpu_isa_compiled(CpuIsa::Avx512Vnni)) return CpuIsa::Avx512Vnni;
     if (avx_vnni && cpu_isa_compiled(CpuIsa::AvxVnni)) return CpuIsa::AvxVnni;
     if (avx2 && fma && cpu_isa_compiled(CpuIsa::Avx2)) return CpuIsa::Avx2;
@@ -221,4 +210,4 @@ CpuCapabilities detect_cpu_capabilities() {
     return c;
 }
 
-} // namespace celeg
+}

@@ -26,8 +26,6 @@ namespace celeg {
 
 namespace {
 
-// BF16 element size. Kept as a plain constant so this host translation unit
-// does not depend on the CUDA toolkit headers (__nv_bfloat16).
 constexpr std::size_t kBf16Bytes = 2;
 
 std::string format_bytes(std::size_t bytes) {
@@ -62,7 +60,7 @@ const char* policy_name(ExpertCachePolicy policy) {
     return "unknown";
 }
 
-} // namespace
+}
 
 std::size_t bytes_per_expert_bf16(const CompiledModelProgram& program) {
     int moe_intermediate = 0;
@@ -149,7 +147,6 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
             options.gpu_expert_cache_bytes /
             (static_cast<std::size_t>(plan.moe_layers) * plan.bytes_per_expert));
     } else {
-        // Auto: derive the cache budget from free VRAM.
         const std::size_t fixed = plan.non_expert_weight_bytes +
             plan.kv_reservation_bytes + plan.workspace_bytes + plan.reserve_bytes;
         std::size_t available_for_experts = 0;
@@ -161,10 +158,6 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
             (static_cast<std::size_t>(plan.moe_layers) * plan.bytes_per_expert));
     }
 
-    // Every routed token may select K distinct experts.  A disk-backed cache
-    // smaller than K cannot execute even a single token without a resident
-    // pointer for every routed expert, so make the topology's routing width a
-    // hard lower bound for the planner.
     const int min_experts = std::max(
         0, std::min(std::max(options.minimum_experts_per_layer,
                              max_experts_per_token),
@@ -178,8 +171,6 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
     }
     slots_per_layer = std::min(slots_per_layer, max_experts);
 
-    // Respect the host pinned budget: every non-resident expert may need host
-    // storage. If it would overflow, force more experts onto the GPU.
     if (options.host_mode == ExpertHostMode::PinnedCopy &&
         options.maximum_pinned_host_bytes > 0) {
         const std::size_t per_layer_host_bytes =
@@ -193,8 +184,6 @@ ExpertOffloadPlan plan_expert_offload(const ExpertOffloadPlanInputs& inputs) {
 
     plan.experts_per_layer = slots_per_layer;
     plan.host_experts_per_layer = max_experts - slots_per_layer;
-    // Prefetch depth cannot exceed the experts that are actually host-resident
-    // (no point prefetching what is already cached).
     if (options.backing == ExpertBackingMode::DiskCached) {
         plan.prefetch_experts = 0;
     } else {
@@ -235,9 +224,6 @@ std::string ExpertOffloadPlan::report() const {
     return out.str();
 }
 
-// ---------------------------------------------------------------------------
-// ExpertSidecar Implementation
-// ---------------------------------------------------------------------------
 
 struct SidecarHeader {
     char magic[8];
@@ -325,7 +311,6 @@ bool ExpertSidecar::load(const std::string& path, int expected_layers, int expec
         return false;
     }
 
-    // Read header using positioned read
     std::array<std::byte, kSidecarHeaderBytes> header_bytes{};
 #if defined(_WIN32)
     OVERLAPPED overlapped = {};
@@ -340,7 +325,6 @@ bool ExpertSidecar::load(const std::string& path, int expected_layers, int expec
 #endif
     const SidecarHeader header = decode_header(header_bytes);
 
-    // Validate magic, layers, experts, and shapes
     if (std::memcmp(header.magic, "LFMSIDE2", 8) != 0) {
         return false;
     }
@@ -351,7 +335,6 @@ bool ExpertSidecar::load(const std::string& path, int expected_layers, int expec
         return false;
     }
 
-    // Read index
     index_.resize(expected_layers, std::vector<SidecarExpertIndex>(expected_experts));
     std::uint64_t index_offset = kSidecarHeaderBytes;
     for (int l = 0; l < expected_layers; ++l) {
@@ -387,7 +370,6 @@ void ExpertSidecar::read_expert(int layer_idx, int expert_id, std::span<std::byt
     }
 
 #if defined(_WIN32)
-    // Read gate_up
     OVERLAPPED overlapped = {};
     overlapped.Offset = static_cast<DWORD>(idx.gate_up_offset & 0xFFFFFFFF);
     overlapped.OffsetHigh = static_cast<DWORD>((idx.gate_up_offset >> 32) & 0xFFFFFFFF);
@@ -397,7 +379,6 @@ void ExpertSidecar::read_expert(int layer_idx, int expert_id, std::span<std::byt
         throw std::runtime_error("Sidecar ReadFile failed for gate_up");
     }
 
-    // Read down
     overlapped.Offset = static_cast<DWORD>(idx.down_offset & 0xFFFFFFFF);
     overlapped.OffsetHigh = static_cast<DWORD>((idx.down_offset >> 32) & 0xFFFFFFFF);
     if (!::ReadFile(file_handle_, dn_dest.data(), static_cast<DWORD>(idx.down_bytes), &bytes_read, &overlapped) ||
@@ -405,20 +386,15 @@ void ExpertSidecar::read_expert(int layer_idx, int expert_id, std::span<std::byt
         throw std::runtime_error("Sidecar ReadFile failed for down");
     }
 #else
-    // Read gate_up
     if (static_cast<std::size_t>(::pread(fd_, gu_dest.data(), idx.gate_up_bytes, idx.gate_up_offset)) != idx.gate_up_bytes) {
         throw std::runtime_error("Sidecar pread failed for gate_up");
     }
-    // Read down
     if (static_cast<std::size_t>(::pread(fd_, dn_dest.data(), idx.down_bytes, idx.down_offset)) != idx.down_bytes) {
         throw std::runtime_error("Sidecar pread failed for down");
     }
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// ModelUsageStats Implementation
-// ---------------------------------------------------------------------------
 
 bool ModelUsageStats::load(const std::string& path, int expected_layers, int expected_experts) {
     std::ifstream in(path);
@@ -472,9 +448,8 @@ void ModelUsageStats::save(const std::string& path) const {
     }
     out.close();
 
-    // Atomic rename
     std::error_code ec;
     std::filesystem::rename(tmp_path, path, ec);
 }
 
-} // namespace celeg
+}

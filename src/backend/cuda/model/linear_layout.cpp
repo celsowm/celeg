@@ -11,7 +11,7 @@ int rope_source_row(int output) {
     return (output % (kRopeHeadDim / 2)) * 2 + output / (kRopeHeadDim / 2);
 }
 
-} // namespace
+}
 
 void undo_rope_permutation(std::vector<__nv_bfloat16>& values, int rows, int cols) {
     if (rows <= 0 || cols <= 0 || rows % kRopeHeadDim != 0 ||
@@ -53,4 +53,4 @@ void undo_rope_permutation_raw(std::vector<uint8_t>& blocks, int rows, size_t ro
     blocks.swap(reordered);
 }
 
-} // namespace celeg::cuda_loader_detail
+}

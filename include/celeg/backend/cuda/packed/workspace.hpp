@@ -13,9 +13,6 @@ namespace celeg {
 
 class PhysicalPagedKvCache;
 
-// Owns every reusable host/device buffer used by packed decode and ragged
-// prefill. The executor owns one workspace for its whole lifetime; request
-// execution only fills these buffers and never grows them on the hot path.
 struct PackedWorkspace {
     PackedWorkspace(size_t maximum_batch,
                     size_t maximum_prefill_tokens,
@@ -130,4 +127,4 @@ struct PackedWorkspace {
     size_t segmented_accum_capacity = 0;
 };
 
-} // namespace celeg
+}

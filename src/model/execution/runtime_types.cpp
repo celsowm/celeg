@@ -35,4 +35,4 @@ void GenerationConfig::validate() const {
     }
 }
 
-} // namespace celeg
+}

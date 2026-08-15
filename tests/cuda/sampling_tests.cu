@@ -14,7 +14,6 @@
 namespace celeg::cuda_test {
 
 void run_sampling_tests(celeg::CudaStream& stream) {
-// Greedy argmax.
 {
     std::vector<__nv_bfloat16> logits = {
         to_bf16(-1.0f), to_bf16(8.0f), to_bf16(8.0f), to_bf16(2.0f)};
@@ -36,7 +35,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     CELEG_TEST_CHECK(index == 1);
 }
 
-// Greedy argmax applies repetition penalty without the top-k path.
 {
     std::vector<__nv_bfloat16> logits = {
         to_bf16(5.0f), to_bf16(4.0f), to_bf16(3.0f), to_bf16(2.0f)};
@@ -60,7 +58,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
 
 
 
-// GPU repetition penalty + top-k=1 sampling selects the adjusted maximum.
 {
     std::vector<__nv_bfloat16> logits = {
         to_bf16(5.0f), to_bf16(4.0f), to_bf16(3.0f), to_bf16(2.0f)};
@@ -83,12 +80,11 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     CELEG_CUDA(cudaMemcpyAsync(&token, result.data(), sizeof(token),
                              cudaMemcpyDeviceToHost, stream.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
-    CELEG_TEST_CHECK(token == 1); // token 0 is penalized from 5 to 2.5
+    CELEG_TEST_CHECK(token == 1);
 }
 
 
 
-// Top-p truncation within top-k is deterministic for a fixed seed.
 {
     std::vector<float> values = {3.0f, 2.0f, 1.0f};
     std::vector<int32_t> indices = {10, 20, 30};
@@ -110,7 +106,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
 
 
 
-// Fused sampler matches the reference multi-launch pipeline.
 {
     std::vector<__nv_bfloat16> logits = {
         to_bf16(4.0f), to_bf16(3.0f), to_bf16(2.0f),
@@ -173,17 +168,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     CELEG_TEST_CHECK(reference_token == fused_token);
 }
 
-// Fused sampler produces the exact ordered top-k at realistic vocabulary
-// size, including the tie-break rule.
-//
-// The check above only compares the finally sampled token on a 6-entry
-// vocabulary, which cannot detect a mis-ordered top-k array. The selection
-// is a block-parallel argmax drain, so it has to reproduce the ordering the
-// original single-threaded insertion sort produced -- descending score, and
-// on an exact tie the *lower* vocabulary index first. Duplicated logits below
-// force many exact ties (bf16 has only 8 mantissa bits, so ties are common in
-// practice, not a synthetic worry), and they are seeded across the whole
-// vocabulary so ties land in different threads' strided slices.
 {
     constexpr int vocab = 65536;
     constexpr int top_k = 50;
@@ -192,8 +176,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     std::mt19937 rng(20260729);
     std::uniform_real_distribution<float> dist(-6.0f, 6.0f);
     for (int i = 0; i < vocab; ++i) logits[i] = to_bf16(dist(rng));
-    // Plant a plateau of exactly-equal top values spread far apart, so the
-    // correct answer is "these indices, in ascending order".
     const int tie_positions[] = {5, 999, 1024, 1025, 40000, 65535, 257, 258};
     for (int p : tie_positions) logits[p] = to_bf16(9.5f);
     for (int i = 0; i < vocab; i += 977) seen[i] = 1;
@@ -201,7 +183,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
     constexpr float temperature = 0.75f;
     constexpr float penalty = 1.1f;
 
-    // CPU reference: the exact semantics of the replaced insertion sort.
     std::vector<float> ref_scores(vocab);
     for (int i = 0; i < vocab; ++i) {
         float v = __bfloat162float(logits[i]);
@@ -253,7 +234,6 @@ void run_sampling_tests(celeg::CudaStream& stream) {
         CELEG_TEST_CHECK(got_indices[r] == order[r]);
         CELEG_TEST_CHECK(got_values[r] == ref_scores[order[r]]);
     }
-    // The planted plateau must come out first, in ascending index order.
     std::vector<int> ties(std::begin(tie_positions), std::end(tie_positions));
     std::sort(ties.begin(), ties.end());
     for (size_t t = 0; t < ties.size(); ++t) {
@@ -264,4 +244,4 @@ void run_sampling_tests(celeg::CudaStream& stream) {
 
 }
 
-} // namespace celeg::cuda_test
+}

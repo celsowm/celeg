@@ -112,4 +112,4 @@ const char* celeg_backend_capabilities(celeg_backend backend) {
 #endif
 }
 
-} // extern "C"
+}

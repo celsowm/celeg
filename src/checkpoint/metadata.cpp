@@ -109,7 +109,7 @@ const T& as(const MetadataValue& value, std::string_view key) {
     throw std::runtime_error("metadata key has unexpected type: " + std::string(key));
 }
 
-} // namespace
+}
 
 bool CheckpointMetadata::contains(std::string_view key) const {
     return values.find(std::string(key)) != values.end();
@@ -217,4 +217,4 @@ CheckpointMetadata CheckpointMetadata::from_gguf(const GgufFile& file) {
     return metadata;
 }
 
-} // namespace celeg
+}

@@ -38,7 +38,7 @@ bool rejects(const std::filesystem::path& path,
     }
 }
 
-} // namespace
+}
 
 int main() {
     const auto base = std::filesystem::temp_directory_path();
@@ -58,7 +58,6 @@ int main() {
         CELEG_TEST_CHECK(tensor.bytes == 4);
         CELEG_TEST_CHECK(std::memcmp(tensor.data, values, 4) == 0);
 
-        // Test locate and read
         celeg::TensorLocator loc = file.locate("x");
         CELEG_TEST_CHECK(loc.bytes == 4);
         CELEG_TEST_CHECK(loc.dtype == celeg::TensorDType::BF16);
@@ -68,7 +67,6 @@ int main() {
         file.read(loc, dest);
         CELEG_TEST_CHECK(std::memcmp(dest.data(), values, 4) == 0);
 
-        // Destination size mismatch throws exception
         bool throws_size_mismatch = false;
         try {
             std::vector<std::byte> bad_dest(5);
@@ -78,7 +76,6 @@ int main() {
         }
         CELEG_TEST_CHECK(throws_size_mismatch);
 
-        // Out of bounds locator throws exception
         bool throws_oob = false;
         try {
             celeg::TensorLocator bad_loc = loc;

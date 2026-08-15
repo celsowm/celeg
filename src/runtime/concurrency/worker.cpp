@@ -66,4 +66,4 @@ void EngineWorker::loop() {
     }
 }
 
-} // namespace celeg::detail
+}

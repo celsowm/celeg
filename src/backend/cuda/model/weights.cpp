@@ -18,4 +18,4 @@ size_t SharedModelWeights::memory_bytes() const {
     return total;
 }
 
-} // namespace celeg
+}

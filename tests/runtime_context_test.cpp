@@ -107,7 +107,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 int main() {
     celeg::RuntimeContext runtime = celeg::RuntimeBuilder{}
@@ -144,7 +144,6 @@ int main() {
     bool rejected = false;
     try {
         (void)runtime.architectures();
-        // The frozen catalog must reject additions through its public API.
         const_cast<celeg::ArchitectureCatalog&>(runtime.architectures())
             .add(std::make_unique<ExtensionArchitecture>());
     } catch (const std::logic_error&) {

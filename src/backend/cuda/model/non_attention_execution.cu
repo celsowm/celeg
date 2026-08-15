@@ -17,9 +17,6 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
         throw std::logic_error("attention layer routed to the non-attention mixer");
       },
       [&](GatedDeltaNetLayer* gated_delta) {
-        // Recurrent Gated Delta execution is neither attention nor the
-        // feed-forward block below. Attribute the complete neutral mixer so
-        // decode profiles cannot hide its cost in the uninstrumented gap.
         decode_phase_profile().begin(stream_.get());
         const GatedDeltaNetSpec& spec = gated_delta->spec;
         const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
@@ -115,4 +112,4 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
       });
 }
 
-} // namespace celeg
+}

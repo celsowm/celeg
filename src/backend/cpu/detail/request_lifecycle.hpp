@@ -11,8 +11,6 @@
 
 namespace celeg {
 
-// Owns legal request-state transitions after a batch outcome. It deliberately
-// does not choose batches, allocate sessions, or run model kernels.
 class CpuRequestLifecycle {
 public:
     using Request = CpuConcurrentRequest;
@@ -36,4 +34,4 @@ public:
         ConcurrentMetrics& metrics);
 };
 
-} // namespace celeg
+}

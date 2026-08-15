@@ -1,5 +1,4 @@
 #include "celeg/backend/cuda/concurrency.hpp"
-// CudaModel rename invalidates scheduler-owned model object code.
 
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/model.hpp"
@@ -63,8 +62,6 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
     const size_t total_pages = engine_options_.logical_kv_pages != 0
         ? engine_options_.logical_kv_pages
         : pages_per_lane * active;
-    // Load the model topology so the physical paged KV arena and the packed
-    // executor can size per-attention-layer storage from the resolved topology.
     const detail::ModelBootstrap bootstrap = detail::load_model_bootstrap(
         std::filesystem::path(model_path_), *runtime_);
     topology_ = bootstrap.model.topology;
@@ -101,4 +98,4 @@ CudaSchedulerDriver::CudaSchedulerDriver(std::string model_path,
     if (engine_options_.worker_thread) start();
 }
 
-} // namespace celeg
+}

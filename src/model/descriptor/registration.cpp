@@ -13,9 +13,6 @@ namespace celeg {
 
 void register_descriptor_architectures(ArchitectureCatalog& catalog,
                                        const std::filesystem::path& directory) {
-    // Descriptor files are an optional extension layer.  The built-in
-    // automatic architecture is registered independently, so a descriptorless
-    // installation must remain usable after all declarative stores are removed.
     if (!std::filesystem::is_directory(directory)) return;
 
     std::vector<std::filesystem::path> stores;
@@ -46,4 +43,4 @@ void register_descriptor_architectures(ArchitectureCatalog& catalog,
     }
 }
 
-} // namespace celeg
+}

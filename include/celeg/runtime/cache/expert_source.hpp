@@ -27,8 +27,6 @@ public:
                       std::span<std::byte> destination) const = 0;
 };
 
-// The source owns format interpretation; the cache owns admission, leases,
-// coalescing, and eviction. Neither interface exposes CUDA pointer tables.
 class IHostExpertCache {
 public:
     virtual ~IHostExpertCache() = default;
@@ -36,4 +34,4 @@ public:
     virtual ExpertCacheMetrics metrics() const = 0;
 };
 
-} // namespace celeg
+}

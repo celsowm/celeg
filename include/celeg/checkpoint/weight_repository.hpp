@@ -11,10 +11,6 @@
 
 namespace celeg {
 
-// Abstract weight source. Both the safetensors repository and the GGUF
-// repository implement this so the weight loader and model builder stay
-// format-agnostic. Implementations translate their native tensor naming to the
-// canonical HuggingFace `model.*` scheme used by the model builder.
 class IWeightRepository {
 public:
     virtual ~IWeightRepository() = default;
@@ -23,19 +19,12 @@ public:
     virtual std::vector<std::string> names() const = 0;
 };
 
-// Optional checkpoint capability for repositories that can resolve a tensor
-// to its source location. Repositories that only expose mapped tensor views
-// implement IWeightRepository without pretending to support this operation.
 class ILocatableTensorRepository {
 public:
     virtual ~ILocatableTensorRepository() = default;
     virtual TensorLocator locate(std::string_view name) const = 0;
 };
 
-// Optional checkpoint capability for repositories that can copy source bytes
-// by location. This is intentionally separate from IWeightRepository: GGUF
-// and in-memory repositories do not need to inherit an operation that is
-// invalid for their storage model.
 class IRandomAccessTensorReader {
 public:
     virtual ~IRandomAccessTensorReader() = default;
@@ -43,9 +32,6 @@ public:
                       std::span<std::byte> destination) const = 0;
 };
 
-// Optional capability for repositories that expose native block storage to a
-// backend. The capability is intentionally format-neutral; consumers must not
-// identify GGUF (or any other concrete format) by RTTI.
 class INativeBlockStorageRepository {
 public:
     virtual ~INativeBlockStorageRepository() = default;
@@ -62,9 +48,6 @@ require_locatable_tensor_repository(const IWeightRepository& repository) {
     return *locator;
 }
 
-// Capability discovery helper for cold/offloaded reads. The exception is
-// raised at the boundary where the capability is required, rather than by a
-// misleading default implementation on every repository.
 inline const IRandomAccessTensorReader&
 require_random_access_tensor_reader(const IWeightRepository& repository) {
     const auto* reader = dynamic_cast<const IRandomAccessTensorReader*>(&repository);
@@ -75,12 +58,10 @@ require_random_access_tensor_reader(const IWeightRepository& repository) {
     return *reader;
 }
 
-// Optional checkpoint capability for repositories that carry tokenizer data.
-// The normalized payload keeps consumers independent of the source format.
 class ITokenizerDataRepository {
 public:
     virtual ~ITokenizerDataRepository() = default;
     virtual TokenizerData tokenizer_data() const = 0;
 };
 
-} // namespace celeg
+}

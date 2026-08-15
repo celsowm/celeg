@@ -341,7 +341,7 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
     }
 }
 
-} // namespace
+}
 
 NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metadata) {
     reject_unknown_semantic_metadata(metadata);
@@ -562,4 +562,4 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     return result;
 }
 
-} // namespace celeg
+}

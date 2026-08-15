@@ -76,9 +76,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
                     shared->program.hidden, semantics.operator_norm.epsilon);
-        // Mamba2 and MLP-only mixers own the whole layer: they write the final
-        // hidden state themselves and skip the shared residual/feed-forward
-        // tail below.
         bool mixer_owns_layer = false;
         visit_operator_weights(layer_program,
           [&](const CpuCompiledModel::AttentionWeights* attention) {
@@ -113,8 +110,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
 
-        // Mixer-only layers do not have the generic post-attention
-        // normalization and dense FFN.
         if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
 
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
@@ -202,4 +197,4 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
     }
 }
 
-} // namespace celeg
+}

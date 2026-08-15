@@ -14,4 +14,4 @@ enum class CpuKvCacheMode : uint8_t {
     Bf16,
 };
 
-} // namespace celeg
+}

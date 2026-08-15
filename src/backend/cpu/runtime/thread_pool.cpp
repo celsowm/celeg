@@ -15,7 +15,6 @@ CpuThreadPool::CpuThreadPool(size_t threads, CpuAffinityPolicy affinity)
     if (threads == 0) {
         threads = std::max<size_t>(1, std::thread::hardware_concurrency());
     }
-    // The calling thread also participates, so keep one logical core for it.
     const size_t worker_count = threads > 1 ? threads - 1 : 0;
     worker_cpu_ids_ = detect_cpu_topology().worker_cpu_order(affinity_, worker_count);
     workers_.reserve(worker_count);
@@ -120,4 +119,4 @@ void CpuThreadPool::worker_loop(size_t worker_index) {
     }
 }
 
-} // namespace celeg
+}

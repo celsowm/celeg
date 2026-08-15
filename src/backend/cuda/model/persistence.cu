@@ -50,7 +50,6 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
             buffers.recurrent_state = gated_delta->recurrent_state.data();
             buffers.recurrent_state_elements = gated_delta->recurrent_state.size();
           },
-          // MLP-only blocks hold no persistent session state.
           [](MlpOnlyLayer*) {});
         state.layer_buffers.push_back(buffers);
     }
@@ -160,7 +159,7 @@ void read_device(std::ifstream& in, void* device, size_t bytes) {
     CELEG_CUDA(cudaMemcpy(device, host.data(), bytes, cudaMemcpyHostToDevice));
 }
 
-} // namespace
+}
 
 void SessionStore::save(const std::string& path, SessionState& state) {
     if (state.stream != nullptr) {
@@ -446,9 +445,6 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
                                  state.logits->bytes(),
                                  cudaMemcpyHostToDevice, state.stream));
     }
-    // Prefix computation is deterministic, but generation randomness belongs
-    // to the receiving request. Never inherit the seed/RNG stream of the
-    // request that populated the shared prefix cache.
     if (state.stream != nullptr && state.rng_state != nullptr) {
         CELEG_CUDA(cudaMemcpyAsync(state.rng_state->data(), &request_seed,
                                  sizeof(request_seed), cudaMemcpyHostToDevice,
@@ -504,5 +500,5 @@ void SessionStore::restore_prefix(const PrefixSnapshot& snapshot,
     }
 }
 
-} // namespace celeg
+}
 

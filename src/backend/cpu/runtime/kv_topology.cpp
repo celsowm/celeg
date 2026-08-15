@@ -12,7 +12,7 @@ const CompiledAttentionProgram* attention_program(
     return std::get_if<CompiledAttentionProgram>(&layer.mixer);
 }
 
-} // namespace
+}
 
 CpuStatePageLayout lower_cpu_state_page_layout(
     const CompiledAttentionStateLayout& state) {
@@ -97,4 +97,4 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
     return result;
 }
 
-} // namespace celeg
+}

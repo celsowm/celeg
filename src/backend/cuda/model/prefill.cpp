@@ -27,7 +27,7 @@ bool has_attention_output_transform(const CompiledModelProgram& program) {
         });
 }
 
-} // namespace
+}
 
 void CudaCompiledModel::validate_token_ids(
     const std::vector<int32_t>& tokens) const {
@@ -50,19 +50,10 @@ void CudaCompiledModel::prefill(const std::vector<int32_t>& tokens) {
         prefill_chunk(tokens, true, true);
         return;
     }
-    // Output transforms are token-local but sit between attention and its
-    // output projection. Until every bulk-prefill implementation consumes the
-    // same primitive vocabulary, keep exact semantics by using the device
-    // token path that shares enqueue_decode_attention with decode.
     if (has_attention_output_transform(resources_.program_)) {
         prefill_chunk(tokens, true, true);
         return;
     }
-    // Disk-backed MoE residency needs the active routed set to fit in the
-    // per-layer GPU cache.  The packed prefill path can route an entire prompt
-    // at once (K * rows unique experts), so use the tokenwise scheduler here;
-    // it preserves recurrent GDN state and lets the residency coordinator
-    // promote exactly one routed set at a time.
     if (resources_.options_.expert_offload.enabled() &&
         resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
         prefill_chunk(tokens, true, true);
@@ -184,4 +175,4 @@ void CudaCompiledModel::prefill_chunk(const std::vector<int32_t>& tokens,
     }
 }
 
-} // namespace celeg
+}

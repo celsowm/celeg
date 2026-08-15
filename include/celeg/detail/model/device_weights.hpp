@@ -1,11 +1,5 @@
 #pragma once
 
-// Ownership of device-resident weight storage.
-//
-// `LinearWeight` is a non-owning view; `DeviceWeight` is the allocation that
-// backs one. Kept apart from `linear_weights.hpp` so that consumers of the
-// view (kernels, dispatchers, layer bindings) do not pull in `DeviceBuffer`
-// and the CUDA runtime allocation machinery.
 
 #include "celeg/detail/model/linear_weights.hpp"
 #include "celeg/backend/cuda/utils.cuh"
@@ -32,4 +26,4 @@ struct DeviceWeight {
 
 using WeightMap = std::unordered_map<std::string, DeviceWeight>;
 
-} // namespace celeg
+}

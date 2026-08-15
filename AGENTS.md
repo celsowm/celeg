@@ -2,6 +2,13 @@
 
 ## Hard rules
 
+- **Only Doxygen comments.** Plain `//` and `/* */` prose comments were
+  swept from the tree (`scripts/strip_comments.py`, self-tested tokenizer
+  that preserves string/raw-string literals and the `/*param*/`
+  call-site-argument convention). Do not reintroduce prose comments — new
+  documentation must use Doxygen (`///`, `/**...*/`, `//!`, `/*!...*/`).
+  The `/*name*/` / `/*name=*/` argument-naming convention at call sites is
+  still fine; it is not prose.
 - **NO backward compatibility.** When refactoring, fully replace old access
   patterns with the new interface. Do not keep legacy shortcuts, `impl_->`
   member access, or shim helpers "for compatibility". Delete the old path.

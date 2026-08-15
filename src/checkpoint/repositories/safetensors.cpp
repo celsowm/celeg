@@ -19,7 +19,7 @@ std::filesystem::path resolve_model_dir(const std::filesystem::path& model_dir) 
     return model_dir;
 }
 
-} // namespace
+}
 
 SafeTensorRepository::SafeTensorRepository(const std::filesystem::path& model_dir) {
     const std::filesystem::path root = resolve_model_dir(model_dir);
@@ -56,7 +56,6 @@ SafeTensorRepository::SafeTensorRepository(const std::filesystem::path& model_di
                     "missing safetensors shard: " + shard_path.string());
             }
 
-            // Populate the unique shard list
             if (shard_filename_to_id_.find(shard_filename) == shard_filename_to_id_.end()) {
                 std::uint32_t new_id = static_cast<std::uint32_t>(shard_filenames_.size());
                 shard_filenames_.push_back(shard_filename);
@@ -72,7 +71,6 @@ SafeTensorRepository::SafeTensorRepository(const std::filesystem::path& model_di
         shard_filenames_.push_back(single_path.filename().string());
         shard_filename_to_id_.emplace(single_path.filename().string(), 0);
     } else if (std::filesystem::is_regular_file(root)) {
-        // A single .safetensors file passed directly.
         sharded_ = false;
         single_file_ = std::make_unique<SafeTensorFile>(root.string());
         shard_filenames_.push_back(root.filename().string());
@@ -174,4 +172,4 @@ std::filesystem::path SafeTensorRepository::shard_path(std::uint32_t shard_id) c
     return dir_ / shard_filenames_[shard_id];
 }
 
-} // namespace celeg
+}

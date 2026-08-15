@@ -79,4 +79,4 @@ const std::vector<int32_t>& PrefixCacheIndex::prompt(EntryId id) const {
     return found->second.prompt;
 }
 
-} // namespace celeg
+}

@@ -132,4 +132,4 @@ std::string CudaModelDiagnostics::execution_plan_description() const {
 }
 bool CudaModelDiagnostics::cuda_graph_ready() const { return owner_->state_->cuda_graph_ready(); }
 
-} // namespace celeg
+}

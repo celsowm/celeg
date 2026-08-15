@@ -50,9 +50,6 @@ using AttentionPatternSpec = std::variant<FullCausalPattern, SlidingWindowPatter
                                          BidirectionalPattern, PrefixLmPattern,
                                          BlockSparsePattern, DynamicSparsePattern>;
 
-// A KV group identifies the full-context stream published by an attention
-// owner and consumed by later layers. -1 means that the layer owns its normal
-// per-layer KV cache.
 struct KvSharingSpec {
     int group = -1;
     bool publishes = false;
@@ -83,8 +80,6 @@ struct RelativePositionBiasSpec {
 using AttentionBiasSpec = std::variant<NoAttentionBiasSpec, AlibiBiasSpec,
                                        RelativePositionBiasSpec>;
 
-// Output transforms are semantic post-attention operations applied before the
-// output projection. They deliberately do not encode a model identity.
 struct NoAttentionOutputTransformSpec {};
 
 struct OrthogonalizeCurrentValueSpec {
@@ -94,17 +89,11 @@ struct OrthogonalizeCurrentValueSpec {
 using AttentionOutputTransformSpec = std::variant<
     NoAttentionOutputTransformSpec, OrthogonalizeCurrentValueSpec>;
 
-// Latent state is a semantic representation.  It is lowered independently
-// from ordinary K/V state so compressed attention does not inherit an
-// equal-width K/V page contract.
 struct LatentAttentionStateSpec {
     int latent_rank = 0;
     int rope_head_dim = 0;
     int nope_head_dim = 0;
     bool decoupled_rope = false;
-    // A factorized latent projection publishes the same semantic latent
-    // state as ordinary compressed attention, but derives Q/K/V through
-    // low-rank projections and per-head expansion matrices.
     bool factorized = false;
     int query_rank = 0;
     int value_head_dim = 0;
@@ -164,10 +153,6 @@ enum class AttentionGateKind : uint8_t {
     Sigmoid,
 };
 
-// The gate projection is a semantic operation over attention heads.  Its
-// physical width is deliberately kept out of the execution backends so a
-// checkpoint can publish either one value per head or one value per output
-// element without creating an architecture-specific path.
 enum class AttentionGateGranularity : uint8_t {
     OutputWise,
     HeadWise,
@@ -176,8 +161,6 @@ enum class AttentionGateGranularity : uint8_t {
 
 struct AttentionOutputGateSpec {
     AttentionGateKind kind = AttentionGateKind::None;
-    // Physical binding detail only: the semantic gate is still a separate
-    // operation, but some checkpoints store its projection beside Q.
     bool packed_with_query = false;
     AttentionGateGranularity granularity = AttentionGateGranularity::OutputWise;
 
@@ -299,16 +282,12 @@ struct ShortConvolutionSpec {
     bool bias = false;
 };
 
-// Recurrent linear attention used by hybrid decoder families.  The fields are
-// execution semantics; tensor spelling remains in the architecture module.
 struct GatedDeltaNetSpec {
     int conv_kernel = 0;
     int key_head_dim = 0;
     int value_head_dim = 0;
     int key_heads = 0;
     int value_heads = 0;
-    // The recurrent linear-attention contract can use either one decay value
-    // per head (the original form) or one value per key coordinate.
     bool vector_decay = false;
     bool safe_decay = false;
     float decay_lower_bound = -5.0f;
@@ -417,15 +396,9 @@ struct LayerSpec {
 };
 
 struct ModelGraph {
-    // Residual-stream width is semantic graph state.  It originates in
-    // checkpoint geometry, but all executable shapes must derive from this
-    // value after graph synthesis.
     int hidden = 0;
     std::vector<LayerSpec> layers;
     NormSpec final_norm;
-    // Intermediate normalization boundaries are semantic graph edges.  The
-    // runtime shape may cache a derived copy for allocation, but compilation
-    // must consume this graph-owned schedule.
     std::vector<int> norm_after_layers;
     struct EmbeddingTransformSpec {
         std::optional<NormSpec> post_norm;
@@ -462,4 +435,4 @@ struct ModelCapabilities {
     bool tied_embeddings = false;
 };
 
-} // namespace celeg
+}

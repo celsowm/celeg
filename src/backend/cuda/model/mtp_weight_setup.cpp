@@ -31,7 +31,7 @@ int last_full_attention_layer(const CompiledModelProgram& program) {
     return -1;
 }
 
-} // namespace
+}
 
 void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     CudaModelResources& resources = model.resources_;
@@ -258,4 +258,4 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     }
 }
 
-} // namespace celeg
+}

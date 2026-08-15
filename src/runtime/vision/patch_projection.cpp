@@ -476,7 +476,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 VisualEmbeddingProvider make_patch_visual_embedding_provider(const std::filesystem::path& model_path) {
     return make_patch_visual_embedding_provider(
@@ -493,4 +493,4 @@ std::unique_ptr<IVisionProviderFactory> make_patch_vision_provider_factory() {
     return std::make_unique<PatchProjectionProviderFactory>();
 }
 
-} // namespace celeg
+}

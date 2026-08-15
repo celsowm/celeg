@@ -57,9 +57,6 @@ void stage_packed_persistent_metadata(
                 clear_slot();
                 workspace.h_conv_states.data()[index] = mamba->conv_state.data();
               },
-              // MLP-only blocks have no session-persistent state.  Keep their
-              // neutral metadata slot explicitly empty so the common packed
-              // layout remains valid for hybrid schedules.
               [&](MlpOnlyLayer*) { clear_slot(); });
         }
     }
@@ -161,4 +158,4 @@ void stage_packed_step_metadata(
     }
 }
 
-} // namespace celeg
+}

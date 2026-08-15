@@ -29,14 +29,6 @@ struct CompiledLinearBinding {
     uint64_t plan_fingerprint = 0;
 };
 
-// Dispatches linear (GEMM) operations across cuBLAS, cuBLASLt, and
-// specialized INT4/INT8 kernels based on the active CudaExecutionPlan and the
-// weight storage kind. Extracted from the compiled model for Single
-// Responsibility: this class owns the cuBLAS handles, the cuBLASLt plan
-// cache, and the autotuning workspace; the compiled model retains the forward pass,
-// session state, and graph capture. New GEMM backends (e.g. CUTLASS) are
-// This is an intentionally closed performance dispatch domain; adding a new
-// backend requires coordinated changes to the dispatcher, plan key, and tests.
 class GemmDispatcher {
 public:
     class NativeFanoutScope {
@@ -54,8 +46,6 @@ public:
         GemmDispatcher* dispatcher_ = nullptr;
     };
 
-    // Constructs a dispatcher bound to a stream + CudaModelOptions. Allocates
-    // the cuBLAS / cuBLASLt handles and the cuBLASLt workspace.
     GemmDispatcher(cudaStream_t stream,
                    const CudaModelOptions& options);
     ~GemmDispatcher();
@@ -63,8 +53,6 @@ public:
     GemmDispatcher(const GemmDispatcher&) = delete;
     GemmDispatcher& operator=(const GemmDispatcher&) = delete;
 
-    // Main dispatch entry point. Selects the GEMM backend from `plan` and
-    // the weight storage kind. `weight` must outlive the call.
     void linear(const __nv_bfloat16* x,
                 const LinearWeight& weight,
                 __nv_bfloat16* y,
@@ -72,33 +60,25 @@ public:
                 float beta,
                 const CudaExecutionPlan& plan);
 
-    // Binds a stable weight pointer to the immutable execution policy once;
-    // subsequent launches reuse the validated dimensions and kernel kind.
     const CompiledLinearBinding& compile_linear_binding(
         const LinearWeight& weight, const CudaExecutionPlan& plan);
 
-    // Direct cuBLAS GEMM (BF16, transposed weight).
     void linear_cublas(const __nv_bfloat16* x,
                        const __nv_bfloat16* weight,
                        __nv_bfloat16* y,
                        int m, int n, int k,
                        float beta);
 
-    // Direct cuBLASLt GEMM (BF16, transposed weight). Falls back to
-    // linear_cublas if no plan is available.
     void linear_cublaslt(const __nv_bfloat16* x,
                          const __nv_bfloat16* weight,
                          __nv_bfloat16* y,
                          int m, int n, int k,
                          float beta);
 
-    // Looks up or creates a cuBLASLt plan for (m, n, k). Auto-tunes for
-    // decode shapes (m == 1) when lt_autotune is enabled.
     LtPlan& get_or_create_lt_plan(const __nv_bfloat16* x,
                                   const __nv_bfloat16* weight,
                                   int m, int n, int k);
 
-    // Internal scope operations used by NativeFanoutScope.
     void begin_native_fanout(const __nv_bfloat16* x, int m, int k);
     void end_native_fanout();
 
@@ -108,10 +88,6 @@ public:
     size_t workspace_bytes() const { return lt_workspace_.bytes(); }
 
 private:
-    // These collaborators deliberately separate CUDA handle lifetime, Lt
-    // shape-plan caching, and native-quant scratch capacity from dispatch
-    // policy. They are value-owned by the dispatcher and independently
-    // testable through their narrow operations.
     struct Handles {
         explicit Handles(cudaStream_t stream) : cublas(stream), cublas_lt() {}
         CublasHandle cublas;
@@ -166,4 +142,4 @@ private:
     bool has_native_fanout(const __nv_bfloat16* x, int m, int k) const;
 };
 
-} // namespace celeg
+}

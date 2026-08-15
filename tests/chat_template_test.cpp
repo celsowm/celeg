@@ -32,7 +32,7 @@ private:
     std::unordered_map<std::string, std::int32_t> ids_;
 };
 
-} // namespace
+}
 
 int main() {
     const EvidenceTokenizer tokenizer;

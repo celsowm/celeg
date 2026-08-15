@@ -40,4 +40,4 @@ private:
     VisualEmbeddingProvider visual_embeddings_;
 };
 
-} // namespace celeg::serve
+}

@@ -5,8 +5,6 @@
 
 namespace celeg {
 
-// Mathematical convention used by an RMSNorm weight.  This is deliberately
-// independent of checkpoint spelling and backend implementation.
 enum class NormWeightKind : uint8_t {
     Scale,
     OnePlusScale,
@@ -26,4 +24,4 @@ struct NormSpec {
     }
 };
 
-} // namespace celeg
+}

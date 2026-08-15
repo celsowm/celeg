@@ -49,4 +49,4 @@ private:
     size_t pending_workers_ = 0;
 };
 
-} // namespace celeg
+}

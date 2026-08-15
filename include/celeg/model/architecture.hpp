@@ -19,8 +19,6 @@ struct ProbeResult {
     std::string reason;
 };
 
-// Checkpoint resolution is an ordered composition of neutral stages. Each
-// stage has one responsibility and receives only the checkpoint data it needs.
 struct ArchitectureResolutionStages {
     std::function<CheckpointDimensions(const CheckpointView&)> checkpoint_dimensions;
     std::function<NumericalPolicy(const CheckpointView&)> numerical_policy;
@@ -34,8 +32,6 @@ struct ArchitectureResolutionStages {
 ResolvedModel resolve_architecture_stages(
     const CheckpointView& checkpoint, ArchitectureResolutionStages stages);
 
-// An architecture owns checkpoint interpretation and produces a fully
-// resolved, backend-neutral model. Backends never inspect architecture IDs.
 class IArchitecture {
 public:
     virtual ~IArchitecture() = default;
@@ -57,9 +53,6 @@ private:
     std::vector<std::unique_ptr<IArchitecture>> architectures_;
 };
 
-// Registers the evidence-driven checkpoint provider. It is deliberately a
-// fallback provider: explicit descriptors/importers outrank it when they
-// supply semantics that cannot be inferred from the checkpoint itself.
 std::unique_ptr<IArchitecture> make_automatic_architecture();
 
-} // namespace celeg
+}

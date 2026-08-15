@@ -9,15 +9,10 @@
 
 namespace celeg {
 
-// Raw multimodal inputs replace selected token positions during prefill.
-// Values are row-major by override, with one vector per position.
 struct PromptEmbedding {
     int width = 0;
     std::vector<std::size_t> positions;
     std::vector<float> values;
-    // Optional three-axis positions for the complete prompt.
-    // When present this vector has one entry per prompt token, including
-    // ordinary text tokens and visual placeholders.
     std::vector<std::array<int32_t, 3>> rope_positions;
     std::array<int32_t, 3> next_rope_position{0, 0, 0};
     bool has_rope_positions = false;
@@ -39,13 +34,8 @@ struct PromptEmbedding {
     }
 };
 
-// Public generation limit shared by CPU and CUDA samplers.
 inline constexpr int kMaxTopK = 128;
 
-// Number of grid-parallel blocks the CUDA top-k sampler splits the
-// vocabulary across before merging (see launch_fused_sample_topk). Only
-// used above a vocabulary-size threshold; small vocabularies use a single
-// block directly.
 inline constexpr int kSamplingPartialBlocks = 8;
 
 struct ModelMemoryStats {
@@ -111,8 +101,6 @@ struct GenerationConfig {
     float top_p = 1.0f;
     float repetition_penalty = 1.05f;
     uint64_t seed = 1;
-    // Protocol-level constrained generation.  The runtime only sees token
-    // ids; the text layer owns the protocol-specific prefix that produced it.
     std::shared_ptr<ForcedTokenPrefix> forced_prefix;
 
     bool greedy() const { return temperature <= 0.0f || top_k == 1; }
@@ -126,4 +114,4 @@ enum class SessionPhase : uint8_t {
     DecodePending,
 };
 
-} // namespace celeg
+}

@@ -29,15 +29,15 @@ struct GgufWriter {
     }
 
     void put_string_array(const std::vector<std::string>& values) {
-        put<uint32_t>(9); // array
-        put<uint32_t>(8); // string
+        put<uint32_t>(9);
+        put<uint32_t>(8);
         put<uint64_t>(values.size());
         for (const std::string& value : values) put_string(value);
     }
 
     void put_i32_array(const std::vector<int32_t>& values) {
-        put<uint32_t>(9); // array
-        put<uint32_t>(5); // i32
+        put<uint32_t>(9);
+        put<uint32_t>(5);
         put<uint64_t>(values.size());
         for (const int32_t value : values) put(value);
     }
@@ -98,7 +98,7 @@ std::filesystem::path write_fixture() {
         writer.put_string(tensor.name);
         writer.put<uint32_t>(tensor.dimensions.size());
         for (const uint64_t dimension : tensor.dimensions) writer.put(dimension);
-        writer.put<int32_t>(0); // F32
+        writer.put<int32_t>(0);
         writer.put(offset);
         offset += tensor.values.size() * sizeof(float);
     }
@@ -118,7 +118,7 @@ std::filesystem::path write_fixture() {
     return path;
 }
 
-} // namespace
+}
 
 int main() {
     const std::vector<std::pair<std::string_view, std::string_view>> mappings = {

@@ -6,9 +6,6 @@
 
 namespace {
 
-// Reference LFM2.5-8B-A1B MoE topology (config.json):
-//   hidden 2048, moe_intermediate 1792, 22 MoE layers, 32 experts,
-//   4 experts/token, 6 attention layers, 8 KV heads, head_dim 64.
 celeg::CompiledModelProgram make_8b_a1b_program() {
     celeg::CompiledModelProgram program;
     program.hidden = 2048;
@@ -43,14 +40,12 @@ celeg::CompiledModelProgram make_8b_a1b_program() {
 
 void test_byte_helpers() {
     const celeg::CompiledModelProgram program = make_8b_a1b_program();
-    // 21 MiB per expert per the proposal.
     const std::size_t per_expert = celeg::bytes_per_expert_bf16(program);
     CELEG_TEST_CHECK(per_expert == 3ull * 1792ull * 2048ull * 2ull);
     CELEG_TEST_CHECK(per_expert == 21ull * 1024ull * 1024ull);
 
     CELEG_TEST_CHECK(celeg::moe_layer_count(program) == 22);
 
-    // 12 KiB/token: 6 layers * 2 * 8 KV heads * 64 * 2 bytes.
     const std::size_t kv_per_token = celeg::kv_cache_bytes(program, 1);
     CELEG_TEST_CHECK(kv_per_token == 12ull * 1024ull);
     CELEG_TEST_CHECK(celeg::kv_cache_bytes(program, 16384) == 12ull * 1024ull * 16384ull);
@@ -77,8 +72,6 @@ void test_auto_plan_rtx3060() {
 
     const celeg::ExpertOffloadPlan plan = celeg::plan_expert_offload(in);
     CELEG_TEST_CHECK(plan.enabled);
-    // With ~10.42 GiB free and this topology the planner should land in the
-    // 14-16 experts/layer band from the proposal.
     CELEG_TEST_CHECK(plan.experts_per_layer >= 14 && plan.experts_per_layer <= 16);
     CELEG_TEST_CHECK(plan.host_experts_per_layer ==
            32 - plan.experts_per_layer);
@@ -95,7 +88,6 @@ void test_explicit_per_layer() {
     CELEG_TEST_CHECK(plan.enabled);
     CELEG_TEST_CHECK(plan.experts_per_layer == 14);
     CELEG_TEST_CHECK(plan.host_experts_per_layer == 18);
-    // 14 * 22 * 21 MiB = 6.32 GiB (per the proposal table).
     CELEG_TEST_CHECK(plan.gpu_expert_cache_bytes ==
            14ull * 22ull * 21ull * 1024ull * 1024ull);
 }
@@ -125,7 +117,7 @@ void test_report_nonempty() {
     CELEG_TEST_CHECK(report.find("experts per layer:") != std::string::npos);
 }
 
-} // namespace
+}
 
 int main() {
     test_byte_helpers();

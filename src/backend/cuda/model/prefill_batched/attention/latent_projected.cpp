@@ -132,4 +132,4 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
-} // namespace celeg::prefill_detail
+}

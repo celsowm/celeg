@@ -14,7 +14,6 @@ uint16_t float_to_bf16(float value) {
     const uint32_t exponent = bits & 0x7f800000u;
     const uint32_t mantissa = bits & 0x007fffffu;
     if (exponent == 0x7f800000u && mantissa != 0) {
-        // Preserve NaN and force a non-zero BF16 payload.
         return static_cast<uint16_t>((bits >> 16) | 0x0040u);
     }
     const uint32_t lsb = (bits >> 16) & 1u;
@@ -44,8 +43,6 @@ std::vector<float> rmsnorm_bf16(const std::vector<float>& x,
     const float inv = 1.0f / std::sqrt(sum / static_cast<float>(x.size()) + eps);
     std::vector<float> out(x.size());
     for (size_t i = 0; i < x.size(); ++i) {
-        // Transformers casts normalized states back to the input dtype before
-        // multiplying by the BF16 norm weight.
         const float normalized = round_bf16(round_bf16(x[i]) * inv);
         out[i] = round_bf16(normalized * round_bf16(weight[i]));
     }
@@ -106,8 +103,6 @@ std::vector<float> gqa_decode_strict_bf16(
                     (static_cast<size_t>(token) * kv_heads + kh) * head_dim + d;
                 dot += qv * round_bf16(key_cache[index]);
             }
-            // BF16 matmul produces a BF16 score before the scalar scale;
-            // the BF16 scalar multiplication then rounds once more.
             scores[static_cast<size_t>(token)] =
                 round_bf16(round_bf16(dot) * scale);
             maximum = std::max(maximum, scores[static_cast<size_t>(token)]);
@@ -163,7 +158,7 @@ bool latent_key_allowed(const AttentionPatternSpec& pattern,
     }, pattern);
 }
 
-} // namespace
+}
 
 std::vector<float> latent_attention_decode_bf16(
     const LatentAttentionReferenceSpec& spec,
@@ -261,4 +256,4 @@ std::vector<float> conv_decode_bf16(
     return out;
 }
 
-} // namespace celeg::reference
+}

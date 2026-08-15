@@ -76,7 +76,7 @@ std::vector<__nv_bfloat16> load_named_bf16(
     return std::vector<__nv_bfloat16>(source, source + bytes / sizeof(__nv_bfloat16));
 }
 
-} // namespace
+}
 
 const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
     const IWeightRepository& repo, int layer,
@@ -397,4 +397,4 @@ const ExpertLinearWeight* WeightLoader::load_moe_down_named(
     return &expert_cache_.find(cache_key)->second;
 }
 
-} // namespace celeg
+}

@@ -48,8 +48,6 @@ private:
     };
 
     void load_definition(const TokenizerDefinition& definition);
-    // Initializes the GPT-2 byte<->unicode encoder tables shared by both the
-    // JSON and GGUF load paths.
     void init_byte_encoder();
 
     std::vector<std::string> pretokenize(std::string_view text) const;
@@ -75,4 +73,4 @@ private:
     int32_t pad_id_ = 0;
 };
 
-} // namespace celeg
+}

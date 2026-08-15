@@ -1,10 +1,5 @@
 #pragma once
 
-// Packed expert (3D) weight collections.
-//
-// Depends only on `linear_weights.hpp`, because an expert collection is
-// defined as a stack of `LinearWeight` views. Nothing here knows about
-// routing, offload, caches or layers.
 
 #include "celeg/detail/model/linear_weights.hpp"
 
@@ -13,12 +8,6 @@
 
 namespace celeg {
 
-// Packed expert linear weight. For recurrent-MoE layouts, expert
-// collections are stored as contiguous 3D tensors
-//   gate_up_proj: [num_experts, 2 * moe_intermediate, hidden]
-//   down_proj:    [num_experts, hidden, moe_intermediate]
-// `expert_view()` exposes a zero-copy 2D LinearWeight into one expert's
-// contiguous region.
 struct ExpertLinearWeight {
     LinearStorageKind kind = LinearStorageKind::Bf16;
     const __nv_bfloat16* bf16 = nullptr;
@@ -74,4 +63,4 @@ inline LinearWeight ExpertLinearWeight::expert_view(int expert_id) const {
     return view;
 }
 
-} // namespace celeg
+}

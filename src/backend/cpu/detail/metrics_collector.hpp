@@ -6,11 +6,6 @@
 
 namespace celeg {
 
-// Converts execution outcomes into scheduler throughput/timing metrics. The
-// collector does not inspect request state or make scheduling decisions.
-// It populates the backend-neutral `ConcurrentMetrics` snapshot directly and
-// only writes CPU-only counters into the small `CpuConcurrentMetricsExtras`
-// side struct (see docs/SOLID_REVIEW_BACKENDS.md §4.1).
 class CpuMetricsCollector {
 public:
     CpuMetricsCollector(ConcurrentMetrics& metrics, CpuConcurrentMetricsExtras& extras)
@@ -27,4 +22,4 @@ private:
     CpuConcurrentMetricsExtras& extras_;
 };
 
-} // namespace celeg
+}

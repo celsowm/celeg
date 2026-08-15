@@ -32,7 +32,7 @@ void aligned_free_portable(void* ptr) {
 #endif
 }
 
-} // namespace
+}
 
 void CpuStatePageLayout::validate() const {
     if (token_elements() == 0) {
@@ -339,4 +339,4 @@ CpuKvPageStats CpuKvPagePool::stats() const {
     return result;
 }
 
-} // namespace celeg
+}

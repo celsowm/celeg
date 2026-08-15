@@ -42,7 +42,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 int main() {
     auto repository = std::make_shared<FakeRepository>();

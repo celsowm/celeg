@@ -81,4 +81,4 @@ celeg::ConcurrentEngineOptions cuda_engine_options(
     const celeg_cuda_engine_options& source);
 #endif
 
-} // namespace celeg::api
+}

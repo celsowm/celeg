@@ -22,7 +22,7 @@
 namespace celeg {
 namespace {
 
-constexpr uint32_t kGgufMagic = 0x46554747u;  // "GGUF" little-endian
+constexpr uint32_t kGgufMagic = 0x46554747u;
 
 GgmlType parse_ggml_type(int32_t raw) {
     switch (raw) {
@@ -42,8 +42,6 @@ GgmlType parse_ggml_type(int32_t raw) {
     }
 }
 
-// Sequential little-endian reader over the memory-mapped file. Every read is
-// bounds-checked against the file size.
 class Cursor {
 public:
     Cursor(const std::byte* base, size_t size) : base_(base), size_(size) {}
@@ -181,11 +179,8 @@ GgufValue read_value(Cursor& c, GgufValueKind kind) {
     return value;
 }
 
-} // namespace
+}
 
-// ---------------------------------------------------------------------------
-// Type traits.
-// ---------------------------------------------------------------------------
 
 GgmlTypeTrait ggml_type_trait(GgmlType type) {
     switch (type) {
@@ -196,15 +191,10 @@ GgmlTypeTrait ggml_type_trait(GgmlType type) {
         case GgmlType::Q4_1: return {32, 20};
         case GgmlType::Q5_0: return {32, 22};
         case GgmlType::Q8_0: return {32, 34};
-        // Q2_K super-block: 256 elems, 84 bytes.
         case GgmlType::Q2_K: return {256, 84};
-        // Q3_K super-block: 256 elems, 110 bytes.
         case GgmlType::Q3_K: return {256, 110};
-        // Q4_K super-block: 256 elems, 144 bytes (2 f16 + 12 scales + 128 quants).
         case GgmlType::Q4_K: return {256, 144};
-        // Q5_K super-block: Q4_K layout plus 32 high-bit bytes.
         case GgmlType::Q5_K: return {256, 176};
-        // Q6_K super-block: 256 elems, 210 bytes.
         case GgmlType::Q6_K: return {256, 210};
         case GgmlType::Unknown: return {0, 0};
     }
@@ -245,9 +235,6 @@ uint64_t GgufTensorInfo::element_count() const {
     return count;
 }
 
-// ---------------------------------------------------------------------------
-// GgufFile.
-// ---------------------------------------------------------------------------
 
 GgufFile::GgufFile(const std::string& path) {
     try {
@@ -335,7 +322,6 @@ void GgufFile::parse() {
         kv_.emplace(std::move(key), read_value(c, kind));
     }
 
-    // Alignment used to pad the tensor data section (default 32).
     uint32_t alignment = 32;
     if (const auto it = kv_.find("general.alignment"); it != kv_.end()) {
         if (is_integral_kind(it->second.kind)) {
@@ -359,7 +345,6 @@ void GgufFile::parse() {
         tensors_.emplace(info.name, std::move(info));
     }
 
-    // Tensor data section starts after the header/metadata, aligned up.
     const size_t after_header = c.offset();
     tensor_data_offset_ = (after_header + alignment - 1) / alignment * alignment;
     if (tensor_data_offset_ > file_size_) {
@@ -456,4 +441,4 @@ std::vector<std::string> GgufFile::tensor_names() const {
     return out;
 }
 
-} // namespace celeg
+}

@@ -18,8 +18,6 @@ struct CpuExpertBackingMetrics {
     std::size_t evictions = 0;
 };
 
-// CPU-owned source/cache boundary. Opening the store only indexes pack
-// metadata; matrix payloads are read by acquire() and remain lease-owned.
 class CpuExpertBackingStore {
 public:
     CpuExpertBackingStore(const std::filesystem::path& pack_path,
@@ -37,4 +35,4 @@ private:
     int intermediate_size_ = 0;
 };
 
-} // namespace celeg
+}

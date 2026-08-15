@@ -120,7 +120,7 @@ ImageRgbF32 decode_wic(const std::vector<std::uint8_t>& bytes) {
 }
 #endif
 
-} // namespace
+}
 
 ImageRgbF32 decode_image_data_url(std::string_view data_url) {
     const std::size_t comma = data_url.find(',');
@@ -165,4 +165,4 @@ ImageRgbF32 resize_image_bilinear(const ImageRgbF32& source, int width, int heig
     return result;
 }
 
-} // namespace celeg
+}

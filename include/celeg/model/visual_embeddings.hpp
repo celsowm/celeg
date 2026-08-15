@@ -13,8 +13,6 @@ namespace celeg {
 struct VisualEmbedding {
     int width = 0;
     std::vector<float> values;
-    // Local three-axis M-RoPE positions for the returned visual tokens. An
-    // empty vector means that the caller should use ordinary scalar positions.
     std::vector<std::array<int32_t, 3>> rope_positions;
 
     std::size_t token_count() const {
@@ -25,8 +23,6 @@ struct VisualEmbedding {
     }
 };
 
-// Architecture plugins provide this capability at the composition root.
-// Serving and inference only see already projected text-space embeddings.
 class IVisualEmbeddingProvider {
 public:
     virtual ~IVisualEmbeddingProvider() = default;
@@ -35,4 +31,4 @@ public:
 
 using VisualEmbeddingProvider = std::shared_ptr<const IVisualEmbeddingProvider>;
 
-} // namespace celeg
+}

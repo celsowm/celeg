@@ -12,9 +12,6 @@
 
 namespace celeg {
 
-// Admission owns the transition from queued requests to allocated sessions.
-// It applies priority order, NUMA placement, and prefix-cache acquisition;
-// batch selection and execution remain separate policies.
 class CpuAdmissionController {
 public:
     using Request = CpuConcurrentRequest;
@@ -39,4 +36,4 @@ private:
     std::unique_ptr<CpuPrefixCacheManager>& prefix_cache_;
 };
 
-} // namespace celeg
+}

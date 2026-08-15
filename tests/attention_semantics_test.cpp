@@ -69,7 +69,7 @@ void test_adjacent_pair_rope() {
     CELEG_TEST_CHECK(close(values[3], 4.0f * c1 + 3.0f * s1));
 }
 
-} // namespace
+}
 
 int main() {
     test_current_value_orthogonalization();

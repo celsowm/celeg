@@ -111,4 +111,4 @@ void ModelDefinition::validate() const {
     }
 }
 
-} // namespace celeg
+}

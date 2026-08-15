@@ -9,8 +9,6 @@ namespace {
 
 using celeg::moe_sigmoid;
 
-// Builds a router weight [E, H] that is the identity-ish projection so each
-// hidden coordinate maps to one expert's logit, plus a per-expert bias.
 void build_problem(int rows, int hidden, int experts,
                    std::vector<float>& hidden_vec,
                    std::vector<float>& router_w,
@@ -18,14 +16,12 @@ void build_problem(int rows, int hidden, int experts,
     hidden_vec.assign(static_cast<size_t>(rows) * hidden, 0.0f);
     router_w.assign(static_cast<size_t>(experts) * hidden, 0.0f);
     bias.assign(static_cast<size_t>(experts), 0.0f);
-    // router_w[e][h] = 1 when h == e % hidden, else small.
     for (int e = 0; e < experts; ++e) {
         for (int h = 0; h < hidden; ++h) {
             router_w[static_cast<size_t>(e) * hidden + h] =
                 (h == (e % hidden)) ? 2.0f : 0.1f;
         }
     }
-    // A simple deterministic hidden state per row.
     for (int r = 0; r < rows; ++r) {
         for (int h = 0; h < hidden; ++h) {
             hidden_vec[static_cast<size_t>(r) * hidden + h] =
@@ -34,7 +30,7 @@ void build_problem(int rows, int hidden, int experts,
     }
 }
 
-} // namespace
+}
 
 int main() {
     const int rows = 3, hidden = 4, experts = 6, K = 4;
@@ -52,8 +48,6 @@ int main() {
     std::vector<float> weights;
     celeg::compute_moe_router(hv, rw, nullptr, rows, hidden, cfg, sel, weights);
 
-    // Manually verify row 0 logits and that selected experts are top-K by
-    // sigmoid probability (no bias).
     {
         std::vector<float> logits(experts), probs(experts);
         for (int e = 0; e < experts; ++e) {
@@ -63,16 +57,12 @@ int main() {
             }
             logits[e] = logit;
             probs[e] = moe_sigmoid(logit);
-            // Large positive logits -> sigmoid near 1.
             if (logit > 5.0f) CELEG_TEST_CHECK(probs[e] > 0.99f);
         }
-        // Selected weights equal the original sigmoid of the selected experts.
         for (int k = 0; k < K; ++k) {
             const int ex = sel[static_cast<size_t>(k)];
             CELEG_TEST_CHECK(std::abs(weights[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
         }
-        // Top-K by prob: every unselected expert has prob <= the smallest
-        // selected prob.
         float min_sel = 1e9f;
         for (int k = 0; k < K; ++k) min_sel = std::min(min_sel, probs[sel[static_cast<size_t>(k)]]);
         for (int e = 0; e < experts; ++e) {
@@ -82,10 +72,8 @@ int main() {
         }
     }
 
-    // Expert bias must change selected IDs but NOT the gathered weight values.
     {
         std::vector<float> biased_bias(experts, 0.0f);
-        // Strongly favor expert 5 (otherwise low prob).
         biased_bias[5] = 100.0f;
         std::vector<int> sel_b;
         std::vector<float> w_b;
@@ -96,8 +84,6 @@ int main() {
         for (int k = 0; k < K; ++k) if (sel_b[static_cast<size_t>(k)] == 5) expert5_selected = true;
         CELEG_TEST_CHECK(expert5_selected);
 
-        // The gathered weight for expert 5 equals its sigmoid prob, NOT
-        // (prob + bias).
         std::vector<float> probs(experts);
         for (int e = 0; e < experts; ++e) {
             float logit = 0.0f;
@@ -107,15 +93,12 @@ int main() {
         }
         for (int k = 0; k < K; ++k) {
             const int ex = sel_b[static_cast<size_t>(k)];
-            // The gathered weight is the original sigmoid prob only; the expert
-            // bias influences selection but never leaks into the weight value.
             CELEG_TEST_CHECK(std::abs(w_b[static_cast<size_t>(k)] - probs[ex]) < 1e-5f);
             CELEG_TEST_CHECK(std::abs(w_b[static_cast<size_t>(k)] - (probs[ex] + biased_bias[ex])) >=
                    (biased_bias[ex] > 0.0f ? 1.0f : 0.0f));
         }
     }
 
-    // Normalization: sum of weights (before scaling) must be ~1.0.
     {
         std::vector<int> sel_n;
         std::vector<float> w_n;
@@ -127,7 +110,6 @@ int main() {
         CELEG_TEST_CHECK(std::abs(sum - 1.0f) < 1e-4f);
     }
 
-    // Routed scaling multiplies weights.
     {
         std::vector<int> sel_s;
         std::vector<float> w_s;
@@ -140,10 +122,7 @@ int main() {
         CELEG_TEST_CHECK(std::abs(sum - 2.0f) < 1e-4f);
     }
 
-    // Tie-break: equal scores -> smaller expert index selected.
     {
-        // All-zero router weight and zero bias -> all logits 0 -> all probs 0.5,
-        // scores equal -> top-K must be experts 0..K-1 in order.
         std::vector<float> zero_rw(static_cast<size_t>(experts) * hidden, 0.0f);
         std::vector<float> zero_b(experts, 0.0f);
         std::vector<int> sel_t;
@@ -152,11 +131,9 @@ int main() {
         cfg_t.use_expert_bias = true;
         celeg::compute_moe_router(hv, zero_rw, &zero_b, 1, hidden, cfg_t, sel_t, w_t);
         for (int k = 0; k < K; ++k) CELEG_TEST_CHECK(sel_t[static_cast<size_t>(k)] == k);
-        // All weights equal 0.5 (sigmoid(0)), then normalized -> 1/K each.
         for (int k = 0; k < K; ++k) CELEG_TEST_CHECK(std::abs(w_t[static_cast<size_t>(k)] - 0.5f) < 1e-5f);
     }
 
-    // Negative logits -> sigmoid < 0.5; large negative -> ~0.
     {
         std::vector<float> neg_rw(static_cast<size_t>(experts) * hidden, -10.0f);
         std::vector<int> sel_n2;

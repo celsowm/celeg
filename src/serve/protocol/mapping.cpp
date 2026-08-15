@@ -56,7 +56,7 @@ celeg::ToolChoice map_tool_choice(
     return {};
 }
 
-} // namespace
+}
 
 namespace celeg::serve::protocol {
 
@@ -268,10 +268,6 @@ GenerateRequest to_generate_request(const ChatCompletionRequest& request,
         }
         const std::size_t prompt_budget = max_context_tokens - max_output_tokens;
         if (prompt_tokens.size() > prompt_budget) {
-            // Keep leading system/developer instructions and slide the
-            // conversational suffix forward until prompt + output fits. A
-            // candidate is validated because dropping the assistant side of a
-            // tool call would otherwise create an invalid conversation.
             std::size_t persistent_prefix = 0;
             while (persistent_prefix < messages.size() &&
                    (messages[persistent_prefix].role == celeg::ChatRole::System ||
@@ -519,9 +515,6 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
                 request.chat_template_kwargs
                     ? std::optional<bool>{request.chat_template_kwargs->enable_thinking}
                     : std::nullopt});
-        // The chat template already embeds the model's special tokens, so BOS
-        // is never added again here regardless of add_special_tokens (which
-        // only applies to the raw-prompt path above).
         response.tokens = tokenizer.encode(prompt_text, /*add_bos=*/false);
     }
     response.count = response.tokens.size();
@@ -529,4 +522,4 @@ TokenizeResponse to_tokenize_response(const TokenizeRequest& request,
     return response;
 }
 
-} // namespace celeg::serve::protocol
+}

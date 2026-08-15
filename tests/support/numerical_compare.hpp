@@ -1,9 +1,5 @@
 #pragma once
 
-// Numerical comparison utilities used by Phase 0 baseline tests and, later, by
-// the Phase 15 testing matrix. Pure host code, header-only, no CUDA dependency.
-// See docs/ARCHITECTURE_EVIDENCE.md (tolerance classes) and
-// section 15.3 (quantization quality).
 
 #include <algorithm>
 #include <cmath>
@@ -19,7 +15,7 @@ struct ComparisonResult {
     double cosine_similarity = 0.0;
     double max_absolute_error = 0.0;
     double rmse = 0.0;
-    double top_k_agreement = 0.0;  // fraction of shared top-k entries, in [0,1]
+    double top_k_agreement = 0.0;
 };
 
 inline void check_equal_length(std::size_t a, std::size_t b) {
@@ -29,8 +25,6 @@ inline void check_equal_length(std::size_t a, std::size_t b) {
     }
 }
 
-// Cosine similarity in [-1, 1]. Returns 1.0 for identical non-zero vectors,
-// 0.0 for orthogonal vectors. Throws on length mismatch or all-zero inputs.
 inline double cosine_similarity(const std::vector<float>& a,
                                 const std::vector<float>& b) {
     check_equal_length(a.size(), b.size());
@@ -67,8 +61,6 @@ inline double rmse(const std::vector<float>& a, const std::vector<float>& b) {
     return std::sqrt(s / static_cast<double>(a.size()));
 }
 
-// Top-k agreement: fraction of entries that appear in the top-k of both vectors.
-// k == 0 means "all entries" (i.e. identity for equal-length, identical vectors).
 inline double top_k_agreement(const std::vector<float>& a,
                               const std::vector<float>& b,
                               std::size_t k) {
@@ -85,8 +77,6 @@ inline double top_k_agreement(const std::vector<float>& a,
     };
     const auto ta = top_indices(a, k);
     const auto tb = top_indices(b, k);
-    // top_indices returns indices sorted by descending value, not by index;
-    // std::set_intersection needs both inputs sorted ascending by element.
     auto sorted = [](std::vector<std::size_t> v) {
         std::sort(v.begin(), v.end());
         return v;
@@ -111,8 +101,6 @@ inline ComparisonResult compare(const std::vector<float>& a,
     return r;
 }
 
-// Tolerance checks with the classes described in section 0.3 of
-// docs/ARCHITECTURE_EVIDENCE.md.
 inline void require_within(const ComparisonResult& r,
                            double min_cosine,
                            double max_rmse,
@@ -142,4 +130,4 @@ inline void require_within(const ComparisonResult& r,
     }
 }
 
-} // namespace celeg::test::numerical
+}

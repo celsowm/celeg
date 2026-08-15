@@ -43,7 +43,7 @@ struct WinHttpHandle {
     explicit operator bool() const { return handle != nullptr; }
 };
 
-} // namespace
+}
 
 std::string url_encode(const std::string& value) {
     static constexpr char hex[] = "0123456789ABCDEF";
@@ -230,6 +230,6 @@ void http_download_file(const std::string& path,
     throw std::runtime_error("download failed after retries: " + last_error);
 }
 
-} // namespace celeg::hf_internal
+}
 
 #endif

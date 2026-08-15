@@ -253,7 +253,6 @@ void run_local_attention_cache(PackedOperatorContext& context,
     request.bias = current.alibi_slopes.data() ? AttentionPositionBias::Alibi
                                                : AttentionPositionBias::None;
     request.fast_attention = reference.options().fast_attention;
-    // There is no batch-pointer segmented kernel; long contexts run paged.
     request.segmented_attention = false;
     request.head_dim = owner_layout.head_dim;
     request.rows = rows;
@@ -327,7 +326,7 @@ void run_local_attention_cache(PackedOperatorContext& context,
     }
 }
 
-} // namespace
+}
 
 void PackedGatedDeltaNetExecutor::run(
     PackedOperatorContext& context,
@@ -612,4 +611,4 @@ void PackedMoeExecutor::run(
                         rows * context.program.hidden, w.stream.get());
 }
 
-} // namespace celeg
+}

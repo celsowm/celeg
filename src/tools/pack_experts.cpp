@@ -50,7 +50,7 @@ std::string layer_name(int layer, const std::string& suffix) {
     return "model.layers." + std::to_string(layer) + "." + suffix;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     if (argc != 3) {
@@ -105,15 +105,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("cannot open output sidecar file: " + sidecar_path.string());
         }
 
-        // Write placeholder header
         write_header(out, header);
 
-        // Write placeholder index
         for (int l = 0; l < moe_layers; ++l) {
             for (const SidecarExpertIndex& entry : index[l]) write_index(out, entry);
         }
 
-        // Align start of data to 4096 bytes
         std::uint64_t index_end_pos = out.tellp();
         std::uint64_t aligned_start = (index_end_pos + 4095) & ~4095ull;
         std::vector<char> padding(aligned_start - index_end_pos, 0);
@@ -125,7 +122,7 @@ int main(int argc, char** argv) {
         const size_t hidden_c = static_cast<size_t>(model.graph.hidden);
         const size_t gate_up_elems = 2 * moe_inter * hidden_c;
         const size_t down_elems = hidden_c * moe_inter;
-        const size_t gate_up_bytes = gate_up_elems * 2; // BF16 element size = 2
+        const size_t gate_up_bytes = gate_up_elems * 2;
         const size_t down_bytes = down_elems * 2;
         const size_t w_bytes = moe_inter * hidden_c * 2;
 
@@ -152,7 +149,6 @@ int main(int argc, char** argv) {
                 std::memcpy(gate_up_stage.data() + w_bytes, w3.data, w_bytes);
                 std::memcpy(down_stage.data(), w2.data, down_bytes);
 
-                // 4 KiB align each expert block
                 std::uint64_t current_pos = out.tellp();
                 std::uint64_t aligned_block_start = (current_pos + 4095) & ~4095ull;
                 std::vector<char> block_pad(aligned_block_start - current_pos, 0);
@@ -173,7 +169,6 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Rewrite final index and header
         out.seekp(0);
         write_header(out, header);
         for (int l = 0; l < moe_layers; ++l) {

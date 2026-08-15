@@ -20,7 +20,7 @@ const celeg::CompiledAttentionStateLayout& compiled_attention_state(
     return std::get<celeg::CompiledAttentionProgram>(layer.mixer).state_layout;
 }
 
-} // namespace
+}
 
 int main() {
     celeg::ResolvedModel model;

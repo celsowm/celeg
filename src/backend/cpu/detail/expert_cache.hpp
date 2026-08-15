@@ -80,4 +80,4 @@ private:
     std::size_t evictions_ = 0;
 };
 
-} // namespace celeg
+}

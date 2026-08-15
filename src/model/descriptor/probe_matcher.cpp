@@ -41,4 +41,4 @@ bool probe_condition(const CheckpointMetadata& metadata, const ProbeCondition& c
 }
 
 
-} // namespace celeg::descriptor_detail
+}

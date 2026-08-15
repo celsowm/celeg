@@ -32,7 +32,7 @@ bool uses_gelu_tanh(const CpuCompiledModel::Shared& shared, size_t layer) {
     return dense_program(shared, layer).activation == ActivationKind::GeluTanh;
 }
 
-} // namespace
+}
 
 void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
                                 const CpuCompiledModel::MlpOnlyWeights& weights) {
@@ -106,4 +106,4 @@ void execute_cpu_dense_feed_forward_chunk(
     }
 }
 
-} // namespace celeg
+}

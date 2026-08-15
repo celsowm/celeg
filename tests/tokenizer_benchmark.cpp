@@ -25,7 +25,7 @@ std::string make_prompt(size_t target_bytes) {
     return result;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     if (argc < 2 || argc > 3) {

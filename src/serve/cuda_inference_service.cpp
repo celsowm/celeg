@@ -21,7 +21,7 @@ RequestStatus map_status(celeg::RequestStatus status) {
     return RequestStatus::Failed;
 }
 
-} // namespace
+}
 
 CudaInferenceService::CudaInferenceService(std::string model_path,
                                            int max_context,
@@ -119,4 +119,4 @@ bool CudaInferenceService::step() { return engine_.step(); }
 void CudaInferenceService::start() { engine_.start(); }
 void CudaInferenceService::stop() { engine_.stop(); }
 
-} // namespace celeg::serve
+}

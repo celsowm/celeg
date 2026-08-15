@@ -50,8 +50,6 @@ void launch_store_kv_int8_batch_ptrs(
     const int32_t* positions, int rows,
     int kv_heads, int head_dim, cudaStream_t stream);
 
-// Physically paged KV cache used by the concurrent packed decoder. page_tables
-// is [rows, page_table_stride] and contains physical page IDs.
 void launch_store_kv_paged_batch(
     const __nv_bfloat16* k, const __nv_bfloat16* v,
     __nv_bfloat16* key_pool, __nv_bfloat16* value_pool,
@@ -91,4 +89,4 @@ void launch_store_latent_paged_batch(
     size_t layer_vector_offset, int latent_rank, int rotary_width,
     cudaStream_t stream);
 
-} // namespace celeg
+}

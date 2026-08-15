@@ -32,9 +32,6 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
     }
     const HostTensorView tensor = repo.tensor(name);
     if (!expected.empty()) {
-        // GGUF convolutional depthwise weights are stored as [hidden, cache]
-        // (2D) while the model builder expects [hidden, 1, cache] (3D). The
-        // extra unit dimension is implicit, so accept the 2D form.
         bool shape_ok = (tensor.shape == expected);
         if (!shape_ok && tensor.shape.size() == 2 && expected.size() == 3 &&
             tensor.shape[0] == expected[0] &&
@@ -192,11 +189,6 @@ const float* WeightLoader::load_f32_weight(
 const LinearWeight* WeightLoader::load_router_weight(
     const IWeightRepository& repo, int layer,
     int num_experts, int hidden) {
-    // The MoE router must always materialize as BF16 regardless of the global
-    // --weight-mode; the CUDA router kernel consumes a float copy of this
-    // weight and would otherwise dereference a null BF16 pointer (Phase 1.1
-    // hazard). We deliberately bypass load_linear_weight and go through the
-    // BF16-only load_weight path.
     std::string name = layer_name(layer, "feed_forward.gate.weight");
     if (!repo.contains(name)) {
         const std::string mlp_name = layer_name(layer, "mlp.gate.weight");
@@ -215,9 +207,6 @@ const LinearWeight* WeightLoader::load_router_weight(
 const LinearWeight* WeightLoader::load_router_weight_named(
     const IWeightRepository& repo, const std::string& name,
     int num_experts, int hidden) {
-    // The MoE router must always materialize as BF16 regardless of the global
-    // weight mode; the CUDA router consumes a float copy made by the setup
-    // path.  Keep this contract shared by base and auxiliary MoE layers.
     if (const auto cached = weights_->tensors.find(name);
         cached != weights_->tensors.end()) {
         if (cached->second.shape != std::vector<int64_t>{
@@ -230,8 +219,6 @@ const LinearWeight* WeightLoader::load_router_weight_named(
     const __nv_bfloat16* bf16 = load_weight(repo, name,
                                             {num_experts, hidden});
 
-    // Construct a LinearWeight view pointing into the shared arena; the slot
-    // was just emplaced by load_weight -> upload_bf16, so this is stable.
     DeviceWeight& slot = weights_->tensors[name];
     LinearWeight view;
     view.kind = LinearStorageKind::Bf16;
@@ -242,4 +229,4 @@ const LinearWeight* WeightLoader::load_router_weight_named(
     return &slot.linear;
 }
 
-} // namespace celeg
+}

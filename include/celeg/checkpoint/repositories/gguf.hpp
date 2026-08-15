@@ -11,15 +11,6 @@ namespace celeg {
 
 class GgufTensorResolver;
 
-// Weight repository backed by a single GGUF checkpoint file. Tensor-name
-// resolution, packed-expert slicing, and native-view adaptation are delegated
-// to internal GGUF components so this facade only exposes repository
-// capabilities to the format-agnostic runtime.
-//
-// Returned HostTensorView values point directly into the memory-mapped GGUF
-// file and stay valid for the lifetime of this repository. Quantized tensors
-// (Q4_K/Q6_K/...) are reported with dtype == Quantized and the matching
-// GgmlType; F32/F16 tensors map to the plain TensorDType values.
 class GgufRepository final : public IWeightRepository,
                              public INativeBlockStorageRepository {
 public:
@@ -38,4 +29,4 @@ private:
     std::unique_ptr<GgufTensorResolver> tensors_;
 };
 
-} // namespace celeg
+}

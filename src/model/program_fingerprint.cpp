@@ -19,4 +19,4 @@ std::string program_semantic_fingerprint(const ModelGraph& graph) {
     return out.str();
 }
 
-} // namespace celeg::detail
+}

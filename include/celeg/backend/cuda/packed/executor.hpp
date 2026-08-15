@@ -18,9 +18,6 @@ class PhysicalPagedKvCache;
 class CudaModel;
 struct PackedDecodeExecutorImpl;
 
-// Immutable sizing contract for the packed executor. Every reusable host and
-// device allocation is derived from this value so a layer-specific shape
-// cannot silently exceed a buffer sized from the first layer.
 struct PackedWorkspaceRequirements {
     size_t maximum_batch = 0;
     size_t maximum_prefill_tokens = 0;
@@ -53,9 +50,6 @@ struct PackedExecutorCapabilities {
     bool physical_paged_kv = false;
 };
 
-// Operation-independent batch invariants. Decode and prefill add their own
-// row/page rules after this check, so invalid input is rejected before CUDA
-// work or host-visible session mutation.
 PackedEligibility validate_packed_batch_common(
     const std::vector<PackedSessionContext>& sessions,
     size_t maximum_batch, PackedOperation operation);
@@ -68,9 +62,6 @@ public:
         PackedExecutorCapabilities capabilities) const;
 };
 
-// Immutable policy for the execution plan and device identity shared by a
-// packed batch.  Session lifecycle and row/page validation remain separate;
-// this policy only owns the compatibility invariant.
 class PackedCompatibilityPolicy {
 public:
     PackedCompatibilityPolicy(uint64_t execution_plan_fingerprint,
@@ -89,9 +80,6 @@ private:
     int device_ordinal_ = -1;
 };
 
-// Backend-internal factory. Keeping this operation-specific context factory
-// out of the public CudaModel surface prevents CUDA packed-execution types from
-// becoming part of the generic model API.
 PackedSessionContext packed_session_context(CudaModel& model);
 
 struct PackedDecodeMetrics {
@@ -109,8 +97,6 @@ struct PackedDecodeMetrics {
     uint64_t segmented_paged_tokens = 0;
     uint64_t ragged_prefill_steps = 0;
     uint64_t ragged_prefill_tokens = 0;
-    // Number of full transformer passes issued for ragged prefill.  A
-    // flattened ragged batch must contribute exactly one.
     uint64_t ragged_prefill_transformer_passes = 0;
     size_t maximum_batch = 0;
     size_t maximum_prefill_batch = 0;
@@ -132,9 +118,6 @@ struct PackedPrefillRow {
     uint8_t finalize = 0;
 };
 
-// Executes one decode token for several independent sessions in one packed
-// model pass. The sessions retain separate KV/ShortConv/RNG state, while all
-// linear layers use M=batch_size against one shared checkpoint allocation.
 class PackedDecodeExecutor {
 public:
     PackedDecodeExecutor(size_t maximum_sessions,
@@ -156,15 +139,11 @@ public:
     std::vector<int32_t> decode(
         const std::vector<PackedSessionContext>& sessions,
         const std::vector<std::vector<uint32_t>>& page_tables);
-    // Allocation-free form for schedulers that retain their result buffer.
     void decode_into(const std::vector<PackedSessionContext>& sessions,
                      std::span<int32_t> output);
     void decode_into(const std::vector<PackedSessionContext>& sessions,
                      const std::vector<std::vector<uint32_t>>& page_tables,
                      std::span<int32_t> output);
-    // Advances a flattened ragged prompt batch. Each row consumes
-    // `rows[i].token_count` tokens from `tokens` beginning at
-    // `rows[i].token_offset`.
     void prefill(const std::vector<PackedSessionContext>& sessions,
                  const std::vector<std::vector<uint32_t>>& page_tables,
                  const std::vector<int32_t>& tokens,
@@ -177,4 +156,4 @@ private:
     std::unique_ptr<PackedDecodeExecutorImpl> state_;
 };
 
-} // namespace celeg
+}

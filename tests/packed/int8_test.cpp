@@ -26,7 +26,7 @@ celeg::HostTensorView view(celeg::TensorDType dtype, std::vector<int64_t> shape,
             values.size() * sizeof(T)};
 }
 
-} // namespace
+}
 
 int main() {
     MemoryRepository repository;

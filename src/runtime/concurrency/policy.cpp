@@ -50,8 +50,6 @@ std::optional<std::vector<uint32_t>> PagedBlockPool::allocate_tokens(size_t toke
 
 
 bool PagedBlockPool::retain(const std::vector<uint32_t>& pages) {
-    // Validate the whole transaction first, including duplicate page IDs.
-    // O(k) sort + run-length encode instead of O(total_pages) histogram.
     if (pages.empty()) return true;
     std::vector<uint32_t> sorted = pages;
     std::sort(sorted.begin(), sorted.end());
@@ -70,7 +68,6 @@ bool PagedBlockPool::retain(const std::vector<uint32_t>& pages) {
         if (!flush(prev, count)) return false;
         if (i < sorted.size()) { prev = sorted[i]; count = 1; }
     }
-    // Apply: run-length decode and update ref counts.
     prev = sorted[0];
     count = 1;
     for (size_t i = 1; i <= sorted.size(); ++i) {
@@ -85,14 +82,11 @@ bool PagedBlockPool::retain(const std::vector<uint32_t>& pages) {
 }
 
 void PagedBlockPool::release(const std::vector<uint32_t>& pages) {
-    // Release is also transactional: an invalid page later in the vector must
-    // not silently release earlier pages.  O(k) sort + run-length encode.
     if (pages.empty()) return;
     std::vector<uint32_t> sorted = pages;
     std::sort(sorted.begin(), sorted.end());
     uint32_t prev = sorted[0];
     uint32_t count = 1;
-    // Validate first.
     for (size_t i = 1; i <= sorted.size(); ++i) {
         if (i < sorted.size() && sorted[i] == prev) {
             ++count;
@@ -103,7 +97,6 @@ void PagedBlockPool::release(const std::vector<uint32_t>& pages) {
         }
         if (i < sorted.size()) { prev = sorted[i]; count = 1; }
     }
-    // Apply.
     prev = sorted[0];
     count = 1;
     for (size_t i = 1; i <= sorted.size(); ++i) {
@@ -126,4 +119,4 @@ uint32_t PagedBlockPool::ref_count(uint32_t page) const {
     return ref_counts_[page];
 }
 
-} // namespace celeg
+}

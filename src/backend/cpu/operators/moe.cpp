@@ -17,7 +17,7 @@ float sigmoid(float value) {
     return 1.0f / (1.0f + std::exp(-value));
 }
 
-} // namespace
+}
 
 CpuMoeRoute route_cpu_moe(const RouterProgram& program,
                           std::span<const float> logits,
@@ -132,7 +132,7 @@ const CpuExpertWeights* acquire_expert(
     return nullptr;
 }
 
-} // namespace
+}
 
 void execute_cpu_moe_token(CpuExecutionContext& context, size_t layer,
                            const CpuCompiledModel::MoeWeights& weights,
@@ -370,4 +370,4 @@ void execute_cpu_moe_chunk(CpuExecutionContext& context, size_t layer,
     (void)layer;
 }
 
-} // namespace celeg
+}

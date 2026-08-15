@@ -802,7 +802,7 @@ void bind_layer(CanonicalInferenceContext& context, int layer) {
         layer_intermediate);
 }
 
-} // namespace
+}
 
 void bind_canonical_tensors(CanonicalInferenceContext& context) {
     bind_global_tensors(context);
@@ -813,4 +813,4 @@ void bind_canonical_tensors(CanonicalInferenceContext& context) {
         BindingSolver{}.solve(context.facts.bindings.values);
 }
 
-} // namespace celeg::inference_detail
+}

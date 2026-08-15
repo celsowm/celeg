@@ -26,7 +26,7 @@ public:
     std::int32_t pad_id() const override { return 0; }
 };
 
-} // namespace
+}
 
 int main() {
     const Tokenizer tokenizer;
@@ -50,8 +50,6 @@ int main() {
     }
     CELEG_TEST_CHECK(rejected);
 
-    // Validation covers every branch.  An unsupported construct must not be
-    // accepted merely because this render would leave the branch inactive.
     metadata.values["chat_template"] = std::string(
         "{% if false %}{{ messages[0].content|unknown_filter }}{% endif %}");
     rejected = false;

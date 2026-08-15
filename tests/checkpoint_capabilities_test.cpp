@@ -37,7 +37,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 int main() {
     ViewOnlyRepository view_only;

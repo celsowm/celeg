@@ -199,4 +199,4 @@ struct CompiledModelProgram {
 
 CompiledModelProgram build_model_program(const ResolvedModel& model);
 
-} // namespace celeg
+}

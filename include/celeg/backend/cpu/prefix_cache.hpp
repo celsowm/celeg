@@ -44,9 +44,6 @@ struct CpuPrefixMatch {
     CpuPrefixSnapshot snapshot;
 };
 
-// Externally synchronized prefix cache. It owns one retained reference for
-// every cached page. acquire() returns a second, request-owned reference and
-// clones the partial tail page before it can be modified.
 class CpuPrefixCacheManager {
 public:
     CpuPrefixCacheManager(
@@ -94,4 +91,4 @@ private:
     CpuPrefixCacheMetrics metrics_;
 };
 
-} // namespace celeg
+}

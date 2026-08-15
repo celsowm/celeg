@@ -259,7 +259,7 @@ std::shared_ptr<MemoryRepository> ling_repository() {
     return result;
 }
 
-} // namespace
+}
 
 int main() {
     celeg::CheckpointView checkpoint;
@@ -295,8 +295,6 @@ int main() {
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
 
-    // A GGUF tokenizer table is authoritative vocabulary structure when a
-    // writer omits the redundant architecture-local vocab_size field.
     auto tokenizer_vocab = gguf_metadata();
     tokenizer_vocab.values.erase("conventional.vocab_size");
     tokenizer_vocab.values["tokenizer.ggml.tokens"] =

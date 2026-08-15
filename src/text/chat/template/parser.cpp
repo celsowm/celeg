@@ -809,7 +809,7 @@ private:
     std::optional<std::pair<std::string, int>> pending_;
 };
 
-} // namespace
+}
 
 std::string trim(std::string_view input) {
     std::size_t first = 0;
@@ -831,4 +831,4 @@ std::vector<TemplateNode> parse_template(
     return TemplateParser(source, std::move(origin)).parse();
 }
 
-} // namespace celeg::chat_template_detail
+}

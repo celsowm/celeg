@@ -8,9 +8,6 @@
 
 namespace celeg {
 
-// Backend-neutral dimensions shared by transformer model families. Model
-// providers translate checkpoint metadata into this value once; execution
-// code should not repeatedly reinterpret provider-specific configuration.
 struct TransformerDimensions {
     int hidden_size = 0;
     int intermediate_size = 0;
@@ -93,9 +90,6 @@ struct TokenIds {
     int pad = -1;
 };
 
-// Immutable, validated common definition. `architecture` is an opaque
-// provider identifier; architecture-specific fields stay in the provider's
-// own specification instead of being added to this common structure.
 struct ModelDefinition {
     TransformerDimensions dimensions;
     PositionSpec position;
@@ -107,4 +101,4 @@ struct ModelDefinition {
     void validate() const;
 };
 
-} // namespace celeg
+}

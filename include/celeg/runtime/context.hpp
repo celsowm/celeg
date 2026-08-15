@@ -10,8 +10,6 @@
 
 namespace celeg {
 
-// Immutable ownership boundary for runtime extension catalogs. A context is
-// cheap to copy and safe to share after RuntimeBuilder::build() returns.
 class RuntimeContext {
 public:
     const ArchitectureCatalog& architectures() const { return *architectures_; }
@@ -62,9 +60,6 @@ public:
     RuntimeBuilder& add_module(std::unique_ptr<IRuntimeModule> module);
     std::shared_ptr<const RuntimeContext> build_shared();
 
-    // Registration-only catalog views used by RuntimeModule implementations.
-    // They are invalid after build() and are deliberately not exposed by
-    // RuntimeContext.
     ArchitectureCatalog& architecture_catalog_for_registration() { return *architectures_; }
     VisionProviderCatalog& vision_catalog_for_registration() { return *vision_providers_; }
     RuntimeContext build();
@@ -80,4 +75,4 @@ private:
 
 std::shared_ptr<const RuntimeContext> create_builtin_runtime_context();
 
-} // namespace celeg
+}

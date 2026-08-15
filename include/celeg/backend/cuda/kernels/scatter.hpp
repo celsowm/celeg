@@ -53,4 +53,4 @@ void launch_scatter_selected_decode_state(
 
 void launch_increment_position(int32_t* position, cudaStream_t stream);
 
-} // namespace celeg
+}

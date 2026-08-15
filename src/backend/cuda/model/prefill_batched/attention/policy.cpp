@@ -161,4 +161,4 @@ void store_and_attend(
     }
 }
 
-} // namespace celeg::prefill_detail
+}

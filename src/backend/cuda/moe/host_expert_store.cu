@@ -13,9 +13,6 @@ namespace celeg {
 
 namespace {
 
-// Rounds `value` down / up to a page-aligned boundary. cudaHostRegister
-// requires page-aligned ranges; we register the enclosing aligned range and
-// offset the returned device pointer back to the requested address.
 constexpr std::size_t kPageSize = 4096;
 
 std::uintptr_t align_down(std::uintptr_t v) { return v & ~(kPageSize - 1); }
@@ -23,11 +20,8 @@ std::size_t align_up(std::size_t v) {
     return (v + kPageSize - 1) & ~(kPageSize - 1);
 }
 
-} // namespace
+}
 
-// ---------------------------------------------------------------------------
-// HostExpertStore
-// ---------------------------------------------------------------------------
 
 HostExpertStore::HostExpertStore(HostExpertStore&& other) noexcept {
     *this = std::move(other);
@@ -104,10 +98,6 @@ HostExpertStore::MappedRange HostExpertStore::alloc_mapped(std::size_t bytes) {
     if (bytes == 0) {
         throw std::invalid_argument("alloc_mapped: empty range");
     }
-    // A single pinned, mapped host allocation serving as the whole-layer arena.
-    // cudaHostAlloc with Mapped|Portable yields a device-visible pointer, so no
-    // separate cudaHostRegister call is needed (registering CUDA-allocated
-    // memory is invalid).
     void* host = nullptr;
     CELEG_CUDA(cudaHostAlloc(&host, bytes,
                             cudaHostAllocMapped | cudaHostAllocPortable));
@@ -118,6 +108,5 @@ HostExpertStore::MappedRange HostExpertStore::alloc_mapped(std::size_t bytes) {
     return MappedRange{host, dev};
 }
 
-// ---------------------------------------------------------------------------
 
-} // namespace celeg
+}

@@ -156,7 +156,7 @@ int rope_threads(int head_dim) {
     return threads;
 }
 
-} // namespace
+}
 
 void launch_qk_norm_rope_positions(
     __nv_bfloat16* query,
@@ -204,4 +204,4 @@ void launch_qk_norm_rope_positions(
     CELEG_CUDA(cudaGetLastError());
 }
 
-} // namespace celeg
+}

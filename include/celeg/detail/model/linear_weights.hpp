@@ -1,12 +1,5 @@
 #pragma once
 
-// Device-resident linear (2D) weight views.
-//
-// This is the foundation header of the CUDA model implementation types: a
-// component that needs `LinearWeight` includes only this file and therefore
-// depends on nothing but the GGUF block-format enum and the CUDA BF16 type.
-// It deliberately knows nothing about experts, layers, session state or
-// weight ownership.
 
 #include "celeg/checkpoint/formats/gguf.hpp"
 
@@ -24,9 +17,6 @@ enum class LinearStorageKind : uint8_t {
     Bf16,
     Int8,
     Int4,
-    // GGUF native block-quantized formats. Weights stay packed in their on-disk
-    // super-block layout on the device; the matmul kernel dequantizes on the
-    // fly. `gguf_segments` points at the raw block bytes.
     Q4_K,
     Q6_K,
 };
@@ -59,8 +49,6 @@ struct LinearWeight {
     void validate_storage() const;
 };
 
-// Returns a view into a contiguous row range of an existing linear weight.
-// The returned LinearWeight shares storage with the source.
 inline LinearWeight slice_rows(const LinearWeight& weight,
                                int row_offset, int rows) {
     if (row_offset < 0 || rows <= 0 || row_offset + rows > weight.rows) {
@@ -105,4 +93,4 @@ inline LinearWeight slice_rows(const LinearWeight& weight,
     return result;
 }
 
-} // namespace celeg
+}

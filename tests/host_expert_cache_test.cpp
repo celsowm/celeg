@@ -13,7 +13,6 @@ using celeg::ExpertHostLease;
 using celeg::HostExpertCache;
 
 void test_basic_hits_misses() {
-    // 3 slots (each 10 bytes)
     HostExpertCache cache(30, 10);
 
     int load_count = 0;
@@ -23,21 +22,18 @@ void test_basic_hits_misses() {
         std::memset(payload.data(), 1, payload.size());
     };
 
-    // Miss 1
     ExpertHostLease lease1 = cache.acquire(0, 1, loader);
     CELEG_TEST_CHECK(lease1.valid());
     CELEG_TEST_CHECK(load_count == 1);
     CELEG_TEST_CHECK(cache.misses() == 1);
     CELEG_TEST_CHECK(cache.hits() == 0);
 
-    // Hit 1
     ExpertHostLease lease2 = cache.acquire(0, 1, loader);
     CELEG_TEST_CHECK(lease2.valid());
-    CELEG_TEST_CHECK(load_count == 1); // no new load
+    CELEG_TEST_CHECK(load_count == 1);
     CELEG_TEST_CHECK(cache.misses() == 1);
     CELEG_TEST_CHECK(cache.hits() == 1);
 
-    // Miss 2
     ExpertHostLease lease3 = cache.acquire(0, 2, loader);
     CELEG_TEST_CHECK(lease3.valid());
     CELEG_TEST_CHECK(load_count == 2);
@@ -46,7 +42,6 @@ void test_basic_hits_misses() {
 }
 
 void test_eviction_and_lease_protection() {
-    // 2 slots
     HostExpertCache cache(20, 10);
 
     auto loader = [](std::span<std::byte>) {};
@@ -54,7 +49,6 @@ void test_eviction_and_lease_protection() {
     ExpertHostLease lease1 = cache.acquire(0, 1, loader);
     ExpertHostLease lease2 = cache.acquire(0, 2, loader);
 
-    // Both slots leased, cache full. Acquire a 3rd expert should throw as no slot is evictable (ref_count > 0).
     bool threw = false;
     try {
         cache.acquire(0, 3, loader);
@@ -63,18 +57,14 @@ void test_eviction_and_lease_protection() {
     }
     CELEG_TEST_CHECK(threw);
 
-    // Release lease1
     lease1.release();
 
-    // Now slot 1 can be evicted
     ExpertHostLease lease3 = cache.acquire(0, 3, loader);
     CELEG_TEST_CHECK(lease3.valid());
     CELEG_TEST_CHECK(cache.evictions() == 1);
 }
 
 void test_frequency_aware_eviction() {
-    // Two slots: expert 1 becomes hot, expert 2 is only touched once. Even
-    // though expert 2 is more recent, admitting expert 3 must evict expert 2.
     HostExpertCache cache(20, 10);
     int load_count = 0;
     auto loader = [&](std::span<std::byte>) {
@@ -95,12 +85,12 @@ void test_frequency_aware_eviction() {
     {
         auto lease = cache.acquire(0, 1, loader);
     }
-    CELEG_TEST_CHECK(load_count == after_three_experts); // hot expert survived
+    CELEG_TEST_CHECK(load_count == after_three_experts);
 
     {
         auto lease = cache.acquire(0, 2, loader);
     }
-    CELEG_TEST_CHECK(load_count == after_three_experts + 1); // cold expert was evicted
+    CELEG_TEST_CHECK(load_count == after_three_experts + 1);
 }
 
 void test_coalescing_and_concurrency() {
@@ -140,9 +130,6 @@ void test_coalescing_and_concurrency() {
     CELEG_TEST_CHECK(load_starts == 1);
     CELEG_TEST_CHECK(load_completes == 1);
     CELEG_TEST_CHECK(cache.misses() == 1);
-    // Depending on OS scheduling, a consumer may arrive just after the
-    // loader completes and be counted as a hit instead of a coalesced wait.
-    // The invariant is that all three consumers reuse the single load.
     CELEG_TEST_CHECK(cache.coalesced_waits() + cache.hits() == 3);
 
     for (int i = 0; i < 4; ++i) {
@@ -166,7 +153,6 @@ void test_loader_failure() {
     }
     CELEG_TEST_CHECK(threw);
 
-    // Slot should be clean and reusable
     int load_count = 0;
     auto loader = [&](std::span<std::byte>) {
         load_count++;
@@ -202,12 +188,10 @@ void test_failure_propagation_to_waiters() {
         t.join();
     }
 
-    // All 4 threads (1 loader, 3 waiters) should catch the exception!
     CELEG_TEST_CHECK(waiter_exceptions == 4);
 }
 
 void test_slot_protection_and_generation() {
-    // 1 slot capacity
     HostExpertCache cache(10, 10);
 
     std::atomic<bool> loader_started{false};
@@ -222,7 +206,6 @@ void test_slot_protection_and_generation() {
         }
     };
 
-    // Thread 1: starts a slow load
     std::thread t1([&]() {
         try {
             auto lease = cache.acquire(0, 1, slow_loader);
@@ -239,7 +222,6 @@ void test_slot_protection_and_generation() {
         std::this_thread::yield();
     }
 
-    // Thread 2: waiter on the same expert (0, 1)
     std::thread t2([&]() {
         try {
             waiter_running = true;
@@ -260,17 +242,14 @@ void test_slot_protection_and_generation() {
     }
     CELEG_TEST_CHECK(waiter_running);
 
-    // Thread 3: tries to evict the slot for expert (0, 2)
-    // Since waiter has reserved ref_count, this eviction must throw because no slot is free or evictable!
     bool threw = false;
     try {
         cache.acquire(0, 2, [](std::span<std::byte>){});
     } catch (const std::runtime_error&) {
         threw = true;
     }
-    CELEG_TEST_CHECK(threw); // Eviction is safely blocked!
+    CELEG_TEST_CHECK(threw);
 
-    // Finish loader
     loader_running = false;
     t1.join();
     t2.join();

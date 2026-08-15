@@ -31,4 +31,4 @@ void launch_mamba2_prefill(const __nv_bfloat16* projected,
                            int num_heads, int head_dim, int group_count,
                            int conv_kernel, cudaStream_t stream);
 
-} // namespace celeg
+}

@@ -148,7 +148,7 @@ PackHeader make_header(const CpuPackMetadata& metadata, uint32_t entries) {
     return header;
 }
 
-} // namespace
+}
 
 void Q4GroupMatrix::validate() const {
     if (rows == 0 || cols == 0 || group_size == 0 || groups_per_row == 0) {
@@ -534,4 +534,4 @@ std::vector<float> CpuPackReader::read_bf16_vector(const std::string& name) cons
     return result;
 }
 
-} // namespace celeg
+}

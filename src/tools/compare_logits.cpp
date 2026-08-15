@@ -41,7 +41,7 @@ std::vector<int32_t> top_indices(const std::vector<float>& values, int count) {
     return indices;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     try {

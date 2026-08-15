@@ -58,4 +58,4 @@ void CudaSamplingState::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
         sampled_device, stream);
 }
 
-} // namespace celeg
+}

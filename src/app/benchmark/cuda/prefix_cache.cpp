@@ -49,8 +49,6 @@ int main(int argc, char** argv) {
             extended_prompt.insert(extended_prompt.end(), suffix.begin(), suffix.end());
         }
 
-        // v0.0.12+ supports arbitrary prompt lengths through partial-page
-        // copy-on-write, so no artificial page alignment is required.
         constexpr int page_tokens = 16;
 
         celeg::CudaModelOptions model;

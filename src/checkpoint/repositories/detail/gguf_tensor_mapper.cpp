@@ -66,7 +66,7 @@ GgufTensorReference layer_tensor(int layer, std::string_view suffix) {
         suffix == "attn_q.weight" || suffix == "attn_k.weight"};
 }
 
-} // namespace
+}
 
 GgufTensorReference GgufTensorNameMapper::resolve(std::string_view canonical_name) {
     constexpr std::string_view language_model_prefix = "model.language_model.";
@@ -159,4 +159,4 @@ GgufTensorReference GgufTensorNameMapper::resolve(std::string_view canonical_nam
     return {};
 }
 
-} // namespace celeg
+}

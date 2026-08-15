@@ -79,4 +79,4 @@ std::string resolved_tensor_name(std::span<const TensorRequest> requests,
                             std::string(tensor_role_name(role)));
 }
 
-} // namespace celeg
+}

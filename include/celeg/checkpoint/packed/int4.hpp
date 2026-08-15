@@ -9,10 +9,6 @@
 
 namespace celeg {
 
-// The compressed-tensors `pack-quantized` INT4 representation.  The packed
-// I32 payload is byte-addressable here: two signed 4-bit values occupy each
-// byte, low nibble first.  Scales are BF16 and are stored per output row and
-// per group of `group_size` input columns.
 struct PackedInt4Matrix {
     int rows = 0;
     int cols = 0;
@@ -37,4 +33,4 @@ PackedInt4Matrix load_packed_int4_matrix(
 
 std::vector<float> dequantize_packed_int4(const PackedInt4Matrix& matrix);
 
-} // namespace celeg
+}

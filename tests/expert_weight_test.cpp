@@ -33,12 +33,10 @@ void write_safetensors(const std::filesystem::path& path,
     out.close();
 }
 
-} // namespace
+}
 
 int main() {
  try {
-    // Synthetic single-file checkpoint with a packed 3D expert tensor and an
-    // F32 expert bias. experts=4, rows_per_expert=3, cols=2.
     const int experts = 4;
     const int rows_per_expert = 3;
     const int cols = 2;
@@ -52,7 +50,6 @@ int main() {
     const std::string header =
         R"({"experts":{"dtype":"BF16","shape":[12,2],"data_offsets":[0,48]},)"
         R"("bias":{"dtype":"F32","shape":[4],"data_offsets":[48,64]}})";
-    // 12*2 bf16 = 48 bytes; 4 f32 = 16 bytes; total data = 64.
     static_assert(sizeof(uint16_t) == 2, "bf16 is 2 bytes");
     static_assert(sizeof(float) == 4, "f32 is 4 bytes");
 
@@ -89,7 +86,6 @@ int main() {
     CELEG_TEST_CHECK(ew->kind == celeg::LinearStorageKind::Bf16);
     CELEG_TEST_CHECK(ew->bf16 != nullptr);
 
-    // expert_view(i) must point at offset i * rows_per_expert * cols.
     for (int e = 0; e < experts; ++e) {
         const celeg::LinearWeight view = ew->expert_view(e);
         CELEG_TEST_CHECK(view.rows == rows_per_expert);
@@ -97,13 +93,11 @@ int main() {
         CELEG_TEST_CHECK(view.bf16 == ew->bf16 + static_cast<size_t>(e) * rows_per_expert * cols);
     }
 
-    // Copy the packed device buffer back and verify exact ordering.
     std::vector<uint16_t> host_expert(total);
     CELEG_CUDA(cudaMemcpy(host_expert.data(), ew->bf16, total * sizeof(uint16_t),
                         cudaMemcpyDeviceToHost));
     for (size_t i = 0; i < total; ++i) CELEG_TEST_CHECK(host_expert[i] == expert_values[i]);
 
-    // Invalid expert index must throw.
     bool threw = false;
     try {
         (void)ew->expert_view(experts);
@@ -112,7 +106,6 @@ int main() {
     }
     CELEG_TEST_CHECK(threw);
 
-    // F32 expert bias.
     const float* bias = loader.load_f32_weight(repo, "bias", {experts});
     CELEG_TEST_CHECK(bias != nullptr);
     std::vector<float> host_bias(experts);
@@ -120,7 +113,6 @@ int main() {
                         cudaMemcpyDeviceToHost));
     for (int i = 0; i < experts; ++i) CELEG_TEST_CHECK(host_bias[i] == bias_values[i]);
 
-    // Memory accounting must include the BF16 expert buffer and the F32 bias.
     CELEG_TEST_CHECK(weights->memory_bytes() >= total * sizeof(uint16_t) + experts * sizeof(float));
     }
 

@@ -69,4 +69,4 @@ inline void finish_linear_binding(DeviceWeight& weight, int rows, int cols) {
     weight.linear.validate_storage();
 }
 
-} // namespace celeg::cuda_loader_detail
+}

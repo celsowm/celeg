@@ -65,4 +65,4 @@ inline void cpu_chunk_layer_gemm(CpuExecutionContext& context,
     }
 }
 
-} // namespace celeg
+}

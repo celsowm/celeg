@@ -16,4 +16,4 @@ void execute_cpu_dense_feed_forward_chunk(
     const CpuCompiledModel::CommonWeights& weights,
     size_t rows, bool& normed_q8_ready);
 
-} // namespace celeg
+}

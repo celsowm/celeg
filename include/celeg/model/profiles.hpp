@@ -10,8 +10,6 @@
 
 namespace celeg {
 
-// A profile is data: it describes a source convention without creating a C++
-// type for every revision or parameter count.
 struct MetadataPatch {
     std::string key;
     MetadataValue value;
@@ -47,4 +45,4 @@ public:
     }
 };
 
-} // namespace celeg
+}

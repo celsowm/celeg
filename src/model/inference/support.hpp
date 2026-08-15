@@ -34,4 +34,4 @@ void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,
                  const TensorInventoryEntry& tensor,
                  std::vector<EvidenceItem> evidence, int physical_layer = -1);
 
-} // namespace celeg::inference_detail
+}

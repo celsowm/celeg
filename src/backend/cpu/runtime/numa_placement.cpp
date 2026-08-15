@@ -14,4 +14,4 @@ int CpuNumaPlacement::next_node() {
     return node;
 }
 
-} // namespace celeg
+}

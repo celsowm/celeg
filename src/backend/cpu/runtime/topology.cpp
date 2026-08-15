@@ -80,9 +80,6 @@ std::vector<int> CpuTopology::worker_cpu_order(CpuAffinityPolicy policy,
         }
         return result;
     }
-    // Spread workers across the process affinity mask. This is deliberately
-    // topology-light and works in containers where physical package metadata
-    // is often hidden.
     for (size_t i = 0; i < workers; ++i) {
         const size_t index = std::min(
             allowed_cpus.size() - 1,
@@ -103,4 +100,4 @@ std::string CpuTopology::summary() const {
     return out.str();
 }
 
-} // namespace celeg
+}

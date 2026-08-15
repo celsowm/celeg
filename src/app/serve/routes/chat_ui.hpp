@@ -6,7 +6,6 @@
 
 namespace celeg::app::serve {
 
-// Serves the packaged local-first chat application at / and /assets/:file.
 void register_chat_ui_routes(uWS::App& app, const std::filesystem::path& asset_dir);
 
-} // namespace celeg::app::serve
+}

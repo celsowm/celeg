@@ -83,11 +83,6 @@ std::optional<uint32_t> PhysicalPagedKvCache::clone_page_prefix(
     try {
         const size_t source_vector = layout_.page_vector_offset(source);
         const size_t target_vector = layout_.page_vector_offset(target);
-        // A page is laid out [layer][token][kv_width], so copying only a flat
-        // prefix would skip later layers. Copy each layer's initialized token
-        // region. The unused suffix is intentionally left untouched because
-        // attention never reads beyond the request position and every future
-        // slot is overwritten before it becomes visible.
         if (mode_ == KvCacheMode::Int8) {
             const size_t source_scale = layout_.page_scale_offset(source);
             const size_t target_scale = layout_.page_scale_offset(target);
@@ -134,4 +129,4 @@ size_t PhysicalPagedKvCache::memory_bytes() const {
            key_scales_.bytes() + value_scales_.bytes();
 }
 
-} // namespace celeg
+}

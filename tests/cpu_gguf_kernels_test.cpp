@@ -71,7 +71,7 @@ const std::byte* bytes(const std::vector<T>& values) {
     return reinterpret_cast<const std::byte*>(values.data());
 }
 
-} // namespace
+}
 
 int main() {
     std::vector<BlockQ4K> q4_rows(2, unit_q4k());

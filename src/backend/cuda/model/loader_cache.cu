@@ -45,6 +45,6 @@ WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
     if (!weights_) throw std::invalid_argument("WeightLoader requires non-null weights");
 }
 
-} // namespace celeg
+}
 
 

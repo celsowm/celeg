@@ -200,7 +200,7 @@ void append_feed_forward(std::ostringstream& out, const LayerSpec& layer) {
     }, layer.feed_forward);
 }
 
-} // namespace
+}
 
 std::string ModelGraph::fingerprint() const {
     std::ostringstream out;
@@ -634,4 +634,4 @@ void RuntimeTopology::validate() const {
     }
 }
 
-} // namespace celeg
+}

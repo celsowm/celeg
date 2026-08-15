@@ -194,7 +194,7 @@ private:
     size_t pos_ = 0;
 };
 
-} // namespace
+}
 
 Json Json::parse(std::string_view text) { return Parser(text).parse(); }
 
@@ -232,4 +232,4 @@ const Json& Json::at(std::string_view key) const {
     return it->second;
 }
 
-} // namespace celeg
+}

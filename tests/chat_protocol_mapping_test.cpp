@@ -14,10 +14,6 @@
 
 namespace {
 
-// Builds a tokenizer whose vocabulary covers exactly the characters used by
-// the LFM2 Instruct template rendering of a single "hi" user turn, so the
-// full chat rendering -> encode pipeline in to_generate_request() is exercised
-// end to end with a deterministic, hand-verifiable token sequence.
 celeg::BpeTokenizer make_test_tokenizer(const std::filesystem::path& path) {
     std::ofstream out(path);
     out << R"({
@@ -42,13 +38,12 @@ celeg::BpeTokenizer make_test_tokenizer(const std::filesystem::path& path) {
     return celeg::BpeTokenizer(celeg::load_tokenizer_definition_json(path.string()));
 }
 
-} // namespace
+}
 
 int main() {
     namespace serve = celeg::serve;
     namespace protocol = celeg::serve::protocol;
 
-    // Role mapping.
     CELEG_TEST_CHECK(protocol::role_from_string("system") == celeg::ChatRole::System);
     CELEG_TEST_CHECK(protocol::role_from_string("developer") == celeg::ChatRole::Developer);
     CELEG_TEST_CHECK(protocol::role_from_string("user") == celeg::ChatRole::User);
@@ -63,15 +58,12 @@ int main() {
     CELEG_TEST_CHECK(threw);
     CELEG_TEST_CHECK(protocol::role_to_string(celeg::ChatRole::User) == "user");
 
-    // Finish reason mapping.
     CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::None) == "");
     CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Stop) == "stop");
     CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Length) == "length");
     CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Cancelled) == "cancelled");
     CELEG_TEST_CHECK(protocol::finish_reason_to_string(serve::FinishReason::Error) == "error");
 
-    // Request JSON round-trip: absent optional fields must not appear on the
-    // wire, and present ones must survive a write/read cycle.
     protocol::ChatCompletionRequest request;
     request.model = "lfm2.5-test";
     request.messages.push_back({"user", std::string("hi")});
@@ -99,13 +91,8 @@ int main() {
     CELEG_TEST_CHECK(parsed.stream_options && parsed.stream_options->include_usage);
     CELEG_TEST_CHECK(!parsed.stream.has_value());
 
-    // enable_thinking is profile-specific; LFM2 must reject it instead of
-    // silently discarding the request. The serialization contract above is
-    // still covered by `parsed`.
     request.chat_template_kwargs.reset();
 
-    // Tool requests are validated before reaching the backend and use the
-    // profile capability contract rather than exception-based discovery.
     protocol::ChatCompletionRequest tool_request;
     tool_request.messages.push_back({"user", std::string("call weather"), std::nullopt, std::nullopt});
     tool_request.tools = std::vector<protocol::ToolDto>{{
@@ -122,7 +109,6 @@ int main() {
     protocol::ErrorResponseDto error = protocol::error_response("bad \"request\"");
     CELEG_TEST_CHECK(protocol::to_json(error).find("\\\"request\\\"") != std::string::npos);
 
-    // Full request -> GenerateRequest pipeline against a real tokenizer.
     const auto tokenizer_path = std::filesystem::temp_directory_path() / "celeg_chat_protocol_test.json";
     const celeg::BpeTokenizer tokenizer = make_test_tokenizer(tokenizer_path);
     celeg::CheckpointMetadata chat_metadata;
@@ -142,8 +128,6 @@ int main() {
     CELEG_TEST_CHECK(generate_request.generation.top_k == 40);
     CELEG_TEST_CHECK(generate_request.generation.seed == 42);
 
-    // A small context leaves room for only the newest user turn. The mapper
-    // must trim the older turn while preserving prompt + max_tokens <= ctx.
     protocol::ChatCompletionRequest sliding_request = request;
     sliding_request.messages.push_back({"user", std::string("hi")});
     sliding_request.max_tokens = 1;
@@ -152,12 +136,10 @@ int main() {
     CELEG_TEST_CHECK(sliding_generate.context_window_trimmed);
     CELEG_TEST_CHECK(sliding_generate.prompt_tokens.size() + sliding_generate.max_output_tokens <= 23);
 
-    // "<|startoftext|><|im_start|>user\nhi<|im_end|>\n<|im_start|>assistant\n"
     const std::vector<std::int32_t> expected_prompt_tokens = {
         0, 1, 3, 4, 5, 6, 12, 7, 8, 2, 12, 1, 9, 4, 4, 8, 4, 11, 9, 10, 11, 12};
     CELEG_TEST_CHECK(generate_request.prompt_tokens == expected_prompt_tokens);
 
-    // Missing messages must be rejected before touching the tokenizer.
     protocol::ChatCompletionRequest empty_request;
     empty_request.model = "lfm2.5-test";
     threw = false;
@@ -168,7 +150,6 @@ int main() {
     }
     CELEG_TEST_CHECK(threw);
 
-    // Response mapping: decode completion tokens "h","i" -> "hi".
     const std::vector<std::int32_t> completion_tokens = {7, 8};
     const protocol::ChatCompletionResponse response = protocol::to_chat_completion_response(
         "req-1", "lfm2.5-test", 1000, generate_request.prompt_tokens.size(),
@@ -188,8 +169,6 @@ int main() {
     CELEG_TEST_CHECK(reparsed.choices[0].message.content == "hi");
     CELEG_TEST_CHECK(reparsed.usage.total_tokens == response.usage.total_tokens);
 
-    // Streaming chunk mapping: first chunk carries the role, later ones don't;
-    // only the terminal chunk carries a finish_reason.
     const protocol::ChatCompletionChunk first_chunk = protocol::to_chat_completion_chunk(
         "req-1", "lfm2.5-test", 1000, completion_tokens, /*include_role=*/true,
         /*finish=*/std::nullopt, tokenizer, chat_template);

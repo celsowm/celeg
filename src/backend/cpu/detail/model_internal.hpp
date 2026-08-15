@@ -448,12 +448,6 @@ struct CpuCompiledModel {
     int preferred_numa_node = -1;
 };
 
-// Exhaustive mixer dispatch for a compiled CPU layer. The operator carried by
-// a MoE layer is unwrapped, so handlers see the mixer regardless of whether the
-// layer also runs an expert feed-forward. Every mixer alternative must be
-// matched by a handler naming its concrete type; there is no fallback, so
-// adding a mixer turns every dispatch site that has not been updated into a
-// compile error. Handlers receive a non-null pointer to the active operator.
 template <typename LayerRef, typename... Handlers>
 decltype(auto) visit_operator_weights(LayerRef&& layer, Handlers&&... handlers) {
     ExhaustiveHandlers<std::decay_t<Handlers>...> dispatch{
@@ -474,18 +468,12 @@ decltype(auto) visit_operator_weights(LayerRef&& layer, Handlers&&... handlers) 
         std::forward<LayerRef>(layer));
 }
 
-// Focused view used by token/chunk operators.  Operators that only need
-// linear execution, scratch storage, and session profiling no longer receive
-// the owning model object and cannot accidentally reach unrelated state.
 struct CpuExecutionContext {
     CpuCompiledModel::Shared& shared;
     CpuWorkspace& workspace;
     CpuCompiledModel::CpuSessionState& session;
 };
 
-// Per-layer recurrent state handed to recurrent mixers. The mixers only need
-// their own layer state slot, so they receive the session state table instead
-// of the owning model.
 struct CpuRecurrentStateView {
     std::vector<CpuCompiledModel::LayerState>& states;
 
@@ -503,10 +491,6 @@ struct CpuRecurrentStateView {
     }
 };
 
-// Attention KV services handed to attention operators. The KV page pools,
-// cache writes, and attention kernels are still owned by the model, so this
-// view forwards to it while exposing only the operations an attention operator
-// is entitled to use.
 class CpuAttentionStateView {
 public:
     explicit CpuAttentionStateView(CpuCompiledModel& owner) : owner_(owner) {}
@@ -556,4 +540,4 @@ void execute_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions,
                               std::span<const int32_t> tokens,
                               std::span<const uint8_t> compute_logits);
 
-} // namespace celeg
+}

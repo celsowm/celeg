@@ -13,4 +13,4 @@ CompiledModelProgram CpuModelCompiler::compile(const ResolvedModel& model) const
     return program;
 }
 
-} // namespace celeg
+}

@@ -17,7 +17,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 int main() {
     celeg::serve::GenerateRequest request;

@@ -26,10 +26,6 @@ struct CpuConcurrentEngineOptions : ConcurrentSchedulerOptions {
     size_t prefix_cache_max_bytes = 512ULL * 1024ULL * 1024ULL;
 };
 
-// CPU-only counters with no backend-neutral meaning yet (no CUDA equivalent
-// exists for chunked-prefill step accounting or CPU attention parallelism).
-// These live alongside the neutral `ConcurrentMetrics` snapshot instead of
-// duplicating it; see docs/SOLID_REVIEW_BACKENDS.md §4.1.
 struct CpuConcurrentMetricsExtras {
     uint64_t chunked_prefill_steps = 0;
     uint64_t maximum_prefill_chunk = 0;
@@ -57,11 +53,8 @@ public:
     RequestStatus status(RequestId request_id) const;
     bool cancel(RequestId request_id);
 
-    // Frees the request record. Only valid once the request has reached a
-    // terminal status; returns false otherwise or if the id is unknown.
     bool release(RequestId request_id);
 
-    // Runs one scheduling iteration. Returns true when any request advanced.
     bool step();
     void start();
     void stop();
@@ -75,4 +68,4 @@ private:
     std::unique_ptr<CpuSchedulerDriver> state_;
 };
 
-} // namespace celeg
+}

@@ -40,8 +40,6 @@ struct PrefixAcquireResult {
     std::shared_ptr<const PrefixState> state;
 };
 
-// Owns prefix-cache indexing, LRU, page references and COW. Calls are expected
-// to be externally synchronized by ConcurrentEngine.
 class PrefixCacheManager {
 public:
     PrefixCacheManager(IKvPageAllocator& pages,
@@ -90,4 +88,4 @@ private:
     PrefixCacheMetrics metrics_;
 };
 
-} // namespace celeg
+}

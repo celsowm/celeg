@@ -24,7 +24,7 @@ void apply_rope_pairing(PositionSpec& position, RopePairingKind pairing) {
     }
 }
 
-} // namespace
+}
 
 ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descriptor,
                                      const NumericalPolicy& numerical_policy,
@@ -94,4 +94,4 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
     return graph;
 }
 
-} // namespace celeg::descriptor_detail
+}

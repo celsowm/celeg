@@ -29,7 +29,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 int main() {
     const auto runtime = celeg::RuntimeBuilder{}

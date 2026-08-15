@@ -15,4 +15,4 @@ struct ImageRgbF32 {
 ImageRgbF32 decode_image_data_url(std::string_view data_url);
 ImageRgbF32 resize_image_bilinear(const ImageRgbF32& source, int width, int height);
 
-} // namespace celeg
+}

@@ -1,12 +1,3 @@
-// Native throughput benchmark for the CPU engine, built to be directly
-// comparable to llama.cpp's llama-bench: same synthetic-token methodology
-// (random/dummy token ids, not a real prompt) and the same JSON row schema
-// (n_prompt, n_gen, avg_ns, stddev_ns, avg_ts, stddev_ts) so a single
-// benchmarks/compare.py loader can parse either engine's output. Running it
-// in-process (load once, reset the session between reps) rather than
-// shelling out to celeg-cpu-run per rep avoids paying process-startup and
-// model-load cost inside the timed region, which is what llama-bench does
-// too.
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/backend/cpu/model.hpp"
 #include "celeg/backend/cpu/topology.hpp"
@@ -163,7 +154,7 @@ std::string escape_json(const std::string& text) {
     return escaped;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     try {

@@ -49,4 +49,4 @@ inline void launch_adjacent_qk_norm_rope_positions(
         RopePairingKind::AdjacentPairs, scaling, stream);
 }
 
-} // namespace celeg
+}

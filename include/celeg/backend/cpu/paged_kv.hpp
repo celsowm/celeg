@@ -25,9 +25,6 @@ struct CpuKvPageStats {
     size_t numa_binding_failures = 0;
 };
 
-// Physical state layout for one token. Ordinary attention occupies the key
-// and value regions. For latent attention, latent_width is the combined key
-// and value width; the page exposes each half through the latent accessors.
 struct CpuStatePageLayout {
     size_t key_width = 0;
     size_t value_width = 0;
@@ -40,8 +37,6 @@ struct CpuStatePageLayout {
     void validate() const;
 };
 
-// A physically paged, reference-counted K/V arena for one attention layer.
-// Pages are stable in memory and may later be shared by prefix-cache entries.
 class CpuKvPagePool {
 public:
     CpuKvPagePool(CpuKvCacheMode mode, size_t page_tokens,
@@ -103,9 +98,6 @@ struct CpuPagedAttentionOptions {
     size_t page_tile = 4;
 };
 
-// Immutable encoder/vision memory projected into the same paged state
-// representation as self-attention.  The owner is populated once and can be
-// shared by decoder sessions without tying the memory to a model family.
 class CpuExternalAttentionMemory {
 public:
     CpuExternalAttentionMemory(CpuKvCacheMode mode, size_t page_tokens,
@@ -133,8 +125,6 @@ struct CpuPagedAttentionStats {
     bool parallel = false;
 };
 
-// Load-time lowering of the backend-neutral attention pattern. Kernels
-// consume this compact value and never inspect checkpoint metadata.
 enum class CpuAttentionPatternKind : uint8_t {
     FullCausal,
     SlidingWindow,
@@ -214,10 +204,6 @@ void cpu_latent_attention_decode_paged(
     int rope_head_dim, float scale, CpuAttentionPattern pattern = {},
     CpuAttentionBias bias = {}, int query_position = -1);
 
-// Causal multi-query prefill attention.  Keys and values for the full chunk
-// must already be committed to pages; query row r sees exactly
-// [0, base_sequence_length + r].  Parallelism is owned by this call so
-// prefill does not create a thread-pool rendezvous for every query.
 void cpu_gqa_prefill_paged(
     const float* queries,
     size_t query_rows,
@@ -232,4 +218,4 @@ void cpu_gqa_prefill_paged(
     CpuThreadPool& thread_pool,
     CpuAttentionPattern pattern = {}, CpuAttentionBias bias = {});
 
-} // namespace celeg
+}

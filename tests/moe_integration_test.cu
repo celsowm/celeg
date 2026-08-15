@@ -1,16 +1,3 @@
-// Integration test for the MoE decode forward sequence wired into CudaModel
-// (run_mlp_moe_decode). It exercises the exact kernel pipeline the model uses:
-//   1. RMSNorm the hidden state (BF16)
-//   2. cast the normed BF16 activations to float (router input path)
-//   3. launch_moe_router (sigmoid top-K + bias + normalize + scaling)
-//   4. launch_moe_ffn (per-(token,expert) SwiGLU + atomic accumulate)
-//   5. residual-add the routed expert output back into the hidden state
-// The result is checked against a CPU reference that runs the same sequence in
-// float, so the test covers the BF16->float cast path and the residual-add
-// that live only in the integrated model forward, not in the isolated kernels.
-//
-// NOTE: the router/FFN run in BF16, so a float CPU reference is expected to
-// differ by a few percent (BF16 rounding). Tolerances below reflect that.
 
 #include "celeg/backend/cuda/moe.hpp"
 #include "celeg/backend/cuda/utils.cuh"
@@ -33,12 +20,12 @@ struct Problem {
     int experts;
     int K;
     float norm_eps;
-    std::vector<float> hidden_vec;   // [hidden]
-    std::vector<float> ffn_norm;     // [hidden]
-    std::vector<float> router_w;     // [E * hidden]
-    std::vector<float> gate_up;      // [E * 2*inter * hidden]
-    std::vector<float> down;         // [E * hidden * inter]
-    std::vector<float> bias;         // [E]
+    std::vector<float> hidden_vec;
+    std::vector<float> ffn_norm;
+    std::vector<float> router_w;
+    std::vector<float> gate_up;
+    std::vector<float> down;
+    std::vector<float> bias;
 };
 
 Problem build(int hidden, int inter, int experts, int K) {
@@ -75,7 +62,6 @@ Problem build(int hidden, int inter, int experts, int K) {
     return p;
 }
 
-// CPU RMSNorm matching launch_rmsnorm (compute in float, output BF16).
 std::vector<__nv_bfloat16> cpu_rmsnorm(const std::vector<float>& x,
                                        const std::vector<float>& w,
                                        float eps) {
@@ -89,7 +75,7 @@ std::vector<__nv_bfloat16> cpu_rmsnorm(const std::vector<float>& x,
     return out;
 }
 
-} // namespace
+}
 
 int main() {
     try {
@@ -104,31 +90,26 @@ int main() {
 
         celeg::CudaStream stream;
 
-        // Hidden state (BF16) and its float copy for the reference.
         celeg::DeviceBuffer<__nv_bfloat16> d_hidden(p.hidden);
         std::vector<__nv_bfloat16> h_bf16(p.hidden);
         for (int i = 0; i < p.hidden; ++i) h_bf16[i] = to_bf16(p.hidden_vec[i]);
         CELEG_CUDA(cudaMemcpy(d_hidden.data(), h_bf16.data(),
                             d_hidden.bytes(), cudaMemcpyHostToDevice));
 
-        // ffn_norm (BF16) on device.
         celeg::DeviceBuffer<__nv_bfloat16> d_ffn_norm(p.hidden);
         std::vector<__nv_bfloat16> w_bf16(p.hidden);
         for (int i = 0; i < p.hidden; ++i) w_bf16[i] = to_bf16(p.ffn_norm[i]);
         CELEG_CUDA(cudaMemcpy(d_ffn_norm.data(), w_bf16.data(),
                             d_ffn_norm.bytes(), cudaMemcpyHostToDevice));
 
-        // Step 1: RMSNorm -> normed BF16.
         celeg::DeviceBuffer<__nv_bfloat16> d_normed(p.hidden);
         celeg::launch_rmsnorm(d_hidden.data(), d_ffn_norm.data(), d_normed.data(),
                             1, p.hidden, p.norm_eps, stream.get());
 
-        // Step 2: cast normed BF16 -> float (the router input path).
         celeg::DeviceBuffer<float> d_hidden_float(p.hidden);
         celeg::launch_cast_bf16_to_float(d_normed.data(), d_hidden_float.data(),
                                        p.hidden, stream.get());
 
-        // Step 3: router.
         celeg::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
         celeg::DeviceBuffer<float> d_bias(p.experts);
         celeg::DeviceBuffer<int> d_sel(p.K);
@@ -148,7 +129,6 @@ int main() {
         rdev.hidden_dim = p.hidden;
         celeg::launch_moe_router(rdev, cfg, d_scratch.data(), stream.get());
 
-        // Step 4: expert FFN accumulate.
         celeg::DeviceBuffer<__nv_bfloat16> d_gate_up(
             static_cast<size_t>(p.experts) * 2 * p.inter * p.hidden);
         celeg::DeviceBuffer<__nv_bfloat16> d_down(
@@ -185,7 +165,6 @@ int main() {
         celeg::launch_finalize_moe_output(d_accum.data(), d_output.data(),
                                         p.hidden, stream.get());
 
-        // CPU reference of the full pipeline (rmsnorm -> router -> ffn -> residual).
         const std::vector<__nv_bfloat16> normed_cpu_ref = cpu_rmsnorm(
             p.hidden_vec, p.ffn_norm, p.norm_eps);
         std::vector<float> normed_float(p.hidden);
@@ -200,7 +179,6 @@ int main() {
         celeg::compute_moe_ffn(normed_float, p.gate_up, p.down, sel_cpu, wts_cpu,
                              1, p.hidden, p.inter, p.experts, ffn_cpu);
 
-        // Step 5: residual add into hidden.
         celeg::launch_residual_add(d_hidden.data(), d_output.data(),
                                  p.hidden, stream.get());
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
@@ -209,7 +187,6 @@ int main() {
         CELEG_CUDA(cudaMemcpy(hidden_gpu.data(), d_hidden.data(),
                             d_hidden.bytes(), cudaMemcpyDeviceToHost));
 
-        // (a) The router selection/weights must match the reference exactly.
         std::vector<int> sel_gpu(p.K);
         std::vector<float> wts_gpu(p.K);
         CELEG_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(),
@@ -229,8 +206,6 @@ int main() {
             }
         }
 
-        // (b) The full pipeline (rmsnorm + ffn + residual) must track the float
-        // reference within BF16 tolerance.
         float max_rel = 0.0f;
         for (int i = 0; i < p.hidden; ++i) {
             const float got = from_bf16(hidden_gpu[i]);

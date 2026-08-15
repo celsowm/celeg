@@ -23,7 +23,7 @@ private:
     bool selected_;
 };
 
-} // namespace
+}
 
 int main() {
     celeg::CheckpointFormatCatalog catalog;

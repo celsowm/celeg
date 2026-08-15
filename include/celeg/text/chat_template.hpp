@@ -22,9 +22,6 @@ struct ChatTemplateOptions {
     ToolChoice tool_choice{};
 };
 
-// A parser is exposed only when the compiled template proves that generated
-// tool calls use this exact deterministic wire grammar. Rendering always goes
-// through the Jinja program; this grammar never formats a second protocol.
 struct ToolCallGrammar {
     std::string opening;
     std::string closing;
@@ -37,10 +34,6 @@ struct ToolCallGrammar {
     ToolParseResult parse(std::string_view generated) const;
 };
 
-// Model-scoped, immutable interaction contract. Its render program is compiled
-// once during model preparation from a source override, checkpoint source, or
-// conservative tokenizer evidence. No model/repository/architecture name
-// participates in this decision.
 class ResolvedInteraction final {
 public:
     std::string format(std::span<const ChatMessage> messages,
@@ -91,4 +84,4 @@ std::string render_chat(std::span<const ChatMessage> messages,
                         bool add_generation_prompt = true,
                         const ChatTemplateOptions& options = {});
 
-} // namespace celeg
+}

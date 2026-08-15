@@ -31,9 +31,6 @@ __global__ void conv_decode_batch_ptrs_kernel(
         __float2bfloat16(c * rounded_bf16_float(conv));
 }
 
-// A request owns one ShortConv ring.  Tokens belonging to that request must
-// therefore be advanced in order, while independent requests/channels remain
-// parallel.  `span_offsets` point into the flattened activation rows.
 __global__ void conv_ragged_prefill_kernel(
     const __nv_bfloat16* bcx, const __nv_bfloat16* weight,
     __nv_bfloat16* const* states, __nv_bfloat16* y,

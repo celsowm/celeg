@@ -11,7 +11,7 @@ namespace celeg {
 namespace {
 void* default_host_allocate(std::size_t bytes) { return std::malloc(bytes); }
 void default_host_deallocate(void* pointer) { std::free(pointer); }
-} // namespace
+}
 
 ExpertHostLease::ExpertHostLease(HostExpertCache* cache, int slot_idx)
     : cache_(cache), slot_idx_(slot_idx) {
@@ -66,14 +66,12 @@ void ExpertHostLease::release() {
     }
 }
 
-// HostExpertCache implementation
 
 HostExpertCache::HostExpertCache(std::size_t budget_bytes, std::size_t bytes_per_expert,
                                  HostAllocateFn allocate, HostDeallocateFn deallocate)
     : bytes_per_expert_(bytes_per_expert),
       deallocate_(deallocate ? deallocate : default_host_deallocate) {
     if (bytes_per_expert == 0 || budget_bytes < bytes_per_expert) {
-        // Fallback to at least 1 expert slot capacity
         capacity_ = 1;
     } else {
         capacity_ = static_cast<int>(budget_bytes / bytes_per_expert);
@@ -81,9 +79,6 @@ HostExpertCache::HostExpertCache(std::size_t budget_bytes, std::size_t bytes_per
 
     std::size_t arena_bytes = capacity_ * bytes_per_expert_;
 
-    // Allocation policy is injected by the owning backend.  The neutral
-    // default is ordinary host storage; CUDA can provide pinned storage
-    // without leaking CUDA headers into this runtime translation unit.
     arena_ = (allocate ? allocate : default_host_allocate)(arena_bytes);
 
     if (!arena_) {
@@ -152,16 +147,12 @@ int HostExpertCache::find_slot(int layer, int expert) {
 }
 
 int HostExpertCache::choose_victim_slot() {
-    // 1. Prefer empty slots.
     for (int i = 0; i < capacity_; ++i) {
         if (slots_[i].layer == -1 && slots_[i].ref_count == 0 && !slots_[i].loading) {
             return i;
         }
     }
 
-    // 2. Evict the coldest non-referenced, non-loading slot. Heat is a
-    // periodically decayed access frequency; the recency bonus breaks close
-    // calls in favour of keeping a recently used expert.
     int victim = -1;
     double lowest_priority = std::numeric_limits<double>::infinity();
     uint64_t oldest = std::numeric_limits<uint64_t>::max();
@@ -193,21 +184,18 @@ ExpertHostLease HostExpertCache::acquire(int layer, int expert, const LoaderFn& 
         slot_idx = find_slot(layer, expert);
 
         if (slot_idx >= 0) {
-            // Cache hit
             slots_[slot_idx].last_used = tick_;
             if (slots_[slot_idx].loading) {
-                // Someone else is loading it. Coalesce and wait.
                 coalesced_waits_++;
                 std::shared_future<void> fut = slots_[slot_idx].shared_fut;
                 uint64_t expected_gen = slots_[slot_idx].generation;
 
-                // Reserve ref_count before releasing lock!
                 slots_[slot_idx].ref_count++;
                 lock.unlock();
 
                 auto wait_start = std::chrono::high_resolution_clock::now();
                 try {
-                    fut.get(); // get() propagates exceptions!
+                    fut.get();
                 } catch (...) {
                     auto wait_end = std::chrono::high_resolution_clock::now();
                     std::unique_lock<std::mutex> wait_lock(mutex_);
@@ -222,7 +210,6 @@ ExpertHostLease HostExpertCache::acquire(int layer, int expert, const LoaderFn& 
                 std::unique_lock<std::mutex> wait_lock(mutex_);
                 total_wait_time_ms_ += std::chrono::duration<double, std::milli>(wait_end - wait_start).count();
 
-                // Validate slot identity and generation upon waking up
                 if (slots_[slot_idx].layer != layer || slots_[slot_idx].expert != expert || slots_[slot_idx].generation != expected_gen) {
                     if (slots_[slot_idx].ref_count > 0) {
                         slots_[slot_idx].ref_count--;
@@ -238,14 +225,12 @@ ExpertHostLease HostExpertCache::acquire(int layer, int expert, const LoaderFn& 
             }
         }
 
-        // Cache miss: find a victim slot to evict
         misses_++;
         slot_idx = choose_victim_slot();
         if (slot_idx < 0) {
             throw std::runtime_error("HostExpertCache: out of free slots (all leased/loading)");
         }
 
-        // Evict
         if (slots_[slot_idx].layer >= 0) {
             evictions_++;
         }
@@ -253,17 +238,15 @@ ExpertHostLease HostExpertCache::acquire(int layer, int expert, const LoaderFn& 
         slots_[slot_idx].layer = layer;
         slots_[slot_idx].expert = expert;
         slots_[slot_idx].last_used = tick_;
-        slots_[slot_idx].ref_count = 1; // Mark as leased immediately
+        slots_[slot_idx].ref_count = 1;
         slots_[slot_idx].loading = true;
         slots_[slot_idx].generation++;
 
-        // Initialize the promise and shared_future
         auto p = std::make_shared<std::promise<void>>();
         slots_[slot_idx].shared_fut = p->get_future().share();
-        slots_[slot_idx].waiters = {p}; // Keep track of the main promise so we can set it
+        slots_[slot_idx].waiters = {p};
     }
 
-    // Perform disk load outside the global lock!
     try {
         std::span<std::byte> payload_dest(slots_[slot_idx].payload_ptr, bytes_per_expert_);
 
@@ -273,12 +256,11 @@ ExpertHostLease HostExpertCache::acquire(int layer, int expert, const LoaderFn& 
             bytes_read_ += bytes_per_expert_;
         }
     } catch (...) {
-        // Rollback state under lock
         std::lock_guard<std::mutex> lock(mutex_);
         slots_[slot_idx].layer = -1;
         slots_[slot_idx].expert = -1;
         if (slots_[slot_idx].ref_count > 0) {
-            slots_[slot_idx].ref_count--; // Decrement loader's ref count
+            slots_[slot_idx].ref_count--;
         }
         slots_[slot_idx].loading = false;
         if (!slots_[slot_idx].waiters.empty()) {
@@ -319,9 +301,6 @@ void HostExpertCache::release_slot(int slot_idx) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ExpertIoManager Implementation
-// ---------------------------------------------------------------------------
 
 ExpertIoManager::ExpertIoManager(int num_workers, int queue_depth)
     : max_queue_depth_(queue_depth) {
@@ -380,4 +359,4 @@ std::future<void> ExpertIoManager::submit(std::function<void()> task) {
     return future;
 }
 
-} // namespace celeg
+}

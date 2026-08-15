@@ -83,7 +83,7 @@ size_t checked_element_count(const std::vector<int64_t>& shape,
     return result;
 }
 
-} // namespace
+}
 
 SafeTensorFile::SafeTensorFile(const std::string& path) {
     try {
@@ -330,7 +330,6 @@ void SafeTensorFile::read(const TensorLocator& locator, std::span<std::byte> des
     if (locator.bytes == 0) return;
 
 #if defined(_WIN32)
-    // Windows positioned read using ReadFile with OVERLAPPED
     OVERLAPPED overlapped = {};
     overlapped.Offset = static_cast<DWORD>(locator.absolute_offset & 0xFFFFFFFF);
     overlapped.OffsetHigh = static_cast<DWORD>((locator.absolute_offset >> 32) & 0xFFFFFFFF);
@@ -352,21 +351,19 @@ void SafeTensorFile::read(const TensorLocator& locator, std::span<std::byte> des
         dest_ptr += bytes_read;
         bytes_to_read -= bytes_read;
 
-        // Update offset in overlapped for next iteration
         std::uint64_t next_offset = (static_cast<std::uint64_t>(overlapped.OffsetHigh) << 32) | overlapped.Offset;
         next_offset += bytes_read;
         overlapped.Offset = static_cast<DWORD>(next_offset & 0xFFFFFFFF);
         overlapped.OffsetHigh = static_cast<DWORD>((next_offset >> 32) & 0xFFFFFFFF);
     }
 #else
-    // POSIX positioned read using pread
     std::byte* dest_ptr = destination.data();
     size_t bytes_to_read = locator.bytes;
     off_t offset = static_cast<off_t>(locator.absolute_offset);
     while (bytes_to_read > 0) {
         ssize_t n = ::pread(fd_, dest_ptr, bytes_to_read, offset);
         if (n < 0) {
-            if (errno == EINTR) continue; // retry interrupted reads
+            if (errno == EINTR) continue;
             throw std::runtime_error("POSIX pread failed: " + std::string(std::strerror(errno)));
         }
         if (n == 0) {
@@ -379,4 +376,4 @@ void SafeTensorFile::read(const TensorLocator& locator, std::span<std::byte> des
 #endif
 }
 
-} // namespace celeg
+}

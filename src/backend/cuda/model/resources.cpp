@@ -5,7 +5,6 @@
 namespace celeg {
 
 void CudaCompiledModel::allocate_celeg_resources() {
-    // Size all per-session device buffers from the runtime shape.
     sampling_.reset_vocabulary(static_cast<size_t>(resources_.dims_.vocab_size));
     workspace_.hidden_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.residual_.reset(static_cast<size_t>(resources_.program_.hidden));
@@ -54,9 +53,6 @@ void CudaCompiledModel::allocate_celeg_resources() {
         workspace_.mtp_candidate_.reset(1);
         workspace_.mtp_target_candidate_.reset(1);
     }
-    // Paged prefill is allowed to switch between ragged and single-row
-    // execution as requests progress. Reserve the full context capacity up
-    // front so that this transition cannot allocate on the execution path.
     workspace_.paged_page_table_.reset(static_cast<size_t>(max_context_));
     workspace_.paged_prefill_tokens_.reset(static_cast<size_t>(max_context_));
     if (resources_.program_.per_layer_input.enabled) {
@@ -67,8 +63,6 @@ void CudaCompiledModel::allocate_celeg_resources() {
             static_cast<size_t>(resources_.program_.per_layer_input.input_size));
     }
 
-    // MoE scratch (decode path: one token). Sized from the MoE topology when
-    // present; harmless (tiny) for dense-only models.
     {
         int E = 1;
         int K = 1;
@@ -105,10 +99,9 @@ void CudaCompiledModel::allocate_celeg_resources() {
     }
     if (resources_.options_.gemm_backend == GemmBackend::CublasLt &&
         resources_.options_.lt_workspace_bytes > 0) {
-        // GemmDispatcher owns the workspace internally.
     }
     gemm_ = std::make_unique<GemmDispatcher>(stream_.get(), resources_.options_);
 }
 
-} // namespace celeg
+}
 

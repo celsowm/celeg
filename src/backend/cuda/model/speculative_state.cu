@@ -12,7 +12,7 @@ void copy_device(cudaMemcpyKind kind, void* destination, const void* source,
     CELEG_CUDA(cudaMemcpyAsync(destination, source, bytes, kind, stream));
 }
 
-} // namespace
+}
 
 void CudaCompiledModel::snapshot_speculative_state() {
     if (session_.phase_ != SessionPhase::Ready) {
@@ -79,7 +79,6 @@ void CudaCompiledModel::snapshot_speculative_state() {
             saved.recurrent_state.reset(0);
         };
         visit_layer(layer,
-          // Attention KV state is snapshotted through the KV cache, not here.
           [&](AttentionLayer*) { clear_saved(); },
           [&](ConvolutionLayer* convolution) {
             saved.conv_state.reset(convolution->conv_state.size());
@@ -107,7 +106,6 @@ void CudaCompiledModel::snapshot_speculative_state() {
                         gated_delta->recurrent_state.data(),
                         gated_delta->recurrent_state.bytes(), stream);
           },
-          // MLP-only blocks hold no speculative state.
           [&](MlpOnlyLayer*) { clear_saved(); });
     }
     CELEG_CUDA(cudaStreamSynchronize(stream));
@@ -151,7 +149,6 @@ void CudaCompiledModel::restore_speculative_state() {
         const SpeculativeLayerSnapshot& saved = speculative_snapshot_.layers[index];
         Layer& layer = resources_.layers_[index];
         visit_layer(layer,
-          // Attention KV state is restored through the KV cache, not here.
           [](AttentionLayer*) {},
           [&](ConvolutionLayer* convolution) {
             copy_device(cudaMemcpyDeviceToDevice, convolution->conv_state.data(),
@@ -170,7 +167,6 @@ void CudaCompiledModel::restore_speculative_state() {
                         saved.recurrent_state.data(),
                         gated_delta->recurrent_state.bytes(), stream);
           },
-          // MLP-only blocks hold no speculative state.
           [](MlpOnlyLayer*) {});
     }
     session_.position_ = speculative_snapshot_.position;
@@ -184,4 +180,4 @@ void CudaCompiledModel::restore_speculative_state() {
     CELEG_CUDA(cudaStreamSynchronize(stream));
 }
 
-} // namespace celeg
+}

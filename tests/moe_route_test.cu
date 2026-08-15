@@ -31,7 +31,7 @@ void build_problem(int rows, int hidden, int experts,
     }
 }
 
-} // namespace
+}
 
 int main() {
     try {
@@ -51,7 +51,6 @@ int main() {
         CELEG_CUDA(cudaMemcpy(d_hidden.data(), hv.data(), d_hidden.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(d_router.data(), rw.data(), d_router.bytes(), cudaMemcpyHostToDevice));
 
-        // Helper to run on GPU and compare against CPU reference for a config.
         auto run_case = [&](const celeg::MoeRouterConfig& cfg, const std::vector<float>* bias_ptr) {
             if (cfg.use_expert_bias)
                 CELEG_CUDA(cudaMemcpy(d_bias.data(), bias.data(), d_bias.bytes(), cudaMemcpyHostToDevice));
@@ -75,7 +74,6 @@ int main() {
             CELEG_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(), d_sel.bytes(), cudaMemcpyDeviceToHost));
             CELEG_CUDA(cudaMemcpy(wts_gpu.data(), d_wts.data(), d_wts.bytes(), cudaMemcpyDeviceToHost));
 
-            // Compare against the existing host reference implementation.
             std::vector<int> sel_cpu;
             std::vector<float> wts_cpu;
             celeg::compute_moe_router(hv, rw, bias_ptr, rows, hidden, cfg, sel_cpu, wts_cpu);
@@ -88,8 +86,6 @@ int main() {
                     throw std::runtime_error("router weight mismatch at " +
                                              std::to_string(i));
             }
-            // Also verify weights equal the original sigmoid of the selected
-            // expert (bias must never leak into the gathered weight).
             for (int r = 0; r < rows; ++r) {
                 for (int k = 0; k < K; ++k) {
                     const int ex = sel_gpu[static_cast<size_t>(r) * K + k];
@@ -117,7 +113,6 @@ int main() {
             }
         };
 
-        // Case 1: no bias, no normalization.
         {
             celeg::MoeRouterConfig cfg;
             cfg.num_experts = experts;
@@ -128,7 +123,6 @@ int main() {
             run_case(cfg, nullptr);
         }
 
-        // Case 2: with bias (must change selection ids, not weights).
         {
             celeg::MoeRouterConfig cfg;
             cfg.num_experts = experts;
@@ -139,7 +133,6 @@ int main() {
             run_case(cfg, &bias);
         }
 
-        // Case 3: normalized, scaled.
         {
             celeg::MoeRouterConfig cfg;
             cfg.num_experts = experts;
@@ -150,7 +143,6 @@ int main() {
             run_case(cfg, nullptr);
         }
 
-        // Case 4: bias + normalization + scaling combined.
         {
             celeg::MoeRouterConfig cfg;
             cfg.num_experts = experts;
@@ -161,9 +153,6 @@ int main() {
             run_case(cfg, &bias);
         }
 
-        // Case 5: single-token (rows=1) decode path. The original router
-        // selection was broken for rows=1 (top-K buffer never updated its
-        // scores), so this guards the decode path explicitly.
         {
             const int E1 = 6, K1 = 4, H1 = 4, R1 = 1;
             std::vector<float> hv1, rw1, b1;
@@ -214,7 +203,6 @@ int main() {
             }
         }
 
-        // Case 6: larger expert count (E=32) to exercise multi-warp blocks.
         {
             const int E2 = 32, K2 = 4, H2 = 8, R2 = 5;
             std::vector<float> hv2, rw2, b2;

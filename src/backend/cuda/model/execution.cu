@@ -281,9 +281,6 @@ DecodeBenchmark CudaCompiledModel::benchmark_decode(int warmup_steps,
     result.warmup_steps = warmup_steps;
     result.measured_steps = measured_steps;
     result.elapsed_ms = CudaEvent::elapsed_ms(begin, end);
-    // The Windows runner exits with TerminateProcess to avoid CUDA DLL teardown
-    // faults, so the process-wide profile's destructor is deliberately never
-    // reached there. Emit an enabled profile while its events are still valid.
     decode_phase_profile().report();
     return result;
 }
@@ -400,4 +397,4 @@ std::vector<float> CudaCompiledModel::copy_logits() {
     return result;
 }
 
-} // namespace celeg
+}

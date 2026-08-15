@@ -6,9 +6,6 @@
 
 namespace celeg {
 
-// Format-neutral tokenizer data extracted while a checkpoint is opened. The
-// text tokenizer consumes this normalized payload without knowing whether it
-// came from GGUF metadata or another checkpoint format.
 struct TokenizerData {
     std::vector<std::string> tokens;
     std::vector<std::string> merges;
@@ -16,10 +13,7 @@ struct TokenizerData {
     int32_t bos_id = 1;
     int32_t eos_id = 7;
     int32_t pad_id = 0;
-    // Raw tokenizer implementation identifier from the checkpoint format.
-    // Interpretation belongs to the tokenizer provider, not the checkpoint
-    // reader.
     std::string pre_tokenizer;
 };
 
-} // namespace celeg
+}

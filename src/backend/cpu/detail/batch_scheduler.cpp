@@ -30,7 +30,7 @@ std::vector<std::shared_ptr<CpuBatchScheduler::Request>> plan(
     return result;
 }
 
-} // namespace
+}
 
 std::vector<std::shared_ptr<CpuBatchScheduler::Request>> CpuBatchScheduler::plan_decode(
     const RequestMap& requests, const detail::BatchPlanner& planner, size_t limit) {
@@ -42,4 +42,4 @@ std::vector<std::shared_ptr<CpuBatchScheduler::Request>> CpuBatchScheduler::plan
     return plan(requests, planner, limit, true);
 }
 
-} // namespace celeg
+}

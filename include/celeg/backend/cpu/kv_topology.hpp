@@ -22,4 +22,4 @@ CpuKvTopology build_cpu_kv_topology(const ExecutionTopology& shape,
                                     const CompiledModelProgram& program,
                                     const CpuModelOptions& options);
 
-} // namespace celeg
+}

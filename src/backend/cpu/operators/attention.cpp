@@ -173,4 +173,4 @@ void apply_cpu_latent_attention_positions(
     }
 }
 
-} // namespace celeg
+}

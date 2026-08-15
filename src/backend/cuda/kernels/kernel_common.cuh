@@ -85,14 +85,6 @@ __device__ __forceinline__ int unpack_int4(const uint8_t* packed, int column) {
                         : static_cast<int>(nibble);
 }
 
-// Whether a bf16x2 vector load/store is safe across all of `ptrs`: each must
-// be 4-byte aligned (cudaMalloc-backed buffers always are at the base, but a
-// caller could in principle pass a pointer offset by an odd number of bf16
-// elements). Checked once per kernel launch (same answer for every thread in
-// the grid, so this is a uniform branch, not a source of warp divergence),
-// so a bandwidth-bound elementwise kernel can pack two bf16 values per
-// 32-bit transaction whenever it's safe and fall back to the scalar loop
-// byte-for-byte identical to before otherwise.
 template <typename... Ptrs>
 __device__ __forceinline__ bool bf16x2_aligned(Ptrs... ptrs) {
     return (((reinterpret_cast<uintptr_t>(ptrs) & 3u) == 0) && ...);
@@ -125,9 +117,6 @@ __global__ void head_rmsnorm_kernel(__nv_bfloat16* data,
     __shared__ float inv;
     if (threadIdx.x == 0) inv = rsqrtf(sum / static_cast<float>(head_dim) + eps);
     __syncthreads();
-    // See rmsnorm_kernel in norm.cuh for why this loop (but not the
-    // reduction above) is safe to vectorize: every output element depends
-    // only on its own input, so this is bit-identical to the scalar loop.
     if ((head_dim & 1) == 0 && bf16x2_aligned(vector, norm_weight)) {
         const int half = head_dim >> 1;
         __nv_bfloat162* vector2 = reinterpret_cast<__nv_bfloat162*>(vector);
@@ -147,5 +136,5 @@ __global__ void head_rmsnorm_kernel(__nv_bfloat16* data,
     }
 }
 
-} // namespace
-} // namespace celeg
+}
+}

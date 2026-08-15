@@ -26,7 +26,7 @@ void write_pack(const std::filesystem::path& path,
     writer.commit();
 }
 
-} // namespace
+}
 
 int main() {
     constexpr size_t rows = 3, cols = 67;

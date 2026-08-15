@@ -306,4 +306,4 @@ std::vector<int> eos_values(const CheckpointMetadata& metadata, const Descriptor
 }
 
 
-} // namespace celeg::descriptor_detail
+}

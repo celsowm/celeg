@@ -6,8 +6,6 @@
 
 namespace celeg {
 
-// Focused scheduling policy for assigning new sessions to CPU NUMA nodes.
-// Allocation and memory binding remain owned by the page/model layers.
 class CpuNumaPlacement {
 public:
     CpuNumaPlacement(CpuNumaMode mode, CpuNumaTopology topology);
@@ -20,4 +18,4 @@ private:
     size_t next_node_ = 0;
 };
 
-} // namespace celeg
+}

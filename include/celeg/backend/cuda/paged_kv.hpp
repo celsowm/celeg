@@ -15,10 +15,6 @@
 
 namespace celeg {
 
-// Physical, reference-counted KV page arena shared by all requests in one
-// ConcurrentEngine. A page contains the same token range for every attention
-// layer of the resolved model, which makes a request page table valid across the
-// entire model.
 class PhysicalPagedKvCache final : public IKvPageAllocator {
 public:
     PhysicalPagedKvCache(size_t page_count,
@@ -38,11 +34,7 @@ public:
     uint32_t ref_count(uint32_t page) const;
     bool is_shared(uint32_t page) const { return ref_count(page) > 1; }
 
-    // Allocates a new page and copies all K/V layers from source. Used by
-    // prefix-cache copy-on-write when the final cached page is partial.
     std::optional<uint32_t> clone_page(uint32_t source);
-    // Copy only the initialized token prefix from a partial page. The unused
-    // suffix is zeroed, reducing COW traffic for short shared prefixes.
     std::optional<uint32_t> clone_page_prefix(uint32_t source, int used_tokens) override;
 
     size_t total_pages() const override { return allocator_.total_pages(); }
@@ -94,8 +86,6 @@ public:
     int layer_rotary_width(int attention_slot) const {
         return layout_.layers.at(static_cast<size_t>(attention_slot)).rotary_width;
     }
-    // Returns the attention slot for a given model layer index, or -1 if the
-    // layer is a convolution layer.
     int attention_slot(int model_layer) const {
         if (model_layer < 0 ||
             model_layer >= static_cast<int>(attention_slot_for_layer_.size())) {
@@ -121,4 +111,4 @@ private:
     DeviceBuffer<float> value_scales_;
 };
 
-} // namespace celeg
+}

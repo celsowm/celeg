@@ -10,8 +10,6 @@
 
 namespace celeg::serve {
 
-// Backend-neutral request lifecycle state. Engines only produce tokens and
-// statuses; this component owns EOS observation and the public finish reason.
 class RequestLifecycle final {
 public:
     void submitted(RequestId id, std::span<const std::int32_t> eos_token_ids) {
@@ -53,4 +51,4 @@ private:
     std::unordered_map<RequestId, State> states_;
 };
 
-} // namespace celeg::serve
+}

@@ -80,11 +80,6 @@ int main() try {
         CELEG_TEST_CHECK(rejected_depth);
     }
 
-    // Phase 1.4: --weight-mode native must not report plain BF16 cuBLASLt. The
-    // actual execution mixes BF16 (norms / conv) and GGUF MMQ (linear blocks);
-    // the plan label must be honest about that, or the diagnostics contradict
-    // the real storage / kernels. See docs/ARCHITECTURE_EVIDENCE.md
-    // section 1.4.
     CudaModelOptions native;
     native.weight_mode = WeightMode::NativeGguf;
     auto native_plan = CudaExecutionPlan::compile(native, 4096);
@@ -94,7 +89,6 @@ int main() try {
         const std::string desc = native_plan.description();
         CELEG_TEST_CHECK(desc.find("linear=mixed-bf16-and-gguf-mmq") !=
                        std::string::npos);
-        // The diagnostic must not falsely contain the BF16 cuBLASLt label.
         CELEG_TEST_CHECK(desc.find("bf16-cublaslt") == std::string::npos);
     }
 

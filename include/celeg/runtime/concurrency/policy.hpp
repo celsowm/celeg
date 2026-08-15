@@ -29,9 +29,6 @@ enum class SchedulerPolicy : uint8_t {
     MaxUtilization,
 };
 
-// Backend-neutral scheduler semantics shared by every concurrent engine.
-// Backends choose their own defaults and keep only execution-specific knobs in
-// their derived option types; generic concepts must not drift independently.
 struct ConcurrentSchedulerOptions {
     constexpr ConcurrentSchedulerOptions(
         size_t active_requests,
@@ -68,4 +65,4 @@ private:
     std::vector<uint32_t> ref_counts_;
 };
 
-} // namespace celeg
+}

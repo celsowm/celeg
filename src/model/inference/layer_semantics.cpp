@@ -494,7 +494,7 @@ void infer_standard_attention(
     if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
-} // namespace
+}
 
 void infer_layer_semantics(CanonicalInferenceContext& context) {
     const auto& input = context.input;
@@ -681,4 +681,4 @@ void infer_layer_semantics(CanonicalInferenceContext& context) {
     graph.validate();
 }
 
-} // namespace celeg::inference_detail
+}

@@ -47,7 +47,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
     std::vector<std::unique_ptr<IRuntimeModule>> modules;
@@ -57,4 +57,4 @@ std::vector<std::unique_ptr<IRuntimeModule>> make_builtin_runtime_modules() {
     return modules;
 }
 
-} // namespace celeg
+}

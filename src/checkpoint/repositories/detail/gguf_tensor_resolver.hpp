@@ -22,4 +22,4 @@ private:
     std::shared_ptr<GgufFile> file_;
 };
 
-} // namespace celeg
+}

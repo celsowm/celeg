@@ -8,9 +8,6 @@
 
 namespace {
 
-// Builds a small synthetic MoE FFN. Experts have inter = 2*hidden so the
-// gate_up projection [2*inter, hidden] and down [hidden, inter] are well
-// conditioned but non-trivial.
 struct Problem {
     int rows;
     int hidden;
@@ -18,10 +15,10 @@ struct Problem {
     int experts;
     int K;
     std::vector<float> hidden_vec;
-    std::vector<float> router_w;     // [E * hidden]
-    std::vector<float> gate_up;       // [E * 2*inter * hidden]
-    std::vector<float> down;         // [E * hidden * inter]
-    std::vector<float> bias;         // [E] or empty
+    std::vector<float> router_w;
+    std::vector<float> gate_up;
+    std::vector<float> down;
+    std::vector<float> bias;
 };
 
 Problem build(int rows, int hidden, int inter, int experts, int K, bool with_bias) {
@@ -57,9 +54,6 @@ Problem build(int rows, int hidden, int inter, int experts, int K, bool with_bia
 
 __nv_bfloat16 to_bf16(float v) { return __float2bfloat16(v); }
 
-// Exercise the native packed-expert path with one Q4_K and one Q6_K tensor.
-// Each packed row decodes to an all-ones vector, which makes the reference
-// independent of a second device implementation of the GGUF block decoder.
 void run_native_quantized_case(celeg::GgmlType gate_type,
                                celeg::GgmlType down_type) {
     constexpr int rows = 2;
@@ -83,12 +77,10 @@ void run_native_quantized_case(celeg::GgmlType gate_type,
         std::vector<uint8_t> bytes(count * row_bytes, 0);
         for (size_t i = 0; i < count; ++i) {
             uint8_t* block = bytes.data() + i * row_bytes;
-            // IEEE-754 half representation of 1.0.
             block[type == celeg::GgmlType::Q4_K ? 0 : 208] = 0x00;
             block[type == celeg::GgmlType::Q4_K ? 1 : 209] = 0x3c;
             if (type == celeg::GgmlType::Q4_K) {
                 for (int s = 4; s < 12; ++s) block[s] = 1;
-                // Packed nibble/scales chosen so this row decodes to ones.
                 for (int q = 16; q < 144; ++q) block[q] = 0x22;
             } else {
                 for (int q = 0; q < 128; ++q) block[q] = 0x11;
@@ -175,7 +167,7 @@ void run_native_quantized_case(celeg::GgmlType gate_type,
     }
 }
 
-} // namespace
+}
 
 int main() {
     try {
@@ -194,7 +186,6 @@ int main() {
 
         celeg::CudaStream stream;
 
-        // Router.
         celeg::DeviceBuffer<float> d_hidden(p.rows * p.hidden);
         celeg::DeviceBuffer<float> d_router(static_cast<size_t>(p.experts) * p.hidden);
         celeg::DeviceBuffer<float> d_bias(p.experts);
@@ -222,7 +213,6 @@ int main() {
         CELEG_CUDA(cudaMemcpy(sel_gpu.data(), d_sel.data(), d_sel.bytes(), cudaMemcpyDeviceToHost));
         CELEG_CUDA(cudaMemcpy(wts_gpu.data(), d_wts.data(), d_wts.bytes(), cudaMemcpyDeviceToHost));
 
-        // CPU reference for router (sanity + feed into CPU FFN reference).
         std::vector<int> sel_cpu;
         std::vector<float> wts_cpu;
         celeg::compute_moe_router(p.hidden_vec, p.router_w,
@@ -230,7 +220,6 @@ int main() {
                                 p.rows, p.hidden, cfg, sel_cpu, wts_cpu);
         for (size_t i = 0; i < sel_gpu.size(); ++i) CELEG_TEST_CHECK(sel_gpu[i] == sel_cpu[i]);
 
-        // FFN device buffers.
         celeg::DeviceBuffer<__nv_bfloat16> d_gate_up(
             static_cast<size_t>(p.experts) * 2 * p.inter * p.hidden);
         celeg::DeviceBuffer<__nv_bfloat16> d_down(
@@ -274,7 +263,6 @@ int main() {
         std::vector<__nv_bfloat16> out_gpu(p.rows * p.hidden);
         CELEG_CUDA(cudaMemcpy(out_gpu.data(), d_output.data(), d_output.bytes(), cudaMemcpyDeviceToHost));
 
-        // CPU reference FFN (float) using the GPU-selected experts/weights.
         std::vector<float> out_cpu;
         celeg::compute_moe_ffn(p.hidden_vec, p.gate_up, p.down,
                              sel_gpu, wts_gpu, p.rows, p.hidden,
@@ -290,13 +278,8 @@ int main() {
         }
         std::cout << "moe_ffn_test: max abs diff vs float reference = " << max_abs
                   << ", max rel = " << max_rel << "\n";
-        // The GPU kernel operates in BF16, so the legitimate reference is the
-        // BF16-cast of the float computation, not the float computation itself.
-        // Keep the float comparison only as a loose sanity bound.
         CELEG_TEST_CHECK(max_rel < 0.25f);
 
-        // Also verify against a pure-BF16 CPU recompute (per-element tolerance
-        // tightened to account only for BF16 rounding of the weights/inputs).
         float max_abs_bf16 = 0.0f;
         for (size_t i = 0; i < out_gpu.size(); ++i) {
             const float g = __bfloat162float(out_gpu[i]);
@@ -304,8 +287,6 @@ int main() {
             max_abs_bf16 = std::max(max_abs_bf16, std::fabs(g - bf16_expected));
         }
         std::cout << "moe_ffn_test: max abs diff vs bf16-cast reference = " << max_abs_bf16 << "\n";
-        // BF16 carries ~3 decimal digits; a per-element deviation larger than
-        // 0.1 indicates a real kernel mismatch rather than rounding.
         CELEG_TEST_CHECK(max_abs_bf16 < 0.1f);
 
         std::cout << "moe_ffn_test: ok\n";

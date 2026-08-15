@@ -15,4 +15,4 @@ void launch_orthogonalize_current_value(
     float minimum_norm_squared,
     cudaStream_t stream);
 
-} // namespace celeg
+}

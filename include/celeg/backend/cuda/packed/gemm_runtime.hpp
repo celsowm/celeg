@@ -6,8 +6,6 @@
 
 namespace celeg {
 
-// Owns packed execution's lazily-created GEMM/autotuning runtime. The
-// compiled packed program only borrows the dispatcher during a launch.
 class PackedGemmRuntime {
 public:
     void ensure(cudaStream_t stream, const CudaModelOptions& options);
@@ -18,4 +16,4 @@ private:
     CudaModelOptions options_{};
 };
 
-} // namespace celeg
+}

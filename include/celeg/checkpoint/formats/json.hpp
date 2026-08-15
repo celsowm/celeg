@@ -43,4 +43,4 @@ private:
     value_t value_;
 };
 
-} // namespace celeg
+}

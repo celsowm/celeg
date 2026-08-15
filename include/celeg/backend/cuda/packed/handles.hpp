@@ -4,9 +4,6 @@
 
 namespace celeg {
 
-// CUDA objects shared by the packed workspace and its compiled operators.
-// Keeping their lifetime in one value makes stream/handle ownership explicit
-// and prevents individual operators from creating runtime resources.
 struct PackedExecutionHandles {
     PackedExecutionHandles() : stream(), cublas(stream.get()) {}
 
@@ -17,4 +14,4 @@ struct PackedExecutionHandles {
     CublasHandle cublas;
 };
 
-} // namespace celeg
+}

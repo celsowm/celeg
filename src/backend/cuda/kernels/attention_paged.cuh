@@ -1,15 +1,3 @@
-// Multi-request batched decode against a paged KV cache: one shared pool of
-// fixed-size pages plus a per-session page table, so sessions grow without
-// reserving a contiguous max-context slab each.
-//
-// Every KV access goes through paged_vector_offset / paged_scale_offset from
-// kv_cache.cuh to translate a logical token index into (page, slot) -- which is
-// why this leaf must be included after kv_cache.cuh. It is the only attention
-// leaf with that dependency.
-//
-// Strict/online are selected by a template parameter rather than the `mode`
-// runtime switch used elsewhere, plus a segmented partial/reduce pair for long
-// contexts.
 
 template <bool Strict>
 __global__ void gqa_decode_paged_batch_kernel(

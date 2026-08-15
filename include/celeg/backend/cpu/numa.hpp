@@ -26,8 +26,6 @@ struct CpuNumaTopology {
 
 CpuNumaTopology detect_cpu_numa_topology();
 
-// Best-effort Linux placement. Returns false when NUMA placement is unavailable
-// or forbidden by the host/container. The memory remains valid in all cases.
 bool bind_memory_to_numa_node(void* address, size_t bytes, int node) noexcept;
 
-} // namespace celeg
+}

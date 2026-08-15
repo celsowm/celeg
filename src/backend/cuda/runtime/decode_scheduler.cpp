@@ -1,12 +1,9 @@
 #include "engine_internal.hpp"
-// Keep the decode scheduler bound to the concrete CudaModel contract.
 
 namespace celeg {
 bool CudaSchedulerDriver::run_decode_work() {
     struct Work { Lane* lane; RequestId id; bool paged_ready; bool forcing_prefix; };
     std::vector<Work> work;
-    // Phase 1: build work list under a single lock.  Copy paged_ready so
-    // the classify phase (phase 3) never needs to re-acquire the lock.
     std::vector<RequestId> page_needed;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -40,7 +37,6 @@ bool CudaSchedulerDriver::run_decode_work() {
             --decode_budget;
         }
     }
-    // Phase 1b: allocate pages outside the lock, then commit.
     if (!page_needed.empty()) {
         std::vector<std::optional<std::vector<uint32_t>>> allocations;
         std::vector<RequestId> page_failed;
@@ -168,10 +164,6 @@ bool CudaSchedulerDriver::run_decode_work() {
                 accept_token(packed_work[i], packed_decode_output_[i], true);
             }
         } catch (const std::invalid_argument& error) {
-            // A paged request normally has no local KV after prefill import.
-            // Only fall back when every row still owns a valid contiguous cache;
-            // otherwise surface the page-table/packed error instead of invoking
-            // the lane path with null cache pointers.
             bool can_fallback = true;
             for (const Work& item : packed_work) {
                 if (!item.lane->model->session().local_kv_cache_available()) {
@@ -203,8 +195,6 @@ bool CudaSchedulerDriver::run_decode_work() {
         }
     }
 
-    // Requests not eligible for the packed kernel continue through the v0.0.9
-    // multi-stream lane path. All streams are enqueued before any is joined.
     std::vector<Work> launched;
     launched.reserve(lane_work.size());
     for (const Work& item : lane_work) {
@@ -230,4 +220,4 @@ bool CudaSchedulerDriver::run_decode_work() {
     return !work.empty();
 }
 
-} // namespace celeg
+}

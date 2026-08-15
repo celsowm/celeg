@@ -28,7 +28,7 @@ std::size_t complete_utf8_prefix(std::string_view text) {
     return cursor;
 }
 
-} // namespace
+}
 
 namespace celeg::serve {
 
@@ -71,4 +71,4 @@ ChatGenerationDelta ChatGenerationInterpreter::consume(
     return delta;
 }
 
-} // namespace celeg::serve
+}

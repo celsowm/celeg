@@ -162,7 +162,7 @@ SchedulerPolicy cuda_scheduler_policy(int value) {
         default: throw std::invalid_argument("invalid CUDA scheduler policy");
     }
 }
-} // namespace
+}
 
 CudaModelOptions cuda_options(const celeg_cuda_model_options& input) {
     if (input.flags != 0) {
@@ -194,4 +194,4 @@ ConcurrentEngineOptions cuda_engine_options(const celeg_cuda_engine_options& inp
 }
 #endif
 
-} // namespace celeg::api
+}

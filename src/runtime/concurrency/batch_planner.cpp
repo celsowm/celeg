@@ -37,7 +37,7 @@ std::vector<int> order_for(const std::vector<LaneSnapshot>& lanes,
     }
     return result;
 }
-} // namespace
+}
 
 std::vector<int> BatchPlanner::order_prefill(
     const std::vector<LaneSnapshot>& lanes) const {
@@ -62,4 +62,4 @@ std::vector<size_t> BatchPlanner::order_priority(
     return result;
 }
 
-} // namespace celeg::detail
+}

@@ -8,7 +8,7 @@ namespace celeg::app::serve {
 
 namespace {
 namespace protocol = celeg::serve::protocol;
-} // namespace
+}
 
 void register_tokenize_route(uWS::App& app, const celeg::ITokenizer& tokenizer,
                              const celeg::ResolvedInteraction& interaction,
@@ -21,4 +21,4 @@ void register_tokenize_route(uWS::App& app, const celeg::ITokenizer& tokenizer,
     });
 }
 
-} // namespace celeg::app::serve
+}

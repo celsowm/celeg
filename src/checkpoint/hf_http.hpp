@@ -22,4 +22,4 @@ void http_download_file(const std::string& path,
                         bool quiet);
 #endif
 
-} // namespace celeg::hf_internal
+}

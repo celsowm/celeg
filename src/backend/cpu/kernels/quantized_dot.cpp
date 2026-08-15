@@ -226,7 +226,7 @@ float q4_dot_neon(const uint8_t* packed_row, const uint16_t* scales_bf16,
 }
 #endif
 
-} // namespace
+}
 
 float q4_dot_scalar(const uint8_t* packed_row, const uint16_t* scales_bf16,
                     const float* activation, size_t cols, size_t group_size,
@@ -283,4 +283,4 @@ Q4Q8DotFunction select_q4_q8_dot_kernel(CpuIsa isa) {
     return nullptr;
 }
 
-} // namespace celeg
+}

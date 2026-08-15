@@ -28,8 +28,6 @@ using MetadataValue = std::variant<
     std::vector<double>,
     std::vector<std::string>>;
 
-// Format-neutral metadata. The checkpoint format readers only normalize value
-// representation; architecture modules own the meaning of individual keys.
 struct CheckpointMetadata {
     CheckpointSourceFormat source_format = CheckpointSourceFormat::Safetensors;
     std::string repository_hint;
@@ -50,8 +48,6 @@ struct CheckpointMetadata {
     std::vector<double> numbers(std::string_view key) const;
     std::vector<std::string> strings(std::string_view key) const;
 
-    // Architecture-facing schema access. Format-specific key spelling stays
-    // here; architecture resolvers consume one normalized lookup surface.
     bool is_gguf() const { return source_format == CheckpointSourceFormat::Gguf; }
     std::string key(std::string_view safetensors_key,
                     std::string_view gguf_key) const;
@@ -70,4 +66,4 @@ struct CheckpointMetadata {
     static CheckpointMetadata from_gguf(const GgufFile& file);
 };
 
-} // namespace celeg
+}

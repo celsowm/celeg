@@ -123,7 +123,7 @@ public:
 };
 #endif
 
-} // namespace
+}
 
 std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     const char* path, const celeg_engine_options& options) {
@@ -165,4 +165,4 @@ std::unique_ptr<celeg::serve::ServiceBundle> create_service_bundle(
     return factory.create(request);
 }
 
-} // namespace celeg::api
+}

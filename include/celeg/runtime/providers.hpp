@@ -67,8 +67,6 @@ public:
         const std::filesystem::path& model_path) const = 0;
 };
 
-// A runtime module contributes one cohesive semantic capability. RuntimeBuilder
-// owns the catalogs and freezes them after all modules have registered.
 class IRuntimeModule {
 public:
     virtual ~IRuntimeModule() = default;
@@ -86,10 +84,6 @@ public:
         const BackendCreateRequest& request) const = 0;
 };
 
-// Optional capability for ABI-facing backend configuration. Keeping this as a
-// separate interface lets ordinary runtime factories remain focused on
-// already-typed options while extensible API entry points delegate decoding
-// to the backend that owns the byte representation.
 class IAbiBackendFactory : public IBackendFactory {
 public:
     ~IAbiBackendFactory() override = default;
@@ -180,4 +174,4 @@ using VisionProviderCatalog = ProviderCatalog<IVisionProviderFactory>;
 std::unique_ptr<ITokenizerProvider> make_builtin_tokenizer_provider(
     std::vector<TokenizerPreTokenizerRule> rules = {});
 
-} // namespace celeg
+}

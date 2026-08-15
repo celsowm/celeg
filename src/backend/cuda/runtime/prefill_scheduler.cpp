@@ -1,5 +1,4 @@
 #include "engine_internal.hpp"
-// Keep the prefill scheduler bound to the concrete CudaModel contract.
 
 namespace celeg {
 bool CudaSchedulerDriver::run_prefill_work() {
@@ -186,4 +185,4 @@ bool CudaSchedulerDriver::run_prefill_work() {
     return !work.empty();
 }
 
-} // namespace celeg
+}

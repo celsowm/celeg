@@ -16,4 +16,4 @@ public:
                                std::uint64_t& rng_state);
 };
 
-} // namespace celeg
+}

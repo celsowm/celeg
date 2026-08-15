@@ -571,4 +571,4 @@ void execute_cpu_packed_batch(std::span<CpuCompiledModel* const> sessions,
     scratch.forward(sessions, tokens, compute_logits);
 }
 
-} // namespace celeg
+}

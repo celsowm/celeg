@@ -143,7 +143,7 @@ std::string bytes(size_t count) {
     out << std::fixed << std::setprecision(unit ? 2 : 0) << value << ' ' << units[unit];
     return out.str();
 }
-} // namespace
+}
 
 int main(int argc, char** argv) {
     try {

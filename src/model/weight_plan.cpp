@@ -195,7 +195,7 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
     }
 }
 
-} // namespace
+}
 
 void build_weight_plan_from_graph(ResolvedModel& model,
                                   const ITensorNamingPolicy& naming_policy) {
@@ -283,4 +283,4 @@ void resolve_weight_plan(ResolvedModel& model,
     }
 }
 
-} // namespace celeg
+}

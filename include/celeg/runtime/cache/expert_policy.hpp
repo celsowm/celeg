@@ -7,8 +7,6 @@
 
 namespace celeg {
 
-// The identity of an expert is shared by CPU caches, host staging, and GPU
-// residency.  The payload and synchronization mechanisms remain tier-owned.
 struct ExpertKey {
     int layer = -1;
     int expert = -1;
@@ -57,4 +55,4 @@ inline double expert_priority(double heat, std::uint64_t age) {
     return heat + 1.0 / (1.0 + static_cast<double>(age));
 }
 
-} // namespace celeg
+}

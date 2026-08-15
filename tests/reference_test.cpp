@@ -13,7 +13,7 @@ void near(float a, float b, float tolerance = 0.02f) {
     }
 }
 
-} // namespace
+}
 
 int main() {
     using celeg::reference::conv_decode_bf16;
@@ -37,10 +37,10 @@ int main() {
     near(vector[1], -4.0f);
     near(vector[3], 2.0f);
 
-    const std::vector<float> q = {1, 0, 1, 0}; // 2 query heads, dim 2
+    const std::vector<float> q = {1, 0, 1, 0};
     const std::vector<float> keys = {
-        1, 0, // token 0, kv head 0
-        0, 1, // token 1, kv head 0
+        1, 0,
+        0, 1,
     };
     const std::vector<float> values = {
         2, 4,

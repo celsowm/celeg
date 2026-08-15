@@ -24,7 +24,7 @@ private:
     const TensorRoleBindings& bindings_;
 };
 
-} // namespace
+}
 
 
 ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const {
@@ -49,4 +49,4 @@ ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) co
     return result;
 }
 
-} // namespace celeg
+}

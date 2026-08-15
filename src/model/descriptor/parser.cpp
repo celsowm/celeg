@@ -249,4 +249,4 @@ Descriptor parse_descriptor(const Json& value) {
 }
 
 
-} // namespace celeg::descriptor_detail
+}

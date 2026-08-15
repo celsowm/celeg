@@ -20,4 +20,4 @@ ModelBootstrap load_model_bootstrap(const std::filesystem::path& model_path,
     return bootstrap;
 }
 
-} // namespace celeg::detail
+}

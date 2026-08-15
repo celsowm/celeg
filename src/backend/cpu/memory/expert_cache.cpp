@@ -212,4 +212,4 @@ bool CpuExpertCache::protected_resident(int layer, int expert) const {
            it->second.protected_entry;
 }
 
-} // namespace celeg
+}

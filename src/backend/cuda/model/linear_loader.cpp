@@ -82,12 +82,6 @@ const LinearWeight* WeightLoader::load_linear_weight(
     DeviceWeight weight;
     weight.shape = tensor.shape;
 
-    // Native GGUF block-quantized weights: by default they are dequantized to
-    // BF16 once here (at load time, off the hot path) so every GEMM runs
-    // through the tensor-core cuBLAS/cuBLASLt path. With --weight-mode native
-    // the raw blocks are kept on-device in their on-disk super-block layout;
-    // the matmul kernels dequantize on the fly, reading ~3x less memory per
-    // decode token at the cost of scalar dequant inside the kernel.
     if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
         if (ggml_type != GgmlType::Q2_K && ggml_type != GgmlType::Q3_K &&
@@ -193,9 +187,6 @@ const LinearWeight* WeightLoader::load_linear_weight(
                                 weight.bf16_storage.data(),
                                 host_bf16.size() * sizeof(__nv_bfloat16),
                                 cudaMemcpyDeviceToHost));
-            // Keep the BF16 device buffer as a prefill fallback: the W8A16
-            // kernel is a scalar GEMV (m=1 decode), so prefill (m>1) dispatches
-            // to BF16 cuBLAS tensor-core GEMM via weight.linear.bf16.
             cuda_loader_detail::quantize_and_bind(
                 weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                 static_cast<size_t>(rows), static_cast<size_t>(cols),
@@ -364,11 +355,6 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         throw std::runtime_error("mixed dense/quantized concat is not supported: " + synthetic_name);
     }
 
-    // GGUF block-quantized concat: by default dequantize every source stream
-    // straight into its row-offset slice of one combined BF16 buffer (tensor-
-    // core GEMM on BF16 beats the scalar dequantizing GEMV/GEMM kernels).
-    // With --weight-mode native, keep each source's raw blocks as a separate
-    // GGUF segment so the matmul kernels dequantize on the fly.
     if (views.front().dtype == TensorDType::Quantized) {
         bool requires_host_dequantization = false;
         for (const auto& v : views) {
@@ -384,9 +370,6 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 v_ggml_type == GgmlType::Q4_0;
         }
 
-        // Q4_0 is a standard GGUF primitive, but has no native CUDA matmul
-        // kernel. Decode it at load time so mixed Q4_0/K concatenations retain
-        // their logical row layout without adding a model-specific path.
         if (requires_host_dequantization) {
             std::vector<__nv_bfloat16> host_bf16(
                 static_cast<size_t>(total_rows) * common_width);
@@ -484,7 +467,6 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                                 weight.bf16_storage.data(),
                                 count * sizeof(__nv_bfloat16),
                                 cudaMemcpyDeviceToHost));
-            // Keep BF16 device buffer as prefill fallback (see load_linear_weight).
             cuda_loader_detail::quantize_and_bind(
                 weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                 static_cast<size_t>(total_rows), static_cast<size_t>(common_width),
@@ -558,4 +540,4 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
     return &it->second.linear;
 }
 
-} // namespace celeg
+}

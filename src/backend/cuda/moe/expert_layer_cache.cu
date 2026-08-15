@@ -42,7 +42,7 @@ __global__ void resolve_residency_kernel(const int* sel_dev,
     }
 }
 
-} // namespace
+}
 
 ExpertLayerCache::ExpertLayerCache(int num_experts, int capacity,
                                    std::size_t gate_up_bytes,
@@ -147,8 +147,6 @@ int ExpertLayerCache::resolve_on_device(
     const int total = rows * K;
     if (total == 0) return 0;
 
-    // The caller waits for the previous FFN and prefetch events before this
-    // method, so slots pinned for the preceding batch are safe to release now.
     for (Slot& slot : slots_) slot.batch_pinned = false;
 
     const int zero = 0;
@@ -383,10 +381,6 @@ void ExpertLayerCache::promote(int expert, int slot,
                         down_host_dev_[static_cast<size_t>(entry.expert)], stream);
     }
 
-    // This overload is used by the disk-backed residency path.  Its sources
-    // are ordinary/pinned host buffers owned by HostExpertCache, not CUDA
-    // device pointers.  Keep the direction explicit: cudaMemcpyDefault can
-    // misclassify a large Windows pinned allocation as a device/UVA pointer.
     CELEG_CUDA(cudaMemcpyAsync(entry.gate_up.data(), gate_up_src,
                               gate_up_bytes_, cudaMemcpyHostToDevice, stream));
     CELEG_CUDA(cudaMemcpyAsync(entry.down.data(), down_src,
@@ -615,4 +609,4 @@ const __nv_bfloat16* ExpertLayerCache::expert_down_dev(int expert) const {
     return slot < 0 ? nullptr : slots_[static_cast<size_t>(slot)].down.data();
 }
 
-} // namespace celeg
+}

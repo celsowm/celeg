@@ -86,4 +86,4 @@ PackedAttentionBatchPlan PackedAttentionBatchPlanner::prepare_prefill(
     return plan;
 }
 
-} // namespace celeg
+}

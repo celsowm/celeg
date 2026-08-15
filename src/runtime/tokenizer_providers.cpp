@@ -47,11 +47,11 @@ private:
     std::vector<TokenizerPreTokenizerRule> rules_;
 };
 
-} // namespace
+}
 
 std::unique_ptr<ITokenizerProvider> make_builtin_tokenizer_provider(
     std::vector<TokenizerPreTokenizerRule> rules) {
     return std::make_unique<BpeTokenizerProvider>(std::move(rules));
 }
 
-} // namespace celeg
+}

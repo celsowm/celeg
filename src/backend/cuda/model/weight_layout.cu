@@ -105,7 +105,7 @@ private:
     GgufLinearSegment segment_;
 };
 
-} // namespace
+}
 
 std::unique_ptr<IWeightLayout> make_weight_layout(
     WeightMode weight_mode,
@@ -129,4 +129,4 @@ std::unique_ptr<IWeightLayout> make_gguf_weight_layout(
     return std::make_unique<GgufWeightLayout>(segment);
 }
 
-} // namespace celeg
+}

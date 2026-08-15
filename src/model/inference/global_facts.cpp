@@ -197,7 +197,7 @@ void initialize_graph(CanonicalInferenceContext& context) {
     }
 }
 
-} // namespace
+}
 
 CanonicalInferenceContext initialize_canonical_facts(
     const InferenceInput& input) {
@@ -305,4 +305,4 @@ CanonicalInferenceContext initialize_canonical_facts(
     return context;
 }
 
-} // namespace celeg::inference_detail
+}

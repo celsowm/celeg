@@ -1,7 +1,3 @@
-// Policy tests for the CUDA attention capability matrix.
-//
-// The matrix is host-only data, so these tests run on every preset: they check
-// what the backend claims to support, not what a GPU computes.
 
 #include "celeg/backend/cuda/attention_capability.hpp"
 #include "support/assertions.hpp"
@@ -58,7 +54,6 @@ bool rejects(const AttentionRequest& request, AttentionUnsupportedReason reason,
     try {
         (void)require_attention_capability(request);
     } catch (const UnsupportedAttentionCapability& error) {
-        // The message must name the combination, not just "unsupported".
         const std::string message = error.what();
         return error.reason() == reason && error.algorithm() == algorithm &&
                message.find(attention_algorithm_name(algorithm)) != std::string::npos &&
@@ -69,7 +64,6 @@ bool rejects(const AttentionRequest& request, AttentionUnsupportedReason reason,
     return false;
 }
 
-// --- the matrix is well formed -------------------------------------------
 
 void matrix_rows_are_unique() {
     for (const AttentionCapability& a : detail::kAttentionCapabilities) {
@@ -86,8 +80,6 @@ void matrix_rows_are_unique() {
     }
 }
 
-// Every reachable request must resolve to a plan the matrix marks supported, or
-// be rejected: it must never silently name a kernel that is not there.
 void resolution_never_contradicts_the_matrix() {
     const std::array<bool, 2> flags{false, true};
     const std::array<int, 4> head_dims{32, 64, 128, 192};
@@ -116,14 +108,11 @@ void resolution_never_contradicts_the_matrix() {
     request.head_dim = head_dim;
     request.rows = rows;
     const AttentionCapability plan = resolve_attention_capability(request);
-    // The answer echoes the request: a plan can never be attributed to a
-    // different combination than the one asked about.
     CELEG_TEST_CHECK(plan.kv_format == format);
     CELEG_TEST_CHECK(plan.operation == operation);
     CELEG_TEST_CHECK(plan.layout == layout);
     CELEG_TEST_CHECK(plan.position_source == source);
     CELEG_TEST_CHECK(plan.bias == bias);
-    // ALiBi requests may only ever produce the fused ALiBi family.
     CELEG_TEST_CHECK((bias == AttentionPositionBias::Alibi) ==
                      (plan.algorithm == AttentionAlgorithm::Alibi));
     const AttentionCapability row = attention_capability(
@@ -153,10 +142,7 @@ void resolution_never_contradicts_the_matrix() {
     CELEG_TEST_CHECK(rejected_count > 0);
 }
 
-// --- the support matrix as it stands today --------------------------------
 
-// Prefill: Int8 has alibi/online/strict; BF16 additionally has flash/gemm/
-// segmented.  This asymmetry is intentional and is asserted, not inferred.
 void prefill_support_matrix_is_asymmetric() {
     const auto selectable = [](KvCacheMode format, AttentionAlgorithm algorithm) {
         const AttentionPositionBias bias = algorithm == AttentionAlgorithm::Alibi
@@ -178,7 +164,6 @@ void prefill_support_matrix_is_asymmetric() {
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Gemm));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Segmented));
     CELEG_TEST_CHECK(selectable(KvCacheMode::Bf16, AttentionAlgorithm::Strict));
-    // A chunk-local online prefill kernel exists but bulk prefill never picks it.
     CELEG_TEST_CHECK(!selectable(KvCacheMode::Bf16, AttentionAlgorithm::Online));
     CELEG_TEST_CHECK(attention_capability(
         KvCacheMode::Bf16, AttentionPositionBias::None, AttentionOperation::Prefill,
@@ -192,19 +177,15 @@ void prefill_support_matrix_is_asymmetric() {
         AttentionUnsupportedReason::NoKernelForCombination);
 }
 
-// --- strict paths ---------------------------------------------------------
 
 void strict_paths() {
     for (KvCacheMode format : kFormats) {
-        // Prefill without fast attention is exact two-pass softmax in both formats.
         CELEG_TEST_CHECK(require_attention_capability(
             prefill_request(format, false, 128, 4096)).algorithm ==
             AttentionAlgorithm::Strict);
-        // ... regardless of head dimension or row count.
         CELEG_TEST_CHECK(require_attention_capability(
             prefill_request(format, false, 64, 1)).algorithm ==
             AttentionAlgorithm::Strict);
-        // Decode without fast attention and without chunking is strict too.
         for (AttentionPositionSource source : kSources) {
             CELEG_TEST_CHECK(require_attention_capability(decode_request(
                 format, AttentionKvLayout::Contiguous, source)).algorithm ==
@@ -221,25 +202,20 @@ void strict_paths() {
     }
 }
 
-// --- fast-path selection by head dimension and row count ------------------
 
 void prefill_fast_path_selection() {
-    // BF16: the tiled path is used above the preferred head dimension even when
-    // the flash flag is absent, and only up to the maximum it supports.
     AttentionRequest request = prefill_request(KvCacheMode::Bf16, true, 128, 16);
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Flash);
     request.head_dim = 65;
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Flash);
-    // At or below the preferred head dimension the flag decides.
     request.head_dim = 64;
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Gemm);
     request.flash_attention_requested = true;
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Flash);
-    // Above the tiled kernel's head-dimension ceiling the flag cannot force it.
     request.head_dim = 129;
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Gemm);
@@ -247,8 +223,6 @@ void prefill_fast_path_selection() {
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Gemm);
 
-    // Int8 fast prefill is online regardless of head dimension and row count:
-    // there is no Int8 tiled, GEMM or segmented prefill kernel to fall into.
     for (int head_dim : {32, 64, 128, 256}) {
         for (int rows : {1, 4096, 1 << 20}) {
             AttentionRequest int8 = prefill_request(KvCacheMode::Int8, true, head_dim, rows);
@@ -259,10 +233,8 @@ void prefill_fast_path_selection() {
     }
 }
 
-// --- long-context fallbacks ----------------------------------------------
 
 void long_context_fallback_selection() {
-    // BF16 prefill above the dense-scratch row ceiling falls back to segmented.
     AttentionRequest request = prefill_request(KvCacheMode::Bf16, true, 64,
                                                kAttentionMaxGemmRows);
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
@@ -270,12 +242,10 @@ void long_context_fallback_selection() {
     request.rows = kAttentionMaxGemmRows + 1;
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Segmented);
-    // A flash-eligible head dimension keeps the tiled path at any row count.
     request.head_dim = 128;
     CELEG_TEST_CHECK(require_attention_capability(request).algorithm ==
                      AttentionAlgorithm::Flash);
 
-    // Decode: the session-resolved chunking decision outranks fast attention.
     for (KvCacheMode format : kFormats) {
         for (AttentionKvLayout layout : {AttentionKvLayout::Contiguous,
                                          AttentionKvLayout::Paged}) {
@@ -288,8 +258,6 @@ void long_context_fallback_selection() {
             CELEG_TEST_CHECK(require_attention_capability(decode).algorithm ==
                              AttentionAlgorithm::Segmented);
         }
-        // Packed batch-pointer decode has no segmented kernel: asking for one is
-        // a deliberate rejection, not a silent fall back to the online kernel.
         AttentionRequest packed = decode_request(
             format, AttentionKvLayout::BatchPointers,
             AttentionPositionSource::DeviceCounter);
@@ -300,17 +268,14 @@ void long_context_fallback_selection() {
     }
 }
 
-// --- ALiBi ----------------------------------------------------------------
 
 void alibi_combinations() {
     for (KvCacheMode format : kFormats) {
-        // Prefill.
         AttentionRequest prefill = prefill_request(format, true, 128, 4096);
         prefill.bias = AttentionPositionBias::Alibi;
         prefill.flash_attention_requested = true;
         CELEG_TEST_CHECK(require_attention_capability(prefill).algorithm ==
                          AttentionAlgorithm::Alibi);
-        // Device-position decode, every layout that has a kernel.
         for (AttentionKvLayout layout : kLayouts) {
             AttentionRequest decode = decode_request(
                 format, layout, AttentionPositionSource::DeviceCounter);
@@ -320,8 +285,6 @@ void alibi_combinations() {
             CELEG_TEST_CHECK(require_attention_capability(decode).algorithm ==
                              AttentionAlgorithm::Alibi);
         }
-        // Host-position decode (prompt-embedding and tokenwise chunk prefill)
-        // has no ALiBi kernel: it must reject rather than run the unbiased one.
         AttentionRequest host = decode_request(
             format, AttentionKvLayout::Contiguous, AttentionPositionSource::HostScalar);
         host.bias = AttentionPositionBias::Alibi;
@@ -335,15 +298,12 @@ void alibi_combinations() {
     }
 }
 
-// --- paged versus contiguous ---------------------------------------------
 
 void paged_and_contiguous_parity() {
     for (KvCacheMode format : kFormats) {
         for (AttentionAlgorithm algorithm : {AttentionAlgorithm::Strict,
                                              AttentionAlgorithm::Online,
                                              AttentionAlgorithm::Segmented}) {
-            // Device-position decode supports the same families paged and
-            // contiguous.
             CELEG_TEST_CHECK(attention_capability(
                 format, AttentionPositionBias::None, AttentionOperation::Decode,
                 AttentionKvLayout::Contiguous, AttentionPositionSource::DeviceCounter,
@@ -353,8 +313,6 @@ void paged_and_contiguous_parity() {
                 AttentionKvLayout::Paged, AttentionPositionSource::DeviceCounter,
                 algorithm).supported);
         }
-        // Bulk prefill exists only for the contiguous cache; the paged and
-        // packed layouts prefill tokenwise through decode.
         for (AttentionKvLayout layout : {AttentionKvLayout::Paged,
                                          AttentionKvLayout::BatchPointers}) {
             for (AttentionAlgorithm algorithm : kAlgorithms) {
@@ -371,7 +329,6 @@ void paged_and_contiguous_parity() {
     }
 }
 
-// --- the policy is compile-time ------------------------------------------
 
 constexpr AttentionRequest constexpr_prefill(KvCacheMode format, bool fast, int head_dim) {
     AttentionRequest request{};
@@ -408,8 +365,8 @@ void run_all() {
     paged_and_contiguous_parity();
 }
 
-} // namespace
-} // namespace celeg
+}
+}
 
 int main() {
     celeg::run_all();

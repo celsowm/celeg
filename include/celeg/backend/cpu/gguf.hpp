@@ -43,9 +43,6 @@ struct CpuInt8Matrix {
 
 using CpuLinearMatrix = std::variant<Q4GroupMatrix, CpuGgufMatrix, CpuInt8Matrix>;
 
-// A logical [rows, cols] linear weight. Most weights have one segment.
-// GGUF concatenations may retain multiple row-contiguous native segments
-// so no dequantization or requantization is needed.
 struct CpuLinearWeight {
     uint32_t rows = 0;
     uint32_t cols = 0;
@@ -59,9 +56,6 @@ struct CpuLinearWeight {
     void validate() const;
 };
 
-// GGML Q8_K activation block: one scale for 256 signed values plus sums for
-// each 16-value group. The sums let Q4_K's per-subblock minimum term be
-// applied without reconstructing floating-point weights.
 struct CpuQ8KBlock {
     float d = 0.0f;
     std::array<int8_t, 256> qs{};
@@ -88,4 +82,4 @@ CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa);
 void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
                              float* output);
 
-} // namespace celeg
+}

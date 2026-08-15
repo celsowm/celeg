@@ -41,7 +41,6 @@ PrefixCacheManager::Entry* PrefixCacheManager::exact_entry(
 }
 
 bool PrefixCacheManager::evict_one(PrefixCacheIndex::EntryId protected_id) {
-    // O(log n) victim selection via the LRU index.
     const auto id = index_.oldest(protected_id);
     if (!id) return false;
     auto entry_it = entries_.find(*id);
@@ -146,7 +145,6 @@ PrefixAcquireResult PrefixCacheManager::acquire(
         throw;
     }
 
-    // Touch: update LRU index.
     index_.touch(indexed->id);
 
     result.status = PrefixAcquireStatus::Hit;
@@ -243,4 +241,4 @@ void PrefixCacheManager::clear() {
     index_.clear();
 }
 
-} // namespace celeg
+}

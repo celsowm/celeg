@@ -20,8 +20,6 @@ struct ChatGenerationDelta {
     bool finished = false;
 };
 
-// Interprets model text above the backend event stream incrementally. Only an
-// incomplete UTF-8 suffix is withheld from the client.
 class ChatGenerationInterpreter {
 public:
     ChatGenerationInterpreter(const ITokenizer& tokenizer,
@@ -37,4 +35,4 @@ private:
     std::size_t emitted_calls_ = 0;
 };
 
-} // namespace celeg::serve
+}

@@ -1,25 +1,3 @@
-// Isolated microbenchmark for the m=1 (decode) GEMV path.
-//
-// Decode issues one skinny GEMV per projection per layer, and those are
-// bandwidth-bound in principle, so it is tempting to assume they dominate. This
-// benchmark checks that assumption directly: it replays the exact per-token
-// sequence of GEMV shapes a model decodes and reports achieved GB/s against the
-// GPU's peak.
-//
-// It exists because the assumption was wrong once already. A weight-traffic
-// argument (BF16 weights move 3x the bytes of native Q4_K blocks) suggested the
-// GEMV path was running at ~17% of peak and that a native-quantized kernel would
-// give a 3x decode win. This benchmark showed the BF16 GEMV was already at 77%
-// of peak and only ~22% of the decode step, so the ceiling on that work was a
-// few percent, not 3x. The real cost was elsewhere -- see
-// scripts/profile_decode.py.
-//
-// Pair the two: this answers "how fast is this kernel", profile_decode.py
-// answers "does that kernel matter".
-//
-// Usage:
-//   celeg-decode-gemv-benchmark [iterations] [--shapes n,k,count ...]
-// Defaults to the LFM2.5-230M shape set.
 
 #include "celeg/backend/cuda/utils.cuh"
 
@@ -34,8 +12,6 @@
 
 namespace {
 
-// Pull in the shared kernel definitions (bf16_gemv_kernel, w8a16_gemv_kernel)
-// from the same header the production backend uses -- no hand-mirrored copies.
 #include "celeg/backend/cuda/kernels/gemv_kernels.cuh"
 
 struct Shape {
@@ -45,8 +21,6 @@ struct Shape {
     std::string name;
 };
 
-// Per-token GEMV sequence for LFM2.5-230M: hidden 1024, intermediate 2560,
-// 6 attention layers + 8 convolution layers, 14 MLP blocks, tied lm_head.
 std::vector<Shape> default_shapes() {
     return {
         {2048, 1024, 6, "qkv"},
@@ -59,7 +33,7 @@ std::vector<Shape> default_shapes() {
     };
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     int iterations = 200;
@@ -80,9 +54,6 @@ int main(int argc, char** argv) {
 
     cudaDeviceProp prop{};
     CELEG_CUDA(cudaGetDeviceProperties(&prop, 0));
-    // cudaDeviceProp::memoryClockRate was removed in CUDA 13; the attribute
-    // query is the portable spelling. Clock is kHz, bus width is bits, x2 for
-    // DDR.
     int mem_clock_khz = 0;
     int bus_width_bits = 0;
     CELEG_CUDA(cudaDeviceGetAttribute(&mem_clock_khz, cudaDevAttrMemoryClockRate, 0));
@@ -135,7 +106,6 @@ int main(int argc, char** argv) {
     celeg::CudaEvent begin;
     celeg::CudaEvent end;
 
-    // INT8 weight traffic per token
     double i8_token_bytes = 0.0;
     for (const Shape& s : shapes)
         i8_token_bytes += static_cast<double>(s.n) * s.k * 1 * s.count;
@@ -178,7 +148,6 @@ int main(int argc, char** argv) {
                     100.0 * gbs / peak_gbs);
     }
 
-    // Full token sequence for both
     const int seq_iters = 50;
     auto seq_bf16 = [&]() {
         for (size_t i = 0; i < shapes.size(); ++i)

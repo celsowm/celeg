@@ -82,7 +82,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 void CheckpointFormatCatalog::add(std::unique_ptr<ICheckpointFormat> format) {
     if (frozen_) throw std::logic_error("checkpoint format catalog is frozen");
@@ -143,4 +143,4 @@ void add_builtin_checkpoint_formats(CheckpointFormatCatalog& catalog) {
     catalog.add(std::make_unique<SafeTensorsFormat>());
 }
 
-} // namespace celeg
+}

@@ -204,4 +204,4 @@ private:
 const char* cpu_kv_cache_mode_name(CpuKvCacheMode mode);
 CpuKvCacheMode parse_cpu_kv_cache_mode(const std::string& text);
 
-} // namespace celeg
+}

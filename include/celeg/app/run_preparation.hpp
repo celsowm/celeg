@@ -15,9 +15,6 @@
 
 namespace celeg::app {
 
-// Backend-neutral command-line inputs.  Backend executables own their
-// specialized switches but share all checkpoint, tokenizer, chat, and
-// sampling semantics through this value object.
 struct RunInputs {
     std::string model;
     std::string repo;
@@ -48,4 +45,4 @@ std::vector<std::int32_t> prepare_prompt(const RunInputs& inputs,
                                          const PreparedRun& prepared);
 GenerationConfig generation_config(const RunInputs& inputs);
 
-} // namespace celeg::app
+}

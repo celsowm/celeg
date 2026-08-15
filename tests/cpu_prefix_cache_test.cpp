@@ -46,7 +46,6 @@ int main() {
                request.attention_pages[0].back());
         CELEG_TEST_CHECK(pools[0]->key_fp32(hit->snapshot.attention_pages[0].back(), 2)[1] == 21.0f);
 
-        // Mutating the private request tail must not modify the cached page.
         std::fill(key.begin(), key.end(), 999.0f);
         std::fill(value.begin(), value.end(), -999.0f);
         pools[0]->write(hit->snapshot.attention_pages[0].back(), 3,

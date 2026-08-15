@@ -70,4 +70,4 @@ void launch_conv_ragged_prefill(
     int requests, int hidden, int cache_length,
     cudaStream_t stream);
 
-} // namespace celeg
+}

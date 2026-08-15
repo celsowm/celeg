@@ -28,7 +28,7 @@ double milliseconds(Clock::duration duration) {
     return std::chrono::duration<double, std::milli>(duration).count();
 }
 
-} // namespace
+}
 
 struct CpuSchedulerDriver {
     using Request = CpuConcurrentRequest;
@@ -59,8 +59,6 @@ struct CpuSchedulerDriver {
                 engine_options.prefix_cache_max_entries,
                 engine_options.prefix_cache_max_bytes);
         }
-        // Start only after validation, so constructor failure cannot destroy a
-        // joinable std::thread during stack unwinding.
         if (engine_options.worker_thread) {
             engine_worker.start([this] { return worker_step(); }, 1000);
         }
@@ -293,7 +291,6 @@ struct CpuSchedulerDriver {
         if (!engine_options.decode_first && budget > 0) {
             progressed |= run_decode_batch(budget);
         } else if (engine_options.decode_first && budget > 0) {
-            // Decode requests that became ready during the ragged prefill waves.
             progressed |= run_decode_batch(budget);
         }
         {
@@ -417,7 +414,6 @@ bool CpuConcurrentEngine::cancel(RequestId id) {
         ++state_->metrics.cancelled;
         state_->refresh_counts_locked();
     } else {
-        // Active execution owns the session until the scheduler returns.
         request.cancel_requested = true;
     }
     return true;
@@ -470,4 +466,4 @@ std::string CpuConcurrentEngine::last_error() const {
     return state_->last_error_text;
 }
 
-} // namespace celeg
+}

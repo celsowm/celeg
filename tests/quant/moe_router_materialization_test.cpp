@@ -1,20 +1,3 @@
-// Phase 1.3: regression test for the MoE router materialization contract.
-//
-// The CUDA MoE router kernel consumes a float copy of the router weight, which
-// is produced by casting the BF16 router at load time (see
-// src/backend/cuda/model/weight_setup.cpp). Before Phase 1.1 the loader routed the
-// router tensor through the global --weight-mode quantizer, so under INT4 / INT8
-// / NativeGguf it produced a LinearWeight with .bf16 == nullptr, which crashed
-// weight_setup.cpp's launch_cast_bf16_to_float(router->bf16, ...).
-//
-// This test pins the contract that the router weight is ALWAYS materialized as
-// BF16 regardless of the global WeightMode, by constructing a tiny fake
-// IWeightRepository containing a single router-shaped BF16 tensor and asking
-// the WeightLoader for it under each WeightMode.
-//
-// The test runs on host only -- the WeightLoader materializes into a
-// DeviceWeight (CUDA-backed) so it requires a CUDA device; it links against
-// celeg_cuda_backend. See docs/ARCHITECTURE_EVIDENCE.md section 1.1.
 
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/detail/model/device_weights.hpp"
@@ -47,9 +30,6 @@ using celeg::WeightLoader;
 using celeg::WeightMode;
 using celeg::HostTensorView;
 
-// In-memory repository that returns one BF16 tensor when asked for the
-// router name of `layer`. Used to mirror what weight_setup.cpp sees for the MoE router
-// tensor on the safetensors side.
 class FakeRouterRepo : public IWeightRepository {
 public:
     FakeRouterRepo(int experts, int hidden, const std::vector<__nv_bfloat16>& bytes)
@@ -83,9 +63,6 @@ private:
     std::vector<__nv_bfloat16> bytes_;
 };
 
-// Acquires a fresh per-test shared weight arena keyed by mode, builds a loader,
-// and asks it for the router weight under that mode. Returns the loaded weight
-// kind + whether the BF16 pointer is non-null.
 struct RouterMaterialization {
     LinearStorageKind kind;
     bool bf16_nonnull;
@@ -102,7 +79,7 @@ RouterMaterialization materialize_router(WeightMode mode, int experts, int hidde
     CELEG_TEST_CHECK(router != nullptr);
     CELEG_TEST_CHECK(router->rows == experts);
     CELEG_TEST_CHECK(router->cols == hidden);
-    CELEG_TEST_CHECK(!router->quantized());  // contract from plan 1.1
+    CELEG_TEST_CHECK(!router->quantized());
     RouterMaterialization result{
         router->kind,
         router->bf16 != nullptr,
@@ -147,20 +124,16 @@ private:
 
 void verify_native_q4_router_is_materialized_as_bf16() {
     constexpr int experts = 1;
-    constexpr int hidden = 256; // one complete Q4_K super-block per row
+    constexpr int hidden = 256;
     const celeg::GgmlTypeTrait trait = celeg::ggml_type_trait(celeg::GgmlType::Q4_K);
     std::vector<std::byte> blocks(static_cast<size_t>(experts) * trait.type_size);
 
-    // A valid Q4_K block with d=1, dmin=0, scale=1 and q=1 everywhere.
-    // The decoded values are not important; this proves that a native
-    // quantized source follows the router's mandatory BF16 materialization
-    // path instead of being passed to the GGUF MMQ linear dispatcher.
     const __half d = __float2half(1.0f);
     const __half dmin = __float2half(0.0f);
     std::memcpy(blocks.data(), &d, sizeof(d));
     std::memcpy(blocks.data() + sizeof(d), &dmin, sizeof(dmin));
     auto* bytes = reinterpret_cast<uint8_t*>(blocks.data());
-    bytes[4] = 1; // six-bit scale for sub-block 0
+    bytes[4] = 1;
     std::fill(bytes + 16, bytes + trait.type_size, uint8_t{1});
 
     auto weights = std::make_shared<SharedModelWeights>();
@@ -174,10 +147,9 @@ void verify_native_q4_router_is_materialized_as_bf16() {
     CELEG_TEST_CHECK(!router->quantized());
 }
 
-} // namespace
+}
 
 int main() {
-    // Tiny router: 4 experts x 8 hidden, BF16.
     constexpr int E = 4, H = 8;
     std::vector<__nv_bfloat16> data(static_cast<size_t>(E) * H);
     for (size_t i = 0; i < data.size(); ++i) {
@@ -185,7 +157,6 @@ int main() {
         data[i] = __float2bfloat16(v);
     }
 
-    // Every WeightMode must produce a non-null BF16 router.
     for (auto mode : {WeightMode::Bf16, WeightMode::Int8, WeightMode::Int4,
                       WeightMode::NativeGguf}) {
         const auto m = materialize_router(mode, E, H, data, nullptr);

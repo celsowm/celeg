@@ -187,27 +187,6 @@ __device__ inline __nv_bfloat16 f_to_bf16(float v) {
     return __float2bfloat16(v);
 }
 
-// One block per (token, selected-expert) pair. Computes the SwiGLU FFN for
-// that token through the selected expert and atomically accumulates the
-// routing-weighted result into the token's FP32 output accumulator.
-//
-// Improvements over the original scalar slide-rule version:
-//   * The token hidden vector is staged into shared memory once per block
-//     (after a single cooperative BF16 -> FP32 cast) and reused by every
-//     gate_up channel. Down-projection reuses the per-pair `act_out` buffer
-//     which is already shared via __syncthreads.
-//   * Expert contributions accumulate into an FP32 buffer via atomicAdd,
-//     removing the previous BF16 CAS round-after-every-contribution reduce
-//     and matching the audit's "reduce in FP32, cast once" recommendation.
-//     The caller is responsible for invoking launch_finalize_moe_output to
-//     cast the accumulator back into the BF16 output buffer.
-// Channel-tiled MoE FFN kernels:
-//   1. moe_gate_up_swiglu_tiled_kernel: Grid (pairs, num_inter_tiles).
-//      Computes gate and up projections for each output channel tile in parallel,
-//      fuses the SwiGLU activation, and writes directly into scratch_activated.
-//   2. moe_down_tiled_kernel: Grid (pairs, num_hidden_tiles).
-//      Computes down-projection for each output hidden channel tile in parallel
-//      and atomically accumulates scaled contributions into output_accum.
 __global__ void moe_gate_up_swiglu_tiled_kernel(
     const __nv_bfloat16* gate_up,
     const __nv_bfloat16* const* gate_up_ptrs,
@@ -309,13 +288,13 @@ __global__ void cast_float_to_bf16_kernel(const float* input,
     output[i] = f_to_bf16(input[i]);
 }
 
-} // namespace
+}
 
 void launch_moe_ffn(const MoeFfnDevice& device,
                     const int* selected_experts,
                     const float* routing_weights,
                     const __nv_bfloat16* hidden,
-                    float* output_accum,        // [rows * hidden], FP32, caller-zeroed
+                    float* output_accum,
                     int rows, int K,
                     __nv_bfloat16* scratch_gate_up,
                     __nv_bfloat16* scratch_activated,
@@ -328,8 +307,6 @@ void launch_moe_ffn(const MoeFfnDevice& device,
         throw std::invalid_argument("invalid MoE FFN device configuration");
     }
     if (indirect) {
-        // Indirect mode resolves experts through the pointer tables; both must
-        // be present. Per-expert strides are irrelevant here.
         if (device.gate_up_ptrs == nullptr || device.down_ptrs == nullptr) {
             throw std::invalid_argument(
                 "MoE FFN offload requires both gate_up_ptrs and down_ptrs");
@@ -420,4 +397,4 @@ void launch_cast_bf16_to_float(const __nv_bfloat16* input,
     CELEG_KERNEL_CHECK();
 }
 
-} // namespace celeg
+}

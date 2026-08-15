@@ -92,7 +92,7 @@ std::vector<TemplateNode> parse_template(std::string_view source, std::string or
 void validate_program(const std::vector<TemplateNode>& nodes, std::string_view origin);
 std::optional<ToolCallGrammar> derive_tool_grammar(std::string_view source);
 
-} // namespace celeg::chat_template_detail
+}
 
 namespace celeg {
 
@@ -112,4 +112,4 @@ private:
     std::vector<chat_template_detail::TemplateNode> nodes_;
 };
 
-} // namespace celeg
+}

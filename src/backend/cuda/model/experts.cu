@@ -30,7 +30,7 @@ std::vector<__nv_bfloat16> load_named_expert_matrix(
     return std::vector<__nv_bfloat16>(source, source + count);
 }
 
-} // namespace
+}
 
 WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     const IWeightRepository& repo, int layer,
@@ -57,10 +57,6 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
     const size_t layer_gate_up_bytes = gate_up_bytes * static_cast<size_t>(num_experts);
     const size_t layer_down_bytes = down_bytes * static_cast<size_t>(num_experts);
 
-    // Mapped mode: allocate one persistent arena per layer (a single pinned +
-    // registered region) and point each expert into it. This avoids 704 separate
-    // cudaHostAlloc calls that can exhaust the driver's pinned-memory pool.
-    // Pinned mode: copy each expert into its own pinned allocation.
     __nv_bfloat16* gate_up_base = nullptr;
     __nv_bfloat16* down_base = nullptr;
     const __nv_bfloat16* gate_up_device_base = nullptr;
@@ -84,8 +80,6 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
         }
     }
 
-    // Reusable host staging buffer: assemble each expert's packed layout
-    // (gate_up = [w1; w3], down = [w2]).
     std::vector<__nv_bfloat16> gate_up_stage(gate_up_elems);
     std::vector<__nv_bfloat16> down_stage(down_elems);
     std::vector<__nv_bfloat16> decoded_stage;
@@ -172,7 +166,6 @@ WeightLoader::HostExpertLayer WeightLoader::load_moe_experts_host(
         }
 
         if (host_mode == ExpertHostMode::Mapped) {
-            // Copy the packed expert into its slot in the persistent arena.
             const size_t gu_off = static_cast<size_t>(e) * gate_up_elems;
             const size_t dw_off = static_cast<size_t>(e) * down_elems;
             std::memcpy(gate_up_base + gu_off,
@@ -383,4 +376,4 @@ std::vector<ExpertLocation> WeightLoader::build_expert_catalog_named(
 }
 
 
-} // namespace celeg
+}

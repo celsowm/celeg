@@ -27,7 +27,7 @@ int maximum_experts_per_token(const CompiledModelProgram& program) {
     }
     return result;
 }
-} // namespace
+}
 
 PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
                                  size_t maximum_prefill_tokens_value,
@@ -168,4 +168,4 @@ void PackedWorkspace::ensure_segmented_workspace(int rows, int chunks) {
     }
 }
 
-} // namespace celeg
+}

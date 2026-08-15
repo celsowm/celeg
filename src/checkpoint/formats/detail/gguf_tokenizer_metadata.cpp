@@ -34,9 +34,6 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
     }
 
     const std::string source = file.str_or("tokenizer.ggml.pre", "");
-    // GGUF stores a tokenizer implementation label rather than the semantic
-    // behavior consumed by the tokenizer engine. Normalize that format
-    // spelling at the import boundary; runtime composition never sees it.
     if (source == "lfm2" || source == "smaug-bpe") {
         result.pre_tokenizer = "numeric_triplets";
     } else if (source == "gpt2" || source == "granite") {
@@ -47,4 +44,4 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
     return result;
 }
 
-} // namespace celeg
+}

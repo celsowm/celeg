@@ -119,4 +119,4 @@ bool bind_memory_to_numa_node(void* address, size_t bytes, int node) noexcept {
 #endif
 }
 
-} // namespace celeg
+}

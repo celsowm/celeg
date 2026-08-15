@@ -83,4 +83,4 @@ ActivationKind parse_activation_kind(std::string_view value) {
                                 std::string(value));
 }
 
-} // namespace celeg::descriptor_detail
+}

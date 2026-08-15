@@ -21,7 +21,7 @@ float random_unit(std::uint64_t& state) {
     return static_cast<float>(unit);
 }
 
-} // namespace
+}
 
 std::int32_t CpuSampler::sample(std::span<const float> logits,
                                 int vocab_size,
@@ -61,10 +61,6 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
     const auto better = [](const Candidate& a, const Candidate& b) {
         return a.score == b.score ? a.token < b.token : a.score > b.score;
     };
-    // Select the K best candidates in linear expected time. The previous
-    // priority_queue performed O(V log K) heap updates for every token; this
-    // path is hot for CPU generation and the final K-way sort is sufficient
-    // for deterministic ordering and top-p truncation.
     std::vector<Candidate> candidates;
     candidates.reserve(static_cast<size_t>(vocab_size));
     for (std::int32_t token = 0; token < vocab_size; ++token) {
@@ -104,4 +100,4 @@ std::int32_t CpuSampler::sample(std::span<const float> logits,
     return candidates[active - 1].token;
 }
 
-} // namespace celeg
+}

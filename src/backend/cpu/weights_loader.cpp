@@ -23,7 +23,7 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
     return resolved_tensor_name(requests, role, layer, expert);
 }
 
-} // namespace
+}
 
 CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
@@ -653,11 +653,6 @@ void CpuCompiledModel::Shared::load_weights() {
         std::visit([&](const auto& value) {
             using Value = std::decay_t<decltype(value)>;
             const auto check_common = [&](const CommonWeights& common) {
-                // Hybrid schedules may intentionally omit a feed-forward
-                // block on recurrent layers.  The compiler has already
-                // proven that from the layer program; requiring dense MLP
-                // matrices here would reintroduce a backend-specific
-                // semantic assumption.
                 if (std::holds_alternative<std::monostate>(
                         program.layers[layer].feed_forward)) return;
                 require_matrix(common.w13, "layer " + std::to_string(layer) + ".w13");
@@ -701,4 +696,4 @@ void CpuCompiledModel::Shared::load_weights() {
     if (writer) writer->commit();
 }
 
-} // namespace celeg
+}

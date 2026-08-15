@@ -48,7 +48,7 @@ std::optional<ToolCallGrammar> derive_tool_grammar(std::string_view source) {
     return grammar;
 }
 
-} // namespace celeg::chat_template_detail
+}
 
 namespace celeg {
 
@@ -194,4 +194,4 @@ ToolParseResult ToolCallGrammar::parse(std::string_view generated) const {
     return result;
 }
 
-} // namespace celeg
+}

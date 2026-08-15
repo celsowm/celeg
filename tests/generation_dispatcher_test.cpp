@@ -24,9 +24,6 @@ using celeg::serve::RequestId;
 using celeg::serve::RequestStatus;
 using celeg::serve::ServingMetrics;
 
-// Minimal in-memory stand-in for CpuInferenceService/CudaInferenceService:
-// each step() emits one token per active request until max_output_tokens is
-// reached, letting the dispatcher be exercised without a real model.
 class FakeInferenceService final : public IRequestService,
                                    public ISchedulerDriver,
                                    public IServiceDiagnostics {
@@ -112,7 +109,7 @@ private:
     bool started_ = false;
 };
 
-} // namespace
+}
 
 int main() {
     FakeInferenceService service;
@@ -122,7 +119,6 @@ int main() {
     dispatcher.start();
     CELEG_TEST_CHECK(service.started());
 
-    // A request the dispatcher should drive to completion and auto-release.
     GenerateRequest request;
     request.max_output_tokens = 5;
     const RequestId id = service.submit(request);
@@ -150,19 +146,14 @@ int main() {
         for (std::int32_t i = 0; i < 5; ++i) CELEG_TEST_CHECK(received[i] == i);
     }
 
-    // The callback is notified before the dispatcher performs its mandated
-    // post-callback release, so wait for that final step rather than assuming
-    // that notification and release are simultaneous.
     const auto release_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     while (service.status(id) != RequestStatus::Failed &&
            std::chrono::steady_clock::now() < release_deadline) {
         std::this_thread::yield();
     }
 
-    // The dispatcher must have released the finished request on our behalf.
     CELEG_TEST_CHECK(service.status(id) == RequestStatus::Failed);
 
-    // unwatch() must stop delivery without releasing the request.
     GenerateRequest long_request;
     long_request.max_output_tokens = std::numeric_limits<std::size_t>::max();
     const RequestId long_id = service.submit(long_request);

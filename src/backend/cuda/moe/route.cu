@@ -9,15 +9,6 @@ namespace {
 
 using celeg::moe_sigmoid;
 
-// One block per row (token). Consumes GEMM-produced router logits, computes
-// probabilities/scores in shared memory, performs a small-K top-K selection
-// (K <= 64), and writes the
-// selected expert ids and (normalized, scaled) sigmoid routing weights.
-//
-// The selection is done deterministically: every thread loads the full
-// scores[0..E-1] into shared memory, then the first K threads each pick the
-// best expert not yet taken, scanning in order. This is O(E*K) per block and
-// avoids the race-prone atomicCAS cascade.
 __global__ void moe_router_kernel(const float* expert_bias,
                                   int* selected_experts,
                                   float* routing_weights,
@@ -108,12 +99,6 @@ __global__ void moe_router_kernel(const float* expert_bias,
         __syncthreads();
     }
 
-    // Deterministic top-K over the shared scores array. Slot k (0..K-1) is
-    // filled in order: thread k picks the highest-scoring expert not yet taken
-    // (ties broken by smaller expert id) and publishes it; a sync after each
-    // slot guarantees later slots observe earlier selections. A bitmask
-    // replaces the O(K)-per-check scan of a taken[] array, making selection
-    // O(E*K) instead of O(E*K^2).
     __shared__ int taken[64];
     if (threadIdx.x < K) taken[threadIdx.x] = -1;
     __syncthreads();
@@ -140,7 +125,6 @@ __global__ void moe_router_kernel(const float* expert_bias,
         __syncthreads();
     }
 
-    // Gather original sigmoid probabilities, normalize, and scale.
     if (threadIdx.x < K) {
         const int expert = taken[threadIdx.x];
         if (expert >= 0) {
@@ -161,7 +145,7 @@ __global__ void moe_router_kernel(const float* expert_bias,
     }
 }
 
-} // namespace
+}
 
 void launch_moe_router(const MoeRouterDevice& device,
                        const MoeRouterConfig& cfg,
@@ -182,8 +166,6 @@ void launch_moe_router(const MoeRouterDevice& device,
     CublasHandle cublas(stream);
     const float alpha = 1.0f;
     const float beta = 0.0f;
-    // C = W * hidden^T, with both inputs supplied in row-major storage. In
-    // cuBLAS' column-major view this is W^T(op=T) times hidden(op=N).
     CELEG_CUBLAS(cublasSgemm(
         cublas.get(), CUBLAS_OP_T, CUBLAS_OP_N,
         E, device.rows, device.hidden_dim,
@@ -203,4 +185,4 @@ void launch_moe_router(const MoeRouterDevice& device,
     CELEG_KERNEL_CHECK();
 }
 
-} // namespace celeg
+}

@@ -18,10 +18,6 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
         ? (weight + static_cast<size_t>(output_row) * packed_cols)
         : nullptr;
     const float row_scale = (output_row < n) ? scales[output_row] : 0.0f;
-    // tile_k is always a multiple of 8 (callers use 512), so every k-tile
-    // boundary lands on an even byte offset; only the row's base offset can
-    // break 4-byte alignment, so we check it once per row and reuse it for
-    // every tile.
     const bool row_weight_aligned =
         (output_row < n) && ((reinterpret_cast<uintptr_t>(row_weight) & 3u) == 0);
 
@@ -102,8 +98,6 @@ void launch_w4a16_linear(const __nv_bfloat16* x, const uint8_t* weight,
                          int m, int n, int k, float beta,
                          cudaStream_t stream) {
     constexpr int warps_per_block = 8;
-    // Use 512-element tiles (1 KB smem). For k <= 512, one chunk; for larger k,
-    // multiple chunks sharing the same smem buffer per activation row.
     constexpr int tile_k = 512;
     const unsigned grid_x = static_cast<unsigned>((n + warps_per_block - 1) / warps_per_block);
     const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);

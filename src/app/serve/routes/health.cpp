@@ -7,4 +7,4 @@ void register_health_routes(uWS::App& app) {
     app.get("/health", [](auto* res, auto* /*req*/) { res->writeStatus("200 OK")->end(); });
 }
 
-} // namespace celeg::app::serve
+}

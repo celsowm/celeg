@@ -13,4 +13,4 @@ void launch_bf16_gemv(const __nv_bfloat16* x,
                       float beta,
                       cudaStream_t stream);
 
-} // namespace celeg
+}

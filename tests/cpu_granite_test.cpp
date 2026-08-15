@@ -103,7 +103,7 @@ void compare_logits(const std::vector<float>& expected,
     CELEG_TEST_CHECK(maximum < 1e-5f);
 }
 
-} // namespace
+}
 
 int main() {
     const std::filesystem::path directory =

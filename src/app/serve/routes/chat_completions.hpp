@@ -12,8 +12,6 @@
 
 namespace celeg::app::serve {
 
-// POST /v1/chat/completions -- OpenAI-compatible, supports both a single
-// JSON response and (stream: true) a Server-Sent Events response.
 void register_chat_completions_route(uWS::App& app,
                                      celeg::serve::GenerationDispatcher& dispatcher,
                                      celeg::serve::IRequestService& service,
@@ -24,4 +22,4 @@ void register_chat_completions_route(uWS::App& app,
                                      std::size_t max_context_tokens,
                                      uWS::Loop* loop);
 
-} // namespace celeg::app::serve
+}

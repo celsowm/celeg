@@ -11,13 +11,6 @@
 
 namespace celeg {
 
-// Pure value type describing the per-page memory layout of a
-// PhysicalPagedKvCache. Extracting the offset/stride math into a standalone
-// struct lets future execution profiles supply a different layout (e.g. per-layer page
-// tokens, or a different quantization group) at construction time without
-// subclassing the cache itself. It also makes the
-// layout testable in isolation from the CUDA resources (Single
-// Responsibility Principle: the struct does math, the cache owns memory).
 struct PageLayout {
     struct Layer {
         int kv_width = 0;
@@ -42,9 +35,6 @@ struct PageLayout {
         if (page_tokens <= 0) {
             throw std::invalid_argument("PageLayout page_tokens must be positive");
         }
-        // A pure recurrent model has no KV layers. Keep an empty layout so
-        // the shared page allocator can still provide request lifetime and
-        // prefix-cache bookkeeping without allocating unused KV storage.
         layers.reserve(static_cast<size_t>(attention_layers));
         size_t vector_offset = 0;
         size_t scale_offset = 0;
@@ -69,9 +59,6 @@ struct PageLayout {
                 if (latent->latent_rank <= 0 || layer_width <= 0) {
                     throw std::invalid_argument("PageLayout latent layer has invalid dimensions");
                 }
-                // The key pool stores [latent key | rotary key], while the
-                // value pool uses the first latent_rank elements. Keeping a
-                // common stride preserves page-table and COW invariants.
                 layers.push_back({layer_width, 1, true, latent->latent_rank,
                                   rotary_width, vector_offset, scale_offset});
                 vector_offset += checked_multiply(
@@ -99,7 +86,6 @@ struct PageLayout {
         }
     }
 
-    // Number of bf16/int8 vector elements per page.
     size_t page_vector_elements() const {
         size_t total = 0;
         for (const Layer& layer : layers) {
@@ -111,7 +97,6 @@ struct PageLayout {
         return total;
     }
 
-    // Number of per-token scale elements per page (one per kv_head).
     size_t page_scale_elements() const {
         size_t total = 0;
         for (const Layer& layer : layers) {
@@ -123,8 +108,6 @@ struct PageLayout {
         return total;
     }
 
-    // Byte offset of a layer's first token within a single page's vector
-    // buffer. Used for per-layer COW copies and per-layer writes.
     size_t layer_vector_offset(int layer) const {
         return layers.at(static_cast<size_t>(layer)).vector_offset;
     }
@@ -147,8 +130,6 @@ struct PageLayout {
             "PageLayout layer scale count overflow");
     }
 
-    // Flat vector-element offset of page `page` (i.e. the first element of
-    // layer 0, token 0 of that page).
     size_t page_vector_offset(uint32_t page) const {
         return checked_multiply(static_cast<size_t>(page), page_vector_elements(),
                                 "PageLayout page vector offset overflow");
@@ -160,4 +141,4 @@ struct PageLayout {
     }
 };
 
-} // namespace celeg
+}

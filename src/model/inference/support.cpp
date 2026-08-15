@@ -15,10 +15,6 @@ bool shape_is(const TensorInventoryEntry& entry,
     const std::vector<std::int64_t> wanted(expected);
     if (entry.shape == wanted) return true;
 
-    // GGUF stores a depth-wise [channels, 1, taps] kernel as the equivalent
-    // two-dimensional [channels, taps] tensor.  The singleton axis has no
-    // mathematical meaning, so normalize that storage distinction at the
-    // evidence boundary instead of teaching every backend a format name.
     return entry.shape.size() == 2 && wanted.size() == 3 && wanted[1] == 1 &&
            entry.shape[0] == wanted[0] && entry.shape[1] == wanted[2];
 }
@@ -148,4 +144,4 @@ void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,
                                std::move(evidence)});
 }
 
-} // namespace celeg::inference_detail
+}

@@ -20,4 +20,4 @@ std::string read_required_file(const std::filesystem::path& path) {
     return *contents;
 }
 
-} // namespace celeg::app::serve
+}

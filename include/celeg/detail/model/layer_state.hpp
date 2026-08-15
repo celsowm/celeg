@@ -1,13 +1,5 @@
 #pragma once
 
-// Per-layer execution state: the mixer alternatives, the `Layer` variant and
-// its exhaustive dispatch helpers.
-//
-// Depends on the weight-binding headers (for `LinearWeight` /
-// `FeedForwardWeights`), on `DeviceBuffer` for the per-layer KV and recurrent
-// state, and on the resolved graph specs. It deliberately does NOT depend on
-// weight ownership (`DeviceWeight`/`WeightMap`), expert offload/residency
-// state or the cuBLASLt plan cache.
 
 #include "celeg/detail/exhaustive_visit.hpp"
 #include "celeg/detail/model/feed_forward_weights.hpp"
@@ -23,9 +15,6 @@
 
 namespace celeg {
 
-// ---------------------------------------------------------------------------
-// Per-layer topology.
-// ---------------------------------------------------------------------------
 
 struct LayerCommon {
     const __nv_bfloat16* operator_norm = nullptr;
@@ -126,9 +115,6 @@ struct MlpOnlyLayer {
 using Layer = std::variant<AttentionLayer, ConvolutionLayer, GatedDeltaNetLayer,
                            Mamba2Layer, MlpOnlyLayer>;
 
-// Free-function visitors replace the old common / as_attention /
-// as_convolution statics). Putting them at namespace scope means callers
-// in packed/kernels.cu no longer need `friend struct PackedDecodeExecutorImpl`.
 inline LayerCommon& common(Layer& layer) {
     return std::visit([](auto& value) -> LayerCommon& { return value.common; }, layer);
 }
@@ -166,14 +152,10 @@ inline const MlpOnlyLayer* as_mlp_only(const Layer& layer) {
     return std::get_if<MlpOnlyLayer>(&layer);
 }
 
-// Exhaustive mixer dispatch. Every alternative of `Layer` must be matched by a
-// handler naming its concrete type; there is no generic fallback, so adding a
-// mixer turns every dispatch site that has not been updated into a compile
-// error. Handlers receive a non-null pointer to the active alternative.
 template <typename LayerRef, typename... Handlers>
 decltype(auto) visit_layer(LayerRef&& layer, Handlers&&... handlers) {
     return visit_exhaustive(std::forward<LayerRef>(layer),
                             std::forward<Handlers>(handlers)...);
 }
 
-} // namespace celeg
+}

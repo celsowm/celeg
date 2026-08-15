@@ -23,14 +23,12 @@ int main() {
     const bool retained_invalid = pool.retain(std::vector<uint32_t>{99});
     CELEG_TEST_CHECK(!retained_invalid);
 
-    // Duplicate IDs are counted transactionally.
     const bool retained_duplicates = pool.retain(std::vector<uint32_t>{a->front(), a->front()});
     CELEG_TEST_CHECK(retained_duplicates);
     CELEG_TEST_CHECK(pool.ref_count(a->front()) == 3);
     pool.release(std::vector<uint32_t>{a->front(), a->front()});
     CELEG_TEST_CHECK(pool.ref_count(a->front()) == 1);
 
-    // An invalid item later in a release list must not mutate earlier pages.
     const uint32_t before = pool.ref_count(a->front());
     bool transactional_caught = false;
     try {

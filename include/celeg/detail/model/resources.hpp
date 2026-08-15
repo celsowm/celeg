@@ -50,9 +50,6 @@ struct CudaMtpResources {
     }
 };
 
-// CUDA model resource owner for immutable/shared topology decisions. Device
-// weights and backend caches are attached by setup, while request-local
-// position, phase, and metrics live in SessionState.
 struct CudaModelResources {
     explicit CudaModelResources(CudaExecutionPlan execution_plan)
         : plan_(std::move(execution_plan)), options_(plan_.options()),
@@ -78,4 +75,4 @@ struct CudaModelResources {
     std::unique_ptr<IWeightLayout> weight_layout_;
 };
 
-} // namespace celeg
+}

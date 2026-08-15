@@ -75,7 +75,7 @@ private:
     std::vector<uint32_t> free_;
 };
 
-} // namespace
+}
 
 int main() {
     using celeg::PrefixAcquireResult;

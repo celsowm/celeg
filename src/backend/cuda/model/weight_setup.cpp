@@ -31,18 +31,13 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
     return cuda_tensor_name(requests, role, layer);
 }
 
-} // namespace
+}
 
 void CudaCompiledModel::load_checkpoint_weights(
     const std::string& model_path,
     const detail::ModelBootstrap& bootstrap) {
     CudaWeightSetup::load(*this, model_path, bootstrap,
         [this](const IWeightRepository& repo) {
-    // Resolve the MoE expert-offload plan before loading experts. Snapshot the
-    // free VRAM now (embeddings/final norm already uploaded; attention/conv and
-    // experts are loaded below) and estimate the always-resident non-expert
-    // weight footprint analytically from the topology so the planner can decide
-    // how many experts fit in the GPU cache per layer.
     configure_cuda_expert_resources(*this);
     const int mtp_layer_count = resources_.options_.enable_mtp
         ? resources_.dims_.mtp_num_hidden_layers : 0;
@@ -105,8 +100,6 @@ void CudaCompiledModel::load_checkpoint_weights(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
         if (mixer_only_layer) {
-            // The compiled layer program, rather than the mixer identity,
-            // determines whether a generic post-mixer FFN exists.
             common_layer.feed_forward = DenseFfnWeights{};
         } else if (const auto* moe_program =
                        std::get_if<MoeLayerProgram>(&semantic_layer.feed_forward)) {
@@ -115,9 +108,6 @@ void CudaCompiledModel::load_checkpoint_weights(
             const int inter = moe_semantics.routed.mlp.intermediate_size;
             const float* expert_bias = nullptr;
             if (moe_semantics.router.has_expert_bias) {
-                // Checkpoint naming varies across otherwise equivalent MoE
-                // layouts. Resolve the neutral role from the repository
-                // evidence instead of coupling CUDA loading to one spelling.
                 const std::string bias_name =
                     repo.contains(layer_name(i, "feed_forward.expert_bias.weight"))
                         ? layer_name(i, "feed_forward.expert_bias.weight")
@@ -130,9 +120,6 @@ void CudaCompiledModel::load_checkpoint_weights(
             const LinearWeight* router = resources_.weight_loader_->load_router_weight(
                 repo, i, E, resources_.program_.hidden);
 
-            // Cache a device float copy of the router weight for the CUDA
-            // router kernel (it consumes float, the loaded weight is BF16 —
-            // always non-null after Phase 1.1's load_router_weight contract).
             DeviceBuffer<float>& router_float = workspace_.moe_router_float_[static_cast<size_t>(i)];
             router_float.reset(static_cast<size_t>(E) * resources_.program_.hidden);
             launch_cast_bf16_to_float(
@@ -247,20 +234,12 @@ void CudaCompiledModel::load_checkpoint_weights(
                         }
                     }
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
-                    // Initial seeding is fully synchronized above, so the
-                    // host payloads are no longer needed.  Do not keep one
-                    // lease per seeded expert alive across all MoE layers:
-                    // that would exhaust a bounded disk-backed HostExpertCache
-                    // before inference starts.
                     controller->inflight_transfers.clear();
                     moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
                     moe_weights.down_ptrs = controller->cache->down_ptrs();
                     resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 } else {
-                    // Host-backed experts + per-layer GPU cache. Load expert bytes
-                    // into the host store (no eager device upload), build the cache,
-                    // and seed it with the first `experts_per_layer` experts.
                     WeightLoader::HostExpertLayer host_layer = named_expert_model
                         ? resources_.weight_loader_->load_moe_experts_host_named(
                             repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
@@ -696,4 +675,4 @@ void CudaCompiledModel::load_checkpoint_weights(
         });
 }
 
-} // namespace celeg
+}

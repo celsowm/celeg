@@ -79,10 +79,6 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
         float* history = conv_state + static_cast<size_t>(channel) * conv_kernel;
         float filtered = 0.0f;
         const float* weight = conv_weight + static_cast<size_t>(channel) * conv_kernel;
-        // Gated recurrent checkpoints overwhelmingly use a short fixed
-        // convolution.  Keep the generic fallback but spell out the common
-        // structurally-proven widths so the compiler can keep history and
-        // taps in registers instead of emitting dynamic trip-count loops.
         if (conv_kernel == 4) {
             history[0] = history[1];
             history[1] = history[2];
@@ -195,7 +191,7 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
     }
 }
 
-} // namespace
+}
 
 void cpu_gated_delta_net_decode(const float* projected_qkv, const float* projected_z,
                                 const float* projected_b, const float* projected_a,
@@ -250,4 +246,4 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
     }
 }
 
-} // namespace celeg
+}

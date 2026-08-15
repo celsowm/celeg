@@ -62,5 +62,5 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
     reset(resources_.options_.allocate_local_kv_cache);
 }
 
-} // namespace celeg
+}
 

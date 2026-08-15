@@ -89,13 +89,11 @@ std::vector<TestShape> registered_model_shapes() {
     return shapes;
 }
 
-} // namespace
+}
 
 int main() {
     celeg::CudaStream stream;
 
-    // Batched Mamba2 prefill must be numerically identical to the canonical
-    // recurrent step sequence, including persistent convolution and SSM state.
     {
         constexpr int rows = 8, intermediate = 4, state_size = 3, heads = 2,
             head_dim = 2, groups = 1, kernel = 4;
@@ -153,9 +151,6 @@ int main() {
         for (size_t i = 0; i < batch_ss.size(); ++i) expect_near(to_float(batch_ss[i]), to_float(step_ss[i]), 0.20f);
     }
 
-    // Exercise the largest recurrent geometry in the cached hybrid fixture.
-    // This is intentionally a launch/synchronization guard: it catches
-    // topology-sized indexing errors independently of model scheduling.
     {
         constexpr int rows = 32, intermediate = 7680, state_size = 128,
             heads = 96, head_dim = 80, groups = 8, kernel = 4;
@@ -184,9 +179,6 @@ int main() {
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     }
 
-    // The sequence CUDA path is a parallel form of the neutral recurrent
-    // operator.  Exercise grouped key/value heads, then compare its output
-    // and both persisted state buffers with the CPU reference.
     {
         constexpr int rows = 64, kernel = 4, dim = 2, key_heads = 1, value_heads = 2;
         constexpr int qkv_width = 2 * key_heads * dim + value_heads * dim;
@@ -214,9 +206,6 @@ int main() {
         for(size_t i=0;i<got_state.size();++i) expect_near(to_float(got_state[i]),cpu_state[i],0.03f);
     }
 
-    // The 128x128 one-to-one state geometry uses the register-resident decode
-    // specialization. Compare one causal four-tap step and its persisted
-    // buffers with the neutral CPU implementation.
     {
         constexpr int rows = 1, kernel = 4, dim = 128, heads = 1;
         constexpr int qkv_width = 3 * dim, value_width = dim;
@@ -260,7 +249,6 @@ int main() {
         for (size_t i = 0; i < got_state.size(); ++i) expect_near(to_float(got_state[i]), cpu_state[i], 0.03f);
     }
 
-    // Embedding by scalar value.
     {
         std::vector<__nv_bfloat16> table(12);
         for (int i = 0; i < 12; ++i) table[i] = to_bf16(static_cast<float>(i));
@@ -279,7 +267,6 @@ int main() {
 
 
 
-    // Batched embedding preserves row-major [tokens, hidden] layout.
     {
         std::vector<__nv_bfloat16> table(12);
         for (int i = 0; i < 12; ++i) table[i] = to_bf16(static_cast<float>(i));
@@ -303,8 +290,6 @@ int main() {
         }
     }
 
-    // The embedding strategy is format-independent for every embedding table,
-    // including the per-layer table bound during model construction.
     {
         constexpr int hidden = 4;
         std::vector<__nv_bfloat16> bf16_table = {
@@ -344,12 +329,10 @@ int main() {
     }
 
 
-    // Packed W4A16 linear dequantizes signed nibbles per output row.
     {
         std::vector<__nv_bfloat16> x = {
             to_bf16(1.0f), to_bf16(1.0f),
             to_bf16(1.0f), to_bf16(1.0f)};
-        // row 0 = [1,2,3,4], row 1 = [-1,-2,-3,-4]
         std::vector<uint8_t> packed = {0x21U, 0x43U, 0xefU, 0xcdU};
         std::vector<float> scales = {0.5f, 0.25f};
         celeg::DeviceBuffer<__nv_bfloat16> dx(x.size()), dy(2);
@@ -368,7 +351,6 @@ int main() {
         expect_near(to_float(output[1]), -2.5f, 0.02f);
     }
 
-    // Packed INT4 embedding shares the same row format as the LM head.
     {
         std::vector<uint8_t> packed = {0x21U, 0x43U, 0xefU, 0xcdU};
         std::vector<float> scales = {0.5f, 0.25f};
@@ -389,7 +371,6 @@ int main() {
         expect_near(to_float(host[3]), -1.00f, 0.02f);
     }
 
-    // RMSNorm.
     {
         std::vector<__nv_bfloat16> x = {
             to_bf16(1.0f), to_bf16(2.0f), to_bf16(3.0f), to_bf16(4.0f)};
@@ -406,7 +387,6 @@ int main() {
         for (int i = 0; i < 4; ++i) expect_near(to_float(y[i]), (i + 1) * inv);
     }
 
-    // Fused SwiGLU layout: [gate..., up...].
     {
         std::vector<__nv_bfloat16> gate_up = {
             to_bf16(0.0f), to_bf16(1.0f),
@@ -425,7 +405,6 @@ int main() {
 
 
     celeg::cuda_test::run_attention_tests(stream);
-    // Weight-only INT8 linear supports both GEMV and batched rows.
     {
         constexpr int m = 2;
         constexpr int n = 3;
@@ -456,7 +435,6 @@ int main() {
         }
     }
 
-    // Quantized embedding dequantizes with one scale per vocabulary row.
     {
         std::vector<int8_t> table = {1, 2, 3, 4, -1, 2, -3, 4};
         std::vector<float> scales = {0.5f, 2.0f};
@@ -478,7 +456,6 @@ int main() {
         for (int i = 0; i < 4; ++i) expect_near(to_float(result[i]), expected[i]);
     }
 
-    // Segmented online GQA matches the single-block online implementation.
     {
         constexpr int seq_len = 5;
         constexpr int q_heads = 2;
@@ -539,7 +516,6 @@ int main() {
     }
 
 
-    // Packed QKV splitting and row-interleaved SwiGLU preserve batch rows.
     {
         constexpr int rows = 2;
         constexpr int q_width = 2;
@@ -585,7 +561,6 @@ int main() {
                     (1.0f / (1.0f + std::exp(-1.0f))) * 4.0f);
     }
 
-    // Packed sampling supports independent logits, penalties and RNG state.
     {
         constexpr int rows = 2;
         constexpr int vocab = 4;
@@ -594,7 +569,7 @@ int main() {
         std::vector<__nv_bfloat16> b = {
             to_bf16(4), to_bf16(3), to_bf16(6), to_bf16(0)};
         std::vector<uint8_t> seen_a(vocab, 0), seen_b(vocab, 0);
-        seen_b[2] = 1; // penalty moves row B from token 2 to token 0
+        seen_b[2] = 1;
         uint64_t rng_a = 1, rng_b = 2;
         celeg::DeviceBuffer<__nv_bfloat16> da(vocab), db(vocab);
         celeg::DeviceBuffer<uint8_t> dsa(vocab), dsb(vocab);
@@ -639,7 +614,6 @@ int main() {
         CELEG_TEST_CHECK(tokens[1] == 0);
     }
 
-    // Physical paged BF16 GQA follows a non-contiguous page table.
     {
         constexpr int page_tokens = 2;
         constexpr int attention_layers = 1;
@@ -651,7 +625,6 @@ int main() {
                                         page_tokens * kv_heads * head_dim,
                                         to_bf16(0.0f));
         std::vector<__nv_bfloat16> values(keys.size(), to_bf16(0.0f));
-        // Use physical page 1; page 0 deliberately remains empty.
         const size_t base = static_cast<size_t>(page_tokens) * head_dim;
         keys[base + 0] = to_bf16(1.0f);
         keys[base + 1] = to_bf16(0.0f);
@@ -702,7 +675,6 @@ int main() {
     }
 
 
-    // Segmented paged BF16 attention matches the single-block online path.
     {
         constexpr int page_tokens = 2;
         constexpr int attention_layers = 1;
@@ -714,7 +686,6 @@ int main() {
                                         page_tokens * kv_heads * head_dim,
                                         to_bf16(0.0f));
         std::vector<__nv_bfloat16> values(keys.size(), to_bf16(0.0f));
-        // Logical order is physical page 1 followed by physical page 0.
         const size_t p1 = static_cast<size_t>(page_tokens) * head_dim;
         keys[p1 + 0] = to_bf16(1.0f); keys[p1 + 1] = to_bf16(0.0f);
         keys[p1 + 2] = to_bf16(0.0f); keys[p1 + 3] = to_bf16(1.0f);
@@ -780,7 +751,6 @@ int main() {
         }
     }
 
-    // Segmented paged INT8 attention matches the single-block online path.
     {
         constexpr int page_tokens = 2;
         constexpr int attention_layers = 1;
@@ -874,7 +844,6 @@ int main() {
         }
     }
 
-    // Per-row seen-token marking updates separate request histories.
     {
         std::vector<int32_t> tokens = {3, 5};
         celeg::DeviceBuffer<int32_t> dtokens(tokens.size());
@@ -901,10 +870,6 @@ int main() {
         CELEG_TEST_CHECK(b[5] == 1 && b[3] == 0);
     }
 
-    // Copy-on-write cloning duplicates all physical page storage while keeping
-    // independent reference counts. Run against every registered model shape so a
-    // regression that affects only one (e.g. different attention_layers) is
-    // caught without editing this test.
     for (const TestShape& shape : registered_model_shapes()) {
         celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Bf16,
                                           shape.topology.exec, shape.program);
@@ -932,7 +897,6 @@ int main() {
         CELEG_TEST_CHECK(cache.free_pages() == cache.total_pages());
     }
 
-    // Partial-page COW copies initialized token slots without transferring the unused suffix.
     for (const TestShape& shape : registered_model_shapes()) {
         constexpr int page_tokens = 4;
         celeg::PhysicalPagedKvCache cache(3, page_tokens, 8,
@@ -962,7 +926,6 @@ int main() {
         cache.release(std::vector<uint32_t>{*cloned});
     }
 
-    // INT8 copy-on-write clones both quantized vectors and scale planes.
     for (const TestShape& shape : registered_model_shapes()) {
         celeg::PhysicalPagedKvCache cache(3, 1, 4, celeg::KvCacheMode::Int8,
                                           shape.topology.exec, shape.program);
@@ -995,7 +958,6 @@ int main() {
         cache.release(std::vector<uint32_t>{*cloned});
     }
 
-    // Paged INT8 store writes the selected physical page and scale slot.
     {
         constexpr int page_tokens = 2;
         constexpr int attention_layers = 1;
@@ -1048,7 +1010,6 @@ int main() {
         CELEG_TEST_CHECK(host_values[vector_base] == 127);
     }
 
-    // CUDA Graph replay uses device-resident mutable state.
     {
         int32_t initial = 7;
         celeg::DeviceBuffer<int32_t> position(1);

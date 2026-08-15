@@ -107,7 +107,7 @@ CompiledFeedForwardProgram lower_feed_forward(const LayerSpec& layer, int hidden
     }, layer.feed_forward);
 }
 
-} // namespace
+}
 
 CompiledModelProgram build_model_program(const ResolvedModel& model) {
     if (model.graph.layers.empty()) throw std::invalid_argument("model has no layers");
@@ -165,4 +165,4 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     return program;
 }
 
-} // namespace celeg
+}

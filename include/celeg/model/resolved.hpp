@@ -44,8 +44,6 @@ struct CheckpointDimensions {
     void validate() const;
 };
 
-// Runtime-only execution cache derived from the final semantic graph. It has
-// no checkpoint/import ownership and cannot be constructed by a frontend.
 class ExecutionTopology {
 public:
     int max_feed_forward_intermediate = 0;
@@ -130,8 +128,6 @@ private:
     ExecutionTopology() = default;
 };
 
-// Checkpoint/import dimensions are kept separate from the derived execution
-// cache. Runtime code must explicitly choose the boundary it consumes.
 struct RuntimeTopology {
     RuntimeTopology() : exec() {}
     CheckpointDimensions dims;
@@ -161,9 +157,7 @@ struct ResolvedModel {
     void validate() const;
 };
 
-// Compose import facts with the allocation cache derived from the final graph.
-// The only construction path for the derived cache is ExecutionTopology::derive.
 RuntimeTopology compose_runtime_topology(CheckpointDimensions checkpoint,
                                          const ModelGraph& graph);
 
-} // namespace celeg
+}

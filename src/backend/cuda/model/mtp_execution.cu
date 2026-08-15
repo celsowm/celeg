@@ -16,7 +16,7 @@ void copy_async(void* destination, const void* source, size_t bytes,
                                cudaMemcpyDeviceToDevice, stream));
 }
 
-} // namespace
+}
 
 void CudaCompiledModel::run_mtp_forward(int32_t token,
                                         const std::array<int32_t, 3>* rope_position) {
@@ -47,9 +47,6 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     const float eps = resources_.program_.final_norm.epsilon;
     CudaMtpResources& mtp = resources_.mtp_;
 
-    // The target hidden state is an input to the predictor, not a mutable
-    // intermediate of it. Preserve it while the auxiliary layer reuses the
-    // normal single-token workspace.
     copy_async(workspace_.mtp_base_hidden_.data(), workspace_.hidden_.data(),
                workspace_.hidden_.bytes(), stream);
     resources_.weight_layout_->embed_token_device(
@@ -108,8 +105,6 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream);
-    // The auxiliary predictor never runs the long-context chunked path: it
-    // decodes a single speculative token against its own cache.
     AttentionRequest attention_request;
     attention_request.kv_format = resources_.options_.kv_cache_mode;
     attention_request.operation = AttentionOperation::Decode;
@@ -220,11 +215,8 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                         hidden, stream);
 
-    // The auxiliary layer uses the same generalized MoE executor as the
-    // target model. Its synthetic layer index points at its own residency
-    // controller/catalog entry, so disk-backed experts remain bounded too.
     run_mlp_decode(common_layer,
-                   resources_.shape_.num_hidden_layers /* MTP layer 0 */);
+                   resources_.shape_.num_hidden_layers );
     launch_rmsnorm(workspace_.hidden_.data(), mtp.norm, workspace_.normed_.data(),
                    1, hidden, eps, stream);
     linear(workspace_.normed_.data(), *mtp.logits, workspace_.mtp_logits_.data(),
@@ -256,4 +248,4 @@ void CudaCompiledModel::finalize_mtp_verification() {
         workspace_.mtp_target_candidate_.data(), stream);
 }
 
-} // namespace celeg
+}

@@ -19,9 +19,6 @@ enum class TokenizerNormalizationKind : uint8_t {
     SentencePieceSpace,
 };
 
-// These are tokenizer behaviors, rather than model identities.  The
-// source-format resolver maps checkpoint metadata to one of these values
-// before the BPE engine is constructed.
 enum class TokenizerPreTokenizerKind : uint8_t {
     Default,
     NumericTriplets,
@@ -53,4 +50,4 @@ TokenizerDefinition resolve_tokenizer_definition(
     const TokenizerData& data,
     const std::vector<TokenizerPreTokenizerRule>& rules = {});
 
-} // namespace celeg
+}

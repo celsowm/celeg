@@ -1,7 +1,3 @@
-// Reference CUDA lowering for latent-key attention.  Persistent state is
-// [latent key/value rank] plus an optional decoupled rotary key per token.
-// The implementation deliberately uses one warp per query head so it can be
-// used as a correctness path before a fused decompression kernel is added.
 
 constexpr int kMaxLatentValuesPerLane = 16;
 

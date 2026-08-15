@@ -1,24 +1,5 @@
 #pragma once
 
-// Coarse GPU phase profiler for the CUDA forward passes.
-//
-// Why this exists: CUDA decode is captured into a single CUDA graph, and Nsight
-// Compute needs elevated permissions (ERR_NVGPUCTRPERM) that are often not
-// available on developer Windows boxes. Without in-tree attribution it is very
-// easy to optimize the wrong thing -- this profiler was added after a plausible
-// bandwidth argument pointed at the GEMV path, and immediately showed that 66%
-// of decode was actually a single-threaded top-k loop in the sampler.
-//
-// Usage:
-//   set CELEG_PROFILE_DECODE=1  (any value) and run with --no-cuda-graph
-//   e.g.  python scripts/profile_decode.py --model model.gguf
-//
-// The graph must be disabled because capture defers execution: the events would
-// record capture order, not execution time. The profiler prints a warning and
-// produces no output rather than reporting nonsense if that is forgotten.
-//
-// Cost when disabled is one predictable branch per phase boundary, so the
-// instrumentation can stay in the hot path permanently.
 
 #include <cuda_runtime.h>
 
@@ -27,15 +8,6 @@
 
 namespace celeg {
 
-// Fixed phase list. Keep names short -- they are column headers in the report.
-// Order follows the decode step so the report reads top-to-bottom.
-//   - AttnOut: the attention output projection (line 191 in execution.cu),
-//     previously unattributed between the Attention and Mlp regions.
-//   - Conv: the conv_in / conv_decode / conv_out block (conv branch of the
-//     per-layer loop), previously unattributed entirely.
-//   - Other: residual/unattributed bucket -- launch_increment_position and the
-//     optional launch_residual_add when !options_.fused_residuals. Lets the
-//     report expose work that would otherwise be hidden between regions.
 enum class DecodePhase : int {
     Sampling = 0,
     Embed,
@@ -80,8 +52,6 @@ public:
         if (enabled_) cudaEventRecord(begin_, stream);
     }
 
-    // Closes the region opened by begin() and attributes it to `phase`.
-    // Synchronizes, so this is a measurement mode, not a production path.
     void end(DecodePhase phase, cudaStream_t stream) {
         if (!enabled_) return;
         cudaEventRecord(end_, stream);
@@ -128,11 +98,8 @@ private:
     cudaEvent_t end_{};
 };
 
-// Process-wide instance. Defined in execution.cu.
 PhaseProfile& decode_phase_profile();
 
-// Prefill phase profiler. Same pattern as PhaseProfile but for prefill_batched.
-// Activated by CELEG_PROFILE_PREFILL=1.
 enum class PrefillPhase : int {
     Embed = 0,
     Norm,
@@ -218,4 +185,4 @@ private:
 
 PrefillPhaseProfile& prefill_phase_profile();
 
-} // namespace celeg
+}

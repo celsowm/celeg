@@ -25,17 +25,6 @@
 
 namespace {
 
-// The NVIDIA CUDA driver/runtime DLLs (nvcuda.dll, cudart64_*.dll,
-// cublasLt64_*.dll) have exit-time DLL_PROCESS_DETACH teardown that is prone
-// to an intermittent access violation / heap corruption on Windows once the
-// CUDA context is torn down (this reproduces on unmodified master, with
-// --no-cuda-graph, and with CUDA_MODULE_LOADING=EAGER, so it is not
-// celeg-specific state; it happens after all real work — model teardown,
-// generation, printing — is already complete). ExitProcess() still runs
-// every attached DLL's DLL_PROCESS_DETACH handler, so even std::_Exit()
-// hits the same crash; only TerminateProcess on our own process skips DLL
-// notifications entirely and avoids it. Everything meaningful (stdout,
-// session files) must be flushed/closed before this is called.
 [[noreturn]] void exit_process_immediately(int code) {
     std::cout.flush();
     std::cerr.flush();
@@ -330,7 +319,7 @@ void print_memory_stats(const celeg::ModelMemoryStats& stats) {
               << "memory.total=" << format_bytes(stats.total()) << '\n';
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     try {
@@ -358,10 +347,6 @@ int main(int argc, char** argv) {
             }
             exit_process_immediately(0);
         }
-        // A JSON checkpoint may omit bos_token_id while its tokenizer config
-        // still names a non-zero BOS token.  BOS is not injected when the
-        // chat template requests add_bos=false, so the unresolved zero is not
-        // a runtime disagreement; EOS remains a hard generation boundary.
         if ((topology.dims.token_policy.bos_token_id != 0 &&
              prepared.tokenizer->bos_id() != topology.dims.token_policy.bos_token_id) ||
             !celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, prepared.tokenizer->eos_id())) {
@@ -413,9 +398,6 @@ int main(int argc, char** argv) {
         model_options.lt_heuristics = args.lt_heuristics;
         model_options.lt_autotune = args.lt_autotune;
         if (args.weight_mode == "auto") {
-            // GGUF checkpoints benefit from INT8 re-quantization: decode reads
-            // 2x less weight traffic than BF16 while prefill falls back to
-            // BF16 cuBLAS tensor-core GEMM via the kept BF16 device buffer.
             model_options.weight_mode = prepared.is_gguf
                 ? celeg::WeightMode::Int8
                 : celeg::WeightMode::Bf16;
@@ -493,10 +475,6 @@ int main(int argc, char** argv) {
             off.usage_profile_path = args.expert_usage_profile;
             off.direct_io = args.expert_direct_io;
         }
-        // Single-file checkpoints ship model.safetensors; sharded checkpoints
-        // ship model.safetensors.index.json in the same directory. The model
-        // constructor resolves the index when given the directory root. GGUF
-        // checkpoints pass the concrete .gguf file path directly.
         const std::string model_path =
             prepared.is_gguf ? prepared.checkpoint_path.string()
                     : [&] {

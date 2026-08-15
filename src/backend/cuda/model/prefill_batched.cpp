@@ -14,10 +14,6 @@
 #include <utility>
 #include <vector>
 
-// Batched CUDA prefill owns one public execution seam: prefill_batched().
-// Everything below that seam is a private implementation collaborator rather
-// than CudaCompiledModel API. This keeps mixer growth out of the model surface
-// and makes latent-attention routing structurally exclusive.
 
 #include "prefill_batched/non_attention.cpp"
 #include "prefill_batched/attention.cpp"
@@ -154,7 +150,7 @@ void run_logits(CudaCompiledModel& model, int rows) {
     }
 }
 
-} // namespace celeg::prefill_detail
+}
 
 namespace celeg {
 
@@ -213,4 +209,4 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
     session_.phase_ = SessionPhase::Ready;
 }
 
-} // namespace celeg
+}

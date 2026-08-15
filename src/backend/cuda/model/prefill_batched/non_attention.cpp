@@ -182,4 +182,4 @@ void run_convolution(
     prof.end(PrefillPhase::Conv, model.stream_.get());
 }
 
-} // namespace celeg::prefill_detail
+}

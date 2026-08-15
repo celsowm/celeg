@@ -233,4 +233,4 @@ void CpuPrefixCacheManager::clear() {
     metrics_.resident_bytes = 0;
 }
 
-} // namespace celeg
+}

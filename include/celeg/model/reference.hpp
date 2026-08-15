@@ -26,11 +26,6 @@ std::vector<float> gqa_decode_strict_bf16(
     int kv_heads,
     int head_dim);
 
-// Correctness-first latent-KV attention reference.  The persistent key/value
-// state is represented by one latent vector per token; query-side content
-// projections and the optional decoupled rotary component are already
-// resolved by the caller.  This keeps the reference independent of a
-// checkpoint naming convention or a particular latent-attention variant.
 struct LatentAttentionReferenceSpec {
     int query_heads = 0;
     int latent_rank = 0;
@@ -56,4 +51,4 @@ std::vector<float> conv_decode_bf16(
     int cache_length,
     int position);
 
-} // namespace celeg::reference
+}

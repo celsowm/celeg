@@ -26,4 +26,4 @@ T from_json(std::string_view text) {
     return value;
 }
 
-} // namespace celeg::serve::protocol
+}

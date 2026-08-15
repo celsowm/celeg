@@ -18,9 +18,6 @@ inline int decode_q4(const uint8_t* packed, size_t col) {
     return nibble >= 8U ? static_cast<int>(nibble) - 16 : static_cast<int>(nibble);
 }
 
-// Unpack 32 packed Q4 nibbles into 32 lanes biased by +8, so the values are
-// unsigned in [0, 15] and usable as the first operand of _mm256_maddubs_epi16.
-// The +8 bias is removed once per row through the activation group sums.
 inline __m256i unpack_q4_biased(const uint8_t* packed) {
     const __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i*>(packed));
     const __m128i mask = _mm_set1_epi8(0x0f);
@@ -31,11 +28,6 @@ inline __m256i unpack_q4_biased(const uint8_t* packed) {
     return _mm256_xor_si256(weights, _mm256_set1_epi8(8));
 }
 
-// 32 int8 products reduced to 8 int32 lanes. Deliberately *not* reduced to a
-// scalar: the caller keeps the lanes live and folds them into a vector float
-// accumulator, so a row pays one horizontal reduction instead of one per group.
-// Biased weights are in [0, 15] and activations in [-127, 127], so the
-// intermediate int16 pair sums stay well inside range.
 inline __m256i dot32_epi32(__m256i biased_weights, const int8_t* activation) {
     const __m256i x = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(activation));
     const __m256i pairs = _mm256_maddubs_epi16(biased_weights, x);
@@ -50,7 +42,7 @@ inline float hsum256_ps(__m256 value) {
     return _mm_cvtss_f32(sum);
 }
 
-} // namespace
+}
 
 float f32_dot_avx2_msvc(const float* weight, const float* activation,
                          size_t cols) {
@@ -117,7 +109,6 @@ float q4_q8_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* weight_scal
                           const int32_t* activation_sums, size_t cols, size_t group_size,
                           size_t groups_per_row) {
     __m256 accumulator = _mm256_setzero_ps();
-    // Bias from the +8 weight offset, deferred to a single correction per row.
     float bias = 0.0f;
     float scalar_total = 0.0f;
     for (size_t group = 0; group < groups_per_row; ++group) {
@@ -144,8 +135,6 @@ float q4_q8_dot_avx2_msvc(const uint8_t* packed_row, const uint16_t* weight_scal
             scalar_activation_sum += activation_q8[col];
         }
         if (scalar_dot != 0) scalar_total += static_cast<float>(scalar_dot) * combined;
-        // The SIMD span only covered part of the group, so the +8 correction
-        // must exclude the activations handled by the scalar tail above.
         if (simd_end != begin && scalar_activation_sum != 0) {
             bias -= combined * static_cast<float>(scalar_activation_sum);
         }
@@ -169,7 +158,6 @@ void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
                              _mm256_setzero_ps(), _mm256_setzero_ps()};
     float bias[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (size_t group = 0; group < groups_per_row; ++group) {
-        // One unpack of the packed nibbles feeds all four activation rows.
         const __m256i weights = unpack_q4_biased(packed_row + group * 16);
         const float weight_scale = celeg::bf16_bits_to_float(weight_scales_bf16[group]);
         for (size_t lane = 0; lane < 4; ++lane) {
@@ -188,6 +176,6 @@ void q4_q8_dot4_avx2_msvc(const uint8_t* packed_row,
     }
 }
 
-} // namespace celeg::detail
+}
 
 #endif

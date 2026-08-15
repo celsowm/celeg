@@ -292,7 +292,6 @@ __device__ __forceinline__ float scaled_rope_frequency(
             frequency /= scaling.factor;
         } else if (wavelength <= static_cast<float>(scaling.original_context) /
                                   scaling.high_frequency_factor) {
-            // Preserve the high-frequency region.
         } else {
             const float span = scaling.low_frequency_factor -
                 scaling.high_frequency_factor;

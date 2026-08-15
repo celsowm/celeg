@@ -11,11 +11,6 @@
 
 namespace celeg::serve {
 
-// Single background thread that drives ISchedulerDriver::step() and fans
-// out poll() results to watchers. Intended to be the only caller of step()
-// and poll() for a given service; HTTP handlers register a callback via
-// watch() and receive GenerateEvents until the request finishes, at which
-// point the dispatcher releases the request automatically.
 class GenerationDispatcher {
 public:
     using EventCallback = std::function<void(const GenerateEvent&)>;
@@ -32,18 +27,10 @@ public:
     void start();
     void stop();
 
-    // Registers callback to receive GenerateEvents for id until it finishes
-    // (the final, finished event is delivered before the request is
-    // released). Replaces any existing watch for the same id.
     void watch(RequestId id, EventCallback callback);
 
-    // Drops the watch without releasing the request.
     void unwatch(RequestId id);
 
-    // Stops delivering events for a disconnected client, cancels the request,
-    // and keeps a short-lived internal watch when cancellation still needs to
-    // reach a terminal state. This operation is safe when the request has
-    // already completed and been released.
     void cancel(RequestId id);
 
 private:
@@ -61,4 +48,4 @@ private:
     std::unordered_map<RequestId, EventCallback> watchers_;
 };
 
-} // namespace celeg::serve
+}

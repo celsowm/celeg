@@ -100,8 +100,6 @@ struct TensorRequest {
     int expert = -1;
     std::vector<int64_t> expected_shape;
     std::optional<std::string> source_name;
-    // Physical checkpoint layer used by architectures that execute a
-    // smaller set of blocks more than once.  -1 means the logical layer.
     int physical_layer = -1;
     NormWeightKind norm_weight_kind = NormWeightKind::Scale;
 };
@@ -117,10 +115,6 @@ public:
     virtual std::vector<std::string> candidates(const TensorRequest& request) const = 0;
 };
 
-// Binding data is preferred for descriptor-backed architectures. Transitional
-// import policies may implement this interface while they converge; the
-// generic header depends only on the narrow capability and never owns a
-// central tensor-name switch.
 
 class TensorResolver {
 public:
@@ -139,4 +133,4 @@ std::string resolved_tensor_name(std::span<const TensorRequest> requests,
                                  TensorRole role, int layer = -1,
                                  int expert = -1);
 
-} // namespace celeg
+}

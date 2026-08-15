@@ -33,4 +33,4 @@ struct CpuConcurrentRequest {
     std::string error;
 };
 
-} // namespace celeg
+}

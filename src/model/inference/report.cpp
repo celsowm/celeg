@@ -31,4 +31,4 @@ ResolutionReport explain_resolution(const CheckpointView& checkpoint) {
     return report;
 }
 
-} // namespace celeg
+}

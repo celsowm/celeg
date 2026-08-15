@@ -30,4 +30,4 @@ inline size_t checked_round_up(size_t value, size_t alignment,
         alignment, message);
 }
 
-} // namespace celeg
+}

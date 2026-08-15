@@ -60,4 +60,4 @@ GroupedConcurrentMetrics group_concurrent_metrics(
     return grouped;
 }
 
-} // namespace celeg
+}

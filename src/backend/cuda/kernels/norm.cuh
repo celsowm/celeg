@@ -23,11 +23,6 @@ __global__ void rmsnorm_kernel(const __nv_bfloat16* x,
     }
     __syncthreads();
 
-    // The reduction above stays scalar (each thread's fixed strided slice
-    // determines the exact floating-point summation order); this loop has no
-    // such constraint -- every output element depends only on its own input,
-    // so packing two bf16 lanes per 32-bit transaction is bit-identical to
-    // the scalar loop, just half the traffic on `in`, `weight`, and `dst`.
     if ((width & 1) == 0 && bf16x2_aligned(in, weight, dst)) {
         const int half = width >> 1;
         const __nv_bfloat162* in2 = reinterpret_cast<const __nv_bfloat162*>(in);
@@ -277,11 +272,6 @@ void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
-// Splits a packed [query|gate] projection into disjoint destination buffers.
-// Must not write into `packed` in place: a compacting in-place variant has
-// thread (row=r) reading packed[r*2*width + column] while thread
-// (row=2r) writes that same address (its own index r*2*width + column lands
-// exactly on row r's source), racing across independently scheduled blocks.
 __global__ void extract_attention_output_gate_kernel(const __nv_bfloat16* packed,
                                           __nv_bfloat16* query_out,
                                           __nv_bfloat16* gate_out,

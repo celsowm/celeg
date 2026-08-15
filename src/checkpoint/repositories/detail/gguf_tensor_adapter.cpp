@@ -20,7 +20,7 @@ HostTensorView host_view(const GgufTensorView& view) {
     return result;
 }
 
-} // namespace
+}
 
 HostTensorView GgufTensorViewAdapter::adapt(const GgufTensorView& view,
                                             bool rows_rope_permuted) {
@@ -47,4 +47,4 @@ HostTensorView GgufTensorViewAdapter::adapt_expert(
     return result;
 }
 
-} // namespace celeg
+}

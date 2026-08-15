@@ -15,8 +15,6 @@ namespace {
 
 namespace protocol = celeg::serve::protocol;
 
-// Known Swagger UI assets served under /docs/<name>. Kept as an explicit
-// allowlist so request paths can never escape the packaged asset directory.
 const std::unordered_map<std::string, std::string>& swagger_ui_assets() {
     static const std::unordered_map<std::string, std::string> assets = {
         {"swagger-ui-bundle.js", "application/javascript"},
@@ -26,7 +24,7 @@ const std::unordered_map<std::string, std::string>& swagger_ui_assets() {
     return assets;
 }
 
-} // namespace
+}
 
 void register_docs_routes(uWS::App& app, const std::string& model_name,
                           const std::filesystem::path& asset_dir) {
@@ -72,4 +70,4 @@ void register_docs_routes(uWS::App& app, const std::string& model_name,
     });
 }
 
-} // namespace celeg::app::serve
+}

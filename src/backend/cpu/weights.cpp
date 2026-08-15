@@ -128,9 +128,6 @@ void CpuCompiledModel::Shared::prepare_pack_path() {
     if (error) throw std::runtime_error("cannot create CPU pack cache: " + error.message());
     const std::string source = source_identity(model_path);
     const size_t id = std::hash<std::string>{}(source);
-    // Keep the on-disk name short.  The full topology fingerprint is useful
-    // for diagnostics but can exceed MAX_PATH for large model checkpoints whose
-    // vocab/layer schedule is encoded in the identity string.
     const size_t model_hash = std::hash<std::string>{}(model_identity);
     std::ostringstream filename;
     filename << "celeg-" << std::hex << model_hash << '-' << id
@@ -263,4 +260,4 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
     return bytes;
 }
 
-} // namespace celeg
+}

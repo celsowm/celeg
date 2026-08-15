@@ -274,7 +274,7 @@ public:
     }
 };
 
-} // namespace
+}
 
 VisualEmbeddingProvider make_safetensor_visual_embedding_provider(const std::filesystem::path& model_path) {
     auto repository = std::make_shared<SafeTensorRepository>(model_path);
@@ -291,4 +291,4 @@ std::unique_ptr<IVisionProviderFactory> make_safetensor_vision_provider_factory(
     return std::make_unique<SafetensorProjectionProviderFactory>();
 }
 
-} // namespace celeg
+}

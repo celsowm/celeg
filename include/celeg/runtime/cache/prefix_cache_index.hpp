@@ -11,8 +11,6 @@
 
 namespace celeg {
 
-// Backend-neutral prefix identity and eviction policy. Payload ownership and
-// page/snapshot lifetime remain in the CPU and CUDA cache managers.
 class PrefixCacheIndex {
 public:
     using EntryId = PrefixRadixIndex::EntryId;
@@ -52,4 +50,4 @@ private:
     uint64_t clock_ = 0;
 };
 
-} // namespace celeg
+}

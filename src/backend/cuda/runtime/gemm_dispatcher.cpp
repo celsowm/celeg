@@ -84,9 +84,6 @@ LtPlan& GemmDispatcher::get_or_create_lt_plan(
         plan->operation, CUBLASLT_MATMUL_DESC_TRANSB,
         &transb, sizeof(transb)));
 
-    // Buffers are row-major in the runtime. Interpreting them as column-major
-    // transposes the logical matrices: W[n,k] -> A[k,n], X[m,k] -> B[k,m],
-    // and Y[m,n] -> D[n,m]. TRANSA restores W to [n,k].
     CELEG_CUBLAS(cublasLtMatrixLayoutCreate(
         &plan->a, CUDA_R_16BF, k, n, k));
     CELEG_CUBLAS(cublasLtMatrixLayoutCreate(
@@ -310,10 +307,6 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
         case LinearKernelKind::Q6kMmq:
             throw std::runtime_error("MMQ kernels are dispatched via gguf_quantized(), not the plan switch");
         case LinearKernelKind::MixedBf16AndGgufMmq:
-            // Native GGUF mode is deliberately per-tensor: formats with a
-            // proven MMQ path stay block-quantized above, while unsupported
-            // block formats and ordinary tensors remain BF16. Do not make a
-            // model-level promise that every tensor has the same storage.
             if (bound_weight.kind != LinearStorageKind::Bf16 || !bound_weight.bf16) {
                 throw std::runtime_error("mixed native GGUF plan has no executable linear storage");
             }
@@ -365,4 +358,4 @@ bool GemmDispatcher::has_native_fanout(const __nv_bfloat16* x, int m, int k) con
     return mmq_workspace_.fanout_input == x && mmq_workspace_.fanout_m == m && mmq_workspace_.fanout_k == k;
 }
 
-} // namespace celeg
+}

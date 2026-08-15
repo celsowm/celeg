@@ -19,7 +19,6 @@ struct MultimodalImage {
     std::string data_url;
 };
 
-// Backend-neutral request lifecycle shared by both inference backends.
 using RequestStatus = celeg::RequestStatus;
 
 enum class FinishReason : std::uint8_t {
@@ -80,4 +79,4 @@ struct ServingMetrics {
     std::optional<double> average_itl_ms;
 };
 
-} // namespace celeg::serve
+}

@@ -29,7 +29,6 @@ void compute_moe_router(const std::vector<float>& hidden,
     std::vector<float> logits(static_cast<size_t>(E));
     std::vector<float> probs(static_cast<size_t>(E));
     std::vector<float> scores(static_cast<size_t>(E));
-    // Best (score, expert) pairs; smaller expert index wins ties.
     std::vector<std::pair<float, int>> best;
 
     for (int r = 0; r < rows; ++r) {
@@ -44,7 +43,6 @@ void compute_moe_router(const std::vector<float>& hidden,
             scores[e] = config.use_expert_bias ? prob + (*expert_bias)[e] : prob;
         }
 
-        // Select top-K by score (descending); tie-break by smaller expert id.
         best.clear();
         best.reserve(static_cast<size_t>(E));
         for (int e = 0; e < E; ++e) best.emplace_back(scores[e], e);
@@ -59,7 +57,7 @@ void compute_moe_router(const std::vector<float>& hidden,
         for (int k = 0; k < K; ++k) {
             const int expert = best[k].second;
             selected_experts[static_cast<size_t>(r) * K + k] = expert;
-            const float w = probs[expert];  // original sigmoid, not score
+            const float w = probs[expert];
             routing_weights[static_cast<size_t>(r) * K + k] = w;
             weight_sum += w;
         }
@@ -126,4 +124,4 @@ void compute_moe_ffn(const std::vector<float>& hidden,
     }
 }
 
-} // namespace celeg
+}

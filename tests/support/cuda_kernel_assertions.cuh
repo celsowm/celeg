@@ -24,4 +24,4 @@ inline void expect_near(float actual, float expected, float tolerance = 0.03f) {
     }
 }
 
-} // namespace celeg::cuda_test
+}

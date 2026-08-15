@@ -11,10 +11,6 @@
 
 namespace celeg::app::serve {
 
-// Wires up the "buffer the full request body, parse it as Req, hand it to
-// fn(), write the result as JSON, or write a 400 on any thrown exception"
-// shape shared by every synchronous JSON POST endpoint. Callers only supply
-// the DTO types and the business-logic call itself.
 template <typename Req, typename Resp, typename Res, typename Fn>
 void handle_json_post(Res* res, Fn&& fn) {
     auto body = std::make_shared<std::string>();
@@ -37,4 +33,4 @@ void handle_json_post(Res* res, Fn&& fn) {
     });
 }
 
-} // namespace celeg::app::serve
+}

@@ -18,7 +18,7 @@ public:
     std::vector<std::string> names() const override { return {}; }
 };
 
-} // namespace
+}
 
 int main() {
     bool rejected_empty_repository = false;

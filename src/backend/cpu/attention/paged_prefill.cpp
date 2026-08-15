@@ -35,4 +35,4 @@ void cpu_gqa_prefill_paged(
     });
 }
 
-} // namespace celeg
+}

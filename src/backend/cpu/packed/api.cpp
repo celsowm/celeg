@@ -28,7 +28,7 @@ bool requires_sequential_execution(const CompiledModelProgram& program) {
         });
 }
 
-} // namespace
+}
 
 void CpuCompiledModel::forward_batch(std::span<CpuCompiledModel* const> sessions,
                                      std::span<const int32_t> tokens,
@@ -163,4 +163,4 @@ CpuModel::decode_batch(std::span<CpuModel* const> models) {
     return {std::move(tokens), {sessions.size(), elapsed}};
 }
 
-} // namespace celeg
+}

@@ -14,9 +14,6 @@ void CudaCompiledModel::configure_model(
     if (resources_.options_.weight_mode == WeightMode::Bf16 &&
         has_packed_int8_matrix(*bootstrap.checkpoint.repository,
                                "model.layers.0.self_attn.q_proj.weight")) {
-        // compressed-tensors checkpoints carry their quantization contract in
-        // the tensors themselves; execute them as native W8A16 even when the
-        // caller did not request a conversion mode.
         resources_.options_.weight_mode = WeightMode::Int8;
         resources_.plan_ = CudaExecutionPlan::compile(
             resources_.options_, max_context_, resources_.plan_.device());
@@ -39,5 +36,5 @@ void CudaCompiledModel::configure_model(
     check_moe_quantization_policy(resources_.options_.weight_mode, resources_.program_.has_moe());
 }
 
-} // namespace celeg
+}
 

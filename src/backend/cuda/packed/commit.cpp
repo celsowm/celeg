@@ -45,4 +45,4 @@ void commit_packed_prefill(std::span<const PackedSessionContext> sessions,
     }
 }
 
-} // namespace celeg
+}

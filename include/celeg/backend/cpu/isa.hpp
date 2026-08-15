@@ -46,4 +46,4 @@ const char* cpu_isa_name(CpuIsa isa);
 CpuIsa parse_cpu_isa(const std::string& value);
 bool cpu_isa_compiled(CpuIsa isa);
 
-} // namespace celeg
+}

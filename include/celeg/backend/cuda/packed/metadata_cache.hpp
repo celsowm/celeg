@@ -9,9 +9,6 @@
 
 namespace celeg {
 
-// Tracks the typed session identity of metadata bindings currently staged in
-// the packed workspace. Storage generation is part of the key because a
-// session can retain its identity while replacing its backing cache allocation.
 class PackedMetadataCache {
 public:
     explicit PackedMetadataCache(size_t capacity) { keys_.reserve(capacity); }
@@ -46,4 +43,4 @@ private:
     std::vector<Key> keys_;
 };
 
-} // namespace celeg
+}

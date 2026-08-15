@@ -15,9 +15,6 @@ public:
     std::string_view id() const override { return "automatic"; }
 
     ProbeResult probe(const CheckpointMetadata& metadata) const override {
-        // Component-prefixed metadata is normalized by the same semantic
-        // resolver as flat metadata. The root may also carry unrelated vision
-        // fields; those do not make text resolution identity-specific.
         const auto has = [&metadata](std::string_view key) {
             return metadata.contains(key) ||
                    metadata.contains("text_config." + std::string(key));
@@ -26,11 +23,6 @@ public:
             return metadata.is_gguf() && metadata.contains(
                 metadata.architecture_type() + "." + std::string(suffix));
         };
-        // GGUF tokenizer tables are structural vocabulary evidence.  Several
-        // valid GGUF writers deliberately omit <architecture>.vocab_size
-        // because the table is the authoritative source (notably hybrid
-        // recurrent checkpoints).  Do not make an identity string decide
-        // whether the generic resolver gets a chance to inspect them.
         const bool has_vocabulary =
             has("vocab_size") || has_gguf("vocab_size") ||
             metadata.contains("tokenizer.ggml.tokens");
@@ -57,10 +49,10 @@ public:
     }
 };
 
-} // namespace
+}
 
 std::unique_ptr<IArchitecture> make_automatic_architecture() {
     return std::make_unique<AutomaticArchitecture>();
 }
 
-} // namespace celeg
+}

@@ -39,24 +39,10 @@ struct ModelBootstrap;
 }
 
 struct CudaCompiledModel {
-    // Chunk size for launch_gqa_prefill_segmented (batched, chunked causal
-    // prefill attention). Smaller than the long-context decode default
-    // (attention_chunk_tokens, 256) because prefill parallelism comes from
-    // chunk *count*, not chunk size: more, shorter chunks -> more concurrent
-    // blocks and a shorter serial critical path per block.
     static constexpr int kPrefillAttnChunkTokens = kAttentionPrefillChunkTokens;
 
-    // Row-count ceiling for launch_gqa_prefill_gemm's dense
-    // O(q_heads*rows^2) score/probability scratch. A single prefill_batched
-    // call above this falls back to launch_gqa_prefill_segmented
-    // (O(rows) scratch) instead of allocating an unbounded scratch buffer.
-    // 2048 rows keeps the scratch under ~1GB even at 32 attention heads.
     static constexpr int kMaxGemmAttentionRows = kAttentionMaxGemmRows;
 
-    // A speculative candidate may advance recurrent mixers before the target
-    // model decides whether to accept it.  KV storage is append-only and is
-    // made invisible again by restoring position; recurrent state is not, so
-    // it gets a device-side transaction buffer instead of a host round-trip.
     struct SpeculativeLayerSnapshot {
         DeviceBuffer<__nv_bfloat16> conv_state;
         DeviceBuffer<__nv_bfloat16> ssm_state;
@@ -94,9 +80,6 @@ struct CudaCompiledModel {
          std::shared_ptr<const RuntimeContext> runtime = nullptr);
     ~CudaCompiledModel();
 
-    // Thin wrapper around gemm_->linear(..., plan_) so call sites in the
-    // forward pass don't need to thread plan_ through every call. New
-    // GEMM backends are added by extending GemmDispatcher (OCP).
     void linear(const __nv_bfloat16* x, const LinearWeight& weight,
                 __nv_bfloat16* y, int m, int n, int k, float beta = 0.0f) {
         gemm_->linear(x, weight, y, m, n, k, beta, resources_.plan_);
@@ -143,9 +126,6 @@ struct CudaCompiledModel {
     void load_session(const std::string& path);
     PrefixState export_prefix_state() const;
     void restore_prefix_state(const PrefixState& state);
-    // Internal transaction boundary for stateful speculative decoding. The
-    // caller must snapshot only at a completed, ready session and must either
-    // commit by discarding the snapshot or restore before another operation.
     void snapshot_speculative_state();
     void restore_speculative_state();
     void discard_speculative_state() { speculative_snapshot_.valid = false; }
@@ -179,9 +159,6 @@ struct CudaCompiledModel {
     void set_sampled_host_value(int32_t value) { sampling_.sampled_host.data()[0] = value; }
     IWeightLayout& weight_layout() { return *resources_.weight_layout_; }
     const LinearWeight* embedding() const { return resources_.embedding_; }
-    // Weight used for the final logits projection. When the checkpoint ships a
-    // separate (untied) lm_head, that is returned; otherwise the tied
-    // embed_tokens table is shared.
     const LinearWeight* logits_weight() const {
         return resources_.lm_head_ ? resources_.lm_head_ : resources_.embedding_;
     }
@@ -208,31 +185,14 @@ struct CudaCompiledModel {
     void run_mtp_forward_device(const int32_t* token_device);
     void finalize_mtp_verification();
 
-    // ---- Host-driven single-token execution ------------------------------
-    //
-    // Standalone decode and paged serving run the *same* per-layer program:
-    //
-    //     residual snapshot -> operator norm -> mixer -> post-attention norm
-    //     -> residual add -> feed-forward -> optional after-layer norm
-    //
-    // They differ only in how attention addresses the KV cache and where the
-    // sequence position comes from.  `TokenKvPolicy` is that difference, so
-    // both entry points share one layer loop and one mixer implementation
-    // instead of two near-identical forward functions that can drift.
     struct TokenKvPolicy {
-        // Which KV addressing mode attention uses for this step.
         AttentionKvLayout kv_layout = AttentionKvLayout::Contiguous;
-        // Where the attention kernels read the sequence position from.
         AttentionPositionSource position_source = AttentionPositionSource::HostScalar;
 
-        // Paged layout only; null for the contiguous layout.
         PhysicalPagedKvCache* paged_kv = nullptr;
         const uint32_t* device_page_table = nullptr;
         int page_table_stride = 0;
 
-        // Contiguous layout only: caller-supplied M-RoPE position for this
-        // step (prompt-embedding prefill). Null means "use the session's
-        // running position".
         const std::array<int32_t, 3>* rope_position = nullptr;
 
         bool paged() const { return kv_layout == AttentionKvLayout::Paged; }
@@ -246,29 +206,22 @@ struct CudaCompiledModel {
                                   const uint32_t* device_page_table,
                                   int page_table_stride);
 
-    // Layer iteration: shared by both host token paths.
     void run_token_layers(const TokenKvPolicy& kv);
-    // One layer: norm/residual framing around the mixer and feed-forward.
     void run_token_layer(Layer& layer, int layer_index, const TokenKvPolicy& kv);
-    // Mixer execution: exhaustive dispatch over the Layer variant.
     void run_token_mixer(Layer& layer, LayerCommon& common_layer,
                          const CompiledLayerProgram& semantics, int layer_index,
                          const TokenKvPolicy& kv);
 
-    // Attention: projections, RoPE, KV access, output gate, output projection.
     void run_token_attention(AttentionLayer& attention, LayerCommon& common_layer,
                              const CompiledLayerProgram& semantics, int layer_index,
                              const TokenKvPolicy& kv);
-    // Latent (MLA-style) attention over paged state.
     void run_token_latent_attention_paged(AttentionLayer& attention,
                                           LayerCommon& common_layer,
                                           const CompiledLayerProgram& semantics,
                                           int layer_index, const TokenKvPolicy& kv);
-    // Attention capability selection for a host token step.
     AttentionCapability token_attention_plan(AttentionLayer& attention,
                                              const AttentionSpec& owner_layout,
                                              const TokenKvPolicy& kv);
-    // KV access policy: append this token's K/V and run the scoring kernel.
     void store_and_attend_token_contiguous(AttentionLayer& attention,
                                            AttentionLayer& owner,
                                            const AttentionCapability& plan,
@@ -280,7 +233,6 @@ struct CudaCompiledModel {
                                       __nv_bfloat16* q, __nv_bfloat16* k,
                                       __nv_bfloat16* v, const TokenKvPolicy& kv);
 
-    // Non-attention mixers: identical under both KV policies.
     void run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
                                const CompiledLayerProgram& semantics);
     void run_token_mamba2(Mamba2Layer& mamba, const CompiledLayerProgram& semantics,
@@ -288,7 +240,6 @@ struct CudaCompiledModel {
     void run_token_mlp_only(MlpOnlyLayer& mlp);
     void run_token_convolution(ConvolutionLayer& convolution);
 
-    // Final norm + logits projection + softcap.
     void run_token_logits();
 
     void enqueue_sampling();
@@ -320,4 +271,4 @@ struct CudaCompiledModel {
     SpeculativeStateSnapshot speculative_snapshot_;
 };
 
-} // namespace celeg
+}

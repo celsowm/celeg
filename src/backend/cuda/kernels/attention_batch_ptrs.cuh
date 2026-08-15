@@ -1,11 +1,3 @@
-// Multi-request batched decode where each session keeps its own contiguous KV
-// cache. The caller passes device arrays of per-session base pointers and
-// positions; blockIdx.y selects the row (session), so one launch serves a whole
-// batch of independent sequences whose caches are not adjacent in memory.
-//
-// Both strict and online strategies, in bf16 and int8-KV flavours. For the
-// paged variant -- one shared page pool instead of per-session caches -- see
-// attention_paged.cuh.
 
 __global__ void gqa_decode_online_batch_ptrs_kernel(
     const __nv_bfloat16* q,

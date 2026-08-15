@@ -7,9 +7,8 @@
 
 namespace celeg::app::serve {
 
-// POST /tokenize -- vLLM/SGLang-style tokenization endpoint.
 void register_tokenize_route(uWS::App& app, const celeg::ITokenizer& tokenizer,
                              const celeg::ResolvedInteraction& interaction,
                              std::size_t max_model_len);
 
-} // namespace celeg::app::serve
+}

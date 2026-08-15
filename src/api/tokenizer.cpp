@@ -61,4 +61,4 @@ const char* celeg_tokenizer_last_error(const celeg_tokenizer* tokenizer) {
     return tokenizer ? tokenizer->error.c_str() : celeg::api::global_error.c_str();
 }
 
-} // extern "C"
+}
