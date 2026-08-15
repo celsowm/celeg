@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -156,12 +157,31 @@ struct CompiledAttentionProgram {
     CompiledAttentionStateLayout state_layout;
 };
 
-using CompiledMixerProgram = std::variant<
+using CompiledMixerVariant = std::variant<
     CompiledAttentionProgram,
     ShortConvolutionSpec,
     GatedDeltaNetSpec,
     Mamba2Spec,
     MlpBlockSpec>;
+
+// The variant is the only stored mixer identity. Assignment from the legacy
+// CompiledMixer enum is intentionally factory-like: it selects a default
+// alternative but does not store a second tag.
+class CompiledMixerProgram : public CompiledMixerVariant {
+public:
+    using CompiledMixerVariant::CompiledMixerVariant;
+    using CompiledMixerVariant::operator=;
+
+    CompiledMixerProgram() = default;
+    CompiledMixerProgram(const CompiledMixerProgram&) = default;
+    CompiledMixerProgram(CompiledMixerProgram&&) = default;
+    CompiledMixerProgram& operator=(const CompiledMixerProgram&) = default;
+    CompiledMixerProgram& operator=(CompiledMixerProgram&&) = default;
+    CompiledMixerProgram& operator=(CompiledMixer kind);
+
+    CompiledMixerVariant& storage() { return *this; }
+    const CompiledMixerVariant& storage() const { return *this; }
+};
 
 CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer);
 bool operator==(const CompiledMixerProgram& mixer, CompiledMixer kind);
@@ -170,8 +190,7 @@ bool operator!=(const CompiledMixerProgram& mixer, CompiledMixer kind);
 bool operator!=(CompiledMixer kind, const CompiledMixerProgram& mixer);
 
 // Optional-like views preserve the compact consumer API without duplicating
-// semantic state. They only point into CompiledLayerProgram::mixer, so changing
-// the active alternative is the only way to change mixer identity.
+// semantic state. They only point into CompiledLayerProgram::mixer.
 template <typename T>
 class CompiledMixerView {
 public:
@@ -180,10 +199,10 @@ public:
     void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
 
     T* get() {
-        return mixer_ ? std::get_if<T>(mixer_) : nullptr;
+        return mixer_ ? std::get_if<T>(&mixer_->storage()) : nullptr;
     }
     const T* get() const {
-        return mixer_ ? std::get_if<T>(mixer_) : nullptr;
+        return mixer_ ? std::get_if<T>(&mixer_->storage()) : nullptr;
     }
     T* operator()() { return get(); }
     const T* operator()() const { return get(); }
@@ -204,6 +223,17 @@ public:
     T& operator*() { return value(); }
     const T& operator*() const { return value(); }
 
+    CompiledMixerView& operator=(const T& value) {
+        if (!mixer_) throw std::logic_error("compiled mixer view is not bound");
+        mixer_->storage() = value;
+        return *this;
+    }
+    CompiledMixerView& operator=(T&& value) {
+        if (!mixer_) throw std::logic_error("compiled mixer view is not bound");
+        mixer_->storage() = std::move(value);
+        return *this;
+    }
+
 private:
     CompiledMixerProgram* mixer_ = nullptr;
 };
@@ -215,11 +245,13 @@ public:
     void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
 
     AttentionSpec* get() {
-        auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        auto* result = mixer_
+            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
         return result ? &result->semantics : nullptr;
     }
     const AttentionSpec* get() const {
-        const auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        const auto* result = mixer_
+            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
         return result ? &result->semantics : nullptr;
     }
     AttentionSpec* operator()() { return get(); }
@@ -241,6 +273,25 @@ public:
     AttentionSpec& operator*() { return value(); }
     const AttentionSpec& operator*() const { return value(); }
 
+    CompiledAttentionView& operator=(const AttentionSpec& semantics) {
+        if (!mixer_) throw std::logic_error("compiled attention view is not bound");
+        if (auto* current = get()) {
+            *current = semantics;
+        } else {
+            mixer_->storage() = CompiledAttentionProgram{semantics, {}};
+        }
+        return *this;
+    }
+    CompiledAttentionView& operator=(AttentionSpec&& semantics) {
+        if (!mixer_) throw std::logic_error("compiled attention view is not bound");
+        if (auto* current = get()) {
+            *current = std::move(semantics);
+        } else {
+            mixer_->storage() = CompiledAttentionProgram{std::move(semantics), {}};
+        }
+        return *this;
+    }
+
 private:
     CompiledMixerProgram* mixer_ = nullptr;
 };
@@ -252,11 +303,13 @@ public:
     void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
 
     CompiledAttentionStateLayout* get() {
-        auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        auto* result = mixer_
+            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
         return result ? &result->state_layout : nullptr;
     }
     const CompiledAttentionStateLayout* get() const {
-        const auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        const auto* result = mixer_
+            ? std::get_if<CompiledAttentionProgram>(&mixer_->storage()) : nullptr;
         return result ? &result->state_layout : nullptr;
     }
     CompiledAttentionStateLayout* operator()() { return get(); }
@@ -277,6 +330,27 @@ public:
     const CompiledAttentionStateLayout* operator->() const { return &value(); }
     CompiledAttentionStateLayout& operator*() { return value(); }
     const CompiledAttentionStateLayout& operator*() const { return value(); }
+
+    CompiledAttentionStateLayoutView& operator=(
+        const CompiledAttentionStateLayout& layout) {
+        if (!mixer_) throw std::logic_error("compiled state-layout view is not bound");
+        if (auto* current = get()) {
+            *current = layout;
+        } else {
+            mixer_->storage() = CompiledAttentionProgram{{}, layout};
+        }
+        return *this;
+    }
+    CompiledAttentionStateLayoutView& operator=(
+        CompiledAttentionStateLayout&& layout) {
+        if (!mixer_) throw std::logic_error("compiled state-layout view is not bound");
+        if (auto* current = get()) {
+            *current = std::move(layout);
+        } else {
+            mixer_->storage() = CompiledAttentionProgram{{}, std::move(layout)};
+        }
+        return *this;
+    }
 
 private:
     CompiledMixerProgram* mixer_ = nullptr;
