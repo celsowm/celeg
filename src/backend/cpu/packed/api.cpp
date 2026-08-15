@@ -24,7 +24,7 @@ bool requires_sequential_execution(const CompiledModelProgram& program) {
                 (!std::holds_alternative<NoAttentionOutputTransformSpec>(
                      attention->semantics.output_transform) ||
                  (attention->semantics.latent_state() &&
-                  attention->semantics.latent_state()->factorized));
+                  attention->semantics.latent_state()->factorized()));
         });
 }
 

@@ -27,6 +27,7 @@ void run_factorized_latent_attention(
     auto& prof = prefill_phase_profile();
     const AttentionSpec& layout = attention.layout;
     const auto& latent = *layout.latent_state();
+    const auto& factorized = *latent.factorized_projection();
     const int hidden = model.resources_.program_.hidden;
 
     prof.begin(model.stream_.get());
@@ -37,12 +38,12 @@ void run_factorized_latent_attention(
             workspace.prefill_normed_.data(),
             *attention.latent_query_projection,
             workspace.prefill_latent_projection_.data(),
-            rows, latent.query_rank, hidden);
+            rows, factorized.query_rank, hidden);
         launch_rmsnorm(
             workspace.prefill_latent_projection_.data(),
             attention.latent_query_norm,
             workspace.prefill_latent_projection_.data(),
-            rows, latent.query_rank, latent.query_latent_norm.epsilon,
+            rows, factorized.query_rank, factorized.query_latent_norm.epsilon,
             model.stream_.get());
         model.linear(
             workspace.prefill_latent_projection_.data(),
@@ -50,7 +51,7 @@ void run_factorized_latent_attention(
             workspace.prefill_qkv_.data(),
             rows,
             layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-            latent.query_rank);
+            factorized.query_rank);
         launch_factorized_latent_query({
             .query_projection = workspace.prefill_qkv_.data(),
             .expansion = attention.latent_expansion->bf16,
@@ -77,7 +78,7 @@ void run_factorized_latent_attention(
         launch_rmsnorm(
             workspace.prefill_qkv_.data(), attention.latent_key_norm,
             workspace.prefill_latent_key_.data(),
-            rows, latent.latent_rank, latent.key_latent_norm.epsilon,
+            rows, latent.latent_rank, factorized.key_latent_norm.epsilon,
             model.stream_.get());
         CELEG_CUDA(cudaMemcpyAsync(
             workspace.prefill_latent_value_.data(),
@@ -145,7 +146,7 @@ void run_factorized_latent_attention(
         .rows = rows,
         .query_heads = layout.query_heads,
         .query_nope = latent.nope_head_dim,
-        .value_dim = latent.value_head_dim,
+        .value_dim = factorized.value_head_dim,
         .latent_rank = latent.latent_rank,
         .stream = model.stream_.get()});
     model.linear(
@@ -156,7 +157,7 @@ void run_factorized_latent_attention(
         launch_sigmoid_multiply_headwise(
             workspace.prefill_latent_decompressed_.data(),
             workspace.prefill_attention_gate_.data(),
-            rows, layout.query_heads, latent.value_head_dim, model.stream_.get());
+            rows, layout.query_heads, factorized.value_head_dim, model.stream_.get());
     } else {
         launch_sigmoid_multiply(
             workspace.prefill_latent_decompressed_.data(),

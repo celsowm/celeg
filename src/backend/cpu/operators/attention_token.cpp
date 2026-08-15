@@ -40,20 +40,21 @@ void execute_cpu_attention_token(
                                     execution.workspace.hidden.data());
             } else if (layout.uses_latent_state()) {
                 const auto& latent = *layout.latent_state();
+                const auto* factorized = latent.factorized_projection();
                 const int content_width = layout.latent_query_content_width();
                 const int rope_width = layout.latent_query_rope_width();
                 float* query_content = execution.workspace.qkv.data();
-                if (latent.factorized) {
+                if (factorized) {
                     execution.shared.linear.gemv(attention.latent_q_projection,
                         execution.workspace.normed.data(), execution.workspace.qkv.data());
                     cpu_rmsnorm_inplace(execution.workspace.qkv.data(), attention.latent_q_norm.data(),
-                                        static_cast<size_t>(latent.query_rank),
-                                        latent.query_latent_norm.epsilon);
+                                        static_cast<size_t>(factorized->query_rank),
+                                        factorized->query_latent_norm.epsilon);
                     execution.shared.linear.gemv(attention.latent_q_expansion,
                         execution.workspace.qkv.data(), execution.workspace.latent_projection.data());
                     query_content = execution.workspace.qkv.data();
                     const int query_stride = latent.nope_head_dim + latent.rope_head_dim;
-                    const int expansion_stride = latent.nope_head_dim + latent.value_head_dim;
+                    const int expansion_stride = latent.nope_head_dim + factorized->value_head_dim;
                     for (int head = 0; head < layout.query_heads; ++head) {
                         execution.shared.linear.gemv_transpose(
                             attention.latent_expansion,
@@ -68,7 +69,7 @@ void execute_cpu_attention_token(
                                         execution.workspace.qkv.data());
                 }
                 float* query_rope = rope_width == 0 ? nullptr : execution.workspace.latent_rope.data();
-                if (query_rope && latent.factorized) {
+                if (query_rope && factorized) {
                     const int stride = latent.nope_head_dim + latent.rope_head_dim;
                     for (int head = 0; head < layout.query_heads; ++head) {
                         std::copy(execution.workspace.latent_projection.data() +
@@ -81,7 +82,7 @@ void execute_cpu_attention_token(
                     execution.shared.linear.gemv(attention.latent_q_rope, execution.workspace.normed.data(),
                                         query_rope);
                 }
-                if (latent.factorized) {
+                if (factorized) {
                     execution.shared.linear.gemv(attention.latent_k_projection,
                         execution.workspace.normed.data(), execution.workspace.latent_projection.data());
                     std::copy(execution.workspace.latent_projection.data(),
@@ -89,7 +90,7 @@ void execute_cpu_attention_token(
                               execution.workspace.latent_key.data());
                     cpu_rmsnorm_inplace(execution.workspace.latent_key.data(), attention.latent_k_norm.data(),
                                         static_cast<size_t>(latent.latent_rank),
-                                        latent.key_latent_norm.epsilon);
+                                        factorized->key_latent_norm.epsilon);
                     std::copy(execution.workspace.latent_key.data(),
                               execution.workspace.latent_key.data() + latent.latent_rank,
                               execution.workspace.latent_value.data());
@@ -105,7 +106,7 @@ void execute_cpu_attention_token(
                 float* key_rope = nullptr;
                 if (latent.decoupled_rope && latent.rope_head_dim != 0) {
                     key_rope = execution.workspace.latent_key_rope.data();
-                    if (!latent.factorized) {
+                    if (!factorized) {
                         execution.shared.linear.gemv(attention.latent_k_rope,
                             execution.workspace.normed.data(), key_rope);
                     }
@@ -122,19 +123,19 @@ void execute_cpu_attention_token(
                                      execution.workspace.op_output.data(), execution.session.position_value + 1,
                                      execution.session.position_value, attention.relative_bias);
                 const float* output_input = execution.workspace.op_output.data();
-                if (latent.factorized) {
-                    const int expansion_stride = latent.nope_head_dim + latent.value_head_dim;
+                if (factorized) {
+                    const int expansion_stride = latent.nope_head_dim + factorized->value_head_dim;
                     for (int head = 0; head < layout.query_heads; ++head) {
                         execution.shared.linear.gemv_transpose(attention.latent_expansion,
                             execution.workspace.op_output.data() +
                                 static_cast<size_t>(head * latent.latent_rank),
                             execution.workspace.latent_projection.data(),
                             static_cast<size_t>(head * expansion_stride + latent.nope_head_dim),
-                            static_cast<size_t>(latent.value_head_dim));
+                            static_cast<size_t>(factorized->value_head_dim));
                         std::copy_n(execution.workspace.latent_projection.data(),
-                                    latent.value_head_dim,
+                                    factorized->value_head_dim,
                                     execution.workspace.latent_decompressed.data() +
-                                        static_cast<size_t>(head * latent.value_head_dim));
+                                        static_cast<size_t>(head * factorized->value_head_dim));
                     }
                     output_input = execution.workspace.latent_decompressed.data();
                     execution.shared.linear.gemv(attention.gate, execution.workspace.normed.data(),
@@ -143,7 +144,7 @@ void execute_cpu_attention_token(
                         execution.workspace.attention_gate.data(),
                         static_cast<size_t>(layout.latent_output_width()),
                         layout.output_gate->granularity,
-                        layout.query_heads, latent.value_head_dim);
+                        layout.query_heads, factorized->value_head_dim);
                 }
                 execution.shared.linear.gemv(attention.out, output_input,
                                     execution.workspace.hidden.data());

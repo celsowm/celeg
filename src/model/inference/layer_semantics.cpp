@@ -300,11 +300,11 @@ void infer_latent_attention(
         rope,
         nope,
         true,
-        true,
-        q_rank,
-        value_dim,
-        NormSpec{*m.norm_epsilon, NormWeightKind::Scale},
-        NormSpec{*m.norm_epsilon, NormWeightKind::Scale}};
+        FactorizedLatentProjection{
+            q_rank,
+            value_dim,
+            NormSpec{*m.norm_epsilon, NormWeightKind::Scale},
+            NormSpec{*m.norm_epsilon, NormWeightKind::Scale}}};
     attention.query_scale =
         std::sqrt(static_cast<float>(value_dim) /
                   static_cast<float>(nope + rope));

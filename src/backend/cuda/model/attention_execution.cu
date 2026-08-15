@@ -33,18 +33,18 @@ void CudaCompiledModel::enqueue_decode_attention(
                         "CUDA latent attention requires BF16 state storage");
                 }
                 const auto& latent = *layout.latent_state();
-                if (latent.factorized) {
+                if (const auto* factorized = latent.factorized_projection()) {
                     decode_phase_profile().begin(stream_.get());
                     linear(workspace_.normed_.data(), *attention->latent_query_projection,
-                           workspace_.latent_projection_.data(), 1, latent.query_rank,
+                           workspace_.latent_projection_.data(), 1, factorized->query_rank,
                            resources_.program_.hidden);
                     launch_rmsnorm(workspace_.latent_projection_.data(), attention->latent_query_norm,
-                                   workspace_.latent_projection_.data(), 1, latent.query_rank,
-                                   latent.query_latent_norm.epsilon, stream_.get());
+                                   workspace_.latent_projection_.data(), 1, factorized->query_rank,
+                                   factorized->query_latent_norm.epsilon, stream_.get());
                     linear(workspace_.latent_projection_.data(), *attention->latent_query_expansion,
                            workspace_.qkv_output_.data(), 1,
                            layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-                           latent.query_rank);
+                           factorized->query_rank);
                     launch_factorized_latent_query({
                         .query_projection = workspace_.qkv_output_.data(),
                         .expansion = attention->latent_expansion->bf16,
@@ -68,7 +68,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                            latent.latent_rank + latent.rope_head_dim, resources_.program_.hidden);
                     launch_rmsnorm(workspace_.qkv_output_.data(), attention->latent_key_norm,
                                    workspace_.latent_key_.data(), 1, latent.latent_rank,
-                                   latent.key_latent_norm.epsilon, stream_.get());
+                                   factorized->key_latent_norm.epsilon, stream_.get());
                     CELEG_CUDA(cudaMemcpyAsync(workspace_.latent_value_.data(),
                         workspace_.latent_key_.data(),
                         static_cast<size_t>(latent.latent_rank) * sizeof(__nv_bfloat16),
@@ -113,7 +113,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         .rows = 1,
                         .query_heads = layout.query_heads,
                         .query_nope = latent.nope_head_dim,
-                        .value_dim = latent.value_head_dim,
+                        .value_dim = factorized->value_head_dim,
                         .latent_rank = latent.latent_rank,
                         .stream = stream_.get()});
                     linear(workspace_.normed_.data(), *attention->gate,
@@ -122,7 +122,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                     if (layout.output_gate->granularity == AttentionGateGranularity::HeadWise) {
                         launch_sigmoid_multiply_headwise(workspace_.latent_decompressed_.data(),
                             workspace_.attention_gate_.data(), 1, layout.query_heads,
-                            latent.value_head_dim, stream_.get());
+                            factorized->value_head_dim, stream_.get());
                     } else {
                         launch_sigmoid_multiply(workspace_.latent_decompressed_.data(),
                             workspace_.attention_gate_.data(), layout.latent_output_width(),

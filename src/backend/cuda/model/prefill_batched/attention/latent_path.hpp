@@ -17,7 +17,7 @@ inline LatentPrefillPath latent_prefill_path(const AttentionSpec& layout) {
         throw std::logic_error(
             "CUDA latent prefill selected without latent attention state");
     }
-    return latent->factorized
+    return latent->factorized()
         ? LatentPrefillPath::Factorized
         : LatentPrefillPath::Projected;
 }

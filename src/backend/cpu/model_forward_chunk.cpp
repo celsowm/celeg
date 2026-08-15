@@ -258,24 +258,25 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             } else if (layout.uses_latent_state()) {
                 const auto& latent = *layout.latent_state();
+                const auto* factorized = latent.factorized_projection();
                 const size_t content_width = static_cast<size_t>(layout.latent_query_content_width());
                 const size_t rope_width = static_cast<size_t>(layout.latent_query_rope_width());
                 linear_started = Clock::now();
-                if (latent.factorized) {
+                if (factorized) {
                     layer_gemm(attention->latent_q_projection, workspace_.chunk_normed.data(),
                                workspace_.chunk_latent_projection.data(), 0.0f,
                                "latent_q_projection");
                     for (size_t row = 0; row < rows; ++row) {
                         cpu_rmsnorm_inplace(workspace_.chunk_latent_projection.data() +
-                            row * static_cast<size_t>(latent.query_rank),
-                            attention->latent_q_norm.data(), static_cast<size_t>(latent.query_rank),
-                            latent.query_latent_norm.epsilon);
+                            row * static_cast<size_t>(factorized->query_rank),
+                            attention->latent_q_norm.data(), static_cast<size_t>(factorized->query_rank),
+                            factorized->query_latent_norm.epsilon);
                     }
                     layer_gemm(attention->latent_q_expansion,
                                workspace_.chunk_latent_projection.data(),
                                workspace_.chunk_qkv.data(), 0.0f, "latent_q_expansion");
                     const int query_stride = latent.nope_head_dim + latent.rope_head_dim;
-                    const int expansion_stride = latent.nope_head_dim + latent.value_head_dim;
+                    const int expansion_stride = latent.nope_head_dim + factorized->value_head_dim;
                     parallel_rows(shared->pool, rows, [&](size_t row) {
                         float* content = workspace_.chunk_latent_projection.data() +
                             row * content_width;
@@ -313,7 +314,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                    workspace_.chunk_latent_rope.data());
                     }
                 }
-                if (latent.factorized) {
+                if (factorized) {
                     layer_gemm(attention->latent_k_projection, workspace_.chunk_normed.data(),
                                workspace_.chunk_latent_projection.data(), 0.0f,
                                "latent_k_projection");
@@ -325,7 +326,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   workspace_.chunk_latent_key.data() + row * latent.latent_rank);
                         cpu_rmsnorm_inplace(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
                             attention->latent_k_norm.data(), static_cast<size_t>(latent.latent_rank),
-                            latent.key_latent_norm.epsilon);
+                            factorized->key_latent_norm.epsilon);
                         std::copy(workspace_.chunk_latent_key.data() + row * latent.latent_rank,
                                   workspace_.chunk_latent_key.data() + (row + 1) * latent.latent_rank,
                                   workspace_.chunk_latent_value.data() + row * latent.latent_rank);
@@ -342,7 +343,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                workspace_.chunk_latent_value.data());
                 }
                 if (latent.decoupled_rope && latent.rope_head_dim != 0 &&
-                    !latent.factorized) {
+                    !factorized) {
                     layer_gemm(attention->latent_k_rope, workspace_.chunk_normed.data(),
                                workspace_.chunk_latent_key_rope.data());
                 }
@@ -379,7 +380,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                     const int position = base_position + static_cast<int>(row);
                     run_latent_attention(
                         state, layout,
-                        latent.factorized
+                        factorized
                             ? workspace_.chunk_qkv.data() + row *
                                   shared->workspace_plan.attention_projection
                             : workspace_.chunk_qkv.data() + row * content_width,
@@ -388,8 +389,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                         committed_length, position, attention->relative_bias);
                 });
                 session_.prefill_profile.attention_ms += milliseconds_since(attention_started);
-                if (latent.factorized) {
-                    const int expansion_stride = latent.nope_head_dim + latent.value_head_dim;
+                if (factorized) {
+                    const int expansion_stride = latent.nope_head_dim + factorized->value_head_dim;
                     parallel_rows(shared->pool, rows, [&](size_t row) {
                         const float* latent_output = workspace_.chunk_op.data() + row * content_width;
                         float* decompressed = workspace_.chunk_latent_decompressed.data() +
@@ -401,9 +402,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                 latent_output + head * latent.latent_rank,
                                 expansion_scratch,
                                 static_cast<size_t>(head * expansion_stride + latent.nope_head_dim),
-                                static_cast<size_t>(latent.value_head_dim));
-                            std::copy_n(expansion_scratch, latent.value_head_dim,
-                                        decompressed + head * latent.value_head_dim);
+                                static_cast<size_t>(factorized->value_head_dim));
+                            std::copy_n(expansion_scratch, factorized->value_head_dim,
+                                        decompressed + head * factorized->value_head_dim);
                         }
                         shared->linear.gemv(attention->gate, workspace_.chunk_normed.data() +
                             row * shared->program.hidden, workspace_.chunk_attention_gate.data() +
@@ -413,12 +414,12 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                 row * static_cast<size_t>(layout.latent_output_width()),
                             static_cast<size_t>(layout.latent_output_width()),
                             layout.output_gate->granularity,
-                            layout.query_heads, latent.value_head_dim);
+                            layout.query_heads, factorized->value_head_dim);
                     });
                 }
                 linear_started = Clock::now();
                 layer_gemm(attention->out,
-                           latent.factorized ? workspace_.chunk_latent_decompressed.data() :
+                           factorized ? workspace_.chunk_latent_decompressed.data() :
                                workspace_.chunk_op.data(),
                            workspace_.chunk_hidden.data());
                 session_.prefill_profile.linear_ms += milliseconds_since(linear_started);

@@ -38,18 +38,18 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         append(TensorRole::AttentionOutput, {hidden, attention.query_width()});
     } else if (attention.uses_latent_state()) {
         const auto& latent = *attention.latent_state();
-        if (latent.factorized) {
+        if (const auto* factorized = latent.factorized_projection()) {
             append(TensorRole::AttentionLatentQueryProjection,
-                   {latent.query_rank, hidden});
+                   {factorized->query_rank, hidden});
             append(TensorRole::AttentionLatentQueryExpansion,
                    {attention.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-                    latent.query_rank});
-            append(TensorRole::AttentionLatentQueryNorm, {latent.query_rank});
+                    factorized->query_rank});
+            append(TensorRole::AttentionLatentQueryNorm, {factorized->query_rank});
             append(TensorRole::AttentionLatentKeyProjection,
                    {latent.latent_rank + latent.rope_head_dim, hidden});
             append(TensorRole::AttentionLatentKeyNorm, {latent.latent_rank});
             append(TensorRole::AttentionLatentExpansion,
-                   {attention.query_heads * (latent.nope_head_dim + latent.value_head_dim),
+                   {attention.query_heads * (latent.nope_head_dim + factorized->value_head_dim),
                     latent.latent_rank});
             append(TensorRole::AttentionLatentOutput,
                    {hidden, attention.latent_output_width()});

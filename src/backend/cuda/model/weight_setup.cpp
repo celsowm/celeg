@@ -348,22 +348,23 @@ void CudaCompiledModel::load_checkpoint_weights(
                         "CUDA latent attention currently requires BF16 state storage");
                 }
                 const auto& latent = *layout.latent_state();
+                const auto* factorized = latent.factorized_projection();
                 const bool owns_latent_state =
                     !std::holds_alternative<SharedKvConsumer>(layout.kv_sharing);
-                if (latent.factorized) {
+                if (factorized) {
                     attention_layer.latent_query_projection = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentQueryProjection, i),
-                        {latent.query_rank, resources_.program_.hidden});
+                        {factorized->query_rank, resources_.program_.hidden});
                     attention_layer.latent_query_expansion = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentQueryExpansion, i),
                         {layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-                         latent.query_rank});
+                         factorized->query_rank});
                     attention_layer.latent_query_norm = resources_.weight_loader_->load_rms_norm_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentQueryNorm, i),
-                        {latent.query_rank}, latent.query_latent_norm.weight_kind);
+                        {factorized->query_rank}, factorized->query_latent_norm.weight_kind);
                     attention_layer.latent_key_projection = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentKeyProjection, i),
@@ -371,11 +372,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                     attention_layer.latent_key_norm = resources_.weight_loader_->load_rms_norm_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentKeyNorm, i),
-                        {latent.latent_rank}, latent.key_latent_norm.weight_kind);
+                        {latent.latent_rank}, factorized->key_latent_norm.weight_kind);
                     attention_layer.latent_expansion = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentExpansion, i),
-                        {layout.query_heads * (latent.nope_head_dim + latent.value_head_dim),
+                        {layout.query_heads * (latent.nope_head_dim + factorized->value_head_dim),
                          latent.latent_rank});
                     attention_layer.gate = resources_.weight_loader_->load_linear_weight(
                         repo, tensor_name(resources_.model_.weight_plan.requests,

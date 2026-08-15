@@ -144,11 +144,21 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
             out << "ordinary:" << state.quantizable;
         } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
             out << "latent:" << state.latent_rank << ':' << state.rope_head_dim << ':'
-                << state.nope_head_dim << ':' << state.decoupled_rope << ':'
-                << state.factorized << ':' << state.query_rank << ':'
-                << state.value_head_dim;
-            append_norm(out, state.query_latent_norm);
-            append_norm(out, state.key_latent_norm);
+                << state.nope_head_dim << ':' << state.decoupled_rope << ':';
+            std::visit([&out](const auto& projection) {
+                using Projection = std::decay_t<decltype(projection)>;
+                if constexpr (std::is_same_v<Projection, DirectLatentProjection>) {
+                    out << "direct";
+                } else if constexpr (std::is_same_v<Projection, FactorizedLatentProjection>) {
+                    out << "factorized:" << projection.query_rank << ':'
+                        << projection.value_head_dim;
+                    append_norm(out, projection.query_latent_norm);
+                    append_norm(out, projection.key_latent_norm);
+                } else {
+                    static_assert(always_false_v<Projection>,
+                                  "unhandled latent projection variant");
+                }
+            }, state.projection);
         } else {
             static_assert(always_false_v<State>, "unhandled attention state variant");
         }
@@ -555,12 +565,13 @@ void AttentionStateStorageSpec::validate(const AttentionStateSpec& state) const 
             latent_state->rope_head_dim + latent_state->nope_head_dim <= 0) {
             throw std::runtime_error("invalid latent attention state dimensions");
         }
-        if (latent_state->factorized &&
-            (latent_state->query_rank <= 0 || latent_state->value_head_dim <= 0 ||
-             !std::isfinite(latent_state->query_latent_norm.epsilon) ||
-             latent_state->query_latent_norm.epsilon <= 0.0f ||
-             !std::isfinite(latent_state->key_latent_norm.epsilon) ||
-             latent_state->key_latent_norm.epsilon <= 0.0f)) {
+        if (const auto* factorized = latent_state->factorized_projection();
+            factorized &&
+            (factorized->query_rank <= 0 || factorized->value_head_dim <= 0 ||
+             !std::isfinite(factorized->query_latent_norm.epsilon) ||
+             factorized->query_latent_norm.epsilon <= 0.0f ||
+             !std::isfinite(factorized->key_latent_norm.epsilon) ||
+             factorized->key_latent_norm.epsilon <= 0.0f)) {
             throw std::runtime_error("invalid factorized latent attention projections");
         }
     }

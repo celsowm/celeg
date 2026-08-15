@@ -191,20 +191,20 @@ void CpuCompiledModel::Shared::load_weights() {
             const AttentionSpec& attention = compiled_attention->semantics;
             if (attention.uses_latent_state()) {
                 const auto& latent = *attention.latent_state();
-                if (latent.factorized) {
+                if (const auto* factorized = latent.factorized_projection()) {
                     layer.latent_q_projection = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryProjection, index),
-        {latent.query_rank, program.hidden});
+        {factorized->query_rank, program.hidden});
                     layer.latent_q_expansion = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryExpansion, index),
                         {attention.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
-                         latent.query_rank});
+                         factorized->query_rank});
                     layer.latent_q_norm = load_vector(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryNorm, index),
-                        {latent.query_rank});
+                        {factorized->query_rank});
                     layer.latent_k_projection = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentKeyProjection, index),
@@ -216,7 +216,7 @@ void CpuCompiledModel::Shared::load_weights() {
                     layer.latent_expansion = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentExpansion, index),
-                        {attention.query_heads * (latent.nope_head_dim + latent.value_head_dim),
+                        {attention.query_heads * (latent.nope_head_dim + factorized->value_head_dim),
                          latent.latent_rank});
                     layer.out = load_matrix(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentOutput, index),
@@ -634,7 +634,7 @@ void CpuCompiledModel::Shared::load_weights() {
                                      const AttentionSpec& semantics,
                                      const std::string& label) {
         require_matrix(attention.out, label + ".out");
-        if (const auto* latent = semantics.latent_state(); latent && latent->factorized) {
+        if (const auto* latent = semantics.latent_state(); latent && latent->factorized()) {
             require_matrix(attention.latent_q_projection, label + ".latent_q_projection");
             require_matrix(attention.latent_q_expansion, label + ".latent_q_expansion");
             require_matrix(attention.latent_k_projection, label + ".latent_k_projection");

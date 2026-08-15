@@ -382,7 +382,7 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
         ling_model.graph.layers[3].mixer));
     CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(ling_model.graph.layers[3].mixer)
-                         .latent_state()->factorized);
+                         .latent_state()->factorized());
     CELEG_TEST_CHECK(std::holds_alternative<celeg::DenseFeedForwardSpec>(
         ling_model.graph.layers[0].feed_forward));
     CELEG_TEST_CHECK(std::holds_alternative<celeg::MixtureOfExpertsSpec>(

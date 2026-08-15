@@ -338,6 +338,7 @@ void bind_latent_attention(CanonicalInferenceContext& context,
     const auto& m = input.metadata;
     auto& bindings = context.facts.bindings;
     const auto& latent = *attention.latent_state();
+    const auto& factorized = *latent.factorized_projection();
     const int query_head_count = *m.query_heads.value_for(layer);
     const std::string prefix =
         "model.layers." + std::string(index) + ".attention.";
@@ -358,16 +359,16 @@ void bind_latent_attention(CanonicalInferenceContext& context,
     bind(
         TensorRole::AttentionLatentQueryProjection,
         "q_a_proj.weight",
-        {latent.query_rank, *m.hidden_size});
+        {factorized.query_rank, *m.hidden_size});
     bind(
         TensorRole::AttentionLatentQueryNorm,
         "q_a_layernorm.weight",
-        {latent.query_rank});
+        {factorized.query_rank});
     bind(
         TensorRole::AttentionLatentQueryExpansion,
         "q_b_proj.weight",
         {query_head_count * (latent.nope_head_dim + latent.rope_head_dim),
-         latent.query_rank});
+         factorized.query_rank});
     bind(
         TensorRole::AttentionLatentKeyProjection,
         "kv_a_proj_with_mqa.weight",
@@ -379,7 +380,7 @@ void bind_latent_attention(CanonicalInferenceContext& context,
     bind(
         TensorRole::AttentionLatentExpansion,
         "kv_b_proj.weight",
-        {query_head_count * (latent.nope_head_dim + latent.value_head_dim),
+        {query_head_count * (latent.nope_head_dim + factorized.value_head_dim),
          latent.latent_rank});
 
     const auto* output = find_unique(
@@ -545,7 +546,7 @@ void bind_mixer(CanonicalInferenceContext& context,
     }
     if (const auto* attention = std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
         if (attention->uses_latent_state() &&
-            attention->latent_state()->factorized) {
+            attention->latent_state()->factorized()) {
             bind_latent_attention(context, layer, index, *attention);
         } else {
             bind_standard_attention(

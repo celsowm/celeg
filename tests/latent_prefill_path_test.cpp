@@ -5,7 +5,7 @@
 int main() {
     celeg::AttentionSpec factorized;
     celeg::LatentAttentionStateSpec factorized_state;
-    factorized_state.factorized = true;
+    factorized_state.projection = celeg::FactorizedLatentProjection{};
     factorized.state = factorized_state;
     if (celeg::prefill_detail::latent_prefill_path(factorized) !=
         celeg::prefill_detail::LatentPrefillPath::Factorized) {
@@ -14,7 +14,7 @@ int main() {
 
     celeg::AttentionSpec projected;
     celeg::LatentAttentionStateSpec projected_state;
-    projected_state.factorized = false;
+    projected_state.projection = celeg::DirectLatentProjection{};
     projected.state = projected_state;
     if (celeg::prefill_detail::latent_prefill_path(projected) !=
         celeg::prefill_detail::LatentPrefillPath::Projected) {

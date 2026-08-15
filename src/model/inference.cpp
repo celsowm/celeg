@@ -78,7 +78,7 @@ void CanonicalModelFacts::validate() const {
                 std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
             const AttentionSpec& attention = *attention_ptr;
             if (attention.uses_latent_state()) {
-                if (attention.latent_state()->factorized) {
+                if (attention.latent_state()->factorized()) {
                     require(TensorRole::AttentionLatentQueryProjection, layer);
                     require(TensorRole::AttentionLatentQueryExpansion, layer);
                     require(TensorRole::AttentionLatentQueryNorm, layer);

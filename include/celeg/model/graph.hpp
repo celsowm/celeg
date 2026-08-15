@@ -105,16 +105,30 @@ struct OrthogonalizeCurrentValueSpec {
 using AttentionOutputTransformSpec = std::variant<
     NoAttentionOutputTransformSpec, OrthogonalizeCurrentValueSpec>;
 
+struct DirectLatentProjection {};
+
+struct FactorizedLatentProjection {
+    int query_rank = 0;
+    int value_head_dim = 0;
+    NormSpec query_latent_norm;
+    NormSpec key_latent_norm;
+};
+
+using LatentProjectionSpec = std::variant<DirectLatentProjection, FactorizedLatentProjection>;
+
 struct LatentAttentionStateSpec {
     int latent_rank = 0;
     int rope_head_dim = 0;
     int nope_head_dim = 0;
     bool decoupled_rope = false;
-    bool factorized = false;
-    int query_rank = 0;
-    int value_head_dim = 0;
-    NormSpec query_latent_norm;
-    NormSpec key_latent_norm;
+    LatentProjectionSpec projection = DirectLatentProjection{};
+
+    bool factorized() const {
+        return std::holds_alternative<FactorizedLatentProjection>(projection);
+    }
+    const FactorizedLatentProjection* factorized_projection() const {
+        return std::get_if<FactorizedLatentProjection>(&projection);
+    }
 };
 
 using AttentionStateSpec = std::variant<OrdinaryKvStateSpec,
@@ -259,14 +273,15 @@ struct AttentionSpec {
     }
     int latent_query_projection_width() const {
         const auto* latent = latent_state();
-        return latent && latent->factorized
+        return latent && latent->factorized()
             ? query_heads * (latent->nope_head_dim + latent->rope_head_dim)
             : latent_query_width();
     }
     int latent_output_width() const {
         const auto* latent = latent_state();
-        return latent && latent->factorized
-            ? query_heads * latent->value_head_dim : latent_query_content_width();
+        return latent && latent->factorized()
+            ? query_heads * latent->factorized_projection()->value_head_dim
+            : latent_query_content_width();
     }
     bool has_causal_pattern() const {
         return std::holds_alternative<FullCausalPattern>(pattern) ||
