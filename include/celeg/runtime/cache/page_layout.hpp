@@ -53,9 +53,7 @@ struct PageLayout {
                 ? shape.layer_for_attention_slot[static_cast<size_t>(slot)] : slot;
             const AttentionSpec* attention = nullptr;
             if (model_layer >= 0 && model_layer < static_cast<int>(program.layers.size())) {
-                const CompiledLayerProgram& layer = program.layers.at(
-                    static_cast<size_t>(model_layer));
-                if (layer.attention) attention = &layer.attention.value();
+                attention = program.layers.at(static_cast<size_t>(model_layer)).attention();
             }
             if (!attention) {
                 throw std::invalid_argument("PageLayout requires an attention layout for every slot");
