@@ -17,7 +17,7 @@ enum class CompiledMixer : unsigned char {
 };
 enum class CompiledFeedForward : unsigned char { Dense, MixtureOfExperts };
 
-// Neutral, immutable MoE semantics.  These values are intentionally free of
+// Neutral, immutable MoE semantics. These values are intentionally free of
 // checkpoint names, architecture identity, CUDA handles, and cache policy.
 enum class MoeRouterScoreKind : unsigned char { SigmoidProbabilities, SoftmaxLogits };
 enum class MoeSelectionKind : unsigned char { TopK, GroupedTopK };
@@ -163,6 +163,125 @@ using CompiledMixerProgram = std::variant<
     Mamba2Spec,
     MlpBlockSpec>;
 
+CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer);
+bool operator==(const CompiledMixerProgram& mixer, CompiledMixer kind);
+bool operator==(CompiledMixer kind, const CompiledMixerProgram& mixer);
+bool operator!=(const CompiledMixerProgram& mixer, CompiledMixer kind);
+bool operator!=(CompiledMixer kind, const CompiledMixerProgram& mixer);
+
+// Optional-like views preserve the compact consumer API without duplicating
+// semantic state. They only point into CompiledLayerProgram::mixer, so changing
+// the active alternative is the only way to change mixer identity.
+template <typename T>
+class CompiledMixerView {
+public:
+    CompiledMixerView() = default;
+
+    void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
+
+    T* get() {
+        return mixer_ ? std::get_if<T>(mixer_) : nullptr;
+    }
+    const T* get() const {
+        return mixer_ ? std::get_if<T>(mixer_) : nullptr;
+    }
+    T* operator()() { return get(); }
+    const T* operator()() const { return get(); }
+    bool has_value() const { return get() != nullptr; }
+    explicit operator bool() const { return has_value(); }
+    T& value() {
+        T* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    const T& value() const {
+        const T* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    T* operator->() { return &value(); }
+    const T* operator->() const { return &value(); }
+    T& operator*() { return value(); }
+    const T& operator*() const { return value(); }
+
+private:
+    CompiledMixerProgram* mixer_ = nullptr;
+};
+
+class CompiledAttentionView {
+public:
+    CompiledAttentionView() = default;
+
+    void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
+
+    AttentionSpec* get() {
+        auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        return result ? &result->semantics : nullptr;
+    }
+    const AttentionSpec* get() const {
+        const auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        return result ? &result->semantics : nullptr;
+    }
+    AttentionSpec* operator()() { return get(); }
+    const AttentionSpec* operator()() const { return get(); }
+    bool has_value() const { return get() != nullptr; }
+    explicit operator bool() const { return has_value(); }
+    AttentionSpec& value() {
+        AttentionSpec* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    const AttentionSpec& value() const {
+        const AttentionSpec* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    AttentionSpec* operator->() { return &value(); }
+    const AttentionSpec* operator->() const { return &value(); }
+    AttentionSpec& operator*() { return value(); }
+    const AttentionSpec& operator*() const { return value(); }
+
+private:
+    CompiledMixerProgram* mixer_ = nullptr;
+};
+
+class CompiledAttentionStateLayoutView {
+public:
+    CompiledAttentionStateLayoutView() = default;
+
+    void bind(CompiledMixerProgram& mixer) { mixer_ = &mixer; }
+
+    CompiledAttentionStateLayout* get() {
+        auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        return result ? &result->state_layout : nullptr;
+    }
+    const CompiledAttentionStateLayout* get() const {
+        const auto* result = mixer_ ? std::get_if<CompiledAttentionProgram>(mixer_) : nullptr;
+        return result ? &result->state_layout : nullptr;
+    }
+    CompiledAttentionStateLayout* operator()() { return get(); }
+    const CompiledAttentionStateLayout* operator()() const { return get(); }
+    bool has_value() const { return get() != nullptr; }
+    explicit operator bool() const { return has_value(); }
+    CompiledAttentionStateLayout& value() {
+        CompiledAttentionStateLayout* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    const CompiledAttentionStateLayout& value() const {
+        const CompiledAttentionStateLayout* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    CompiledAttentionStateLayout* operator->() { return &value(); }
+    const CompiledAttentionStateLayout* operator->() const { return &value(); }
+    CompiledAttentionStateLayout& operator*() { return value(); }
+    const CompiledAttentionStateLayout& operator*() const { return value(); }
+
+private:
+    CompiledMixerProgram* mixer_ = nullptr;
+};
+
 enum class CompiledChunkCapability : uint8_t {
     Native,
     SequentialAdapter,
@@ -170,11 +289,18 @@ enum class CompiledChunkCapability : uint8_t {
 };
 
 // Immutable execution description produced before a backend starts serving.
-// The mixer variant is the single source of truth for mixer identity and
-// payload, so contradictory states such as "Attention + Mamba2 payload" are
-// unrepresentable.
+// `mixer` is the single semantic source of truth. The optional-like members
+// below are non-owning views into that variant and therefore cannot create
+// contradictory mixer states.
 struct CompiledLayerProgram {
     CompiledMixerProgram mixer;
+    CompiledAttentionView attention;
+    CompiledAttentionStateLayoutView state_layout;
+    CompiledMixerView<ShortConvolutionSpec> short_convolution;
+    CompiledMixerView<GatedDeltaNetSpec> gated_delta_net;
+    CompiledMixerView<Mamba2Spec> mamba2;
+    CompiledMixerView<MlpBlockSpec> mlp_only;
+
     CompiledFeedForward feed_forward = CompiledFeedForward::Dense;
     bool execute_feed_forward = true;
     CompiledChunkCapability chunk_capability = CompiledChunkCapability::Native;
@@ -188,20 +314,16 @@ struct CompiledLayerProgram {
     NormSpec post_feed_forward_norm;
     ResidualSpec residual;
 
-    CompiledMixer mixer_kind() const;
+    CompiledLayerProgram();
+    CompiledLayerProgram(const CompiledLayerProgram& other);
+    CompiledLayerProgram(CompiledLayerProgram&& other);
+    CompiledLayerProgram& operator=(const CompiledLayerProgram& other);
+    CompiledLayerProgram& operator=(CompiledLayerProgram&& other);
 
-    AttentionSpec* attention();
-    const AttentionSpec* attention() const;
-    CompiledAttentionStateLayout* state_layout();
-    const CompiledAttentionStateLayout* state_layout() const;
-    ShortConvolutionSpec* short_convolution();
-    const ShortConvolutionSpec* short_convolution() const;
-    GatedDeltaNetSpec* gated_delta_net();
-    const GatedDeltaNetSpec* gated_delta_net() const;
-    Mamba2Spec* mamba2();
-    const Mamba2Spec* mamba2() const;
-    MlpBlockSpec* mlp_only();
-    const MlpBlockSpec* mlp_only() const;
+    CompiledMixer mixer_kind() const { return compiled_mixer_kind(mixer); }
+
+private:
+    void bind_mixer_views();
 };
 
 struct CompiledModelProgram {
