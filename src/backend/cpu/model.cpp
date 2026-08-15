@@ -17,9 +17,10 @@ namespace {
 bool requires_sequential_attention_transform(const CompiledModelProgram& program) {
     return std::any_of(program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) {
-            return layer.attention.has_value() &&
+            const AttentionSpec* attention = layer.attention();
+            return attention &&
                 !std::holds_alternative<NoAttentionOutputTransformSpec>(
-                    layer.attention->output_transform);
+                    attention->output_transform);
         });
 }
 
