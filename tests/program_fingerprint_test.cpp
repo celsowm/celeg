@@ -3,6 +3,7 @@
 #include "support/assertions.hpp"
 
 #include <iostream>
+#include <stdexcept>
 
 namespace {
 
@@ -62,6 +63,16 @@ int main() {
     celeg::ResolvedModel logits = baseline;
     logits.graph.final_logit_softcap = 30.0f;
     expect_fingerprint_change(baseline, logits);
+
+    celeg::CompiledModelProgram ambiguous = compiled;
+    ambiguous.layers[0].mamba2 = celeg::Mamba2Spec{};
+    bool ambiguous_rejected = false;
+    try {
+        ambiguous.validate();
+    } catch (const std::invalid_argument&) {
+        ambiguous_rejected = true;
+    }
+    CELEG_TEST_CHECK(ambiguous_rejected);
 
     std::cout << "program_fingerprint_test: ok\n";
     return 0;
