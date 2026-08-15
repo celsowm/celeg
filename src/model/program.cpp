@@ -232,6 +232,27 @@ void PerLayerInputPlan::validate() const {
     }
 }
 
+CompiledMixerProgram& CompiledMixerProgram::operator=(CompiledMixer kind) {
+    switch (kind) {
+    case CompiledMixer::Attention:
+        storage() = CompiledAttentionProgram{};
+        break;
+    case CompiledMixer::ShortConvolution:
+        storage() = ShortConvolutionSpec{};
+        break;
+    case CompiledMixer::GatedDeltaNet:
+        storage() = GatedDeltaNetSpec{};
+        break;
+    case CompiledMixer::Mamba2:
+        storage() = Mamba2Spec{};
+        break;
+    case CompiledMixer::MlpOnly:
+        storage() = MlpBlockSpec{};
+        break;
+    }
+    return *this;
+}
+
 CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer) {
     return std::visit([](const auto& value) {
         using Mixer = std::decay_t<decltype(value)>;
@@ -248,7 +269,7 @@ CompiledMixer compiled_mixer_kind(const CompiledMixerProgram& mixer) {
         } else {
             static_assert(always_false_v<Mixer>, "unhandled compiled mixer variant");
         }
-    }, mixer);
+    }, mixer.storage());
 }
 
 bool operator==(const CompiledMixerProgram& mixer, CompiledMixer kind) {
