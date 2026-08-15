@@ -290,6 +290,34 @@ def main() -> int:
             r"launch_dynamic_qk_norm_rope)_", cuda_decode.read_text(encoding="utf-8")):
         errors.append(f"CUDA attention execution body remains in orchestration file: {cuda_decode}")
 
+    # docs/SEMANTIC_STATE_CLEANUP_PLAN.md: backend capability decisions belong
+    # to backend compilers, not the resolved semantic model. Keep the deleted
+    # ModelCapabilities flag bag from silently growing back.
+    semantic_state_roots = ("include/celeg/model", "src/model")
+    forbidden_capability_symbols = re.compile(
+        r"\bModelCapabilities\b|\.capabilities\.supports_(?:cpu|cuda|expert_offload)\b")
+    for relative in semantic_state_roots:
+        for path in files(root / relative, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".inl"}:
+                continue
+            if forbidden_capability_symbols.search(path.read_text(encoding="utf-8")):
+                errors.append(f"backend capability flag reintroduced into resolved model: {path}")
+
+    # docs/SEMANTIC_STATE_CLEANUP_PLAN.md: the sum types finished during the
+    # cleanup must not regrow a parallel enum-kind + payload representation.
+    # These symbol names are retired entirely -- their replacements are
+    # closed std::variant alternatives (KvSharingSpec, AttentionKeyValueSource,
+    # AttentionOutputGateSpec, LatentAttentionStateSpec::projection).
+    retired_tagged_union_symbols = re.compile(
+        r"\bAttentionSourceSpec\b|\bAttentionSourceKind\b|\bAttentionGateKind\b|"
+        r"\bAttentionStateStorageSpec\b|state_storage\.(?:key|value|latent|rotary)\b")
+    for relative in semantic_state_roots:
+        for path in files(root / relative, "**/*"):
+            if path.suffix not in {".h", ".hpp", ".c", ".cpp", ".cu", ".cuh", ".inl"}:
+                continue
+            if retired_tagged_union_symbols.search(path.read_text(encoding="utf-8")):
+                errors.append(f"retired tagged-union representation reintroduced: {path}")
+
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
