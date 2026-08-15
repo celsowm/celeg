@@ -16,7 +16,7 @@ namespace celeg {
 enum class CompiledMixer : unsigned char {
     Attention, ShortConvolution, GatedDeltaNet, Mamba2, MlpOnly
 };
-enum class CompiledFeedForward : unsigned char { Dense, MixtureOfExperts };
+enum class CompiledFeedForward : unsigned char { Dense, MixtureOfExperts, None };
 
 // Neutral, immutable MoE semantics. These values are intentionally free of
 // checkpoint names, architecture identity, CUDA handles, and cache policy.
@@ -94,6 +94,171 @@ struct MoeLayerProgram {
 
     void validate() const;
     std::string fingerprint() const;
+};
+
+struct CompiledDenseFeedForwardProgram {
+    int intermediate_size = 0;
+    ActivationKind activation = ActivationKind::SwiGLU;
+
+    void validate() const;
+};
+
+using CompiledFeedForwardVariant = std::variant<
+    std::monostate,
+    CompiledDenseFeedForwardProgram,
+    MoeLayerProgram>;
+
+// The variant is the only stored post-mixer feed-forward identity. The legacy
+// enum remains only as a derived compatibility tag, never as independent state.
+class CompiledFeedForwardProgram : public CompiledFeedForwardVariant {
+public:
+    using CompiledFeedForwardVariant::operator=;
+
+    CompiledFeedForwardProgram();
+    CompiledFeedForwardProgram(const CompiledFeedForwardProgram&) = default;
+    CompiledFeedForwardProgram(CompiledFeedForwardProgram&&) = default;
+    CompiledFeedForwardProgram& operator=(const CompiledFeedForwardProgram&) = default;
+    CompiledFeedForwardProgram& operator=(CompiledFeedForwardProgram&&) = default;
+    CompiledFeedForwardProgram& operator=(CompiledFeedForward kind);
+
+    CompiledFeedForwardVariant& storage() { return *this; }
+    const CompiledFeedForwardVariant& storage() const { return *this; }
+    bool enabled() const { return !std::holds_alternative<std::monostate>(storage()); }
+    void validate() const;
+};
+
+CompiledFeedForward compiled_feed_forward_kind(const CompiledFeedForwardProgram& program);
+bool operator==(const CompiledFeedForwardProgram& program, CompiledFeedForward kind);
+bool operator==(CompiledFeedForward kind, const CompiledFeedForwardProgram& program);
+bool operator!=(const CompiledFeedForwardProgram& program, CompiledFeedForward kind);
+bool operator!=(CompiledFeedForward kind, const CompiledFeedForwardProgram& program);
+
+class CompiledFeedForwardEnabledView {
+public:
+    CompiledFeedForwardEnabledView() = default;
+    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+    operator bool() const { return program_ && program_->enabled(); }
+    CompiledFeedForwardEnabledView& operator=(bool enabled) {
+        if (!program_) throw std::logic_error("compiled feed-forward enabled view is not bound");
+        if (!enabled) {
+            program_->storage() = std::monostate{};
+        } else if (!program_->enabled()) {
+            program_->storage() = CompiledDenseFeedForwardProgram{};
+        }
+        return *this;
+    }
+
+private:
+    CompiledFeedForwardProgram* program_ = nullptr;
+};
+
+class CompiledFeedForwardIntermediateView {
+public:
+    CompiledFeedForwardIntermediateView() = default;
+    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+    int value() const {
+        if (!program_) return 0;
+        if (const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+            return dense->intermediate_size;
+        }
+        if (const auto* moe = std::get_if<MoeLayerProgram>(&program_->storage())) {
+            return moe->routed.mlp.intermediate_size;
+        }
+        return 0;
+    }
+    operator int() const { return value(); }
+    CompiledFeedForwardIntermediateView& operator=(int intermediate_size) {
+        if (!program_) throw std::logic_error("compiled feed-forward width view is not bound");
+        if (auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+            dense->intermediate_size = intermediate_size;
+        } else if (auto* moe = std::get_if<MoeLayerProgram>(&program_->storage())) {
+            moe->routed.mlp.intermediate_size = intermediate_size;
+        } else {
+            program_->storage() = CompiledDenseFeedForwardProgram{
+                intermediate_size, ActivationKind::SwiGLU};
+        }
+        return *this;
+    }
+
+private:
+    CompiledFeedForwardProgram* program_ = nullptr;
+};
+
+class CompiledFeedForwardActivationView {
+public:
+    CompiledFeedForwardActivationView() = default;
+    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+    ActivationKind value() const {
+        if (program_) {
+            if (const auto* dense =
+                    std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+                return dense->activation;
+            }
+        }
+        return ActivationKind::SwiGLU;
+    }
+    operator ActivationKind() const { return value(); }
+    CompiledFeedForwardActivationView& operator=(ActivationKind activation) {
+        if (!program_) throw std::logic_error("compiled feed-forward activation view is not bound");
+        if (auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(&program_->storage())) {
+            dense->activation = activation;
+        } else if (std::holds_alternative<std::monostate>(program_->storage())) {
+            program_->storage() = CompiledDenseFeedForwardProgram{0, activation};
+        } else {
+            throw std::logic_error("MoE activation is part of the MoE semantic program");
+        }
+        return *this;
+    }
+
+private:
+    CompiledFeedForwardProgram* program_ = nullptr;
+};
+
+class CompiledMoeView {
+public:
+    CompiledMoeView() = default;
+    void bind(CompiledFeedForwardProgram& program) { program_ = &program; }
+    MoeLayerProgram* get() {
+        return program_ ? std::get_if<MoeLayerProgram>(&program_->storage()) : nullptr;
+    }
+    const MoeLayerProgram* get() const {
+        return program_ ? std::get_if<MoeLayerProgram>(&program_->storage()) : nullptr;
+    }
+    MoeLayerProgram* operator()() { return get(); }
+    const MoeLayerProgram* operator()() const { return get(); }
+    bool has_value() const { return get() != nullptr; }
+    explicit operator bool() const { return has_value(); }
+    MoeLayerProgram& value() {
+        MoeLayerProgram* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    const MoeLayerProgram& value() const {
+        const MoeLayerProgram* result = get();
+        if (!result) throw std::bad_optional_access();
+        return *result;
+    }
+    MoeLayerProgram* operator->() { return &value(); }
+    const MoeLayerProgram* operator->() const { return &value(); }
+    MoeLayerProgram& operator*() { return value(); }
+    const MoeLayerProgram& operator*() const { return value(); }
+    CompiledMoeView& operator=(const MoeLayerProgram& value) {
+        if (!program_) throw std::logic_error("compiled MoE view is not bound");
+        program_->storage() = value;
+        return *this;
+    }
+    CompiledMoeView& operator=(MoeLayerProgram&& value) {
+        if (!program_) throw std::logic_error("compiled MoE view is not bound");
+        program_->storage() = std::move(value);
+        return *this;
+    }
+    void reset() {
+        if (!program_) throw std::logic_error("compiled MoE view is not bound");
+        program_->storage() = std::monostate{};
+    }
+
+private:
+    CompiledFeedForwardProgram* program_ = nullptr;
 };
 
 struct PerLayerInputPlan {
@@ -363,9 +528,8 @@ enum class CompiledChunkCapability : uint8_t {
 };
 
 // Immutable execution description produced before a backend starts serving.
-// `mixer` is the single semantic source of truth. The optional-like members
-// below are non-owning views into that variant and therefore cannot create
-// contradictory mixer states.
+// Mixer and post-mixer feed-forward variants are the semantic sources of truth;
+// compatibility members below are non-owning views into those variants.
 struct CompiledLayerProgram {
     CompiledMixerProgram mixer;
     CompiledAttentionView attention;
@@ -375,13 +539,14 @@ struct CompiledLayerProgram {
     CompiledMixerView<Mamba2Spec> mamba2;
     CompiledMixerView<MlpBlockSpec> mlp_only;
 
-    CompiledFeedForward feed_forward = CompiledFeedForward::Dense;
-    bool execute_feed_forward = true;
+    CompiledFeedForwardProgram feed_forward;
+    CompiledFeedForwardEnabledView execute_feed_forward;
+    CompiledFeedForwardIntermediateView feed_forward_intermediate;
+    CompiledFeedForwardActivationView feed_forward_activation;
+    CompiledMoeView moe;
+
     CompiledChunkCapability chunk_capability = CompiledChunkCapability::Native;
-    int feed_forward_intermediate = 0;
-    ActivationKind feed_forward_activation = ActivationKind::SwiGLU;
     std::vector<std::size_t> weight_request_indices;
-    std::optional<MoeLayerProgram> moe;
     NormSpec operator_norm;
     NormSpec post_attention_norm;
     NormSpec feed_forward_norm;
@@ -395,9 +560,13 @@ struct CompiledLayerProgram {
     CompiledLayerProgram& operator=(CompiledLayerProgram&& other);
 
     CompiledMixer mixer_kind() const { return compiled_mixer_kind(mixer); }
+    CompiledFeedForward feed_forward_kind() const {
+        return compiled_feed_forward_kind(feed_forward);
+    }
 
 private:
     void bind_mixer_views();
+    void bind_feed_forward_views();
 };
 
 struct CompiledModelProgram {
