@@ -24,10 +24,9 @@ int main() {
         program.hidden = graph.hidden;
         program.layers.resize(graph.layers.size());
         for (size_t index = 0; index < graph.layers.size(); ++index) {
-            program.layers[index].mixer = celeg::CompiledMixer::Attention;
+            program.layers[index].mixer = celeg::CompiledAttentionProgram{
+                std::get<celeg::AttentionSpec>(graph.layers[index].mixer), {}};
             program.layers[index].feed_forward = celeg::CompiledFeedForward::Dense;
-            program.layers[index].attention = std::get<celeg::AttentionSpec>(
-                graph.layers[index].mixer);
             program.layers[index].feed_forward_intermediate =
                 index == 0 ? 128 : 192;
         }
