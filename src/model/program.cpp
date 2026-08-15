@@ -169,6 +169,89 @@ std::string MoeLayerProgram::fingerprint() const {
     return fingerprint_text(out.str());
 }
 
+void CompiledDenseFeedForwardProgram::validate() const {
+    if (intermediate_size <= 0) {
+        throw std::invalid_argument("compiled dense feed-forward has no width");
+    }
+}
+
+CompiledFeedForwardProgram::CompiledFeedForwardProgram()
+    : CompiledFeedForwardVariant(CompiledDenseFeedForwardProgram{}) {}
+
+CompiledFeedForwardProgram& CompiledFeedForwardProgram::operator=(
+    CompiledFeedForward kind) {
+    switch (kind) {
+    case CompiledFeedForward::Dense:
+        if (!std::holds_alternative<CompiledDenseFeedForwardProgram>(storage())) {
+            storage() = CompiledDenseFeedForwardProgram{};
+        }
+        break;
+    case CompiledFeedForward::MixtureOfExperts:
+        if (!std::holds_alternative<MoeLayerProgram>(storage())) {
+            storage() = MoeLayerProgram{};
+        }
+        break;
+    case CompiledFeedForward::None:
+        storage() = std::monostate{};
+        break;
+    }
+    return *this;
+}
+
+CompiledFeedForward compiled_feed_forward_kind(
+    const CompiledFeedForwardProgram& program) {
+    return std::visit([](const auto& value) {
+        using FeedForward = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+            return CompiledFeedForward::None;
+        } else if constexpr (
+            std::is_same_v<FeedForward, CompiledDenseFeedForwardProgram>) {
+            return CompiledFeedForward::Dense;
+        } else if constexpr (std::is_same_v<FeedForward, MoeLayerProgram>) {
+            return CompiledFeedForward::MixtureOfExperts;
+        } else {
+            static_assert(always_false_v<FeedForward>,
+                          "unhandled compiled feed-forward variant");
+        }
+    }, program.storage());
+}
+
+void CompiledFeedForwardProgram::validate() const {
+    std::visit([](const auto& value) {
+        using FeedForward = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<FeedForward, std::monostate>) {
+            return;
+        } else if constexpr (
+            std::is_same_v<FeedForward, CompiledDenseFeedForwardProgram> ||
+            std::is_same_v<FeedForward, MoeLayerProgram>) {
+            value.validate();
+        } else {
+            static_assert(always_false_v<FeedForward>,
+                          "unhandled compiled feed-forward validation variant");
+        }
+    }, storage());
+}
+
+bool operator==(const CompiledFeedForwardProgram& program,
+                CompiledFeedForward kind) {
+    return compiled_feed_forward_kind(program) == kind;
+}
+
+bool operator==(CompiledFeedForward kind,
+                const CompiledFeedForwardProgram& program) {
+    return program == kind;
+}
+
+bool operator!=(const CompiledFeedForwardProgram& program,
+                CompiledFeedForward kind) {
+    return !(program == kind);
+}
+
+bool operator!=(CompiledFeedForward kind,
+                const CompiledFeedForwardProgram& program) {
+    return !(program == kind);
+}
+
 PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     PerLayerInputPlan result;
     const ModelGraph& graph = model.graph;
@@ -297,8 +380,16 @@ void CompiledLayerProgram::bind_mixer_views() {
     mlp_only.bind(mixer);
 }
 
+void CompiledLayerProgram::bind_feed_forward_views() {
+    execute_feed_forward.bind(feed_forward);
+    feed_forward_intermediate.bind(feed_forward);
+    feed_forward_activation.bind(feed_forward);
+    moe.bind(feed_forward);
+}
+
 CompiledLayerProgram::CompiledLayerProgram() {
     bind_mixer_views();
+    bind_feed_forward_views();
 }
 
 CompiledLayerProgram::CompiledLayerProgram(const CompiledLayerProgram& other)
@@ -316,12 +407,8 @@ CompiledLayerProgram& CompiledLayerProgram::operator=(
     if (this == &other) return *this;
     mixer = other.mixer;
     feed_forward = other.feed_forward;
-    execute_feed_forward = other.execute_feed_forward;
     chunk_capability = other.chunk_capability;
-    feed_forward_intermediate = other.feed_forward_intermediate;
-    feed_forward_activation = other.feed_forward_activation;
     weight_request_indices = other.weight_request_indices;
-    moe = other.moe;
     operator_norm = other.operator_norm;
     post_attention_norm = other.post_attention_norm;
     feed_forward_norm = other.feed_forward_norm;
@@ -334,13 +421,9 @@ CompiledLayerProgram& CompiledLayerProgram::operator=(
     CompiledLayerProgram&& other) {
     if (this == &other) return *this;
     mixer = std::move(other.mixer);
-    feed_forward = other.feed_forward;
-    execute_feed_forward = other.execute_feed_forward;
+    feed_forward = std::move(other.feed_forward);
     chunk_capability = other.chunk_capability;
-    feed_forward_intermediate = other.feed_forward_intermediate;
-    feed_forward_activation = other.feed_forward_activation;
     weight_request_indices = std::move(other.weight_request_indices);
-    moe = std::move(other.moe);
     operator_norm = std::move(other.operator_norm);
     post_attention_norm = std::move(other.post_attention_norm);
     feed_forward_norm = std::move(other.feed_forward_norm);
@@ -351,7 +434,9 @@ CompiledLayerProgram& CompiledLayerProgram::operator=(
 
 bool CompiledModelProgram::has_moe() const {
     for (const auto& layer : layers) {
-        if (layer.feed_forward == CompiledFeedForward::MixtureOfExperts) return true;
+        if (std::holds_alternative<MoeLayerProgram>(layer.feed_forward.storage())) {
+            return true;
+        }
     }
     return false;
 }
@@ -388,19 +473,9 @@ void CompiledModelProgram::validate() const {
             }
         }
         if (const auto* state = layer.state_layout()) state->validate();
-        if (layer.feed_forward_intermediate <= 0) {
-            throw std::invalid_argument("compiled layer has no FFN width");
-        }
+        layer.feed_forward.validate();
         if (!std::isfinite(layer.residual.multiplier)) {
             throw std::invalid_argument("compiled layer has invalid residual multiplier");
-        }
-        if (layer.feed_forward == CompiledFeedForward::MixtureOfExperts) {
-            if (!layer.moe) {
-                throw std::invalid_argument("compiled MoE layer has no semantics");
-            }
-            layer.moe->validate();
-        } else if (layer.moe) {
-            throw std::invalid_argument("dense layer has an MoE semantic program");
         }
     }
 }
