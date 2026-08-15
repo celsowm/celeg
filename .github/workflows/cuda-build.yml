@@ -44,7 +44,8 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake ninja-build g++ python3
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++ python3 python3-pip
+          python3 -m pip install --no-cache-dir cmake==3.31.6 ninja==1.13.0
       - name: Diagnose
         run: python3 scripts/dev.py doctor --backend cuda --arch 80 --json > doctor-linux-cuda.json
       - name: Compile and run host tests
