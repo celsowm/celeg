@@ -18,7 +18,7 @@ struct Field {
     std::string json;
     std::vector<std::string> json_alternatives;
     std::string gguf;
-    double fallback = 0.0;
+    std::optional<double> fallback;
     std::string fallback_expression;
 };
 

@@ -44,7 +44,7 @@ int integer_value(const CheckpointMetadata& metadata, const Field& field,
             return static_cast<int>(*scalar);
         }
         if (std::holds_alternative<std::vector<int64_t>>(value)) {
-            return field.fallback != 0.0 ? static_cast<int>(field.fallback) : 0;
+            return static_cast<int>(field.fallback.value_or(0.0));
         }
         throw std::runtime_error("descriptor dimension metadata is not an integer: " + key);
     }
@@ -52,7 +52,7 @@ int integer_value(const CheckpointMetadata& metadata, const Field& field,
         if (hidden <= 0 || query_heads <= 0) throw std::invalid_argument("invalid descriptor dimension expression");
         return hidden / query_heads;
     }
-    if (field.fallback_expression.empty()) return static_cast<int>(field.fallback);
+    if (field.fallback_expression.empty()) return static_cast<int>(field.fallback.value_or(0.0));
     throw std::invalid_argument("unsupported descriptor default expression: " + field.fallback_expression);
 }
 
@@ -70,7 +70,7 @@ double number_value(const CheckpointMetadata& metadata, const Field& field, int 
         throw std::invalid_argument("unsupported descriptor numeric expression: " +
                                     field.fallback_expression);
     }
-    return field.fallback;
+    return field.fallback.value_or(0.0);
 }
 
 int scaling_integer_value(const CheckpointMetadata& metadata,
@@ -272,7 +272,7 @@ bool boolean_value(const CheckpointMetadata& metadata, const std::optional<Field
         if (field->fallback_expression == "false" || !field->fallback_expression.empty()) {
             return false;
         }
-        return field->fallback != 0.0 ? true : fallback;
+        return field->fallback.has_value() && *field->fallback != 0.0 ? true : fallback;
     }
     return metadata.boolean(key);
 }
