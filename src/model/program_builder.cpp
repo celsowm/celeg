@@ -17,14 +17,14 @@ CompiledAttentionStateLayout lower_attention_state_layout(
             CompiledOrdinaryKvStateLayout layout{
                 attention.key_value_width(),
                 attention.key_value_width(),
-                attention.state_storage};
+                state.storage};
             layout.validate();
             return layout;
         } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
             CompiledLatentStateLayout layout{
                 2 * state.latent_rank,
                 state.decoupled_rope ? state.rope_head_dim : 0,
-                attention.state_storage};
+                state.storage};
             layout.validate();
             return layout;
         } else {

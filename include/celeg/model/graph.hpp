@@ -73,8 +73,43 @@ inline int kv_sharing_group(const KvSharingSpec& spec) {
     return -1;
 }
 
+enum class StateScalarType : uint8_t {
+    FP32,
+    FP16,
+    BF16,
+    FP8,
+    INT8,
+    INT4,
+};
+
+enum class StateQuantizationGranularity : uint8_t {
+    PerTensor,
+    PerHead,
+    PerToken,
+    PerBlock,
+};
+
+struct OrdinaryKvStorageSpec {
+    StateScalarType key = StateScalarType::BF16;
+    StateScalarType value = StateScalarType::BF16;
+    StateQuantizationGranularity granularity = StateQuantizationGranularity::PerTensor;
+    bool paged = true;
+
+    void validate() const;
+};
+
+struct LatentStorageSpec {
+    StateScalarType latent = StateScalarType::BF16;
+    StateScalarType rotary = StateScalarType::BF16;
+    StateQuantizationGranularity granularity = StateQuantizationGranularity::PerTensor;
+    bool paged = true;
+
+    void validate() const;
+};
+
 struct OrdinaryKvStateSpec {
     bool quantizable = true;
+    OrdinaryKvStorageSpec storage;
 };
 
 struct NoAttentionBiasSpec {};
@@ -122,6 +157,7 @@ struct LatentAttentionStateSpec {
     int nope_head_dim = 0;
     bool decoupled_rope = false;
     LatentProjectionSpec projection = DirectLatentProjection{};
+    LatentStorageSpec storage;
 
     bool factorized() const {
         return std::holds_alternative<FactorizedLatentProjection>(projection);
@@ -129,37 +165,11 @@ struct LatentAttentionStateSpec {
     const FactorizedLatentProjection* factorized_projection() const {
         return std::get_if<FactorizedLatentProjection>(&projection);
     }
+    void validate() const;
 };
 
 using AttentionStateSpec = std::variant<OrdinaryKvStateSpec,
                                         LatentAttentionStateSpec>;
-
-enum class StateScalarType : uint8_t {
-    FP32,
-    FP16,
-    BF16,
-    FP8,
-    INT8,
-    INT4,
-};
-
-enum class StateQuantizationGranularity : uint8_t {
-    PerTensor,
-    PerHead,
-    PerToken,
-    PerBlock,
-};
-
-struct AttentionStateStorageSpec {
-    StateScalarType key = StateScalarType::BF16;
-    StateScalarType value = StateScalarType::BF16;
-    StateScalarType latent = StateScalarType::BF16;
-    StateScalarType rotary = StateScalarType::BF16;
-    StateQuantizationGranularity granularity = StateQuantizationGranularity::PerTensor;
-    bool paged = true;
-
-    void validate(const AttentionStateSpec& state) const;
-};
 
 struct CurrentSequenceSource {};
 
@@ -195,7 +205,6 @@ struct AttentionSpec {
     PositionSpec position = RopePositionSpec{};
     AttentionBiasSpec bias = NoAttentionBiasSpec{};
     AttentionStateSpec state = OrdinaryKvStateSpec{};
-    AttentionStateStorageSpec state_storage;
     AttentionKeyValueSource key_value_source = CurrentSequenceSource{};
     AttentionOutputTransformSpec output_transform = NoAttentionOutputTransformSpec{};
 
@@ -218,6 +227,12 @@ struct AttentionSpec {
     }
     const LatentAttentionStateSpec* latent_state() const {
         return std::get_if<LatentAttentionStateSpec>(&state);
+    }
+    StateQuantizationGranularity state_storage_granularity() const {
+        return std::visit([](const auto& s) { return s.storage.granularity; }, state);
+    }
+    bool state_storage_paged() const {
+        return std::visit([](const auto& s) { return s.storage.paged; }, state);
     }
     int latent_query_content_width() const {
         const auto* latent = latent_state();

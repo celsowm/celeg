@@ -72,7 +72,8 @@ std::vector<TestShape> registered_model_shapes() {
                 celeg::CompiledOrdinaryKvStateLayout state_layout;
                 state_layout.key_width = attention->key_value_width();
                 state_layout.value_width = attention->key_value_width();
-                state_layout.storage = attention->state_storage;
+                state_layout.storage =
+                    std::get<celeg::OrdinaryKvStateSpec>(attention->state).storage;
                 compiled.mixer = celeg::CompiledAttentionProgram{
                     *attention, state_layout};
             } else {

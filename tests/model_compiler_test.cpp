@@ -132,8 +132,9 @@ int main() {
     CELEG_TEST_CHECK(cuda_relative_rejected);
 
     celeg::ResolvedModel int8_state = model;
-    std::get<celeg::AttentionSpec>(int8_state.graph.layers[0].mixer)
-        .state_storage.key = celeg::StateScalarType::INT8;
+    std::get<celeg::OrdinaryKvStateSpec>(
+        std::get<celeg::AttentionSpec>(int8_state.graph.layers[0].mixer).state)
+        .storage.key = celeg::StateScalarType::INT8;
     const auto int8_program = celeg::CpuModelCompiler{}.compile(int8_state);
     CELEG_TEST_CHECK(int8_program.semantic_fingerprint != cpu.semantic_fingerprint);
 

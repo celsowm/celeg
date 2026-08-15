@@ -141,7 +141,11 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
     std::visit([&out](const auto& state) {
         using State = std::decay_t<decltype(state)>;
         if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
-            out << "ordinary:" << state.quantizable;
+            out << "ordinary:" << state.quantizable << ":storage:"
+                << static_cast<int>(state.storage.key) << ':'
+                << static_cast<int>(state.storage.value) << ':'
+                << static_cast<int>(state.storage.granularity) << ':'
+                << state.storage.paged;
         } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
             out << "latent:" << state.latent_rank << ':' << state.rope_head_dim << ':'
                 << state.nope_head_dim << ':' << state.decoupled_rope << ':';
@@ -159,16 +163,14 @@ void append_attention(std::ostringstream& out, const AttentionSpec& attention) {
                                   "unhandled latent projection variant");
                 }
             }, state.projection);
+            out << ":storage:" << static_cast<int>(state.storage.latent) << ':'
+                << static_cast<int>(state.storage.rotary) << ':'
+                << static_cast<int>(state.storage.granularity) << ':'
+                << state.storage.paged;
         } else {
             static_assert(always_false_v<State>, "unhandled attention state variant");
         }
     }, attention.state);
-    out << ":storage:" << static_cast<int>(attention.state_storage.key) << ':'
-        << static_cast<int>(attention.state_storage.value) << ':'
-        << static_cast<int>(attention.state_storage.latent) << ':'
-        << static_cast<int>(attention.state_storage.rotary) << ':'
-        << static_cast<int>(attention.state_storage.granularity) << ':'
-        << attention.state_storage.paged;
     out << ":source:";
     std::visit([&out](const auto& source) {
         using Source = std::decay_t<decltype(source)>;
@@ -529,49 +531,60 @@ void RelativePositionBiasSpec::validate() const {
     }
 }
 
-void AttentionStateStorageSpec::validate(const AttentionStateSpec& state) const {
-    const auto validate_scalar = [](StateScalarType scalar) {
-        switch (scalar) {
-        case StateScalarType::FP32:
-        case StateScalarType::FP16:
-        case StateScalarType::BF16:
-        case StateScalarType::FP8:
-        case StateScalarType::INT8:
-        case StateScalarType::INT4:
-            return;
-        }
-        throw std::runtime_error("invalid attention state scalar type");
-    };
-    const auto validate_granularity = [](StateQuantizationGranularity granularity) {
-        switch (granularity) {
-        case StateQuantizationGranularity::PerTensor:
-        case StateQuantizationGranularity::PerHead:
-        case StateQuantizationGranularity::PerToken:
-        case StateQuantizationGranularity::PerBlock:
-            return;
-        }
-        throw std::runtime_error("invalid attention state quantization granularity");
-    };
-    validate_scalar(key);
-    validate_scalar(value);
-    validate_scalar(latent);
-    validate_scalar(rotary);
-    validate_granularity(granularity);
-    if (const auto* latent_state = std::get_if<LatentAttentionStateSpec>(&state)) {
-        if (latent_state->latent_rank <= 0 || latent_state->rope_head_dim < 0 ||
-            latent_state->nope_head_dim < 0 ||
-            latent_state->rope_head_dim + latent_state->nope_head_dim <= 0) {
-            throw std::runtime_error("invalid latent attention state dimensions");
-        }
-        if (const auto* factorized = latent_state->factorized_projection();
-            factorized &&
-            (factorized->query_rank <= 0 || factorized->value_head_dim <= 0 ||
-             !std::isfinite(factorized->query_latent_norm.epsilon) ||
-             factorized->query_latent_norm.epsilon <= 0.0f ||
-             !std::isfinite(factorized->key_latent_norm.epsilon) ||
-             factorized->key_latent_norm.epsilon <= 0.0f)) {
-            throw std::runtime_error("invalid factorized latent attention projections");
-        }
+namespace {
+
+void validate_state_scalar(StateScalarType scalar) {
+    switch (scalar) {
+    case StateScalarType::FP32:
+    case StateScalarType::FP16:
+    case StateScalarType::BF16:
+    case StateScalarType::FP8:
+    case StateScalarType::INT8:
+    case StateScalarType::INT4:
+        return;
+    }
+    throw std::runtime_error("invalid attention state scalar type");
+}
+
+void validate_state_granularity(StateQuantizationGranularity granularity) {
+    switch (granularity) {
+    case StateQuantizationGranularity::PerTensor:
+    case StateQuantizationGranularity::PerHead:
+    case StateQuantizationGranularity::PerToken:
+    case StateQuantizationGranularity::PerBlock:
+        return;
+    }
+    throw std::runtime_error("invalid attention state quantization granularity");
+}
+
+}
+
+void OrdinaryKvStorageSpec::validate() const {
+    validate_state_scalar(key);
+    validate_state_scalar(value);
+    validate_state_granularity(granularity);
+}
+
+void LatentStorageSpec::validate() const {
+    validate_state_scalar(latent);
+    validate_state_scalar(rotary);
+    validate_state_granularity(granularity);
+}
+
+void LatentAttentionStateSpec::validate() const {
+    storage.validate();
+    if (latent_rank <= 0 || rope_head_dim < 0 || nope_head_dim < 0 ||
+        rope_head_dim + nope_head_dim <= 0) {
+        throw std::runtime_error("invalid latent attention state dimensions");
+    }
+    if (const auto* factorized = factorized_projection();
+        factorized &&
+        (factorized->query_rank <= 0 || factorized->value_head_dim <= 0 ||
+         !std::isfinite(factorized->query_latent_norm.epsilon) ||
+         factorized->query_latent_norm.epsilon <= 0.0f ||
+         !std::isfinite(factorized->key_latent_norm.epsilon) ||
+         factorized->key_latent_norm.epsilon <= 0.0f)) {
+        throw std::runtime_error("invalid factorized latent attention projections");
     }
 }
 

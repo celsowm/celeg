@@ -53,7 +53,6 @@ AttentionSpec make_attention(
         RopeScalingSpec{}};
     std::get<RopePositionSpec>(attention.position).pairing =
         *metadata.rope_pairing;
-    attention.state_storage = AttentionStateStorageSpec{};
     if (*metadata.xsa_projection) {
         attention.output_transform = OrthogonalizeCurrentValueSpec{
             *metadata.xsa_minimum_norm_squared};

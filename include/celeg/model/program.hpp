@@ -118,7 +118,7 @@ inline std::size_t compiled_state_scalar_bytes(StateScalarType scalar) {
 struct CompiledOrdinaryKvStateLayout {
     int key_width = 0;
     int value_width = 0;
-    AttentionStateStorageSpec storage;
+    OrdinaryKvStorageSpec storage;
 
     std::size_t persistent_elements() const {
         return static_cast<std::size_t>(key_width) +
@@ -136,7 +136,7 @@ struct CompiledOrdinaryKvStateLayout {
 struct CompiledLatentStateLayout {
     int latent_width = 0;
     int rotary_width = 0;
-    AttentionStateStorageSpec storage;
+    LatentStorageSpec storage;
 
     std::size_t persistent_elements() const {
         return static_cast<std::size_t>(latent_width) +

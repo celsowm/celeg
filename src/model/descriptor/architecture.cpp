@@ -418,13 +418,31 @@ public:
                 throw std::invalid_argument("descriptor has unsupported attention state kind: " +
                                             descriptor_.attention_state_kind);
             }
-            attention.state_storage.key = parse_state_scalar(descriptor_.state_key_storage);
-            attention.state_storage.value = parse_state_scalar(descriptor_.state_value_storage);
-            attention.state_storage.latent = parse_state_scalar(descriptor_.state_latent_storage);
-            attention.state_storage.rotary = parse_state_scalar(descriptor_.state_rotary_storage);
-            attention.state_storage.granularity = parse_state_granularity(
-                descriptor_.state_storage_granularity);
-            attention.state_storage.paged = descriptor_.state_paged;
+            {
+                const StateScalarType key_storage = parse_state_scalar(descriptor_.state_key_storage);
+                const StateScalarType value_storage = parse_state_scalar(descriptor_.state_value_storage);
+                const StateScalarType latent_storage = parse_state_scalar(descriptor_.state_latent_storage);
+                const StateScalarType rotary_storage = parse_state_scalar(descriptor_.state_rotary_storage);
+                const StateQuantizationGranularity granularity = parse_state_granularity(
+                    descriptor_.state_storage_granularity);
+                std::visit([&](auto& state) {
+                    using State = std::decay_t<decltype(state)>;
+                    if constexpr (std::is_same_v<State, OrdinaryKvStateSpec>) {
+                        state.storage.key = key_storage;
+                        state.storage.value = value_storage;
+                        state.storage.granularity = granularity;
+                        state.storage.paged = descriptor_.state_paged;
+                    } else if constexpr (std::is_same_v<State, LatentAttentionStateSpec>) {
+                        state.storage.latent = latent_storage;
+                        state.storage.rotary = rotary_storage;
+                        state.storage.granularity = granularity;
+                        state.storage.paged = descriptor_.state_paged;
+                    } else {
+                        static_assert(always_false_v<State>,
+                                      "unhandled attention state variant");
+                    }
+                }, attention.state);
+            }
             if (descriptor_.attention_key_value_source == "external_memory") {
                 if (!descriptor_.attention_memory_slot.has_value()) {
                     throw std::invalid_argument(
