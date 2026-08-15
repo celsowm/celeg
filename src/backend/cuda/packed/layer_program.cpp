@@ -11,8 +11,7 @@ PackedLayerProgram PackedLayerProgram::compile(const CompiledModelProgram& progr
     std::vector<PackedLayerBinding> layers;
     layers.reserve(program.layers.size());
     for (const CompiledLayerProgram& layer : program.layers) {
-        const CompiledMixer kind = layer.mixer;
-        switch (kind) {
+        switch (layer.mixer_kind()) {
         case CompiledMixer::Attention:
             layers.push_back({PackedLayerKind::Attention});
             break;
