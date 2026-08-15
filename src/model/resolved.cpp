@@ -273,20 +273,24 @@ std::string ModelGraph::fingerprint() const {
         << embedding_transform.post_norm.has_value();
     if (embedding_transform.post_norm) append_norm(out, *embedding_transform.post_norm);
     out << ":logits=" << logits_divisor << ':' << logits_multiplier << ':'
-        << final_logit_softcap << ":layers=";
+        << final_logit_softcap << ":per-layer-input="
+        << per_layer_input.has_value();
+    if (per_layer_input) {
+        out << ':' << per_layer_input->input_size << ':'
+            << static_cast<int>(per_layer_input->activation) << ':';
+        append_norm(out, per_layer_input->norm);
+    }
+    out << ":layers=";
     for (const LayerSpec& layer : layers) {
         append_norm(out, layer.operator_norm);
         append_optional_norm(out, layer.post_attention_norm);
         append_optional_norm(out, layer.pre_feed_forward_norm);
         append_optional_norm(out, layer.post_feed_forward_norm);
-        append_optional_norm(out, layer.per_layer_input_norm);
         append_mixer(out, layer);
         append_optional_norm(out, layer.feed_forward_norm);
         append_feed_forward(out, layer);
-        out << ":residual=" << layer.residual.multiplier << ":input="
-            << layer.per_layer_input.input_size << ':'
-            << static_cast<int>(layer.per_layer_input.activation) << ':'
-            << layer.per_layer_input.enabled << ":scalar=" << layer.layer_scalar << ';';
+        out << ":residual=" << layer.residual.multiplier
+            << ":scalar=" << layer.layer_scalar << ';';
     }
     return out.str();
 }
@@ -416,6 +420,12 @@ void ModelGraph::validate() const {
     }
     final_norm.validate();
     embedding_transform.validate();
+    if (per_layer_input) {
+        if (per_layer_input->input_size <= 0) {
+            throw std::runtime_error("enabled per-layer input has invalid width");
+        }
+        per_layer_input->norm.validate();
+    }
     for (size_t index = 0; index < norm_after_layers.size(); ++index) {
         const int layer = norm_after_layers[index];
         if (layer < 0 || layer >= static_cast<int>(layers.size()) - 1 ||
@@ -434,9 +444,6 @@ void ModelGraph::validate() const {
         if (layer.post_attention_norm) layer.post_attention_norm->validate();
         if (layer.pre_feed_forward_norm) layer.pre_feed_forward_norm->validate();
         if (layer.post_feed_forward_norm) layer.post_feed_forward_norm->validate();
-        if (layer.per_layer_input.enabled && layer.per_layer_input.input_size <= 0) {
-            throw std::runtime_error("enabled per-layer input has invalid width");
-        }
         std::visit([](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
             if constexpr (std::is_same_v<FeedForward, std::monostate>) {

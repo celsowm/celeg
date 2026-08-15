@@ -185,19 +185,16 @@ void CompiledDenseFeedForwardProgram::validate() const {
 PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     PerLayerInputPlan result;
     const ModelGraph& graph = model.graph;
-    const auto enabled_layer = std::find_if(
-        graph.layers.begin(), graph.layers.end(),
-        [](const LayerSpec& layer) { return layer.per_layer_input.enabled; });
-    if (enabled_layer == graph.layers.end()) {
+    if (!graph.per_layer_input.has_value()) {
         return result;
     }
-    if (graph.layers.empty() || graph.hidden <= 0 ||
-        enabled_layer->per_layer_input.input_size <= 0) {
+    const PerLayerInputPolicy& policy = *graph.per_layer_input;
+    if (graph.layers.empty() || graph.hidden <= 0 || policy.input_size <= 0) {
         throw std::invalid_argument("invalid per-layer input dimensions");
     }
     result.enabled = true;
     result.layer_count = static_cast<int>(graph.layers.size());
-    result.input_size = enabled_layer->per_layer_input.input_size;
+    result.input_size = policy.input_size;
     result.packed_width = checked_product(
         static_cast<std::size_t>(result.layer_count),
         static_cast<std::size_t>(result.input_size),
@@ -209,18 +206,8 @@ PerLayerInputPlan PerLayerInputPlan::derive(const ResolvedModel& model) {
     result.token_scale = std::sqrt(static_cast<float>(result.input_size));
     result.context_scale = 1.0f / std::sqrt(static_cast<float>(graph.hidden));
     result.residual_scale = kPerLayerResidualScale;
-    result.activation = graph.layers.front().per_layer_input.activation;
-    result.norm_epsilon = graph.layers.front().per_layer_input_norm
-        ? graph.layers.front().per_layer_input_norm->epsilon : 0.0f;
-    for (const LayerSpec& layer : graph.layers) {
-        if (!layer.per_layer_input.enabled ||
-            layer.per_layer_input.input_size != result.input_size ||
-            layer.per_layer_input.activation != result.activation ||
-            (layer.per_layer_input_norm ? layer.per_layer_input_norm->epsilon : 0.0f)
-                != result.norm_epsilon) {
-            throw std::invalid_argument("inconsistent per-layer input specification");
-        }
-    }
+    result.activation = policy.activation;
+    result.norm_epsilon = policy.norm.epsilon;
     result.validate();
     return result;
 }

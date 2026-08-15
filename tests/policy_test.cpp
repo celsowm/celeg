@@ -41,11 +41,11 @@ int main() {
     resolved.graph.layers.resize(2);
     for (auto& layer : resolved.graph.layers) {
         layer.mixer = celeg::AttentionSpec{};
-        layer.per_layer_input = {4, celeg::ActivationKind::GeluTanh, true};
-        layer.per_layer_input_norm = celeg::NormSpec{1.0e-5f};
         layer.feed_forward = celeg::DenseFeedForwardSpec{
             16, celeg::ActivationKind::SwiGLU};
     }
+    resolved.graph.per_layer_input = celeg::PerLayerInputPolicy{
+        4, celeg::ActivationKind::GeluTanh, celeg::NormSpec{1.0e-5f}};
     resolved.topology = celeg::compose_runtime_topology(
         celeg::CheckpointDimensions{32, 0, {}, {}, 0}, resolved.graph);
     const auto per_layer = celeg::PerLayerInputPlan::derive(resolved);

@@ -211,12 +211,9 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                      {graph.hidden}, -1);
     add_request(model, TensorRole::LanguageModelHead, -1, -1,
                 {model.topology.dims.vocab_size, graph.hidden});
-    const auto per_layer = std::find_if(
-        graph.layers.begin(), graph.layers.end(),
-        [](const LayerSpec& layer) { return layer.per_layer_input.enabled; });
-    if (per_layer != graph.layers.end()) {
+    if (graph.per_layer_input) {
         const int layer_count = static_cast<int>(graph.layers.size());
-        const int input_size = per_layer->per_layer_input.input_size;
+        const int input_size = graph.per_layer_input->input_size;
         add_request(model, TensorRole::PerLayerEmbedding, -1, -1,
                     {model.topology.dims.vocab_size, layer_count * input_size});
         add_request(model, TensorRole::PerLayerContextProjection, -1, -1,
@@ -261,11 +258,11 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                          layer.post_attention_norm, {graph.hidden}, physical_layer);
         add_norm_request(model, TensorRole::FfnOutputNorm, layer_index,
                          layer.post_feed_forward_norm, {graph.hidden}, physical_layer);
-        if (layer.per_layer_input.enabled) {
+        if (graph.per_layer_input) {
             add_request(model, TensorRole::PerLayerInputGate, layer_index, -1,
-                        {layer.per_layer_input.input_size, graph.hidden}, physical_layer);
+                        {graph.per_layer_input->input_size, graph.hidden}, physical_layer);
             add_request(model, TensorRole::PerLayerProjection, layer_index, -1,
-                        {graph.hidden, layer.per_layer_input.input_size}, physical_layer);
+                        {graph.hidden, graph.per_layer_input->input_size}, physical_layer);
             add_request(model, TensorRole::PerLayerInputNorm, layer_index, -1,
                         {graph.hidden}, physical_layer);
             add_request(model, TensorRole::LayerScalar, layer_index, -1,

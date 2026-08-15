@@ -84,11 +84,14 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
             layer.mixer = std::move(attention);
         }
         layer.residual.multiplier = numerical_policy.residual_multiplier;
-        layer.per_layer_input = {descriptor.per_layer_input_size.has_value()
-                                     ? integer_value(metadata, *descriptor.per_layer_input_size)
-                                     : 0,
-                                 ActivationKind::GeluTanh,
-                                 descriptor.per_layer_input_size.has_value()};
+    }
+    if (descriptor.per_layer_input_size.has_value()) {
+        graph.per_layer_input = PerLayerInputPolicy{
+            integer_value(metadata, *descriptor.per_layer_input_size),
+            ActivationKind::GeluTanh,
+            NormSpec{numerical_policy.norm_eps, NormWeightKind::Scale}};
+    } else {
+        graph.per_layer_input = std::nullopt;
     }
     graph.validate();
     return graph;

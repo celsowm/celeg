@@ -361,10 +361,10 @@ struct DenseFeedForwardSpec {
     ActivationKind activation = ActivationKind::SwiGLU;
 };
 
-struct PerLayerInputSpec {
+struct PerLayerInputPolicy {
     int input_size = 0;
     ActivationKind activation = ActivationKind::GeluTanh;
-    bool enabled = false;
+    NormSpec norm;
 };
 
 enum class MoeCombineOrder : uint8_t {
@@ -423,12 +423,10 @@ struct LayerSpec {
     std::optional<NormSpec> post_attention_norm;
     std::optional<NormSpec> pre_feed_forward_norm;
     std::optional<NormSpec> post_feed_forward_norm;
-    std::optional<NormSpec> per_layer_input_norm;
     MixerSpec mixer;
     std::optional<NormSpec> feed_forward_norm;
     FeedForwardSpec feed_forward;
     ResidualSpec residual;
-    PerLayerInputSpec per_layer_input;
     float layer_scalar = 1.0f;
 };
 
@@ -437,6 +435,7 @@ struct ModelGraph {
     std::vector<LayerSpec> layers;
     NormSpec final_norm;
     std::vector<int> norm_after_layers;
+    std::optional<PerLayerInputPolicy> per_layer_input;
     struct EmbeddingTransformSpec {
         std::optional<NormSpec> post_norm;
         float multiplier = 1.0f;
