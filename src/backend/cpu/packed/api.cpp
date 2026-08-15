@@ -14,12 +14,13 @@ namespace {
 bool requires_sequential_execution(const CompiledModelProgram& program) {
     return std::any_of(program.layers.begin(), program.layers.end(),
         [](const CompiledLayerProgram& layer) {
+            const AttentionSpec* attention = layer.attention();
             return layer.chunk_capability != CompiledChunkCapability::Native ||
-                (layer.attention.has_value() &&
+                (attention &&
                  (!std::holds_alternative<NoAttentionOutputTransformSpec>(
-                      layer.attention->output_transform) ||
-                  (layer.attention->latent_state() &&
-                   layer.attention->latent_state()->factorized)));
+                      attention->output_transform) ||
+                  (attention->latent_state() &&
+                   attention->latent_state()->factorized)));
         });
 }
 
@@ -94,7 +95,7 @@ CpuBatchMetrics CpuModel::prefill_chunk(
         throw std::runtime_error("CPU session is not eligible for chunked prefill");
     }
     for (int32_t token : tokens) {
-    if (token < 0 || token >= session.shared->dims.vocab_size) {
+        if (token < 0 || token >= session.shared->dims.vocab_size) {
             throw std::invalid_argument("CPU chunked prefill token out of range");
         }
         session.session_.seen[static_cast<size_t>(token)] = 1;
