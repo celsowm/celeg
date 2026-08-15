@@ -3,7 +3,6 @@
 #include "support/assertions.hpp"
 
 #include <iostream>
-#include <stdexcept>
 
 namespace {
 
@@ -42,6 +41,11 @@ int main() {
     const auto compiled = celeg::build_model_program(baseline);
     CELEG_TEST_CHECK(!compiled.semantic_fingerprint.empty());
     CELEG_TEST_CHECK(compiled.semantic_fingerprint.size() <= 16);
+    CELEG_TEST_CHECK(compiled.layers[0].mixer_kind() ==
+                     celeg::CompiledMixer::Attention);
+    CELEG_TEST_CHECK(compiled.layers[0].attention() != nullptr);
+    CELEG_TEST_CHECK(compiled.layers[0].state_layout() != nullptr);
+    CELEG_TEST_CHECK(compiled.layers[0].mamba2() == nullptr);
 
     celeg::ResolvedModel head_geometry = baseline;
     std::get<celeg::AttentionSpec>(head_geometry.graph.layers[0].mixer).head_dim = 16;
@@ -64,16 +68,6 @@ int main() {
     celeg::ResolvedModel logits = baseline;
     logits.graph.final_logit_softcap = 30.0f;
     expect_fingerprint_change(baseline, logits);
-
-    celeg::CompiledModelProgram ambiguous = compiled;
-    ambiguous.layers[0].mamba2 = celeg::Mamba2Spec{};
-    bool ambiguous_rejected = false;
-    try {
-        ambiguous.validate();
-    } catch (const std::invalid_argument&) {
-        ambiguous_rejected = true;
-    }
-    CELEG_TEST_CHECK(ambiguous_rejected);
 
     std::cout << "program_fingerprint_test: ok\n";
     return 0;
