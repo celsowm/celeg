@@ -20,9 +20,11 @@ CpuAttentionPattern CpuAttentionPattern::lower(const AttentionPatternSpec& patte
         } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
             return {CpuAttentionPatternKind::BlockSparse, 0, 0,
                     value.block_size, value.local_blocks, value.global_blocks};
-        } else {
+        } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
             return {CpuAttentionPatternKind::DynamicSparse, 0, 0,
                     value.block_size, 0, 0, value.max_selected_blocks};
+        } else {
+            static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
     }, pattern);
 }
