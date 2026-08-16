@@ -642,24 +642,6 @@ void CheckpointDimensions::validate() const {
     for (int token : token_policy.eos_token_ids) validate_token_id(token, "EOS");
 }
 
-std::string ExecutionTopology::fingerprint() const {
-    std::ostringstream out;
-    out << "-l" << num_hidden_layers
-        << "-cc" << conv_cache
-        << "-ac" << attention_layer_count << "-conv" << conv_layer_count
-        << "-gdn" << gated_delta_net_layer_count << "-m2" << mamba2_layer_count
-        << "-mlp" << mlp_only_layer_count << "-m2i" << mamba2_intermediate
-        << "-max-attn-proj" << maximum_attention_projection_width_value
-        << "-max-attn-heads" << maximum_attention_query_heads_value
-        << "-max-attn-dim" << maximum_attention_head_dim_value
-        << "-max-attn-out" << maximum_attention_output_width_value
-        << "-max-mamba-proj" << maximum_mamba_projection_width_value
-        << "-max-gdn-qkv" << maximum_gated_delta_net_qkv_width_value
-        << "-max-ff" << max_feed_forward_intermediate
-        << "-ff" << max_feed_forward_intermediate;
-    return out.str();
-}
-
 std::string ExecutionTopology::summary() const {
     std::ostringstream out;
     out << "layers=" << num_hidden_layers
@@ -693,16 +675,6 @@ void ResolvedModel::validate() const {
     if (graph.layers.size() != static_cast<size_t>(topology.exec.num_hidden_layers)) {
         throw std::runtime_error("resolved graph/topology layer count mismatch");
     }
-}
-
-std::string RuntimeTopology::fingerprint() const {
-    std::ostringstream out;
-    out << exec.fingerprint()
-        << "-mtp" << dims.mtp_num_hidden_layers
-        << "-voc" << dims.vocab_size;
-    out << "-map";
-    for (int layer : dims.checkpoint_layer_for_layer) out << '-' << layer;
-    return out.str();
 }
 
 std::string RuntimeTopology::summary() const {

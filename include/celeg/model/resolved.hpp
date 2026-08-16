@@ -117,7 +117,6 @@ public:
         return maximum_gated_delta_net_gate_width_value;
     }
 
-    std::string fingerprint() const;
     std::string summary() const;
     void validate() const;
 
@@ -133,7 +132,6 @@ struct RuntimeTopology {
     CheckpointDimensions dims;
     ExecutionTopology exec;
 
-    std::string fingerprint() const;
     std::string summary() const;
     void validate() const;
 };
