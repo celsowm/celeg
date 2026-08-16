@@ -124,14 +124,35 @@ class DevCliTest(unittest.TestCase):
             warnings=[],
         )
         args = mock.Mock(build_type="RelWithDebInfo", celeg_tests="on")
-        command = dev.configure_command(args, environment, pathlib.Path("out"))
-        self.assertIn("-DCMAKE_C_COMPILER=cl.exe", command)
-        self.assertIn("-DCMAKE_CXX_COMPILER=cl.exe", command)
-        self.assertFalse(any(value.startswith("-DCMAKE_CUDA_HOST_COMPILER=") for value in command))
-        self.assertIn("-DCMAKE_CUDA_ARCHITECTURES=86", command)
-        self.assertIn("-DCMAKE_CUDA_FLAGS_INIT=--use-local-env", command)
-        self.assertIn("-DCELEG_MSVC_SHOWINCLUDES_PREFIX=Note: including file: ", command)
-        self.assertNotIn("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler", command)
+        with tempfile.TemporaryDirectory() as build_dir:
+            directory = pathlib.Path(build_dir)
+            command = dev.configure_command(args, environment, directory)
+            self.assertIn("-DCMAKE_C_COMPILER=cl.exe", command)
+            self.assertIn("-DCMAKE_CXX_COMPILER=cl.exe", command)
+            self.assertFalse(any(value.startswith("-DCMAKE_CUDA_HOST_COMPILER=") for value in command))
+            self.assertIn("-DCMAKE_CUDA_ARCHITECTURES=86", command)
+            self.assertIn("-DCMAKE_CUDA_FLAGS_INIT=--use-local-env", command)
+            self.assertNotIn("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler", command)
+            # The localized /showIncludes prefix must reach CMake through a
+            # UTF-8 initial-cache script (-C), not a -D argument: CMake
+            # mangles non-ASCII -D values through the ANSI/OEM codepage on
+            # Windows, which would silently break Ninja's msvc_deps_prefix
+            # byte-match against cl.exe's real UTF-8 output.
+            prefix_index = command.index("-C")
+            script_path = pathlib.Path(command[prefix_index + 1])
+            self.assertTrue(script_path.is_file())
+            script_text = script_path.read_text(encoding="utf-8")
+            self.assertIn('set(CELEG_MSVC_SHOWINCLUDES_PREFIX "Note: including file: "', script_text)
+            self.assertNotIn("-DCELEG_MSVC_SHOWINCLUDES_PREFIX", command)
+
+    def test_msvc_prefix_cache_script_escapes_special_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as build_dir:
+            directory = pathlib.Path(build_dir)
+            script_path = dev.write_msvc_prefix_cache_script(
+                directory, 'weird "prefix"\\ value: '
+            )
+            script_text = script_path.read_text(encoding="utf-8")
+            self.assertIn('"weird \\"prefix\\"\\\\ value: "', script_text)
 
 
 if __name__ == "__main__":

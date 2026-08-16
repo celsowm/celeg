@@ -74,6 +74,61 @@ def run_capture(
     )
 
 
+def windows_oem_encoding() -> str:
+    """Return the Python codec name for the console's active output codepage.
+
+    cl.exe's localized /showIncludes note is written in whatever codepage the
+    attached console session is actively using -- not necessarily UTF-8, and
+    not necessarily the machine's static OEM codepage either. This can differ
+    per terminal: a classic conhost/git-bash session typically inherits the
+    OS default OEM codepage (e.g. cp850 on a pt-BR install), while a modern
+    PowerShell 7 session commonly reconfigures its console to codepage 65001
+    (UTF-8). GetConsoleOutputCP() reports whichever one is actually active;
+    the static GetOEMCP() does not and silently double-encodes/mis-decodes
+    output when the two diverge. Decoding cl.exe's output with the wrong
+    codec corrupts every non-ASCII byte (either into U+FFFD, or -- if UTF-8
+    bytes get mis-decoded as a single-byte codepage -- into unrelated
+    mojibake), which then poisons Ninja's `msvc_deps_prefix` and silently
+    disables MSVC header-dependency tracking for the whole build.
+    """
+    try:
+        import ctypes
+
+        codepage = ctypes.windll.kernel32.GetConsoleOutputCP()  # type: ignore[attr-defined]
+        if not codepage:
+            codepage = ctypes.windll.kernel32.GetOEMCP()  # type: ignore[attr-defined]
+        if codepage:
+            return f"cp{codepage}"
+    except (AttributeError, OSError, ValueError):
+        pass
+    return "utf-8"
+
+
+def run_capture_oem(
+    command: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    cwd: pathlib.Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Like run_capture, but decodes output with the console OEM codepage.
+
+    Use this instead of run_capture whenever a probed tool's output must be
+    parsed for non-ASCII, locale-dependent text (see windows_oem_encoding).
+    """
+    return subprocess.run(
+        list(command),
+        cwd=str(cwd) if cwd else None,
+        env=dict(env) if env else None,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding=windows_oem_encoding(),
+        errors="replace",
+        check=False,
+    )
+
+
 def version_key(value: str | pathlib.Path) -> tuple[int, ...]:
     matches = re.findall(r"\d+", str(value))
     return tuple(int(part) for part in matches[-3:]) if matches else ()
@@ -333,7 +388,7 @@ def fallback_msvc_environment(
 def detect_msvc_include_prefix(
     compiler: pathlib.Path,
     env: Mapping[str, str],
-    runner: Runner = run_capture,
+    runner: Runner = run_capture_oem,
 ) -> str:
     with tempfile.TemporaryDirectory() as temporary:
         directory = pathlib.Path(temporary)
@@ -563,7 +618,10 @@ def discover_environment(
     if not compiler:
         errors.append("A C++ compiler was not found after environment initialization.")
     elif system == "windows":
-        msvc_include_prefix = detect_msvc_include_prefix(compiler.path, values, runner)
+        # Deliberately not the generic `runner`: probing cl.exe's localized
+        # /showIncludes note needs OEM-codepage decoding (run_capture_oem),
+        # not the UTF-8 decoding every other probe in this module expects.
+        msvc_include_prefix = detect_msvc_include_prefix(compiler.path, values)
         if not msvc_include_prefix:
             warnings.append("MSVC /showIncludes prefix could not be detected; Ninja output may be noisy.")
 

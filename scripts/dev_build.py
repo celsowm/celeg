@@ -31,6 +31,32 @@ def build_directory(args: argparse.Namespace, environment: Environment) -> pathl
     return ROOT / "out" / flavor
 
 
+def cmake_string_literal(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def write_msvc_prefix_cache_script(directory: pathlib.Path, prefix: str) -> pathlib.Path:
+    """Write an initial-cache script carrying the localized /showIncludes prefix.
+
+    CMake mangles non-ASCII `-D` command-line argument values through the
+    process's ANSI/OEM codepage before writing them into generated Ninja
+    files, but preserves UTF-8 *file* content byte-for-byte. Ninja's own
+    subprocess capture of cl.exe -- unlike a bare Python subprocess.PIPE --
+    yields UTF-8 for the localized note, so `msvc_deps_prefix` in the
+    generated rules.ninja must also be UTF-8 to byte-match it. Routing the
+    value through a `-C` script instead of `-D` is what makes that happen.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "celeg_msvc_showincludes_prefix.cmake"
+    script.write_text(
+        "set(CELEG_MSVC_SHOWINCLUDES_PREFIX "
+        f"{cmake_string_literal(prefix)} CACHE STRING \"\" FORCE)\n",
+        encoding="utf-8",
+    )
+    return script
+
+
 def configure_command(
     args: argparse.Namespace,
     environment: Environment,
@@ -79,7 +105,8 @@ def configure_command(
         if allow_unsupported:
             command.append("-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler")
     if environment.msvc_include_prefix:
-        command.append(f"-DCELEG_MSVC_SHOWINCLUDES_PREFIX={environment.msvc_include_prefix}")
+        prefix_script = write_msvc_prefix_cache_script(directory, environment.msvc_include_prefix)
+        command.extend(["-C", str(prefix_script)])
     serve = env_value(environment.values, "CELEG_ENABLE_SERVE")
     if serve:
         command.append(f"-DCELEG_ENABLE_SERVE={serve}")
