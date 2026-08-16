@@ -14,6 +14,7 @@ int main() {
     flat.values["num_hidden_layers"] = std::int64_t{2};
     flat.values["num_attention_heads"] = std::int64_t{4};
     flat.values["vocab_size"] = std::int64_t{128};
+    flat.values["rope_theta"] = 10000.0;
 
     celeg::CheckpointMetadata component;
     component.values["model_type"] = std::string("invented_identity");
@@ -22,6 +23,7 @@ int main() {
     component.values["text_config.num_hidden_layers"] = std::int64_t{2};
     component.values["text_config.num_attention_heads"] = std::int64_t{4};
     component.values["text_config.vocab_size"] = std::int64_t{128};
+    component.values["text_config.rope_theta"] = 10000.0;
 
     const auto automatic = celeg::make_automatic_architecture();
     CELEG_TEST_CHECK(automatic->probe(flat).supported);

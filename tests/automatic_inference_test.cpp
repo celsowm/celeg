@@ -47,6 +47,7 @@ celeg::CheckpointMetadata metadata() {
     result.values["head_dim"] = int64_t(2);
     result.values["vocab_size"] = int64_t(32);
     result.values["max_position_embeddings"] = int64_t(64);
+    result.values["rope_theta"] = 10000.0;
     result.values["xsa_projection"] = true;
     result.values["tie_word_embeddings"] = true;
     result.values["embedding_multiplier"] = 2.0;

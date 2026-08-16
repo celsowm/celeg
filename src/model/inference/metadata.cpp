@@ -416,7 +416,8 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.shortconv_cache = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                           "shortconv_cache", "shortconv.l_cache");
     std::optional<double> rope_theta = aliases<double>(
-        metadata, {"rope_theta"}, result.evidence, "rope_theta", "rope.freq_base");
+        metadata, {"rope_theta", "rope_parameters.rope_theta"}, result.evidence,
+        "rope_theta", "rope.freq_base");
     std::optional<float> rotary_fraction = aliases<float>(
         metadata, {"rotary_fraction"}, result.evidence, "rotary_fraction");
     const bool architecture_never_applies_rope = metadata.is_gguf() &&
@@ -577,6 +578,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         result.evidence.push_back({EvidenceKind::FormatGuarantee, "architecture",
                                    metadata.architecture_type() + " does not use RoPE"});
     } else {
+        if (!rope_theta.has_value()) {
+            inference_detail::fail(ResolutionFailureKind::MissingRequiredMetadata,
+                                   "checkpoint applies RoPE but does not specify rope_theta");
+        }
         RopePairingKind pairing = RopePairingKind::SplitHalf;
         if (metadata.contains("rope_pairing")) {
             const std::string pairing_value = metadata.string("rope_pairing");
@@ -594,7 +599,7 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                        "RoPE pairing = adjacent_pairs"});
         }
         result.position_encoding = InferredRopePosition{
-            rope_theta.value_or(100000.0),
+            *rope_theta,
             rotary_fraction.value_or(1.0f),
             pairing};
     }
