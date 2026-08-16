@@ -7,7 +7,7 @@ namespace celeg {
 CpuExternalAttentionMemory::CpuExternalAttentionMemory(
     CpuKvCacheMode mode, size_t page_tokens, size_t key_width,
     size_t value_width)
-    : pool_(mode, page_tokens, CpuStatePageLayout{key_width, value_width, 0, 0}) {}
+    : pool_(mode, page_tokens, CpuOrdinaryKvPageLayout{key_width, value_width}) {}
 
 void CpuExternalAttentionMemory::append(const float* key, const float* value) {
     if (!key || !value) {

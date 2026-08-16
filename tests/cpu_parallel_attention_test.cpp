@@ -13,7 +13,8 @@ int main() {
     constexpr int sequence = 37;
     celeg::CpuKvPagePool pool(
         celeg::CpuKvCacheMode::Bf16, 8,
-        celeg::CpuStatePageLayout{kv_heads * head_dim, kv_heads * head_dim, 0, 0});
+        celeg::CpuStatePageLayout{
+            celeg::CpuOrdinaryKvPageLayout{kv_heads * head_dim, kv_heads * head_dim}});
     std::vector<celeg::CpuKvPageId> pages;
     std::vector<float> key(kv_heads * head_dim);
     std::vector<float> value(kv_heads * head_dim);

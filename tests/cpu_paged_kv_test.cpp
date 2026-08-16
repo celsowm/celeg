@@ -59,7 +59,8 @@ static void run(celeg::CpuKvCacheMode mode) {
     constexpr int kv_width = kv_heads * head_dim;
 
     celeg::CpuKvPagePool pool(mode, page_tokens,
-                              celeg::CpuStatePageLayout{kv_width, kv_width, 0, 0});
+                              celeg::CpuStatePageLayout{
+                                  celeg::CpuOrdinaryKvPageLayout{kv_width, kv_width}});
     std::vector<celeg::CpuKvPageId> pages;
     std::vector<float> keys(sequence * kv_width);
     std::vector<float> values(sequence * kv_width);
@@ -193,13 +194,13 @@ int main() {
     run(celeg::CpuKvCacheMode::Bf16);
     celeg::CpuKvPagePool latent_pool(
         celeg::CpuKvCacheMode::Bf16, 4,
-        celeg::CpuStatePageLayout{0, 0, 8, 4});
+        celeg::CpuStatePageLayout{celeg::CpuLatentPageLayout{8, 4}});
     const auto latent_page = latent_pool.allocate();
     CELEG_TEST_CHECK(latent_pool.page_bytes() == 4 * 12 * sizeof(uint16_t));
     latent_pool.release(latent_page);
     celeg::CpuKvPagePool mixed_pool(
         celeg::CpuKvCacheMode::Fp32, 4,
-        celeg::CpuStatePageLayout{2, 3, 4, 1});
+        celeg::CpuStatePageLayout{celeg::CpuOrdinaryKvPageLayout{2, 3}});
     const auto mixed_page = mixed_pool.allocate();
     const float mixed_key[] = {1.0f, 2.0f};
     const float mixed_value[] = {3.0f, 4.0f, 5.0f};
@@ -216,8 +217,8 @@ int main() {
     constexpr int latent_rope = 1;
     celeg::CpuKvPagePool latent_attention_pool(
         celeg::CpuKvCacheMode::Fp32, 2,
-        celeg::CpuStatePageLayout{0, 0, 2 * latent_rank,
-                                  latent_rope});
+        celeg::CpuStatePageLayout{
+            celeg::CpuLatentPageLayout{2 * latent_rank, latent_rope}});
     std::vector<celeg::CpuKvPageId> latent_pages;
     std::vector<float> latent_keys(latent_sequence * latent_rank);
     std::vector<float> latent_values(latent_sequence * latent_rank);

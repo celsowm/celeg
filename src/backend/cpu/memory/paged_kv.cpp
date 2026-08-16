@@ -34,8 +34,28 @@ void aligned_free_portable(void* ptr) {
 
 }
 
-void CpuStatePageLayout::validate() const {
-    if (token_elements() == 0) {
+size_t cpu_state_page_key_width(const CpuStatePageLayout& layout) {
+    const auto* ordinary = std::get_if<CpuOrdinaryKvPageLayout>(&layout);
+    return ordinary ? ordinary->key_width : 0;
+}
+size_t cpu_state_page_value_width(const CpuStatePageLayout& layout) {
+    const auto* ordinary = std::get_if<CpuOrdinaryKvPageLayout>(&layout);
+    return ordinary ? ordinary->value_width : 0;
+}
+size_t cpu_state_page_latent_width(const CpuStatePageLayout& layout) {
+    const auto* latent = std::get_if<CpuLatentPageLayout>(&layout);
+    return latent ? latent->latent_width : 0;
+}
+size_t cpu_state_page_rotary_width(const CpuStatePageLayout& layout) {
+    const auto* latent = std::get_if<CpuLatentPageLayout>(&layout);
+    return latent ? latent->rotary_width : 0;
+}
+size_t cpu_state_page_token_elements(const CpuStatePageLayout& layout) {
+    return cpu_state_page_key_width(layout) + cpu_state_page_value_width(layout) +
+        cpu_state_page_latent_width(layout) + cpu_state_page_rotary_width(layout);
+}
+void cpu_state_page_validate(const CpuStatePageLayout& layout) {
+    if (cpu_state_page_token_elements(layout) == 0) {
         throw std::invalid_argument("CPU state page layout must contain state");
     }
 }
@@ -58,9 +78,9 @@ CpuKvPagePool::CpuKvPagePool(CpuKvCacheMode mode,
     if (page_tokens_ == 0) {
         throw std::invalid_argument("CPU state page token count must be positive");
     }
-    layout_.validate();
+    cpu_state_page_validate(layout_);
     const size_t elements = checked_multiply(
-        page_tokens_, layout_.token_elements(), "CPU state page dimensions overflow");
+        page_tokens_, cpu_state_page_token_elements(layout_), "CPU state page dimensions overflow");
     page_bytes_ = checked_multiply(elements,
         mode_ == CpuKvCacheMode::Fp32 ? sizeof(float) : sizeof(uint16_t),
         "CPU KV page byte size overflow");
@@ -155,19 +175,19 @@ CpuKvPageId CpuKvPagePool::clone_prefix(CpuKvPageId source,
     try {
         const size_t element_bytes = mode_ == CpuKvCacheMode::Fp32
             ? sizeof(float) : sizeof(uint16_t);
-        const size_t key_bytes = used_tokens * layout_.key_width * element_bytes;
-        const size_t value_bytes = used_tokens * layout_.value_width * element_bytes;
+        const size_t key_bytes = used_tokens * cpu_state_page_key_width(layout_) * element_bytes;
+        const size_t value_bytes = used_tokens * cpu_state_page_value_width(layout_) * element_bytes;
         const Page& source_page = checked_page(source);
         Page& destination_page = checked_page(destination);
         const auto* src = static_cast<const std::byte*>(source_page.storage);
         auto* dst = static_cast<std::byte*>(destination_page.storage);
         std::memcpy(dst, src, key_bytes);
-        const size_t value_base = page_tokens_ * layout_.key_width * element_bytes;
+        const size_t value_base = page_tokens_ * cpu_state_page_key_width(layout_) * element_bytes;
         std::memcpy(dst + value_base, src + value_base, value_bytes);
         const size_t state_base = page_tokens_ *
-            (layout_.key_width + layout_.value_width) * element_bytes;
+            (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_)) * element_bytes;
         const size_t latent_bytes = used_tokens *
-            (layout_.latent_width + layout_.rotary_width) * element_bytes;
+            (cpu_state_page_latent_width(layout_) + cpu_state_page_rotary_width(layout_)) * element_bytes;
         if (latent_bytes != 0) std::memcpy(dst + state_base, src + state_base, latent_bytes);
         return destination;
     } catch (...) {
@@ -179,25 +199,25 @@ CpuKvPageId CpuKvPagePool::clone_prefix(CpuKvPageId source,
 void CpuKvPagePool::write(CpuKvPageId page_id, size_t token_offset,
                           const float* key, const float* value) {
     if (!key || !value) throw std::invalid_argument("CPU KV write pointers are required");
-    if (layout_.key_width == 0 || layout_.value_width == 0) {
+    if (cpu_state_page_key_width(layout_) == 0 || cpu_state_page_value_width(layout_) == 0) {
         throw std::logic_error("CPU state page has no ordinary KV regions");
     }
     if (token_offset >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
     Page& page = checked_page(page_id);
     if (page.references == 0) throw std::logic_error("writing to a free CPU KV page");
-    const size_t key_offset = token_offset * layout_.key_width;
-    const size_t value_offset = page_tokens_ * layout_.key_width +
-        token_offset * layout_.value_width;
+    const size_t key_offset = token_offset * cpu_state_page_key_width(layout_);
+    const size_t value_offset = page_tokens_ * cpu_state_page_key_width(layout_) +
+        token_offset * cpu_state_page_value_width(layout_);
     if (mode_ == CpuKvCacheMode::Fp32) {
         auto* data = static_cast<float*>(page.storage);
-        std::copy(key, key + layout_.key_width, data + key_offset);
-        std::copy(value, value + layout_.value_width, data + value_offset);
+        std::copy(key, key + cpu_state_page_key_width(layout_), data + key_offset);
+        std::copy(value, value + cpu_state_page_value_width(layout_), data + value_offset);
     } else {
         auto* data = static_cast<uint16_t*>(page.storage);
-        for (size_t i = 0; i < layout_.key_width; ++i) {
+        for (size_t i = 0; i < cpu_state_page_key_width(layout_); ++i) {
             data[key_offset + i] = float_to_bf16_bits(key[i]);
         }
-        for (size_t i = 0; i < layout_.value_width; ++i) {
+        for (size_t i = 0; i < cpu_state_page_value_width(layout_); ++i) {
             data[value_offset + i] = float_to_bf16_bits(value[i]);
         }
     }
@@ -207,27 +227,27 @@ void CpuKvPagePool::write_latent(CpuKvPageId page_id, size_t token_offset,
                                  const float* key, const float* value,
                                  const float* rotary) {
     if (!key || !value) throw std::invalid_argument("CPU latent state pointers are required");
-    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0) {
+    if (cpu_state_page_latent_width(layout_) == 0 || (cpu_state_page_latent_width(layout_) % 2) != 0) {
         throw std::logic_error("CPU latent state width must contain key and value regions");
     }
-    if (layout_.rotary_width != 0 && !rotary) {
+    if (cpu_state_page_rotary_width(layout_) != 0 && !rotary) {
         throw std::invalid_argument("CPU latent rotary pointer is required");
     }
     if (token_offset >= page_tokens_) throw std::out_of_range("CPU latent token offset out of range");
     Page& page = checked_page(page_id);
     if (page.references == 0) throw std::logic_error("writing to a free CPU state page");
-    const size_t width = layout_.latent_width / 2;
-    const size_t state_base = page_tokens_ * (layout_.key_width + layout_.value_width);
+    const size_t width = cpu_state_page_latent_width(layout_) / 2;
+    const size_t state_base = page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_));
     const size_t key_offset = state_base + token_offset * width;
     const size_t value_offset = state_base + page_tokens_ * width + token_offset * width;
-    const size_t rotary_offset = state_base + page_tokens_ * layout_.latent_width +
-        token_offset * layout_.rotary_width;
+    const size_t rotary_offset = state_base + page_tokens_ * cpu_state_page_latent_width(layout_) +
+        token_offset * cpu_state_page_rotary_width(layout_);
     if (mode_ == CpuKvCacheMode::Fp32) {
         auto* data = static_cast<float*>(page.storage);
         std::copy(key, key + width, data + key_offset);
         std::copy(value, value + width, data + value_offset);
-        if (layout_.rotary_width != 0) {
-            std::copy(rotary, rotary + layout_.rotary_width, data + rotary_offset);
+        if (cpu_state_page_rotary_width(layout_) != 0) {
+            std::copy(rotary, rotary + cpu_state_page_rotary_width(layout_), data + rotary_offset);
         }
     } else {
         auto* data = static_cast<uint16_t*>(page.storage);
@@ -235,7 +255,7 @@ void CpuKvPagePool::write_latent(CpuKvPageId page_id, size_t token_offset,
             data[key_offset + i] = float_to_bf16_bits(key[i]);
             data[value_offset + i] = float_to_bf16_bits(value[i]);
         }
-        for (size_t i = 0; i < layout_.rotary_width; ++i) {
+        for (size_t i = 0; i < cpu_state_page_rotary_width(layout_); ++i) {
             data[rotary_offset + i] = float_to_bf16_bits(rotary[i]);
         }
     }
@@ -244,73 +264,73 @@ void CpuKvPagePool::write_latent(CpuKvPageId page_id, size_t token_offset,
 const float* CpuKvPagePool::key_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
-    return static_cast<const float*>(checked_page(id).storage) + token * layout_.key_width;
+    return static_cast<const float*>(checked_page(id).storage) + token * cpu_state_page_key_width(layout_);
 }
 const float* CpuKvPagePool::value_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
     return static_cast<const float*>(checked_page(id).storage) +
-        page_tokens_ * layout_.key_width + token * layout_.value_width;
+        page_tokens_ * cpu_state_page_key_width(layout_) + token * cpu_state_page_value_width(layout_);
 }
 const uint16_t* CpuKvPagePool::key_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
-    return static_cast<const uint16_t*>(checked_page(id).storage) + token * layout_.key_width;
+    return static_cast<const uint16_t*>(checked_page(id).storage) + token * cpu_state_page_key_width(layout_);
 }
 const uint16_t* CpuKvPagePool::value_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
     if (token >= page_tokens_) throw std::out_of_range("CPU KV token offset out of range");
     return static_cast<const uint16_t*>(checked_page(id).storage) +
-        page_tokens_ * layout_.key_width + token * layout_.value_width;
+        page_tokens_ * cpu_state_page_key_width(layout_) + token * cpu_state_page_value_width(layout_);
 }
 
 const float* CpuKvPagePool::latent_key_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
-    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+    if (cpu_state_page_latent_width(layout_) == 0 || (cpu_state_page_latent_width(layout_) % 2) != 0 || token >= page_tokens_)
         throw std::out_of_range("CPU latent token is out of range");
     return static_cast<const float*>(checked_page(id).storage) +
-        page_tokens_ * (layout_.key_width + layout_.value_width) +
-        token * (layout_.latent_width / 2);
+        page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_)) +
+        token * (cpu_state_page_latent_width(layout_) / 2);
 }
 const float* CpuKvPagePool::latent_value_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
-    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+    if (cpu_state_page_latent_width(layout_) == 0 || (cpu_state_page_latent_width(layout_) % 2) != 0 || token >= page_tokens_)
         throw std::out_of_range("CPU latent token is out of range");
     return static_cast<const float*>(checked_page(id).storage) +
-        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width / 2) +
-        token * (layout_.latent_width / 2);
+        page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_) + cpu_state_page_latent_width(layout_) / 2) +
+        token * (cpu_state_page_latent_width(layout_) / 2);
 }
 const float* CpuKvPagePool::rotary_fp32(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Fp32) throw std::logic_error("CPU KV pool is not FP32");
-    if (layout_.rotary_width == 0 || token >= page_tokens_)
+    if (cpu_state_page_rotary_width(layout_) == 0 || token >= page_tokens_)
         throw std::out_of_range("CPU latent rotary token is out of range");
     return static_cast<const float*>(checked_page(id).storage) +
-        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width) +
-        token * layout_.rotary_width;
+        page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_) + cpu_state_page_latent_width(layout_)) +
+        token * cpu_state_page_rotary_width(layout_);
 }
 const uint16_t* CpuKvPagePool::latent_key_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
-    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+    if (cpu_state_page_latent_width(layout_) == 0 || (cpu_state_page_latent_width(layout_) % 2) != 0 || token >= page_tokens_)
         throw std::out_of_range("CPU latent token is out of range");
     return static_cast<const uint16_t*>(checked_page(id).storage) +
-        page_tokens_ * (layout_.key_width + layout_.value_width) +
-        token * (layout_.latent_width / 2);
+        page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_)) +
+        token * (cpu_state_page_latent_width(layout_) / 2);
 }
 const uint16_t* CpuKvPagePool::latent_value_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
-    if (layout_.latent_width == 0 || (layout_.latent_width % 2) != 0 || token >= page_tokens_)
+    if (cpu_state_page_latent_width(layout_) == 0 || (cpu_state_page_latent_width(layout_) % 2) != 0 || token >= page_tokens_)
         throw std::out_of_range("CPU latent token is out of range");
     return static_cast<const uint16_t*>(checked_page(id).storage) +
-        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width / 2) +
-        token * (layout_.latent_width / 2);
+        page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_) + cpu_state_page_latent_width(layout_) / 2) +
+        token * (cpu_state_page_latent_width(layout_) / 2);
 }
 const uint16_t* CpuKvPagePool::rotary_bf16(CpuKvPageId id, size_t token) const {
     if (mode_ != CpuKvCacheMode::Bf16) throw std::logic_error("CPU KV pool is not BF16");
-    if (layout_.rotary_width == 0 || token >= page_tokens_)
+    if (cpu_state_page_rotary_width(layout_) == 0 || token >= page_tokens_)
         throw std::out_of_range("CPU latent rotary token is out of range");
     return static_cast<const uint16_t*>(checked_page(id).storage) +
-        page_tokens_ * (layout_.key_width + layout_.value_width + layout_.latent_width) +
-        token * layout_.rotary_width;
+        page_tokens_ * (cpu_state_page_key_width(layout_) + cpu_state_page_value_width(layout_) + cpu_state_page_latent_width(layout_)) +
+        token * cpu_state_page_rotary_width(layout_);
 }
 
 const CpuKvPagePool::Page& CpuKvPagePool::checked_page(CpuKvPageId id) const {

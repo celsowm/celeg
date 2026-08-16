@@ -19,12 +19,11 @@ CpuStatePageLayout lower_cpu_state_page_layout(
     return std::visit([](const auto& layout) -> CpuStatePageLayout {
         using Layout = std::decay_t<decltype(layout)>;
         if constexpr (std::is_same_v<Layout, CompiledOrdinaryKvStateLayout>) {
-            return {
+            return CpuOrdinaryKvPageLayout{
                 static_cast<std::size_t>(layout.key_width),
-                static_cast<std::size_t>(layout.value_width), 0, 0};
+                static_cast<std::size_t>(layout.value_width)};
         } else if constexpr (std::is_same_v<Layout, CompiledLatentStateLayout>) {
-            return {
-                0, 0,
+            return CpuLatentPageLayout{
                 static_cast<std::size_t>(layout.latent_width),
                 static_cast<std::size_t>(layout.rotary_width)};
         } else {

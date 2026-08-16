@@ -68,9 +68,9 @@ int main() {
         celeg::build_cpu_kv_topology(latent_shape.exec, latent_program,
                                      celeg::CpuModelOptions{});
     CELEG_TEST_CHECK(latent_topology.pools.size() == 1);
-    CELEG_TEST_CHECK(latent_topology.pools[0]->layout().key_width == 0);
-    CELEG_TEST_CHECK(latent_topology.pools[0]->layout().latent_width == 16);
-    CELEG_TEST_CHECK(latent_topology.pools[0]->layout().rotary_width == 4);
+    CELEG_TEST_CHECK(celeg::cpu_state_page_key_width(latent_topology.pools[0]->layout()) == 0);
+    CELEG_TEST_CHECK(celeg::cpu_state_page_latent_width(latent_topology.pools[0]->layout()) == 16);
+    CELEG_TEST_CHECK(celeg::cpu_state_page_rotary_width(latent_topology.pools[0]->layout()) == 4);
     std::cout << "cpu_kv_topology_test: ok\n";
     return 0;
 }

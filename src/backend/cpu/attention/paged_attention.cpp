@@ -369,9 +369,9 @@ void cpu_latent_attention_decode_paged(
     int rope_head_dim, float scale, CpuAttentionPattern pattern,
     CpuAttentionBias bias, int query_position) {
     if (!query_content || !output || sequence_length <= 0 || query_heads <= 0 ||
-        latent_rank <= 0 || rope_head_dim < 0 || pool.layout().latent_width !=
-            static_cast<size_t>(2 * latent_rank) ||
-        pool.layout().rotary_width != static_cast<size_t>(rope_head_dim)) {
+        latent_rank <= 0 || rope_head_dim < 0 ||
+        cpu_state_page_latent_width(pool.layout()) != static_cast<size_t>(2 * latent_rank) ||
+        cpu_state_page_rotary_width(pool.layout()) != static_cast<size_t>(rope_head_dim)) {
         throw std::invalid_argument("invalid CPU latent attention dimensions");
     }
     const size_t required_pages = (static_cast<size_t>(sequence_length) +

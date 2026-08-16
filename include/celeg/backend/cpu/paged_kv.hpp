@@ -26,17 +26,24 @@ struct CpuKvPageStats {
     size_t numa_binding_failures = 0;
 };
 
-struct CpuStatePageLayout {
+struct CpuOrdinaryKvPageLayout {
     size_t key_width = 0;
     size_t value_width = 0;
+};
+
+struct CpuLatentPageLayout {
     size_t latent_width = 0;
     size_t rotary_width = 0;
-
-    size_t token_elements() const {
-        return key_width + value_width + latent_width + rotary_width;
-    }
-    void validate() const;
 };
+
+using CpuStatePageLayout = std::variant<CpuOrdinaryKvPageLayout, CpuLatentPageLayout>;
+
+size_t cpu_state_page_key_width(const CpuStatePageLayout& layout);
+size_t cpu_state_page_value_width(const CpuStatePageLayout& layout);
+size_t cpu_state_page_latent_width(const CpuStatePageLayout& layout);
+size_t cpu_state_page_rotary_width(const CpuStatePageLayout& layout);
+size_t cpu_state_page_token_elements(const CpuStatePageLayout& layout);
+void cpu_state_page_validate(const CpuStatePageLayout& layout);
 
 class CpuKvPagePool {
 public:
@@ -75,8 +82,8 @@ public:
     CpuKvCacheMode mode() const { return mode_; }
     size_t page_tokens() const { return page_tokens_; }
     const CpuStatePageLayout& layout() const { return layout_; }
-    size_t key_width() const { return layout_.key_width; }
-    size_t value_width() const { return layout_.value_width; }
+    size_t key_width() const { return cpu_state_page_key_width(layout_); }
+    size_t value_width() const { return cpu_state_page_value_width(layout_); }
     size_t page_bytes() const { return page_bytes_; }
     CpuKvPageStats stats() const;
 
