@@ -227,7 +227,7 @@ public:
                         routing_group_score_top_k};
                 }
                 std::optional<SharedExpertSpec> shared;
-                if (shared_expert_intermediate > 0) {
+                if (descriptor_.moe_shared_intermediate.has_value()) {
                     shared = SharedExpertSpec{
                         shared_expert_intermediate,
                         MoeCombineOrder::RoutedThenShared};
