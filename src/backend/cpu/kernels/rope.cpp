@@ -65,14 +65,15 @@ void cpu_qk_norm_rope(float* data, const float* norm_weight,
         (head_dim % 2) != 0 || position < 0) {
         throw std::invalid_argument("invalid QK norm/RoPE arguments");
     }
-    const int half = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction) / 2;
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
+    const int half = rotary_dim / 2;
     thread_local std::vector<float> cos_vals;
     thread_local std::vector<float> sin_vals;
     cos_vals.resize(static_cast<size_t>(half));
     sin_vals.resize(static_cast<size_t>(half));
     for (int d = 0; d < half; ++d) {
         const float frequency = static_cast<float>(rope_frequency(
-            rope, d, head_dim, position));
+            rope, d, rotary_dim, position));
         const float angle = static_cast<float>(position) * frequency;
         cos_vals[d] = std::cos(angle);
         sin_vals[d] = std::sin(angle);
@@ -129,12 +130,13 @@ void cpu_rope(float* data, int heads, int head_dim, int position,
         position < 0 || !(rope.theta > 0.0)) {
         throw std::invalid_argument("invalid RoPE arguments");
     }
-    const int half = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction) / 2;
+    const int rotary_dim = static_cast<int>(static_cast<float>(head_dim) * rope.rotary_fraction);
+    const int half = rotary_dim / 2;
     std::vector<float> cos_vals(static_cast<size_t>(half));
     std::vector<float> sin_vals(static_cast<size_t>(half));
     for (int pair = 0; pair < half; ++pair) {
         const float frequency = static_cast<float>(rope_frequency(
-            rope, pair, head_dim, position));
+            rope, pair, rotary_dim, position));
         const float angle = static_cast<float>(position) * frequency;
         cos_vals[static_cast<size_t>(pair)] = std::cos(angle);
         sin_vals[static_cast<size_t>(pair)] = std::sin(angle);

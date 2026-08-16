@@ -4,8 +4,6 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <vector>
 
 namespace celeg {
@@ -94,10 +92,6 @@ void execute_cpu_mamba2_token(
         // safetensors checkpoints still store the untransformed A_log parameter.
         const float a = spec.a_log_needs_exp ? -std::exp(weights.a_log[head]) : weights.a_log[head];
         const float decay = std::exp(dt * a);
-        if (head == 0 && getenv("CELEG_DEBUG_DECAY")) {
-            fprintf(stderr, "[mamba2 decay] needs_exp=%d a_log=%.6f a=%.6f dt=%.6f decay=%.6f\n",
-                (int)spec.a_log_needs_exp, weights.a_log[head], a, dt, decay);
-        }
         const int group = head / group_size;
         for (int d = 0; d < spec.head_dim; ++d) {
             const int channel = head * spec.head_dim + d;
@@ -113,12 +107,21 @@ void execute_cpu_mamba2_token(
             workspace.mamba_inner[channel] = output + weights.d[head] * x;
         }
     }
-    cpu_rmsnorm(workspace.mamba_inner.data(), weights.norm.data(),
-                workspace.op_output.data(), inner,
-                shared.program.layers.at(layer).operator_norm.epsilon);
+    // Reference (ggml mamba-base.cpp / HF MambaRMSNormGated): the SiLU gate is
+    // applied to the raw SSM output BEFORE the RMS statistics are computed, and
+    // the norm is grouped by spec.group_count (matching the B/C state grouping),
+    // not a single normalization over the whole intermediate width.
     for (int i = 0; i < inner; ++i) {
         const float gate = z[i];
-        workspace.op_output[i] *= gate / (1.0f + std::exp(-gate));
+        workspace.mamba_inner[i] *= gate / (1.0f + std::exp(-gate));
+    }
+    const int norm_group_width = inner / spec.group_count;
+    const float norm_eps = shared.program.layers.at(layer).operator_norm.epsilon;
+    for (int group = 0; group < spec.group_count; ++group) {
+        cpu_rmsnorm(workspace.mamba_inner.data() + group * norm_group_width,
+                    weights.norm.data() + group * norm_group_width,
+                    workspace.op_output.data() + group * norm_group_width,
+                    norm_group_width, norm_eps);
     }
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());

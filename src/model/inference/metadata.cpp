@@ -418,6 +418,29 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                          "rope_theta", "rope.freq_base");
     result.rotary_fraction = aliases<float>(metadata, {"rotary_fraction"}, result.evidence,
                                             "rotary_fraction");
+    if (!result.rotary_fraction.has_value() && metadata.is_gguf()) {
+        // GGUF stores partial rotary as an absolute dimension count
+        // ("<arch>.rope.dimension_count"), not a fraction of head_dim like the
+        // HF-config "rotary_fraction"/"partial_rotary_factor" convention does.
+        const std::string rope_dim_key =
+            metadata.architecture_type() + ".rope.dimension_count";
+        const std::optional<int> rope_dimension_count =
+            gguf_scalar_or_uniform_schedule<int>(metadata, rope_dim_key);
+        if (rope_dimension_count.has_value()) {
+            const std::optional<int> effective_head_dim = result.head_dim.global.has_value()
+                ? result.head_dim.global
+                : (result.hidden_size.has_value() && result.query_heads.global.has_value() &&
+                   *result.query_heads.global > 0)
+                      ? std::optional<int>(*result.hidden_size / *result.query_heads.global)
+                      : std::nullopt;
+            if (effective_head_dim.has_value() && *effective_head_dim > 0) {
+                result.rotary_fraction = static_cast<float>(*rope_dimension_count) /
+                    static_cast<float>(*effective_head_dim);
+                result.evidence.push_back({EvidenceKind::AliasMetadata, rope_dim_key,
+                    "rotary_fraction = " + std::to_string(*result.rotary_fraction)});
+            }
+        }
+    }
     result.bos_token_id = aliases<int>(metadata,
                                        {"bos_token_id", "tokenizer.ggml.bos_token_id"},
                                        result.evidence, "bos_token_id");
