@@ -54,7 +54,7 @@ void run_factorized_latent_attention(
             factorized.query_rank);
         launch_factorized_latent_query({
             .query_projection = workspace.prefill_qkv_.data(),
-            .expansion = attention.latent_expansion->bf16,
+            .expansion = std::get<Bf16LinearStorage>(attention.latent_expansion->storage).data,
             .query_content = workspace.prefill_latent_query_content_.data(),
             .rows = rows,
             .query_heads = layout.query_heads,
@@ -141,7 +141,7 @@ void run_factorized_latent_attention(
     prof.begin(model.stream_.get());
     launch_factorized_latent_value({
         .latent_output = workspace.prefill_op_output_.data(),
-        .expansion = attention.latent_expansion->bf16,
+        .expansion = std::get<Bf16LinearStorage>(attention.latent_expansion->storage).data,
         .value_output = workspace.prefill_latent_decompressed_.data(),
         .rows = rows,
         .query_heads = layout.query_heads,

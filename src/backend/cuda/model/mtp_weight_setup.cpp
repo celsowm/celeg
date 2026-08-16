@@ -105,7 +105,8 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             DeviceBuffer<float>& router_float =
                 model.workspace_.moe_router_float_[static_cast<size_t>(resource_layer)];
             router_float.reset(static_cast<size_t>(E) * resources.program_.hidden);
-            launch_cast_bf16_to_float(moe.router->bf16, router_float.data(),
+            launch_cast_bf16_to_float(
+                std::get<Bf16LinearStorage>(moe.router->storage).data, router_float.data(),
                                       E * resources.program_.hidden, model.stream_.get());
             moe.router_float = router_float.data();
 

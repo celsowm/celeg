@@ -221,8 +221,7 @@ const LinearWeight* WeightLoader::load_router_weight_named(
 
     DeviceWeight& slot = weights_->tensors[name];
     LinearWeight view;
-    view.kind = LinearStorageKind::Bf16;
-    view.bf16 = bf16;
+    view.storage = Bf16LinearStorage{bf16};
     view.rows = num_experts;
     view.cols = hidden;
     slot.linear = view;

@@ -123,7 +123,7 @@ void CudaCompiledModel::load_checkpoint_weights(
             DeviceBuffer<float>& router_float = workspace_.moe_router_float_[static_cast<size_t>(i)];
             router_float.reset(static_cast<size_t>(E) * resources_.program_.hidden);
             launch_cast_bf16_to_float(
-                router->bf16, router_float.data(),
+                std::get<Bf16LinearStorage>(router->storage).data, router_float.data(),
                 static_cast<int>(E) * resources_.program_.hidden, stream_.get());
 
             MoeFfnWeights moe_weights{};
@@ -386,8 +386,10 @@ void CudaCompiledModel::load_checkpoint_weights(
                         repo, tensor_name(resources_.model_.weight_plan.requests,
                                           TensorRole::AttentionLatentOutput, i),
                         {resources_.program_.hidden, layout.latent_output_width()});
-                    if (attention_layer.latent_query_expansion->kind != LinearStorageKind::Bf16 ||
-                        attention_layer.latent_expansion->kind != LinearStorageKind::Bf16) {
+                    if (!std::holds_alternative<Bf16LinearStorage>(
+                            attention_layer.latent_query_expansion->storage) ||
+                        !std::holds_alternative<Bf16LinearStorage>(
+                            attention_layer.latent_expansion->storage)) {
                         throw std::invalid_argument(
                             "CUDA factorized latent attention currently requires BF16 expansion weights");
                     }

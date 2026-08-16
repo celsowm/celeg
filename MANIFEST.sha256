@@ -237,7 +237,6 @@ b3fd23e2bf7be6f207f5ef8d8a89e7a528aa90545d254e13819b0fa9fc9bc0e7  ./src/backend/
 e4dca2cb13b7e5087909b847c84a65531c005d8205778540cffb9f40e9cacb46  ./src/backend/cuda/model/weight_loader_internal.hpp
 91c98e0910e8dbfe0bdbab7b30bdd724ed27f6bb836527dde12b8d16ae3b6bc4  ./src/backend/cuda/model/weight_setup.cpp
 348a897d233006541477e7f292bae672df9715b527fc3506a51e667404ce37ad  ./src/backend/cuda/model/weight_upload.cpp
-8087298c059537bbb1de6410db324e2584db4da4cb909d61e2ab41a86b3a20f9  ./src/backend/cuda/model/weight_validation.cpp
 e2f4ffe7f460f8a099e5b4f896237b063975541d4bfde33f608b2a320af57114  ./src/backend/cuda/model/weights.cpp
 c6219bfcca33d5b0f057d068a60b5e3a72355595bbcded77253eeb7fdff25fcb  ./src/backend/cuda/moe/expert_layer_cache.cu
 2fd0aafc9b2f48a40f35e4800166a30e3020145a60f1b6fd41559ff6fefdb156  ./src/backend/cuda/moe/ffn.cu

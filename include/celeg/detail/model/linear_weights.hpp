@@ -9,17 +9,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <variant>
 #include <vector>
 
 namespace celeg {
-
-enum class LinearStorageKind : uint8_t {
-    Bf16,
-    Int8,
-    Int4,
-    Q4_K,
-    Q6_K,
-};
 
 struct GgufLinearSegment {
     const uint8_t* blocks = nullptr;
@@ -30,23 +23,42 @@ struct GgufLinearSegment {
     size_t row_bytes = 0;
 };
 
-struct LinearWeight {
-    LinearStorageKind kind = LinearStorageKind::Bf16;
-    const __nv_bfloat16* bf16 = nullptr;
-    const int8_t* int8 = nullptr;
-    const uint8_t* int4 = nullptr;
+struct Bf16LinearStorage {
+    const __nv_bfloat16* data = nullptr;
+};
+
+struct Int8LinearStorage {
+    const int8_t* data = nullptr;
     const float* scales = nullptr;
-    std::vector<GgufLinearSegment> gguf_segments;
+    // Optional dense BF16 shadow of the same weight, used by GEMM dispatch to
+    // prefer a cuBLAS(Lt) BF16 kernel over the custom quantized kernel for
+    // multi-row (prefill) inputs, while decode (single row) still uses the
+    // quantized path. Populated only when the loader derived this storage
+    // from an existing BF16 buffer.
+    const __nv_bfloat16* bf16_fallback = nullptr;
+};
+
+struct Int4LinearStorage {
+    const uint8_t* data = nullptr;
+    const float* scales = nullptr;
+    // See Int8LinearStorage::bf16_fallback.
+    const __nv_bfloat16* bf16_fallback = nullptr;
+};
+
+struct GgufLinearStorage {
+    std::vector<GgufLinearSegment> segments;
+};
+
+using LinearStorage = std::variant<
+    Bf16LinearStorage,
+    Int8LinearStorage,
+    Int4LinearStorage,
+    GgufLinearStorage>;
+
+struct LinearWeight {
     int rows = 0;
     int cols = 0;
-
-    bool quantized() const { return kind != LinearStorageKind::Bf16; }
-    bool int4_quantized() const { return kind == LinearStorageKind::Int4; }
-    bool int8_quantized() const { return kind == LinearStorageKind::Int8; }
-    bool gguf_quantized() const {
-        return kind == LinearStorageKind::Q4_K || kind == LinearStorageKind::Q6_K;
-    }
-    void validate_storage() const;
+    LinearStorage storage;
 };
 
 inline LinearWeight slice_rows(const LinearWeight& weight,
@@ -56,40 +68,62 @@ inline LinearWeight slice_rows(const LinearWeight& weight,
     }
     LinearWeight result = weight;
     result.rows = rows;
-    if (weight.bf16) {
-        result.bf16 = weight.bf16 + static_cast<size_t>(row_offset) * weight.cols;
-    }
-    if (weight.int8) {
-        result.int8 = weight.int8 + static_cast<size_t>(row_offset) * weight.cols;
-        result.scales = weight.scales + row_offset;
-    }
-    if (weight.int4) {
-        const size_t packed_cols =
-            (static_cast<size_t>(weight.cols) + 1) / 2;
-        result.int4 = weight.int4 + static_cast<size_t>(row_offset) * packed_cols;
-        result.scales = weight.scales + row_offset;
-    }
-    if (weight.gguf_quantized()) {
-        result.gguf_segments.clear();
-        const int end = row_offset + rows;
-        for (const GgufLinearSegment& segment : weight.gguf_segments) {
-            const int segment_end = segment.row_offset + segment.rows;
-            const int first = std::max(row_offset, segment.row_offset);
-            const int last = std::min(end, segment_end);
-            if (first >= last) continue;
-            GgufLinearSegment view = segment;
-            view.blocks = segment.blocks +
-                static_cast<size_t>(first - segment.row_offset) * segment.row_bytes;
-            view.row_offset = first - row_offset;
-            view.rows = last - first;
-            result.gguf_segments.push_back(view);
-        }
-        if (result.gguf_segments.empty()) {
-            throw std::runtime_error("GGUF row slice has no segments");
-        }
-        result.kind = result.gguf_segments.front().type == GgmlType::Q4_K
-            ? LinearStorageKind::Q4_K : LinearStorageKind::Q6_K;
-    }
+    result.storage = std::visit(
+        [&](const auto& storage) -> LinearStorage {
+            using StorageT = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageT, Bf16LinearStorage>) {
+                Bf16LinearStorage out = storage;
+                if (out.data) {
+                    out.data = storage.data + static_cast<size_t>(row_offset) * weight.cols;
+                }
+                return out;
+            } else if constexpr (std::is_same_v<StorageT, Int8LinearStorage>) {
+                Int8LinearStorage out = storage;
+                if (out.data) {
+                    out.data = storage.data + static_cast<size_t>(row_offset) * weight.cols;
+                    out.scales = storage.scales + row_offset;
+                }
+                if (out.bf16_fallback) {
+                    out.bf16_fallback = storage.bf16_fallback +
+                        static_cast<size_t>(row_offset) * weight.cols;
+                }
+                return out;
+            } else if constexpr (std::is_same_v<StorageT, Int4LinearStorage>) {
+                Int4LinearStorage out = storage;
+                if (out.data) {
+                    const size_t packed_cols =
+                        (static_cast<size_t>(weight.cols) + 1) / 2;
+                    out.data = storage.data + static_cast<size_t>(row_offset) * packed_cols;
+                    out.scales = storage.scales + row_offset;
+                }
+                if (out.bf16_fallback) {
+                    out.bf16_fallback = storage.bf16_fallback +
+                        static_cast<size_t>(row_offset) * weight.cols;
+                }
+                return out;
+            } else {
+                static_assert(std::is_same_v<StorageT, GgufLinearStorage>);
+                GgufLinearStorage out;
+                const int end = row_offset + rows;
+                for (const GgufLinearSegment& segment : storage.segments) {
+                    const int segment_end = segment.row_offset + segment.rows;
+                    const int first = std::max(row_offset, segment.row_offset);
+                    const int last = std::min(end, segment_end);
+                    if (first >= last) continue;
+                    GgufLinearSegment view = segment;
+                    view.blocks = segment.blocks +
+                        static_cast<size_t>(first - segment.row_offset) * segment.row_bytes;
+                    view.row_offset = first - row_offset;
+                    view.rows = last - first;
+                    out.segments.push_back(view);
+                }
+                if (out.segments.empty()) {
+                    throw std::runtime_error("GGUF row slice has no segments");
+                }
+                return out;
+            }
+        },
+        weight.storage);
     return result;
 }
 

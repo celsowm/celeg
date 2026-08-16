@@ -47,7 +47,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                            factorized->query_rank);
                     launch_factorized_latent_query({
                         .query_projection = workspace_.qkv_output_.data(),
-                        .expansion = attention->latent_expansion->bf16,
+                        .expansion = std::get<Bf16LinearStorage>(attention->latent_expansion->storage).data,
                         .query_content = workspace_.latent_query_content_.data(),
                         .rows = 1,
                         .query_heads = layout.query_heads,
@@ -108,7 +108,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         .stream = stream_.get()});
                     launch_factorized_latent_value({
                         .latent_output = workspace_.op_output_.data(),
-                        .expansion = attention->latent_expansion->bf16,
+                        .expansion = std::get<Bf16LinearStorage>(attention->latent_expansion->storage).data,
                         .value_output = workspace_.latent_decompressed_.data(),
                         .rows = 1,
                         .query_heads = layout.query_heads,

@@ -194,7 +194,9 @@ const CompiledLinearBinding& GemmDispatcher::compile_linear_binding(
         it->second.plan_fingerprint == plan.fingerprint()) {
         return it->second;
     }
-    weight.validate_storage();
+    if (weight.rows <= 0 || weight.cols <= 0) {
+        throw std::runtime_error("linear weight dimensions must be positive");
+    }
     CompiledLinearBinding binding;
     binding.weight = &weight;
     binding.kernel = plan.linear_kernel();
@@ -224,14 +226,13 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             " requested=" + std::to_string(n) + "x" + std::to_string(k));
     }
     const LinearWeight& bound_weight = *binding.weight;
-    bound_weight.validate_storage();
-    if (bound_weight.gguf_quantized()) {
+    if (const auto* gguf = std::get_if<GgufLinearStorage>(&bound_weight.storage)) {
         if (!has_native_fanout(x, m, k)) {
             ensure_mmq_capacity(m, k);
             launch_quantize_q8_1(x, mmq_workspace_.q8.data(), mmq_workspace_.scales.data(),
                                  mmq_workspace_.sums.data(), m, k, stream_);
         }
-        for (const GgufLinearSegment& segment : bound_weight.gguf_segments) {
+        for (const GgufLinearSegment& segment : gguf->segments) {
             if (segment.cols != k) {
                 throw std::runtime_error("GGUF segment width does not match GEMM");
             }
@@ -253,71 +254,81 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
         return;
     }
     switch (binding.kernel) {
-        case LinearKernelKind::W4A16:
-            if (!weight.int4_quantized()) {
+        case LinearKernelKind::W4A16: {
+            const auto* int4 = std::get_if<Int4LinearStorage>(&weight.storage);
+            if (!int4) {
                 throw std::runtime_error("execution plan requires INT4 weights");
             }
-            if (m > 1 && weight.bf16) {
+            if (m > 1 && int4->bf16_fallback) {
                 if (options_.gemm_backend == GemmBackend::CublasLt) {
-                    linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
+                    linear_cublaslt(x, int4->bf16_fallback, y, m, n, k, beta);
                 } else {
-                    linear_cublas(x, weight.bf16, y, m, n, k, beta);
+                    linear_cublas(x, int4->bf16_fallback, y, m, n, k, beta);
                 }
                 return;
             }
-            launch_w4a16_linear(x, weight.int4, weight.scales, y,
+            launch_w4a16_linear(x, int4->data, int4->scales, y,
                                 m, n, k, beta, stream_);
             return;
-        case LinearKernelKind::W8A16:
-            if (!weight.int8_quantized()) {
+        }
+        case LinearKernelKind::W8A16: {
+            const auto* int8 = std::get_if<Int8LinearStorage>(&weight.storage);
+            if (!int8) {
                 throw std::runtime_error("execution plan requires INT8 weights");
             }
-            if (m > 1 && weight.bf16) {
+            if (m > 1 && int8->bf16_fallback) {
                 if (options_.gemm_backend == GemmBackend::CublasLt) {
-                    linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
+                    linear_cublaslt(x, int8->bf16_fallback, y, m, n, k, beta);
                 } else {
-                    linear_cublas(x, weight.bf16, y, m, n, k, beta);
+                    linear_cublas(x, int8->bf16_fallback, y, m, n, k, beta);
                 }
                 return;
             }
-            launch_w8a16_linear(x, weight.int8, weight.scales, y,
+            launch_w8a16_linear(x, int8->data, int8->scales, y,
                                 m, n, k, beta, stream_);
             return;
-        case LinearKernelKind::Bf16CublasLt:
-            if (weight.kind != LinearStorageKind::Bf16) {
+        }
+        case LinearKernelKind::Bf16CublasLt: {
+            const auto* bf16 = std::get_if<Bf16LinearStorage>(&weight.storage);
+            if (!bf16) {
                 throw std::runtime_error("execution plan requires BF16 weights");
             }
             if (m == 1) {
-                launch_bf16_gemv(x, weight.bf16, y, n, k, beta, stream_);
+                launch_bf16_gemv(x, bf16->data, y, n, k, beta, stream_);
                 return;
             }
-            linear_cublaslt(x, weight.bf16, y, m, n, k, beta);
+            linear_cublaslt(x, bf16->data, y, m, n, k, beta);
             return;
-        case LinearKernelKind::Bf16Cublas:
-            if (weight.kind != LinearStorageKind::Bf16) {
+        }
+        case LinearKernelKind::Bf16Cublas: {
+            const auto* bf16 = std::get_if<Bf16LinearStorage>(&weight.storage);
+            if (!bf16) {
                 throw std::runtime_error("execution plan requires BF16 weights");
             }
             if (m == 1) {
-                launch_bf16_gemv(x, weight.bf16, y, n, k, beta, stream_);
+                launch_bf16_gemv(x, bf16->data, y, n, k, beta, stream_);
                 return;
             }
-            linear_cublas(x, weight.bf16, y, m, n, k, beta);
+            linear_cublas(x, bf16->data, y, m, n, k, beta);
             return;
+        }
         case LinearKernelKind::Q4kMmq:
         case LinearKernelKind::Q6kMmq:
-            throw std::runtime_error("MMQ kernels are dispatched via gguf_quantized(), not the plan switch");
-        case LinearKernelKind::MixedBf16AndGgufMmq:
-            if (bound_weight.kind != LinearStorageKind::Bf16 || !bound_weight.bf16) {
+            throw std::runtime_error("MMQ kernels are dispatched via the GGUF storage branch, not the plan switch");
+        case LinearKernelKind::MixedBf16AndGgufMmq: {
+            const auto* bf16 = std::get_if<Bf16LinearStorage>(&bound_weight.storage);
+            if (!bf16 || !bf16->data) {
                 throw std::runtime_error("mixed native GGUF plan has no executable linear storage");
             }
             if (m == 1) {
-                launch_bf16_gemv(x, bound_weight.bf16, y, n, k, beta, stream_);
+                launch_bf16_gemv(x, bf16->data, y, n, k, beta, stream_);
             } else if (options_.gemm_backend == GemmBackend::CublasLt) {
-                linear_cublaslt(x, bound_weight.bf16, y, m, n, k, beta);
+                linear_cublaslt(x, bf16->data, y, m, n, k, beta);
             } else {
-                linear_cublas(x, bound_weight.bf16, y, m, n, k, beta);
+                linear_cublas(x, bf16->data, y, m, n, k, beta);
             }
             return;
+        }
     }
     throw std::runtime_error("unknown linear execution plan");
 }

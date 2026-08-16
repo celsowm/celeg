@@ -24,19 +24,20 @@ void PackedLayerExecutor::linear(const __nv_bfloat16* x,
 
 void PackedLayerExecutor::launch_embedding_rows(
     const PackedSessionContext& reference, int rows) {
-    if (reference.embedding()->int4_quantized()) {
+    const LinearStorage& storage = reference.embedding()->storage;
+    if (const auto* int4 = std::get_if<Int4LinearStorage>(&storage)) {
         launch_embedding_int4_batch(
-            workspace_.sampled.data(), rows, reference.embedding()->int4,
-            reference.embedding()->scales, workspace_.hidden.data(),
+            workspace_.sampled.data(), rows, int4->data,
+            int4->scales, workspace_.hidden.data(),
             workspace_.program_.hidden, workspace_.stream.get());
-    } else if (reference.embedding()->int8_quantized()) {
+    } else if (const auto* int8 = std::get_if<Int8LinearStorage>(&storage)) {
         launch_embedding_int8_batch(
-            workspace_.sampled.data(), rows, reference.embedding()->int8,
-            reference.embedding()->scales, workspace_.hidden.data(),
+            workspace_.sampled.data(), rows, int8->data,
+            int8->scales, workspace_.hidden.data(),
             workspace_.program_.hidden, workspace_.stream.get());
     } else {
         launch_embedding_batch(
-            workspace_.sampled.data(), rows, reference.embedding()->bf16,
+            workspace_.sampled.data(), rows, std::get<Bf16LinearStorage>(storage).data,
             workspace_.hidden.data(), workspace_.program_.hidden,
             workspace_.stream.get());
     }

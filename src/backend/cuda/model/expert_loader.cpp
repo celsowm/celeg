@@ -52,7 +52,7 @@ const ExpertLinearWeight* WeightLoader::load_expert_linear_weight(
                         cudaMemcpyHostToDevice));
 
     ExpertLinearWeight ew;
-    ew.kind = LinearStorageKind::Bf16;
+    ew.kind = ExpertStorageKind::Bf16;
     ew.bf16 = weight.bf16_storage.data();
     ew.experts = experts;
     ew.rows_per_expert = rows_per_expert;

@@ -83,14 +83,15 @@ int main() {
     CELEG_TEST_CHECK(ew->experts == experts);
     CELEG_TEST_CHECK(ew->rows_per_expert == rows_per_expert);
     CELEG_TEST_CHECK(ew->cols == cols);
-    CELEG_TEST_CHECK(ew->kind == celeg::LinearStorageKind::Bf16);
+    CELEG_TEST_CHECK(ew->kind == celeg::ExpertStorageKind::Bf16);
     CELEG_TEST_CHECK(ew->bf16 != nullptr);
 
     for (int e = 0; e < experts; ++e) {
         const celeg::LinearWeight view = ew->expert_view(e);
         CELEG_TEST_CHECK(view.rows == rows_per_expert);
         CELEG_TEST_CHECK(view.cols == cols);
-        CELEG_TEST_CHECK(view.bf16 == ew->bf16 + static_cast<size_t>(e) * rows_per_expert * cols);
+        CELEG_TEST_CHECK(std::get<celeg::Bf16LinearStorage>(view.storage).data ==
+                          ew->bf16 + static_cast<size_t>(e) * rows_per_expert * cols);
     }
 
     std::vector<uint16_t> host_expert(total);

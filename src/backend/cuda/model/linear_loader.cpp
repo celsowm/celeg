@@ -63,8 +63,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                 static_cast<size_t>(packed.cols), weight_mode_,
                 weight.bf16_storage.data());
         } else {
-            weight.linear.kind = LinearStorageKind::Bf16;
-            weight.linear.bf16 = weight.bf16_storage.data();
+            weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
         }
         cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
         auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
@@ -120,8 +119,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
                     static_cast<size_t>(cols), weight_mode_,
                     weight.bf16_storage.data());
             } else {
-                weight.linear.kind = LinearStorageKind::Bf16;
-                weight.linear.bf16 = weight.bf16_storage.data();
+                weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
             }
             cuda_loader_detail::finish_linear_binding(weight, rows, cols);
             auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
@@ -149,11 +147,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             segment.cols = cols;
             segment.row_bytes = row_bytes;
             weight.gguf_segment_storage.push_back(std::move(raw_blocks));
-            weight.linear.gguf_segments.push_back(segment);
-            weight.linear.kind =
-                ggml_type == GgmlType::Q4_K
-                    ? LinearStorageKind::Q4_K
-                    : LinearStorageKind::Q6_K;
+            weight.linear.storage = GgufLinearStorage{{segment}};
             cuda_loader_detail::finish_linear_binding(weight, rows, cols);
             auto [it, inserted] =
                 weights_->tensors.emplace(name, std::move(weight));
@@ -198,8 +192,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             return &it->second.linear;
         }
 
-        weight.linear.kind = LinearStorageKind::Bf16;
-        weight.linear.bf16 = weight.bf16_storage.data();
+        weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
         cuda_loader_detail::finish_linear_binding(weight, rows, cols);
         auto [it, inserted] =
             weights_->tensors.emplace(name, std::move(weight));
@@ -245,8 +238,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense_data,
                             count * sizeof(__nv_bfloat16),
                             cudaMemcpyHostToDevice));
-        weight.linear.kind = LinearStorageKind::Bf16;
-        weight.linear.bf16 = weight.bf16_storage.data();
+        weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
     }
     cuda_loader_detail::finish_linear_binding(weight, rows, cols);
 
@@ -387,8 +379,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host_bf16.data(),
                                   host_bf16.size() * sizeof(__nv_bfloat16),
                                   cudaMemcpyHostToDevice));
-            weight.linear.kind = LinearStorageKind::Bf16;
-            weight.linear.bf16 = weight.bf16_storage.data();
+            weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
             cuda_loader_detail::finish_linear_binding(
                 weight, static_cast<int>(total_rows), static_cast<int>(common_width));
             auto [it, inserted] =
@@ -400,6 +391,9 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         if (weight_mode_ == WeightMode::NativeGguf) {
             DeviceWeight weight;
             weight.shape = {total_rows, common_width};
+            weight.linear.storage = GgufLinearStorage{};
+            std::vector<GgufLinearSegment>& segments =
+                std::get<GgufLinearStorage>(weight.linear.storage).segments;
             int row_offset = 0;
             for (const auto& v : views) {
                 const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
@@ -420,12 +414,9 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                 segment.cols = static_cast<int>(common_width);
                 segment.row_bytes = row_bytes;
                 weight.gguf_segment_storage.push_back(std::move(raw_blocks));
-                weight.linear.gguf_segments.push_back(segment);
+                segments.push_back(segment);
                 row_offset += static_cast<int>(v.shape[0]);
             }
-            weight.linear.kind = ggml_type_from_block_encoding(views.front().block_encoding) == GgmlType::Q4_K
-                ? LinearStorageKind::Q4_K
-                : LinearStorageKind::Q6_K;
             cuda_loader_detail::finish_linear_binding(
                 weight, static_cast<int>(total_rows), static_cast<int>(common_width));
             auto [it, inserted] =
@@ -479,8 +470,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             return &it->second.linear;
         }
 
-        weight.linear.kind = LinearStorageKind::Bf16;
-        weight.linear.bf16 = weight.bf16_storage.data();
+        weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
         cuda_loader_detail::finish_linear_binding(
             weight, static_cast<int>(total_rows), static_cast<int>(common_width));
         auto [it, inserted] =
@@ -529,8 +519,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
                                 cudaMemcpyHostToDevice));
             offset += count;
         }
-        weight.linear.kind = LinearStorageKind::Bf16;
-        weight.linear.bf16 = weight.bf16_storage.data();
+        weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
     }
     cuda_loader_detail::finish_linear_binding(
         weight, static_cast<int>(total_rows), static_cast<int>(common_width));

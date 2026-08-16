@@ -79,8 +79,8 @@ inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe,
         fdev.gate_up_ptrs = moe.gate_up_ptrs;
         fdev.down_ptrs = moe.down_ptrs;
     } else {
-        if (moe.gate_up->kind == LinearStorageKind::Q4_K ||
-            moe.gate_up->kind == LinearStorageKind::Q6_K) {
+        if (moe.gate_up->kind == ExpertStorageKind::Q4_K ||
+            moe.gate_up->kind == ExpertStorageKind::Q6_K) {
             fdev.gate_up_gguf = moe.gate_up->gguf_blocks;
             fdev.down_gguf = moe.down->gguf_blocks;
             fdev.gate_up_gguf_type = moe.gate_up->gguf_type;

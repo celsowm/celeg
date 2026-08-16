@@ -22,10 +22,8 @@ inline void bind_int8_storage(DeviceWeight& weight,
                           values.size() * sizeof(int8_t), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
                           scales.size() * sizeof(float), cudaMemcpyHostToDevice));
-    weight.linear.kind = LinearStorageKind::Int8;
-    weight.linear.int8 = weight.int8_storage.data();
-    weight.linear.scales = weight.scales_storage.data();
-    weight.linear.bf16 = bf16_fallback;
+    weight.linear.storage = Int8LinearStorage{
+        weight.int8_storage.data(), weight.scales_storage.data(), bf16_fallback};
 }
 
 inline void bind_int4_storage(DeviceWeight& weight,
@@ -38,10 +36,8 @@ inline void bind_int4_storage(DeviceWeight& weight,
                           values.size() * sizeof(uint8_t), cudaMemcpyHostToDevice));
     CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
                           scales.size() * sizeof(float), cudaMemcpyHostToDevice));
-    weight.linear.kind = LinearStorageKind::Int4;
-    weight.linear.int4 = weight.int4_storage.data();
-    weight.linear.scales = weight.scales_storage.data();
-    weight.linear.bf16 = bf16_fallback;
+    weight.linear.storage = Int4LinearStorage{
+        weight.int4_storage.data(), weight.scales_storage.data(), bf16_fallback};
 }
 
 inline void quantize_and_bind(DeviceWeight& weight,
@@ -64,9 +60,11 @@ inline void quantize_and_bind(DeviceWeight& weight,
 }
 
 inline void finish_linear_binding(DeviceWeight& weight, int rows, int cols) {
+    if (rows <= 0 || cols <= 0) {
+        throw std::runtime_error("linear weight dimensions must be positive");
+    }
     weight.linear.rows = rows;
     weight.linear.cols = cols;
-    weight.linear.validate_storage();
 }
 
 }

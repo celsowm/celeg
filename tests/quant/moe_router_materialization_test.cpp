@@ -22,7 +22,7 @@ namespace {
 
 using celeg::DeviceWeight;
 using celeg::IWeightRepository;
-using celeg::LinearStorageKind;
+using celeg::Bf16LinearStorage;
 using celeg::LinearWeight;
 using celeg::SharedModelWeights;
 using celeg::TensorDType;
@@ -64,7 +64,7 @@ private:
 };
 
 struct RouterMaterialization {
-    LinearStorageKind kind;
+    bool is_bf16;
     bool bf16_nonnull;
 };
 
@@ -79,12 +79,13 @@ RouterMaterialization materialize_router(WeightMode mode, int experts, int hidde
     CELEG_TEST_CHECK(router != nullptr);
     CELEG_TEST_CHECK(router->rows == experts);
     CELEG_TEST_CHECK(router->cols == hidden);
-    CELEG_TEST_CHECK(!router->quantized());
+    const auto* bf16_storage = std::get_if<Bf16LinearStorage>(&router->storage);
+    CELEG_TEST_CHECK(bf16_storage != nullptr);
     RouterMaterialization result{
-        router->kind,
-        router->bf16 != nullptr,
+        bf16_storage != nullptr,
+        bf16_storage != nullptr && bf16_storage->data != nullptr,
     };
-    CELEG_TEST_CHECK(result.kind == LinearStorageKind::Bf16);
+    CELEG_TEST_CHECK(result.is_bf16);
     CELEG_TEST_CHECK(result.bf16_nonnull);
     return result;
 }
@@ -142,9 +143,9 @@ void verify_native_q4_router_is_materialized_as_bf16() {
     const LinearWeight* router = loader.load_router_weight(
         repo, 0, experts, hidden);
     CELEG_TEST_CHECK(router != nullptr);
-    CELEG_TEST_CHECK(router->kind == LinearStorageKind::Bf16);
-    CELEG_TEST_CHECK(router->bf16 != nullptr);
-    CELEG_TEST_CHECK(!router->quantized());
+    const auto* bf16_storage = std::get_if<Bf16LinearStorage>(&router->storage);
+    CELEG_TEST_CHECK(bf16_storage != nullptr);
+    CELEG_TEST_CHECK(bf16_storage->data != nullptr);
 }
 
 }
@@ -164,9 +165,9 @@ int main() {
                                 mode == WeightMode::Int8 ? "int8" :
                                 mode == WeightMode::Int4 ? "int4" : "native_gguf";
         std::cout << "mode=" << mode_name
-                  << " kind=" << static_cast<int>(m.kind)
+                  << " is_bf16=" << (m.is_bf16 ? "yes" : "no")
                   << " bf16_nonnull=" << (m.bf16_nonnull ? "yes" : "no") << "\n";
-        CELEG_TEST_CHECK(m.kind == LinearStorageKind::Bf16);
+        CELEG_TEST_CHECK(m.is_bf16);
         CELEG_TEST_CHECK(m.bf16_nonnull);
     }
 

@@ -192,13 +192,12 @@ int main() {
     celeg::CudaModelOptions dispatcher_options;
     celeg::GemmDispatcher dispatcher(nullptr, dispatcher_options);
     celeg::LinearWeight segmented;
-    segmented.kind = celeg::LinearStorageKind::Q4_K;
     segmented.rows = 2;
     segmented.cols = k;
-    segmented.gguf_segments = {
+    segmented.storage = celeg::GgufLinearStorage{{
         {d_q4, celeg::GgmlType::Q4_K, 0, 1, k, q4_bytes},
         {d_q6, celeg::GgmlType::Q6_K, 1, 1, k, q6_bytes},
-    };
+    }};
     const celeg::CudaExecutionPlan dispatcher_plan =
         celeg::CudaExecutionPlan::compile(dispatcher_options, 1024);
     const auto& binding = dispatcher.compile_linear_binding(segmented,

@@ -131,7 +131,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
                                       cudaMemcpyHostToDevice));
             }
             ExpertLinearWeight view;
-            view.kind = LinearStorageKind::Bf16;
+            view.kind = ExpertStorageKind::Bf16;
             view.bf16 = weight.bf16_storage.data();
             view.experts = num_experts;
             view.rows_per_expert = static_cast<int>(rows);
@@ -164,8 +164,8 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
             CELEG_CUDA(cudaMemcpy(dst + w1.bytes, w3.data, w3.bytes,
                                 cudaMemcpyHostToDevice));
         }
-        const LinearStorageKind kind = first_w1_ggml_type == GgmlType::Q4_K
-            ? LinearStorageKind::Q4_K : LinearStorageKind::Q6_K;
+        const ExpertStorageKind kind = first_w1_ggml_type == GgmlType::Q4_K
+            ? ExpertStorageKind::Q4_K : ExpertStorageKind::Q6_K;
         ExpertLinearWeight view;
         view.kind = kind;
         view.gguf_blocks = weight.gguf_expert_storage.data();
@@ -202,7 +202,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up(
                             w3.data, source_bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
-    view.kind = LinearStorageKind::Bf16;
+    view.kind = ExpertStorageKind::Bf16;
     view.bf16 = weight.bf16_storage.data();
     view.experts = num_experts;
     view.rows_per_expert = static_cast<int>(rows);
@@ -248,7 +248,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
                                       cudaMemcpyHostToDevice));
             }
             ExpertLinearWeight view;
-            view.kind = LinearStorageKind::Bf16;
+            view.kind = ExpertStorageKind::Bf16;
             view.bf16 = weight.bf16_storage.data();
             view.experts = num_experts;
             view.rows_per_expert = hidden;
@@ -278,7 +278,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
         }
         ExpertLinearWeight view;
         view.kind = first_ggml_type == GgmlType::Q4_K
-            ? LinearStorageKind::Q4_K : LinearStorageKind::Q6_K;
+            ? ExpertStorageKind::Q4_K : ExpertStorageKind::Q6_K;
         view.gguf_blocks = weight.gguf_expert_storage.data();
         view.gguf_type = first_ggml_type;
         view.gguf_row_bytes = row_bytes;
@@ -311,7 +311,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down(
                             tensor.data, tensor.bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
-    view.kind = LinearStorageKind::Bf16;
+    view.kind = ExpertStorageKind::Bf16;
     view.bf16 = weight.bf16_storage.data();
     view.experts = num_experts;
     view.rows_per_expert = hidden;
@@ -352,7 +352,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_gate_up_named(
                               projection_bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
-    view.kind = LinearStorageKind::Bf16;
+    view.kind = ExpertStorageKind::Bf16;
     view.bf16 = weight.bf16_storage.data();
     view.experts = num_experts;
     view.rows_per_expert = 2 * moe_intermediate;
@@ -386,7 +386,7 @@ const ExpertLinearWeight* WeightLoader::load_moe_down_named(
                               tensor.data(), bytes, cudaMemcpyHostToDevice));
     }
     ExpertLinearWeight view;
-    view.kind = LinearStorageKind::Bf16;
+    view.kind = ExpertStorageKind::Bf16;
     view.bf16 = weight.bf16_storage.data();
     view.experts = num_experts;
     view.rows_per_expert = hidden;
