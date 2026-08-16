@@ -4,6 +4,7 @@
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/backend/cuda/weight_policy.hpp"
 #include "celeg/model/weights/quantization.hpp"
+#include "celeg/checkpoint/packed/int4.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/weight_setup_support.hpp"
@@ -105,19 +106,22 @@ void CudaCompiledModel::load_checkpoint_weights(
             const MoeLayerProgram& moe_semantics = *moe_program;
             const int E = moe_semantics.router.expert_count;
             const int inter = moe_semantics.routed.mlp.intermediate_size;
+            /// Routed-expert tensor names and the packed-vs-individual layout
+            /// decision come from the resolved weight plan; setup never
+            /// re-derives them from checkpoint tensor spellings.
+            const MoeExpertTensorNames expert_names = moe_expert_tensor_names(
+                resources_.model_.weight_plan.requests, i, E);
             const float* expert_bias = nullptr;
             if (moe_semantics.router.has_expert_bias) {
-                const std::string bias_name =
-                    repo.contains(layer_name(i, "feed_forward.expert_bias.weight"))
-                        ? layer_name(i, "feed_forward.expert_bias.weight")
-                    : repo.contains(layer_name(i, "feed_forward.expert_bias"))
-                        ? layer_name(i, "feed_forward.expert_bias")
-                    : layer_name(i, "mlp.gate.expert_bias");
                 expert_bias = resources_.weight_loader_->load_f32_weight(
-                    repo, bias_name, {static_cast<int64_t>(E)});
+                    repo, tensor_name(resources_.model_.weight_plan.requests,
+                                      TensorRole::MoeRouterBias, i),
+                    {static_cast<int64_t>(E)});
             }
-            const LinearWeight* router = resources_.weight_loader_->load_router_weight(
-                repo, i, E, resources_.program_.hidden);
+            const LinearWeight* router = resources_.weight_loader_->load_router_weight_named(
+                repo, tensor_name(resources_.model_.weight_plan.requests,
+                                  TensorRole::MoeRouter, i),
+                E, resources_.program_.hidden);
 
             DeviceBuffer<float>& router_float = workspace_.moe_router_float_[static_cast<size_t>(i)];
             router_float.reset(static_cast<size_t>(E) * resources_.program_.hidden);
@@ -162,48 +166,30 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
 
             if (workspace_.expert_offload_plan_.enabled) {
-                // The routed-expert checkpoint layout (packed vs individual)
-                // was already decided once, from real checkpoint evidence,
-                // when the weight plan was built (see append_moe() /
-                // bind_moe()): it shows up here purely as which tensor
-                // roles the plan actually requested for this layer. Setup
-                // must consume that answer, not re-probe repo.contains() on
-                // literal tensor-name spellings.
-                const bool individual_expert_model = std::any_of(
-                    resources_.model_.weight_plan.requests.begin(),
-                    resources_.model_.weight_plan.requests.end(),
-                    [i](const TensorRequest& request) {
-                        return request.role == TensorRole::MoeExpertGate &&
-                               request.layer == i && request.expert == 0;
-                    });
-                // Which individual-expert naming convention applies is a
-                // genuine repository storage-format capability (GGUF native
-                // block storage vs everything else), not a name spelling,
-                // so it is answered via the existing capability interface
-                // rather than a literal probe.
-                const auto* native_storage =
-                    dynamic_cast<const INativeBlockStorageRepository*>(&repo);
-                const bool named_expert_model = individual_expert_model &&
-                    !(native_storage && native_storage->has_native_block_storage());
-                const HostTensorView expert_probe = individual_expert_model
-                    ? repo.tensor(resolved_tensor_name(
-                          resources_.model_.weight_plan.requests,
-                          TensorRole::MoeExpertGate, i, 0))
-                    : repo.tensor(resolved_tensor_name(
-                          resources_.model_.weight_plan.requests,
-                          TensorRole::MoePackedGateUp, i));
-                if (expert_probe.dtype == TensorDType::Quantized) {
-                    throw std::invalid_argument(
-                        "native GGUF MoE experts do not support BF16 offload; "
-                        "disable expert offload to keep packed Q4/Q6 weights resident");
+                /// The routed-expert checkpoint layout (packed vs individual)
+                /// and every expert tensor name were already decided once,
+                /// from real checkpoint evidence, when the weight plan was
+                /// built (see append_moe() / bind_moe()); setup consumes
+                /// expert_names instead of probing repo.contains() on literal
+                /// tensor-name spellings. Checkpoint-packed int4 experts are
+                /// addressed by a virtual base name, so they are probed via
+                /// the int4 convention rather than a direct tensor view.
+                const std::string& probe_name = expert_names.packed()
+                    ? expert_names.packed_gate_up : expert_names.gate.front();
+                if (!has_packed_int4_matrix(repo, probe_name)) {
+                    const HostTensorView expert_probe = repo.tensor(probe_name);
+                    if (expert_probe.dtype == TensorDType::Quantized) {
+                        throw std::invalid_argument(
+                            "native GGUF MoE experts do not support BF16 offload; "
+                            "disable expert offload to keep packed Q4/Q6 weights "
+                            "resident");
+                    }
                 }
                 if (resources_.options_.expert_offload.backing == ExpertBackingMode::DiskCached) {
-                    std::vector<ExpertLocation> catalog = named_expert_model
-                        ? resources_.weight_loader_->build_expert_catalog_named(
-                            repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                            "down_proj", E, inter, resources_.program_.hidden)
-                        : resources_.weight_loader_->build_expert_catalog(
-                            repo, i, E, inter, resources_.program_.hidden);
+                    std::vector<ExpertLocation> catalog =
+                        resources_.weight_loader_->build_expert_catalog(
+                            repo, expert_names, E, inter,
+                            resources_.program_.hidden);
                     workspace_.expert_catalog_[static_cast<size_t>(i)] = catalog;
                     if (resources_.weights_->expert_catalog[static_cast<size_t>(i)].empty()) {
                         resources_.weights_->expert_catalog[static_cast<size_t>(i)] = catalog;
@@ -248,14 +234,12 @@ void CudaCompiledModel::load_checkpoint_weights(
                     resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 } else {
-                    WeightLoader::HostExpertLayer host_layer = named_expert_model
-                        ? resources_.weight_loader_->load_moe_experts_host_named(
-                            repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                            "down_proj", E, inter, resources_.program_.hidden,
-                            workspace_.host_expert_store_, resources_.options_.expert_offload.host_mode)
-                        : resources_.weight_loader_->load_moe_experts_host(
-                            repo, i, E, inter, resources_.program_.hidden,
-                            workspace_.host_expert_store_, resources_.options_.expert_offload.host_mode);
+                    WeightLoader::HostExpertLayer host_layer =
+                        resources_.weight_loader_->load_moe_experts_host(
+                            repo, expert_names, E, inter,
+                            resources_.program_.hidden,
+                            workspace_.host_expert_store_,
+                            resources_.options_.expert_offload.host_mode);
                     auto cache = std::make_unique<ExpertLayerCache>(
                         E, workspace_.expert_offload_plan_.experts_per_layer,
                         host_layer.gate_up_bytes, host_layer.down_bytes);
@@ -280,49 +264,28 @@ void CudaCompiledModel::load_checkpoint_weights(
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 }
             } else {
-                // Same plan-driven layout decision as the offload branch
-                // above: role presence in the resolved plan, not literal
-                // name probing, tells setup which family this layer is.
-                const bool individual_expert_model = std::any_of(
-                    resources_.model_.weight_plan.requests.begin(),
-                    resources_.model_.weight_plan.requests.end(),
-                    [i](const TensorRequest& request) {
-                        return request.role == TensorRole::MoeExpertGate &&
-                               request.layer == i && request.expert == 0;
-                    });
-                const auto* native_storage =
-                    dynamic_cast<const INativeBlockStorageRepository*>(&repo);
-                const bool named_expert_model = individual_expert_model &&
-                    !(native_storage && native_storage->has_native_block_storage());
-                if (!individual_expert_model) {
+                /// Same plan-driven layout decision as the offload branch
+                /// above: expert_names carries it, including which storage
+                /// family each resolved tensor belongs to.
+                if (expert_names.packed()) {
                     const ExpertLinearWeight* gate_up =
                         resources_.weight_loader_->load_expert_linear_weight(
-                            repo, tensor_name(resources_.model_.weight_plan.requests,
-                                              TensorRole::MoePackedGateUp, i),
+                            repo, expert_names.packed_gate_up,
                             E, 2 * inter, resources_.program_.hidden);
                     const ExpertLinearWeight* down =
                         resources_.weight_loader_->load_expert_linear_weight(
-                            repo, tensor_name(resources_.model_.weight_plan.requests,
-                                              TensorRole::MoePackedDown, i),
+                            repo, expert_names.packed_down,
                             E, resources_.program_.hidden, inter);
-                    moe_weights.storage = ResidentExpertWeights{gate_up, down};
-                } else if (named_expert_model) {
-                    const ExpertLinearWeight* gate_up =
-                        resources_.weight_loader_->load_moe_gate_up_named(
-                            repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                            E, inter, resources_.program_.hidden);
-                    const ExpertLinearWeight* down =
-                        resources_.weight_loader_->load_moe_down_named(
-                            repo, layer_name(i, "mlp.experts"), "down_proj", E, inter,
-                            resources_.program_.hidden);
                     moe_weights.storage = ResidentExpertWeights{gate_up, down};
                 } else {
                     const ExpertLinearWeight* gate_up =
                         resources_.weight_loader_->load_moe_gate_up(
-                            repo, i, E, inter, resources_.program_.hidden);
+                            repo, expert_names, E, inter,
+                            resources_.program_.hidden);
                     const ExpertLinearWeight* down =
                         resources_.weight_loader_->load_moe_down(
-                            repo, i, E, inter, resources_.program_.hidden);
+                            repo, expert_names, E, inter,
+                            resources_.program_.hidden);
                     moe_weights.storage = ResidentExpertWeights{gate_up, down};
                 }
             }

@@ -55,8 +55,10 @@ public:
         return name == "poison.layer0.expert0.gate" ||
                name == "poison.layer0.expert0.up" ||
                name == "poison.layer0.expert0.down" ||
+               name == "poison.layer0.router_bias" ||
                name == "poison.layer1.packed_gate_up" ||
-               name == "poison.layer1.packed_down";
+               name == "poison.layer1.packed_down" ||
+               name == "poison.layer1.router_bias";
     }
 
     celeg::HostTensorView tensor(std::string_view name) const override {
@@ -67,8 +69,9 @@ public:
 
     std::vector<std::string> names() const override {
         return {"poison.layer0.expert0.gate", "poison.layer0.expert0.up",
-                "poison.layer0.expert0.down", "poison.layer1.packed_gate_up",
-                "poison.layer1.packed_down"};
+                "poison.layer0.expert0.down", "poison.layer0.router_bias",
+                "poison.layer1.packed_gate_up", "poison.layer1.packed_down",
+                "poison.layer1.router_bias"};
     }
 };
 
@@ -104,6 +107,16 @@ public:
             return {"model.layers.1.mlp.experts.down_proj",
                     "poison.layer1.packed_down"};
         }
+        if (request.role == celeg::TensorRole::MoeRouterBias &&
+            request.layer == 0) {
+            return {"model.layers.0.mlp.gate.expert_bias",
+                    "poison.layer0.router_bias"};
+        }
+        if (request.role == celeg::TensorRole::MoeRouterBias &&
+            request.layer == 1) {
+            return {"model.layers.1.feed_forward.expert_bias.weight",
+                    "poison.layer1.router_bias"};
+        }
         return {};
     }
 };
@@ -121,6 +134,7 @@ celeg::LayerSpec make_moe_layer(int intermediate, int num_experts, int hidden) {
     moe.intermediate_size = intermediate;
     moe.num_experts = num_experts;
     moe.experts_per_token = 1;
+    moe.use_expert_bias = true;
     layer.feed_forward = moe;
     return layer;
 }
@@ -169,6 +183,35 @@ void run_poisoned_moe_layout_test() {
     CELEG_TEST_CHECK(packed_down != nullptr);
     CELEG_TEST_CHECK(packed_down->source_name.has_value());
     CELEG_TEST_CHECK(*packed_down->source_name == "poison.layer1.packed_down");
+
+    // The router bias is planned whenever the MoE semantics say one exists,
+    // so backends read its resolved name instead of probing spellings.
+    const auto* bias0 = find_one(celeg::TensorRole::MoeRouterBias, 0, -1);
+    CELEG_TEST_CHECK(bias0 != nullptr);
+    CELEG_TEST_CHECK(bias0->source_name.has_value());
+    CELEG_TEST_CHECK(*bias0->source_name == "poison.layer0.router_bias");
+    const auto* bias1 = find_one(celeg::TensorRole::MoeRouterBias, 1, -1);
+    CELEG_TEST_CHECK(bias1 != nullptr);
+    CELEG_TEST_CHECK(bias1->source_name.has_value());
+    CELEG_TEST_CHECK(*bias1->source_name == "poison.layer1.router_bias");
+
+    // The per-layer resolved-name bundle backends consume must carry the
+    // same poisoned spellings and the same layout decision as the plan.
+    const celeg::MoeExpertTensorNames individual_names =
+        celeg::moe_expert_tensor_names(requests, 0, 1);
+    CELEG_TEST_CHECK(!individual_names.packed());
+    CELEG_TEST_CHECK(individual_names.gate.size() == 1);
+    CELEG_TEST_CHECK(individual_names.up.size() == 1);
+    CELEG_TEST_CHECK(individual_names.down.size() == 1);
+    CELEG_TEST_CHECK(individual_names.gate.front() == "poison.layer0.expert0.gate");
+    CELEG_TEST_CHECK(individual_names.up.front() == "poison.layer0.expert0.up");
+    CELEG_TEST_CHECK(individual_names.down.front() == "poison.layer0.expert0.down");
+
+    const celeg::MoeExpertTensorNames packed_names =
+        celeg::moe_expert_tensor_names(requests, 1, 1);
+    CELEG_TEST_CHECK(packed_names.packed());
+    CELEG_TEST_CHECK(packed_names.packed_gate_up == "poison.layer1.packed_gate_up");
+    CELEG_TEST_CHECK(packed_names.packed_down == "poison.layer1.packed_down");
 }
 
 }

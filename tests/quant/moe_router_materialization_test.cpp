@@ -32,6 +32,11 @@ using celeg::HostTensorView;
 
 class FakeRouterRepo : public IWeightRepository {
 public:
+    static std::string router_name(int layer) {
+        return "model.layers." + std::to_string(layer) +
+               ".feed_forward.gate.weight";
+    }
+
     FakeRouterRepo(int experts, int hidden, const std::vector<__nv_bfloat16>& bytes)
         : experts_(experts), hidden_(hidden), bytes_(bytes) {}
 
@@ -54,10 +59,6 @@ public:
     std::vector<std::string> names() const override { return {router_name(0)}; }
 
 private:
-    static std::string router_name(int layer) {
-        return "model.layers." + std::to_string(layer) +
-               ".feed_forward.gate.weight";
-    }
     int experts_ = 0;
     int hidden_ = 0;
     std::vector<__nv_bfloat16> bytes_;
@@ -75,7 +76,8 @@ RouterMaterialization materialize_router(WeightMode mode, int experts, int hidde
     WeightLoader loader(shared, mode);
     FakeRouterRepo repo(experts, hidden, data);
 
-    const LinearWeight* router = loader.load_router_weight(repo, 0, experts, hidden);
+    const LinearWeight* router = loader.load_router_weight_named(
+        repo, FakeRouterRepo::router_name(0), experts, hidden);
     CELEG_TEST_CHECK(router != nullptr);
     CELEG_TEST_CHECK(router->rows == experts);
     CELEG_TEST_CHECK(router->cols == hidden);
@@ -140,8 +142,8 @@ void verify_native_q4_router_is_materialized_as_bf16() {
     auto weights = std::make_shared<SharedModelWeights>();
     WeightLoader loader(weights, WeightMode::NativeGguf);
     FakeQuantizedRouterRepo repo(experts, hidden, std::move(blocks));
-    const LinearWeight* router = loader.load_router_weight(
-        repo, 0, experts, hidden);
+    const LinearWeight* router = loader.load_router_weight_named(
+        repo, "model.layers.0.feed_forward.gate.weight", experts, hidden);
     CELEG_TEST_CHECK(router != nullptr);
     const auto* bf16_storage = std::get_if<Bf16LinearStorage>(&router->storage);
     CELEG_TEST_CHECK(bf16_storage != nullptr);

@@ -109,6 +109,23 @@ struct ResolvedTensor {
     HostTensorView view;
 };
 
+/**
+ * Resolved source names for one MoE layer's routed-expert tensors, extracted
+ * from the authoritative weight plan. Exactly one family is populated:
+ * either per-expert individual names (one gate/up/down entry per expert) or
+ * the packed tensor pair. Backends consume this value instead of re-deriving
+ * names or packed-vs-individual layout from checkpoint spellings.
+ */
+struct MoeExpertTensorNames {
+    std::vector<std::string> gate;
+    std::vector<std::string> up;
+    std::vector<std::string> down;
+    std::string packed_gate_up;
+    std::string packed_down;
+
+    bool packed() const { return !packed_gate_up.empty(); }
+};
+
 class ITensorNamingPolicy {
 public:
     virtual ~ITensorNamingPolicy() = default;
@@ -132,5 +149,8 @@ private:
 std::string resolved_tensor_name(std::span<const TensorRequest> requests,
                                  TensorRole role, int layer = -1,
                                  int expert = -1);
+
+MoeExpertTensorNames moe_expert_tensor_names(
+    std::span<const TensorRequest> requests, int layer, int num_experts);
 
 }

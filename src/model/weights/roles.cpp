@@ -40,6 +40,30 @@ std::string_view tensor_role_name(TensorRole role) {
     return index < std::size(names) ? names[index] : "unknown";
 }
 
+namespace {
+
+const TensorRequest* find_request(std::span<const TensorRequest> requests,
+                                  TensorRole role, int layer, int expert) {
+    for (const TensorRequest& request : requests) {
+        if (request.role != role || request.layer != layer ||
+            request.expert != expert) {
+            continue;
+        }
+        return &request;
+    }
+    return nullptr;
+}
+
+const std::string& resolved_source(const TensorRequest& request) {
+    if (!request.source_name) {
+        throw std::logic_error("tensor request has no resolved source name: " +
+                               std::string(tensor_role_name(request.role)));
+    }
+    return *request.source_name;
+}
+
+}
+
 ResolvedTensor TensorResolver::resolve(const TensorRequest& request) const {
     const std::vector<std::string> candidates = naming_policy_.candidates(request);
     for (const std::string& candidate : candidates) {
@@ -67,16 +91,55 @@ ResolvedTensor TensorResolver::resolve(const TensorRequest& request) const {
 
 std::string resolved_tensor_name(std::span<const TensorRequest> requests,
                                  TensorRole role, int layer, int expert) {
-    for (const TensorRequest& request : requests) {
-        if (request.role != role || request.layer != layer || request.expert != expert) {
-            continue;
-        }
-        if (request.source_name) return *request.source_name;
-        throw std::logic_error("tensor request has no resolved source name: " +
-                               std::string(tensor_role_name(role)));
+    const TensorRequest* request = find_request(requests, role, layer, expert);
+    if (request == nullptr) {
+        throw std::out_of_range("resolved tensor request not found: " +
+                                std::string(tensor_role_name(role)));
     }
-    throw std::out_of_range("resolved tensor request not found: " +
-                            std::string(tensor_role_name(role)));
+    return resolved_source(*request);
+}
+
+MoeExpertTensorNames moe_expert_tensor_names(
+    std::span<const TensorRequest> requests, int layer, int num_experts) {
+    if (num_experts <= 0) {
+        throw std::invalid_argument("MoE routed-expert count must be positive");
+    }
+    MoeExpertTensorNames names;
+    const TensorRequest* packed_gate_up =
+        find_request(requests, TensorRole::MoePackedGateUp, layer, -1);
+    const TensorRequest* packed_down =
+        find_request(requests, TensorRole::MoePackedDown, layer, -1);
+    if (packed_gate_up != nullptr || packed_down != nullptr) {
+        if (packed_gate_up == nullptr || packed_down == nullptr) {
+            throw std::logic_error(
+                "weight plan has an incomplete packed routed-expert request "
+                "for layer " +
+                std::to_string(layer));
+        }
+        names.packed_gate_up = resolved_source(*packed_gate_up);
+        names.packed_down = resolved_source(*packed_down);
+        return names;
+    }
+    names.gate.reserve(static_cast<size_t>(num_experts));
+    names.up.reserve(static_cast<size_t>(num_experts));
+    names.down.reserve(static_cast<size_t>(num_experts));
+    for (int expert = 0; expert < num_experts; ++expert) {
+        const TensorRequest* gate =
+            find_request(requests, TensorRole::MoeExpertGate, layer, expert);
+        const TensorRequest* up =
+            find_request(requests, TensorRole::MoeExpertUp, layer, expert);
+        const TensorRequest* down =
+            find_request(requests, TensorRole::MoeExpertDown, layer, expert);
+        if (gate == nullptr || up == nullptr || down == nullptr) {
+            throw std::logic_error(
+                "weight plan has no resolved routed-expert request for layer " +
+                std::to_string(layer) + ", expert " + std::to_string(expert));
+        }
+        names.gate.push_back(resolved_source(*gate));
+        names.up.push_back(resolved_source(*up));
+        names.down.push_back(resolved_source(*down));
+    }
+    return names;
 }
 
 }

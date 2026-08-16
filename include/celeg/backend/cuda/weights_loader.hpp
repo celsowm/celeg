@@ -7,6 +7,7 @@
 #include "celeg/detail/model/expert_weights.hpp"
 #include "celeg/detail/model/layer_state.hpp"
 #include "celeg/detail/model/shared_weights.hpp"
+#include "celeg/model/weights/roles.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -55,21 +56,20 @@ public:
         const std::string& name,
         int experts, int rows_per_expert, int cols);
 
+    /// Routed-expert loaders consume the resolved per-layer tensor names
+    /// taken from the authoritative weight plan (see
+    /// moe_expert_tensor_names()); they never construct checkpoint spellings
+    /// or probe the repository for layout by name. Storage family (GGUF
+    /// block-quantized, checkpoint-packed int4, BF16) is decided by tensor
+    /// dtype/capability, not by spelling.
     const ExpertLinearWeight* load_moe_gate_up(
-        const IWeightRepository& repo, int layer,
+        const IWeightRepository& repo,
+        const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden);
 
     const ExpertLinearWeight* load_moe_down(
-        const IWeightRepository& repo, int layer,
-        int num_experts, int moe_intermediate, int hidden);
-
-    const ExpertLinearWeight* load_moe_gate_up_named(
-        const IWeightRepository& repo, const std::string& experts_prefix,
-        const std::string& gate_name, const std::string& up_name,
-        int num_experts, int moe_intermediate, int hidden);
-    const ExpertLinearWeight* load_moe_down_named(
-        const IWeightRepository& repo, const std::string& experts_prefix,
-        const std::string& down_name,
+        const IWeightRepository& repo,
+        const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden);
 
     const float* load_f32_weight(
@@ -77,9 +77,6 @@ public:
         const std::string& name,
         std::vector<int64_t> expected);
 
-    const LinearWeight* load_router_weight(
-        const IWeightRepository& repo, int layer,
-        int num_experts, int hidden);
     const LinearWeight* load_router_weight_named(
         const IWeightRepository& repo, const std::string& name,
         int num_experts, int hidden);
@@ -92,25 +89,15 @@ public:
     };
 
     HostExpertLayer load_moe_experts_host(
-        const IWeightRepository& repo, int layer,
+        const IWeightRepository& repo,
+        const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden,
         class HostExpertStore& store, ExpertHostMode host_mode);
 
-    HostExpertLayer load_moe_experts_host_named(
-        const IWeightRepository& repo, const std::string& experts_prefix,
-        const std::string& gate_name, const std::string& up_name,
-        const std::string& down_name, int num_experts,
-        int moe_intermediate, int hidden, class HostExpertStore& store,
-        ExpertHostMode host_mode);
-
     std::vector<ExpertLocation> build_expert_catalog(
-        const IWeightRepository& repo, int layer,
+        const IWeightRepository& repo,
+        const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden);
-    std::vector<ExpertLocation> build_expert_catalog_named(
-        const IWeightRepository& repo, const std::string& experts_prefix,
-        const std::string& gate_name, const std::string& up_name,
-        const std::string& down_name, int num_experts,
-        int moe_intermediate, int hidden);
 
     WeightMode weight_mode() const { return weight_mode_; }
 

@@ -83,7 +83,7 @@ c8f0ef048676990ed8ca64d2910d1ac21a9c29ba3f4e92257e87b4e6209de2f2  ./include/cele
 118a654aea202c51c15b339ebca620108cf380b3513a4b506f68c191855c8194  ./include/celeg/model/reference.hpp
 1f3b015d8927571e47979d9567635c8bf144aafd1a2e8b008cdc2bf0c0b04308  ./include/celeg/model/session.hpp
 c347e6abe873534be6a50bf381739fff92036ae78dddd794614e59018815558d  ./include/celeg/model/weights/quantization.hpp
-a574d5d65125e8d7dbef6ceba4e85d39119d41fcee3c1ed13b1a33e382715523  ./include/celeg/model/weights/roles.hpp
+4f4deb9737d974137c8ff9bb0dd2608154c36975a69e1fdb8cfe72a2fe3ba3e4  ./include/celeg/model/weights/roles.hpp
 1a32c869cec67b0968983ed34e4c76afe6e9be582fa4846a6672dc3634a7e268  ./include/celeg/runtime/cache/kv_page_allocator.hpp
 64d48caed291cc6f4c1b3bd3ad22761e8dcf38a4eedba8e86be634333c32a3e3  ./include/celeg/runtime/cache/page_layout.hpp
 ff933844391d3ba531d2d6d9389767ee11bad5763c3b0318fee4ecbcef32b4c4  ./include/celeg/runtime/cache/page_lease.hpp
@@ -214,13 +214,13 @@ a5e253eeab7778ba07c63879322439b5939f2430275761ccb3c14fb16803830d  ./src/backend/
 169e842835138637fae2195e546a67763ea3823b4c2ab25fd1025af9abd6b006  ./src/backend/cuda/model/decode.cpp
 561822ac834923e0d83bf07c9b0b4a276d1b62a1c6af4cb59f3ef52811fc3b9f  ./src/backend/cuda/model/execution.cu
 31e9eca769ec63265fb8f3ac48c4e8846f87e2e246cd25e5b6ed50df7ee21250  ./src/backend/cuda/model/expert_loader.cpp
-f614f3bd99918426abbd4479d2d51756f33d8770086ff3a97422af6417451180  ./src/backend/cuda/model/experts.cu
+463b3a3f304e599f387a8cd18f7d7cf91293c6105e5ff5cd1bbfaeb1fd69a741  ./src/backend/cuda/model/experts.cu
 a8c00bb31c7776dd0c293c992de1f816285d3983aa12a3a9b37ced925397beca  ./src/backend/cuda/model/facade.cu
 9eca1173c705bd9f55034787d79f98ebbbe18997e5f378aa7dbaea9fc108aafc  ./src/backend/cuda/model/gguf_dequant.cpp
 80ed5fb6990111f3270e2ab36187cac3e45e68d4564fc98bd0cdba334cf65ad0  ./src/backend/cuda/model/lifecycle.cpp
 c2c0d63b0b7ad3da846ec85f3cd9324ec1a31e95ff90a6b535c5e735ca42b699  ./src/backend/cuda/model/linear_loader.cpp
 d62feee101a84b66bdd983e15be8986413059fdb080bf7f07b3edefce4c528b6  ./src/backend/cuda/model/loader_cache.cu
-232d214e21099d0a548634cb4440ea7aa22c91a326fa5fcf82bd5ce451330097  ./src/backend/cuda/model/loader_experts.cu
+829acf4f45ff55a112478140b4838df81ae605e70e9f2c574da8deffe9fd01ca  ./src/backend/cuda/model/loader_experts.cu
 064adf341ac46ee44247d53a35ce1c0def30d2d7f554d0ad8503e2b2512a61f9  ./src/backend/cuda/packed/execution.cu
 dbc166a5d244ad7fb59f7ee38625a71c7e7a46201e1f8cd8191fa6b2a582984d  ./src/backend/cuda/model/paged_prefill.cpp
 c70cddc79eb01973c98152503b39b82aa275a054b425b14558c37c00327cd50d  ./src/backend/cuda/model/persistence.cu
@@ -234,8 +234,8 @@ b3fd23e2bf7be6f207f5ef8d8a89e7a528aa90545d254e13819b0fa9fc9bc0e7  ./src/backend/
 463de7b14424dd4c46c21c05711abfece8524a27231160ceda6362d81e38e497  ./src/backend/cuda/model/warmup.cpp
 34ee8fa3486f5833488c91dba43a5528ce8da3fa83f1c88fc3d3b043e3dec521  ./src/backend/cuda/model/weight_layout.cu
 e4dca2cb13b7e5087909b847c84a65531c005d8205778540cffb9f40e9cacb46  ./src/backend/cuda/model/weight_loader_internal.hpp
-91c98e0910e8dbfe0bdbab7b30bdd724ed27f6bb836527dde12b8d16ae3b6bc4  ./src/backend/cuda/model/weight_setup.cpp
-348a897d233006541477e7f292bae672df9715b527fc3506a51e667404ce37ad  ./src/backend/cuda/model/weight_upload.cpp
+9c335dcd6f9621acdc3692010dc4709c7f5266249aeac1de2d8dd590f4332e56  ./src/backend/cuda/model/weight_setup.cpp
+350359bd0e3592d836739ce7f1adc8dfe220113b221825fc594d07c0bcf1e40e  ./src/backend/cuda/model/weight_upload.cpp
 e2f4ffe7f460f8a099e5b4f896237b063975541d4bfde33f608b2a320af57114  ./src/backend/cuda/model/weights.cpp
 c6219bfcca33d5b0f057d068a60b5e3a72355595bbcded77253eeb7fdff25fcb  ./src/backend/cuda/moe/expert_layer_cache.cu
 2fd0aafc9b2f48a40f35e4800166a30e3020145a60f1b6fd41559ff6fefdb156  ./src/backend/cuda/moe/ffn.cu
@@ -260,7 +260,7 @@ c07df7ff90731d3e5d260126b231b3afe66c0e02360429d5e0c0ede0a122e570  ./src/checkpoi
 194675d8c68e3e9e15e0c92b3668cb15c5fed70215b61d89b1881c7ddf81504d  ./src/model/definition.cpp
 89f69c9e917be65b4e41cf5cab1dc270a9fab3d30bcaa627cbfed15e0e23b871  ./src/model/reference.cpp
 d498bb18e88087ee99bdb368d81112fcde6f0b3647246878f703af3135774afb  ./src/model/weights/quantization.cpp
-985b4ad278699e57de703d41b639d90b61ddb706c10e03b5d7e247d3606c9830  ./src/model/weights/roles.cpp
+c545978d3895268bfcbe83ca3c0213f3ceb10a73db3761059299194781a37343  ./src/model/weights/roles.cpp
 7f88d31a6e4618ff2eb455227d42cb96bb856b79c525b02772fb0a4913b88c09  ./src/runtime/cache/host_expert_cache.cpp
 9fb7e5e33b58af8d59320e328964f2e23af5a11ed5947cdd18fdc0af9b8a7db9  ./src/runtime/cache/prefix_cache_index.cpp
 4a234158e5895d7c3f66de9153a11f0cea5d1d54eac32c2805cfc24a0a821ba3  ./src/runtime/cache/prefix_cache.cpp
@@ -327,7 +327,7 @@ f64958b9c47cd03ab518e9113c40c8bd436dc438c2901dc26f468cb054f1e907  ./tests/moe_ro
 b36cbead13538b36abbbafce100aaca8c01cc1d5dccf9042391784c36010b19b  ./tests/prefix_cache_test.cpp
 9cb1fedcaafdecd51fdfc2b6107304cb54ed4ce10cf15d45ecaf1d6cffa11ed8  ./tests/prefix_radix_test.cpp
 d008191a212cdfb4399c01569e30d13fd1fc9ae6602cc56c72ed0c99bedea20d  ./tests/public_facade_test.cpp
-dcf8fb531e6d50fa41d549c0575030392dc11e12371414e078d6d07eaa6bb82e  ./tests/quant/moe_router_materialization_test.cpp
+d14c8bddbd5e82f2965abae3505de573b9c7320a1556582470f3aabed6fffffb  ./tests/quant/moe_router_materialization_test.cpp
 2dd293427629e74bb6e8a5f8fa3882974a7e0bb6429704c75bd68d096d9189a4  ./tests/quant/unsupported_moe_policy_test.cpp
 f7ea2ce1ac970fac9367aa1df2cefe82d724c09f0b7969211b41c027feebe5ac  ./tests/quantization_test.cpp
 9ec88cfa2ff3b2fbf77a8968e7027c95f8528e79e0902850f9564eb94b6f43f9  ./tests/reference_test.cpp
@@ -349,7 +349,7 @@ e80c8949debee6362e7c571f6e801880b71dc218f951ed78983b25922415116f  ./include/cele
 45d96ef8a61bfa1bc1969142e1b5a0161031b4dc278fad9016154de4a13f1ed1  ./MANIFEST.sha256
 5f00e9afd5d126d64b4398e31c350227f5ee9a3630a4acf24820067a3c6878c0  ./src/backend/cpu/sampler.cpp
 6abd42e8b0f0899e3a8010e083e0083429597145ee458832b0ef595795501934  ./src/model/resolved.cpp
-e7037237e5166e6d7304d9322492a039bf0594a47960d0d167682be08b9dac00  ./src/model/weight_plan.cpp
+9087126c2c8055b97af97d2fabe7d3e99d548617ad32505c0d378bb257278716  ./src/model/weight_plan.cpp
 0bcbbba131146880ff7265f502b47abfadd8638372ee2c8253d2bbf8bc51cab6  ./tests/architecture_resolution_test.cpp
 6b2fbc91dae7f4fa8df31cdc13f7887b0f90349ab548021d76aaa52fb74b347c  ./tests/conversation_test.cpp
 14f215aa0701a2d4066507e3fffcdb519fcf79a09bc02093c26b6f59892cb8ac  ./tests/tokenizer_benchmark.cpp

@@ -515,21 +515,27 @@ void CpuCompiledModel::Shared::load_weights() {
                 {moe_semantics.router.expert_count, program.hidden});
 
             if (packed_expert_model) {
-                const int shared_intermediate = moe_semantics.shared->mlp.intermediate_size;
-                moe.shared_w13 = load_concat(source, reader.get(), writer.get(),
-                    layer_name(index, "shared_expert.w13.weight"), {
-                        {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
-                         {shared_intermediate, program.hidden}},
-                        {tensor_name(weight_requests, TensorRole::MoeSharedUp, index),
-                         {shared_intermediate, program.hidden}},
-                    });
-                moe.shared_w2 = load_matrix(source, reader.get(), writer.get(),
-                    tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
-                    {program.hidden, shared_intermediate});
-                moe.shared_gate = load_matrix(source, reader.get(), writer.get(),
-                    tensor_name(weight_requests, TensorRole::MoeSharedGateWeight, index),
-                    {1, program.hidden});
-                moe.has_shared_gate = true;
+                if (moe_semantics.shared.has_value()) {
+                    const int shared_intermediate =
+                        moe_semantics.shared->mlp.intermediate_size;
+                    moe.shared_w13 = load_concat(source, reader.get(), writer.get(),
+                        layer_name(index, "shared_expert.w13.weight"), {
+                            {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),
+                             {shared_intermediate, program.hidden}},
+                            {tensor_name(weight_requests, TensorRole::MoeSharedUp, index),
+                             {shared_intermediate, program.hidden}},
+                        });
+                    moe.shared_w2 = load_matrix(source, reader.get(), writer.get(),
+                        tensor_name(weight_requests, TensorRole::MoeSharedDown, index),
+                        {program.hidden, shared_intermediate});
+                    if (has_request(TensorRole::MoeSharedGateWeight)) {
+                        moe.shared_gate = load_matrix(source, reader.get(), writer.get(),
+                            tensor_name(weight_requests,
+                                        TensorRole::MoeSharedGateWeight, index),
+                            {1, program.hidden});
+                        moe.has_shared_gate = true;
+                    }
+                }
                 moe.expert_w13 = CpuWeightCodec(source, reader.get(), writer.get(), group_size)
                     .packed_matrices(
                         tensor_name(weight_requests, TensorRole::MoePackedGateUp, index),
@@ -541,7 +547,8 @@ void CpuCompiledModel::Shared::load_weights() {
                         {moe_semantics.router.expert_count, program.hidden,
                          moe_semantics.routed.mlp.intermediate_size});
             } else if (individual_expert_model && moe_semantics.shared.has_value()) {
-                const int shared_intermediate = moe_semantics.shared->mlp.intermediate_size;
+                const int shared_intermediate =
+                    moe_semantics.shared->mlp.intermediate_size;
                 moe.shared_w13 = load_concat(source, reader.get(), writer.get(),
                     layer_name(index, "mlp.shared_experts.w13.weight"), {
                         {tensor_name(weight_requests, TensorRole::MoeSharedGate, index),

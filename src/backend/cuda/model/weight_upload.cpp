@@ -186,24 +186,6 @@ const float* WeightLoader::load_f32_weight(
     return it->second.scales_storage.data();
 }
 
-const LinearWeight* WeightLoader::load_router_weight(
-    const IWeightRepository& repo, int layer,
-    int num_experts, int hidden) {
-    std::string name = layer_name(layer, "feed_forward.gate.weight");
-    if (!repo.contains(name)) {
-        const std::string mlp_name = layer_name(layer, "mlp.gate.weight");
-        if (repo.contains(mlp_name)) {
-            name = mlp_name;
-        } else {
-            const std::string language_model_name =
-                "model.language_model.layers." + std::to_string(layer) +
-                ".mlp.gate.weight";
-            if (repo.contains(language_model_name)) name = language_model_name;
-        }
-    }
-    return load_router_weight_named(repo, name, num_experts, hidden);
-}
-
 const LinearWeight* WeightLoader::load_router_weight_named(
     const IWeightRepository& repo, const std::string& name,
     int num_experts, int hidden) {

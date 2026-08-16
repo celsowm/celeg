@@ -1,5 +1,6 @@
 #include "celeg/model/weight_plan.hpp"
 
+#include "celeg/checkpoint/packed/int4.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <algorithm>
@@ -164,6 +165,16 @@ void append_mixer(ResolvedModel& model, const LayerSpec& layer,
     }, layer.mixer);
 }
 
+/// A naming candidate is loadable when the repository stores it directly or
+/// when it is a checkpoint-packed int4 tensor addressed by its virtual base
+/// name (physical entries carry the _packed/_scale/_shape suffixes). This is
+/// the same repository-level convention the weight codecs consume, so plan
+/// resolution and loaders agree on what a resolved name means.
+bool repository_has_tensor(const IWeightRepository& repository,
+                           const std::string& name) {
+    return repository.contains(name) || has_packed_int4_matrix(repository, name);
+}
+
 // Decides, once, whether this MoE layer's routed-expert weights are packed
 // into a single [num_experts, ...] tensor pair or stored as individually
 // named per-expert tensors. This is checkpoint-family information that
@@ -177,7 +188,7 @@ bool moe_routed_experts_are_packed(int layer, int physical_layer,
     const TensorRequest probe{TensorRole::MoePackedGateUp, layer, -1, {},
                               std::nullopt, physical_layer};
     for (const std::string& candidate : naming_policy.candidates(probe)) {
-        if (repository->contains(candidate)) return true;
+        if (repository_has_tensor(*repository, candidate)) return true;
     }
     return false;
 }
@@ -191,6 +202,9 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
         add_request(model, role, layer, expert, std::move(shape), physical_layer);
     };
     append(TensorRole::MoeRouter, -1, {moe.num_experts, hidden});
+    if (moe.use_expert_bias) {
+        append(TensorRole::MoeRouterBias, -1, {moe.num_experts});
+    }
     if (moe_routed_experts_are_packed(layer, physical_layer, naming_policy, repository)) {
         append(TensorRole::MoePackedGateUp, -1,
                {moe.num_experts, 2 * moe.intermediate_size, hidden});
@@ -302,7 +316,7 @@ void resolve_weight_plan(ResolvedModel& model,
         const auto names = naming_policy.candidates(request);
         if (repository != nullptr) {
             for (const std::string& name : names) {
-                if (repository->contains(name)) {
+                if (repository_has_tensor(*repository, name)) {
                     request.source_name = name;
                     break;
                 }

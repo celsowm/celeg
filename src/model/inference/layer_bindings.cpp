@@ -679,11 +679,24 @@ void bind_moe(CanonicalInferenceContext& context,
         TensorRole::MoeRouter,
         prefix + "gate.weight",
         {num_experts, *m.hidden_size});
-    const std::string bias_name = prefix + "gate.expert_bias";
-    if (has_tensor(bias_name)) {
+    /// The router-bias tensor spelling is a checkpoint-family fact: resolve
+    /// it here, once, so backends read the bound name from the plan instead
+    /// of each probing their own literal fallback chain.
+    std::optional<std::string> bias_name;
+    for (const std::string& candidate : {
+             prefix + "gate.expert_bias",
+             feed_forward_prefix + "expert_bias.weight",
+             feed_forward_prefix + "expert_bias",
+         }) {
+        if (has_tensor(candidate)) {
+            bias_name = candidate;
+            break;
+        }
+    }
+    if (bias_name) {
         bind(
             TensorRole::MoeRouterBias,
-            bias_name,
+            *bias_name,
             {num_experts});
     }
 

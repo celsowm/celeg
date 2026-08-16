@@ -30,6 +30,27 @@ int last_full_attention_layer(const CompiledModelProgram& program) {
     return -1;
 }
 
+/// MTP layers are not part of the canonical weight plan yet (extensibility
+/// plan, Sprint C residual gap), so their routed-expert spellings are
+/// constructed here, at the one place that knows the MTP checkpoint
+/// convention, and then flow through the same resolved-name loader API the
+/// planned layers use.
+MoeExpertTensorNames mtp_expert_names(const std::string& experts_prefix,
+                                      int num_experts) {
+    MoeExpertTensorNames names;
+    names.gate.reserve(static_cast<size_t>(num_experts));
+    names.up.reserve(static_cast<size_t>(num_experts));
+    names.down.reserve(static_cast<size_t>(num_experts));
+    for (int expert = 0; expert < num_experts; ++expert) {
+        const std::string prefix =
+            experts_prefix + "." + std::to_string(expert);
+        names.gate.push_back(prefix + ".gate_proj.weight");
+        names.up.push_back(prefix + ".up_proj.weight");
+        names.down.push_back(prefix + ".down_proj.weight");
+    }
+    return names;
+}
+
 }
 
 void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
@@ -126,11 +147,13 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
             }
 
             const std::string experts_prefix = prefix + ".mlp.experts";
+            const MoeExpertTensorNames expert_names =
+                mtp_expert_names(experts_prefix, E);
             if (model.workspace_.expert_offload_plan_.enabled) {
                 std::vector<ExpertLocation> catalog =
-                    resources.weight_loader_->build_expert_catalog_named(
-                        repo, experts_prefix, "gate_proj", "up_proj", "down_proj",
-                        E, inter, resources.program_.hidden);
+                    resources.weight_loader_->build_expert_catalog(
+                        repo, expert_names, E, inter,
+                        resources.program_.hidden);
                 model.workspace_.expert_catalog_[static_cast<size_t>(resource_layer)] = catalog;
                 if (resources.weights_->expert_catalog[static_cast<size_t>(resource_layer)].empty()) {
                     resources.weights_->expert_catalog[static_cast<size_t>(resource_layer)] = catalog;
@@ -172,9 +195,9 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                 } else {
                     WeightLoader::HostExpertLayer host_layer =
-                        resources.weight_loader_->load_moe_experts_host_named(
-                            repo, experts_prefix, "gate_proj", "up_proj", "down_proj",
-                            E, inter, resources.program_.hidden,
+                        resources.weight_loader_->load_moe_experts_host(
+                            repo, expert_names, E, inter,
+                            resources.program_.hidden,
                             model.workspace_.host_expert_store_,
                             resources.options_.expert_offload.host_mode);
                     controller->cache->set_host_sources(host_layer.gate_up_host_dev,
@@ -195,12 +218,12 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                     resources.weights_->expert_controllers[static_cast<size_t>(resource_layer)]->cache.get();
             } else {
                 const ExpertLinearWeight* gate_up =
-                    resources.weight_loader_->load_moe_gate_up_named(
-                        repo, experts_prefix, "gate_proj", "up_proj", E, inter,
+                    resources.weight_loader_->load_moe_gate_up(
+                        repo, expert_names, E, inter,
                         resources.program_.hidden);
                 const ExpertLinearWeight* down =
-                    resources.weight_loader_->load_moe_down_named(
-                        repo, experts_prefix, "down_proj", E, inter, resources.program_.hidden);
+                    resources.weight_loader_->load_moe_down(
+                        repo, expert_names, E, inter, resources.program_.hidden);
                 moe.storage = ResidentExpertWeights{gate_up, down};
             }
             common_layer.feed_forward = moe;
