@@ -171,27 +171,21 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
         add_request(model, role, layer, expert, std::move(shape), physical_layer);
     };
     append(TensorRole::MoeRouter, -1, {moe.num_experts, hidden});
+    for (int expert = 0; expert < moe.num_experts; ++expert) {
+        append(TensorRole::MoeExpertGate, expert,
+               {moe.intermediate_size, hidden});
+        append(TensorRole::MoeExpertUp, expert,
+               {moe.intermediate_size, hidden});
+        append(TensorRole::MoeExpertDown, expert,
+               {hidden, moe.intermediate_size});
+    }
     if (moe.shared) {
-        append(TensorRole::MoePackedGateUp, -1,
-               {moe.num_experts, 2 * moe.intermediate_size, hidden});
-        append(TensorRole::MoePackedDown, -1,
-               {moe.num_experts, hidden, moe.intermediate_size});
         append(TensorRole::MoeSharedGate, -1,
                {moe.shared->intermediate_size, hidden});
         append(TensorRole::MoeSharedUp, -1,
                {moe.shared->intermediate_size, hidden});
         append(TensorRole::MoeSharedDown, -1,
                {hidden, moe.shared->intermediate_size});
-        append(TensorRole::MoeSharedGateWeight, -1, {1, hidden});
-    } else {
-        for (int expert = 0; expert < moe.num_experts; ++expert) {
-            append(TensorRole::MoeExpertGate, expert,
-                   {moe.intermediate_size, hidden});
-            append(TensorRole::MoeExpertUp, expert,
-                   {moe.intermediate_size, hidden});
-            append(TensorRole::MoeExpertDown, expert,
-                   {hidden, moe.intermediate_size});
-        }
     }
 }
 

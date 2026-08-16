@@ -7,8 +7,11 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace celeg {
@@ -109,6 +112,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         rmsnorm_rows(workspace_.chunk_hidden.data(), shared->weight_store.embedding_norm,
                      workspace_.chunk_hidden.data(), hidden,
                      shared->program.embedding_transform.post_norm->epsilon);
+    }
+    if (const char* dump_dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR")) {
+        const std::string path = std::string(dump_dir) + "/layer_embed.f32";
+        std::ofstream out(path, std::ios::binary);
+        const float* last_row = workspace_.chunk_hidden.data() + (rows - 1) * hidden;
+        out.write(reinterpret_cast<const char*>(last_row),
+                  static_cast<std::streamsize>(hidden * sizeof(float)));
     }
 
     const PerLayerInputPlan& input_plan = shared->program.per_layer_input;
@@ -554,6 +564,14 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(),
                                  shared->weight_store.final_norm, hidden,
                                  shared->program.final_norm.epsilon);
+        }
+        if (const char* dump_dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR")) {
+            const std::string path = std::string(dump_dir) + "/layer_" +
+                std::to_string(index) + ".f32";
+            std::ofstream out(path, std::ios::binary);
+            const float* last_row = workspace_.chunk_hidden.data() + (rows - 1) * hidden;
+            out.write(reinterpret_cast<const char*>(last_row),
+                      static_cast<std::streamsize>(hidden * sizeof(float)));
         }
     }
 

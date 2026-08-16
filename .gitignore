@@ -30,3 +30,4 @@ model/
 # hub cache (see benchmarks/run_bench.py).
 .externals/
 benchmarks/results/
+run_asan_qwen.bat

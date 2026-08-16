@@ -6,10 +6,24 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace celeg {
+
+namespace {
+void celeg_debug_dump_hidden(const char* name, const float* data, size_t hidden) {
+    const char* dump_dir = std::getenv("CELEG_DEBUG_HIDDEN_DIR");
+    if (!dump_dir) return;
+    const std::string path = std::string(dump_dir) + "/" + name + ".f32";
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(hidden * sizeof(float)));
+}
+}
 
 void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                      const PromptEmbedding* embeddings) {
@@ -42,6 +56,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.embedding_norm.data(),
                             shared->program.hidden,
                             shared->program.embedding_transform.post_norm->epsilon);
+    }
+    if (compute_logits) {
+        celeg_debug_dump_hidden("layer_embed", workspace_.hidden.data(), shared->program.hidden);
     }
     if (shared->program.per_layer_input.enabled) {
         const PerLayerInputPlan& plan = shared->program.per_layer_input;
@@ -100,6 +117,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             execute_cpu_mlp_only_token(execution, index, *mlp);
             mixer_owns_layer = true;
           });
+        if (getenv("CELEG_DEBUG_LAYER_STATS")) {
+            double sq = 0.0; float mx = 0.0f; bool bad = false;
+            for (float v : workspace_.hidden) { sq += (double)v*v; mx = std::max(mx, std::fabs(v)); if (!std::isfinite(v)) bad = true; }
+            fprintf(stderr, "[layer %zu mixer-out] norm=%.4f max=%.4f bad=%d\n", index, std::sqrt(sq), mx, bad);
+        }
         if (mixer_owns_layer) continue;
         if (semantics.residual.multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
@@ -109,6 +131,11 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                 shared->program.hidden, semantics.post_attention_norm->epsilon);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
+        if (getenv("CELEG_DEBUG_LAYER_STATS")) {
+            double sq = 0.0; float mx = 0.0f; bool bad = false;
+            for (float v : workspace_.hidden) { sq += (double)v*v; mx = std::max(mx, std::fabs(v)); if (!std::isfinite(v)) bad = true; }
+            fprintf(stderr, "[layer %zu post-residual] norm=%.4f max=%.4f bad=%d\n", index, std::sqrt(sq), mx, bad);
+        }
 
         if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
 
@@ -165,10 +192,15 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             cpu_rmsnorm_inplace(workspace_.hidden.data(), shared->weight_store.final_norm.data(),
                                 shared->program.hidden, shared->program.final_norm.epsilon);
         }
+        if (compute_logits) {
+            celeg_debug_dump_hidden(("layer_" + std::to_string(index)).c_str(),
+                                    workspace_.hidden.data(), shared->program.hidden);
+        }
     }
     if (compute_logits) {
         cpu_rmsnorm(workspace_.hidden.data(), shared->weight_store.final_norm.data(), workspace_.normed.data(),
                     shared->program.hidden, shared->program.final_norm.epsilon);
+        celeg_debug_dump_hidden("layer_final_normed", workspace_.normed.data(), shared->program.hidden);
         shared->linear.gemv(shared->tie_word_embeddings ? shared->weight_store.embedding :
                             shared->weight_store.lm_head, workspace_.normed.data(), workspace_.logits.data());
         if (shared->program.logits_multiplier != 1.0f) {
@@ -182,6 +214,17 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 value = std::tanh(value / shared->program.final_logit_softcap) *
                     shared->program.final_logit_softcap;
             }
+        }
+        if (getenv("CELEG_DEBUG_TOPK")) {
+            std::vector<size_t> idx(workspace_.logits.size());
+            for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+            std::partial_sort(idx.begin(), idx.begin() + std::min<size_t>(5, idx.size()), idx.end(),
+                [&](size_t a, size_t b) { return workspace_.logits[a] > workspace_.logits[b]; });
+            fprintf(stderr, "[topk pos=%d]", session_.position_value);
+            for (size_t i = 0; i < std::min<size_t>(5, idx.size()); ++i) {
+                fprintf(stderr, " %zu:%.4f", idx[i], workspace_.logits[idx[i]]);
+            }
+            fprintf(stderr, "\n");
         }
     }
     ++session_.position_value;

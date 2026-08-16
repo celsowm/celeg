@@ -54,7 +54,7 @@ float fp16_to_float(uint16_t bits) {
                 ++shift;
             }
             mantissa &= 0x03ffu;
-            result = sign | static_cast<uint32_t>(127 - 15 - shift) << 23 |
+            result = sign | static_cast<uint32_t>(127 - 14 - shift) << 23 |
                      mantissa << 13;
         }
     } else if (exponent == 31) {

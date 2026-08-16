@@ -61,6 +61,8 @@ struct CpuWorkspacePlan {
             static_cast<size_t>(shape.maximum_attention_latent_projection_width()));
         plan.attention_output = std::max(plan.attention_output,
             static_cast<size_t>(shape.maximum_attention_latent_output_width()));
+        plan.attention_output = std::max(plan.attention_output,
+            static_cast<size_t>(shape.maximum_attention_output_width()));
         plan.latent_state = static_cast<size_t>(shape.maximum_attention_latent_rank());
         plan.latent_rotary = static_cast<size_t>(
             shape.maximum_attention_latent_query_rope_width());

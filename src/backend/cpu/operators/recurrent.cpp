@@ -4,6 +4,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace celeg {
@@ -50,7 +52,8 @@ void execute_cpu_gated_delta_token(
         spec.value_head_dim, spec.key_heads, spec.value_heads,
         shared.program.layers.at(layer).operator_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
-        spec.decay_lower_bound, spec.sigmoid_output_gate);
+        spec.decay_lower_bound, spec.sigmoid_output_gate,
+        spec.factorized_projections);
     shared.linear.gemv(weights.out, workspace.gated_delta_output.data(),
                        workspace.hidden.data());
 }
@@ -87,7 +90,14 @@ void execute_cpu_mamba2_token(
     const int group_size = spec.num_heads / spec.group_count;
     for (int head = 0; head < spec.num_heads; ++head) {
         const float dt = std::log1p(std::exp(dt_raw[head] + weights.dt_bias[head]));
-        const float decay = std::exp(dt * -std::exp(weights.a_log[head]));
+        // GGUF conversion bakes A = -exp(A_log) into the stored tensor; raw
+        // safetensors checkpoints still store the untransformed A_log parameter.
+        const float a = spec.a_log_needs_exp ? -std::exp(weights.a_log[head]) : weights.a_log[head];
+        const float decay = std::exp(dt * a);
+        if (head == 0 && getenv("CELEG_DEBUG_DECAY")) {
+            fprintf(stderr, "[mamba2 decay] needs_exp=%d a_log=%.6f a=%.6f dt=%.6f decay=%.6f\n",
+                (int)spec.a_log_needs_exp, weights.a_log[head], a, dt, decay);
+        }
         const int group = head / group_size;
         for (int d = 0; d < spec.head_dim; ++d) {
             const int channel = head * spec.head_dim + d;
@@ -187,7 +197,8 @@ void execute_cpu_gated_delta_chunk(
         spec.key_head_dim, spec.value_head_dim, spec.key_heads, spec.value_heads,
         shared.program.layers.at(layer).operator_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
-        spec.decay_lower_bound, spec.sigmoid_output_gate);
+        spec.decay_lower_bound, spec.sigmoid_output_gate,
+        spec.factorized_projections);
     context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();

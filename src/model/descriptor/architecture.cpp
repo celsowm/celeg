@@ -281,7 +281,8 @@ public:
                 graph.layers[static_cast<size_t>(layer)].mixer =
                     Mamba2Spec{gated_conv_kernel, mamba_intermediate, mamba_state_size,
                                mamba_time_step_rank, mamba_heads, mamba_head_dim,
-                               mamba_groups, mamba_chunk_size, false, false};
+                               mamba_groups, mamba_chunk_size, false, false,
+                               !metadata.is_gguf()};
             }
         }
         if (descriptor_.map_physical_layers) {

@@ -389,6 +389,7 @@ void infer_mamba2(
                 std::to_string(layer));
     }
 
+    const bool a_log_is_gguf_native = a_log->name.rfind("blk.", 0) == 0;
     semantic_layer.mixer = Mamba2Spec{
         conv_kernel,
         inner,
@@ -399,7 +400,8 @@ void infer_mamba2(
         group_count,
         chunk_size,
         true,
-        false};
+        false,
+        !a_log_is_gguf_native};
     semantic_layer.feed_forward = std::monostate{};
 }
 

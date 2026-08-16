@@ -661,7 +661,7 @@ void ExecutionTopology::validate() const {
         mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {
         throw std::runtime_error("resolved layer counts are inconsistent");
     }
-    if (max_feed_forward_intermediate <= 0 ||
+    if (max_feed_forward_intermediate < 0 ||
         maximum_attention_projection_width_value < 0 ||
         maximum_gated_delta_net_qkv_width_value < 0 ||
         maximum_mamba_projection_width_value < 0) {

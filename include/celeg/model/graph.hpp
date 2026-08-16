@@ -349,6 +349,10 @@ struct Mamba2Spec {
     int chunk_size = 0;
     bool conv_bias = false;
     bool projection_bias = false;
+    // GGUF conversion bakes A = -exp(A_log) into the stored tensor, so the CPU
+    // kernel must use it as-is; raw safetensors checkpoints still store the
+    // untransformed A_log parameter and need -exp() applied at inference time.
+    bool a_log_needs_exp = true;
 };
 
 struct MlpBlockSpec {

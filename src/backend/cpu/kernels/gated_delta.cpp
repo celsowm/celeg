@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <vector>
 
@@ -48,7 +50,7 @@ struct GatedDeltaScratch {
     std::vector<float> decay_base;
 
     GatedDeltaScratch(int conv_dim, int key_width, int value_head_dim,
-                      int value_heads, const float* a_log) :
+                      int value_heads, const float* a_log, bool a_log_needs_exp) :
         filtered_qkv(static_cast<size_t>(conv_dim)),
         normalized_q(static_cast<size_t>(key_width)),
         normalized_k(static_cast<size_t>(key_width)),
@@ -56,7 +58,8 @@ struct GatedDeltaScratch {
         normalized_head(static_cast<size_t>(value_head_dim)),
         decay_base(static_cast<size_t>(value_heads)) {
         for (int head = 0; head < value_heads; ++head) {
-            decay_base[static_cast<size_t>(head)] = std::exp(a_log[head]);
+            decay_base[static_cast<size_t>(head)] =
+                a_log_needs_exp ? std::exp(a_log[head]) : a_log[head];
         }
     }
 };
@@ -69,7 +72,8 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
                       int conv_kernel, int key_head_dim, int value_head_dim,
                       int key_heads, int value_heads, float eps, bool vector_decay,
                       bool safe_decay, float decay_lower_bound,
-                      bool sigmoid_output_gate, GatedDeltaScratch& scratch) {
+                      bool sigmoid_output_gate, bool a_log_needs_exp,
+                      GatedDeltaScratch& scratch) {
     const int key_width = key_heads * key_head_dim;
     const int value_width = value_heads * value_head_dim;
     const int conv_dim = 2 * key_width + value_width;
@@ -143,12 +147,21 @@ void gated_delta_step(const float* projected_qkv, const float* projected_z,
         for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
                 const int decay_index = vector_decay ? key_head * key_head_dim + k_dim
                                                       : value_head;
+                // When a_log is already the final log-domain coefficient (GGUF
+                // convention: -exp(A_log) baked in at conversion time), it must be
+                // used as-is; when it is the raw A_log parameter (safetensors
+                // convention), the consumer must apply -exp() itself.
                 const float decay = safe_decay
                     ? std::exp(sigmoid(decay_base *
                         (projected_a[decay_index] + dt_bias[decay_index])) *
                         decay_lower_bound)
-                    : std::exp(-decay_base *
+                    : std::exp((a_log_needs_exp ? -decay_base : decay_base) *
                         softplus(projected_a[decay_index] + dt_bias[decay_index]));
+                if (value_head == 0 && k_dim == 0 && std::getenv("CELEG_DEBUG_DECAY")) {
+                    fprintf(stderr, "[gdn decay] needs_exp=%d decay_base=%.6f a=%.6f dt_bias=%.6f decay=%.6f\n",
+                        (int)a_log_needs_exp, decay_base, projected_a[decay_index],
+                        dt_bias[decay_index], decay);
+                }
 #pragma loop(ivdep)
                 for (int v_dim = 0; v_dim < value_head_dim; ++v_dim) {
                     state[k_dim * value_head_dim + v_dim] *= decay;
@@ -201,18 +214,19 @@ void cpu_gated_delta_net_decode(const float* projected_qkv, const float* project
                                 float* output, int conv_kernel, int key_head_dim,
                                 int value_head_dim, int key_heads, int value_heads,
                                 float eps, bool vector_decay, bool safe_decay,
-                                float decay_lower_bound, bool sigmoid_output_gate) {
+                                float decay_lower_bound, bool sigmoid_output_gate,
+                                bool a_log_needs_exp) {
     validate_gated_delta_arguments(projected_qkv, projected_z, projected_b, projected_a,
         conv_weight, dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
         conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
     const int key_width = key_heads * key_head_dim;
     const int value_width = value_heads * value_head_dim;
     GatedDeltaScratch scratch(2 * key_width + value_width, key_width,
-                              value_head_dim, value_heads, a_log);
+                              value_head_dim, value_heads, a_log, a_log_needs_exp);
     gated_delta_step(projected_qkv, projected_z, projected_b, projected_a, conv_weight,
         dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, conv_kernel,
         key_head_dim, value_head_dim, key_heads, value_heads, eps, vector_decay,
-        safe_decay, decay_lower_bound, sigmoid_output_gate, scratch);
+        safe_decay, decay_lower_bound, sigmoid_output_gate, a_log_needs_exp, scratch);
 }
 
 void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projected_z,
@@ -224,7 +238,7 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
                                  int key_head_dim, int value_head_dim, int key_heads,
                                  int value_heads, float eps, bool vector_decay,
                                  bool safe_decay, float decay_lower_bound,
-                                 bool sigmoid_output_gate) {
+                                 bool sigmoid_output_gate, bool a_log_needs_exp) {
     if (rows == 0) throw std::invalid_argument("GatedDeltaNet prefill needs rows");
     validate_gated_delta_arguments(projected_qkv, projected_z, projected_b, projected_a,
         conv_weight, dt_bias, a_log, norm_weight, conv_state, recurrent_state, output,
@@ -232,7 +246,7 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
     const int qkv_width = 2 * key_heads * key_head_dim + value_heads * value_head_dim;
     const int z_width = value_heads * value_head_dim;
     GatedDeltaScratch scratch(qkv_width, key_heads * key_head_dim,
-                              value_head_dim, value_heads, a_log);
+                              value_head_dim, value_heads, a_log, a_log_needs_exp);
     for (size_t row = 0; row < rows; ++row) {
         gated_delta_step(projected_qkv + row * static_cast<size_t>(qkv_width),
             projected_z + row * static_cast<size_t>(z_width),
@@ -242,7 +256,7 @@ void cpu_gated_delta_net_prefill(const float* projected_qkv, const float* projec
             a_log, norm_weight, conv_state, recurrent_state,
             output + row * static_cast<size_t>(z_width), conv_kernel, key_head_dim,
             value_head_dim, key_heads, value_heads, eps, vector_decay, safe_decay,
-            decay_lower_bound, sigmoid_output_gate, scratch);
+            decay_lower_bound, sigmoid_output_gate, a_log_needs_exp, scratch);
     }
 }
 
