@@ -44,7 +44,7 @@ public:
         const InferenceInput input = build_inference_input(checkpoint);
         CanonicalModelFacts facts = infer_canonical_model_facts(input);
         facts.source_format = checkpoint.metadata.is_gguf() ? "gguf" : "safetensors";
-        ResolvedModel result = ResolutionAssembler{}.assemble(facts);
+        ResolvedModel result = ResolutionAssembler{}.assemble(facts, checkpoint.repository.get());
         return result;
     }
 };

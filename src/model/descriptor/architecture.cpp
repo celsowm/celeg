@@ -529,9 +529,9 @@ public:
             return finalize_descriptor_graph(graph, descriptor_, numerical_policy,
                                              view.metadata);
         };
-        stages.weights = [this](ResolvedModel& model, const CheckpointView&) {
+        stages.weights = [this](ResolvedModel& model, const CheckpointView& view) {
             auto policy = descriptor_detail::create_naming_policy(descriptor_);
-            build_weight_plan_from_graph(model, *policy);
+            build_weight_plan_from_graph(model, *policy, view.repository.get());
         };
         stages.tied_embeddings = descriptor_.tied_embeddings_field.has_value()
             ? boolean_value(metadata, descriptor_.tied_embeddings_field, descriptor_.tied_embeddings)

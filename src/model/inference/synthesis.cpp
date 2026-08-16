@@ -32,7 +32,8 @@ ModelGraph GraphSynthesizer::synthesize(const CanonicalModelFacts& facts) const 
     return facts.graph;
 }
 
-ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) const {
+ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts,
+                                            const IWeightRepository* repository) const {
     facts.validate();
     ResolvedModel result;
     result.graph = GraphSynthesizer{}.synthesize(facts);
@@ -43,7 +44,7 @@ ResolvedModel ResolutionAssembler::assemble(const CanonicalModelFacts& facts) co
     result.topology = compose_runtime_topology(facts.checkpoint, result.graph);
     result.topology.validate();
     CanonicalBindingNamingPolicy naming(facts.bindings);
-    build_weight_plan_from_graph(result, naming);
+    build_weight_plan_from_graph(result, naming, repository);
     result.provenance.identity = facts.fingerprint();
     result.validate();
     return result;

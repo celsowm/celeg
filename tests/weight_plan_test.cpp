@@ -39,7 +39,7 @@ int main() {
             celeg::CheckpointDimensions{32, 0, {}, {}, 0}, model.graph);
 
         Naming naming;
-        celeg::build_weight_plan_from_graph(model, naming);
+        celeg::build_weight_plan_from_graph(model, naming, nullptr);
         const auto find = [&](celeg::TensorRole role, int layer) -> const celeg::TensorRequest& {
             for (const auto& request : model.weight_plan.requests) {
                 if (request.role == role && request.layer == layer) return request;

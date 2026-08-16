@@ -628,6 +628,8 @@ void bind_moe(CanonicalInferenceContext& context,
     auto& facts = context.facts;
     const std::string prefix =
         "model.layers." + std::string(index) + ".mlp.";
+    const std::string feed_forward_prefix =
+        "model.layers." + std::string(index) + ".feed_forward.";
     const auto has_tensor = [&](std::string_view name) {
         return input.inventory.find(name) != nullptr;
     };
@@ -654,6 +656,24 @@ void bind_moe(CanonicalInferenceContext& context,
         });
     };
 
+    // Binds a tensor whose on-disk shape may legitimately vary between a
+    // packed [num_experts, rows, cols] layout and a flattened
+    // [num_experts * rows, cols] layout. The physical family (packed vs
+    // individual) is decided here, once, from real checkpoint evidence, so
+    // that backends never need to re-derive it from tensor-name spellings.
+    const auto bind_packed = [&](TensorRole role, const std::string& name) {
+        const auto* tensor = input.inventory.find(name);
+        if (tensor == nullptr) {
+            fail(ResolutionFailureKind::MissingTensorRole,
+                 "automatic resolution could not bind " +
+                     std::string(tensor_role_name(role)) + " for layer " +
+                     std::to_string(layer));
+        }
+        facts.bindings.values.push_back({
+            role, layer, -1, -1, tensor->name, tensor->shape, {},
+        });
+    };
+
     const int num_experts = context.moe->num_experts;
     bind(
         TensorRole::MoeRouter,
@@ -676,25 +696,78 @@ void bind_moe(CanonicalInferenceContext& context,
                 std::to_string(layer));
     }
 
+    // Decide the routed-expert checkpoint's physical layout (family) once,
+    // here, from real checkpoint evidence: individually-named
+    // "gate_proj/up_proj/down_proj" tensors per expert, individually-named
+    // "w1/w2/w3" tensors per expert (the convention GGUF native storage
+    // answers to), or a single tensor packing every expert's weights
+    // together. Backends must consume the resulting role set rather than
+    // re-probing the repository for these spellings themselves.
     const int expert_intermediate = moe->intermediate_size;
-    for (int expert = 0; expert < num_experts; ++expert) {
-        const std::string expert_prefix =
-            prefix + "experts." + std::to_string(expert) + ".";
-        bind(
-            TensorRole::MoeExpertGate,
-            expert_prefix + "gate_proj.weight",
-            {expert_intermediate, *m.hidden_size},
-            expert);
-        bind(
-            TensorRole::MoeExpertUp,
-            expert_prefix + "up_proj.weight",
-            {expert_intermediate, *m.hidden_size},
-            expert);
-        bind(
-            TensorRole::MoeExpertDown,
-            expert_prefix + "down_proj.weight",
-            {*m.hidden_size, expert_intermediate},
-            expert);
+    const bool named_individual = has_tensor(prefix + "experts.0.gate_proj.weight");
+    const bool raw_individual = !named_individual &&
+        has_tensor(feed_forward_prefix + "experts.0.w1.weight");
+    std::optional<std::string> packed_prefix;
+    if (!named_individual && !raw_individual) {
+        const std::string alternate_prefix =
+            "model.language_model.layers." + std::string(index) + ".mlp.";
+        for (const std::string& candidate_prefix : {prefix, alternate_prefix}) {
+            if (has_tensor(candidate_prefix + "experts.gate_up_proj") &&
+                has_tensor(candidate_prefix + "experts.down_proj")) {
+                packed_prefix = candidate_prefix;
+                break;
+            }
+        }
+    }
+
+    if (named_individual) {
+        for (int expert = 0; expert < num_experts; ++expert) {
+            const std::string expert_prefix =
+                prefix + "experts." + std::to_string(expert) + ".";
+            bind(
+                TensorRole::MoeExpertGate,
+                expert_prefix + "gate_proj.weight",
+                {expert_intermediate, *m.hidden_size},
+                expert);
+            bind(
+                TensorRole::MoeExpertUp,
+                expert_prefix + "up_proj.weight",
+                {expert_intermediate, *m.hidden_size},
+                expert);
+            bind(
+                TensorRole::MoeExpertDown,
+                expert_prefix + "down_proj.weight",
+                {*m.hidden_size, expert_intermediate},
+                expert);
+        }
+    } else if (raw_individual) {
+        for (int expert = 0; expert < num_experts; ++expert) {
+            const std::string expert_prefix =
+                feed_forward_prefix + "experts." + std::to_string(expert) + ".";
+            bind(
+                TensorRole::MoeExpertGate,
+                expert_prefix + "w1.weight",
+                {expert_intermediate, *m.hidden_size},
+                expert);
+            bind(
+                TensorRole::MoeExpertUp,
+                expert_prefix + "w3.weight",
+                {expert_intermediate, *m.hidden_size},
+                expert);
+            bind(
+                TensorRole::MoeExpertDown,
+                expert_prefix + "w2.weight",
+                {*m.hidden_size, expert_intermediate},
+                expert);
+        }
+    } else if (packed_prefix) {
+        bind_packed(TensorRole::MoePackedGateUp, *packed_prefix + "experts.gate_up_proj");
+        bind_packed(TensorRole::MoePackedDown, *packed_prefix + "experts.down_proj");
+    } else {
+        fail(
+            ResolutionFailureKind::MissingTensorRole,
+            "automatic resolution could not determine the MoE routed-expert "
+            "checkpoint layout for layer " + std::to_string(layer));
     }
 
     if (moe->shared) {

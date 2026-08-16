@@ -5,7 +5,6 @@
 #include "celeg/backend/cuda/weight_policy.hpp"
 #include "celeg/model/weights/quantization.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/runtime/weights_topology.hpp"
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/weight_setup_support.hpp"
 #include "celeg/backend/cuda/weight_setup.hpp"

@@ -5,7 +5,6 @@
 #include "celeg/backend/cuda/weight_policy.hpp"
 #include "celeg/model/weights/quantization.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
-#include "celeg/runtime/weights_topology.hpp"
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/weight_setup_support.hpp"
 #include "celeg/backend/cuda/weight_setup.hpp"
@@ -163,6 +162,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             }
 
             if (workspace_.expert_offload_plan_.enabled) {
+                // The routed-expert checkpoint layout (packed vs individual)
+                // was already decided once, from real checkpoint evidence,
+                // when the weight plan was built (see append_moe() /
+                // bind_moe()): it shows up here purely as which tensor
+                // roles the plan actually requested for this layer. Setup
+                // must consume that answer, not re-probe repo.contains() on
+                // literal tensor-name spellings.
                 const bool individual_expert_model = std::any_of(
                     resources_.model_.weight_plan.requests.begin(),
                     resources_.model_.weight_plan.requests.end(),
@@ -170,20 +176,22 @@ void CudaCompiledModel::load_checkpoint_weights(
                         return request.role == TensorRole::MoeExpertGate &&
                                request.layer == i && request.expert == 0;
                     });
-                const bool packed_expert_model = !individual_expert_model &&
-                    moe_semantics.shared.has_value();
-                const bool named_expert_model = !packed_expert_model &&
-                    (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
-                     repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed")));
-                const std::string probe_name = packed_expert_model
-                    ? "model.language_model.layers." + std::to_string(i) +
-                      ".mlp.experts.gate_up_proj"
-                    : named_expert_model
-                        ? layer_name(i, "mlp.experts.0.gate_proj.weight")
-                    : layer_name(i, "feed_forward.experts.0.w1.weight");
-                const HostTensorView expert_probe = repo.contains(probe_name)
-                    ? repo.tensor(probe_name)
-                    : repo.tensor(probe_name + "_packed");
+                // Which individual-expert naming convention applies is a
+                // genuine repository storage-format capability (GGUF native
+                // block storage vs everything else), not a name spelling,
+                // so it is answered via the existing capability interface
+                // rather than a literal probe.
+                const auto* native_storage =
+                    dynamic_cast<const INativeBlockStorageRepository*>(&repo);
+                const bool named_expert_model = individual_expert_model &&
+                    !(native_storage && native_storage->has_native_block_storage());
+                const HostTensorView expert_probe = individual_expert_model
+                    ? repo.tensor(resolved_tensor_name(
+                          resources_.model_.weight_plan.requests,
+                          TensorRole::MoeExpertGate, i, 0))
+                    : repo.tensor(resolved_tensor_name(
+                          resources_.model_.weight_plan.requests,
+                          TensorRole::MoePackedGateUp, i));
                 if (expert_probe.dtype == TensorDType::Quantized) {
                     throw std::invalid_argument(
                         "native GGUF MoE experts do not support BF16 offload; "
@@ -272,6 +280,9 @@ void CudaCompiledModel::load_checkpoint_weights(
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 }
             } else {
+                // Same plan-driven layout decision as the offload branch
+                // above: role presence in the resolved plan, not literal
+                // name probing, tells setup which family this layer is.
                 const bool individual_expert_model = std::any_of(
                     resources_.model_.weight_plan.requests.begin(),
                     resources_.model_.weight_plan.requests.end(),
@@ -279,7 +290,11 @@ void CudaCompiledModel::load_checkpoint_weights(
                         return request.role == TensorRole::MoeExpertGate &&
                                request.layer == i && request.expert == 0;
                     });
-                if (!individual_expert_model && moe_semantics.shared) {
+                const auto* native_storage =
+                    dynamic_cast<const INativeBlockStorageRepository*>(&repo);
+                const bool named_expert_model = individual_expert_model &&
+                    !(native_storage && native_storage->has_native_block_storage());
+                if (!individual_expert_model) {
                     const ExpertLinearWeight* gate_up =
                         resources_.weight_loader_->load_expert_linear_weight(
                             repo, tensor_name(resources_.model_.weight_plan.requests,
@@ -291,8 +306,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                                               TensorRole::MoePackedDown, i),
                             E, resources_.program_.hidden, inter);
                     moe_weights.storage = ResidentExpertWeights{gate_up, down};
-                } else if (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
-                           repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed"))) {
+                } else if (named_expert_model) {
                     const ExpertLinearWeight* gate_up =
                         resources_.weight_loader_->load_moe_gate_up_named(
                             repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",

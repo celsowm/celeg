@@ -164,20 +164,47 @@ void append_mixer(ResolvedModel& model, const LayerSpec& layer,
     }, layer.mixer);
 }
 
+// Decides, once, whether this MoE layer's routed-expert weights are packed
+// into a single [num_experts, ...] tensor pair or stored as individually
+// named per-expert tensors. This is checkpoint-family information that
+// backends must consume from the resolved plan rather than re-deriving by
+// probing `repository->contains()` on literal tensor-name spellings during
+// setup (see docs/EXTENSIBILITY_REFACTORING_PLAN.md, Phase 3).
+bool moe_routed_experts_are_packed(int layer, int physical_layer,
+                                   const ITensorNamingPolicy& naming_policy,
+                                   const IWeightRepository* repository) {
+    if (repository == nullptr) return false;
+    const TensorRequest probe{TensorRole::MoePackedGateUp, layer, -1, {},
+                              std::nullopt, physical_layer};
+    for (const std::string& candidate : naming_policy.candidates(probe)) {
+        if (repository->contains(candidate)) return true;
+    }
+    return false;
+}
+
 void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
-                int layer, int physical_layer) {
+                int layer, int physical_layer,
+                const ITensorNamingPolicy& naming_policy,
+                const IWeightRepository* repository) {
     const int hidden = model.graph.hidden;
     const auto append = [&](TensorRole role, int expert, std::vector<int64_t> shape) {
         add_request(model, role, layer, expert, std::move(shape), physical_layer);
     };
     append(TensorRole::MoeRouter, -1, {moe.num_experts, hidden});
-    for (int expert = 0; expert < moe.num_experts; ++expert) {
-        append(TensorRole::MoeExpertGate, expert,
-               {moe.intermediate_size, hidden});
-        append(TensorRole::MoeExpertUp, expert,
-               {moe.intermediate_size, hidden});
-        append(TensorRole::MoeExpertDown, expert,
-               {hidden, moe.intermediate_size});
+    if (moe_routed_experts_are_packed(layer, physical_layer, naming_policy, repository)) {
+        append(TensorRole::MoePackedGateUp, -1,
+               {moe.num_experts, 2 * moe.intermediate_size, hidden});
+        append(TensorRole::MoePackedDown, -1,
+               {moe.num_experts, hidden, moe.intermediate_size});
+    } else {
+        for (int expert = 0; expert < moe.num_experts; ++expert) {
+            append(TensorRole::MoeExpertGate, expert,
+                   {moe.intermediate_size, hidden});
+            append(TensorRole::MoeExpertUp, expert,
+                   {moe.intermediate_size, hidden});
+            append(TensorRole::MoeExpertDown, expert,
+                   {hidden, moe.intermediate_size});
+        }
     }
     if (moe.shared) {
         append(TensorRole::MoeSharedGate, -1,
@@ -192,7 +219,8 @@ void append_moe(ResolvedModel& model, const MixtureOfExpertsSpec& moe,
 }
 
 void build_weight_plan_from_graph(ResolvedModel& model,
-                                  const ITensorNamingPolicy& naming_policy) {
+                                  const ITensorNamingPolicy& naming_policy,
+                                  const IWeightRepository* repository) {
     const ModelGraph& graph = model.graph;
     const CheckpointDimensions& dimensions = model.topology.dims;
     if (graph.layers.empty() || graph.hidden <= 0) {
@@ -242,7 +270,8 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                 add_request(model, TensorRole::FfnDown, layer_index, -1,
                             {graph.hidden, feed_forward.intermediate_size}, physical_layer);
             } else if constexpr (std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-                append_moe(model, feed_forward, layer_index, physical_layer);
+                append_moe(model, feed_forward, layer_index, physical_layer,
+                          naming_policy, repository);
             } else {
                 static_assert(always_false_v<FeedForward>,
                               "unhandled feed-forward weight requirements");
@@ -263,14 +292,24 @@ void build_weight_plan_from_graph(ResolvedModel& model,
                         {1}, physical_layer);
         }
     }
-    resolve_weight_plan(model, naming_policy);
+    resolve_weight_plan(model, naming_policy, repository);
 }
 
 void resolve_weight_plan(ResolvedModel& model,
-                         const ITensorNamingPolicy& naming_policy) {
+                         const ITensorNamingPolicy& naming_policy,
+                         const IWeightRepository* repository) {
     for (TensorRequest& request : model.weight_plan.requests) {
         const auto names = naming_policy.candidates(request);
-        if (!names.empty()) request.source_name = names.front();
+        if (repository != nullptr) {
+            for (const std::string& name : names) {
+                if (repository->contains(name)) {
+                    request.source_name = name;
+                    break;
+                }
+            }
+        } else if (!names.empty()) {
+            request.source_name = names.front();
+        }
     }
 }
 

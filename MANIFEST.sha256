@@ -94,7 +94,6 @@ ca52b99f9871a5896083792ded3e4d35c9a867781e2212ea8e83b4a5f5c4ba94  ./include/cele
 88c15eb9997f639420250d3b2dd6b8ff40b8d65c1d6a48ffec4e15a100847a36  ./include/celeg/runtime/concurrency/metrics.hpp
 9533c16689bf441407f6593508daf57d643a3245269fc6637de264c61f20ecfa  ./include/celeg/runtime/concurrency/policy_types.hpp
 ae8d54443ebdb53ed7a763cdd33f8a0593c6021e3c9ec5524750ab7bfb91b614  ./include/celeg/runtime/concurrency/policy.hpp
-abab5c5b3d3f9859139a3743e117c59990df08b3c61385513cdabf5bbd81419d  ./include/celeg/runtime/weights_topology.hpp
 95c930f62e5380e11bcaa64f3a6ead050b14480cec7cba3171177386f0b45e3e  ./include/celeg/serve/cpu_inference_service.hpp
 0f1f56e8c67fe83b6088b8739703e88cfd16e1bf08c2f61a3b9ea34df5fc5e7f  ./include/celeg/serve/generation_dispatcher.hpp
 3a70202e3cbcf357621c45f828ae631fe339b7c4981cd30ae67a8e38e67783d1  ./include/celeg/serve/inference_service.hpp

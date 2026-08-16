@@ -478,12 +478,17 @@ void CpuCompiledModel::Shared::load_weights() {
                                request.expert == expert;
                     });
             };
+            // The routed-expert checkpoint layout (packed vs individual) was
+            // already decided once, from real checkpoint evidence, when the
+            // weight plan was built (see append_moe() / bind_moe()); it is
+            // read here purely from which tensor roles the plan requested,
+            // never re-derived from tensor-name spellings.
             const bool individual_expert_model =
                 has_request(TensorRole::MoeExpertGate, 0);
+            const bool packed_expert_model =
+                has_request(TensorRole::MoePackedGateUp);
             const MoeLayerProgram& moe_semantics = std::get<MoeLayerProgram>(
                 program.layers.at(static_cast<size_t>(index)).feed_forward);
-            const bool packed_expert_model = !individual_expert_model &&
-                moe_semantics.shared.has_value();
             layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::AttentionInputNorm)
                     ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)

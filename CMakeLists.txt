@@ -474,7 +474,6 @@ set(CELEG_PUBLIC_HEADERS
     include/celeg/backend/cuda/moe.hpp
     include/celeg/backend/cuda/moe/offload.hpp
     include/celeg/backend/cuda/moe/expert_residency.hpp
-    include/celeg/runtime/weights_topology.hpp
     include/celeg/serve/cpu_inference_service.hpp
     include/celeg/backend/cuda/cuda_inference_service.hpp
     include/celeg/serve/generation_dispatcher.hpp

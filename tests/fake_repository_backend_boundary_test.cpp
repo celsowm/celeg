@@ -42,6 +42,135 @@ public:
     }
 };
 
+// A checkpoint whose MoE tensors use deliberately unconventional spellings
+// that no backend's (former) literal-substring sniffing would recognize.
+// The naming policy is the only thing that knows how to find them; the
+// weight plan must still resolve the correct role/locator for each,
+// proving that layout decisions (packed vs individual) and per-tensor
+// binding both flow from the resolved plan rather than from backends
+// re-matching tensor-name spellings themselves.
+class PoisonedMoeRepository final : public celeg::IWeightRepository {
+public:
+    bool contains(std::string_view name) const override {
+        return name == "poison.layer0.expert0.gate" ||
+               name == "poison.layer0.expert0.up" ||
+               name == "poison.layer0.expert0.down" ||
+               name == "poison.layer1.packed_gate_up" ||
+               name == "poison.layer1.packed_down";
+    }
+
+    celeg::HostTensorView tensor(std::string_view name) const override {
+        if (!contains(name)) return {};
+        return celeg::HostTensorView{.dtype = celeg::TensorDType::BF16,
+                                     .shape = {}, .data = nullptr, .bytes = 0};
+    }
+
+    std::vector<std::string> names() const override {
+        return {"poison.layer0.expert0.gate", "poison.layer0.expert0.up",
+                "poison.layer0.expert0.down", "poison.layer1.packed_gate_up",
+                "poison.layer1.packed_down"};
+    }
+};
+
+class PoisonedMoeNamingPolicy final : public celeg::ITensorNamingPolicy {
+public:
+    std::vector<std::string> candidates(
+        const celeg::TensorRequest& request) const override {
+        // Deliberately offer decoy candidates first (conventional spellings
+        // that do NOT exist in the repository) to prove selection is driven
+        // by existence, not by pattern order or literal recognition.
+        if (request.role == celeg::TensorRole::MoeExpertGate &&
+            request.layer == 0 && request.expert == 0) {
+            return {"model.layers.0.mlp.experts.0.gate_proj.weight",
+                    "poison.layer0.expert0.gate"};
+        }
+        if (request.role == celeg::TensorRole::MoeExpertUp &&
+            request.layer == 0 && request.expert == 0) {
+            return {"model.layers.0.mlp.experts.0.up_proj.weight",
+                    "poison.layer0.expert0.up"};
+        }
+        if (request.role == celeg::TensorRole::MoeExpertDown &&
+            request.layer == 0 && request.expert == 0) {
+            return {"model.layers.0.mlp.experts.0.down_proj.weight",
+                    "poison.layer0.expert0.down"};
+        }
+        if (request.role == celeg::TensorRole::MoePackedGateUp &&
+            request.layer == 1) {
+            return {"model.layers.1.mlp.experts.gate_up_proj",
+                    "poison.layer1.packed_gate_up"};
+        }
+        if (request.role == celeg::TensorRole::MoePackedDown &&
+            request.layer == 1) {
+            return {"model.layers.1.mlp.experts.down_proj",
+                    "poison.layer1.packed_down"};
+        }
+        return {};
+    }
+};
+
+celeg::LayerSpec make_moe_layer(int intermediate, int num_experts, int hidden) {
+    celeg::LayerSpec layer;
+    layer.operator_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+    celeg::AttentionSpec attention;
+    attention.query_heads = 1;
+    attention.key_value_heads = 1;
+    attention.head_dim = hidden;
+    attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
+    layer.mixer = attention;
+    celeg::MixtureOfExpertsSpec moe;
+    moe.intermediate_size = intermediate;
+    moe.num_experts = num_experts;
+    moe.experts_per_token = 1;
+    layer.feed_forward = moe;
+    return layer;
+}
+
+void run_poisoned_moe_layout_test() {
+    auto repository = std::make_shared<PoisonedMoeRepository>();
+    celeg::ResolvedModel model;
+    model.provenance.identity = "poisoned-moe-boundary";
+    model.graph.hidden = 4;
+    model.graph.final_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+    model.graph.layers.push_back(make_moe_layer(2, 1, 4));
+    model.graph.layers.push_back(make_moe_layer(2, 1, 4));
+
+    PoisonedMoeNamingPolicy naming;
+    celeg::build_weight_plan_from_graph(model, naming, repository.get());
+
+    const auto& requests = model.weight_plan.requests;
+    const auto find_one = [&](celeg::TensorRole role, int layer, int expert) {
+        for (const auto& request : requests) {
+            if (request.role == role && request.layer == layer &&
+                request.expert == expert) {
+                return &request;
+            }
+        }
+        return static_cast<const celeg::TensorRequest*>(nullptr);
+    };
+
+    // Layer 0: individual experts, resolved to the poisoned spelling even
+    // though a conventional-looking decoy candidate was offered first.
+    const auto* gate0 = find_one(celeg::TensorRole::MoeExpertGate, 0, 0);
+    CELEG_TEST_CHECK(gate0 != nullptr);
+    CELEG_TEST_CHECK(gate0->source_name.has_value());
+    CELEG_TEST_CHECK(*gate0->source_name == "poison.layer0.expert0.gate");
+
+    // Layer 1: no individual per-expert request should have been planned at
+    // all -- the plan itself decided this layer is packed (using the same
+    // existence-checked naming-policy candidates), so a backend consuming
+    // this plan never needs to sniff repo.contains() on literal spellings
+    // to find that out.
+    CELEG_TEST_CHECK(find_one(celeg::TensorRole::MoeExpertGate, 1, 0) == nullptr);
+    const auto* packed_gate_up = find_one(celeg::TensorRole::MoePackedGateUp, 1, -1);
+    CELEG_TEST_CHECK(packed_gate_up != nullptr);
+    CELEG_TEST_CHECK(packed_gate_up->source_name.has_value());
+    CELEG_TEST_CHECK(*packed_gate_up->source_name == "poison.layer1.packed_gate_up");
+    const auto* packed_down = find_one(celeg::TensorRole::MoePackedDown, 1, -1);
+    CELEG_TEST_CHECK(packed_down != nullptr);
+    CELEG_TEST_CHECK(packed_down->source_name.has_value());
+    CELEG_TEST_CHECK(*packed_down->source_name == "poison.layer1.packed_down");
+}
+
 }
 
 int main() {
@@ -67,7 +196,7 @@ int main() {
     model.weight_plan.requests.push_back({
         celeg::TensorRole::AttentionInputNorm, 0, -1, {4}});
     FakeNamingPolicy naming;
-    celeg::resolve_weight_plan(model, naming);
+    celeg::resolve_weight_plan(model, naming, repository.get());
     CELEG_TEST_CHECK(model.weight_plan.requests.front().source_name.has_value());
     CELEG_TEST_CHECK(repository->contains(
         *model.weight_plan.requests.front().source_name));
@@ -77,5 +206,8 @@ int main() {
     CELEG_TEST_CHECK(cpu.identity == cuda.identity);
     CELEG_TEST_CHECK(cpu.weight_request_count == 1);
     CELEG_TEST_CHECK(cuda.weight_request_count == 1);
+
+    run_poisoned_moe_layout_test();
     return 0;
 }
+

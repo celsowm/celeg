@@ -292,7 +292,12 @@ public:
 
 class ResolutionAssembler {
 public:
-    ResolvedModel assemble(const CanonicalModelFacts& facts) const;
+    // `repository` lets weight-plan resolution confirm candidate tensor
+    // names actually exist in the checkpoint rather than trusting the
+    // first candidate blindly. Pass nullptr only when no checkpoint
+    // repository is available (e.g. synthetic facts in tests).
+    ResolvedModel assemble(const CanonicalModelFacts& facts,
+                           const IWeightRepository* repository) const;
 };
 
 }
