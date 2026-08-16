@@ -27,12 +27,14 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
                     throw std::invalid_argument(
                         "CUDA latent attention requires BF16 local state storage");
                 }
-                attention->latent_key_cache.reset(
+                attention->state = LatentAttentionRuntimeState{};
+                auto& latent_state = std::get<LatentAttentionRuntimeState>(attention->state);
+                latent_state.latent_key_cache.reset(
                     static_cast<size_t>(max_context_) * latent.latent_rank);
-                attention->latent_value_cache.reset(
+                latent_state.latent_value_cache.reset(
                     static_cast<size_t>(max_context_) * latent.latent_rank);
                 if (latent.decoupled_rope && latent.rope_head_dim != 0) {
-                    attention->latent_key_rope_cache.reset(
+                    latent_state.latent_key_rope_cache.reset(
                         static_cast<size_t>(max_context_) * latent.rope_head_dim);
                 }
                 continue;
@@ -43,13 +45,17 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
             const size_t scale_elements = static_cast<size_t>(max_context_) *
                 static_cast<size_t>(layout.key_value_heads);
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                attention->key_cache_int8.reset(cache_elements);
-                attention->value_cache_int8.reset(cache_elements);
-                attention->key_cache_scales.reset(scale_elements);
-                attention->value_cache_scales.reset(scale_elements);
+                attention->state = OrdinaryInt8KvState{};
+                auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention->state);
+                ordinary_state.key_cache.reset(cache_elements);
+                ordinary_state.value_cache.reset(cache_elements);
+                ordinary_state.key_scales.reset(scale_elements);
+                ordinary_state.value_scales.reset(scale_elements);
             } else {
-                attention->key_cache.reset(cache_elements);
-                attention->value_cache.reset(cache_elements);
+                attention->state = OrdinaryBf16KvState{};
+                auto& ordinary_state = std::get<OrdinaryBf16KvState>(attention->state);
+                ordinary_state.key_cache.reset(cache_elements);
+                ordinary_state.value_cache.reset(cache_elements);
             }
         }
         for (Layer& layer : resources_.mtp_.layers) {
@@ -61,13 +67,17 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
             const size_t scale_elements = static_cast<size_t>(max_context_) *
                 static_cast<size_t>(layout.key_value_heads);
             if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                attention->key_cache_int8.reset(cache_elements);
-                attention->value_cache_int8.reset(cache_elements);
-                attention->key_cache_scales.reset(scale_elements);
-                attention->value_cache_scales.reset(scale_elements);
+                attention->state = OrdinaryInt8KvState{};
+                auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention->state);
+                ordinary_state.key_cache.reset(cache_elements);
+                ordinary_state.value_cache.reset(cache_elements);
+                ordinary_state.key_scales.reset(scale_elements);
+                ordinary_state.value_scales.reset(scale_elements);
             } else {
-                attention->key_cache.reset(cache_elements);
-                attention->value_cache.reset(cache_elements);
+                attention->state = OrdinaryBf16KvState{};
+                auto& ordinary_state = std::get<OrdinaryBf16KvState>(attention->state);
+                ordinary_state.key_cache.reset(cache_elements);
+                ordinary_state.value_cache.reset(cache_elements);
             }
         }
         local_kv_cache_available_ = true;

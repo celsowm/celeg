@@ -119,12 +119,12 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     const bool int8_kv = attention_request.kv_format == KvCacheMode::Int8;
     if (int8_kv) {
         launch_store_kv_int8_device(
-            k, v, attention->key_cache_int8.data(), attention->value_cache_int8.data(),
-            attention->key_cache_scales.data(), attention->value_cache_scales.data(),
+            k, v, attention->key_cache_int8_ptr(), attention->value_cache_int8_ptr(),
+            attention->key_cache_scales_ptr(), attention->value_cache_scales_ptr(),
             position_device_.data(), layout.key_value_heads, layout.head_dim, stream);
     } else {
-        launch_store_kv_device(k, v, attention->key_cache.data(),
-                               attention->value_cache.data(), position_device_.data(),
+        launch_store_kv_device(k, v, attention->key_cache_bf16(),
+                               attention->value_cache_bf16(), position_device_.data(),
                                layout.key_value_width(), stream);
     }
     const GqaGeometry attention_geometry{
@@ -133,13 +133,13 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
         .head_dim = layout.head_dim,
         .sliding_window = layout.sliding_window_size()};
     const AttentionExtent attention_extent{.position = position_device_.data()};
-    const Bf16KvView bf16_kv{.keys = attention->key_cache.data(),
-                             .values = attention->value_cache.data()};
+    const Bf16KvView bf16_kv{.keys = attention->key_cache_bf16(),
+                             .values = attention->value_cache_bf16()};
     const Int8KvView int8_kv_view{
-        .keys = attention->key_cache_int8.data(),
-        .values = attention->value_cache_int8.data(),
-        .key_scales = attention->key_cache_scales.data(),
-        .value_scales = attention->value_cache_scales.data()};
+        .keys = attention->key_cache_int8_ptr(),
+        .values = attention->value_cache_int8_ptr(),
+        .key_scales = attention->key_cache_scales_ptr(),
+        .value_scales = attention->value_cache_scales_ptr()};
     switch (attention_plan.algorithm) {
     case AttentionAlgorithm::Alibi:
         if (int8_kv) {

@@ -91,8 +91,8 @@ void run_projected_latent_attention(
                     latent.rope_head_dim != 0
                 ? workspace.prefill_latent_key_rope_.data()
                 : nullptr,
-            owner.latent_key_cache.data(), owner.latent_value_cache.data(),
-            owner.latent_key_rope_cache.data(),
+            owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
+            owner.latent_key_rope_cache_ptr(),
             rows, latent.latent_rank,
             latent.decoupled_rope ? latent.rope_head_dim : 0,
             model.stream_.get());
@@ -104,9 +104,9 @@ void run_projected_latent_attention(
                 ? workspace.prefill_latent_query_rope_.data()
                 : nullptr},
         .kv = {
-            .keys = owner.latent_key_cache.data(),
-            .values = owner.latent_value_cache.data(),
-            .key_rope = owner.latent_key_rope_cache.data()},
+            .keys = owner.latent_key_cache_ptr(),
+            .values = owner.latent_value_cache_ptr(),
+            .key_rope = owner.latent_key_rope_cache_ptr()},
         .out = workspace.prefill_op_output_.data(),
         .extent = {.rows = rows},
         .alibi_slopes = attention.alibi_slopes.data(),

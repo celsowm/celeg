@@ -87,16 +87,16 @@ void CudaCompiledModel::enqueue_decode_attention(
                         lower_cuda_rope_scaling(*layout.rope_position()), stream_.get());
                     launch_store_latent_device(
                         workspace_.latent_key_.data(), workspace_.latent_value_.data(),
-                        workspace_.latent_key_rope_.data(), owner->latent_key_cache.data(),
-                        owner->latent_value_cache.data(), owner->latent_key_rope_cache.data(),
+                        workspace_.latent_key_rope_.data(), owner->latent_key_cache_ptr(),
+                        owner->latent_value_cache_ptr(), owner->latent_key_rope_cache_ptr(),
                         position_device_.data(), latent.latent_rank, latent.rope_head_dim,
                         stream_.get());
                     launch_latent_attention_device({
                         .query = {.content = workspace_.latent_query_content_.data(),
                                   .rope = workspace_.latent_query_rope_.data()},
-                        .kv = {.keys = owner->latent_key_cache.data(),
-                               .values = owner->latent_value_cache.data(),
-                               .key_rope = owner->latent_key_rope_cache.data()},
+                        .kv = {.keys = owner->latent_key_cache_ptr(),
+                               .values = owner->latent_value_cache_ptr(),
+                               .key_rope = owner->latent_key_rope_cache_ptr()},
                         .out = workspace_.op_output_.data(),
                         .extent = {.position = position_device_.data()},
                         .alibi_slopes = attention->alibi_slopes.data(),
@@ -189,8 +189,8 @@ void CudaCompiledModel::enqueue_decode_attention(
                         attention->latent_key_rope && latent.decoupled_rope &&
                         latent.rope_head_dim != 0
                             ? workspace_.latent_key_rope_.data() : nullptr,
-                        owner->latent_key_cache.data(), owner->latent_value_cache.data(),
-                        owner->latent_key_rope_cache.data(), position_device_.data(),
+                        owner->latent_key_cache_ptr(), owner->latent_value_cache_ptr(),
+                        owner->latent_key_rope_cache_ptr(), position_device_.data(),
                         latent.latent_rank,
                         latent.decoupled_rope ? latent.rope_head_dim : 0,
                         stream_.get());
@@ -201,9 +201,9 @@ void CudaCompiledModel::enqueue_decode_attention(
                               .rope = layout.latent_query_rope_width() != 0
                                           ? workspace_.latent_query_rope_.data()
                                           : nullptr},
-                    .kv = {.keys = owner->latent_key_cache.data(),
-                           .values = owner->latent_value_cache.data(),
-                           .key_rope = owner->latent_key_rope_cache.data()},
+                    .kv = {.keys = owner->latent_key_cache_ptr(),
+                           .values = owner->latent_value_cache_ptr(),
+                           .key_rope = owner->latent_key_rope_cache_ptr()},
                     .out = workspace_.op_output_.data(),
                     .extent = {.position = position_device_.data()},
                     .alibi_slopes = attention->alibi_slopes.data(),
@@ -284,13 +284,13 @@ void CudaCompiledModel::enqueue_decode_attention(
             if (attention->key && attention->value) {
                 if (int8_kv) {
                     launch_store_kv_int8_device(
-                        k, v, owner->key_cache_int8.data(), owner->value_cache_int8.data(),
-                        owner->key_cache_scales.data(), owner->value_cache_scales.data(),
+                        k, v, owner->key_cache_int8_ptr(), owner->value_cache_int8_ptr(),
+                        owner->key_cache_scales_ptr(), owner->value_cache_scales_ptr(),
                         position_device_.data(), owner_layout.key_value_heads,
                         owner_layout.head_dim, stream_.get());
                 } else {
                     launch_store_kv_device(
-                        k, v, owner->key_cache.data(), owner->value_cache.data(),
+                        k, v, owner->key_cache_bf16(), owner->value_cache_bf16(),
                         position_device_.data(), owner_layout.key_value_width(), stream_.get());
                 }
             }
@@ -300,13 +300,13 @@ void CudaCompiledModel::enqueue_decode_attention(
                 .head_dim = owner_layout.head_dim,
                 .sliding_window = layout.sliding_window_size()};
             const AttentionExtent attention_extent{.position = position_device_.data()};
-            const Bf16KvView bf16_kv{.keys = owner->key_cache.data(),
-                                     .values = owner->value_cache.data()};
+            const Bf16KvView bf16_kv{.keys = owner->key_cache_bf16(),
+                                     .values = owner->value_cache_bf16()};
             const Int8KvView int8_kv_view{
-                .keys = owner->key_cache_int8.data(),
-                .values = owner->value_cache_int8.data(),
-                .key_scales = owner->key_cache_scales.data(),
-                .value_scales = owner->value_cache_scales.data()};
+                .keys = owner->key_cache_int8_ptr(),
+                .values = owner->value_cache_int8_ptr(),
+                .key_scales = owner->key_cache_scales_ptr(),
+                .value_scales = owner->value_cache_scales_ptr()};
             const AttentionSegmentation attention_segmentation{
                 .chunk_tokens = resources_.options_.attention_chunk_tokens,
                 .chunks = workspace_.attention_chunks_,

@@ -34,15 +34,15 @@ void store_and_attend(
             launch_store_kv_int8_prefill(
                 model.workspace_.prefill_k_.data(),
                 model.workspace_.prefill_v_.data(),
-                owner.key_cache_int8.data(), owner.value_cache_int8.data(),
-                owner.key_cache_scales.data(), owner.value_cache_scales.data(),
+                owner.key_cache_int8_ptr(), owner.value_cache_int8_ptr(),
+                owner.key_cache_scales_ptr(), owner.value_cache_scales_ptr(),
                 rows, owner_layout.key_value_heads, owner_layout.head_dim,
                 model.stream_.get());
         } else {
             launch_store_kv_prefill(
                 model.workspace_.prefill_k_.data(),
                 model.workspace_.prefill_v_.data(),
-                owner.key_cache.data(), owner.value_cache.data(),
+                owner.key_cache_bf16(), owner.value_cache_bf16(),
                 rows, owner_layout.key_value_width(), model.stream_.get());
         }
     }
@@ -54,13 +54,13 @@ void store_and_attend(
         .sliding_window = layout.sliding_window_size()};
     const AttentionExtent extent{.rows = rows};
     const Bf16KvView bf16_kv{
-        .keys = owner.key_cache.data(),
-        .values = owner.value_cache.data()};
+        .keys = owner.key_cache_bf16(),
+        .values = owner.value_cache_bf16()};
     const Int8KvView int8_kv_view{
-        .keys = owner.key_cache_int8.data(),
-        .values = owner.value_cache_int8.data(),
-        .key_scales = owner.key_cache_scales.data(),
-        .value_scales = owner.value_cache_scales.data()};
+        .keys = owner.key_cache_int8_ptr(),
+        .values = owner.value_cache_int8_ptr(),
+        .key_scales = owner.key_cache_scales_ptr(),
+        .value_scales = owner.value_cache_scales_ptr()};
     const AttentionRowStrides strides{
         .q_width = layout.query_width(),
         .kv_width = owner_layout.key_value_width(),

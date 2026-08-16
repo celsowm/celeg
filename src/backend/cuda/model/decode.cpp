@@ -107,12 +107,12 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
     const bool int8_kv = plan.kv_format == KvCacheMode::Int8;
     if (int8_kv) {
         launch_store_kv_int8(
-            k, v, owner.key_cache_int8.data(), owner.value_cache_int8.data(),
-            owner.key_cache_scales.data(), owner.value_cache_scales.data(),
+            k, v, owner.key_cache_int8_ptr(), owner.value_cache_int8_ptr(),
+            owner.key_cache_scales_ptr(), owner.value_cache_scales_ptr(),
             session_.position_, owner_layout.key_value_heads, owner_layout.head_dim,
             stream_.get());
     } else {
-        launch_store_kv(k, v, owner.key_cache.data(), owner.value_cache.data(),
+        launch_store_kv(k, v, owner.key_cache_bf16(), owner.value_cache_bf16(),
                         session_.position_, owner_layout.key_value_width(), stream_.get());
     }
     const GqaGeometry geometry{
@@ -126,10 +126,10 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         if (int8_kv) {
             launch_gqa_decode_online_int8({
                 .query = q,
-                .kv = {.keys = owner.key_cache_int8.data(),
-                       .values = owner.value_cache_int8.data(),
-                       .key_scales = owner.key_cache_scales.data(),
-                       .value_scales = owner.value_cache_scales.data()},
+                .kv = {.keys = owner.key_cache_int8_ptr(),
+                       .values = owner.value_cache_int8_ptr(),
+                       .key_scales = owner.key_cache_scales_ptr(),
+                       .value_scales = owner.value_cache_scales_ptr()},
                 .out = workspace_.op_output_.data(),
                 .geometry = geometry,
                 .extent = extent,
@@ -137,8 +137,8 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         } else {
             launch_gqa_decode_online({
                 .query = q,
-                .kv = {.keys = owner.key_cache.data(),
-                       .values = owner.value_cache.data()},
+                .kv = {.keys = owner.key_cache_bf16(),
+                       .values = owner.value_cache_bf16()},
                 .out = workspace_.op_output_.data(),
                 .geometry = geometry,
                 .extent = extent,
@@ -149,10 +149,10 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         if (int8_kv) {
             launch_gqa_decode_strict_int8({
                 .query = q,
-                .kv = {.keys = owner.key_cache_int8.data(),
-                       .values = owner.value_cache_int8.data(),
-                       .key_scales = owner.key_cache_scales.data(),
-                       .value_scales = owner.value_cache_scales.data()},
+                .kv = {.keys = owner.key_cache_int8_ptr(),
+                       .values = owner.value_cache_int8_ptr(),
+                       .key_scales = owner.key_cache_scales_ptr(),
+                       .value_scales = owner.value_cache_scales_ptr()},
                 .out = workspace_.op_output_.data(),
                 .geometry = geometry,
                 .extent = extent,
@@ -160,8 +160,8 @@ void CudaCompiledModel::store_and_attend_token_contiguous(
         } else {
             launch_gqa_decode_strict({
                 .query = q,
-                .kv = {.keys = owner.key_cache.data(),
-                       .values = owner.value_cache.data()},
+                .kv = {.keys = owner.key_cache_bf16(),
+                       .values = owner.value_cache_bf16()},
                 .out = workspace_.op_output_.data(),
                 .geometry = geometry,
                 .extent = extent,

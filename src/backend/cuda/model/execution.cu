@@ -291,11 +291,7 @@ ModelMemoryStats CudaCompiledModel::memory_stats() const {
     for (const Layer& layer : resources_.layers_) {
         visit_layer(layer,
           [&](const AttentionLayer* attention) {
-            stats.kv_cache += attention->key_cache.bytes() +
-                attention->value_cache.bytes() + attention->key_cache_int8.bytes() +
-                attention->value_cache_int8.bytes() +
-                attention->key_cache_scales.bytes() +
-                attention->value_cache_scales.bytes();
+            stats.kv_cache += attention->runtime_state_bytes();
           },
           [&](const ConvolutionLayer* convolution) {
             stats.conv_state += convolution->conv_state.bytes();
@@ -367,12 +363,7 @@ void CudaCompiledModel::release_local_kv_cache() {
     for (Layer& layer : resources_.layers_) {
         AttentionLayer* attention = as_attention(layer);
         if (!attention) continue;
-        attention->key_cache.reset(0);
-        attention->value_cache.reset(0);
-        attention->key_cache_int8.reset(0);
-        attention->value_cache_int8.reset(0);
-        attention->key_cache_scales.reset(0);
-        attention->value_cache_scales.reset(0);
+        attention->release_runtime_state_buffers();
     }
     local_kv_cache_available_ = false;
     ++storage_generation_;

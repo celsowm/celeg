@@ -37,12 +37,12 @@ void stage_packed_persistent_metadata(
             };
             visit_layer(layer,
               [&](AttentionLayer* attention) {
-                workspace.h_key_bf16.data()[index] = attention->key_cache.data();
-                workspace.h_value_bf16.data()[index] = attention->value_cache.data();
-                workspace.h_key_int8.data()[index] = attention->key_cache_int8.data();
-                workspace.h_value_int8.data()[index] = attention->value_cache_int8.data();
-                workspace.h_key_scales.data()[index] = attention->key_cache_scales.data();
-                workspace.h_value_scales.data()[index] = attention->value_cache_scales.data();
+                workspace.h_key_bf16.data()[index] = attention->key_cache_bf16();
+                workspace.h_value_bf16.data()[index] = attention->value_cache_bf16();
+                workspace.h_key_int8.data()[index] = attention->key_cache_int8_ptr();
+                workspace.h_value_int8.data()[index] = attention->value_cache_int8_ptr();
+                workspace.h_key_scales.data()[index] = attention->key_cache_scales_ptr();
+                workspace.h_value_scales.data()[index] = attention->value_cache_scales_ptr();
                 workspace.h_conv_states.data()[index] = nullptr;
               },
               [&](ConvolutionLayer* convolution) {

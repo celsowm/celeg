@@ -23,14 +23,14 @@ SessionStore::SessionState CudaCompiledModel::make_session_state() {
         visit_layer(layer,
           [&](AttentionLayer* attention) {
             buffers.is_attention = true;
-            buffers.owns_kv_cache = attention->key_cache.data() != nullptr ||
-                attention->key_cache_int8.data() != nullptr;
-            buffers.key_cache_bf16 = attention->key_cache.data();
-            buffers.value_cache_bf16 = attention->value_cache.data();
-            buffers.key_cache_int8 = attention->key_cache_int8.data();
-            buffers.value_cache_int8 = attention->value_cache_int8.data();
-            buffers.key_cache_scales = attention->key_cache_scales.data();
-            buffers.value_cache_scales = attention->value_cache_scales.data();
+            buffers.owns_kv_cache = attention->key_cache_bf16() != nullptr ||
+                attention->key_cache_int8_ptr() != nullptr;
+            buffers.key_cache_bf16 = attention->key_cache_bf16();
+            buffers.value_cache_bf16 = attention->value_cache_bf16();
+            buffers.key_cache_int8 = attention->key_cache_int8_ptr();
+            buffers.value_cache_int8 = attention->value_cache_int8_ptr();
+            buffers.key_cache_scales = attention->key_cache_scales_ptr();
+            buffers.value_cache_scales = attention->value_cache_scales_ptr();
           },
           [&](ConvolutionLayer* convolution) {
             buffers.conv_state = convolution->conv_state.data();

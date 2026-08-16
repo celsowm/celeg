@@ -28,6 +28,37 @@ struct LayerCommon {
     const __nv_bfloat16* layer_scalar = nullptr;
 };
 
+// Mutually exclusive CUDA KV-cache runtime state families. Each attention
+// layer belongs to exactly one family, matching the semantic taxonomy in
+// `AttentionStateSpec` (celeg/model/graph.hpp): `OrdinaryKvStateSpec` splits
+// further into BF16 vs INT8 storage based on the runtime `KvCacheMode`
+// option, and `LatentAttentionStateSpec` maps to
+// `LatentAttentionRuntimeState`. A layer never owns buffers for a family it
+// does not use (e.g. an ordinary BF16 layer never allocates INT8 or latent
+// buffers). Buffers start empty and are lazily sized by `reset()`; a
+// shared-KV consumer layer (see `kv_owner_layer` below) keeps its buffers
+// empty forever and always reads through its owner instead.
+struct OrdinaryBf16KvState {
+    DeviceBuffer<__nv_bfloat16> key_cache;
+    DeviceBuffer<__nv_bfloat16> value_cache;
+};
+
+struct OrdinaryInt8KvState {
+    DeviceBuffer<int8_t> key_cache;
+    DeviceBuffer<int8_t> value_cache;
+    DeviceBuffer<float> key_scales;
+    DeviceBuffer<float> value_scales;
+};
+
+struct LatentAttentionRuntimeState {
+    DeviceBuffer<__nv_bfloat16> latent_key_cache;
+    DeviceBuffer<__nv_bfloat16> latent_value_cache;
+    DeviceBuffer<__nv_bfloat16> latent_key_rope_cache;
+};
+
+using AttentionRuntimeState = std::variant<
+    OrdinaryBf16KvState, OrdinaryInt8KvState, LatentAttentionRuntimeState>;
+
 struct AttentionLayer {
     LayerCommon common;
     AttentionSpec layout;
@@ -49,17 +80,111 @@ struct AttentionLayer {
     const __nv_bfloat16* latent_key_norm = nullptr;
     const __nv_bfloat16* q_norm = nullptr;
     const __nv_bfloat16* k_norm = nullptr;
-    DeviceBuffer<__nv_bfloat16> key_cache;
-    DeviceBuffer<__nv_bfloat16> value_cache;
-    DeviceBuffer<int8_t> key_cache_int8;
-    DeviceBuffer<int8_t> value_cache_int8;
-    DeviceBuffer<float> key_cache_scales;
-    DeviceBuffer<float> value_cache_scales;
-    DeviceBuffer<__nv_bfloat16> latent_key_cache;
-    DeviceBuffer<__nv_bfloat16> latent_value_cache;
-    DeviceBuffer<__nv_bfloat16> latent_key_rope_cache;
+    AttentionRuntimeState state = OrdinaryBf16KvState{};
     DeviceBuffer<float> alibi_slopes;
     int kv_owner_layer = -1;
+
+    OrdinaryBf16KvState* bf16_state() { return std::get_if<OrdinaryBf16KvState>(&state); }
+    const OrdinaryBf16KvState* bf16_state() const { return std::get_if<OrdinaryBf16KvState>(&state); }
+    OrdinaryInt8KvState* int8_state() { return std::get_if<OrdinaryInt8KvState>(&state); }
+    const OrdinaryInt8KvState* int8_state() const { return std::get_if<OrdinaryInt8KvState>(&state); }
+    LatentAttentionRuntimeState* latent_kv_state() {
+        return std::get_if<LatentAttentionRuntimeState>(&state);
+    }
+    const LatentAttentionRuntimeState* latent_kv_state() const {
+        return std::get_if<LatentAttentionRuntimeState>(&state);
+    }
+
+    __nv_bfloat16* key_cache_bf16() {
+        auto* s = bf16_state(); return s ? s->key_cache.data() : nullptr;
+    }
+    const __nv_bfloat16* key_cache_bf16() const {
+        auto* s = bf16_state(); return s ? s->key_cache.data() : nullptr;
+    }
+    __nv_bfloat16* value_cache_bf16() {
+        auto* s = bf16_state(); return s ? s->value_cache.data() : nullptr;
+    }
+    const __nv_bfloat16* value_cache_bf16() const {
+        auto* s = bf16_state(); return s ? s->value_cache.data() : nullptr;
+    }
+
+    int8_t* key_cache_int8_ptr() {
+        auto* s = int8_state(); return s ? s->key_cache.data() : nullptr;
+    }
+    const int8_t* key_cache_int8_ptr() const {
+        auto* s = int8_state(); return s ? s->key_cache.data() : nullptr;
+    }
+    int8_t* value_cache_int8_ptr() {
+        auto* s = int8_state(); return s ? s->value_cache.data() : nullptr;
+    }
+    const int8_t* value_cache_int8_ptr() const {
+        auto* s = int8_state(); return s ? s->value_cache.data() : nullptr;
+    }
+    float* key_cache_scales_ptr() {
+        auto* s = int8_state(); return s ? s->key_scales.data() : nullptr;
+    }
+    const float* key_cache_scales_ptr() const {
+        auto* s = int8_state(); return s ? s->key_scales.data() : nullptr;
+    }
+    float* value_cache_scales_ptr() {
+        auto* s = int8_state(); return s ? s->value_scales.data() : nullptr;
+    }
+    const float* value_cache_scales_ptr() const {
+        auto* s = int8_state(); return s ? s->value_scales.data() : nullptr;
+    }
+
+    __nv_bfloat16* latent_key_cache_ptr() {
+        auto* s = latent_kv_state(); return s ? s->latent_key_cache.data() : nullptr;
+    }
+    const __nv_bfloat16* latent_key_cache_ptr() const {
+        auto* s = latent_kv_state(); return s ? s->latent_key_cache.data() : nullptr;
+    }
+    __nv_bfloat16* latent_value_cache_ptr() {
+        auto* s = latent_kv_state(); return s ? s->latent_value_cache.data() : nullptr;
+    }
+    const __nv_bfloat16* latent_value_cache_ptr() const {
+        auto* s = latent_kv_state(); return s ? s->latent_value_cache.data() : nullptr;
+    }
+    __nv_bfloat16* latent_key_rope_cache_ptr() {
+        auto* s = latent_kv_state(); return s ? s->latent_key_rope_cache.data() : nullptr;
+    }
+    const __nv_bfloat16* latent_key_rope_cache_ptr() const {
+        auto* s = latent_kv_state(); return s ? s->latent_key_rope_cache.data() : nullptr;
+    }
+
+    size_t runtime_state_bytes() const {
+        return std::visit([](const auto& s) -> size_t {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, OrdinaryBf16KvState>) {
+                return s.key_cache.bytes() + s.value_cache.bytes();
+            } else if constexpr (std::is_same_v<T, OrdinaryInt8KvState>) {
+                return s.key_cache.bytes() + s.value_cache.bytes() +
+                    s.key_scales.bytes() + s.value_scales.bytes();
+            } else {
+                return s.latent_key_cache.bytes() + s.latent_value_cache.bytes() +
+                    s.latent_key_rope_cache.bytes();
+            }
+        }, state);
+    }
+
+    void release_runtime_state_buffers() {
+        std::visit([](auto& s) {
+            using T = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<T, OrdinaryBf16KvState>) {
+                s.key_cache.reset(0);
+                s.value_cache.reset(0);
+            } else if constexpr (std::is_same_v<T, OrdinaryInt8KvState>) {
+                s.key_cache.reset(0);
+                s.value_cache.reset(0);
+                s.key_scales.reset(0);
+                s.value_scales.reset(0);
+            } else {
+                s.latent_key_cache.reset(0);
+                s.latent_value_cache.reset(0);
+                s.latent_key_rope_cache.reset(0);
+            }
+        }, state);
+    }
 };
 
 struct ConvolutionLayer {

@@ -115,17 +115,17 @@ void run_factorized_latent_attention(
         workspace.prefill_latent_key_.data(),
         workspace.prefill_latent_value_.data(),
         workspace.prefill_latent_key_rope_.data(),
-        owner.latent_key_cache.data(), owner.latent_value_cache.data(),
-        owner.latent_key_rope_cache.data(),
+        owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
+        owner.latent_key_rope_cache_ptr(),
         rows, latent.latent_rank, latent.rope_head_dim, model.stream_.get());
     launch_latent_attention_prefill({
         .query = {
             .content = workspace.prefill_latent_query_content_.data(),
             .rope = workspace.prefill_latent_query_rope_.data()},
         .kv = {
-            .keys = owner.latent_key_cache.data(),
-            .values = owner.latent_value_cache.data(),
-            .key_rope = owner.latent_key_rope_cache.data()},
+            .keys = owner.latent_key_cache_ptr(),
+            .values = owner.latent_value_cache_ptr(),
+            .key_rope = owner.latent_key_rope_cache_ptr()},
         .out = workspace.prefill_op_output_.data(),
         .extent = {.rows = rows},
         .alibi_slopes = attention.alibi_slopes.data(),

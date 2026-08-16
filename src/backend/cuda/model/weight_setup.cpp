@@ -434,13 +434,15 @@ void CudaCompiledModel::load_checkpoint_weights(
                                       TensorRole::AttentionLatentOutput, i),
                     {resources_.program_.hidden, layout.latent_query_content_width()});
                 }
+                attention_layer.state = LatentAttentionRuntimeState{};
                 if (resources_.options_.allocate_local_kv_cache && owns_latent_state) {
-                    attention_layer.latent_key_cache.reset(
+                    auto& latent_state = std::get<LatentAttentionRuntimeState>(attention_layer.state);
+                    latent_state.latent_key_cache.reset(
                         static_cast<size_t>(max_context_) * latent.latent_rank);
-                    attention_layer.latent_value_cache.reset(
+                    latent_state.latent_value_cache.reset(
                         static_cast<size_t>(max_context_) * latent.latent_rank);
                     if (latent.decoupled_rope && latent.rope_head_dim != 0) {
-                        attention_layer.latent_key_rope_cache.reset(
+                        latent_state.latent_key_rope_cache.reset(
                             static_cast<size_t>(max_context_) * latent.rope_head_dim);
                     }
                 }
@@ -495,20 +497,27 @@ void CudaCompiledModel::load_checkpoint_weights(
                 }
             }
 
+            if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
+                attention_layer.state = OrdinaryInt8KvState{};
+            } else {
+                attention_layer.state = OrdinaryBf16KvState{};
+            }
             if (resources_.options_.allocate_local_kv_cache && attention_layer.key) {
                 const size_t cache_elements = static_cast<size_t>(max_context_) *
                     static_cast<size_t>(layout.key_value_width());
                 if (resources_.options_.kv_cache_mode == KvCacheMode::Int8) {
-                    attention_layer.key_cache_int8.reset(cache_elements);
-                    attention_layer.value_cache_int8.reset(cache_elements);
+                    auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention_layer.state);
+                    ordinary_state.key_cache.reset(cache_elements);
+                    ordinary_state.value_cache.reset(cache_elements);
                     const size_t scale_elements =
                         static_cast<size_t>(max_context_) *
                         static_cast<size_t>(layout.key_value_heads);
-                    attention_layer.key_cache_scales.reset(scale_elements);
-                    attention_layer.value_cache_scales.reset(scale_elements);
+                    ordinary_state.key_scales.reset(scale_elements);
+                    ordinary_state.value_scales.reset(scale_elements);
                 } else {
-                    attention_layer.key_cache.reset(cache_elements);
-                    attention_layer.value_cache.reset(cache_elements);
+                    auto& ordinary_state = std::get<OrdinaryBf16KvState>(attention_layer.state);
+                    ordinary_state.key_cache.reset(cache_elements);
+                    ordinary_state.value_cache.reset(cache_elements);
                 }
             }
             if (kv_sharing_publishes(layout.kv_sharing)) {

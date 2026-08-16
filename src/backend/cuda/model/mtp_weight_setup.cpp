@@ -248,15 +248,19 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
         const size_t cache_elements = static_cast<size_t>(model.max_context_) *
             static_cast<size_t>(mtp_layout.key_value_width());
         if (resources.options_.kv_cache_mode == KvCacheMode::Int8) {
-            attention.key_cache_int8.reset(cache_elements);
-            attention.value_cache_int8.reset(cache_elements);
+            attention.state = OrdinaryInt8KvState{};
+            auto& ordinary_state = std::get<OrdinaryInt8KvState>(attention.state);
+            ordinary_state.key_cache.reset(cache_elements);
+            ordinary_state.value_cache.reset(cache_elements);
             const size_t scales = static_cast<size_t>(model.max_context_) *
                 static_cast<size_t>(mtp_layout.key_value_heads);
-            attention.key_cache_scales.reset(scales);
-            attention.value_cache_scales.reset(scales);
+            ordinary_state.key_scales.reset(scales);
+            ordinary_state.value_scales.reset(scales);
         } else {
-            attention.key_cache.reset(cache_elements);
-            attention.value_cache.reset(cache_elements);
+            attention.state = OrdinaryBf16KvState{};
+            auto& ordinary_state = std::get<OrdinaryBf16KvState>(attention.state);
+            ordinary_state.key_cache.reset(cache_elements);
+            ordinary_state.value_cache.reset(cache_elements);
         }
         mtp.layers.emplace_back(std::move(attention));
     }
