@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace celeg {
@@ -45,6 +46,25 @@ struct InferenceProposal {
 
     friend bool operator==(const InferenceProposal&, const InferenceProposal&) = default;
 };
+
+// Inferred positional-encoding outcome for a checkpoint's attention layers.
+// Exactly one alternative is ever populated, so an inferred RoPE payload can
+// never coexist with a "no position encoding" conclusion, and generic
+// semantic code consumes only this variant -- never an architecture name.
+struct UnresolvedPositionEncoding {};
+
+struct InferredRopePosition {
+    double theta = 0.0;
+    float rotary_fraction = 1.0f;
+    RopePairingKind pairing = RopePairingKind::SplitHalf;
+
+    friend bool operator==(const InferredRopePosition&, const InferredRopePosition&) = default;
+};
+
+using InferredPositionEncoding = std::variant<
+    UnresolvedPositionEncoding,
+    NoPositionEncodingSpec,
+    InferredRopePosition>;
 
 template <typename T>
 struct LayerScopedValue {
@@ -142,9 +162,7 @@ struct NormalizedModelMetadata {
     std::optional<float> logits_multiplier;
     std::optional<float> logits_divisor;
     std::optional<int> shortconv_cache;
-    std::optional<double> rope_theta;
-    std::optional<float> rotary_fraction;
-    std::optional<bool> uses_rope;
+    InferredPositionEncoding position_encoding = UnresolvedPositionEncoding{};
     std::optional<int> bos_token_id;
     std::vector<int> eos_token_ids;
     std::optional<int> pad_token_id;
@@ -152,7 +170,6 @@ struct NormalizedModelMetadata {
     std::optional<bool> xsa_projection;
     std::optional<float> xsa_minimum_norm_squared;
     std::optional<bool> tied_embeddings;
-    std::optional<RopePairingKind> rope_pairing;
     std::vector<EvidenceItem> evidence;
     std::optional<bool> feed_forward_auto_adjust;
     std::optional<int> first_dense_layer;

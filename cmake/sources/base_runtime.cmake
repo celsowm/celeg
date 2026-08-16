@@ -8,6 +8,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/formats/gguf.cpp
     src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp
+    src/checkpoint/gguf_position_profile.cpp
     src/checkpoint/repositories/safetensors.cpp
     src/checkpoint/repositories/gguf.cpp
     src/checkpoint/repositories/detail/gguf_tensor_mapper.cpp

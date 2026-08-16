@@ -117,6 +117,29 @@ std::shared_ptr<MemoryRepository> gguf_repository() {
     return result;
 }
 
+celeg::CheckpointMetadata no_rope_gguf_metadata() {
+    // Same structural/tensor grammar as gguf_metadata() (ordinary attention
+    // tensors, via gguf_repository()), but declares a GGUF architecture that
+    // is known to never apply RoPE despite carrying an active-looking
+    // "rope.freq_base"/"rope.dimension_count". This mirrors the real
+    // Nemotron-H bug: vestigial rope hparams inherited from a related
+    // architecture family that the reference graph never consumes.
+    celeg::CheckpointMetadata result = gguf_metadata();
+    result.values["general.architecture"] = std::string("mamba2");
+    for (const std::string_view suffix : {"embedding_length", "feed_forward_length",
+                                          "block_count", "attention.head_count",
+                                          "attention.head_count_kv", "attention.key_length",
+                                          "vocab_size", "context_length",
+                                          "attention.layer_norm_rms_epsilon", "rope.freq_base"}) {
+        const std::string old_key = "conventional." + std::string(suffix);
+        const std::string new_key = "mamba2." + std::string(suffix);
+        result.values[new_key] = result.values.at(old_key);
+        result.values.erase(old_key);
+    }
+    result.values["mamba2.rope.dimension_count"] = int64_t(2);
+    return result;
+}
+
 celeg::CheckpointMetadata hybrid_gguf_metadata() {
     celeg::CheckpointMetadata result = gguf_metadata();
     result.values["general.architecture"] = std::string("hybrid");
@@ -294,6 +317,25 @@ int main() {
     CELEG_TEST_CHECK(gguf_model.graph.hidden == 8);
     CELEG_TEST_CHECK(gguf_model.graph.layers.size() == 2);
     CELEG_TEST_CHECK(celeg::explain_resolution(gguf_checkpoint).failures.empty());
+    // A GGUF architecture absent from the no-RoPE profile, with active
+    // "rope.freq_base" metadata, must resolve to a real RopePositionSpec:
+    // generic inference does not treat all GGUF checkpoints as position-free,
+    // only the ones the format boundary declares as such.
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::RopePositionSpec>(
+        std::get<celeg::AttentionSpec>(gguf_model.graph.layers[0].mixer).position));
+
+    celeg::CheckpointView no_rope_checkpoint;
+    no_rope_checkpoint.metadata = no_rope_gguf_metadata();
+    no_rope_checkpoint.repository = gguf_repository();
+    const celeg::ResolvedModel no_rope_model =
+        catalog.select(no_rope_checkpoint.metadata).resolve(no_rope_checkpoint);
+    // Same tensor grammar and same "active-looking" rope hparams as
+    // gguf_model above, but a GGUF architecture the format boundary knows
+    // never applies RoPE: the resolved attention layer must carry
+    // NoPositionEncodingSpec regardless of the vestigial rope metadata.
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+        std::get<celeg::AttentionSpec>(no_rope_model.graph.layers[0].mixer).position));
+    CELEG_TEST_CHECK(celeg::explain_resolution(no_rope_checkpoint).failures.empty());
 
     auto tokenizer_vocab = gguf_metadata();
     tokenizer_vocab.values.erase("conventional.vocab_size");
@@ -360,6 +402,22 @@ int main() {
             error.kind() == celeg::ResolutionFailureKind::ConflictingMetadata;
     }
     CELEG_TEST_CHECK(conflicting_scope_rejected);
+
+    // NormalizedModelMetadata::position_encoding is the single canonical
+    // representation of inferred positional semantics: a checkpoint carrying
+    // "active-looking" rope hparams under a no-RoPE GGUF architecture must
+    // resolve to NoPositionEncodingSpec (not a RoPE payload the runtime
+    // happens to ignore), and a checkpoint under an ordinary GGUF
+    // architecture with the same hparams must resolve to a real
+    // InferredRopePosition carrying those values through unmodified.
+    const auto no_rope_facts = celeg::normalize_model_metadata(no_rope_gguf_metadata());
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
+        no_rope_facts.position_encoding));
+    const auto rope_facts = celeg::normalize_model_metadata(gguf_metadata());
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::InferredRopePosition>(
+        rope_facts.position_encoding));
+    CELEG_TEST_CHECK(std::get<celeg::InferredRopePosition>(rope_facts.position_encoding).theta ==
+        10000.0);
 
     auto ling_alias = metadata();
     ling_alias.values.erase("qk_norm");

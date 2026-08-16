@@ -2,6 +2,7 @@
 #include "support.hpp"
 
 #include <cmath>
+#include <type_traits>
 
 namespace celeg::inference_detail {
 namespace {
@@ -47,16 +48,21 @@ AttentionSpec make_attention(
     attention.key_norm = attention.query_norm;
     attention.pattern = FullCausalPattern{};
     attention.query_scale = 1.0f;
-    if (metadata.uses_rope.has_value() && !*metadata.uses_rope) {
-        attention.position = NoPositionEncodingSpec{};
-    } else {
-        attention.position = RopePositionSpec{
-            *metadata.rope_theta,
-            *metadata.rotary_fraction,
-            RopeScalingSpec{}};
-        std::get<RopePositionSpec>(attention.position).pairing =
-            *metadata.rope_pairing;
-    }
+    std::visit([&](const auto& position) {
+        using T = std::decay_t<decltype(position)>;
+        if constexpr (std::is_same_v<T, NoPositionEncodingSpec>) {
+            attention.position = NoPositionEncodingSpec{};
+        } else if constexpr (std::is_same_v<T, InferredRopePosition>) {
+            RopePositionSpec rope{position.theta, position.rotary_fraction, RopeScalingSpec{}};
+            rope.pairing = position.pairing;
+            attention.position = rope;
+        } else if constexpr (std::is_same_v<T, UnresolvedPositionEncoding>) {
+            fail(ResolutionFailureKind::MissingRequiredMetadata,
+                "positional encoding could not be resolved from checkpoint metadata");
+        } else {
+            static_assert(always_false_v<T>, "unhandled inferred position encoding alternative");
+        }
+    }, metadata.position_encoding);
     if (*metadata.xsa_projection) {
         attention.output_transform = OrthogonalizeCurrentValueSpec{
             *metadata.xsa_minimum_norm_squared};

@@ -1,5 +1,6 @@
 #include "celeg/model/inference.hpp"
 
+#include "celeg/checkpoint/gguf_position_profile.hpp"
 #include "support.hpp"
 
 #include <algorithm>
@@ -10,20 +11,6 @@
 
 namespace celeg {
 namespace {
-
-// GGUF architectures whose reference graph builders never apply RoPE to
-// attention layers (llama.cpp: llama_model_rope_type() -> LLAMA_ROPE_TYPE_NONE),
-// even though their GGUF metadata may still carry rope hparams inherited from
-// a related architecture family.
-bool architecture_never_uses_rope(const std::string& architecture) {
-    static const std::unordered_set<std::string> kNoRopeArchitectures = {
-        "clip", "gpt2", "gptj", "mpt", "refact", "bloom",
-        "mamba", "mamba2", "jamba", "jina-bert-v2", "t5", "t5encoder",
-        "jais", "rwkv6", "rwkv6qwen2", "rwkv7", "arwkv7",
-        "wavtokenizer-dec", "nemotron_h", "nemotron_h_moe", "kimi-linear",
-    };
-    return kNoRopeArchitectures.contains(architecture);
-}
 
 template <typename T>
 std::optional<T> scalar(const CheckpointMetadata& metadata, std::string_view key) {
@@ -428,22 +415,13 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "logits_divisor");
     result.shortconv_cache = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                           "shortconv_cache", "shortconv.l_cache");
-    result.rope_theta = aliases<double>(metadata, {"rope_theta"}, result.evidence,
-                                         "rope_theta", "rope.freq_base");
-    result.rotary_fraction = aliases<float>(metadata, {"rotary_fraction"}, result.evidence,
-                                            "rotary_fraction");
-    if (metadata.is_gguf() && architecture_never_uses_rope(metadata.architecture_type())) {
-        // Some GGUF architectures (mostly hybrid recurrent/attention models
-        // whose position information already flows through the recurrent
-        // state) carry vestigial "<arch>.rope.dimension_count" hparams that
-        // the reference graph builder never actually applies to the
-        // attention layers. Applying RoPE anyway corrupts every attention
-        // layer's positional structure, so treat these architectures as
-        // never using RoPE regardless of what rope metadata is present.
-        result.uses_rope = false;
-        result.evidence.push_back({EvidenceKind::FormatGuarantee, "architecture",
-                                   metadata.architecture_type() + " does not use RoPE"});
-    } else if (!result.rotary_fraction.has_value() && metadata.is_gguf()) {
+    std::optional<double> rope_theta = aliases<double>(
+        metadata, {"rope_theta"}, result.evidence, "rope_theta", "rope.freq_base");
+    std::optional<float> rotary_fraction = aliases<float>(
+        metadata, {"rotary_fraction"}, result.evidence, "rotary_fraction");
+    const bool architecture_never_applies_rope = metadata.is_gguf() &&
+        gguf_architecture_never_applies_rope(metadata.architecture_type());
+    if (!architecture_never_applies_rope && !rotary_fraction.has_value() && metadata.is_gguf()) {
         // GGUF stores partial rotary as an absolute dimension count
         // ("<arch>.rope.dimension_count"), not a fraction of head_dim like the
         // HF-config "rotary_fraction"/"partial_rotary_factor" convention does.
@@ -459,10 +437,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                       ? std::optional<int>(*result.hidden_size / *result.query_heads.global)
                       : std::nullopt;
             if (effective_head_dim.has_value() && *effective_head_dim > 0) {
-                result.rotary_fraction = static_cast<float>(*rope_dimension_count) /
+                rotary_fraction = static_cast<float>(*rope_dimension_count) /
                     static_cast<float>(*effective_head_dim);
                 result.evidence.push_back({EvidenceKind::AliasMetadata, rope_dim_key,
-                    "rotary_fraction = " + std::to_string(*result.rotary_fraction)});
+                    "rotary_fraction = " + std::to_string(*rotary_fraction)});
             }
         }
     }
@@ -584,28 +562,41 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     if (!result.residual_multiplier.has_value()) result.residual_multiplier = 1.0f;
     if (!result.logits_multiplier.has_value()) result.logits_multiplier = 1.0f;
     if (!result.logits_divisor.has_value()) result.logits_divisor = 1.0f;
-    if (!result.rope_theta.has_value()) result.rope_theta = 100000.0;
-    if (!result.rotary_fraction.has_value()) result.rotary_fraction = 1.0f;
     if (!result.query_key_norm.has_value()) result.query_key_norm = false;
     if (!result.xsa_projection.has_value()) result.xsa_projection = false;
     if (!result.xsa_minimum_norm_squared.has_value()) result.xsa_minimum_norm_squared = 1.0e-6f;
 
-    if (metadata.contains("rope_pairing")) {
-        const std::string pairing = metadata.string("rope_pairing");
-        if (pairing == "adjacent_pairs" || pairing == "interleaved") {
-            result.rope_pairing = RopePairingKind::AdjacentPairs;
-        } else if (pairing == "split_half") {
-            result.rope_pairing = RopePairingKind::SplitHalf;
-        } else {
-            inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
-                                   "unsupported RoPE pairing: " + pairing);
-        }
-    } else if (*result.xsa_projection) {
-        result.rope_pairing = RopePairingKind::AdjacentPairs;
-        result.evidence.push_back({EvidenceKind::FormatGuarantee, "xsa_projection",
-                                   "RoPE pairing = adjacent_pairs"});
+    if (architecture_never_applies_rope) {
+        // Some GGUF architectures (mostly hybrid recurrent/attention models
+        // whose position information already flows through the recurrent
+        // state) carry vestigial RoPE hparams that the reference graph
+        // builder never actually applies to the attention layers. Applying
+        // RoPE anyway corrupts every attention layer's positional structure,
+        // so the GGUF format boundary overrides any rope metadata present.
+        result.position_encoding = NoPositionEncodingSpec{};
+        result.evidence.push_back({EvidenceKind::FormatGuarantee, "architecture",
+                                   metadata.architecture_type() + " does not use RoPE"});
     } else {
-        result.rope_pairing = RopePairingKind::SplitHalf;
+        RopePairingKind pairing = RopePairingKind::SplitHalf;
+        if (metadata.contains("rope_pairing")) {
+            const std::string pairing_value = metadata.string("rope_pairing");
+            if (pairing_value == "adjacent_pairs" || pairing_value == "interleaved") {
+                pairing = RopePairingKind::AdjacentPairs;
+            } else if (pairing_value == "split_half") {
+                pairing = RopePairingKind::SplitHalf;
+            } else {
+                inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                                       "unsupported RoPE pairing: " + pairing_value);
+            }
+        } else if (*result.xsa_projection) {
+            pairing = RopePairingKind::AdjacentPairs;
+            result.evidence.push_back({EvidenceKind::FormatGuarantee, "xsa_projection",
+                                       "RoPE pairing = adjacent_pairs"});
+        }
+        result.position_encoding = InferredRopePosition{
+            rope_theta.value_or(100000.0),
+            rotary_fraction.value_or(1.0f),
+            pairing};
     }
     return result;
 }
