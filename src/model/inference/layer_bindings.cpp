@@ -43,8 +43,7 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
         }
     }
     if (head == nullptr) {
-        if (input.source_format == CheckpointSourceFormat::Gguf &&
-            !m.tied_embeddings.has_value()) {
+        if (input.is_gguf() && !m.tied_embeddings.has_value()) {
             facts.tied_embeddings = true;
             facts.evidence.push_back({
                 EvidenceKind::FormatGuarantee,

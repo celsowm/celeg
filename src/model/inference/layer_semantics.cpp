@@ -132,7 +132,6 @@ void infer_fused_gated_delta(
                 std::to_string(layer));
     }
 
-    const bool a_log_is_gguf_native = a_log->name.rfind("blk.", 0) == 0;
     semantic_layer.mixer = GatedDeltaNetSpec{
         m.mamba_conv_kernel.value_or(0),
         key_dim,
@@ -144,7 +143,7 @@ void infer_fused_gated_delta(
         -5.0f,
         false,
         false,
-        !a_log_is_gguf_native};
+        !input.is_gguf()};
     if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
@@ -209,7 +208,6 @@ void infer_factorized_gated_delta(
                 std::to_string(layer));
     }
 
-    const bool a_log_is_gguf_native = a_log->name.rfind("blk.", 0) == 0;
     semantic_layer.mixer = GatedDeltaNetSpec{
         conv_kernel,
         key_dim,
@@ -221,7 +219,7 @@ void infer_factorized_gated_delta(
         m.recurrent_decay_lower_bound.value_or(-5.0f),
         true,
         true,
-        !a_log_is_gguf_native};
+        !input.is_gguf()};
     if (!has_ffn) semantic_layer.feed_forward = std::monostate{};
 }
 
@@ -403,7 +401,6 @@ void infer_mamba2(
                 std::to_string(layer));
     }
 
-    const bool a_log_is_gguf_native = a_log->name.rfind("blk.", 0) == 0;
     semantic_layer.mixer = Mamba2Spec{
         conv_kernel,
         inner,
@@ -415,7 +412,7 @@ void infer_mamba2(
         chunk_size,
         true,
         false,
-        !a_log_is_gguf_native};
+        !input.is_gguf()};
     semantic_layer.feed_forward = std::monostate{};
 }
 
