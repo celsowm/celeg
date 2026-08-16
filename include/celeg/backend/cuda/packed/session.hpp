@@ -42,11 +42,20 @@ struct PackedExecutionServices {
     SharedModelWeights* weights = nullptr;
     ExpertResidencyWorkspace* residency_workspace = nullptr;
 
-    explicit operator bool() const noexcept { return session_identity != nullptr; }
+    // A packed session is only usable once every required dependency is
+    // bound. session_identity alone was previously trusted as a proxy for
+    // overall validity, which let a partially-populated instance (e.g.
+    // constructed by hand rather than through packed_session_context())
+    // pass validity checks while other pointers stayed null.
+    explicit operator bool() const noexcept {
+        return session_identity != nullptr && execution_plan != nullptr &&
+               program != nullptr && weights != nullptr &&
+               residency_workspace != nullptr;
+    }
 
     friend bool operator==(const PackedExecutionServices& services,
                            std::nullptr_t) noexcept {
-        return services.session_identity == nullptr;
+        return !services;
     }
     friend bool operator==(std::nullptr_t,
                            const PackedExecutionServices& services) noexcept {
