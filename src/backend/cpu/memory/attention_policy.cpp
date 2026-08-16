@@ -85,7 +85,7 @@ CpuAttentionBias CpuAttentionBias::lower(const AttentionBiasSpec& bias,
                                          std::span<const float> relative_values,
                                          int query_heads) {
     if (const auto* alibi = std::get_if<AlibiBiasSpec>(&bias)) {
-        return {alibi->slopes.data(), alibi->slopes.size()};
+        return {CpuAlibiBiasView{alibi->slopes.data(), alibi->slopes.size()}};
     }
     if (const auto* relative = std::get_if<RelativePositionBiasSpec>(&bias)) {
         if (query_heads <= 0 || relative->bucket_count <= 0 ||
@@ -94,53 +94,74 @@ CpuAttentionBias CpuAttentionBias::lower(const AttentionBiasSpec& bias,
                     static_cast<size_t>(relative->bucket_count)) {
             throw std::invalid_argument("relative position bias dimensions are invalid");
         }
-        return {nullptr, 0, relative_values.data(), relative->bucket_count,
-                relative->max_distance, relative->bidirectional};
+        return {CpuRelativeBiasView{relative_values.data(), relative->bucket_count,
+                                    relative->max_distance, relative->bidirectional}};
     }
     return {};
 }
 
-float CpuAttentionBias::score(int query_head, int query_position,
-                              int key_position) const {
-    if (empty()) return 0.0f;
-    if (relative_values != nullptr && relative_bucket_count != 0) {
-        if (query_head < 0) {
-            throw std::invalid_argument("relative position bias query head is out of range");
-        }
-        const int relative_position = key_position - query_position;
-        const int bucket_count = relative_bidirectional
-            ? relative_bucket_count / 2 : relative_bucket_count;
-        if (bucket_count <= 0) {
-            throw std::invalid_argument("relative position bias bucket count is invalid");
-        }
-        const bool positive = relative_bidirectional && relative_position > 0;
-        const int distance = relative_bidirectional
-            ? std::abs(relative_position) : std::max(-relative_position, 0);
-        const int max_exact = bucket_count / 2;
-        int bucket = 0;
-        if (distance < max_exact) {
-            bucket = distance;
-        } else {
-            const float denominator = std::log(
-                static_cast<float>(std::max(relative_max_distance, max_exact + 1)) /
-                static_cast<float>(std::max(max_exact, 1)));
-            const float logarithmic = denominator == 0.0f ? 0.0f : std::log(
-                static_cast<float>(std::max(distance, max_exact)) /
-                static_cast<float>(std::max(max_exact, 1))) / denominator;
-            bucket = max_exact + static_cast<int>(
-                logarithmic * static_cast<float>(bucket_count - max_exact));
-            bucket = std::min(bucket, bucket_count - 1);
-        }
-        if (positive) bucket += bucket_count;
-        return relative_values[static_cast<size_t>(query_head) *
-                               static_cast<size_t>(relative_bucket_count) +
-                               static_cast<size_t>(bucket)];
+namespace {
+
+float score_relative_bias(const CpuRelativeBiasView& relative, int query_head,
+                          int query_position, int key_position) {
+    if (query_head < 0) {
+        throw std::invalid_argument("relative position bias query head is out of range");
     }
-    if (query_head < 0 || static_cast<size_t>(query_head) >= slope_count) {
+    const int relative_position = key_position - query_position;
+    const int bucket_count = relative.bidirectional
+        ? relative.bucket_count / 2 : relative.bucket_count;
+    if (bucket_count <= 0) {
+        throw std::invalid_argument("relative position bias bucket count is invalid");
+    }
+    const bool positive = relative.bidirectional && relative_position > 0;
+    const int distance = relative.bidirectional
+        ? std::abs(relative_position) : std::max(-relative_position, 0);
+    const int max_exact = bucket_count / 2;
+    int bucket = 0;
+    if (distance < max_exact) {
+        bucket = distance;
+    } else {
+        const float denominator = std::log(
+            static_cast<float>(std::max(relative.max_distance, max_exact + 1)) /
+            static_cast<float>(std::max(max_exact, 1)));
+        const float logarithmic = denominator == 0.0f ? 0.0f : std::log(
+            static_cast<float>(std::max(distance, max_exact)) /
+            static_cast<float>(std::max(max_exact, 1))) / denominator;
+        bucket = max_exact + static_cast<int>(
+            logarithmic * static_cast<float>(bucket_count - max_exact));
+        bucket = std::min(bucket, bucket_count - 1);
+    }
+    if (positive) bucket += bucket_count;
+    return relative.values[static_cast<size_t>(query_head) *
+                           static_cast<size_t>(relative.bucket_count) +
+                           static_cast<size_t>(bucket)];
+}
+
+float score_alibi_bias(const CpuAlibiBiasView& alibi, int query_head,
+                       int query_position, int key_position) {
+    if (query_head < 0 || static_cast<size_t>(query_head) >= alibi.slope_count) {
         throw std::invalid_argument("ALiBi query head is out of range");
     }
-    return -alibi_slopes[static_cast<size_t>(query_head)] *
+    return -alibi.slopes[static_cast<size_t>(query_head)] *
         static_cast<float>(std::abs(query_position - key_position));
+}
+
+}
+
+float CpuAttentionBias::score(int query_head, int query_position,
+                              int key_position) const {
+    return std::visit([&](const auto& value) -> float {
+        using View = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<View, CpuNoAttentionBiasView>) {
+            return 0.0f;
+        } else if constexpr (std::is_same_v<View, CpuAlibiBiasView>) {
+            return score_alibi_bias(value, query_head, query_position, key_position);
+        } else if constexpr (std::is_same_v<View, CpuRelativeBiasView>) {
+            return score_relative_bias(value, query_head, query_position, key_position);
+        } else {
+            static_assert(always_false_v<View>, "unhandled CPU attention bias variant");
+        }
+    }, storage);
 }
 
 }

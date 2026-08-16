@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <variant>
 #include <vector>
 
 namespace celeg {
@@ -152,20 +153,31 @@ struct CpuAttentionPattern {
     }
 };
 
-struct CpuAttentionBias {
-    const float* alibi_slopes = nullptr;
+struct CpuNoAttentionBiasView {};
+
+struct CpuAlibiBiasView {
+    const float* slopes = nullptr;
     size_t slope_count = 0;
-    const float* relative_values = nullptr;
-    int relative_bucket_count = 0;
-    int relative_max_distance = 0;
-    bool relative_bidirectional = false;
+};
+
+struct CpuRelativeBiasView {
+    const float* values = nullptr;
+    int bucket_count = 0;
+    int max_distance = 0;
+    bool bidirectional = false;
+};
+
+using CpuAttentionBiasStorage = std::variant<CpuNoAttentionBiasView, CpuAlibiBiasView,
+                                             CpuRelativeBiasView>;
+
+struct CpuAttentionBias {
+    CpuAttentionBiasStorage storage = CpuNoAttentionBiasView{};
 
     static CpuAttentionBias lower(const AttentionBiasSpec& bias,
                                   std::span<const float> relative_values = {},
                                   int query_heads = 0);
     bool empty() const {
-        return (alibi_slopes == nullptr || slope_count == 0) &&
-               (relative_values == nullptr || relative_bucket_count == 0);
+        return std::holds_alternative<CpuNoAttentionBiasView>(storage);
     }
     float score(int query_head, int query_position, int key_position) const;
 };

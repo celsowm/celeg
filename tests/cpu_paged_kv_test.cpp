@@ -117,7 +117,8 @@ static void run(celeg::CpuKvCacheMode mode) {
         }
 
         const std::vector<float> slopes(q_heads, 0.05f);
-        const celeg::CpuAttentionBias alibi{slopes.data(), slopes.size()};
+        const celeg::CpuAttentionBias alibi{
+            celeg::CpuAlibiBiasView{slopes.data(), slopes.size()}};
         const auto expected_alibi = reference_pattern(
             query, reference_keys, reference_values, sequence,
             q_heads, kv_heads, head_dim, sequence - 1,
