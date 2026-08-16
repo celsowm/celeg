@@ -7,6 +7,7 @@
 #include "celeg/model/program.hpp"
 
 #include <cstddef>
+#include <type_traits>
 #include <variant>
 
 namespace celeg {
@@ -16,22 +17,35 @@ struct DenseFfnWeights {
     const LinearWeight* w2 = nullptr;
 };
 
+struct ResidentExpertWeights {
+    const ExpertLinearWeight* gate_up = nullptr;
+    const ExpertLinearWeight* down = nullptr;
+};
+
+struct OffloadedExpertWeights {
+    const __nv_bfloat16* const* gate_up = nullptr;
+    const __nv_bfloat16* const* down = nullptr;
+};
+
+using ExpertWeightStorage = std::variant<
+    ResidentExpertWeights,
+    OffloadedExpertWeights>;
+
 struct MoeFfnWeights {
     const LinearWeight* router = nullptr;
     const float* expert_bias = nullptr;
-    const ExpertLinearWeight* gate_up = nullptr;
-    const ExpertLinearWeight* down = nullptr;
     const float* router_float = nullptr;
 
-    const __nv_bfloat16* const* gate_up_ptrs = nullptr;
-    const __nv_bfloat16* const* down_ptrs = nullptr;
+    ExpertWeightStorage storage = ResidentExpertWeights{};
 
     const LinearWeight* shared_w13 = nullptr;
     const LinearWeight* shared_w2 = nullptr;
     const LinearWeight* shared_gate = nullptr;
-
-    bool offloaded() const { return gate_up_ptrs != nullptr; }
 };
+
+inline bool moe_experts_offloaded(const MoeFfnWeights& moe) {
+    return std::holds_alternative<OffloadedExpertWeights>(moe.storage);
+}
 
 using FeedForwardWeights = std::variant<
     std::monostate,
@@ -81,31 +95,36 @@ inline celeg::MoeFfnDevice moe_ffn_device(const MoeFfnWeights& moe,
     fdev.num_experts = semantics.router.expert_count;
     fdev.inter = semantics.routed.mlp.intermediate_size;
     fdev.hidden_dim = semantics.routed.mlp.hidden_size;
-    if (moe.offloaded()) {
-        fdev.gate_up_ptrs = moe.gate_up_ptrs;
-        fdev.down_ptrs = moe.down_ptrs;
-    } else {
-        if (moe.gate_up->kind == ExpertStorageKind::Q4_K ||
-            moe.gate_up->kind == ExpertStorageKind::Q6_K) {
-            fdev.gate_up_gguf = moe.gate_up->gguf_blocks;
-            fdev.down_gguf = moe.down->gguf_blocks;
-            fdev.gate_up_gguf_type = moe.gate_up->gguf_type;
-            fdev.down_gguf_type = moe.down->gguf_type;
-            fdev.expert_gate_up_row_bytes = moe.gate_up->gguf_row_bytes;
-            fdev.expert_down_row_bytes = moe.down->gguf_row_bytes;
-            fdev.expert_gate_up_byte_stride = moe.gate_up->gguf_expert_stride;
-            fdev.expert_down_byte_stride = moe.down->gguf_expert_stride;
+    std::visit([&](const auto& expert_storage) {
+        using T = std::decay_t<decltype(expert_storage)>;
+        if constexpr (std::is_same_v<T, OffloadedExpertWeights>) {
+            fdev.gate_up_ptrs = expert_storage.gate_up;
+            fdev.down_ptrs = expert_storage.down;
         } else {
-            fdev.gate_up = moe.gate_up->bf16;
-            fdev.down = moe.down->bf16;
-            fdev.expert_gate_up_stride =
-                static_cast<size_t>(2) * semantics.routed.mlp.intermediate_size *
-                    semantics.routed.mlp.hidden_size;
-            fdev.expert_down_stride =
-                static_cast<size_t>(semantics.routed.mlp.hidden_size) *
-                    semantics.routed.mlp.intermediate_size;
+            const ExpertLinearWeight* gate_up = expert_storage.gate_up;
+            const ExpertLinearWeight* down = expert_storage.down;
+            if (gate_up->kind == ExpertStorageKind::Q4_K ||
+                gate_up->kind == ExpertStorageKind::Q6_K) {
+                fdev.gate_up_gguf = gate_up->gguf_blocks;
+                fdev.down_gguf = down->gguf_blocks;
+                fdev.gate_up_gguf_type = gate_up->gguf_type;
+                fdev.down_gguf_type = down->gguf_type;
+                fdev.expert_gate_up_row_bytes = gate_up->gguf_row_bytes;
+                fdev.expert_down_row_bytes = down->gguf_row_bytes;
+                fdev.expert_gate_up_byte_stride = gate_up->gguf_expert_stride;
+                fdev.expert_down_byte_stride = down->gguf_expert_stride;
+            } else {
+                fdev.gate_up = gate_up->bf16;
+                fdev.down = down->bf16;
+                fdev.expert_gate_up_stride =
+                    static_cast<size_t>(2) * semantics.routed.mlp.intermediate_size *
+                        semantics.routed.mlp.hidden_size;
+                fdev.expert_down_stride =
+                    static_cast<size_t>(semantics.routed.mlp.hidden_size) *
+                        semantics.routed.mlp.intermediate_size;
+            }
         }
-    }
+    }, moe.storage);
     return fdev;
 }
 

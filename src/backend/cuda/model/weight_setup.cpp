@@ -235,8 +235,8 @@ void CudaCompiledModel::load_checkpoint_weights(
                     }
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                     controller->inflight_transfers.clear();
-                    moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
-                    moe_weights.down_ptrs = controller->cache->down_ptrs();
+                    moe_weights.storage = OffloadedExpertWeights{
+                        controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
                     resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 } else {
@@ -266,8 +266,8 @@ void CudaCompiledModel::load_checkpoint_weights(
                     }
                     controller->cache->seed(seed, controller->transfer_stream->get());
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
-                    moe_weights.gate_up_ptrs = controller->cache->gate_up_ptrs();
-                    moe_weights.down_ptrs = controller->cache->down_ptrs();
+                    moe_weights.storage = OffloadedExpertWeights{
+                        controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
                     resources_.weights_->expert_controllers[static_cast<size_t>(i)] = std::move(controller);
                     workspace_.expert_caches_[static_cast<size_t>(i)] = resources_.weights_->expert_controllers[static_cast<size_t>(i)]->cache.get();
                 }
@@ -280,27 +280,36 @@ void CudaCompiledModel::load_checkpoint_weights(
                                request.layer == i && request.expert == 0;
                     });
                 if (!individual_expert_model && moe_semantics.shared) {
-                    moe_weights.gate_up = resources_.weight_loader_->load_expert_linear_weight(
-                        repo, tensor_name(resources_.model_.weight_plan.requests,
-                                          TensorRole::MoePackedGateUp, i),
-                        E, 2 * inter, resources_.program_.hidden);
-                    moe_weights.down = resources_.weight_loader_->load_expert_linear_weight(
-                        repo, tensor_name(resources_.model_.weight_plan.requests,
-                                          TensorRole::MoePackedDown, i),
-                        E, resources_.program_.hidden, inter);
+                    const ExpertLinearWeight* gate_up =
+                        resources_.weight_loader_->load_expert_linear_weight(
+                            repo, tensor_name(resources_.model_.weight_plan.requests,
+                                              TensorRole::MoePackedGateUp, i),
+                            E, 2 * inter, resources_.program_.hidden);
+                    const ExpertLinearWeight* down =
+                        resources_.weight_loader_->load_expert_linear_weight(
+                            repo, tensor_name(resources_.model_.weight_plan.requests,
+                                              TensorRole::MoePackedDown, i),
+                            E, resources_.program_.hidden, inter);
+                    moe_weights.storage = ResidentExpertWeights{gate_up, down};
                 } else if (repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight")) ||
                            repo.contains(layer_name(i, "mlp.experts.0.gate_proj.weight_packed"))) {
-                    moe_weights.gate_up = resources_.weight_loader_->load_moe_gate_up_named(
-                        repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
-                        E, inter, resources_.program_.hidden);
-                    moe_weights.down = resources_.weight_loader_->load_moe_down_named(
-                        repo, layer_name(i, "mlp.experts"), "down_proj", E, inter,
-                        resources_.program_.hidden);
+                    const ExpertLinearWeight* gate_up =
+                        resources_.weight_loader_->load_moe_gate_up_named(
+                            repo, layer_name(i, "mlp.experts"), "gate_proj", "up_proj",
+                            E, inter, resources_.program_.hidden);
+                    const ExpertLinearWeight* down =
+                        resources_.weight_loader_->load_moe_down_named(
+                            repo, layer_name(i, "mlp.experts"), "down_proj", E, inter,
+                            resources_.program_.hidden);
+                    moe_weights.storage = ResidentExpertWeights{gate_up, down};
                 } else {
-                    moe_weights.gate_up = resources_.weight_loader_->load_moe_gate_up(
-                        repo, i, E, inter, resources_.program_.hidden);
-                    moe_weights.down = resources_.weight_loader_->load_moe_down(
-                        repo, i, E, inter, resources_.program_.hidden);
+                    const ExpertLinearWeight* gate_up =
+                        resources_.weight_loader_->load_moe_gate_up(
+                            repo, i, E, inter, resources_.program_.hidden);
+                    const ExpertLinearWeight* down =
+                        resources_.weight_loader_->load_moe_down(
+                            repo, i, E, inter, resources_.program_.hidden);
+                    moe_weights.storage = ResidentExpertWeights{gate_up, down};
                 }
             }
 

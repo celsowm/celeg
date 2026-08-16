@@ -595,7 +595,7 @@ void PackedMoeExecutor::run(
         if (session.ensure_expert_residency) {
             session.ensure_expert_residency(
                 session.owner, layer_index, w.moe_sel.data(), rows, w.stream.get(),
-                moe->offloaded() ? w.moe_router_scratch.data() : nullptr);
+                moe_experts_offloaded(*moe) ? w.moe_router_scratch.data() : nullptr);
         }
     }
 

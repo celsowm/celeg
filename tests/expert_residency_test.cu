@@ -187,8 +187,7 @@ std::vector<__nv_bfloat16> run_model_offload(const Problem& p, int capacity,
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
 
     celeg::MoeFfnWeights moe;
-    moe.gate_up_ptrs = cache.gate_up_ptrs();
-    moe.down_ptrs = cache.down_ptrs();
+    moe.storage = celeg::OffloadedExpertWeights{cache.gate_up_ptrs(), cache.down_ptrs()};
 
     celeg::MoeLayerProgram semantics;
     semantics.router.expert_count = p.experts;

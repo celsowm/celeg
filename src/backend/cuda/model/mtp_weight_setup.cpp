@@ -188,18 +188,21 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
                     controller->cache->seed(seed, controller->transfer_stream->get());
                     CELEG_CUDA(cudaStreamSynchronize(controller->transfer_stream->get()));
                 }
-                moe.gate_up_ptrs = controller->cache->gate_up_ptrs();
-                moe.down_ptrs = controller->cache->down_ptrs();
+                moe.storage = OffloadedExpertWeights{
+                    controller->cache->gate_up_ptrs(), controller->cache->down_ptrs()};
                 resources.weights_->expert_controllers[static_cast<size_t>(resource_layer)] =
                     std::move(controller);
                 model.workspace_.expert_caches_[static_cast<size_t>(resource_layer)] =
                     resources.weights_->expert_controllers[static_cast<size_t>(resource_layer)]->cache.get();
             } else {
-                moe.gate_up = resources.weight_loader_->load_moe_gate_up_named(
-                    repo, experts_prefix, "gate_proj", "up_proj", E, inter,
-                    resources.program_.hidden);
-                moe.down = resources.weight_loader_->load_moe_down_named(
-                    repo, experts_prefix, "down_proj", E, inter, resources.program_.hidden);
+                const ExpertLinearWeight* gate_up =
+                    resources.weight_loader_->load_moe_gate_up_named(
+                        repo, experts_prefix, "gate_proj", "up_proj", E, inter,
+                        resources.program_.hidden);
+                const ExpertLinearWeight* down =
+                    resources.weight_loader_->load_moe_down_named(
+                        repo, experts_prefix, "down_proj", E, inter, resources.program_.hidden);
+                moe.storage = ResidentExpertWeights{gate_up, down};
             }
             common_layer.feed_forward = moe;
         } else {
