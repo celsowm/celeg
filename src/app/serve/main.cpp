@@ -1,5 +1,6 @@
 #include "App.h"
 
+#include "celeg/app/run_preparation.hpp"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/checkpoint/downloader.hpp"
 #include "celeg/serve/cpu_inference_service.hpp"
@@ -91,7 +92,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--mtp-speculative-tokens") args.mtp_speculative_tokens = std::stoi(value());
         else if (key == "--no-cuda-graph") args.cuda_graph = false;
         else if (key == "--help") {
-            std::cout << "celeg-serve (--model PATH | --repo HF_REPO) [--host 127.0.0.1] [--port 8080] [--context 4096] "
+            std::cout << "celeg-serve (--model PATH | --repo HF_REPO | HF_REPO_OR_PATH) [--host 127.0.0.1] [--port 8080] [--context 4096] "
                          "[--threads N] [--max-active-requests N] [--max-batched-tokens N] "
                          "[--prefill-chunk-tokens N] [--backend cpu|cuda] "
                          "[--format auto|safetensors|gguf] [--quant TAG] "
@@ -101,6 +102,9 @@ Args parse_args(int argc, char** argv) {
                          "[--mtp] [--mtp-speculative-tokens N] [--no-cuda-graph] "
                          "[--served-model-name NAME] [--chat-template-file PATH]\n";
             std::exit(0);
+        } else if (!key.empty() && key.rfind("--", 0) != 0 &&
+                   args.model_dir.empty() && args.repo.empty()) {
+            celeg::app::assign_model_or_repo_token(key, args.model_dir, args.repo);
         } else {
             throw std::runtime_error("unknown argument: " + key);
         }

@@ -2,6 +2,7 @@
 
 #include "celeg/checkpoint/downloader.hpp"
 
+#include <filesystem>
 #include <stdexcept>
 
 namespace celeg::app {
@@ -18,6 +19,15 @@ bool is_gguf_repo(std::string_view repo, std::string_view quant_tag) {
     return !repo.empty() && (repo.ends_with("-GGUF") || !quant_tag.empty());
 }
 
+}
+
+void assign_model_or_repo_token(const std::string& token, std::string& model,
+                                std::string& repo) {
+    if (std::filesystem::exists(token)) {
+        model = token;
+    } else {
+        repo = token;
+    }
 }
 
 PreparedRun prepare_run(const RunInputs& inputs, bool resolve_chat) {

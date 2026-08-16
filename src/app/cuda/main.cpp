@@ -157,7 +157,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--expert-direct-io") args.expert_direct_io = true;
         else if (key == "--help") {
             std::cout
-                << "celeg-run [--model DIR | --repo REPO_ID] [--prompt TEXT] [--system TEXT]\n"
+                << "celeg-run [--model DIR | --repo REPO_ID | REPO_ID_OR_DIR] [--prompt TEXT] [--system TEXT]\n"
                 << "  [--chat-template-file PATH]\n"
                 << "  [--max-new-tokens N] [--context N] [--raw]\n"
                 << "  [--fused-residuals] [--fast-attention] [--fused-projections]\n"
@@ -191,6 +191,9 @@ Args parse_args(int argc, char** argv) {
                 << "  [--expert-usage-profile PATH]\n"
                 << "  [--expert-direct-io]\n";
             std::exit(0);
+        } else if (!key.empty() && key.rfind("--", 0) != 0 &&
+                   args.model_dir.empty() && args.repo.empty()) {
+            celeg::app::assign_model_or_repo_token(key, args.model_dir, args.repo);
         } else {
             throw std::runtime_error("unknown argument: " + key);
         }

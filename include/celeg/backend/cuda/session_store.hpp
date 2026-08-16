@@ -15,8 +15,8 @@ namespace celeg {
 class SessionStore {
 public:
     struct Header {
-        std::array<char, 8> magic{{'C', 'E', 'L', 'E', 'G', 'S', 'S', '4'}};
-        uint32_t version = 4;
+        std::array<char, 8> magic{{'C', 'E', 'L', 'E', 'G', 'S', 'S', '5'}};
+        uint32_t version = 5;
         uint32_t kv_cache_mode = 0;
         int32_t position = 0;
         int32_t max_context = 0;
@@ -24,12 +24,12 @@ public:
         int32_t vocab = 0;
         int32_t attention_layers = 0;
         uint64_t rng_state = 0;
-        char model_identity[96] = {};
+        uint64_t model_identity_hash = 0;
     };
 
     static constexpr std::array<char, 8> kMagic{
-        {'C', 'E', 'L', 'E', 'G', 'S', 'S', '4'}};
-    static constexpr uint32_t kVersion = 4;
+        {'C', 'E', 'L', 'E', 'G', 'S', 'S', '5'}};
+    static constexpr uint32_t kVersion = 5;
 
     struct SessionState {
         const ExecutionTopology& shape;

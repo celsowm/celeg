@@ -45,4 +45,11 @@ std::vector<std::int32_t> prepare_prompt(const RunInputs& inputs,
                                          const PreparedRun& prepared);
 GenerationConfig generation_config(const RunInputs& inputs);
 
+// Assigns a bare CLI token (no --model/--repo given) to `model` when it names
+// an existing local path, otherwise to `repo` (a Hugging Face repo id, e.g.
+// "org/model" or "org/model:Q4_K_M"), mirroring how other model-serving CLIs
+// accept either form positionally.
+void assign_model_or_repo_token(const std::string& token, std::string& model,
+                                std::string& repo);
+
 }

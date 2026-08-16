@@ -1,13 +1,26 @@
 #include "celeg/backend/cuda/session_store.hpp"
 #include "celeg/detail/model/compiled_model.hpp"
 
-#include <cstring>
 #include <fstream>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
 namespace celeg {
+
+namespace {
+
+uint64_t fnv1a_hash(std::string_view text) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char byte : text) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+}  // namespace
 
 SessionStore::SessionState CudaCompiledModel::make_session_state() {
     SessionStore::SessionState state{
@@ -178,11 +191,7 @@ void SessionStore::save(const std::string& path, SessionState& state) {
                             sizeof(header.rng_state), cudaMemcpyDeviceToHost));
     }
     if (!state.model_identity.empty()) {
-        const std::string_view id = state.model_identity;
-        const size_t copy_size =
-            std::min(id.size(), sizeof(header.model_identity) - 1);
-        std::memcpy(header.model_identity, id.data(), copy_size);
-        header.model_identity[copy_size] = '\0';
+        header.model_identity_hash = fnv1a_hash(state.model_identity);
     }
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -247,7 +256,7 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     read_scalar(in, header);
     if (header.magic != kMagic || header.version != kVersion) {
         throw std::runtime_error(
-            "unsupported session format; this build requires session v4 files");
+            "unsupported session format; this build requires session v5 files");
     }
     const uint32_t expected_kv =
         state.kv_cache_mode == KvCacheMode::Int8 ? 1U : 0U;
@@ -260,15 +269,10 @@ void SessionStore::load(const std::string& path, SessionState& state) {
         header.attention_layers != state.shape.attention_layer_count) {
         throw std::runtime_error("session dimensions are incompatible with this model");
     }
-    if (!state.model_identity.empty()) {
-        const std::string_view id = state.model_identity;
-        const std::string_view stored(
-            header.model_identity,
-            strnlen(header.model_identity, sizeof(header.model_identity)));
-        if (!stored.empty() && id != stored) {
+    if (!state.model_identity.empty() && header.model_identity_hash != 0) {
+        if (fnv1a_hash(state.model_identity) != header.model_identity_hash) {
             throw std::runtime_error(
-                "session was written for a different resolved model: " +
-                std::string(stored));
+                "session was written for a different resolved model");
         }
     }
 

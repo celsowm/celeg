@@ -95,7 +95,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--memory-report") args.memory_report = true;
         else if (key == "--help") {
             std::cout
-                << "celeg-cpu-run [--model DIR | --repo REPO_ID] --prompt TEXT [options]\n"
+                << "celeg-cpu-run [--model DIR | --repo REPO_ID | REPO_ID_OR_DIR] --prompt TEXT [options]\n"
                 << "  --cpu-isa auto|scalar|avx2|avx-vnni|avx512-vnni|neon\n"
                 << "    (AMX/I8MM/SME2 remain diagnostic-only in v0.0.21)\n"
                 << "  --cpu-q4-group 32|64 --threads N\n"
@@ -109,6 +109,9 @@ Args parse_args(int argc, char** argv) {
                 << "  --raw --chat-template-file PATH\n"
                 << "  --temperature F --top-k N --top-p F\n";
             std::exit(0);
+        } else if (!key.empty() && key.rfind("--", 0) != 0 &&
+                   args.model_dir.empty() && args.repo.empty()) {
+            celeg::app::assign_model_or_repo_token(key, args.model_dir, args.repo);
         } else throw std::runtime_error("unknown argument: " + key);
     }
     if (args.print_cpu && args.model_dir.empty() && args.repo.empty()) return args;
