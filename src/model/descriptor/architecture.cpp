@@ -219,7 +219,7 @@ public:
                     ? integer_value(metadata, *descriptor_.moe_routing_group_score_top_k) : 0;
             for (int layer = dense_layers; layer < layer_count; ++layer) {
                 MoeSelectionSpec selection = MoeTopKSelectionSpec{};
-                if (routing_group_count > 0) {
+                if (descriptor_.moe_routing_group_count.has_value()) {
                     selection = MoeGroupedTopKSelectionSpec{
                         routing_group_count,
                         routing_experts_per_group,
