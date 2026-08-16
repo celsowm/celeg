@@ -387,13 +387,13 @@ public:
             attention.query_heads = layer_query_heads;
             attention.key_value_heads = scheduled_layer_kv_heads;
             attention.head_dim = layer_head_dim;
-            attention.query_norm = descriptor_.query_norm_enabled
+            attention.query_norm = descriptor_.query_norm_kind
                 ? std::optional<NormSpec>{NormSpec{numerical_policy.norm_eps,
-                                                   descriptor_.query_norm_kind}}
+                                                   *descriptor_.query_norm_kind}}
                 : std::nullopt;
-            attention.key_norm = descriptor_.key_norm_enabled
+            attention.key_norm = descriptor_.key_norm_kind
                 ? std::optional<NormSpec>{NormSpec{numerical_policy.norm_eps,
-                                                   descriptor_.key_norm_kind}}
+                                                   *descriptor_.key_norm_kind}}
                 : std::nullopt;
             attention.pattern = FullCausalPattern{};
             attention.query_scale = numerical_policy.attention_multiplier;

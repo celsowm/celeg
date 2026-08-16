@@ -123,10 +123,8 @@ struct Descriptor {
     NormWeightKind operator_norm_kind = NormWeightKind::Scale;
     NormWeightKind feed_forward_norm_kind = NormWeightKind::Scale;
     NormWeightKind final_norm_kind = NormWeightKind::Scale;
-    NormWeightKind query_norm_kind = NormWeightKind::None;
-    NormWeightKind key_norm_kind = NormWeightKind::None;
-    bool query_norm_enabled = false;
-    bool key_norm_enabled = false;
+    std::optional<NormWeightKind> query_norm_kind;
+    std::optional<NormWeightKind> key_norm_kind;
     std::optional<NormWeightKind> embedding_post_norm_kind;
     bool attention_gate_sigmoid = false;
     bool attention_gate_packed_with_query = false;

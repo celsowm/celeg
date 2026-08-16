@@ -135,10 +135,12 @@ Descriptor parse_descriptor(const Json& value) {
         result.feed_forward_norm_kind = parse_norm("feed_forward",
                                                     result.feed_forward_norm_kind);
         result.final_norm_kind = parse_norm("final", result.final_norm_kind);
-        result.query_norm_kind = parse_norm("query", result.query_norm_kind);
-        result.key_norm_kind = parse_norm("key", result.key_norm_kind);
-        result.query_norm_enabled = norms.contains("query");
-        result.key_norm_enabled = norms.contains("key");
+        if (norms.contains("query")) {
+            result.query_norm_kind = parse_norm_weight_kind(norms.at("query").as_string());
+        }
+        if (norms.contains("key")) {
+            result.key_norm_kind = parse_norm_weight_kind(norms.at("key").as_string());
+        }
         if (norms.contains("post_embedding")) {
             result.embedding_post_norm_kind = parse_norm_weight_kind(
                 norms.at("post_embedding").as_string());
@@ -151,8 +153,6 @@ Descriptor parse_descriptor(const Json& value) {
             attention.at("query_key_norm").as_bool()) {
             result.query_norm_kind = NormWeightKind::Scale;
             result.key_norm_kind = NormWeightKind::Scale;
-            result.query_norm_enabled = true;
-            result.key_norm_enabled = true;
         }
         if (attention.contains("output_gate")) {
             const std::string gate = attention.at("output_gate").as_string();
