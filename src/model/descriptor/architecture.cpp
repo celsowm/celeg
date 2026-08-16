@@ -483,12 +483,11 @@ public:
                     ? KvSharingSpec{SharedKvPublisher{group}}
                     : KvSharingSpec{SharedKvConsumer{group}};
             }
-            if (layer_rope_theta == 0.0) {
-                attention.position = NoPositionEncodingSpec{};
-            } else if (layer < static_cast<int>(disabled.size()) &&
-                disabled[static_cast<size_t>(layer)] == 0) {
-                attention.position = NoPositionEncodingSpec{};
-            } else if (position_kind == "none") {
+            const bool layer_disables_rope = layer_rope_theta == 0.0 ||
+                (layer < static_cast<int>(disabled.size()) &&
+                    disabled[static_cast<size_t>(layer)] == 0) ||
+                position_kind == "none";
+            if (layer_disables_rope) {
                 attention.position = NoPositionEncodingSpec{};
             } else if (position_kind == "alibi") {
                 attention.position = NoPositionEncodingSpec{};
