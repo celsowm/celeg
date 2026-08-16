@@ -100,7 +100,7 @@ void CudaCompiledModel::load_checkpoint_weights(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::LayerScalar, i), {1});
         }
         if (mixer_only_layer) {
-            common_layer.feed_forward = DenseFfnWeights{};
+            common_layer.feed_forward = std::monostate{};
         } else if (const auto* moe_program =
                        std::get_if<MoeLayerProgram>(&semantic_layer.feed_forward)) {
             const MoeLayerProgram& moe_semantics = *moe_program;

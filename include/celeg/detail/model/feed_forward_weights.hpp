@@ -33,7 +33,10 @@ struct MoeFfnWeights {
     bool offloaded() const { return gate_up_ptrs != nullptr; }
 };
 
-using FeedForwardWeights = std::variant<DenseFfnWeights, MoeFfnWeights>;
+using FeedForwardWeights = std::variant<
+    std::monostate,
+    DenseFfnWeights,
+    MoeFfnWeights>;
 
 inline DenseFfnWeights* as_dense_ffn(FeedForwardWeights& ff) {
     return std::get_if<DenseFfnWeights>(&ff);
@@ -49,6 +52,9 @@ inline const MoeFfnWeights* as_moe_ffn(const FeedForwardWeights& ff) {
 }
 inline bool is_moe_ffn(const FeedForwardWeights& ff) {
     return std::holds_alternative<MoeFfnWeights>(ff);
+}
+inline bool has_ffn(const FeedForwardWeights& ff) {
+    return !std::holds_alternative<std::monostate>(ff);
 }
 
 inline celeg::MoeRouterConfig moe_router_config(const MoeLayerProgram& semantics) {
