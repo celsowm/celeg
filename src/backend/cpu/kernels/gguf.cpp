@@ -524,11 +524,15 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ4_0& weight = weights[b];
             const float d = fp16_to_float(weight.d);
-            for (int col = 0; col < 32; ++col) {
-                const uint8_t packed_value = weight.qs[col / 2];
-                const int q = (col & 1) ? (packed_value >> 4) : (packed_value & 0x0f);
-                output[b * 32 + static_cast<size_t>(col)] =
-                    d * static_cast<float>(q - 8);
+            // GGML packs each block as two halves, not interleaved pairs:
+            // qs[j] holds element j in its low nibble and element j+16 in
+            // its high nibble (j in [0,16)).
+            for (int j = 0; j < 16; ++j) {
+                const uint8_t packed_value = weight.qs[j];
+                output[b * 32 + static_cast<size_t>(j)] =
+                    d * static_cast<float>((packed_value & 0x0f) - 8);
+                output[b * 32 + static_cast<size_t>(j + 16)] =
+                    d * static_cast<float>((packed_value >> 4) - 8);
             }
         }
         return;
@@ -538,12 +542,19 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ5_0& weight = weights[b];
             const float d = fp16_to_float(weight.d);
-            for (int col = 0; col < 32; ++col) {
-                const uint8_t packed_value = weight.qs[col / 2];
-                const int low = (col & 1) ? (packed_value >> 4) : (packed_value & 0x0f);
-                const int high = (weight.qh[col / 8] >> (col & 7)) & 1;
-                output[b * 32 + static_cast<size_t>(col)] =
-                    d * static_cast<float>((low | (high << 4)) - 16);
+            uint32_t qh;
+            std::memcpy(&qh, weight.qh, sizeof(qh));
+            // Same split-half nibble layout as Q4_0; the high (5th) bit of
+            // element j lives at bit j of qh, and of element j+16 at bit
+            // j+16 of qh.
+            for (int j = 0; j < 16; ++j) {
+                const uint8_t packed_value = weight.qs[j];
+                const int high0 = (qh >> j) & 1;
+                const int high1 = (qh >> (j + 16)) & 1;
+                output[b * 32 + static_cast<size_t>(j)] =
+                    d * static_cast<float>(((packed_value & 0x0f) | (high0 << 4)) - 16);
+                output[b * 32 + static_cast<size_t>(j + 16)] =
+                    d * static_cast<float>(((packed_value >> 4) | (high1 << 4)) - 16);
             }
         }
         return;

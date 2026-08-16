@@ -47,12 +47,16 @@ AttentionSpec make_attention(
     attention.key_norm = attention.query_norm;
     attention.pattern = FullCausalPattern{};
     attention.query_scale = 1.0f;
-    attention.position = RopePositionSpec{
-        *metadata.rope_theta,
-        *metadata.rotary_fraction,
-        RopeScalingSpec{}};
-    std::get<RopePositionSpec>(attention.position).pairing =
-        *metadata.rope_pairing;
+    if (metadata.uses_rope.has_value() && !*metadata.uses_rope) {
+        attention.position = NoPositionEncodingSpec{};
+    } else {
+        attention.position = RopePositionSpec{
+            *metadata.rope_theta,
+            *metadata.rotary_fraction,
+            RopeScalingSpec{}};
+        std::get<RopePositionSpec>(attention.position).pairing =
+            *metadata.rope_pairing;
+    }
     if (*metadata.xsa_projection) {
         attention.output_transform = OrthogonalizeCurrentValueSpec{
             *metadata.xsa_minimum_norm_squared};

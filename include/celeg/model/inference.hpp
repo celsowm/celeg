@@ -144,6 +144,7 @@ struct NormalizedModelMetadata {
     std::optional<int> shortconv_cache;
     std::optional<double> rope_theta;
     std::optional<float> rotary_fraction;
+    std::optional<bool> uses_rope;
     std::optional<int> bos_token_id;
     std::vector<int> eos_token_ids;
     std::optional<int> pad_token_id;

@@ -11,6 +11,20 @@
 namespace celeg {
 namespace {
 
+// GGUF architectures whose reference graph builders never apply RoPE to
+// attention layers (llama.cpp: llama_model_rope_type() -> LLAMA_ROPE_TYPE_NONE),
+// even though their GGUF metadata may still carry rope hparams inherited from
+// a related architecture family.
+bool architecture_never_uses_rope(const std::string& architecture) {
+    static const std::unordered_set<std::string> kNoRopeArchitectures = {
+        "clip", "gpt2", "gptj", "mpt", "refact", "bloom",
+        "mamba", "mamba2", "jamba", "jina-bert-v2", "t5", "t5encoder",
+        "jais", "rwkv6", "rwkv6qwen2", "rwkv7", "arwkv7",
+        "wavtokenizer-dec", "nemotron_h", "nemotron_h_moe", "kimi-linear",
+    };
+    return kNoRopeArchitectures.contains(architecture);
+}
+
 template <typename T>
 std::optional<T> scalar(const CheckpointMetadata& metadata, std::string_view key) {
     if (!metadata.contains(key)) return std::nullopt;
@@ -418,7 +432,18 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                                          "rope_theta", "rope.freq_base");
     result.rotary_fraction = aliases<float>(metadata, {"rotary_fraction"}, result.evidence,
                                             "rotary_fraction");
-    if (!result.rotary_fraction.has_value() && metadata.is_gguf()) {
+    if (metadata.is_gguf() && architecture_never_uses_rope(metadata.architecture_type())) {
+        // Some GGUF architectures (mostly hybrid recurrent/attention models
+        // whose position information already flows through the recurrent
+        // state) carry vestigial "<arch>.rope.dimension_count" hparams that
+        // the reference graph builder never actually applies to the
+        // attention layers. Applying RoPE anyway corrupts every attention
+        // layer's positional structure, so treat these architectures as
+        // never using RoPE regardless of what rope metadata is present.
+        result.uses_rope = false;
+        result.evidence.push_back({EvidenceKind::FormatGuarantee, "architecture",
+                                   metadata.architecture_type() + " does not use RoPE"});
+    } else if (!result.rotary_fraction.has_value() && metadata.is_gguf()) {
         // GGUF stores partial rotary as an absolute dimension count
         // ("<arch>.rope.dimension_count"), not a fraction of head_dim like the
         // HF-config "rotary_fraction"/"partial_rotary_factor" convention does.

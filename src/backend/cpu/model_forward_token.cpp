@@ -122,6 +122,10 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             for (float v : workspace_.hidden) { sq += (double)v*v; mx = std::max(mx, std::fabs(v)); if (!std::isfinite(v)) bad = true; }
             fprintf(stderr, "[layer %zu mixer-out] norm=%.4f max=%.4f bad=%d\n", index, std::sqrt(sq), mx, bad);
         }
+        if (compute_logits && mixer_owns_layer) {
+            celeg_debug_dump_hidden(("layer_" + std::to_string(index)).c_str(),
+                                    workspace_.hidden.data(), shared->program.hidden);
+        }
         if (mixer_owns_layer) continue;
         if (semantics.residual.multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
