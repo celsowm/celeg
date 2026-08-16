@@ -34,14 +34,14 @@ CpuCompiledModel::~CpuCompiledModel() {
 void CpuCompiledModel::allocate_state() {
     session_.states.reserve(shared->weight_store.layers.size());
     for (size_t index = 0; index < shared->weight_store.layers.size(); ++index) {
-        const WeightLayer& layer = shared->weight_store.layers[index];
+        const CpuLayerWeights& layer = shared->weight_store.layers[index];
         const auto emplace_convolution_state = [&]() {
             ConvolutionState state;
             state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
                                shared->program.hidden);
             session_.states.emplace_back(std::move(state));
         };
-        visit_operator_weights(layer,
+        visit_operator_weights(layer.mixer,
           [&](const AttentionWeights*) {
             const int pool = shared->layer_to_kv_pool.at(index);
             if (pool < 0) throw std::logic_error("attention layer has no CPU KV page pool");
@@ -83,9 +83,7 @@ void CpuCompiledModel::allocate_activations() {
 
 const CpuCompiledModel::CommonWeights& CpuCompiledModel::common_weights(
     size_t layer) const {
-    return std::visit([](const auto& value) -> const CommonWeights& {
-        return value.common;
-    }, shared->weight_store.layers.at(layer));
+    return shared->weight_store.layers.at(layer).common;
 }
 
 CpuCompiledModel::AttentionState& CpuCompiledModel::attention_state(size_t layer) {

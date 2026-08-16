@@ -44,10 +44,10 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
         throw std::logic_error("CPU MLP-only execution received unsupported semantics");
     }
     const int intermediate = mlp->intermediate_size;
-    shared.linear.gemv(weights.common.mlp_up, workspace.normed.data(),
+    shared.linear.gemv(weights.mlp_up, workspace.normed.data(),
                        workspace.activated.data());
     cpu_relu2(workspace.activated.data(), workspace.activated.data(), intermediate);
-    shared.linear.gemv(weights.common.w2, workspace.activated.data(),
+    shared.linear.gemv(weights.w2, workspace.activated.data(),
                        workspace.hidden.data());
     cpu_residual_add(workspace.hidden.data(), workspace.residual.data(),
                      shared.program.hidden);
@@ -55,7 +55,7 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
 
 void execute_cpu_dense_feed_forward_token(
     CpuExecutionContext& context, size_t layer,
-    const CpuCompiledModel::CommonWeights& weights) {
+    const CpuCompiledModel::DenseFeedForwardWeights& weights) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;
     const int intermediate = intermediate_size(shared, layer);
@@ -74,7 +74,7 @@ void execute_cpu_dense_feed_forward_token(
 
 void execute_cpu_dense_feed_forward_chunk(
     CpuExecutionContext& context, size_t layer,
-    const CpuCompiledModel::CommonWeights& weights,
+    const CpuCompiledModel::DenseFeedForwardWeights& weights,
     size_t rows, bool& normed_q8_ready) {
     auto& shared = context.shared;
     auto& workspace = context.workspace;

@@ -17,10 +17,11 @@ struct CpuCompiledModel::BatchScratch {
     CpuWorkspace workspace_;
     using State = CpuCompiledModel;
     using SharedWeights = State::Shared;
-    using LayerWeights = State::WeightLayer;
+    using LayerWeights = State::CpuLayerWeights;
     using CommonWeights = State::CommonWeights;
     using AttentionWeights = State::AttentionWeights;
     using ConvolutionWeights = State::ConvolutionWeights;
+    using DenseFeedForwardWeights = State::DenseFeedForwardWeights;
     using MoeWeights = State::MoeWeights;
     static void validate_shared(std::span<State* const> sessions) {
         if (sessions.empty()) throw std::invalid_argument("packed CPU batch is empty");
@@ -143,7 +144,7 @@ struct CpuCompiledModel::BatchScratch {
                     shared.linear.gemm(weight, input, output, rows, beta);
                 }
             };
-            visit_operator_weights(layer_program,
+            visit_operator_weights(layer_program.mixer,
               [&](const GatedDeltaNetWeights* gated_delta) {
                 const GatedDeltaNetSpec& spec = gated_delta->spec;
                 const int qkv_width = 2 * spec.key_heads * spec.key_head_dim +
@@ -334,7 +335,7 @@ struct CpuCompiledModel::BatchScratch {
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
             rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm, workspace_.normed.data(), hidden);
-            if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
+            if (const auto* moe = std::get_if<MoeWeights>(&layer_program.feed_forward)) {
                 const MoeLayerProgram& semantics =
                     std::get<MoeLayerProgram>(shared.program.layers[index].feed_forward);
                 const int experts = semantics.router.expert_count;
@@ -476,8 +477,13 @@ struct CpuCompiledModel::BatchScratch {
                 const auto* dense = std::get_if<CompiledDenseFeedForwardProgram>(
                     &layer_semantics.feed_forward);
                 if (!dense) throw std::logic_error("packed dense layer has non-dense semantics");
+                const auto* dense_weights = std::get_if<DenseFeedForwardWeights>(
+                    &layer_program.feed_forward);
+                if (!dense_weights) {
+                    throw std::logic_error("packed dense layer has no dense feed-forward weights");
+                }
                 const int intermediate = dense->intermediate_size;
-                layer_gemm(common.w13, workspace_.normed.data(), workspace_.gate_up.data());
+                layer_gemm(dense_weights->w13, workspace_.normed.data(), workspace_.gate_up.data());
                 rows_for([&](size_t row) {
                     const float* gate_up = workspace_.gate_up.data() + row * 2ULL * intermediate;
                     float* activated = workspace_.activated.data() + row * intermediate;
@@ -487,7 +493,7 @@ struct CpuCompiledModel::BatchScratch {
                         cpu_swiglu(gate_up, activated, intermediate);
                     }
                 });
-                layer_gemm(common.w2, workspace_.activated.data(), workspace_.mlp_output.data());
+                layer_gemm(dense_weights->w2, workspace_.activated.data(), workspace_.mlp_output.data());
             }
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
@@ -502,8 +508,14 @@ struct CpuCompiledModel::BatchScratch {
             normed_q8_ready = false;
 
             if (input_plan.enabled) {
+                const auto* dense_weights = std::get_if<DenseFeedForwardWeights>(
+                    &layer_program.feed_forward);
+                if (!dense_weights) {
+                    throw std::logic_error(
+                        "packed per-layer input is only implemented for dense feed-forward layers");
+                }
                 std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-                shared.linear.gemm(common.per_layer_input_gate, workspace_.hidden.data(),
+                shared.linear.gemm(dense_weights->per_layer_input_gate, workspace_.hidden.data(),
                                    workspace_.per_layer_gate.data(), rows);
                 const size_t input_size = static_cast<size_t>(input_plan.input_size);
                 rows_for([&](size_t row) {
@@ -513,7 +525,7 @@ struct CpuCompiledModel::BatchScratch {
                         row * input_plan.packed_width + index * input_size;
                     for (size_t d = 0; d < input_size; ++d) gate[d] *= context[d];
                 });
-                shared.linear.gemm(common.per_layer_projection, workspace_.per_layer_gate.data(),
+                shared.linear.gemm(dense_weights->per_layer_projection, workspace_.per_layer_gate.data(),
                                    workspace_.hidden.data(), rows);
                 rmsnorm_rows_inplace(workspace_.hidden.data(), common.per_layer_input_norm, hidden);
                 if (common.layer_scalar != 1.0f) {

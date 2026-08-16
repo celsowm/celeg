@@ -84,7 +84,7 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
 
     for (std::size_t index = 0; index < shared.weight_store.layers.size(); ++index) {
         auto* moe = std::get_if<CpuCompiledModel::MoeWeights>(
-            &shared.weight_store.layers[index]);
+            &shared.weight_store.layers[index].feed_forward);
         if (!moe) continue;
         moe->layer_index = static_cast<int>(index);
         moe->disk_cached = true;

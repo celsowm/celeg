@@ -9,11 +9,11 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
 
 void execute_cpu_dense_feed_forward_token(
     CpuExecutionContext& context, size_t layer,
-    const CpuCompiledModel::CommonWeights& weights);
+    const CpuCompiledModel::DenseFeedForwardWeights& weights);
 
 void execute_cpu_dense_feed_forward_chunk(
     CpuExecutionContext& context, size_t layer,
-    const CpuCompiledModel::CommonWeights& weights,
+    const CpuCompiledModel::DenseFeedForwardWeights& weights,
     size_t rows, bool& normed_q8_ready);
 
 }

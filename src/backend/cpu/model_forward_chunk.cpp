@@ -163,8 +163,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
     }
 
     for (size_t index = 0; index < shared->weight_store.layers.size(); ++index) {
-        const WeightLayer& layer_program = shared->weight_store.layers[index];
-        const CommonWeights& common = common_weights(index);
+        const CpuLayerWeights& layer = shared->weight_store.layers[index];
+        const CommonWeights& common = layer.common;
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
                   workspace_.chunk_residual.begin());
@@ -194,7 +194,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             }
         };
 
-        visit_operator_weights(layer_program,
+        visit_operator_weights(layer.mixer,
           [&](const CpuCompiledModel::GatedDeltaNetWeights* gated_delta) {
             execute_cpu_gated_delta_chunk(execution, recurrent_state, index, *gated_delta, rows,
                                           normed_q8_ready);
@@ -535,14 +535,19 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                      semantics.feed_forward_norm->epsilon);
         normed_q8_ready = false;
 
-        if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
+        const auto* moe = std::get_if<MoeWeights>(&layer.feed_forward);
+        const auto* dense = std::get_if<DenseFeedForwardWeights>(&layer.feed_forward);
+        if (moe) {
             const MoeLayerProgram& moe_semantics =
                 std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
             execute_cpu_moe_chunk(execution, index, *moe, moe_semantics, rows,
                                   normed_q8_ready);
-        } else {
-            execute_cpu_dense_feed_forward_chunk(execution, index, common, rows,
+        } else if (dense) {
+            execute_cpu_dense_feed_forward_chunk(execution, index, *dense, rows,
                                                  normed_q8_ready);
+        } else {
+            throw std::logic_error(
+                "CPU chunk layer has non-monostate FFN semantics but no feed-forward weights");
         }
         if (semantics.residual.multiplier != 1.0f) {
             scale(workspace_.chunk_mlp, rows * hidden,
@@ -555,10 +560,14 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_mlp.data(), hidden);
 
         if (input_plan.enabled) {
+            if (!dense) {
+                throw std::logic_error(
+                    "CPU per-layer input is only implemented for dense feed-forward layers");
+            }
             std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
                       workspace_.chunk_residual.begin());
             linear_started = Clock::now();
-            shared->linear.gemm(common.per_layer_input_gate, workspace_.chunk_hidden.data(),
+            shared->linear.gemm(dense->per_layer_input_gate, workspace_.chunk_hidden.data(),
                                 workspace_.per_layer_gate.data(), rows);
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             const size_t input_size = static_cast<size_t>(input_plan.input_size);
@@ -570,7 +579,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 for (size_t d = 0; d < input_size; ++d) gate[d] *= context[d];
             });
             linear_started = Clock::now();
-            shared->linear.gemm(common.per_layer_projection, workspace_.per_layer_gate.data(),
+            shared->linear.gemm(dense->per_layer_projection, workspace_.per_layer_gate.data(),
                                 workspace_.chunk_hidden.data(), rows);
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.per_layer_input_norm, hidden);

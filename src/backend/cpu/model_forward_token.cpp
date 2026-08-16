@@ -87,14 +87,14 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         }
     }
     for (size_t index = 0; index < shared->weight_store.layers.size(); ++index) {
-        const WeightLayer& layer_program = shared->weight_store.layers[index];
-        const CommonWeights& common = common_weights(index);
+        const CpuLayerWeights& layer = shared->weight_store.layers[index];
+        const CommonWeights& common = layer.common;
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
         cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
                     shared->program.hidden, semantics.operator_norm.epsilon);
         bool mixer_owns_layer = false;
-        visit_operator_weights(layer_program,
+        visit_operator_weights(layer.mixer,
           [&](const CpuCompiledModel::AttentionWeights* attention) {
             execute_cpu_attention_token(execution, attention_state, index, *attention, semantics,
                                         rope_position);
@@ -146,7 +146,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
                     shared->program.hidden, semantics.feed_forward_norm->epsilon);
 
-        if (const auto* moe = std::get_if<MoeWeights>(&layer_program)) {
+        const auto* moe = std::get_if<MoeWeights>(&layer.feed_forward);
+        const auto* dense = std::get_if<DenseFeedForwardWeights>(&layer.feed_forward);
+        if (moe) {
             const MoeLayerProgram& moe_semantics =
                 std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
             execute_cpu_moe_token(execution, index, *moe, moe_semantics);
@@ -158,8 +160,8 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                     shared->program.hidden, semantics.post_feed_forward_norm->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
-        } else {
-            execute_cpu_dense_feed_forward_token(execution, index, common);
+        } else if (dense) {
+            execute_cpu_dense_feed_forward_token(execution, index, *dense);
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
@@ -168,11 +170,18 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                                     shared->program.hidden, semantics.post_feed_forward_norm->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
+        } else {
+            throw std::logic_error(
+                "CPU layer has non-monostate FFN semantics but no feed-forward weights");
         }
         if (shared->program.per_layer_input.enabled) {
             const PerLayerInputPlan& plan = shared->program.per_layer_input;
+            if (!dense) {
+                throw std::logic_error(
+                    "CPU per-layer input is only implemented for dense feed-forward layers");
+            }
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-            shared->linear.gemv(common.per_layer_input_gate, workspace_.hidden.data(),
+            shared->linear.gemv(dense->per_layer_input_gate, workspace_.hidden.data(),
                                 workspace_.per_layer_gate.data());
             cpu_gelu_tanh(workspace_.per_layer_gate.data(),
                           static_cast<size_t>(plan.input_size));
@@ -181,7 +190,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             for (int d = 0; d < plan.input_size; ++d) {
                 workspace_.per_layer_gate[static_cast<size_t>(d)] *= layer_input[d];
             }
-            shared->linear.gemv(common.per_layer_projection, workspace_.per_layer_gate.data(),
+            shared->linear.gemv(dense->per_layer_projection, workspace_.per_layer_gate.data(),
                                 workspace_.hidden.data());
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.per_layer_input_norm.data(),
                                 shared->program.hidden, shared->program.per_layer_input.norm_epsilon);

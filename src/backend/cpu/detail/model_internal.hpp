@@ -192,15 +192,9 @@ struct CpuCompiledModel {
         std::vector<float> post_feed_forward_norm;
         std::vector<float> per_layer_input_norm;
         std::vector<float> ffn_norm;
-        CpuLinearWeight w13;
-        CpuLinearWeight w2;
-        CpuLinearWeight mlp_up;
-        CpuLinearWeight per_layer_input_gate;
-        CpuLinearWeight per_layer_projection;
         float layer_scalar;
     };
     struct AttentionWeights {
-        CommonWeights common;
         CpuLinearWeight q;
         CpuLinearWeight latent_q_rope;
         CpuLinearWeight latent_q_projection;
@@ -219,13 +213,11 @@ struct CpuCompiledModel {
         std::vector<float> relative_bias;
     };
     struct ConvolutionWeights {
-        CommonWeights common;
         CpuLinearWeight in;
         std::vector<float> weight_tap_major;
         CpuLinearWeight out;
     };
     struct Mamba2Weights {
-        CommonWeights common;
         CpuLinearWeight in;
         std::vector<float> conv_weight;
         std::vector<float> conv_bias;
@@ -236,7 +228,6 @@ struct CpuCompiledModel {
         CpuLinearWeight out;
     };
     struct GatedDeltaNetWeights {
-        CommonWeights common;
         GatedDeltaNetSpec spec;
         CpuLinearWeight qkv;
         CpuLinearWeight q;
@@ -255,12 +246,16 @@ struct CpuCompiledModel {
         CpuLinearWeight out;
     };
     struct MlpOnlyWeights {
-        CommonWeights common;
+        CpuLinearWeight mlp_up;
+        CpuLinearWeight w2;
+    };
+    struct DenseFeedForwardWeights {
+        CpuLinearWeight w13;
+        CpuLinearWeight w2;
+        CpuLinearWeight per_layer_input_gate;
+        CpuLinearWeight per_layer_projection;
     };
     struct MoeWeights {
-        CommonWeights common;
-        std::variant<AttentionWeights, ConvolutionWeights, GatedDeltaNetWeights,
-                     Mamba2Weights, MlpOnlyWeights> operator_layer;
         std::vector<float> router;
         std::vector<float> router_bias;
         std::vector<CpuLinearWeight> expert_w13;
@@ -277,9 +272,17 @@ struct CpuCompiledModel {
         bool disk_cached = false;
         float routed_scaling_factor = 1.0f;
     };
-    using WeightLayer = std::variant<AttentionWeights, ConvolutionWeights,
-                                     GatedDeltaNetWeights, Mamba2Weights,
-                                     MlpOnlyWeights, MoeWeights>;
+    using CpuMixerWeights = std::variant<AttentionWeights, ConvolutionWeights,
+                                         GatedDeltaNetWeights, Mamba2Weights,
+                                         MlpOnlyWeights>;
+    using CpuFeedForwardWeights = std::variant<std::monostate,
+                                               DenseFeedForwardWeights, MoeWeights>;
+
+    struct CpuLayerWeights {
+        CommonWeights common;
+        CpuMixerWeights mixer;
+        CpuFeedForwardWeights feed_forward;
+    };
 
     struct CpuWeightStore {
         CpuLinearWeight embedding;
@@ -289,7 +292,7 @@ struct CpuCompiledModel {
         std::vector<float> embedding_norm;
         std::vector<float> per_layer_projection_norm;
         std::vector<float> final_norm;
-        std::vector<WeightLayer> layers;
+        std::vector<CpuLayerWeights> layers;
     };
 
     struct Shared {
@@ -303,6 +306,11 @@ struct CpuCompiledModel {
                                   class CpuPackReader* reader,
                                   class CpuPackWriter* writer,
                                   int layer);
+        DenseFeedForwardWeights load_dense_feed_forward(
+            class IWeightRepository* repository,
+            class CpuPackReader* reader,
+            class CpuPackWriter* writer,
+            int layer);
         CpuLinearWeight load_matrix(class IWeightRepository* repository,
                                     class CpuPackReader* reader,
                                     class CpuPackWriter* writer,
@@ -450,24 +458,15 @@ struct CpuCompiledModel {
     int preferred_numa_node = -1;
 };
 
-template <typename LayerRef, typename... Handlers>
-decltype(auto) visit_operator_weights(LayerRef&& layer, Handlers&&... handlers) {
+template <typename MixerRef, typename... Handlers>
+decltype(auto) visit_operator_weights(MixerRef&& mixer, Handlers&&... handlers) {
     ExhaustiveHandlers<std::decay_t<Handlers>...> dispatch{
         std::forward<Handlers>(handlers)...};
     return std::visit(
         [&dispatch](auto&& alternative) -> decltype(auto) {
-            using Alternative = std::remove_cvref_t<decltype(alternative)>;
-            if constexpr (std::is_same_v<Alternative, CpuCompiledModel::MoeWeights>) {
-                return std::visit(
-                    [&dispatch](auto&& mixer) -> decltype(auto) {
-                        return dispatch(&mixer);
-                    },
-                    alternative.operator_layer);
-            } else {
-                return dispatch(&alternative);
-            }
+            return dispatch(&alternative);
         },
-        std::forward<LayerRef>(layer));
+        std::forward<MixerRef>(mixer));
 }
 
 struct CpuExecutionContext {

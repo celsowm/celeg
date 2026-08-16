@@ -192,12 +192,10 @@ std::vector<float> CpuCompiledModel::Shared::load_vector(
 size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
     size_t bytes = weight_store.embedding.memory_bytes() +
         weight_store.final_norm.size() * sizeof(float);
-    for (const WeightLayer& layer : weight_store.layers) {
+    for (const CpuLayerWeights& layer : weight_store.layers) {
+        bytes += layer.common.operator_norm.size() * sizeof(float) +
+                 layer.common.ffn_norm.size() * sizeof(float);
         std::visit([&](const auto& value) {
-            bytes += value.common.operator_norm.size() * sizeof(float) +
-                     value.common.ffn_norm.size() * sizeof(float) +
-                     value.common.w13.memory_bytes() +
-                     value.common.w2.memory_bytes();
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, AttentionWeights>) {
                 bytes += value.q.memory_bytes() + value.k.memory_bytes() +
@@ -219,33 +217,17 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                          (value.conv_weight.size() + value.dt_bias.size() +
                           value.a_log.size() + value.norm.size()) * sizeof(float);
             } else if constexpr (std::is_same_v<T, MlpOnlyWeights>) {
-                bytes += value.common.mlp_up.memory_bytes();
-            } else {
+                bytes += value.mlp_up.memory_bytes() + value.w2.memory_bytes();
+            }
+        }, layer.mixer);
+        std::visit([&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, DenseFeedForwardWeights>) {
+                bytes += value.w13.memory_bytes() + value.w2.memory_bytes() +
+                         value.per_layer_input_gate.memory_bytes() +
+                         value.per_layer_projection.memory_bytes();
+            } else if constexpr (std::is_same_v<T, MoeWeights>) {
                 bytes += (value.router.size() + value.router_bias.size()) * sizeof(float);
-                std::visit([&](const auto& operator_weights) {
-                    using Operator = std::decay_t<decltype(operator_weights)>;
-                    if constexpr (std::is_same_v<Operator, AttentionWeights>) {
-                        bytes += operator_weights.q.memory_bytes() +
-                                 operator_weights.k.memory_bytes() +
-                                 operator_weights.v.memory_bytes() +
-                                 operator_weights.out.memory_bytes() +
-                                 (operator_weights.q_norm.size() +
-                                  operator_weights.k_norm.size()) * sizeof(float);
-                    } else if constexpr (std::is_same_v<Operator, ConvolutionWeights>) {
-                        bytes += operator_weights.in.memory_bytes() +
-                                 operator_weights.out.memory_bytes() +
-                                 operator_weights.weight_tap_major.size() * sizeof(float);
-                    } else if constexpr (std::is_same_v<Operator, Mamba2Weights>) {
-                        bytes += operator_weights.in.memory_bytes() +
-                                 operator_weights.out.memory_bytes();
-                    } else if constexpr (std::is_same_v<Operator, GatedDeltaNetWeights>) {
-                        bytes += operator_weights.qkv.memory_bytes() +
-                                 operator_weights.z.memory_bytes() +
-                                 operator_weights.a.memory_bytes() +
-                                 operator_weights.b.memory_bytes() +
-                                 operator_weights.out.memory_bytes();
-                    }
-                }, value.operator_layer);
                 for (const CpuLinearWeight& weight : value.expert_w13) {
                     bytes += weight.memory_bytes();
                 }
@@ -255,7 +237,7 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
                 bytes += value.shared_w13.memory_bytes() + value.shared_w2.memory_bytes() +
                          value.shared_gate.memory_bytes();
             }
-        }, layer);
+        }, layer.feed_forward);
     }
     return bytes;
 }
