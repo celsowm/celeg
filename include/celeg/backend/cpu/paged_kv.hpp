@@ -126,30 +126,20 @@ struct CpuPagedAttentionStats {
     bool parallel = false;
 };
 
-enum class CpuAttentionPatternKind : uint8_t {
-    FullCausal,
-    SlidingWindow,
-    Bidirectional,
-    PrefixLm,
-    BlockSparse,
-    DynamicSparse,
-};
-
+// The CPU backend needs no data beyond what the semantic pattern already
+// carries, so it reuses AttentionPatternSpec directly instead of lowering
+// into a parallel kind + flattened-payload representation.
 struct CpuAttentionPattern {
-    CpuAttentionPatternKind kind = CpuAttentionPatternKind::FullCausal;
-    int window = 0;
-    int prefix_length = 0;
-    int block_size = 0;
-    int local_blocks = 0;
-    int global_blocks = 0;
-    int max_selected_blocks = 0;
+    AttentionPatternSpec storage = FullCausalPattern{};
 
-    static CpuAttentionPattern lower(const AttentionPatternSpec& pattern);
+    static CpuAttentionPattern lower(const AttentionPatternSpec& pattern) {
+        return {pattern};
+    }
     bool allows(int query_position, int key_position) const;
     bool may_read_future(int query_position, int sequence_length) const;
     int first_candidate(int query_position) const;
     bool parallel_safe() const {
-        return kind == CpuAttentionPatternKind::FullCausal;
+        return std::holds_alternative<FullCausalPattern>(storage);
     }
 };
 

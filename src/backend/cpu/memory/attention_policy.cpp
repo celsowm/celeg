@@ -6,79 +6,74 @@
 
 namespace celeg {
 
-CpuAttentionPattern CpuAttentionPattern::lower(const AttentionPatternSpec& pattern) {
-    return std::visit([](const auto& value) -> CpuAttentionPattern {
+bool CpuAttentionPattern::allows(int query_position, int key_position) const {
+    if (query_position < 0 || key_position < 0) return false;
+    return std::visit([&](const auto& value) -> bool {
         using Pattern = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Pattern, FullCausalPattern>) {
-            return {CpuAttentionPatternKind::FullCausal};
+            return key_position <= query_position;
         } else if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
-            return {CpuAttentionPatternKind::SlidingWindow, value.window};
+            return key_position <= query_position &&
+                   key_position >= query_position - value.window + 1;
         } else if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
-            return {CpuAttentionPatternKind::Bidirectional};
+            return true;
         } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
-            return {CpuAttentionPatternKind::PrefixLm, 0, value.prefix_length};
+            return query_position < value.prefix_length
+                ? key_position < value.prefix_length
+                : key_position <= query_position;
         } else if constexpr (std::is_same_v<Pattern, BlockSparsePattern>) {
-            return {CpuAttentionPatternKind::BlockSparse, 0, 0,
-                    value.block_size, value.local_blocks, value.global_blocks};
+            const int query_block = query_position / value.block_size;
+            const int key_block = key_position / value.block_size;
+            if (key_block < value.global_blocks) return key_block <= query_block;
+            return key_block <= query_block &&
+                   key_block >= query_block - value.local_blocks + 1;
         } else if constexpr (std::is_same_v<Pattern, DynamicSparsePattern>) {
-            return {CpuAttentionPatternKind::DynamicSparse, 0, 0,
-                    value.block_size, 0, 0, value.max_selected_blocks};
+            const int query_block = query_position / value.block_size;
+            const int key_block = key_position / value.block_size;
+            if (key_block > query_block) return false;
+            if (key_block == query_block) return true;
+            return key_block < value.max_selected_blocks;
         } else {
             static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
         }
-    }, pattern);
-}
-
-bool CpuAttentionPattern::allows(int query_position, int key_position) const {
-    if (query_position < 0 || key_position < 0) return false;
-    switch (kind) {
-    case CpuAttentionPatternKind::FullCausal:
-        return key_position <= query_position;
-    case CpuAttentionPatternKind::SlidingWindow:
-        return key_position <= query_position &&
-               key_position >= query_position - window + 1;
-    case CpuAttentionPatternKind::Bidirectional:
-        return true;
-    case CpuAttentionPatternKind::PrefixLm:
-        return query_position < prefix_length
-            ? key_position < prefix_length
-            : key_position <= query_position;
-    case CpuAttentionPatternKind::BlockSparse: {
-        const int query_block = query_position / block_size;
-        const int key_block = key_position / block_size;
-        if (key_block < global_blocks) return key_block <= query_block;
-        return key_block <= query_block &&
-               key_block >= query_block - local_blocks + 1;
-    }
-    case CpuAttentionPatternKind::DynamicSparse: {
-        const int query_block = query_position / block_size;
-        const int key_block = key_position / block_size;
-        if (key_block > query_block) return false;
-        if (key_block == query_block) return true;
-        return key_block < max_selected_blocks;
-    }
-    }
-    return false;
+    }, storage);
 }
 
 bool CpuAttentionPattern::may_read_future(int query_position,
                                           int sequence_length) const {
-    if (kind == CpuAttentionPatternKind::Bidirectional) return true;
-    return kind == CpuAttentionPatternKind::PrefixLm &&
-           query_position < prefix_length && prefix_length < sequence_length;
+    return std::visit([&](const auto& value) -> bool {
+        using Pattern = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Pattern, BidirectionalPattern>) {
+            return true;
+        } else if constexpr (std::is_same_v<Pattern, PrefixLmPattern>) {
+            return query_position < value.prefix_length &&
+                   value.prefix_length < sequence_length;
+        } else if constexpr (std::is_same_v<Pattern, FullCausalPattern> ||
+                             std::is_same_v<Pattern, SlidingWindowPattern> ||
+                             std::is_same_v<Pattern, BlockSparsePattern> ||
+                             std::is_same_v<Pattern, DynamicSparsePattern>) {
+            return false;
+        } else {
+            static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
+        }
+    }, storage);
 }
 
 int CpuAttentionPattern::first_candidate(int query_position) const {
-    switch (kind) {
-    case CpuAttentionPatternKind::SlidingWindow:
-        return std::max(0, query_position - window + 1);
-    case CpuAttentionPatternKind::BlockSparse:
-        return 0;
-    case CpuAttentionPatternKind::DynamicSparse:
-        return 0;
-    default:
-        return 0;
-    }
+    return std::visit([&](const auto& value) -> int {
+        using Pattern = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Pattern, SlidingWindowPattern>) {
+            return std::max(0, query_position - value.window + 1);
+        } else if constexpr (std::is_same_v<Pattern, FullCausalPattern> ||
+                             std::is_same_v<Pattern, BidirectionalPattern> ||
+                             std::is_same_v<Pattern, PrefixLmPattern> ||
+                             std::is_same_v<Pattern, BlockSparsePattern> ||
+                             std::is_same_v<Pattern, DynamicSparsePattern>) {
+            return 0;
+        } else {
+            static_assert(always_false_v<Pattern>, "unhandled attention pattern variant");
+        }
+    }, storage);
 }
 
 CpuAttentionBias CpuAttentionBias::lower(const AttentionBiasSpec& bias,

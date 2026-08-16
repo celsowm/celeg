@@ -180,8 +180,7 @@ void update_online(const float* query, int query_head, int kv_head, int head_dim
                    const CpuAttentionBias& bias, float* accumulator,
                    PartialAttention& state) {
 #if CELEG_CPU_HAS_AVX2_KERNEL
-    if (g_has_avx2_fma && bias.empty() &&
-        pattern.kind == CpuAttentionPatternKind::FullCausal) {
+    if (g_has_avx2_fma && bias.empty() && pattern.parallel_safe()) {
         update_online_avx2(query, kv_head, head_dim, scale, pool, page,
                            token_begin, token_end, accumulator, state);
         return;
