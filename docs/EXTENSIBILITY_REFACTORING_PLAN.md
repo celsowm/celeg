@@ -6,6 +6,24 @@ Active implementation roadmap.
 
 Audit baseline: `master` at `32872bc19d992cf0c9bfb8ac9fdd5fece4931f18`.
 
+### Progress
+
+- **Sprint A — impossible-state cleanup: done.**
+  - 1.1 CUDA `LinearWeight` storage variant — `bb7ae24`.
+  - 1.2 CUDA `FeedForwardWeights` gains `std::monostate` — `3215871`.
+  - 1.3 CUDA MoE resident/offloaded expert storage variant — `578dd34`.
+  - 1.4 CUDA `AttentionLayer` runtime state split by semantic family — `ea6d143`.
+  - Verified against a real model (LiquidAI/LFM2.5-350M) on CUDA: logit-level parity across attention/KV-cache mode configs, plus a real session-persistence bug found and fixed along the way (`85579be`, hash-based model-identity check replacing a truncating fixed-size buffer; session format bumped v4→v5) and positional `--model`/`--repo` CLI auto-resolution added to `celeg-run`/`celeg-cpu-run`/`celeg-serve`.
+- **Sprint B — CPU composition: done.**
+  - 5–7 CPU `WeightLayer` mixer×MoE Cartesian variant replaced with `CpuLayerWeights{common, CpuMixerWeights mixer, CpuFeedForwardWeights feed_forward}` composition; nested duplicated memory-accounting visitor simplified to two flat visitors — `c3ded51`.
+  - Verified: CPU ctest 77/77 passing.
+- **Sprint C — checkpoint boundary: mostly done, two disclosed gaps remain.**
+  - 8/9 `resolve_weight_plan`/`build_weight_plan_from_graph` made existence-aware (checks `IWeightRepository::contains()` per naming candidate instead of trusting the first template); `append_moe()` and the automatic-inference `bind_moe()` now decide packed-vs-individual expert layout once from real checkpoint evidence and record it in the resolved plan (this also fixed a latent bug where `individual_expert_model` was unconditionally true and CUDA's packed-expert loading path was dead code). CUDA `weight_setup.cpp`'s duplicated `repo.contains(literal)` boolean blocks deleted in favor of reading role presence from the resolved plan plus the existing `INativeBlockStorageRepository` capability. Dead narrower `celeg::weights::TensorRole` enum in `weights_topology.hpp` removed — `facb607`.
+  - 11 poisoned-tensor-name regression test added (`tests/fake_repository_backend_boundary_test.cpp`) proving MoE layout/role resolution is plan-driven, not name-matching.
+  - Verified: CPU ctest 77/77, CUDA ctest 87/87 passing (both independently re-confirmed).
+  - **Not done — outer `weight_setup.cpp` sniffing is fixed, but two inner spots remain**: (a) `experts.cu`/`expert_loader.cpp`'s low-level `expert_name()`/`named_expert_name()` string-concatenation helpers and an inner `repo.contains(...)` packed-probe inside `load_moe_experts_host` were left as-is — rewriting the 6 GGUF-quantized/int4-packed dequant loader functions across those two files to consume per-expert resolved locators was judged too large/risky to do blind in one pass; (b) `mtp_weight_setup.cpp` (multi-token-prediction layers) was left untouched — MTP layers aren't part of `graph.layers`/`weight_plan` today, so routing them through the same resolved-plan mechanism needs weight-plan support for MTP first. Both are candidates for a small follow-up sprint before Sprint C is fully closed out.
+- **Sprint D (inference extensibility) through Sprint F (extension ABI/orchestration): not started.**
+
 This plan consolidates the extensibility findings from the backend SOLID review,
 the follow-up source audit, the semantic-state cleanup work, and the discussion
 around GGUF native/repacked CPU paths. It is intentionally broader than a SOLID
@@ -1185,25 +1203,25 @@ model semantic types only to advertise backend capability
 
 Use small commits that each remove one old representation completely.
 
-### Sprint A — impossible-state cleanup
+### Sprint A — impossible-state cleanup — DONE
 
-1. CUDA `FeedForwardWeights` gains `std::monostate`; delete empty-dense sentinel.
-2. CUDA `LinearWeight` becomes a storage variant; migrate all consumers.
-3. CUDA MoE resident/offloaded expert storage becomes a variant.
-4. CUDA attention runtime storage is split by active attention-state/storage family.
+1. [x] CUDA `FeedForwardWeights` gains `std::monostate`; delete empty-dense sentinel. (`3215871`)
+2. [x] CUDA `LinearWeight` becomes a storage variant; migrate all consumers. (`bb7ae24`)
+3. [x] CUDA MoE resident/offloaded expert storage becomes a variant. (`578dd34`)
+4. [x] CUDA attention runtime storage is split by active attention-state/storage family. (`ea6d143`)
 
-### Sprint B — CPU composition
+### Sprint B — CPU composition — DONE
 
-5. Replace CPU `WeightLayer` Cartesian flattening with `mixer + feed_forward` composition.
-6. Consolidate common CPU layer weights under one owner.
-7. Simplify memory accounting/visitors after the new composition.
+5. [x] Replace CPU `WeightLayer` Cartesian flattening with `mixer + feed_forward` composition. (`c3ded51`)
+6. [x] Consolidate common CPU layer weights under one owner. (`c3ded51`)
+7. [x] Simplify memory accounting/visitors after the new composition. (`c3ded51`)
 
-### Sprint C — checkpoint boundary
+### Sprint C — checkpoint boundary — MOSTLY DONE
 
-8. Enrich canonical weight planning with the irreducible expert physical layout.
-9. Delete CUDA raw expert-name/layout probing.
-10. Delete equivalent CPU re-inference where found.
-11. Add poisoning/alternate-spelling regression tests proving backends consume roles/locators.
+8. [x] Enrich canonical weight planning with the irreducible expert physical layout. (`facb607`)
+9. [~] Delete CUDA raw expert-name/layout probing. (`facb607` — outer `weight_setup.cpp` sniffing deleted; inner `experts.cu`/`expert_loader.cpp` dequant-loader naming and `mtp_weight_setup.cpp` still probe/build names directly, see Status notes above)
+10. [x] Delete equivalent CPU re-inference where found. (CPU was already plan-driven; picked up the existence-aware fix for free via `facb607`)
+11. [x] Add poisoning/alternate-spelling regression tests proving backends consume roles/locators. (`facb607`)
 
 ### Sprint D — inference extensibility
 
