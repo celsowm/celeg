@@ -71,6 +71,7 @@ private:
     int32_t bos_id_ = 1;
     int32_t eos_id_ = 7;
     int32_t pad_id_ = 0;
+    bool has_bos_ = false;
 };
 
 }

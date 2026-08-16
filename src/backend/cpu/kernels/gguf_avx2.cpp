@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstring>
 #include <immintrin.h>
-#include <stdexcept>
 
 namespace celeg::detail {
 namespace {
@@ -366,7 +365,7 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
         }
         return total;
     }
-    throw std::invalid_argument("unsupported CPU GGUF AVX2 type");
+    return cpu_gguf_dot_scalar(packed_row, type, activation, cols);
 }
 
 #undef CELEG_GGUF_AVX2_TARGET

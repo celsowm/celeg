@@ -447,9 +447,33 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                            workspace_.chunk_conv.data());
             }
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+            const bool packed_gate = layout.output_gate.has_value() &&
+                layout.output_gate->packed_with_query;
+            // The packed Q+Gate projection interleaves [query, gate] per head
+            // (not as two contiguous halves) and has a wider per-row stride
+            // than q_width, so it cannot be processed in place: deinterleave
+            // into a compact q_width-strided query buffer (and the existing
+            // gate buffer) before anything that assumes q_width striding runs.
+            std::vector<float> packed_query;
+            if (packed_gate) packed_query.resize(rows * q_width);
+            float* const query_base = packed_gate
+                ? packed_query.data() : workspace_.chunk_qkv.data();
+            const size_t query_stride = packed_gate ? q_width : q_projection_width;
             parallel_rows(shared->pool, rows, [&](size_t row) {
-                float* projected_q = workspace_.chunk_qkv.data() + row * q_projection_width;
-                float* q = projected_q;
+                if (packed_gate) {
+                    const float* source = workspace_.chunk_qkv.data() + row * q_projection_width;
+                    float* dest_q = query_base + row * query_stride;
+                    float* dest_gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                    const int head_dim = layout.head_dim;
+                    for (int head = 0; head < layout.query_heads; ++head) {
+                        const float* head_source = source + static_cast<size_t>(head) * 2 * head_dim;
+                        std::copy(head_source, head_source + head_dim,
+                                 dest_q + static_cast<size_t>(head) * head_dim);
+                        std::copy(head_source + head_dim, head_source + 2 * head_dim,
+                                 dest_gate + static_cast<size_t>(head) * head_dim);
+                    }
+                }
+                float* q = query_base + row * query_stride;
                 float* k = workspace_.chunk_op.data() + row * kv_width;
                 const int position = base_position + static_cast<int>(row);
                 const auto* explicit_rope = embeddings
@@ -459,7 +483,6 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
                 apply_cpu_attention_qk(layout, *attention, q, k, position,
                                        rope_position);
-                (void)projected_q;
             });
             const int owner = shared->layer_to_kv_owner.at(index);
             AttentionState& state = attention_state(static_cast<size_t>(owner));
@@ -472,7 +495,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             }
             auto attention_started = Clock::now();
             const CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
-            cpu_gqa_prefill_paged(workspace_.chunk_qkv.data(), rows, q_width, pool,
+            cpu_gqa_prefill_paged(query_base, rows, q_width, pool,
                                   state.pages, workspace_.chunk_op.data(), base_position,
                                   layout.query_heads, layout.key_value_heads, layout.head_dim,
                                   shared->pool,
@@ -480,14 +503,12 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                                   CpuAttentionBias::lower(layout.bias, attention->relative_bias,
                                                           layout.query_heads));
             if (layout.output_gate.has_value()) {
-                if (!layout.output_gate->packed_with_query) {
+                if (!packed_gate) {
                     layer_gemm(attention->gate, workspace_.chunk_normed.data(),
                                workspace_.chunk_attention_gate.data());
                 }
                 for (size_t row = 0; row < rows; ++row) {
-                    const float* gate = layout.output_gate->packed_with_query
-                        ? workspace_.chunk_qkv.data() + row * q_projection_width + q_width
-                        : workspace_.chunk_attention_gate.data() + row * q_width;
+                    const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
                     float* output = workspace_.chunk_op.data() + row * q_width;
                     apply_cpu_attention_output_gate(output, gate, q_width);
                 }

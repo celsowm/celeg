@@ -68,6 +68,7 @@ void apply_tokenizer_config(TokenizerDefinition& definition, const std::string& 
     };
     if (const auto bos = id_for(configured_token_text(config, "bos_token"))) {
         definition.bos_id = *bos;
+        definition.has_bos = true;
     }
     if (const auto eos = id_for(configured_token_text(config, "eos_token"))) {
         definition.eos_id = *eos;
@@ -151,6 +152,7 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
             token.text == "<|begin_of_text|>" || token.text == "<bos>" ||
             token.text == "<|end_of_text|>") {
             definition.bos_id = token.id;
+            definition.has_bos = true;
             explicit_bos = true;
         }
         if (token.text == "<|im_end|>" || token.text == "<eos>" ||
@@ -163,6 +165,7 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
     if (endoftext_id >= 0 && !explicit_bos && !explicit_eos) {
         definition.bos_id = endoftext_id;
         definition.eos_id = endoftext_id;
+        definition.has_bos = true;
     }
     apply_tokenizer_config(definition, path);
     return definition;
@@ -180,6 +183,7 @@ TokenizerDefinition resolve_tokenizer_definition(
     definition.bos_id = data.bos_id;
     definition.eos_id = data.eos_id;
     definition.pad_id = data.pad_id;
+    definition.has_bos = data.has_bos;
     for (const TokenizerPreTokenizerRule& rule : rules) {
         const bool matches = rule.contains
             ? data.pre_tokenizer.find(rule.identifier) != std::string::npos

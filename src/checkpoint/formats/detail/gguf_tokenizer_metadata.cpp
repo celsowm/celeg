@@ -25,6 +25,7 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
     }
     if (file.has("tokenizer.ggml.bos_token_id")) {
         result.bos_id = static_cast<int32_t>(file.i64("tokenizer.ggml.bos_token_id"));
+        result.has_bos = true;
     }
     if (file.has("tokenizer.ggml.eos_token_id")) {
         result.eos_id = static_cast<int32_t>(file.i64("tokenizer.ggml.eos_token_id"));

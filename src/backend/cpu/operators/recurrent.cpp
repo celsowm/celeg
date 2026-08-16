@@ -51,7 +51,7 @@ void execute_cpu_gated_delta_token(
         shared.program.layers.at(layer).operator_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate,
-        spec.factorized_projections);
+        spec.a_log_needs_exp);
     shared.linear.gemv(weights.out, workspace.gated_delta_output.data(),
                        workspace.hidden.data());
 }
@@ -201,7 +201,7 @@ void execute_cpu_gated_delta_chunk(
         shared.program.layers.at(layer).operator_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate,
-        spec.factorized_projections);
+        spec.a_log_needs_exp);
     context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();

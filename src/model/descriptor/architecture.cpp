@@ -274,9 +274,12 @@ public:
         for (int layer = 0; layer < layer_count; ++layer) {
             auto& mixer = graph.layers[static_cast<size_t>(layer)].mixer;
             if (std::holds_alternative<GatedDeltaNetSpec>(mixer)) {
-                graph.layers[static_cast<size_t>(layer)].mixer =
-                    GatedDeltaNetSpec{gated_conv_kernel, gated_key_dim, gated_value_dim,
-                                      gated_key_heads, gated_value_heads};
+                GatedDeltaNetSpec gated_delta{gated_conv_kernel, gated_key_dim, gated_value_dim,
+                                              gated_key_heads, gated_value_heads};
+                // GGUF conversion bakes A = -exp(A_log) into the stored tensor; raw
+                // safetensors checkpoints still store the untransformed A_log parameter.
+                gated_delta.a_log_needs_exp = !metadata.is_gguf();
+                graph.layers[static_cast<size_t>(layer)].mixer = gated_delta;
             } else if (std::holds_alternative<Mamba2Spec>(mixer)) {
                 graph.layers[static_cast<size_t>(layer)].mixer =
                     Mamba2Spec{gated_conv_kernel, mamba_intermediate, mamba_state_size,

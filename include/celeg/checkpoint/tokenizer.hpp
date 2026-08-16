@@ -13,6 +13,7 @@ struct TokenizerData {
     int32_t bos_id = 1;
     int32_t eos_id = 7;
     int32_t pad_id = 0;
+    bool has_bos = false;
     std::string pre_tokenizer;
 };
 

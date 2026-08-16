@@ -415,6 +415,51 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         }
         return total;
     }
+    if (type == GgmlType::Q5_K) {
+        const auto* weights = reinterpret_cast<const BlockQ5K*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const BlockQ5K& weight = weights[b];
+            const CpuQ8KBlock& x = activation[b];
+            const float d = fp16_to_float(weight.d);
+            const float dmin = fp16_to_float(weight.dmin);
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                uint8_t scale = 0, minimum = 0;
+                q4k_scale_min(sub, weight.scales, scale, minimum);
+                int dot = 0;
+                const int base = sub * 32;
+                for (int i = 0; i < 32; ++i) {
+                    dot += q5k_value(weight, base + i) *
+                           static_cast<int>(x.qs[base + i]);
+                }
+                const int sum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                block_total += d * static_cast<float>(scale * dot) -
+                               dmin * static_cast<float>(minimum * sum);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::Q8_0) {
+        const auto* weights = reinterpret_cast<const BlockQ8_0*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const BlockQ8_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                const float d = fp16_to_float(weight.d);
+                const int base = sub * 32;
+                int dot = 0;
+                for (int i = 0; i < 32; ++i) {
+                    dot += static_cast<int>(weight.qs[i]) *
+                           static_cast<int>(x.qs[base + i]);
+                }
+                block_total += d * static_cast<float>(dot);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
     throw std::invalid_argument("unsupported CPU GGUF dot type");
 }
 

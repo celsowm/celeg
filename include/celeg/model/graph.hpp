@@ -330,6 +330,7 @@ struct GatedDeltaNetSpec {
     float decay_lower_bound = -5.0f;
     bool sigmoid_output_gate = false;
     bool factorized_projections = false;
+    bool a_log_needs_exp = false;
 
     int qkv_width() const {
         return 2 * key_heads * key_head_dim + value_heads * value_head_dim;

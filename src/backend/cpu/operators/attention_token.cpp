@@ -156,6 +156,24 @@ void execute_cpu_attention_token(
             float* q = execution.workspace.qkv.data();
             float* k = q + q_projection_width;
             float* v = k + kv_width;
+            const bool packed_gate = layout.output_gate.has_value() &&
+                layout.output_gate->packed_with_query;
+            float* gate = nullptr;
+            if (packed_gate) {
+                // The packed Q+Gate projection interleaves [query, gate] per
+                // head (not as two contiguous halves), so de-interleave into
+                // per-head-contiguous buffers before any per-head code (RoPE,
+                // QK norm) that assumes a fixed head_dim stride runs on it.
+                gate = execution.workspace.attention_gate.data();
+                const int head_dim = layout.head_dim;
+                for (int head = 0; head < layout.query_heads; ++head) {
+                    const float* source = q + static_cast<size_t>(head) * 2 * head_dim;
+                    std::copy(source, source + head_dim,
+                             q + static_cast<size_t>(head) * head_dim);
+                    std::copy(source + head_dim, source + 2 * head_dim,
+                             gate + static_cast<size_t>(head) * head_dim);
+                }
+            }
             if (!attention.k.segments.empty()) {
                 execution.shared.linear.gemv(attention.k, execution.workspace.normed.data(), k);
                 execution.shared.linear.gemv(attention.v, execution.workspace.normed.data(), v);
@@ -172,10 +190,7 @@ void execute_cpu_attention_token(
             apply_cpu_attention_output_transform(
                 layout, execution.workspace.op_output.data(), v);
             if (layout.output_gate.has_value()) {
-                const float* gate = nullptr;
-                if (layout.output_gate->packed_with_query) {
-                    gate = q + q_width;
-                } else {
+                if (!packed_gate) {
                     execution.shared.linear.gemv(attention.gate,
                                                  execution.workspace.normed.data(),
                                                  execution.workspace.attention_gate.data());

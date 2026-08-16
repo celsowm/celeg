@@ -316,6 +316,7 @@ void BpeTokenizer::load_definition(const TokenizerDefinition& definition) {
     bos_id_ = definition.bos_id;
     eos_id_ = definition.eos_id;
     pad_id_ = definition.pad_id;
+    has_bos_ = definition.has_bos;
 
     pre_tokenizer_ = definition.pre_tokenizer;
     normalization_ = definition.normalization;
@@ -615,7 +616,7 @@ std::vector<int32_t> BpeTokenizer::encode_ordinary(std::string_view text) const 
 
 std::vector<int32_t> BpeTokenizer::encode(std::string_view text, bool add_bos) const {
     std::vector<int32_t> out;
-    if (add_bos) out.push_back(bos_id_);
+    if (add_bos && has_bos_) out.push_back(bos_id_);
     size_t cursor = 0;
     while (cursor < text.size()) {
         const SpecialToken* best = nullptr;
