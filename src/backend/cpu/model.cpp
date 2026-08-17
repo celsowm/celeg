@@ -200,10 +200,10 @@ std::string CpuModel::session_backend_description() const {
     std::ostringstream out;
     out << "cpu-native isa=" << cpu_isa_name(state_->shared->options.isa)
         << " weights="
-        << (state_->shared->native_checkpoint
+        << (state_->shared->checkpoint.native_checkpoint
                 ? "gguf-native(q4_k,q6_k)"
                 : "q4-group")
-        << (state_->shared->native_checkpoint
+        << (state_->shared->checkpoint.native_checkpoint
                 ? "" : ("-" + std::to_string(state_->shared->group_size)))
         << " kv=" << cpu_kv_cache_mode_name(state_->shared->options.kv_cache_mode)
         << " kv-page=" << state_->shared->options.kv_page_tokens
@@ -215,19 +215,21 @@ std::string CpuModel::session_backend_description() const {
         << " attention-page-tile=" << state_->shared->options.attention_page_tile
         << " pinned-workers=" << state_->shared->pool.pinned_workers()
         << " pack="
-        << (state_->shared->native_checkpoint
+        << (state_->shared->checkpoint.native_checkpoint
                 ? "none"
-                : (state_->shared->loaded_pack ? "hit" : "built"))
+                : (state_->shared->checkpoint.loaded_pack ? "hit" : "built"))
         << " hardware-best="
         << cpu_isa_name(state_->shared->capabilities.best_isa());
     return out.str();
 }
 
 const std::filesystem::path& CpuModel::session_pack_path() const {
-    return state_->shared->pack_file;
+    return state_->shared->checkpoint.pack_file;
 }
 
-bool CpuModel::session_loaded_from_pack() const { return state_->shared->loaded_pack; }
+bool CpuModel::session_loaded_from_pack() const {
+    return state_->shared->checkpoint.loaded_pack;
+}
 
 uint64_t CpuModel::session_attention_parallel_calls() const {
     return state_->session_.attention_parallel_calls;

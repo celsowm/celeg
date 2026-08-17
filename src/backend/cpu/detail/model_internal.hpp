@@ -449,6 +449,18 @@ struct CpuCompiledModel {
         std::vector<CpuLayerWeights> layers;
     };
 
+    /// Owns the resolved checkpoint/format binding for a compiled model: which
+    /// checkpoint flavor was loaded, its source identity, and the resolved pack
+    /// cache path. This is one fact with one owner, kept separate from the model's
+    /// runtime/compute state in `Shared`.
+    struct CpuCheckpointBinding {
+        bool native_checkpoint = false;
+        bool compressed_checkpoint = false;
+        std::string source_id;
+        std::filesystem::path pack_file;
+        bool loaded_pack = false;
+    };
+
     struct Shared {
         Shared(const std::string& path, int context, CpuModelOptions requested,
                std::shared_ptr<const RuntimeContext> runtime);
@@ -486,9 +498,8 @@ struct CpuCompiledModel {
 
         std::string model_path;
         std::shared_ptr<const RuntimeContext> runtime;
-        bool native_checkpoint = false;
-        bool compressed_checkpoint = false;
         std::shared_ptr<IWeightRepository> repository;
+        CpuCheckpointBinding checkpoint;
         int max_context = 0;
         CpuModelOptions options;
         CpuCapabilities capabilities;
@@ -496,9 +507,6 @@ struct CpuCompiledModel {
         CpuLinearEngine linear;
         CpuWorkspacePlan workspace_plan;
         size_t group_size = 32;
-        std::filesystem::path pack_file;
-        std::string source_id;
-        bool loaded_pack = false;
         RuntimeTopology runtime_topology;
         ExecutionTopology& shape;
         CheckpointDimensions& dims;

@@ -71,8 +71,8 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
         detail::load_model_bootstrap(std::filesystem::path(model_path), *runtime);
     const auto* native_storage = dynamic_cast<const INativeBlockStorageRepository*>(
         bootstrap.checkpoint.repository.get());
-    native_checkpoint = native_storage != nullptr &&
-                        native_storage->has_native_block_storage();
+    checkpoint.native_checkpoint = native_storage != nullptr &&
+                         native_storage->has_native_block_storage();
     runtime_topology = bootstrap.model.topology;
     tie_word_embeddings = bootstrap.model.graph.tied_embeddings;
     program = CpuModelCompiler{}.compile(bootstrap.model);
@@ -81,13 +81,13 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;
     const std::vector<std::string> repository_names = repository->names();
-    compressed_checkpoint = std::any_of(
+    checkpoint.compressed_checkpoint = std::any_of(
         repository_names.begin(), repository_names.end(),
         [](const std::string& name) { return name.ends_with("_packed"); });
     prepare_pack_path();
     if (options.expert_backing == CpuExpertBacking::DiskCached &&
-        !native_checkpoint && !compressed_checkpoint &&
-        (!options.use_pack_cache || pack_file.empty())) {
+        !checkpoint.native_checkpoint && !checkpoint.compressed_checkpoint &&
+        (!options.use_pack_cache || checkpoint.pack_file.empty())) {
         throw std::invalid_argument(
             "CPU disk-backed experts require the CPU pack cache");
     }
@@ -99,7 +99,10 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
 }
 
 void CpuCompiledModel::Shared::prepare_pack_path() {
-    if (native_checkpoint || compressed_checkpoint || !options.use_pack_cache) return;
+    if (checkpoint.native_checkpoint || checkpoint.compressed_checkpoint ||
+        !options.use_pack_cache) {
+        return;
+    }
     std::filesystem::path directory = options.pack_cache_directory.empty()
         ? default_cache_directory() : options.pack_cache_directory;
     std::error_code error;
@@ -112,8 +115,8 @@ void CpuCompiledModel::Shared::prepare_pack_path() {
     filename << "celeg-" << std::hex << model_hash << '-' << id
              << "-q4g" << group_size
              << '-' << cpu_isa_name(options.isa) << ".lfmpack";
-    pack_file = directory / filename.str();
-    source_id = source;
+    checkpoint.pack_file = directory / filename.str();
+    checkpoint.source_id = source;
 }
 
 
@@ -122,7 +125,7 @@ CpuLinearWeight CpuCompiledModel::Shared::load_matrix(
     IWeightRepository* source, CpuPackReader* reader, CpuPackWriter* writer,
     const std::string& name, const std::vector<int64_t>& expected) {
     try {
-        if (compressed_checkpoint) {
+        if (checkpoint.compressed_checkpoint) {
             if (const auto cached = compressed_linear_cache.find(name);
                 cached != compressed_linear_cache.end()) return cached->second;
             CpuLinearWeight loaded = CpuWeightCodec(source, reader, writer, group_size).matrix(name, expected);
@@ -140,7 +143,7 @@ CpuLinearWeight CpuCompiledModel::Shared::load_concat(
     const std::string& synthetic,
     const std::vector<std::pair<std::string, std::vector<int64_t>>>& parts) {
     try {
-    if (compressed_checkpoint) {
+    if (checkpoint.compressed_checkpoint) {
         if (const auto cached = compressed_linear_cache.find(synthetic);
             cached != compressed_linear_cache.end()) return cached->second;
         if (parts.empty()) throw std::invalid_argument("compressed CPU concat has no parts");

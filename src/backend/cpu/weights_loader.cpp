@@ -105,14 +105,14 @@ CpuCompiledModel::DenseFeedForwardWeights CpuCompiledModel::Shared::load_dense_f
 
 void CpuCompiledModel::Shared::load_weights() {
     std::unique_ptr<CpuPackReader> reader;
-    if (!pack_file.empty() && std::filesystem::exists(pack_file)) {
+    if (!checkpoint.pack_file.empty() && std::filesystem::exists(checkpoint.pack_file)) {
         try {
-            reader = std::make_unique<CpuPackReader>(pack_file);
-            if (reader->metadata().source_id != source_id ||
+            reader = std::make_unique<CpuPackReader>(checkpoint.pack_file);
+            if (reader->metadata().source_id != checkpoint.source_id ||
                 reader->metadata().group_size != group_size) {
                 reader.reset();
             } else {
-                loaded_pack = true;
+                checkpoint.loaded_pack = true;
             }
         } catch (const std::exception& error) {
             std::clog << "CPU pack cache rejected, rebuilding: "
@@ -126,19 +126,19 @@ void CpuCompiledModel::Shared::load_weights() {
 
     std::unique_ptr<CpuPackWriter> writer;
     if (!reader) {
-        if (!pack_file.empty()) {
+        if (!checkpoint.pack_file.empty()) {
             CpuPackMetadata metadata;
-            metadata.source_id = source_id;
+            metadata.source_id = checkpoint.source_id;
             metadata.isa = cpu_isa_name(options.isa);
             metadata.group_size = static_cast<uint32_t>(group_size);
-            writer = std::make_unique<CpuPackWriter>(pack_file, std::move(metadata));
+            writer = std::make_unique<CpuPackWriter>(checkpoint.pack_file, std::move(metadata));
         }
     }
 
     IWeightRepository* source = reader ? nullptr : repository.get();
     const bool disk_cached_experts =
         options.expert_backing == CpuExpertBacking::DiskCached &&
-        !native_checkpoint;
+        !checkpoint.native_checkpoint;
     weight_store.embedding = load_matrix(source, reader.get(), writer.get(),
         tensor_name(weight_requests, TensorRole::TokenEmbedding),
         {dims.vocab_size, program.hidden});

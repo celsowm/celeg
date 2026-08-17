@@ -57,15 +57,15 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
     std::lock_guard lock(shared.expert_pack_mutex);
     if (shared.expert_backing_store) return;
 
-    if (shared.native_checkpoint) return;
-    if (!shared.options.use_pack_cache || shared.pack_file.empty()) {
+    if (shared.checkpoint.native_checkpoint) return;
+    if (!shared.options.use_pack_cache || shared.checkpoint.pack_file.empty()) {
         throw std::invalid_argument(
             "CPU disk-backed experts require the CPU pack cache");
     }
-    if (!std::filesystem::exists(shared.pack_file)) {
+    if (!std::filesystem::exists(shared.checkpoint.pack_file)) {
         throw std::runtime_error(
             "CPU expert pack is missing after weight preparation: " +
-            shared.pack_file.string());
+            shared.checkpoint.pack_file.string());
     }
 
     const auto moe_program = std::find_if(shared.program.layers.begin(),
@@ -79,7 +79,7 @@ void configure_cpu_expert_backing(CpuCompiledModel::Shared& shared) {
     const int intermediate =
         std::get<MoeLayerProgram>(moe_program->feed_forward).routed.mlp.intermediate_size;
     shared.expert_backing_store = std::make_unique<CpuExpertBackingStore>(
-        shared.pack_file, shared.options.expert_cache_bytes,
+        shared.checkpoint.pack_file, shared.options.expert_cache_bytes,
         shared.program.hidden, intermediate);
 
     for (std::size_t index = 0; index < shared.weight_store.layers.size(); ++index) {

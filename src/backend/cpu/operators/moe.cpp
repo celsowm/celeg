@@ -115,7 +115,7 @@ double elapsed_ms(Clock::time_point start) {
 void prepare_expert_backing(CpuCompiledModel::Shared& shared,
                             const CpuCompiledModel::MoeWeights& weights) {
     if (shared.options.expert_backing == CpuExpertBacking::DiskCached &&
-        !weights.disk_cached && !shared.native_checkpoint) {
+        !weights.disk_cached && !shared.checkpoint.native_checkpoint) {
         configure_cpu_expert_backing(shared);
     }
 }
