@@ -18,8 +18,7 @@ ResolutionError::ResolutionError(
 
 CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     auto context = inference_detail::initialize_canonical_facts(input);
-    inference_detail::infer_layer_semantics(context);
-    inference_detail::bind_canonical_tensors(context);
+    inference_detail::resolve_canonical_layers(context);
     context.facts.validate();
     return std::move(context.facts);
 }

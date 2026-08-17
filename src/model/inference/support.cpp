@@ -1,5 +1,6 @@
 #include "support.hpp"
 
+#include "canonical_internal.hpp"
 
 #include <string>
 
@@ -142,6 +143,43 @@ void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,
                  std::vector<EvidenceItem> evidence, int physical_layer) {
     bindings.values.push_back({role, layer, -1, physical_layer, tensor.name, tensor.shape,
                                std::move(evidence)});
+}
+
+const TensorInventoryEntry* find_mamba_tensor(const InferenceInput& input,
+                                              int layer,
+                                              std::string_view suffix) {
+    const auto candidates = mamba2_tensor_candidates(layer, suffix);
+    const TensorInventoryEntry* found = nullptr;
+    for (const auto& candidate : candidates) {
+        if (const auto* tensor = input.inventory.find(candidate)) {
+            if (found != nullptr) {
+                fail(
+                    ResolutionFailureKind::AmbiguousTensorBinding,
+                    "multiple Mamba-2 tensor spellings are present for layer " +
+                        std::to_string(layer));
+            }
+            found = tensor;
+        }
+    }
+    return found;
+}
+
+bool layer_has_feed_forward(const CanonicalInferenceContext& context,
+                            int layer) {
+    const auto& input = context.input;
+    const auto has_tensor = [&](std::string_view name) {
+        return input.inventory.find(name) != nullptr;
+    };
+    const std::string index = std::to_string(layer);
+    return find_mamba_tensor(input, layer, "in_proj.weight") == nullptr &&
+        (has_tensor("blk." + index + ".ffn_up.weight") ||
+         has_tensor("model.layers." + index + ".mlp.up_proj.weight") ||
+         has_tensor("model.language_model.layers." + index + ".mlp.up_proj.weight") ||
+         has_tensor("transformer.h." + index + ".mlp.w_up.weight") ||
+         has_tensor("model.layers." + index + ".feed_forward.w1.weight") ||
+         (context.moe &&
+          has_tensor("model.layers." + index +
+                     ".mlp.experts.0.gate_proj.weight")));
 }
 
 }

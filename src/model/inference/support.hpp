@@ -9,6 +9,8 @@
 
 namespace celeg::inference_detail {
 
+struct CanonicalInferenceContext;
+
 [[noreturn]] void fail(ResolutionFailureKind kind, std::string message,
                        std::vector<EvidenceItem> evidence = {});
 
@@ -29,6 +31,17 @@ std::vector<std::string> shortconv_tensor_candidates(int layer,
                                                      std::string_view suffix);
 std::vector<std::string> mamba2_tensor_candidates(int layer,
                                                   std::string_view suffix);
+
+const TensorInventoryEntry* find_mamba_tensor(const InferenceInput& input,
+                                              int layer,
+                                              std::string_view suffix);
+
+/// Whether the layer's inventory carries any feed-forward grammar (dense
+/// projections in any known convention, or the first routed-expert tensor of
+/// a checkpoint MoE family). Shared by the mixer rules (absence turns the
+/// layer feed-forward into monostate) and the MLP-only grammar rule.
+bool layer_has_feed_forward(const CanonicalInferenceContext& context,
+                            int layer);
 
 void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,
                  const TensorInventoryEntry& tensor,

@@ -54,9 +54,23 @@ function(celeg_register_program_fingerprint_test)
     add_test(NAME program_fingerprint_test COMMAND program_fingerprint_test)
 endfunction()
 
+function(celeg_register_layer_inference_rule_test)
+    if(NOT CELEG_BUILD_TESTS)
+        return()
+    endif()
+    add_executable(layer_inference_rule_test
+        tests/layer_inference_rule_test.cpp)
+    target_include_directories(layer_inference_rule_test PRIVATE
+        include src/model tests)
+    target_link_libraries(layer_inference_rule_test PRIVATE
+        celeg_base Threads::Threads)
+    add_test(NAME layer_inference_rule_test COMMAND layer_inference_rule_test)
+endfunction()
+
 # This manifest is included before targets are declared. Defer registration so
 # celeg_cpu_backend exists and the tests remain owned by the test manifest.
 cmake_language(DEFER CALL celeg_register_cpu_expert_cache_test)
 cmake_language(DEFER CALL celeg_register_attention_semantics_test)
 cmake_language(DEFER CALL celeg_register_latent_prefill_path_test)
 cmake_language(DEFER CALL celeg_register_program_fingerprint_test)
+cmake_language(DEFER CALL celeg_register_layer_inference_rule_test)
