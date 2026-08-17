@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <iosfwd>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,14 @@ public:
         std::vector<LayerBuffers> layer_buffers;
     };
 
+    /// Serialize/deserialize a session to/from a byte stream. The codec is
+    /// independent of the storage medium so it can be exercised against an
+    /// in-memory stream as well as a file.
+    static void encode(std::ostream& out, SessionState& state);
+
+    static void decode(std::istream& in, SessionState& state);
+
+    /// File-transport wrappers: open the path and delegate to `encode`/`decode`.
     static void save(const std::string& path, SessionState& state);
 
     static void load(const std::string& path, SessionState& state);

@@ -140,20 +140,20 @@ void SessionPersistence::restore_prefix_state(const PrefixState& state) {
 namespace {
 
 template <typename T>
-void write_scalar(std::ofstream& out, const T& value) {
+void write_scalar(std::ostream& out, const T& value) {
     static_assert(std::is_trivially_copyable_v<T>);
     out.write(reinterpret_cast<const char*>(&value), sizeof(T));
     if (!out) throw std::runtime_error("failed writing session");
 }
 
 template <typename T>
-void read_scalar(std::ifstream& in, T& value) {
+void read_scalar(std::istream& in, T& value) {
     static_assert(std::is_trivially_copyable_v<T>);
     in.read(reinterpret_cast<char*>(&value), sizeof(T));
     if (!in) throw std::runtime_error("truncated session file");
 }
 
-void write_device(std::ofstream& out, const void* device, size_t bytes,
+void write_device(std::ostream& out, const void* device, size_t bytes,
                   cudaStream_t stream) {
     if (bytes == 0) return;
     std::vector<std::byte> host(bytes);
@@ -163,7 +163,7 @@ void write_device(std::ofstream& out, const void* device, size_t bytes,
     if (!out) throw std::runtime_error("failed writing session payload");
 }
 
-void read_device(std::ifstream& in, void* device, size_t bytes) {
+void read_device(std::istream& in, void* device, size_t bytes) {
     if (bytes == 0) return;
     std::vector<std::byte> host(bytes);
     in.read(reinterpret_cast<char*>(host.data()),
@@ -174,7 +174,7 @@ void read_device(std::ifstream& in, void* device, size_t bytes) {
 
 }
 
-void SessionStore::save(const std::string& path, SessionState& state) {
+void SessionStore::encode(std::ostream& out, SessionState& state) {
     if (state.stream != nullptr) {
         CELEG_CUDA(cudaStreamSynchronize(state.stream));
     }
@@ -194,8 +194,6 @@ void SessionStore::save(const std::string& path, SessionState& state) {
         header.model_identity_hash = fnv1a_hash(state.model_identity);
     }
 
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("cannot create session file: " + path);
     write_scalar(out, header);
 
     if (state.seen_tokens != nullptr) {
@@ -249,9 +247,13 @@ void SessionStore::save(const std::string& path, SessionState& state) {
     }
 }
 
-void SessionStore::load(const std::string& path, SessionState& state) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("cannot open session file: " + path);
+void SessionStore::save(const std::string& path, SessionState& state) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) throw std::runtime_error("cannot create session file: " + path);
+    encode(out, state);
+}
+
+void SessionStore::decode(std::istream& in, SessionState& state) {
     Header header;
     read_scalar(in, header);
     if (header.magic != kMagic || header.version != kVersion) {
@@ -325,6 +327,12 @@ void SessionStore::load(const std::string& path, SessionState& state) {
     if (!in.eof()) throw std::runtime_error("failed reading session file");
 
     state.position = header.position;
+}
+
+void SessionStore::load(const std::string& path, SessionState& state) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error("cannot open session file: " + path);
+    decode(in, state);
 }
 
 SessionStore::PrefixSnapshot SessionStore::export_prefix(const SessionState& state) {

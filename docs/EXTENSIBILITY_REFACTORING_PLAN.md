@@ -30,7 +30,7 @@ Audit baseline: `master` at `32872bc19d992cf0c9bfb8ac9fdd5fece4931f18`.
   - 17 Generic `input.is_gguf()` semantic branches replaced with `DecayParameterEncoding` on `GatedDeltaFacts` and `Mamba2Facts`, resolved at format boundary.
   - Verified: CPU ctest 78/78, CUDA ctest 88/88; custom grammar extension test passing (`tests/layer_inference_rule_test.cpp`).
 - **Sprint E (backend planning): items 18–22 done.**
-- **Sprint F (extension ABI and orchestration): items 23–26 done; 27 deferred.**
+- **Sprint F (extension ABI and orchestration): items 23–27 done.**
   - 26 first contained cut: the checkpoint/format binding fields
     (`native_checkpoint`, `compressed_checkpoint`, `source_id`, `pack_file`,
     `loaded_pack`) were extracted from `CpuCompiledModel::Shared` into a dedicated
@@ -39,10 +39,13 @@ Audit baseline: `master` at `32872bc19d992cf0c9bfb8ac9fdd5fece4931f18`.
     across `weights.cpp`, `weights_loader.cpp`, `expert_backing.cpp`, `moe.cpp`,
     `model.cpp`; CUDA build + 88-test ctest green. Further `Shared` decomposition
     (weight-loader/expert-backing ownership) remains a candidate but is lower priority.
-  - 27 (persistence codec/snapshot vs file-transport split) is deferred: it is gated in
-    the plan on "where tests justify it" and is a larger, unscoped refactor that should
-    be scoped in a dedicated session rather than edited blindly, to avoid destabilizing
-    the green 88-test CUDA build.
+  - 27 persistence codec/transport split: in `src/backend/cuda/model/persistence.cu`
+    the serialization codec (`SessionStore::encode`/`decode` over `std::ostream`/
+    `std::istream`) was separated from the file-transport wrappers
+    (`SessionStore::save`/`load`, which only open the path and delegate). The byte
+    stream produced is unchanged (behavior-preserving), so `celeg-run
+    --save-session/--load-session` is unaffected. The stream-based codec now makes an
+    in-memory round-trip test possible without a file; CUDA build + 88-test ctest green.
   - 18 Mixer/FFN maxima (`maximum_attention_*`, `maximum_mamba_*`, `maximum_gated_delta_*`,
     `max_feed_forward_intermediate`, `mamba2_intermediate`, `conv_cache`, `conv_dim`) removed
     from neutral `ExecutionTopology`; `ExecutionTopology::derive` no longer computes them.
@@ -1297,7 +1300,7 @@ Use small commits that each remove one old representation completely.
 24. [x] Make the core C engine API consistently backend-ID based; remove the requirement for a central CPU/CUDA backend enum to add a backend.
 25. [x] Decide the explicit future of the CPU-only direct model C API (kept as a documented CPU-only convenience API; `celeg_engine_*` is the backend-neutral path).
 26. [x] Continue ownership-based decomposition of `CudaCompiledModel` and `CpuCompiledModel::Shared`.
-27. Split persistence codec/snapshot from file transport where tests justify it.
+27. [x] Split persistence codec/snapshot from file transport where tests justify it.
 
 ### Separate performance project
 
