@@ -1,5 +1,7 @@
 #include "api_internal.hpp"
 
+#include <cstring>
+
 extern "C" {
 
 void celeg_cpu_model_options_init(celeg_cpu_model_options* options) {
@@ -98,8 +100,8 @@ void celeg_request_options_init(celeg_request_options* options) {
     options->generation.seed = 1;
 }
 
-const char* celeg_backend_capabilities(celeg_backend backend) {
-    if (backend == CELEG_BACKEND_CPU) {
+const char* celeg_backend_capabilities(const char* backend_id) {
+    if (backend_id && std::strcmp(backend_id, "cpu") == 0) {
         celeg::api::global_error = celeg::detect_cpu_capabilities().summary();
         return celeg::api::global_error.c_str();
     }

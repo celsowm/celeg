@@ -31,20 +31,19 @@ public:
     virtual ~IBackendOptions() = default;
     virtual BackendId backend_id() const noexcept = 0;
 
+    /// Stable, ABI-safe identity for the decoded options schema (e.g. "cpu/1").
+    /// Concrete option types publish a matching `static constexpr
+    /// std::string_view schema_id` so `as<T>()` compares by content rather than
+    /// by the address of a process-local static object.
+    virtual std::string_view schema_id() const noexcept = 0;
+
     template <typename T>
     const T* as() const noexcept {
-        return type_tag() == type_tag_for<T>()
+        return schema_id() == T::kSchemaId
             ? static_cast<const T*>(data()) : nullptr;
     }
 
 protected:
-    template <typename T>
-    static const void* type_tag_for() noexcept {
-        static const int tag = 0;
-        return &tag;
-    }
-
-    virtual const void* type_tag() const noexcept = 0;
     virtual const void* data() const noexcept = 0;
 };
 

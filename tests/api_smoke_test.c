@@ -15,8 +15,8 @@ int main(void) {
     celeg_request_options request;
     celeg_request_options_init(&request);
     if (request.max_new_tokens != 128) return 1;
-    if (!celeg_backend_capabilities(CELEG_BACKEND_CPU) ||
-        strlen(celeg_backend_capabilities(CELEG_BACKEND_CPU)) == 0) return 1;
+    if (!celeg_backend_capabilities("cpu") ||
+        strlen(celeg_backend_capabilities("cpu")) == 0) return 1;
     if (celeg_model_create("", &model) != NULL) return 1;
 
     {

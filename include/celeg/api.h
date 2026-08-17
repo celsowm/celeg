@@ -147,8 +147,14 @@ CELEG_API void celeg_engine_options_init(celeg_engine_options* options,
 CELEG_API void celeg_cpu_backend_options_init(celeg_cpu_backend_options* options);
 CELEG_API void celeg_cuda_backend_options_init(celeg_cuda_backend_options* options);
 CELEG_API void celeg_request_options_init(celeg_request_options* options);
-CELEG_API const char* celeg_backend_capabilities(celeg_backend backend);
+CELEG_API const char* celeg_backend_capabilities(const char* backend_id);
 
+/// The `celeg_model_*` family is a CPU-only convenience API. It is not a
+/// generic, backend-neutral creation path: it always builds a `celeg::CpuModel`
+/// and bypasses the backend factory/planner used by `celeg_engine_*`. New code
+/// that needs backend selection should use `celeg_engine_create` with a
+/// `backend_id` string. This CPU-direct surface is intentionally kept small and
+/// CPU-specific so that adding a third backend never requires extending it.
 CELEG_API celeg_model* celeg_model_create(const char* path, const celeg_cpu_model_options* options);
 CELEG_API void celeg_model_destroy(celeg_model* model);
 CELEG_API celeg_status celeg_model_prefill(celeg_model* model, const int32_t* tokens, size_t count);

@@ -15,15 +15,15 @@ namespace {
 
 class CpuBackendOptions final : public IBackendOptions {
 public:
+    static constexpr std::string_view kSchemaId = "cpu/1";
+
     CpuBackendOptions(CpuModelOptions model_value,
                       CpuConcurrentEngineOptions engine_value)
         : model(std::move(model_value)), engine(std::move(engine_value)) {}
 
     BackendId backend_id() const noexcept override { return "cpu"; }
 
-    const void* type_tag() const noexcept override {
-        return type_tag_for<CpuBackendOptions>();
-    }
+    std::string_view schema_id() const noexcept override { return kSchemaId; }
 
     const void* data() const noexcept override { return this; }
 
@@ -70,15 +70,15 @@ public:
 #ifdef CELEG_API_WITH_CUDA
 class CudaBackendOptions final : public IBackendOptions {
 public:
+    static constexpr std::string_view kSchemaId = "cuda/1";
+
     CudaBackendOptions(CudaModelOptions model_value,
                        ConcurrentEngineOptions engine_value)
         : model(std::move(model_value)), engine(std::move(engine_value)) {}
 
     BackendId backend_id() const noexcept override { return "cuda"; }
 
-    const void* type_tag() const noexcept override {
-        return type_tag_for<CudaBackendOptions>();
-    }
+    std::string_view schema_id() const noexcept override { return kSchemaId; }
 
     const void* data() const noexcept override { return this; }
 
