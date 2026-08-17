@@ -1092,11 +1092,15 @@ matrix width is a multiple of 256. A native kernel can consume eight 32-element
 weight blocks against the corresponding eight 32-element slices of one Q8_K
 activation superblock.
 
-Therefore the future work for aligned Q4_0/Q5_0 is better described as:
-
 > implement and benchmark native Q4_0/Q5_0 × Q8_K scalar/SIMD dot kernels
 
-rather than "a mandatory new 32-element activation representation".
+This is now implemented (`gguf.cpp` scalar path and `gguf_avx2.cpp` AVX2 path,
+both gated by the existing 256-width check). `weight_codec.cpp` routes
+256-aligned Q4_0/Q5_0 through the native path instead of the dequant→groupwise-Q4
+repack, so it is also more numerically faithful. `cpu_gguf_kernels_test.cpp`
+checks scalar, AVX2, and the dequantized-float reference agree. End-to-end
+throughput still wants a real aligned Q4_0/Q5_0 checkpoint to benchmark
+(`CELEG_GGUF_TEST_FILE`).
 
 ## 12.3 Non-256-aligned widths
 
@@ -1304,7 +1308,7 @@ Use small commits that each remove one old representation completely.
 
 ### Separate performance project
 
-28. Benchmark/design native Q4_0/Q5_0 × Q8_K CPU dots.
+28. [x] Design and implement native Q4_0/Q5_0 × Q8_K CPU dots (scalar + AVX2) and route 256-aligned Q4_0/Q5_0 through the native path. End-to-end throughput benchmark still pending a real aligned Q4_0/Q5_0 checkpoint.
 29. Evaluate Q2_K/Q3_K optimized native execution vs repack.
 30. Design/test non-256-width activation tails only if real models/performance justify it.
 

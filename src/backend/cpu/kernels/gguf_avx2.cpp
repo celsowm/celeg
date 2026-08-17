@@ -29,7 +29,19 @@ struct BlockQ6K {
     int8_t scales[16];
     uint16_t d;
 };
+struct BlockQ4_0 {
+    uint16_t d;
+    uint8_t qs[16];
+};
+struct BlockQ5_0 {
+    uint16_t d;
+    uint8_t qh[4];
+    uint8_t qs[16];
+};
 #pragma pack(pop)
+
+static_assert(sizeof(BlockQ4_0) == 18);
+static_assert(sizeof(BlockQ5_0) == 22);
 
 float fp16_to_float(uint16_t bits) {
     const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
@@ -91,11 +103,40 @@ CELEG_GGUF_AVX2_TARGET int dot_u8_i8_32(const uint8_t* weights,
 }
 
 CELEG_GGUF_AVX2_TARGET int dot_u8_i8_16(const uint8_t* weights,
-                                      const int8_t* activation) {
+                                       const int8_t* activation) {
     const __m128i w = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights));
     const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(activation));
     const __m128i pair = _mm_maddubs_epi16(w, x);
     return horizontal_sum_128(_mm_madd_epi16(pair, _mm_set1_epi16(1)));
+}
+
+CELEG_GGUF_AVX2_TARGET int dot_u8_i8_16_nib(const uint8_t* weights,
+                                            const int8_t* activation,
+                                            bool high_nibble) {
+    const __m128i w = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights));
+    const __m128i mask = _mm_set1_epi8(15);
+    const __m128i unpacked = high_nibble
+        ? _mm_and_si128(_mm_srli_epi16(w, 4), mask)
+        : _mm_and_si128(w, mask);
+    const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(activation));
+    const __m128i pair = _mm_maddubs_epi16(unpacked, x);
+    return horizontal_sum_128(_mm_madd_epi16(pair, _mm_set1_epi16(1)));
+}
+
+CELEG_GGUF_AVX2_TARGET __m128i expand8(uint8_t byte) {
+    const __m128i src = _mm_cvtsi32_si128(static_cast<int>(byte));
+    const __m128i bcast = _mm_shuffle_epi8(src, _mm_set1_epi8(0));
+    const __m128i masks = _mm_setr_epi8(1, 2, 4, 8, 16, 32, 64, -128,
+                                        0, 0, 0, 0, 0, 0, 0, 0);
+    const __m128i anded = _mm_and_si128(bcast, masks);
+    const __m128i bits = _mm_cmpgt_epi8(anded, _mm_setzero_si128());
+    return _mm_and_si128(bits, _mm_set1_epi8(1));
+}
+
+CELEG_GGUF_AVX2_TARGET __m128i expand16(uint16_t bits) {
+    const __m128i lo = expand8(static_cast<uint8_t>(bits & 0xFFu));
+    const __m128i hi = expand8(static_cast<uint8_t>(bits >> 8));
+    return _mm_unpacklo_epi64(lo, hi);
 }
 
 CELEG_GGUF_AVX2_TARGET int dot_i8_u4(const int8_t* activation,
@@ -362,6 +403,63 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
             }
             total += fp16_to_float(weight.d) * x.d *
                      static_cast<float>(block_total);
+        }
+        return total;
+    }
+    if (type == GgmlType::Q4_0) {
+        const auto* weights = reinterpret_cast<const BlockQ4_0*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const BlockQ4_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                const int dot =
+                    dot_u8_i8_16_nib(weight.qs, x.qs.data() + sub * 32, false) +
+                    dot_u8_i8_16_nib(weight.qs, x.qs.data() + sub * 32 + 16, true);
+                const int bsum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                block_total += fp16_to_float(weight.d) *
+                              static_cast<float>(dot - 8 * bsum);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::Q5_0) {
+        const auto* weights = reinterpret_cast<const BlockQ5_0*>(packed_row);
+        const __m128i lo_mask = _mm_set1_epi8(15);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const BlockQ5_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                uint32_t qh;
+                std::memcpy(&qh, weight.qh, sizeof(qh));
+                const __m128i hi_low = expand16(static_cast<uint16_t>(qh & 0xFFFFu));
+                const __m128i hi_high = expand16(static_cast<uint16_t>(qh >> 16));
+                const __m128i qs128 = _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(weight.qs));
+                const __m128i low4 = _mm_and_si128(qs128, lo_mask);
+                const __m128i high4 = _mm_and_si128(
+                    _mm_srli_epi16(qs128, 4), lo_mask);
+                const __m128i x_low = _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(x.qs.data() + sub * 32));
+                const __m128i x_high = _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(x.qs.data() + sub * 32 + 16));
+                const __m128i vlow = _mm_or_si128(
+                    low4, _mm_slli_epi16(hi_low, 4));
+                const __m128i vhigh = _mm_or_si128(
+                    high4, _mm_slli_epi16(hi_high, 4));
+                const int dot = dot_u8_i8_16(
+                                   reinterpret_cast<const uint8_t*>(&vlow),
+                                   reinterpret_cast<const int8_t*>(&x_low)) +
+                               dot_u8_i8_16(
+                                   reinterpret_cast<const uint8_t*>(&vhigh),
+                                   reinterpret_cast<const int8_t*>(&x_high));
+                const int bsum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                block_total += fp16_to_float(weight.d) *
+                              static_cast<float>(dot - 16 * bsum);
+            }
+            total += x.d * block_total;
         }
         return total;
     }

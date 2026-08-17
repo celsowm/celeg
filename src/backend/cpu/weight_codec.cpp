@@ -160,12 +160,14 @@ CpuLinearWeight CpuWeightCodec::matrix(
     }
     if (tensor.dtype == TensorDType::Quantized) {
         const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
-        // The native GGUF dot path quantizes activations into 256-wide Q8_K
-        // superblocks regardless of the weight's own block size, so legacy
-        // 32-block types (Q4_0/Q5_0/Q8_0) whose column count isn't a
-        // multiple of 256 can't use it and must be repacked.
+        /// The native GGUF dot path re-quantizes activations into 256-wide Q8_K
+        /// superblocks regardless of the weight block size, so a weight matrix
+        /// whose column count is not a multiple of 256 cannot use it and must be
+        /// repacked. Q4_0/Q5_0 gain dedicated native dot kernels, so they follow
+        /// the same rule as the K-types: keep the native path when 256-aligned.
+        /// Q2_K/Q3_K are still repacked because their native dots are not wired
+        /// into the production path yet.
         if (matrix.type == GgmlType::Q2_K || matrix.type == GgmlType::Q3_K ||
-            matrix.type == GgmlType::Q4_0 || matrix.type == GgmlType::Q5_0 ||
             (matrix.cols % 256) != 0) {
             const std::vector<float> values = dequantize_matrix(matrix);
             return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
@@ -262,8 +264,8 @@ CpuLinearWeight CpuWeightCodec::concat(
         matrices.reserve(tensors.size());
         for (size_t i = 0; i < tensors.size(); ++i) {
             matrices.push_back(gguf_matrix(tensors[i], parts[i].first));
-            needs_repack = needs_repack || matrices.back().type == GgmlType::Q4_0 ||
-                matrices.back().type == GgmlType::Q5_0 ||
+            needs_repack = needs_repack || matrices.back().type == GgmlType::Q2_K ||
+                matrices.back().type == GgmlType::Q3_K ||
                 (matrices.back().cols % 256) != 0;
         }
         if (needs_repack) {

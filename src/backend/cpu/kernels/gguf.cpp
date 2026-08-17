@@ -460,6 +460,55 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         }
         return total;
     }
+    if (type == GgmlType::Q4_0) {
+        const auto* weights = reinterpret_cast<const BlockQ4_0*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const BlockQ4_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                const float d = fp16_to_float(weight.d);
+                int dot = 0;
+                for (int j = 0; j < 16; ++j) {
+                    dot += (weight.qs[j] & 0x0f) *
+                           static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + j]);
+                    dot += (weight.qs[j] >> 4) *
+                           static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + j + 16]);
+                }
+                const int bsum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                block_total += d * static_cast<float>(dot - 8 * bsum);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::Q5_0) {
+        const auto* weights = reinterpret_cast<const BlockQ5_0*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const BlockQ5_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                const float d = fp16_to_float(weight.d);
+                uint32_t qh;
+                std::memcpy(&qh, weight.qh, sizeof(qh));
+                int dot = 0;
+                for (int j = 0; j < 16; ++j) {
+                    const int low = (weight.qs[j] & 0x0f) | (((qh >> j) & 1u) << 4);
+                    const int high = (weight.qs[j] >> 4) |
+                                     (((qh >> (j + 16)) & 1u) << 4);
+                    dot += low *
+                           static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + j]);
+                    dot += high *
+                           static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + j + 16]);
+                }
+                const int bsum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                block_total += d * static_cast<float>(dot - 16 * bsum);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
     throw std::invalid_argument("unsupported CPU GGUF dot type");
 }
 

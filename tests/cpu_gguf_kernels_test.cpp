@@ -43,12 +43,23 @@ struct BlockQ3K {
     uint8_t scales[12]{};
     uint16_t d = 0x3c00;
 };
+struct BlockQ4_0 {
+    uint16_t d = 0x3c00;
+    uint8_t qs[16]{};
+};
+struct BlockQ5_0 {
+    uint16_t d = 0x3c00;
+    uint8_t qh[4]{};
+    uint8_t qs[16]{};
+};
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4K) == 144);
 static_assert(sizeof(BlockQ6K) == 210);
 static_assert(sizeof(BlockQ2K) == 84);
 static_assert(sizeof(BlockQ3K) == 110);
+static_assert(sizeof(BlockQ4_0) == 18);
+static_assert(sizeof(BlockQ5_0) == 22);
 
 BlockQ4K unit_q4k() {
     BlockQ4K block;
@@ -202,6 +213,46 @@ int main() {
             1e-4f * std::max(1.0f, std::abs(reference));
         CELEG_TEST_CHECK(std::abs(scalar - reference) < tolerance);
         CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
+    }
+
+    BlockQ4_0 known_q4_0;
+    known_q4_0.d = 0x3800;
+    for (size_t i = 0; i < std::size(known_q4_0.qs); ++i) {
+        known_q4_0.qs[i] = static_cast<uint8_t>(i * 37 + 11);
+    }
+    BlockQ5_0 known_q5_0;
+    known_q5_0.d = 0x3800;
+    for (size_t i = 0; i < std::size(known_q5_0.qs); ++i) {
+        known_q5_0.qs[i] = static_cast<uint8_t>(i * 29 + 7);
+    }
+    for (size_t i = 0; i < std::size(known_q5_0.qh); ++i) {
+        known_q5_0.qh[i] = static_cast<uint8_t>(i * 43 + 3);
+    }
+    for (const auto matrix : {
+             celeg::CpuGgufMatrix{
+                 celeg::GgmlType::Q4_0, 1, 256,
+                 reinterpret_cast<const std::byte*>(&known_q4_0),
+                 sizeof(known_q4_0)},
+             celeg::CpuGgufMatrix{
+                 celeg::GgmlType::Q5_0, 1, 256,
+                 reinterpret_cast<const std::byte*>(&known_q5_0),
+                 sizeof(known_q5_0)}}) {
+        std::vector<float> dequantized(256);
+        celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
+        float reference = 0.0f;
+        for (size_t i = 0; i < dequantized.size(); ++i) {
+            reference += dequantized[i] * activation[0].d *
+                         static_cast<float>(activation[0].qs[i]);
+        }
+        const float scalar = celeg::cpu_gguf_dot_scalar(
+            matrix.data, matrix.type, activation.data(), matrix.cols);
+        const float optimized = celeg::select_cpu_gguf_dot_kernel(isa)(
+            matrix.data, matrix.type, activation.data(), matrix.cols);
+        const float tolerance =
+            1e-3f * std::max(1.0f, std::abs(reference));
+        CELEG_TEST_CHECK(std::abs(scalar - reference) < tolerance);
+        CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
+        CELEG_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
     }
 
     celeg::CpuLinearWeight composite;
