@@ -22,6 +22,7 @@ set(CELEG_CPU_BACKEND_SOURCES
     src/backend/cpu/detail/metrics_collector.cpp
     src/backend/cpu/kernels/quantized_dot.cpp
     src/backend/cpu/kernels/quantized_dot_avx2_msvc.cpp
+    src/backend/cpu/kernels/kernel_backend.cpp
     src/backend/cpu/kernels/gguf.cpp
     src/backend/cpu/kernels/gguf_avx2.cpp
     src/backend/cpu/kernels/linear.cpp

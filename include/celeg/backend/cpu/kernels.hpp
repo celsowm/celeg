@@ -81,11 +81,18 @@ public:
     void embedding(const CpuLinearWeight& table, int32_t token,
                    float* output) const;
     void gemv_raw(const float* weight, const float* input, float* output,
-                  int n, int k) const;
+                   int n, int k) const;
     void gemm_raw(const float* weight, const float* input, float* output,
-                  size_t rows, int n, int k) const;
+                   size_t rows, int n, int k) const;
 
 private:
+    void gemv_int8(const CpuInt8Matrix& matrix, const float* input, float* output,
+                   float beta) const;
+    void gemv_gguf(const CpuGgufMatrix& matrix, std::span<const CpuQ8KBlock> activation,
+                   float* output, float beta) const;
+    void gemm_int8(const CpuInt8Matrix& matrix, const float* input, float* output,
+                   size_t rows, float beta, size_t output_stride, size_t output_base) const;
+
     CpuIsa isa_;
     CpuThreadPool* pool_;
     Q4DotFunction dot_;

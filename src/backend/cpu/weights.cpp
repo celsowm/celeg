@@ -48,7 +48,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
       options(std::move(requested)),
       capabilities(detect_cpu_capabilities()),
       pool(options.threads, options.affinity),
-      linear(resolve_isa(options.isa), pool),
+      linear(options.isa, pool),
       shape(runtime_topology.exec), dims(runtime_topology.dims) {
     if (max_context <= 0) throw std::invalid_argument("max_context must be positive");
     if (options.kv_page_tokens == 0) {
@@ -96,27 +96,6 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     kv_pools = std::move(kv_topology.pools);
     layer_to_kv_pool = std::move(kv_topology.layer_to_pool);
     layer_to_kv_owner = std::move(kv_topology.layer_to_owner);
-}
-
-CpuIsa CpuCompiledModel::Shared::resolve_isa(CpuIsa requested) {
-    const CpuCapabilities caps = detect_cpu_capabilities();
-    if (requested == CpuIsa::Auto) return caps.best_isa();
-    if (requested != CpuIsa::Scalar && requested != CpuIsa::Avx2 &&
-        requested != CpuIsa::AvxVnni && requested != CpuIsa::Avx512Vnni &&
-        requested != CpuIsa::Neon) {
-        throw std::invalid_argument(
-            "requested ISA is detected by the API but its native kernel is not implemented in v0.0.20");
-    }
-    if (!cpu_isa_compiled(requested)) {
-        throw std::invalid_argument("requested CPU ISA was not compiled into this binary");
-    }
-    if (!caps.supports(requested)) {
-        throw std::invalid_argument("requested CPU ISA is not supported by this host");
-    }
-    if (requested == CpuIsa::Avx2 && !caps.fma) {
-        throw std::invalid_argument("AVX2 CPU backend requires FMA");
-    }
-    return requested;
 }
 
 void CpuCompiledModel::Shared::prepare_pack_path() {

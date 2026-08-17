@@ -29,7 +29,7 @@ Audit baseline: `master` at `32872bc19d992cf0c9bfb8ac9fdd5fece4931f18`.
   - 16 `NormalizedModelMetadata` decomposed into typed fact groups (`CoreModelFacts`, `AttentionFacts`, `LatentAttentionFacts`, `ShortConvolutionFacts`, `GatedDeltaFacts`, `Mamba2Facts`, `MoeFacts`). Stringly-typed MoE fields replaced with `MoeRouterScoreFunction` and `MoeRouterSelectionMethod` enums.
   - 17 Generic `input.is_gguf()` semantic branches replaced with `DecayParameterEncoding` on `GatedDeltaFacts` and `Mamba2Facts`, resolved at format boundary.
   - Verified: CPU ctest 78/78, CUDA ctest 88/88; custom grammar extension test passing (`tests/layer_inference_rule_test.cpp`).
-- **Sprint E (backend planning): items 18–20 done; 21–22 not started.**
+- **Sprint E (backend planning): items 18–22 done.**
   - 18 Mixer/FFN maxima (`maximum_attention_*`, `maximum_mamba_*`, `maximum_gated_delta_*`,
     `max_feed_forward_intermediate`, `mamba2_intermediate`, `conv_cache`, `conv_dim`) removed
     from neutral `ExecutionTopology`; `ExecutionTopology::derive` no longer computes them.
@@ -838,6 +838,24 @@ sets.
 
 # Phase 9 — Centralize CPU linear-storage and ISA dispatch
 
+Implemented (Sprint E items 21–22):
+
+- **9.1 (storage dispatch):** `CpuLinearEngine` no longer re-classifies the
+  `CpuLinearWeight` variant in four independent `std::all_of(holds_alternative<…>)`
+  blocks. A single exhaustive `classify_weight` (`LinearStorageKind::{Q4,Int8,Gguf}`)
+  is the one decision point; `gemv`/`gemm` route each segment through per-storage
+  helpers (`gemv_int8`, `gemv_gguf`, `gemm_int8`) or the existing `Q4GroupMatrix` /
+  `gemm_gguf` paths. Mixed storage still throws at one obvious site.
+- **9.2 (ISA metadata):** `CpuCompiledModel::Shared::resolve_isa` and the four
+  per-kernel selectors' divergent resolution knowledge are replaced by one registry
+  (`include/celeg/backend/cpu/kernel_backend.hpp`, `CpuKernelBackend`/`CpuKernelTable`)
+  built in `kernel_backend.cpp`. `cpu_resolve_kernel_backend` is the single home for
+  ISA selection: it unifies known / compiled (`cpu_isa_compiled`) / host-supported
+  (`CpuKernelBackend::supports_hw`) / kernel-available into one table and resolves
+  `Auto` by priority. The four `select_*` functions remain as the per-ISA kernel
+  registry consumed by the table. `CpuLinearEngine` and the model weights path consult
+  only `cpu_resolve_kernel_backend`.
+
 ## 9.1 Give each storage alternative one execution dispatch home
 
 ### Current problem
@@ -1257,8 +1275,8 @@ Use small commits that each remove one old representation completely.
 18. [x] Move mixer-specific maxima out of neutral `ExecutionTopology` where they exist only for backend allocation.
 19. [x] Derive CPU workspace requirements directly from compiled program semantics (`CpuWorkspacePlan::from_program`).
 20. [x] Decompose/plan `CpuWorkspace`; remove avoidable token/chunk duplicate scratch families; source `conv_cache` from per-layer `ShortConvolutionSpec`.
-21. Centralize CPU linear storage dispatch.
-22. Centralize CPU ISA implementation metadata/selection.
+21. [x] Centralize CPU linear storage dispatch.
+22. [x] Centralize CPU ISA implementation metadata/selection.
 
 ### Sprint F — extension ABI and orchestration
 

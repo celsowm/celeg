@@ -453,7 +453,6 @@ struct CpuCompiledModel {
         Shared(const std::string& path, int context, CpuModelOptions requested,
                std::shared_ptr<const RuntimeContext> runtime);
 
-        static CpuIsa resolve_isa(CpuIsa requested);
         void prepare_pack_path();
         void load_weights();
         CommonWeights load_common(class IWeightRepository* repository,

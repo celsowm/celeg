@@ -1,4 +1,5 @@
 #include "celeg/backend/cpu/kernels.hpp"
+#include "celeg/backend/cpu/kernel_backend.hpp"
 
 #include "celeg/model/weights/quantization.hpp"
 
@@ -43,14 +44,39 @@ void quantize_gguf_rows(CpuThreadPool& pool, CpuIsa isa, const float* input,
 
 }
 
+enum class LinearStorageKind { Q4, Int8, Gguf };
+
+LinearStorageKind classify_weight(const CpuLinearWeight& weight) {
+    bool any_q4 = false;
+    bool any_int8 = false;
+    bool any_gguf = false;
+    for (const CpuLinearMatrix& segment : weight.segments) {
+        if (std::holds_alternative<Q4GroupMatrix>(segment)) any_q4 = true;
+        else if (std::holds_alternative<CpuInt8Matrix>(segment)) any_int8 = true;
+        else any_gguf = true;
+    }
+    if (any_q4 && !any_int8 && !any_gguf) return LinearStorageKind::Q4;
+    if (any_int8 && !any_q4 && !any_gguf) return LinearStorageKind::Int8;
+    if (any_gguf && !any_q4 && !any_int8) return LinearStorageKind::Gguf;
+    throw std::logic_error("mixed CPU linear storage (Q4/INT8/GGUF) is unsupported");
+}
+
+size_t segment_rows(const CpuLinearMatrix& segment) {
+    return std::visit([](const auto& matrix) {
+        return static_cast<size_t>(matrix.rows);
+    }, segment);
+}
+
 CpuLinearEngine::CpuLinearEngine(CpuIsa isa, CpuThreadPool& pool)
-    : isa_(isa), pool_(&pool), dot_(select_q4_dot_kernel(isa)),
-      q8_dot_(select_q4_q8_dot_kernel(isa)),
-      gguf_dot_(select_cpu_gguf_dot_kernel(isa)),
-      gguf_dot4_(select_cpu_gguf_dot4_kernel(isa)),
-      dynamic_q8_(q8_dot_ != nullptr) {
+    : isa_(isa), pool_(&pool) {
     const CpuCapabilities caps = detect_cpu_capabilities();
-    if (!caps.supports(isa)) throw std::invalid_argument("requested CPU ISA is not supported by this host");
+    const CpuKernelBackend& backend = cpu_resolve_kernel_backend(isa, caps);
+    isa_ = backend.isa;
+    dot_ = backend.kernels.q4_dot;
+    q8_dot_ = backend.kernels.q4_q8_dot;
+    gguf_dot_ = backend.kernels.gguf_dot;
+    gguf_dot4_ = backend.kernels.gguf_dot4;
+    dynamic_q8_ = backend.kernels.has_dynamic_q8();
 }
 
 void CpuLinearEngine::gemv(const Q4GroupMatrix& weight, const float* input,
@@ -178,81 +204,33 @@ void CpuLinearEngine::embedding(const Q4GroupMatrix& table, int32_t token,
 }
 
 void CpuLinearEngine::gemv(const CpuLinearWeight& weight, const float* input,
-                           float* output, float beta) const {
+                            float* output, float beta) const {
     weight.validate();
     if (!input || !output) throw std::invalid_argument("null CPU GEMV buffer");
-    if (weight.segments.size() == 1) {
-        bool dispatched_q4 = false;
-        std::visit([&](const auto& matrix) {
-            using Matrix = std::remove_cvref_t<decltype(matrix)>;
-            if constexpr (std::is_same_v<Matrix, Q4GroupMatrix>) {
-                gemv(matrix, input, output, beta);
-                dispatched_q4 = true;
-            }
-        }, weight.segments.front());
-        if (dispatched_q4) return;
-    }
-
-    if (std::all_of(weight.segments.begin(), weight.segments.end(),
-                    [](const CpuLinearMatrix& segment) {
-                        return std::holds_alternative<Q4GroupMatrix>(segment);
-                    })) {
-        size_t output_offset = 0;
+    const LinearStorageKind kind = classify_weight(weight);
+    if (kind == LinearStorageKind::Q4) {
+        size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             const Q4GroupMatrix& matrix = std::get<Q4GroupMatrix>(segment);
-            gemv(matrix, input, output + output_offset, beta);
-            output_offset += matrix.rows;
+            gemv(matrix, input, output + offset, beta);
+            offset += matrix.rows;
         }
         return;
     }
-
-    if (std::all_of(weight.segments.begin(), weight.segments.end(),
-                    [](const CpuLinearMatrix& segment) {
-                        return std::holds_alternative<CpuInt8Matrix>(segment);
-                    })) {
-        size_t output_offset = 0;
+    if (kind == LinearStorageKind::Int8) {
+        size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
-            const CpuInt8Matrix& matrix = std::get<CpuInt8Matrix>(segment);
-            const size_t grain = std::max<size_t>(
-                1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
-            pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
-                for (size_t row = begin; row < end; ++row) {
-                    float value = 0.0f;
-                    const int8_t* weights = matrix.data() + row * matrix.cols;
-                    for (size_t col = 0; col < matrix.cols; ++col) {
-                        value += static_cast<float>(weights[col]) * input[col];
-                    }
-                    value *= matrix.scales->at(row);
-                    float& destination = output[output_offset + row];
-                    destination = beta == 0.0f ? value : value + beta * destination;
-                }
-            });
-            output_offset += matrix.rows;
+            gemv_int8(std::get<CpuInt8Matrix>(segment), input, output + offset, beta);
+            offset += segment_rows(segment);
         }
         return;
     }
-
     const std::vector<CpuQ8KBlock> activation =
         cpu_quantize_q8k(input, weight.cols, isa_);
-    size_t output_offset = 0;
+    size_t offset = 0;
     for (const CpuLinearMatrix& segment : weight.segments) {
-        if (!std::holds_alternative<CpuGgufMatrix>(segment)) {
-            throw std::logic_error("mixed internal-Q4/GGUF weight is unsupported");
-        }
-        const CpuGgufMatrix& matrix = std::get<CpuGgufMatrix>(segment);
-        const size_t grain = std::max<size_t>(
-            1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
-        pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
-            for (size_t row = begin; row < end; ++row) {
-                const float value = gguf_dot_(
-                    matrix.data + row * matrix.row_bytes(), matrix.type,
-                    activation.data(), matrix.cols);
-                float& destination = output[output_offset + row];
-                destination = beta == 0.0f
-                    ? value : value + beta * destination;
-            }
-        });
-        output_offset += matrix.rows;
+        gemv_gguf(std::get<CpuGgufMatrix>(segment), activation, output + offset, beta);
+        offset += segment_rows(segment);
     }
 }
 
@@ -302,75 +280,100 @@ void CpuLinearEngine::gemv_transpose(const CpuLinearWeight& weight,
 }
 
 void CpuLinearEngine::gemm(const CpuLinearWeight& weight, const float* input,
-                           float* output, size_t rows, float beta) const {
+                            float* output, size_t rows, float beta) const {
     weight.validate();
     if ((!input || !output) && rows != 0) {
         throw std::invalid_argument("null CPU GEMM buffer");
     }
     if (rows == 0) return;
-    if (weight.segments.size() == 1 &&
-        std::holds_alternative<Q4GroupMatrix>(weight.segments.front())) {
-        gemm(std::get<Q4GroupMatrix>(weight.segments.front()),
-             input, output, rows, beta);
-        return;
-    }
-
-    if (std::all_of(weight.segments.begin(), weight.segments.end(),
-                    [](const CpuLinearMatrix& segment) {
-                        return std::holds_alternative<Q4GroupMatrix>(segment);
-                    })) {
-        size_t output_offset = 0;
+    const LinearStorageKind kind = classify_weight(weight);
+    if (kind == LinearStorageKind::Q4) {
+        size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
             const Q4GroupMatrix& matrix = std::get<Q4GroupMatrix>(segment);
             std::vector<float> segment_output(rows * matrix.rows);
             gemm(matrix, input, segment_output.data(), rows, 0.0f);
             for (size_t row = 0; row < rows; ++row) {
                 for (size_t column = 0; column < matrix.rows; ++column) {
-                    float& destination = output[row * weight.rows +
-                                                output_offset + column];
+                    float& destination = output[row * weight.rows + offset + column];
                     const float value = segment_output[row * matrix.rows + column];
                     destination = beta == 0.0f
                         ? value : value + beta * destination;
                 }
             }
-            output_offset += matrix.rows;
+            offset += matrix.rows;
         }
         return;
     }
-
-    if (std::all_of(weight.segments.begin(), weight.segments.end(),
-                    [](const CpuLinearMatrix& segment) {
-                        return std::holds_alternative<CpuInt8Matrix>(segment);
-                    })) {
-        size_t output_offset = 0;
+    if (kind == LinearStorageKind::Int8) {
+        size_t offset = 0;
         for (const CpuLinearMatrix& segment : weight.segments) {
-            const CpuInt8Matrix& matrix = std::get<CpuInt8Matrix>(segment);
-            const size_t grain = std::max<size_t>(
-                1, rows / std::max<size_t>(1, pool_->size() * 4));
-            pool_->parallel_for(0, rows, grain, [&](size_t begin, size_t end) {
-                for (size_t row = begin; row < end; ++row) {
-                    float* destination = output + row * weight.rows + output_offset;
-                    const float* activation = input + row * matrix.cols;
-                    for (size_t out = 0; out < matrix.rows; ++out) {
-                        float value = 0.0f;
-                        const int8_t* weights = matrix.data() + out * matrix.cols;
-                        for (size_t col = 0; col < matrix.cols; ++col) {
-                            value += static_cast<float>(weights[col]) * activation[col];
-                        }
-                        const float previous = destination[out];
-                        destination[out] = matrix.scales->at(out) * value;
-                        if (beta != 0.0f) destination[out] += beta * previous;
-                    }
-                }
-            });
-            output_offset += matrix.rows;
+            gemm_int8(std::get<CpuInt8Matrix>(segment), input, output, rows, beta,
+                      weight.rows, offset);
+            offset += segment_rows(segment);
         }
         return;
     }
-
     std::vector<CpuQ8KBlock> activation;
     prepare_gguf_activation(input, rows, weight.cols, activation);
     gemm_gguf(activation, weight, output, rows, beta);
+}
+
+void CpuLinearEngine::gemv_int8(const CpuInt8Matrix& matrix, const float* input,
+                               float* output, float beta) const {
+    const size_t grain = std::max<size_t>(
+        1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
+    pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
+        for (size_t row = begin; row < end; ++row) {
+            float value = 0.0f;
+            const int8_t* weights = matrix.data() + row * matrix.cols;
+            for (size_t col = 0; col < matrix.cols; ++col) {
+                value += static_cast<float>(weights[col]) * input[col];
+            }
+            value *= matrix.scales->at(row);
+            float& destination = output[row];
+            destination = beta == 0.0f ? value : value + beta * destination;
+        }
+    });
+}
+
+void CpuLinearEngine::gemv_gguf(const CpuGgufMatrix& matrix,
+                               std::span<const CpuQ8KBlock> activation,
+                               float* output, float beta) const {
+    const size_t grain = std::max<size_t>(
+        1, matrix.rows / std::max<size_t>(1, pool_->size() * 8));
+    pool_->parallel_for(0, matrix.rows, grain, [&](size_t begin, size_t end) {
+        for (size_t row = begin; row < end; ++row) {
+            const float value = gguf_dot_(
+                matrix.data + row * matrix.row_bytes(), matrix.type,
+                activation.data(), matrix.cols);
+            float& destination = output[row];
+            destination = beta == 0.0f ? value : value + beta * destination;
+        }
+    });
+}
+
+void CpuLinearEngine::gemm_int8(const CpuInt8Matrix& matrix, const float* input,
+                               float* output, size_t rows, float beta,
+                               size_t output_stride, size_t output_base) const {
+    const size_t grain = std::max<size_t>(
+        1, rows / std::max<size_t>(1, pool_->size() * 4));
+    pool_->parallel_for(0, rows, grain, [&](size_t begin, size_t end) {
+        for (size_t row = begin; row < end; ++row) {
+            float* destination = output + row * output_stride + output_base;
+            const float* activation = input + row * matrix.cols;
+            for (size_t out = 0; out < matrix.rows; ++out) {
+                float value = 0.0f;
+                const int8_t* weights = matrix.data() + out * matrix.cols;
+                for (size_t col = 0; col < matrix.cols; ++col) {
+                    value += static_cast<float>(weights[col]) * activation[col];
+                }
+                const float previous = destination[out];
+                destination[out] = matrix.scales->at(out) * value;
+                if (beta != 0.0f) destination[out] += beta * previous;
+            }
+        }
+    });
 }
 
 void CpuLinearEngine::prepare_gguf_activation(
