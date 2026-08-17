@@ -189,6 +189,26 @@ int main() {
         known_q6.scales[i] = static_cast<int8_t>(
             static_cast<int>(i) * 7 - 48);
     }
+    BlockQ2K known_q2k;
+    known_q2k.d = 0x3800;
+    known_q2k.dmin = 0x3400;
+    for (size_t i = 0; i < std::size(known_q2k.scales); ++i) {
+        known_q2k.scales[i] = static_cast<uint8_t>(13 + i * 23);
+    }
+    for (size_t i = 0; i < std::size(known_q2k.qs); ++i) {
+        known_q2k.qs[i] = static_cast<uint8_t>(i * 31 + 5);
+    }
+    BlockQ3K known_q3k;
+    known_q3k.d = 0x3800;
+    for (size_t i = 0; i < std::size(known_q3k.hmask); ++i) {
+        known_q3k.hmask[i] = static_cast<uint8_t>(i * 17 + 2);
+    }
+    for (size_t i = 0; i < std::size(known_q3k.qs); ++i) {
+        known_q3k.qs[i] = static_cast<uint8_t>(i * 19 + 9);
+    }
+    for (size_t i = 0; i < std::size(known_q3k.scales); ++i) {
+        known_q3k.scales[i] = static_cast<uint8_t>(7 + i * 11);
+    }
     for (const auto matrix : {
              celeg::CpuGgufMatrix{
                  celeg::GgmlType::Q4_K, 1, 256,
@@ -197,7 +217,15 @@ int main() {
              celeg::CpuGgufMatrix{
                  celeg::GgmlType::Q6_K, 1, 256,
                  reinterpret_cast<const std::byte*>(&known_q6),
-                 sizeof(known_q6)}}) {
+                 sizeof(known_q6)},
+             celeg::CpuGgufMatrix{
+                 celeg::GgmlType::Q2_K, 1, 256,
+                 reinterpret_cast<const std::byte*>(&known_q2k),
+                 sizeof(known_q2k)},
+             celeg::CpuGgufMatrix{
+                 celeg::GgmlType::Q3_K, 1, 256,
+                 reinterpret_cast<const std::byte*>(&known_q3k),
+                 sizeof(known_q3k)}}) {
         std::vector<float> dequantized(256);
         celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
         float reference = 0.0f;

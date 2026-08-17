@@ -1113,6 +1113,15 @@ execution design, such as:
 - a 32-element Q8 activation path;
 - another storage-specific tail strategy.
 
+### 12.3.1 Audit outcome (non-256 tails)
+
+Decision: **do not build a native tail path yet.** The repack-to-groupwise-Q4
+fallback in `weight_codec.cpp` already handles non-256 widths correctly. Per the
+measure-first rule, there is no profiled model showing the repack of
+non-256-width layers as a decode/prefill bottleneck. Keep the repack path and
+revisit only if a real model with material non-256 layers demonstrates a
+measured cost that a native tail would remove.
+
 ## 12.4 Q2_K/Q3_K audit
 
 The scalar GGUF implementation contains Q2_K/Q3_K logic, while the current
@@ -1125,6 +1134,27 @@ whether the desired feature is:
 - or selecting based on measured matrix shape/ISA.
 
 Do not change the fallback based on aesthetics.
+
+### 12.4.1 Audit outcome (Q2_K/Q3_K)
+
+Decision: **keep repack as the preferred production path** for Q2_K/Q3_K.
+
+- The scalar native Q2_K/Q3_K dots in `cpu_gguf_dot_scalar` are correct: the
+  dot and the dequant-reference use identical formulas (verified by
+  `cpu_gguf_kernels_test.cpp`, which now exercises Q2_K/Q3_K for both the scalar
+  and AVX2 ISA selections). They remain as a documented reference/fallback.
+- The AVX2 dispatcher (`cpu_gguf_dot_avx2`) has no Q2_K/Q3_K case and falls back
+  to the scalar function. So "native routing" on AVX2 would run *scalar*, while
+  the current repack-to-groupwise-Q4 path runs the *vectorized* Q4_K AVX2 dot.
+  Vectorized beats scalar, so repack is the faster production path.
+- Repack upgrades precision (4-bit groupwise > 2/3-bit K-quant), so it is not a
+  fidelity regression.
+- A native AVX2/AVX-VNNI Q2_K/Q3_K kernel (per-16 scales, `dmin`, 2/3-bit
+  unpacking) is high-complexity and high-risk, and the refactor policy forbids
+  a new quantized path without quality + performance tests. Per the
+  measure-first rule, there is no evidence that the repack path is a decode
+  bottleneck, so this optimization is not justified. Revisit only if a profiled
+  model shows Q2_K/Q3_K repack dominating decode time.
 
 ## 12.5 Required validation for every new native quantized path
 
@@ -1309,8 +1339,8 @@ Use small commits that each remove one old representation completely.
 ### Separate performance project
 
 28. [x] Design and implement native Q4_0/Q5_0 × Q8_K CPU dots (scalar + AVX2) and route 256-aligned Q4_0/Q5_0 through the native path. End-to-end throughput benchmark still pending a real aligned Q4_0/Q5_0 checkpoint.
-29. Evaluate Q2_K/Q3_K optimized native execution vs repack.
-30. Design/test non-256-width activation tails only if real models/performance justify it.
+29. [x] Evaluate Q2_K/Q3_K optimized native execution vs repack — decision: keep repack (AVX2 has no native Q2_K/Q3_K kernel, so native routing would run slower scalar; repack reuses the vectorized Q4_K AVX2 dot and upgrades precision). Scalar native Q2_K/Q3_K dots retained as verified reference (cpu_gguf_kernels_test.cpp).
+30. [x] Design/test non-256-width activation tails only if real models/performance justify it — decision: no evidence justifies it; repack fallback retained (§12.3.1). Revisit only when a profiled model shows a measured cost.
 
 Items 28-30 must not block completion of the structural extensibility plan.
 
