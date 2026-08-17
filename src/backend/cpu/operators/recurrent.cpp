@@ -139,7 +139,7 @@ void execute_cpu_short_convolution_token(
                        workspace.conv_projected.data());
     cpu_conv_decode(workspace.conv_projected.data(), weights.weight_tap_major.data(),
                     state.state.data(), workspace.op_output.data(), shared.program.hidden,
-                    shared.shape.conv_cache, context.session.position_value);
+                    weights.spec.cache_length, context.session.position_value);
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());
 }
@@ -229,9 +229,9 @@ void execute_cpu_short_convolution_chunk(
     started = Clock::now();
     auto& state = state_view.convolution(layer);
     cpu_conv_prefill(workspace.chunk_conv.data(), weights.weight_tap_major.data(),
-                     state.state.data(), workspace.chunk_op.data(), rows,
-                     shared.program.hidden, shared.shape.conv_cache,
-                     context.session.position_value, shared.pool);
+                      state.state.data(), workspace.chunk_op.data(), rows,
+                      shared.program.hidden, weights.spec.cache_length,
+                      context.session.position_value, shared.pool);
     context.session.prefill_profile.shortconv_ms += elapsed_ms(started);
 
     started = Clock::now();

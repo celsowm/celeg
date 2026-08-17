@@ -192,7 +192,8 @@ struct CpuCompiledModel::BatchScratch {
                     cpu_conv_decode(workspace_.conv_projected.data() + row * 3ULL * hidden,
                                     convolution->weight_tap_major.data(), state.state.data(),
                                     workspace_.op_output.data() + row * hidden, shared.program.hidden,
-                                    shape.conv_cache, sessions[row]->session_.position_value);
+                                    convolution->spec.cache_length,
+                                    sessions[row]->session_.position_value);
                 });
                 layer_gemm(convolution->out, workspace_.op_output.data(),
                            workspace_.hidden.data());

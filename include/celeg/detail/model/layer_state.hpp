@@ -189,6 +189,7 @@ struct AttentionLayer {
 
 struct ConvolutionLayer {
     LayerCommon common;
+    ShortConvolutionSpec spec;
     const LinearWeight* conv_in = nullptr;
     const __nv_bfloat16* conv_weight = nullptr;
     const LinearWeight* conv_out = nullptr;

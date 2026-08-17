@@ -69,15 +69,15 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
       v(maximum_prefill_token_capacity * requirements_.maximum_projection_width),
       conv_projected(maximum_prefill_token_capacity * 3 * program_.hidden),
       gated_delta_qkv(maximum_prefill_token_capacity *
-                      static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_qkv_width()))),
+                      requirements_.max_gated_delta_qkv),
       gated_delta_z(maximum_prefill_token_capacity *
-                    static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_output_width()))),
+                    requirements_.max_gated_delta_output),
       gated_delta_b(maximum_prefill_token_capacity *
-                    static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_gate_width()))),
+                    requirements_.max_gated_delta_gate),
       gated_delta_a(maximum_prefill_token_capacity *
-                    static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_gate_width()))),
+                    requirements_.max_gated_delta_gate),
       gated_delta_output(maximum_prefill_token_capacity *
-                         static_cast<size_t>(std::max(1, shape_.max_gated_delta_net_output_width()))),
+                         requirements_.max_gated_delta_output),
       gate_up(maximum_prefill_token_capacity * 2 * requirements_.maximum_ffn_intermediate),
       activated(maximum_prefill_token_capacity * requirements_.maximum_ffn_intermediate),
       mlp_output(maximum_prefill_token_capacity * program_.hidden),
@@ -155,8 +155,8 @@ PackedWorkspace::PackedWorkspace(size_t maximum_batch_value,
 
 void PackedWorkspace::ensure_segmented_workspace(int rows, int chunks) {
     const size_t scalar_count = static_cast<size_t>(rows) *
-        shape_.maximum_attention_query_heads() * static_cast<size_t>(chunks);
-    const size_t accum_count = scalar_count * shape_.maximum_attention_head_dim();
+        requirements_.attention_query_heads * static_cast<size_t>(chunks);
+    const size_t accum_count = scalar_count * requirements_.attention_head_dim;
     if (scalar_count > segmented_scalar_capacity) {
         segmented_partial_max.reset(scalar_count);
         segmented_partial_denom.reset(scalar_count);

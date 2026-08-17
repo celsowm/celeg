@@ -124,7 +124,7 @@ void PackedLayerExecutor::run_transformer_layers(
             }
             const int intermediate = mlp->spec.intermediate_size;
             if (intermediate <= 0 ||
-                intermediate > workspace_.shape_.max_feed_forward_intermediate) {
+                intermediate > static_cast<int>(workspace_.requirements_.maximum_ffn_intermediate)) {
                 throw std::runtime_error("invalid packed MLP-only width at layer " +
                                          std::to_string(layer_index));
             }

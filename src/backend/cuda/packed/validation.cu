@@ -111,32 +111,69 @@ PackedWorkspaceRequirements PackedWorkspaceRequirements::derive(
     if (maximum_batch == 0 || maximum_prefill_tokens == 0) {
         throw std::invalid_argument("packed capacities must be positive");
     }
-    if (program.hidden <= 0 ||
-        shape.num_hidden_layers <= 0 ||
-        std::max(shape.maximum_attention_projection_width(),
-                 shape.maximum_mamba_projection_width()) <= 0 ||
-        shape.max_feed_forward_intermediate <= 0) {
+    if (program.hidden <= 0 || shape.num_hidden_layers <= 0) {
         throw std::invalid_argument("packed topology has invalid workspace dimensions");
     }
     PackedWorkspaceRequirements result;
     result.maximum_batch = maximum_batch;
     result.maximum_prefill_tokens = maximum_prefill_tokens;
-    result.maximum_projection_width = static_cast<size_t>(std::max(
-        shape.maximum_attention_projection_width(),
-        shape.maximum_mamba_projection_width()));
-    result.maximum_mamba_projection_width = static_cast<size_t>(std::max(
-        1, shape.maximum_mamba_projection_width()));
-    result.maximum_mamba_intermediate = static_cast<size_t>(std::max(
-        1, shape.mamba2_intermediate));
-    result.maximum_ffn_intermediate =
-        static_cast<size_t>(shape.max_feed_forward_intermediate);
     for (const CompiledLayerProgram& layer : program.layers) {
-        if (const auto* moe = std::get_if<MoeLayerProgram>(&layer.feed_forward)) {
-            result.moe_intermediate = std::max(
-                result.moe_intermediate,
-                static_cast<size_t>(moe->routed.mlp.intermediate_size));
-        }
+        std::visit([&](const auto& mixer) {
+            using Mixer = std::decay_t<decltype(mixer)>;
+            if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
+                result.maximum_projection_width = std::max(
+                    result.maximum_projection_width,
+                    static_cast<size_t>(mixer.semantics.projection_width()));
+                result.attention_query_heads = std::max(
+                    result.attention_query_heads, mixer.semantics.query_heads);
+                result.attention_head_dim = std::max(
+                    result.attention_head_dim, mixer.semantics.head_dim);
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                result.max_gated_delta_qkv = std::max(
+                    result.max_gated_delta_qkv, static_cast<size_t>(mixer.qkv_width()));
+                result.max_gated_delta_output = std::max(
+                    result.max_gated_delta_output, static_cast<size_t>(mixer.value_width()));
+                result.max_gated_delta_gate = std::max(
+                    result.max_gated_delta_gate,
+                    static_cast<size_t>(std::max(mixer.value_heads, mixer.decay_width())));
+            } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                result.maximum_mamba_projection_width = std::max(
+                    result.maximum_mamba_projection_width,
+                    static_cast<size_t>(2 * mixer.intermediate_size +
+                                        2 * mixer.group_count * mixer.state_size + mixer.num_heads));
+                result.maximum_mamba_intermediate = std::max(
+                    result.maximum_mamba_intermediate, static_cast<size_t>(mixer.intermediate_size));
+                result.maximum_projection_width = std::max(
+                    result.maximum_projection_width, result.maximum_mamba_projection_width);
+            } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                result.maximum_ffn_intermediate = std::max(
+                    result.maximum_ffn_intermediate, static_cast<size_t>(mixer.intermediate_size));
+            }
+        }, layer.mixer);
+
+        std::visit([&](const auto& ff) {
+            using FF = std::decay_t<decltype(ff)>;
+            if constexpr (std::is_same_v<FF, std::monostate>) {
+                return;
+            } else if constexpr (std::is_same_v<FF, CompiledDenseFeedForwardProgram>) {
+                result.maximum_ffn_intermediate = std::max(
+                    result.maximum_ffn_intermediate, static_cast<size_t>(ff.intermediate_size));
+            } else if constexpr (std::is_same_v<FF, MoeLayerProgram>) {
+                result.moe_intermediate = std::max(
+                    result.moe_intermediate, static_cast<size_t>(ff.routed.mlp.intermediate_size));
+                result.maximum_ffn_intermediate = std::max(
+                    result.maximum_ffn_intermediate, static_cast<size_t>(ff.routed.mlp.intermediate_size));
+            }
+        }, layer.feed_forward);
     }
+    result.maximum_mamba_projection_width = std::max<size_t>(1, result.maximum_mamba_projection_width);
+    result.maximum_mamba_intermediate = std::max<size_t>(1, result.maximum_mamba_intermediate);
+    result.max_gated_delta_qkv = std::max<size_t>(1, result.max_gated_delta_qkv);
+    result.max_gated_delta_output = std::max<size_t>(1, result.max_gated_delta_output);
+    result.max_gated_delta_gate = std::max<size_t>(1, result.max_gated_delta_gate);
+    result.maximum_projection_width = std::max<size_t>(1, result.maximum_projection_width);
+    result.maximum_ffn_intermediate = std::max<size_t>(1, result.maximum_ffn_intermediate);
     result.layer_slots = maximum_batch * static_cast<size_t>(shape.num_hidden_layers);
     result.page_table_entries = maximum_prefill_tokens * page_table_stride;
     return result;

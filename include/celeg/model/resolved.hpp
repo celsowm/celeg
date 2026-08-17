@@ -46,10 +46,7 @@ struct CheckpointDimensions {
 
 class ExecutionTopology {
 public:
-    int max_feed_forward_intermediate = 0;
     int num_hidden_layers = 0;
-    int conv_cache = 0;
-    int conv_dim = 0;
     std::vector<int> attention_slot_for_layer;
     std::vector<int> layer_for_attention_slot;
     int attention_layer_count = 0;
@@ -57,65 +54,6 @@ public:
     int gated_delta_net_layer_count = 0;
     int mamba2_layer_count = 0;
     int mlp_only_layer_count = 0;
-    int mamba2_intermediate = 0;
-    int maximum_mamba_projection_width_value = 0;
-    int maximum_mamba_conv_width_value = 0;
-    int maximum_attention_projection_width_value = 0;
-    int maximum_attention_query_heads_value = 0;
-    int maximum_attention_head_dim_value = 0;
-    int maximum_attention_output_width_value = 0;
-    int maximum_attention_latent_rank_value = 0;
-    int maximum_attention_latent_rope_width_value = 0;
-    int maximum_attention_latent_query_rope_width_value = 0;
-    int maximum_attention_latent_output_width_value = 0;
-    int maximum_attention_latent_projection_width_value = 0;
-    int maximum_gated_delta_net_qkv_width_value = 0;
-    int maximum_gated_delta_net_output_width_value = 0;
-    int maximum_gated_delta_net_gate_width_value = 0;
-
-    int maximum_attention_projection_width() const {
-        return maximum_attention_projection_width_value;
-    }
-    int maximum_attention_query_heads() const {
-        return maximum_attention_query_heads_value;
-    }
-    int maximum_attention_head_dim() const {
-        return maximum_attention_head_dim_value;
-    }
-
-    int maximum_mamba_projection_width() const {
-        return maximum_mamba_projection_width_value;
-    }
-    int maximum_mamba_conv_width() const {
-        return maximum_mamba_conv_width_value;
-    }
-    int maximum_attention_output_width() const {
-        return maximum_attention_output_width_value;
-    }
-    int maximum_attention_latent_rank() const {
-        return maximum_attention_latent_rank_value;
-    }
-    int maximum_attention_latent_rope_width() const {
-        return maximum_attention_latent_rope_width_value;
-    }
-    int maximum_attention_latent_query_rope_width() const {
-        return maximum_attention_latent_query_rope_width_value;
-    }
-    int maximum_attention_latent_output_width() const {
-        return maximum_attention_latent_output_width_value;
-    }
-    int maximum_attention_latent_projection_width() const {
-        return maximum_attention_latent_projection_width_value;
-    }
-    int max_gated_delta_net_qkv_width() const {
-        return maximum_gated_delta_net_qkv_width_value;
-    }
-    int max_gated_delta_net_output_width() const {
-        return maximum_gated_delta_net_output_width_value;
-    }
-    int max_gated_delta_net_gate_width() const {
-        return maximum_gated_delta_net_gate_width_value;
-    }
 
     std::string summary() const;
     void validate() const;

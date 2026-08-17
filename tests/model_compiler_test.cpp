@@ -80,7 +80,6 @@ int main() {
     const celeg::ExecutionTopology mlp_only_topology =
         celeg::ExecutionTopology::derive(mlp_only_graph);
     CELEG_TEST_CHECK(mlp_only_topology.mlp_only_layer_count == 1);
-    CELEG_TEST_CHECK(mlp_only_topology.max_feed_forward_intermediate == 64);
 
     celeg::ResolvedModel unsupported_pattern = model;
     std::get<celeg::AttentionSpec>(unsupported_pattern.graph.layers[0].mixer).pattern =

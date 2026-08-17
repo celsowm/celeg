@@ -430,6 +430,7 @@ void CpuCompiledModel::Shared::load_weights() {
             throw std::logic_error("CPU weight loader received unknown mixer alternative");
         }
         ConvolutionWeights layer;
+        layer.spec = *convolution;
         layer.in = load_matrix(source, reader.get(), writer.get(),
             tensor_name(weight_requests, TensorRole::ShortConvInput, index),
             {3 * program.hidden, program.hidden});
@@ -441,7 +442,7 @@ void CpuCompiledModel::Shared::load_weights() {
         for (int tap = 0; tap < convolution->cache_length; ++tap) {
             for (int channel = 0; channel < program.hidden; ++channel) {
                 layer.weight_tap_major[static_cast<size_t>(tap) * program.hidden + channel] =
-                    channel_major[static_cast<size_t>(channel) * shape.conv_cache + tap];
+                    channel_major[static_cast<size_t>(channel) * convolution->cache_length + tap];
             }
         }
         layer.out = load_matrix(source, reader.get(), writer.get(),

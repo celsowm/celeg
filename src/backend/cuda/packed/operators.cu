@@ -43,12 +43,12 @@ void PackedConvolutionExecutor::run(
             w.conv_projected.data(), convolution.conv_weight,
             w.d_conv_states.data() + offset, w.op_output.data(), w.positions.data(),
             w.d_span_offsets.data(), w.d_span_counts.data(), ragged_requests,
-            context.program.hidden, context.shape.conv_cache, w.stream.get());
+            context.program.hidden, convolution.spec.cache_length, w.stream.get());
     } else {
         launch_conv_decode_batch_ptrs(
             w.conv_projected.data(), convolution.conv_weight,
             w.d_conv_states.data() + offset, w.op_output.data(), w.positions.data(),
-            rows, context.program.hidden, context.shape.conv_cache, w.stream.get());
+            rows, context.program.hidden, convolution.spec.cache_length, w.stream.get());
     }
     context.linear(w.op_output.data(), *convolution.conv_out, w.hidden.data(), rows,
                    context.program.hidden, context.program.hidden,
@@ -523,7 +523,8 @@ void PackedDenseFfnExecutor::run(
         throw std::logic_error("packed dense executor received non-dense semantics");
     }
     const int intermediate = dense_semantics->intermediate_size;
-    if (intermediate <= 0 || intermediate > context.shape.max_feed_forward_intermediate) {
+    if (intermediate <= 0 ||
+        intermediate > static_cast<int>(context.workspace.requirements_.maximum_ffn_intermediate)) {
         throw std::runtime_error("invalid packed dense FFN width at layer " +
                                  std::to_string(layer_index));
     }

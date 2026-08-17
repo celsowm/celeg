@@ -76,7 +76,7 @@ CpuCompiledModel::Shared::Shared(const std::string& path, int context,
     runtime_topology = bootstrap.model.topology;
     tie_word_embeddings = bootstrap.model.graph.tied_embeddings;
     program = CpuModelCompiler{}.compile(bootstrap.model);
-    workspace_plan = CpuWorkspacePlan::from_topology(shape, program);
+    workspace_plan = CpuWorkspacePlan::from_program(program);
     model_identity = bootstrap.model.provenance.identity;
     weight_requests = bootstrap.model.weight_plan.requests;
     repository = bootstrap.checkpoint.repository;

@@ -612,7 +612,7 @@ void CudaCompiledModel::run_token_convolution(ConvolutionLayer& convolution) {
     launch_conv_decode(
         workspace_.conv_projected_.data(), convolution.conv_weight,
         convolution.conv_state.data(), workspace_.op_output_.data(),
-        resources_.program_.hidden, resources_.shape_.conv_cache, session_.position_,
+        resources_.program_.hidden, convolution.spec.cache_length, session_.position_,
         stream_.get());
     linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(),
            1, resources_.program_.hidden, resources_.program_.hidden,

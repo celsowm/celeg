@@ -25,6 +25,11 @@ struct PackedWorkspaceRequirements {
     size_t maximum_mamba_projection_width = 0;
     size_t maximum_mamba_intermediate = 0;
     size_t maximum_ffn_intermediate = 0;
+    size_t max_gated_delta_qkv = 0;
+    size_t max_gated_delta_output = 0;
+    size_t max_gated_delta_gate = 0;
+    int attention_query_heads = 0;
+    int attention_head_dim = 0;
     size_t moe_intermediate = 0;
     size_t layer_slots = 0;
     size_t page_table_entries = 0;

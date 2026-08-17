@@ -173,7 +173,7 @@ void run_convolution(
     launch_conv_prefill(
         workspace.prefill_conv_projected_.data(), convolution.conv_weight,
         convolution.conv_state.data(), workspace.prefill_op_output_.data(),
-        rows, hidden, model.resources_.shape_.conv_cache, model.stream_.get());
+        rows, hidden, convolution.spec.cache_length, model.stream_.get());
     model.linear(
         workspace.prefill_op_output_.data(), *convolution.conv_out,
         workspace.prefill_hidden_.data(),
@@ -183,3 +183,4 @@ void run_convolution(
 }
 
 }
+

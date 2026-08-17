@@ -1,4 +1,5 @@
 #include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/workspace_plan.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 
 #include <algorithm>
@@ -118,6 +119,7 @@ void CudaCompiledModel::reset(bool allocate_local_kv) {
 }
 
 void CudaCompiledModel::allocate_prefill_workspace(int rows) {
+    const CudaWorkspacePlan plan = CudaWorkspacePlan::from_program(resources_.program_);
     const size_t r = static_cast<size_t>(rows);
     workspace_.prefill_tokens_.reserve(r);
     workspace_.prefill_hidden_.reserve(r * resources_.program_.hidden);
@@ -125,39 +127,30 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
     workspace_.prefill_normed_.reserve(r * resources_.program_.hidden);
     workspace_.prefill_op_output_.reserve(r * static_cast<size_t>(std::max(
         resources_.program_.hidden,
-        resources_.shape_.maximum_attention_output_width())));
-    workspace_.prefill_qkv_.reserve(r * resources_.shape_.maximum_attention_projection_width());
-    const size_t projection_width = resources_.shape_.maximum_attention_projection_width();
+        static_cast<int>(plan.attention_output))));
+    workspace_.prefill_qkv_.reserve(r * plan.attention_projection);
+    const size_t projection_width = plan.attention_projection;
     workspace_.prefill_q_.reserve(r * projection_width);
-    workspace_.prefill_latent_query_content_.reserve(
-        r * static_cast<size_t>(resources_.shape_.maximum_attention_output_width()));
-    workspace_.prefill_latent_query_rope_.reserve(
-        r * static_cast<size_t>(resources_.shape_.maximum_attention_latent_query_rope_width()));
-    workspace_.prefill_latent_key_.reserve(
-        r * static_cast<size_t>(resources_.shape_.maximum_attention_latent_rank()));
-    workspace_.prefill_latent_value_.reserve(
-        r * static_cast<size_t>(resources_.shape_.maximum_attention_latent_rank()));
-    workspace_.prefill_latent_key_rope_.reserve(
-        r * static_cast<size_t>(resources_.shape_.maximum_attention_latent_rope_width()));
-    workspace_.prefill_latent_projection_.reserve(r * static_cast<size_t>(
-        resources_.shape_.maximum_attention_projection_width()));
-    workspace_.prefill_latent_decompressed_.reserve(
-        r * static_cast<size_t>(resources_.shape_.maximum_attention_output_width()));
-    workspace_.prefill_attention_gate_.reserve(r * resources_.shape_.maximum_attention_query_heads() *
-                                               resources_.shape_.maximum_attention_head_dim());
+    workspace_.prefill_latent_query_content_.reserve(r * plan.latent_query_content);
+    workspace_.prefill_latent_query_rope_.reserve(r * plan.latent_query_rope);
+    workspace_.prefill_latent_key_.reserve(r * plan.latent_rank);
+    workspace_.prefill_latent_value_.reserve(r * plan.latent_rank);
+    workspace_.prefill_latent_key_rope_.reserve(r * plan.latent_rope);
+    workspace_.prefill_latent_projection_.reserve(r * plan.latent_projection);
+    workspace_.prefill_latent_decompressed_.reserve(r * plan.latent_decompressed);
+    workspace_.prefill_attention_gate_.reserve(r * plan.attention_output);
     workspace_.prefill_k_.reserve(r * projection_width);
     workspace_.prefill_v_.reserve(r * projection_width);
     workspace_.prefill_conv_projected_.reserve(r * 3 * resources_.program_.hidden);
-    workspace_.prefill_gated_delta_qkv_.reserve(r * resources_.shape_.max_gated_delta_net_qkv_width());
-    workspace_.prefill_gated_delta_z_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
-    workspace_.prefill_gated_delta_b_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
-    workspace_.prefill_gated_delta_a_.reserve(r * resources_.shape_.max_gated_delta_net_gate_width());
-    workspace_.prefill_gated_delta_output_.reserve(r * resources_.shape_.max_gated_delta_net_output_width());
-    workspace_.prefill_mamba_projected_.reserve(
-        r * resources_.shape_.maximum_mamba_projection_width());
-    workspace_.prefill_mamba_inner_.reserve(r * resources_.shape_.mamba2_intermediate);
-    workspace_.prefill_gate_up_.reserve(r * 2 * resources_.shape_.max_feed_forward_intermediate);
-    workspace_.prefill_activated_.reserve(r * resources_.shape_.max_feed_forward_intermediate);
+    workspace_.prefill_gated_delta_qkv_.reserve(r * plan.gated_delta_qkv);
+    workspace_.prefill_gated_delta_z_.reserve(r * plan.gated_delta_z);
+    workspace_.prefill_gated_delta_b_.reserve(r * plan.gated_delta_b);
+    workspace_.prefill_gated_delta_a_.reserve(r * plan.gated_delta_a);
+    workspace_.prefill_gated_delta_output_.reserve(r * plan.gated_delta_output);
+    workspace_.prefill_mamba_projected_.reserve(r * plan.mamba_projection);
+    workspace_.prefill_mamba_inner_.reserve(r * plan.mamba_inner);
+    workspace_.prefill_gate_up_.reserve(r * 2 * plan.ffn_intermediate);
+    workspace_.prefill_activated_.reserve(r * plan.ffn_intermediate);
     workspace_.prefill_mlp_output_.reserve(r * resources_.program_.hidden);
     workspace_.moe_pf_shared_gate_.reserve(r);
     if (resources_.program_.per_layer_input.enabled) {
@@ -172,15 +165,15 @@ void CudaCompiledModel::allocate_prefill_workspace(int rows) {
 
     if (rows <= kMaxGemmAttentionRows) {
         const size_t scores_elems =
-            static_cast<size_t>(resources_.shape_.maximum_attention_query_heads()) * r * r;
+            static_cast<size_t>(plan.attention_query_heads) * r * r;
         workspace_.prefill_attn_scores_.reserve(scores_elems);
         workspace_.prefill_attn_probs_.reserve(scores_elems);
     } else {
         const size_t chunks = (r + kPrefillAttnChunkTokens - 1) / kPrefillAttnChunkTokens;
-        const size_t partials = r * resources_.shape_.maximum_attention_query_heads() * chunks;
+        const size_t partials = r * plan.attention_query_heads * chunks;
         workspace_.prefill_attn_partial_max_.reserve(partials);
         workspace_.prefill_attn_partial_denom_.reserve(partials);
-        workspace_.prefill_attn_partial_accum_.reserve(partials * resources_.shape_.maximum_attention_head_dim());
+        workspace_.prefill_attn_partial_accum_.reserve(partials * plan.attention_head_dim);
     }
 }
 

@@ -1,46 +1,38 @@
 #include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/workspace_plan.hpp"
 
 #include <algorithm>
 #include <cstddef>
 namespace celeg {
 
 void CudaCompiledModel::allocate_celeg_resources() {
+    const CudaWorkspacePlan plan = CudaWorkspacePlan::from_program(resources_.program_);
     sampling_.reset_vocabulary(static_cast<size_t>(resources_.dims_.vocab_size));
     workspace_.hidden_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.residual_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.normed_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.op_output_.reset(static_cast<size_t>(std::max(
         resources_.program_.hidden,
-        resources_.shape_.maximum_attention_output_width())));
-    workspace_.qkv_output_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_projection_width()));
-    workspace_.attention_gate_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_output_width()));
-    workspace_.latent_query_content_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_output_width()));
-    workspace_.latent_query_rope_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_latent_query_rope_width()));
-    workspace_.latent_key_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_latent_rank()));
-    workspace_.latent_value_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_latent_rank()));
-    workspace_.latent_key_rope_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_latent_rope_width()));
-    workspace_.latent_projection_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_projection_width()));
-    workspace_.latent_decompressed_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_attention_output_width()));
+        static_cast<int>(plan.attention_output))));
+    workspace_.qkv_output_.reset(plan.attention_projection);
+    workspace_.attention_gate_.reset(plan.attention_output);
+    workspace_.latent_query_content_.reset(plan.latent_query_content);
+    workspace_.latent_query_rope_.reset(plan.latent_query_rope);
+    workspace_.latent_key_.reset(plan.latent_rank);
+    workspace_.latent_value_.reset(plan.latent_rank);
+    workspace_.latent_key_rope_.reset(plan.latent_rope);
+    workspace_.latent_projection_.reset(plan.latent_projection);
+    workspace_.latent_decompressed_.reset(plan.latent_decompressed);
     workspace_.conv_projected_.reset(static_cast<size_t>(3 * resources_.program_.hidden));
-    workspace_.mamba_projected_.reset(static_cast<size_t>(
-        resources_.shape_.maximum_mamba_projection_width()));
-    workspace_.mamba_inner_.reset(static_cast<size_t>(resources_.shape_.mamba2_intermediate));
-    workspace_.gated_delta_qkv_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_qkv_width()));
-    workspace_.gated_delta_z_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_output_width()));
-    workspace_.gated_delta_b_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_gate_width()));
-    workspace_.gated_delta_a_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_gate_width()));
-    workspace_.gated_delta_output_.reset(static_cast<size_t>(resources_.shape_.max_gated_delta_net_output_width()));
-    workspace_.gate_up_.reset(static_cast<size_t>(2 * resources_.shape_.max_feed_forward_intermediate));
-    workspace_.activated_.reset(static_cast<size_t>(resources_.shape_.max_feed_forward_intermediate));
+    workspace_.mamba_projected_.reset(plan.mamba_projection);
+    workspace_.mamba_inner_.reset(plan.mamba_inner);
+    workspace_.gated_delta_qkv_.reset(plan.gated_delta_qkv);
+    workspace_.gated_delta_z_.reset(plan.gated_delta_z);
+    workspace_.gated_delta_b_.reset(plan.gated_delta_b);
+    workspace_.gated_delta_a_.reset(plan.gated_delta_a);
+    workspace_.gated_delta_output_.reset(plan.gated_delta_output);
+    workspace_.gate_up_.reset(static_cast<size_t>(2 * plan.ffn_intermediate));
+    workspace_.activated_.reset(plan.ffn_intermediate);
     workspace_.mlp_output_.reset(static_cast<size_t>(resources_.program_.hidden));
     workspace_.logits_.reset(static_cast<size_t>(resources_.dims_.vocab_size));
     if (resources_.options_.enable_mtp && resources_.dims_.mtp_num_hidden_layers > 0) {
@@ -92,10 +84,10 @@ void CudaCompiledModel::allocate_celeg_resources() {
     workspace_.attention_chunks_ = resources_.plan_.attention_chunks();
     if (workspace_.attention_chunks_ > 0) {
         const size_t partials =
-            static_cast<size_t>(resources_.shape_.maximum_attention_query_heads()) * workspace_.attention_chunks_;
+            static_cast<size_t>(plan.attention_query_heads) * workspace_.attention_chunks_;
         workspace_.attention_partial_max_.reset(partials);
         workspace_.attention_partial_denom_.reset(partials);
-        workspace_.attention_partial_accum_.reset(partials * resources_.shape_.maximum_attention_head_dim());
+        workspace_.attention_partial_accum_.reset(partials * plan.attention_head_dim);
     }
     if (resources_.options_.gemm_backend == GemmBackend::CublasLt &&
         resources_.options_.lt_workspace_bytes > 0) {
@@ -104,4 +96,3 @@ void CudaCompiledModel::allocate_celeg_resources() {
 }
 
 }
-

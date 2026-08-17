@@ -43,51 +43,136 @@ struct CpuWorkspacePlan {
     size_t mamba_inner = 0;
     size_t feed_forward = 0;
     size_t q8_blocks = 0;
+    int conv_cache = 0;
 
-    static CpuWorkspacePlan from_topology(const ExecutionTopology& shape,
-                                          const CompiledModelProgram& program) {
+    static CpuWorkspacePlan from_program(const CompiledModelProgram& program) {
         CpuWorkspacePlan plan;
         plan.hidden = static_cast<size_t>(program.hidden);
-        plan.attention_output = static_cast<size_t>(shape.maximum_attention_query_heads()) *
-            static_cast<size_t>(shape.maximum_attention_head_dim());
-        plan.attention_output = std::max(plan.attention_output,
-            std::max(static_cast<size_t>(shape.mamba2_intermediate),
-                     static_cast<size_t>(shape.max_gated_delta_net_output_width())));
-        plan.attention_projection = static_cast<size_t>(
-            shape.maximum_attention_projection_width());
-        plan.attention_projection = std::max(plan.attention_projection,
-            static_cast<size_t>(shape.maximum_attention_latent_query_rope_width()));
-        plan.attention_projection = std::max(plan.attention_projection,
-            static_cast<size_t>(shape.maximum_attention_latent_projection_width()));
-        plan.attention_output = std::max(plan.attention_output,
-            static_cast<size_t>(shape.maximum_attention_latent_output_width()));
-        plan.attention_output = std::max(plan.attention_output,
-            static_cast<size_t>(shape.maximum_attention_output_width()));
-        plan.latent_state = static_cast<size_t>(shape.maximum_attention_latent_rank());
-        plan.latent_rotary = static_cast<size_t>(
-            shape.maximum_attention_latent_query_rope_width());
-        plan.latent_key_rotary = static_cast<size_t>(
-            shape.maximum_attention_latent_rope_width());
-        plan.latent_output = static_cast<size_t>(shape.maximum_attention_latent_output_width());
-        plan.latent_projection = static_cast<size_t>(
-            shape.maximum_attention_latent_projection_width());
-        plan.gated_delta_qkv = static_cast<size_t>(shape.max_gated_delta_net_qkv_width());
-        plan.gated_delta_output = static_cast<size_t>(shape.max_gated_delta_net_output_width());
-        plan.gated_delta_gate = static_cast<size_t>(shape.max_gated_delta_net_gate_width());
-        plan.mamba_projection = static_cast<size_t>(shape.maximum_mamba_projection_width());
-        plan.mamba_conv = static_cast<size_t>(shape.maximum_mamba_conv_width());
-        plan.mamba_inner = static_cast<size_t>(shape.mamba2_intermediate);
-        plan.feed_forward = static_cast<size_t>(shape.max_feed_forward_intermediate);
         plan.q8_blocks = static_cast<size_t>(program.hidden) / 256;
+        for (const CompiledLayerProgram& layer : program.layers) {
+            std::visit([&](const auto& mixer) {
+                using Mixer = std::decay_t<decltype(mixer)>;
+                if constexpr (std::is_same_v<Mixer, CompiledAttentionProgram>) {
+                    const AttentionSpec& attn = mixer.semantics;
+                    plan.attention_output = std::max(
+                        plan.attention_output,
+                        static_cast<size_t>(attn.query_heads) * static_cast<size_t>(attn.head_dim));
+                    plan.attention_projection = std::max(
+                        plan.attention_projection,
+                        static_cast<size_t>(attn.projection_width()));
+                    plan.attention_output = std::max(
+                        plan.attention_output,
+                        static_cast<size_t>(attn.uses_latent_state() ? attn.latent_query_content_width()
+                                                                     : attn.query_width()));
+                    if (const auto* latent = attn.latent_state()) {
+                        plan.latent_state = std::max(
+                            plan.latent_state, static_cast<size_t>(latent->latent_rank));
+                        plan.latent_rotary = std::max(
+                            plan.latent_rotary, static_cast<size_t>(attn.latent_query_rope_width()));
+                        plan.latent_key_rotary = std::max(
+                            plan.latent_key_rotary,
+                            static_cast<size_t>(latent->decoupled_rope ? latent->rope_head_dim : 0));
+                        plan.latent_output = std::max(
+                            plan.latent_output, static_cast<size_t>(attn.latent_output_width()));
+                        plan.latent_projection = std::max(
+                            plan.latent_projection,
+                            static_cast<size_t>(attn.latent_query_projection_width()));
+                        plan.attention_projection = std::max(
+                            plan.attention_projection, static_cast<size_t>(attn.latent_query_rope_width()));
+                        plan.attention_projection = std::max(
+                            plan.attention_projection,
+                            static_cast<size_t>(attn.latent_query_projection_width()));
+                        plan.attention_output = std::max(
+                            plan.attention_output, static_cast<size_t>(attn.latent_output_width()));
+                    }
+            } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
+                plan.conv_cache = std::max(plan.conv_cache, mixer.cache_length);
+            } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
+                    plan.gated_delta_qkv = std::max(
+                        plan.gated_delta_qkv, static_cast<size_t>(mixer.qkv_width()));
+                    plan.gated_delta_output = std::max(
+                        plan.gated_delta_output, static_cast<size_t>(mixer.value_width()));
+                    plan.gated_delta_gate = std::max(
+                        plan.gated_delta_gate,
+                        static_cast<size_t>(std::max(mixer.value_heads, mixer.decay_width())));
+                    plan.attention_output = std::max(
+                        plan.attention_output, static_cast<size_t>(mixer.value_width()));
+                } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
+                    plan.mamba_inner = std::max(
+                        plan.mamba_inner, static_cast<size_t>(mixer.intermediate_size));
+                    plan.mamba_projection = std::max(
+                        plan.mamba_projection,
+                        static_cast<size_t>(2 * mixer.intermediate_size +
+                                            2 * mixer.group_count * mixer.state_size + mixer.num_heads));
+                    plan.mamba_conv = std::max(
+                        plan.mamba_conv,
+                        static_cast<size_t>(mixer.intermediate_size +
+                                            2 * mixer.group_count * mixer.state_size));
+                    plan.attention_output = std::max(
+                        plan.attention_output, static_cast<size_t>(mixer.intermediate_size));
+                } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
+                    plan.feed_forward = std::max(
+                        plan.feed_forward, static_cast<size_t>(mixer.intermediate_size));
+                }
+            }, layer.mixer);
+
+            std::visit([&](const auto& ff) {
+                using FF = std::decay_t<decltype(ff)>;
+                if constexpr (std::is_same_v<FF, std::monostate>) {
+                    return;
+                } else if constexpr (std::is_same_v<FF, CompiledDenseFeedForwardProgram>) {
+                    plan.feed_forward = std::max(
+                        plan.feed_forward, static_cast<size_t>(ff.intermediate_size));
+                } else if constexpr (std::is_same_v<FF, MoeLayerProgram>) {
+                    plan.feed_forward = std::max(
+                        plan.feed_forward, static_cast<size_t>(ff.routed.mlp.intermediate_size));
+                }
+            }, layer.feed_forward);
+        }
         return plan;
     }
 };
 
-struct CpuWorkspace {
+struct CpuCommonWorkspace {
+    std::vector<float> hidden;
+    std::vector<float> residual;
+    std::vector<float> normed;
+    std::vector<float> mlp_output;
+    std::vector<float> shared_output;
+    std::vector<float> shared_gate;
+    std::vector<float> logits;
+    std::vector<float> per_layer_input;
+    std::vector<float> per_layer_context;
+    std::vector<float> per_layer_gate;
+    std::vector<CpuQ8KBlock> chunk_q8;
+    std::vector<float> final_normed;
+    std::vector<float> final_logits;
+    std::vector<size_t> terminal_rows;
+
     void ensure(size_t rows, const CpuWorkspacePlan& plan) {
         hidden.resize(rows * plan.hidden);
         residual.resize(rows * plan.hidden);
         normed.resize(rows * plan.hidden);
+        mlp_output.resize(rows * plan.hidden);
+        shared_output.resize(rows * plan.hidden);
+        shared_gate.resize(rows);
+        chunk_q8.resize(rows * plan.q8_blocks);
+        final_normed.resize(plan.hidden);
+    }
+};
+
+struct CpuAttentionWorkspace {
+    std::vector<float> op_output;
+    std::vector<float> attention_gate;
+    std::vector<float> qkv;
+    std::vector<float> latent_key;
+    std::vector<float> latent_value;
+    std::vector<float> latent_rope;
+    std::vector<float> latent_key_rope;
+    std::vector<float> latent_decompressed;
+    std::vector<float> latent_projection;
+
+    void ensure(size_t rows, const CpuWorkspacePlan& plan) {
         op_output.resize(rows * plan.attention_output);
         attention_gate.resize(rows * plan.attention_output);
         qkv.resize(rows * plan.attention_projection);
@@ -97,6 +182,22 @@ struct CpuWorkspace {
         latent_key_rope.resize(rows * plan.latent_key_rotary);
         latent_decompressed.resize(rows * plan.latent_output);
         latent_projection.resize(rows * plan.latent_projection);
+    }
+};
+
+struct CpuRecurrentWorkspace {
+    std::vector<float> conv_projected;
+    std::vector<float> gated_delta_qkv;
+    std::vector<float> gated_delta_z;
+    std::vector<float> gated_delta_b;
+    std::vector<float> gated_delta_a;
+    std::vector<float> gated_delta_output;
+    std::vector<float> mamba_projected;
+    std::vector<float> mamba_bcx;
+    std::vector<float> mamba_inner;
+
+    void ensure(size_t rows, const CpuWorkspacePlan& plan) {
+        conv_projected.resize(rows * 3ULL * plan.hidden);
         gated_delta_qkv.resize(rows * plan.gated_delta_qkv);
         gated_delta_z.resize(rows * plan.gated_delta_output);
         gated_delta_b.resize(rows * plan.gated_delta_gate);
@@ -105,80 +206,132 @@ struct CpuWorkspace {
         mamba_projected.resize(rows * plan.mamba_projection);
         mamba_bcx.resize(rows * plan.mamba_conv);
         mamba_inner.resize(rows * plan.mamba_inner);
-        conv_projected.resize(rows * 3ULL * plan.hidden);
-        gate_up.resize(rows * 2ULL * plan.feed_forward);
-        activated.resize(rows * plan.feed_forward);
-        mlp_output.resize(rows * plan.hidden);
-        shared_output.resize(rows * plan.hidden);
-        shared_gate.resize(rows);
-        chunk_q8.resize(rows * plan.q8_blocks);
     }
+};
 
-    void ensure_chunk(size_t rows, const CpuWorkspacePlan& plan) {
-        chunk_hidden.resize(rows * plan.hidden);
-        chunk_residual.resize(rows * plan.hidden);
-        chunk_normed.resize(rows * plan.hidden);
-        chunk_op.resize(rows * plan.attention_output);
-        chunk_qkv.resize(rows * plan.attention_projection);
-        chunk_latent_key.resize(rows * plan.latent_state);
-        chunk_latent_value.resize(rows * plan.latent_state);
-        chunk_latent_rope.resize(rows * plan.latent_rotary);
-        chunk_latent_key_rope.resize(rows * plan.latent_key_rotary);
-        chunk_latent_decompressed.resize(rows * plan.latent_output);
-        chunk_latent_projection.resize(rows * plan.latent_projection);
-        chunk_attention_gate.resize(rows * plan.attention_output);
-        chunk_gated_delta_qkv.resize(rows * plan.gated_delta_qkv);
-        chunk_gated_delta_z.resize(rows * plan.gated_delta_output);
-        chunk_gated_delta_b.resize(rows * plan.gated_delta_gate);
-        chunk_gated_delta_a.resize(rows * plan.gated_delta_gate);
-        chunk_gated_delta_output.resize(rows * plan.gated_delta_output);
-        chunk_conv.resize(rows * 3ULL * plan.hidden);
-        chunk_gate_up.resize(rows * 2ULL * plan.feed_forward);
-        chunk_activated.resize(rows * plan.feed_forward);
-        chunk_mlp.resize(rows * plan.hidden);
-        shared_output.resize(rows * plan.hidden);
-        shared_gate.resize(rows);
-        chunk_q8.resize(rows * plan.q8_blocks);
-        final_normed.resize(plan.hidden);
-        terminal_rows.clear();
-    }
-
-    std::vector<float> hidden, residual, normed, op_output, attention_gate, qkv;
-    std::vector<float> latent_key, latent_value, latent_rope, latent_key_rope;
-    std::vector<float> latent_decompressed;
-    std::vector<float> latent_projection;
-    std::vector<float> per_layer_input, per_layer_context, per_layer_gate;
-    std::vector<float> conv_projected, gate_up, activated, mlp_output;
-    std::vector<float> shared_output, shared_gate;
-    std::vector<float> mamba_projected, mamba_bcx, mamba_inner;
-    std::vector<float> gated_delta_qkv, gated_delta_z, gated_delta_b, gated_delta_a;
-    std::vector<float> gated_delta_output;
-    std::vector<float> logits;
-    std::vector<float> chunk_hidden, chunk_residual, chunk_normed, chunk_op;
-    std::vector<float> chunk_qkv, chunk_conv, chunk_gate_up;
-    std::vector<float> chunk_latent_key, chunk_latent_value, chunk_latent_rope;
-    std::vector<float> chunk_latent_key_rope;
-    std::vector<float> chunk_latent_decompressed;
-    std::vector<float> chunk_latent_projection;
-    std::vector<float> chunk_attention_gate;
-    std::vector<float> chunk_gated_delta_qkv, chunk_gated_delta_z;
-    std::vector<float> chunk_gated_delta_b, chunk_gated_delta_a, chunk_gated_delta_output;
-    std::vector<float> chunk_activated, chunk_mlp;
-    std::vector<CpuQ8KBlock> chunk_q8;
-    std::vector<float> final_normed, final_logits;
-    std::vector<size_t> terminal_rows;
-    std::vector<float> moe_router_logits, moe_router_probs;
+struct CpuFeedForwardWorkspace {
+    std::vector<float> gate_up;
+    std::vector<float> activated;
+    std::vector<float> moe_router_logits;
+    std::vector<float> moe_router_probs;
     std::vector<std::pair<float, int>> moe_router_scored;
     std::vector<int> moe_selected;
     std::vector<float> moe_weights;
-    std::vector<size_t> moe_group_offsets, moe_group_cursor;
+    std::vector<size_t> moe_group_offsets;
+    std::vector<size_t> moe_group_cursor;
     std::vector<size_t> moe_route_order;
-    std::vector<int> moe_route_rows, moe_route_experts;
+    std::vector<int> moe_route_rows;
+    std::vector<int> moe_route_experts;
     std::vector<float> moe_route_weights;
-    std::vector<float> moe_gathered_normed, moe_gathered_gate_up;
-    std::vector<float> moe_gathered_activated, moe_gathered_output;
+    std::vector<float> moe_gathered_normed;
+    std::vector<float> moe_gathered_gate_up;
+    std::vector<float> moe_gathered_activated;
+    std::vector<float> moe_gathered_output;
     std::vector<CpuGroupedGemmJob> moe_gemm_jobs;
     std::vector<std::shared_ptr<const CpuExpertWeights>> moe_cached_experts;
+
+    void ensure(size_t rows, const CpuWorkspacePlan& plan) {
+        gate_up.resize(rows * 2ULL * plan.feed_forward);
+        activated.resize(rows * plan.feed_forward);
+    }
+};
+
+struct CpuWorkspace {
+    CpuCommonWorkspace common;
+    CpuAttentionWorkspace attention;
+    CpuRecurrentWorkspace recurrent;
+    CpuFeedForwardWorkspace feed_forward;
+
+    std::vector<float>& hidden = common.hidden;
+    std::vector<float>& residual = common.residual;
+    std::vector<float>& normed = common.normed;
+    std::vector<float>& mlp_output = common.mlp_output;
+    std::vector<float>& shared_output = common.shared_output;
+    std::vector<float>& shared_gate = common.shared_gate;
+    std::vector<float>& logits = common.logits;
+    std::vector<float>& per_layer_input = common.per_layer_input;
+    std::vector<float>& per_layer_context = common.per_layer_context;
+    std::vector<float>& per_layer_gate = common.per_layer_gate;
+    std::vector<CpuQ8KBlock>& chunk_q8 = common.chunk_q8;
+    std::vector<float>& final_normed = common.final_normed;
+    std::vector<float>& final_logits = common.final_logits;
+    std::vector<size_t>& terminal_rows = common.terminal_rows;
+
+    std::vector<float>& op_output = attention.op_output;
+    std::vector<float>& attention_gate = attention.attention_gate;
+    std::vector<float>& qkv = attention.qkv;
+    std::vector<float>& latent_key = attention.latent_key;
+    std::vector<float>& latent_value = attention.latent_value;
+    std::vector<float>& latent_rope = attention.latent_rope;
+    std::vector<float>& latent_key_rope = attention.latent_key_rope;
+    std::vector<float>& latent_decompressed = attention.latent_decompressed;
+    std::vector<float>& latent_projection = attention.latent_projection;
+
+    std::vector<float>& conv_projected = recurrent.conv_projected;
+    std::vector<float>& gated_delta_qkv = recurrent.gated_delta_qkv;
+    std::vector<float>& gated_delta_z = recurrent.gated_delta_z;
+    std::vector<float>& gated_delta_b = recurrent.gated_delta_b;
+    std::vector<float>& gated_delta_a = recurrent.gated_delta_a;
+    std::vector<float>& gated_delta_output = recurrent.gated_delta_output;
+    std::vector<float>& mamba_projected = recurrent.mamba_projected;
+    std::vector<float>& mamba_bcx = recurrent.mamba_bcx;
+    std::vector<float>& mamba_inner = recurrent.mamba_inner;
+
+    std::vector<float>& gate_up = feed_forward.gate_up;
+    std::vector<float>& activated = feed_forward.activated;
+    std::vector<float>& moe_router_logits = feed_forward.moe_router_logits;
+    std::vector<float>& moe_router_probs = feed_forward.moe_router_probs;
+    std::vector<std::pair<float, int>>& moe_router_scored = feed_forward.moe_router_scored;
+    std::vector<int>& moe_selected = feed_forward.moe_selected;
+    std::vector<float>& moe_weights = feed_forward.moe_weights;
+    std::vector<size_t>& moe_group_offsets = feed_forward.moe_group_offsets;
+    std::vector<size_t>& moe_group_cursor = feed_forward.moe_group_cursor;
+    std::vector<size_t>& moe_route_order = feed_forward.moe_route_order;
+    std::vector<int>& moe_route_rows = feed_forward.moe_route_rows;
+    std::vector<int>& moe_route_experts = feed_forward.moe_route_experts;
+    std::vector<float>& moe_route_weights = feed_forward.moe_route_weights;
+    std::vector<float>& moe_gathered_normed = feed_forward.moe_gathered_normed;
+    std::vector<float>& moe_gathered_gate_up = feed_forward.moe_gathered_gate_up;
+    std::vector<float>& moe_gathered_activated = feed_forward.moe_gathered_activated;
+    std::vector<float>& moe_gathered_output = feed_forward.moe_gathered_output;
+    std::vector<CpuGroupedGemmJob>& moe_gemm_jobs = feed_forward.moe_gemm_jobs;
+    std::vector<std::shared_ptr<const CpuExpertWeights>>& moe_cached_experts =
+        feed_forward.moe_cached_experts;
+
+    // Legacy chunk alias references for non-overlapping chunk forward paths
+    std::vector<float>& chunk_hidden = common.hidden;
+    std::vector<float>& chunk_residual = common.residual;
+    std::vector<float>& chunk_normed = common.normed;
+    std::vector<float>& chunk_op = attention.op_output;
+    std::vector<float>& chunk_qkv = attention.qkv;
+    std::vector<float>& chunk_conv = recurrent.conv_projected;
+    std::vector<float>& chunk_gate_up = feed_forward.gate_up;
+    std::vector<float>& chunk_latent_key = attention.latent_key;
+    std::vector<float>& chunk_latent_value = attention.latent_value;
+    std::vector<float>& chunk_latent_rope = attention.latent_rope;
+    std::vector<float>& chunk_latent_key_rope = attention.latent_key_rope;
+    std::vector<float>& chunk_latent_decompressed = attention.latent_decompressed;
+    std::vector<float>& chunk_latent_projection = attention.latent_projection;
+    std::vector<float>& chunk_attention_gate = attention.attention_gate;
+    std::vector<float>& chunk_gated_delta_qkv = recurrent.gated_delta_qkv;
+    std::vector<float>& chunk_gated_delta_z = recurrent.gated_delta_z;
+    std::vector<float>& chunk_gated_delta_b = recurrent.gated_delta_b;
+    std::vector<float>& chunk_gated_delta_a = recurrent.gated_delta_a;
+    std::vector<float>& chunk_gated_delta_output = recurrent.gated_delta_output;
+    std::vector<float>& chunk_activated = feed_forward.activated;
+    std::vector<float>& chunk_mlp = common.mlp_output;
+
+    void ensure(size_t rows, const CpuWorkspacePlan& plan) {
+        common.ensure(rows, plan);
+        attention.ensure(rows, plan);
+        recurrent.ensure(rows, plan);
+        feed_forward.ensure(rows, plan);
+    }
+
+    void ensure_chunk(size_t rows, const CpuWorkspacePlan& plan) {
+        ensure(rows, plan);
+        terminal_rows.clear();
+    }
 };
 
 struct CpuCompiledModel {
@@ -213,6 +366,7 @@ struct CpuCompiledModel {
         std::vector<float> relative_bias;
     };
     struct ConvolutionWeights {
+        ShortConvolutionSpec spec;
         CpuLinearWeight in;
         std::vector<float> weight_tap_major;
         CpuLinearWeight out;

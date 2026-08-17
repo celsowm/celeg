@@ -312,93 +312,26 @@ ExecutionTopology ExecutionTopology::derive(const ModelGraph& graph) {
     result.gated_delta_net_layer_count = 0;
     result.mamba2_layer_count = 0;
     result.mlp_only_layer_count = 0;
-    result.mamba2_intermediate = 0;
-    result.max_feed_forward_intermediate = 0;
-    int maximum_conv_cache = 0;
-    int maximum_conv_dim = 0;
     for (std::size_t index = 0; index < layer_count; ++index) {
         const LayerSpec& layer = graph.layers[index];
         std::visit([&](const auto& mixer) {
             using Mixer = std::decay_t<decltype(mixer)>;
             if constexpr (std::is_same_v<Mixer, AttentionSpec>) {
-                result.maximum_attention_projection_width_value = std::max(
-                    result.maximum_attention_projection_width_value,
-                    mixer.projection_width());
-                result.maximum_attention_query_heads_value = std::max(
-                    result.maximum_attention_query_heads_value, mixer.query_heads);
-                result.maximum_attention_head_dim_value = std::max(
-                    result.maximum_attention_head_dim_value, mixer.head_dim);
-                result.maximum_attention_output_width_value = std::max(
-                    result.maximum_attention_output_width_value,
-                    mixer.uses_latent_state() ? mixer.latent_query_content_width()
-                                               : mixer.query_width());
-                result.maximum_attention_latent_query_rope_width_value = std::max(
-                    result.maximum_attention_latent_query_rope_width_value,
-                    mixer.latent_query_rope_width());
-                result.maximum_attention_latent_projection_width_value = std::max(
-                    result.maximum_attention_latent_projection_width_value,
-                    mixer.latent_query_projection_width());
-                result.maximum_attention_latent_output_width_value = std::max(
-                    result.maximum_attention_latent_output_width_value,
-                    mixer.latent_output_width());
-                if (const auto* latent = mixer.latent_state()) {
-                    result.maximum_attention_latent_rank_value = std::max(
-                        result.maximum_attention_latent_rank_value, latent->latent_rank);
-                    result.maximum_attention_latent_rope_width_value = std::max(
-                        result.maximum_attention_latent_rope_width_value,
-                        latent->decoupled_rope ? latent->rope_head_dim : 0);
-                }
                 result.attention_slot_for_layer[index] = result.attention_layer_count++;
                 result.layer_for_attention_slot.push_back(static_cast<int>(index));
             } else if constexpr (std::is_same_v<Mixer, ShortConvolutionSpec>) {
-                maximum_conv_cache = std::max(maximum_conv_cache, mixer.cache_length);
-                maximum_conv_dim = std::max(maximum_conv_dim, mixer.channels);
                 ++result.conv_layer_count;
             } else if constexpr (std::is_same_v<Mixer, GatedDeltaNetSpec>) {
-                result.maximum_gated_delta_net_qkv_width_value = std::max(
-                    result.maximum_gated_delta_net_qkv_width_value, mixer.qkv_width());
-                result.maximum_gated_delta_net_output_width_value = std::max(
-                    result.maximum_gated_delta_net_output_width_value, mixer.value_width());
-                result.maximum_gated_delta_net_gate_width_value = std::max(
-                    result.maximum_gated_delta_net_gate_width_value,
-                    std::max(mixer.value_heads, mixer.decay_width()));
                 ++result.gated_delta_net_layer_count;
             } else if constexpr (std::is_same_v<Mixer, Mamba2Spec>) {
-                result.mamba2_intermediate = std::max(
-                    result.mamba2_intermediate, mixer.intermediate_size);
-                result.maximum_mamba_projection_width_value = std::max(
-                    result.maximum_mamba_projection_width_value,
-                    2 * mixer.intermediate_size +
-                    2 * mixer.group_count * mixer.state_size + mixer.num_heads);
-                result.maximum_mamba_conv_width_value = std::max(
-                    result.maximum_mamba_conv_width_value,
-                    mixer.intermediate_size +
-                    2 * mixer.group_count * mixer.state_size);
                 ++result.mamba2_layer_count;
             } else if constexpr (std::is_same_v<Mixer, MlpBlockSpec>) {
-                result.max_feed_forward_intermediate = std::max(
-                    result.max_feed_forward_intermediate, mixer.intermediate_size);
                 ++result.mlp_only_layer_count;
             } else {
                 static_assert(always_false_v<Mixer>, "unhandled mixer derivation variant");
             }
         }, layer.mixer);
-        std::visit([&](const auto& feed_forward) {
-            using FeedForward = std::decay_t<decltype(feed_forward)>;
-            if constexpr (std::is_same_v<FeedForward, std::monostate>) {
-                return;
-            } else if constexpr (std::is_same_v<FeedForward, DenseFeedForwardSpec> ||
-                                 std::is_same_v<FeedForward, MixtureOfExpertsSpec>) {
-                result.max_feed_forward_intermediate = std::max(
-                    result.max_feed_forward_intermediate, feed_forward.intermediate_size);
-            } else {
-                static_assert(always_false_v<FeedForward>,
-                              "unhandled feed-forward derivation variant");
-            }
-        }, layer.feed_forward);
     }
-    result.conv_cache = maximum_conv_cache;
-    result.conv_dim = maximum_conv_dim;
     return result;
 }
 
@@ -660,12 +593,6 @@ void ExecutionTopology::validate() const {
     if (attention_layer_count + conv_layer_count + gated_delta_net_layer_count +
         mamba2_layer_count + mlp_only_layer_count != num_hidden_layers) {
         throw std::runtime_error("resolved layer counts are inconsistent");
-    }
-    if (max_feed_forward_intermediate < 0 ||
-        maximum_attention_projection_width_value < 0 ||
-        maximum_gated_delta_net_qkv_width_value < 0 ||
-        maximum_mamba_projection_width_value < 0) {
-        throw std::runtime_error("resolved topology cache has invalid maxima");
     }
 }
 

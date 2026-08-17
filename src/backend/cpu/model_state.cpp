@@ -37,8 +37,8 @@ void CpuCompiledModel::allocate_state() {
         const CpuLayerWeights& layer = shared->weight_store.layers[index];
         const auto emplace_convolution_state = [&]() {
             ConvolutionState state;
-            state.state.resize(static_cast<size_t>(shared->shape.conv_cache) *
-                               shared->program.hidden);
+            state.state.resize(static_cast<size_t>(shared->workspace_plan.conv_cache) *
+                                shared->program.hidden);
             session_.states.emplace_back(std::move(state));
         };
         visit_operator_weights(layer.mixer,

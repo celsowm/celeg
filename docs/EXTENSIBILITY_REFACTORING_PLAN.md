@@ -29,7 +29,20 @@ Audit baseline: `master` at `32872bc19d992cf0c9bfb8ac9fdd5fece4931f18`.
   - 16 `NormalizedModelMetadata` decomposed into typed fact groups (`CoreModelFacts`, `AttentionFacts`, `LatentAttentionFacts`, `ShortConvolutionFacts`, `GatedDeltaFacts`, `Mamba2Facts`, `MoeFacts`). Stringly-typed MoE fields replaced with `MoeRouterScoreFunction` and `MoeRouterSelectionMethod` enums.
   - 17 Generic `input.is_gguf()` semantic branches replaced with `DecayParameterEncoding` on `GatedDeltaFacts` and `Mamba2Facts`, resolved at format boundary.
   - Verified: CPU ctest 78/78, CUDA ctest 88/88; custom grammar extension test passing (`tests/layer_inference_rule_test.cpp`).
-- **Sprint E (backend planning) through Sprint F (extension ABI/orchestration): not started.**
+- **Sprint E (backend planning): items 18–20 done; 21–22 not started.**
+  - 18 Mixer/FFN maxima (`maximum_attention_*`, `maximum_mamba_*`, `maximum_gated_delta_*`,
+    `max_feed_forward_intermediate`, `mamba2_intermediate`, `conv_cache`, `conv_dim`) removed
+    from neutral `ExecutionTopology`; `ExecutionTopology::derive` no longer computes them.
+  - 19 CPU workspace now derives from the compiled program via `CpuWorkspacePlan::from_program`
+    (replacing `from_topology`); CUDA gained an equivalent `CudaWorkspacePlan::from_program`
+    consumed by `allocate_celeg_resources`/`allocate_prefill_workspace`, and
+    `PackedWorkspaceRequirements::derive` now derives all maxima from `CompiledModelProgram`
+    instead of `ExecutionTopology`.
+  - 20 `CpuWorkspace` is already decomposed into common/attention/recurrent/feed-forward
+    sub-workspaces; `conv_cache` is now part of `CpuWorkspacePlan` and every short-convolution
+    consumer sources `cache_length` from its own `ShortConvolutionSpec` (CPU `ConvolutionWeights`
+    and CUDA `ConvolutionLayer` both gained a `spec` member) rather than `ExecutionTopology`.
+  - Verified: CUDA build green (492 targets) and the full 88-test ctest suite passes.
 
 This plan consolidates the extensibility findings from the backend SOLID review,
 the follow-up source audit, the semantic-state cleanup work, and the discussion
@@ -1241,9 +1254,9 @@ Use small commits that each remove one old representation completely.
 
 ### Sprint E — backend planning
 
-18. Move mixer-specific maxima out of neutral `ExecutionTopology` where they exist only for backend allocation.
-19. Derive CPU workspace requirements directly from compiled program semantics.
-20. Decompose/plan `CpuWorkspace`; remove avoidable token/chunk duplicate scratch families.
+18. [x] Move mixer-specific maxima out of neutral `ExecutionTopology` where they exist only for backend allocation.
+19. [x] Derive CPU workspace requirements directly from compiled program semantics (`CpuWorkspacePlan::from_program`).
+20. [x] Decompose/plan `CpuWorkspace`; remove avoidable token/chunk duplicate scratch families; source `conv_cache` from per-layer `ShortConvolutionSpec`.
 21. Centralize CPU linear storage dispatch.
 22. Centralize CPU ISA implementation metadata/selection.
 

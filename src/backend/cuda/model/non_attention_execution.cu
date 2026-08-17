@@ -102,7 +102,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
         launch_conv_decode_device(
             workspace_.conv_projected_.data(), convolution->conv_weight,
             convolution->conv_state.data(), workspace_.op_output_.data(),
-            resources_.program_.hidden, resources_.shape_.conv_cache,
+            resources_.program_.hidden, convolution->spec.cache_length,
             position_device_.data(), stream_.get());
         linear(workspace_.op_output_.data(), *convolution->conv_out,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
