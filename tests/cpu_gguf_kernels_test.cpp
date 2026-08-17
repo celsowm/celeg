@@ -52,6 +52,22 @@ struct BlockQ5_0 {
     uint8_t qh[4]{};
     uint8_t qs[16]{};
 };
+struct BlockQ4_1 {
+    uint16_t d = 0x3c00;
+    uint16_t dmin = 0x3c00;
+    uint8_t qs[16]{};
+};
+struct BlockQ8_0 {
+    uint16_t d = 0x3c00;
+    int8_t qs[32]{};
+};
+struct BlockQ5K {
+    uint16_t d = 0x3c00;
+    uint16_t dmin = 0;
+    uint8_t scales[12]{};
+    uint8_t qh[32]{};
+    uint8_t qs[128]{};
+};
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4K) == 144);
@@ -60,6 +76,9 @@ static_assert(sizeof(BlockQ2K) == 84);
 static_assert(sizeof(BlockQ3K) == 110);
 static_assert(sizeof(BlockQ4_0) == 18);
 static_assert(sizeof(BlockQ5_0) == 22);
+static_assert(sizeof(BlockQ4_1) == 20);
+static_assert(sizeof(BlockQ8_0) == 34);
+static_assert(sizeof(BlockQ5K) == 176);
 
 BlockQ4K unit_q4k() {
     BlockQ4K block;
@@ -74,6 +93,26 @@ BlockQ6K unit_q6k() {
     for (uint8_t& value : block.ql) value = 0x11;
     for (uint8_t& value : block.qh) value = 0xaa;
     for (int8_t& value : block.scales) value = 1;
+    return block;
+}
+
+BlockQ5K unit_q5k() {
+    BlockQ5K block;
+    for (uint8_t& value : block.scales) value = 1;
+    for (uint8_t& value : block.qh) value = 0;
+    for (uint8_t& value : block.qs) value = 0x11;
+    return block;
+}
+
+BlockQ8_0 unit_q8_0() {
+    BlockQ8_0 block;
+    for (int8_t& value : block.qs) value = 1;
+    return block;
+}
+
+BlockQ4_1 unit_q4_1() {
+    BlockQ4_1 block;
+    for (uint8_t& value : block.qs) value = 0x11;
     return block;
 }
 
@@ -209,6 +248,26 @@ int main() {
     for (size_t i = 0; i < std::size(known_q3k.scales); ++i) {
         known_q3k.scales[i] = static_cast<uint8_t>(7 + i * 11);
     }
+    BlockQ5K known_q5k = unit_q5k();
+    for (uint8_t& value : known_q5k.qs) value = 0x11;
+    std::vector<BlockQ8_0> known_q8_0(8, unit_q8_0());
+    for (BlockQ8_0& block : known_q8_0) {
+        for (int8_t& value : block.qs) value = 1;
+    }
+    std::vector<BlockQ4_1> known_q4_1(8, unit_q4_1());
+    for (BlockQ4_1& block : known_q4_1) {
+        for (uint8_t& value : block.qs) value = 0x11;
+    }
+    std::vector<float> dequant_q4_1(32);
+    celeg::cpu_gguf_dequantize_row(
+        celeg::CpuGgufMatrix{
+            celeg::GgmlType::Q4_1, 1, 32,
+            reinterpret_cast<const std::byte*>(&known_q4_1[0]), sizeof(known_q4_1[0])},
+        0, dequant_q4_1.data());
+    for (size_t i = 0; i < dequant_q4_1.size(); ++i) {
+        const float expected = 1.0f * static_cast<float>(0x11 & 0x0f) + 1.0f;
+        CELEG_TEST_CHECK(std::abs(dequant_q4_1[i] - expected) < 1e-6f);
+    }
     for (const auto matrix : {
              celeg::CpuGgufMatrix{
                  celeg::GgmlType::Q4_K, 1, 256,
@@ -223,9 +282,21 @@ int main() {
                  reinterpret_cast<const std::byte*>(&known_q2k),
                  sizeof(known_q2k)},
              celeg::CpuGgufMatrix{
-                 celeg::GgmlType::Q3_K, 1, 256,
-                 reinterpret_cast<const std::byte*>(&known_q3k),
-                 sizeof(known_q3k)}}) {
+                  celeg::GgmlType::Q3_K, 1, 256,
+                  reinterpret_cast<const std::byte*>(&known_q3k),
+                  sizeof(known_q3k)},
+             celeg::CpuGgufMatrix{
+                  celeg::GgmlType::Q5_K, 1, 256,
+                  reinterpret_cast<const std::byte*>(&known_q5k),
+                  sizeof(known_q5k)},
+             celeg::CpuGgufMatrix{
+                  celeg::GgmlType::Q8_0, 1, 256,
+                  reinterpret_cast<const std::byte*>(known_q8_0.data()),
+                  known_q8_0.size() * sizeof(BlockQ8_0)},
+             celeg::CpuGgufMatrix{
+                  celeg::GgmlType::Q4_1, 1, 256,
+                  reinterpret_cast<const std::byte*>(known_q4_1.data()),
+                  known_q4_1.size() * sizeof(BlockQ4_1)}}) {
         std::vector<float> dequantized(256);
         celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
         float reference = 0.0f;
@@ -243,28 +314,32 @@ int main() {
         CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
     }
 
-    BlockQ4_0 known_q4_0;
-    known_q4_0.d = 0x3800;
-    for (size_t i = 0; i < std::size(known_q4_0.qs); ++i) {
-        known_q4_0.qs[i] = static_cast<uint8_t>(i * 37 + 11);
+    std::vector<BlockQ4_0> known_q4_0(8);
+    for (BlockQ4_0& block : known_q4_0) {
+        block.d = 0x3800;
+        for (size_t i = 0; i < std::size(block.qs); ++i) {
+            block.qs[i] = static_cast<uint8_t>(i * 37 + 11);
+        }
     }
-    BlockQ5_0 known_q5_0;
-    known_q5_0.d = 0x3800;
-    for (size_t i = 0; i < std::size(known_q5_0.qs); ++i) {
-        known_q5_0.qs[i] = static_cast<uint8_t>(i * 29 + 7);
-    }
-    for (size_t i = 0; i < std::size(known_q5_0.qh); ++i) {
-        known_q5_0.qh[i] = static_cast<uint8_t>(i * 43 + 3);
+    std::vector<BlockQ5_0> known_q5_0(8);
+    for (BlockQ5_0& block : known_q5_0) {
+        block.d = 0x3800;
+        for (size_t i = 0; i < std::size(block.qs); ++i) {
+            block.qs[i] = static_cast<uint8_t>(i * 29 + 7);
+        }
+        for (size_t i = 0; i < std::size(block.qh); ++i) {
+            block.qh[i] = static_cast<uint8_t>(i * 43 + 3);
+        }
     }
     for (const auto matrix : {
              celeg::CpuGgufMatrix{
                  celeg::GgmlType::Q4_0, 1, 256,
-                 reinterpret_cast<const std::byte*>(&known_q4_0),
-                 sizeof(known_q4_0)},
+                 reinterpret_cast<const std::byte*>(known_q4_0.data()),
+                 known_q4_0.size() * sizeof(BlockQ4_0)},
              celeg::CpuGgufMatrix{
                  celeg::GgmlType::Q5_0, 1, 256,
-                 reinterpret_cast<const std::byte*>(&known_q5_0),
-                 sizeof(known_q5_0)}}) {
+                 reinterpret_cast<const std::byte*>(known_q5_0.data()),
+                 known_q5_0.size() * sizeof(BlockQ5_0)}}) {
         std::vector<float> dequantized(256);
         celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
         float reference = 0.0f;
@@ -277,7 +352,7 @@ int main() {
         const float optimized = celeg::select_cpu_gguf_dot_kernel(isa)(
             matrix.data, matrix.type, activation.data(), matrix.cols);
         const float tolerance =
-            1e-3f * std::max(1.0f, std::abs(reference));
+            1e-4f * std::max(1.0f, std::abs(reference));
         CELEG_TEST_CHECK(std::abs(scalar - reference) < tolerance);
         CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
         CELEG_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);

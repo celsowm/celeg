@@ -1137,24 +1137,34 @@ Do not change the fallback based on aesthetics.
 
 ### 12.4.1 Audit outcome (Q2_K/Q3_K)
 
-Decision: **keep repack as the preferred production path** for Q2_K/Q3_K.
+Original decision (item 29): keep repack as the preferred production path for
+Q2_K/Q3_K. **Reversed.** Q2_K and Q3_K now have first-class AVX2 native dots
+added in `cpu_gguf_dot_avx2` (per-16-group scales, `dmin` for Q2_K; 3-bit
+unpack plus `hmask` high-bit reconstruction for Q3_K), alongside the existing
+Q4_0/Q5_0/Q4_K/Q6_K/Q8_0/Q5_K/Q4_1 AVX2 kernels. `gguf_type_is_native_dot`
+therefore returns `true` for every `Q_*` GGUF type.
 
-- The scalar native Q2_K/Q3_K dots in `cpu_gguf_dot_scalar` are correct: the
-  dot and the dequant-reference use identical formulas (verified by
-  `cpu_gguf_kernels_test.cpp`, which now exercises Q2_K/Q3_K for both the scalar
-  and AVX2 ISA selections). They remain as a documented reference/fallback.
-- The AVX2 dispatcher (`cpu_gguf_dot_avx2`) has no Q2_K/Q3_K case and falls back
-  to the scalar function. So "native routing" on AVX2 would run *scalar*, while
-  the current repack-to-groupwise-Q4 path runs the *vectorized* Q4_K AVX2 dot.
-  Vectorized beats scalar, so repack is the faster production path.
-- Repack upgrades precision (4-bit groupwise > 2/3-bit K-quant), so it is not a
-  fidelity regression.
-- A native AVX2/AVX-VNNI Q2_K/Q3_K kernel (per-16 scales, `dmin`, 2/3-bit
-  unpacking) is high-complexity and high-risk, and the refactor policy forbids
-  a new quantized path without quality + performance tests. Per the
-  measure-first rule, there is no evidence that the repack path is a decode
-  bottleneck, so this optimization is not justified. Revisit only if a profiled
-  model shows Q2_K/Q3_K repack dominating decode time.
+Consequence for routing: `CpuGgufWeightCodec::matrix()` and `concat()` now use
+`!gguf_type_is_native_dot(type) || (cols % 256) != 0` as the repack gate, so
+any `Q_*` matrix whose column count is a multiple of 256 takes the native dot
+path and is **not** repacked. This is type-agnostic: a mixed-quant GGUF (e.g. a
+Q4_0 file that sprinkles in Q4_1, or a profile that mixes Q2_K/Q3_K with K-quants)
+loads and runs through the native path without per-type allow-lists. Non-256
+widths and non-`Q_*` types still repack to groupwise Q4.
+
+- The scalar native Q2_K/Q3_K dots in `cpu_gguf_dot_scalar` remain correct and
+  are verified against the dequant-reference by `cpu_gguf_kernels_test.cpp`,
+  which now exercises every `Q_*` type (including Q2_K/Q3_K/Q5_K/Q8_0/Q4_1) for
+  both the scalar and AVX2 ISA selections.
+- The AVX2 dispatcher now has Q2_K/Q3_K cases; on AVX2 the native path is
+  vectorized, no longer scalar-fallback.
+- Repack is still available for non-256 widths and remains a precision upgrade
+  (4-bit groupwise > 2/3-bit K-quant) where used; the *type* is no longer the
+  repack trigger.
+- A future performance comparison (native K-quant dot vs repack-to-Q4) is still
+  warranted per the measure-first rule if a profiled model shows repack
+  dominating decode time, but that is now a tuning choice rather than a
+  correctness/loading limitation.
 
 ## 12.5 Required validation for every new native quantized path
 
@@ -1339,10 +1349,11 @@ Use small commits that each remove one old representation completely.
 ### Separate performance project
 
 28. [x] Design and implement native Q4_0/Q5_0 × Q8_K CPU dots (scalar + AVX2) and route 256-aligned Q4_0/Q5_0 through the native path. End-to-end throughput benchmark still pending a real aligned Q4_0/Q5_0 checkpoint.
-29. [x] Evaluate Q2_K/Q3_K optimized native execution vs repack — decision: keep repack (AVX2 has no native Q2_K/Q3_K kernel, so native routing would run slower scalar; repack reuses the vectorized Q4_K AVX2 dot and upgrades precision). Scalar native Q2_K/Q3_K dots retained as verified reference (cpu_gguf_kernels_test.cpp).
+29. [x] Evaluate Q2_K/Q3_K optimized native execution vs repack — original decision: keep repack (AVX2 had no native Q2_K/Q3_K kernel, so native routing would run slower scalar; repack reuses the vectorized Q4_K AVX2 dot and upgrades precision). **Reversed in the mixed-quant follow-up**: Q2_K/Q3_K AVX2 native dots were added, so `gguf_type_is_native_dot` now returns `true` for every `Q_*` type and the codec routes all 256-aligned `Q_*` matrices natively (type-agnostic mixed-quant loading). Scalar native Q2_K/Q3_K dots retained as verified reference (cpu_gguf_kernels_test.cpp). A perf comparison native-dot vs repack remains open per the measure-first rule.
 30. [x] Design/test non-256-width activation tails only if real models/performance justify it — decision: no evidence justifies it; repack fallback retained (§12.3.1). Revisit only when a profiled model shows a measured cost.
+31. [x] Mixed-quant GGUF loading + first-class native dots for every `Q_*` type — all nine `Q_*` GGUF quant types (Q2_K, Q3_K, Q4_0, Q4_1, Q5_0, Q5_K, Q6_K, Q8_0, Q4_K) now have scalar **and** AVX2 native dots in `cpu_gguf_dot_scalar`/`cpu_gguf_dot_avx2`; `gguf_type_is_native_dot`/`gguf_type_dequantizable` gate dequant/routing uniformly (no per-type allow-lists); `matrix()` and `concat()` repack only for non-256 widths or non-`Q_*` types. Validated: `cpu_gguf_kernels_test` (avx2 oracle across all types incl. Q4_1), and real-weight native load of `Qwen3.5-0.8B-Q4_0.gguf` (which mixes in Q4_1) plus Q5_K_M/Q4_0 regressions.
 
-Items 28-30 must not block completion of the structural extensibility plan.
+Items 28-31 must not block completion of the structural extensibility plan.
 
 ---
 

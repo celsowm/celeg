@@ -69,6 +69,11 @@ struct BlockQ8_0 {
     uint16_t d;
     int8_t qs[32];
 };
+struct BlockQ4_1 {
+    uint16_t d;
+    uint16_t dmin;
+    uint8_t qs[16];
+};
 #pragma pack(pop)
 
 static_assert(sizeof(BlockQ4K) == 144);
@@ -79,6 +84,7 @@ static_assert(sizeof(BlockQ6K) == 210);
 static_assert(sizeof(BlockQ4_0) == 18);
 static_assert(sizeof(BlockQ5_0) == 22);
 static_assert(sizeof(BlockQ8_0) == 34);
+static_assert(sizeof(BlockQ4_1) == 20);
 
 float fp16_to_float(uint16_t bits) {
     const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
@@ -215,11 +221,8 @@ size_t CpuGgufMatrix::row_bytes() const {
 }
 
 void CpuGgufMatrix::validate() const {
-    if (type != GgmlType::Q2_K && type != GgmlType::Q3_K &&
-        type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
-        type != GgmlType::Q8_0 && type != GgmlType::Q4_K && type != GgmlType::Q5_K &&
-        type != GgmlType::Q6_K) {
-        throw std::invalid_argument("CPU GGUF matrix requires Q2_K, Q3_K, Q4_0, Q5_0, Q8_0, Q4_K, Q5_K or Q6_K");
+    if (!gguf_type_dequantizable(type)) {
+        throw std::invalid_argument("CPU GGUF matrix requires a supported quantization type");
     }
     if (rows == 0 || cols == 0 || !data || row_bytes() == 0 ||
         bytes != static_cast<size_t>(rows) * row_bytes()) {
@@ -440,6 +443,32 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         }
         return total;
     }
+    if (type == GgmlType::Q4_1) {
+        const auto* weights = reinterpret_cast<const BlockQ4_1*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const BlockQ4_1& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                const float d = fp16_to_float(weight.d);
+                const float m = fp16_to_float(weight.dmin);
+                int dot = 0;
+                for (int j = 0; j < 16; ++j) {
+                    const int low = weight.qs[j] & 0x0f;
+                    const int high = weight.qs[j] >> 4;
+                    dot += low *
+                        static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + j]);
+                    dot += high *
+                        static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + j + 16]);
+                }
+                const int sum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
+                block_total += d * static_cast<float>(dot) +
+                    m * static_cast<float>(sum);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
     if (type == GgmlType::Q8_0) {
         const auto* weights = reinterpret_cast<const BlockQ8_0*>(packed_row);
         for (size_t b = 0; b < blocks; ++b) {
@@ -528,6 +557,18 @@ CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa) {
     return nullptr;
 }
 
+bool gguf_type_is_native_dot(GgmlType type) {
+    return type == GgmlType::Q2_K || type == GgmlType::Q3_K ||
+        type == GgmlType::Q4_0 || type == GgmlType::Q5_0 ||
+        type == GgmlType::Q8_0 || type == GgmlType::Q4_K ||
+        type == GgmlType::Q5_K || type == GgmlType::Q6_K ||
+        type == GgmlType::Q4_1;
+}
+
+bool gguf_type_dequantizable(GgmlType type) {
+    return gguf_type_is_native_dot(type);
+}
+
 void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
                              float* output) {
     matrix.validate();
@@ -608,6 +649,22 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         }
         return;
     }
+    if (matrix.type == GgmlType::Q4_1) {
+        const auto* weights = reinterpret_cast<const BlockQ4_1*>(packed);
+        for (size_t b = 0; b < matrix.cols / 32; ++b) {
+            const BlockQ4_1& weight = weights[b];
+            const float d = fp16_to_float(weight.d);
+            const float m = fp16_to_float(weight.dmin);
+            for (int j = 0; j < 16; ++j) {
+                const uint8_t packed_value = weight.qs[j];
+                output[b * 32 + static_cast<size_t>(j)] =
+                    d * static_cast<float>(packed_value & 0x0f) + m;
+                output[b * 32 + static_cast<size_t>(j + 16)] =
+                    d * static_cast<float>(packed_value >> 4) + m;
+            }
+        }
+        return;
+    }
     if (matrix.type == GgmlType::Q8_0) {
         const auto* weights = reinterpret_cast<const BlockQ8_0*>(packed);
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
@@ -657,6 +714,9 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
             }
         }
         return;
+    }
+    if (matrix.type != GgmlType::Q6_K) {
+        throw std::invalid_argument("unsupported CPU GGUF dequantize type");
     }
     const auto* weights = reinterpret_cast<const BlockQ6K*>(packed);
     for (size_t b = 0; b < blocks; ++b) {

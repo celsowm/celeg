@@ -98,11 +98,9 @@ std::vector<float> read_vector(const HostTensorView& tensor,
 CpuGgufMatrix gguf_matrix(const HostTensorView& tensor,
                           const std::string& name) {
     const GgmlType type = ggml_type_from_block_encoding(tensor.block_encoding);
-    if (type != GgmlType::Q2_K && type != GgmlType::Q3_K &&
-        type != GgmlType::Q4_0 && type != GgmlType::Q5_0 &&
-        type != GgmlType::Q8_0 && type != GgmlType::Q4_K && type != GgmlType::Q5_K &&
-        type != GgmlType::Q6_K) {
-        throw std::runtime_error("unsupported CPU GGUF linear quantization: " + name);
+    if (!gguf_type_dequantizable(type)) {
+        throw std::runtime_error("unsupported CPU GGUF linear quantization: " +
+            name + " (" + std::string(ggml_type_name(type)) + ")");
     }
     CpuGgufMatrix matrix;
     matrix.type = type;
@@ -160,15 +158,13 @@ CpuLinearWeight CpuWeightCodec::matrix(
     }
     if (tensor.dtype == TensorDType::Quantized) {
         const CpuGgufMatrix matrix = gguf_matrix(tensor, name);
-        /// The native GGUF dot path re-quantizes activations into 256-wide Q8_K
-        /// superblocks regardless of the weight block size, so a weight matrix
-        /// whose column count is not a multiple of 256 cannot use it and must be
-        /// repacked. Q4_0/Q5_0 gain dedicated native dot kernels, so they follow
-        /// the same rule as the K-types: keep the native path when 256-aligned.
-        /// Q2_K/Q3_K are still repacked because their native dots are not wired
-        /// into the production path yet.
-        if (matrix.type == GgmlType::Q2_K || matrix.type == GgmlType::Q3_K ||
-            (matrix.cols % 256) != 0) {
+        /// Every GGUF quant type now has a native dot kernel, so route it
+        /// natively whenever the column count is a multiple of 256. Anything
+        /// else (non-256 width, or a type without a native kernel) is
+        /// dequantized and repacked into groupwise Q4, which keeps mixed-quant
+        /// GGUF files (e.g. a Q4_0 file that sprinkles in Q4_1 tensors)
+        /// loadable without special casing.
+        if (!gguf_type_is_native_dot(matrix.type) || (matrix.cols % 256) != 0) {
             const std::vector<float> values = dequantize_matrix(matrix);
             return CpuLinearWeight::from_q4(quantize_float_groupwise_q4(
                 values.data(), matrix.rows, matrix.cols, group_size_));
@@ -264,8 +260,8 @@ CpuLinearWeight CpuWeightCodec::concat(
         matrices.reserve(tensors.size());
         for (size_t i = 0; i < tensors.size(); ++i) {
             matrices.push_back(gguf_matrix(tensors[i], parts[i].first));
-            needs_repack = needs_repack || matrices.back().type == GgmlType::Q2_K ||
-                matrices.back().type == GgmlType::Q3_K ||
+            needs_repack = needs_repack ||
+                !gguf_type_is_native_dot(matrices.back().type) ||
                 (matrices.back().cols % 256) != 0;
         }
         if (needs_repack) {

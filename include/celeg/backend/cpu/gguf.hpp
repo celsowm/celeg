@@ -79,6 +79,8 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
                           const CpuQ8KBlock* activation, size_t cols);
 CpuGgufDotFunction select_cpu_gguf_dot_kernel(CpuIsa isa);
 CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa);
+bool gguf_type_is_native_dot(GgmlType type);
+bool gguf_type_dequantizable(GgmlType type);
 void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
                              float* output);
 
