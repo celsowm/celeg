@@ -24,8 +24,12 @@ Audit baseline: `master` at `32872bc19d992cf0c9bfb8ac9fdd5fece4931f18`.
   - CPU packed-MoE branch no longer unconditionally dereferences `moe_semantics.shared` or demands an (never-planned) `MoeSharedGateWeight` request — both latent crashes for packed models made reachable by `facb607`'s layout fix.
   - 11 poisoned-tensor-name regression test added (`tests/fake_repository_backend_boundary_test.cpp`) proving MoE layout/role resolution is plan-driven, not name-matching; extended to cover `moe_expert_tensor_names()` and `MoeRouterBias` planning.
   - Verified: CPU ctest 77/77, CUDA ctest 87/87; real-model checks — CPU Ling-3.0-tiny-int4 decode (fixed by this sprint), CUDA LFM2.5-350M deterministic with cross-KV-mode parity, CUDA Nemotron3-Nano-4B-GGUF identical to baseline. Known pre-existing issue (not caused by this sprint, unchanged): CUDA decode of Ling-3.0-tiny-int4 segfaults on the 12GB reference GPU (master behaves identically; the int4 experts dequantize to ~22GB of BF16 device storage, which exceeds VRAM).
-  - **Remaining sub-gap — MTP layers are still outside the weight plan.** `mtp_weight_setup.cpp` constructs MTP expert spellings in one local helper (`mtp_expert_names`) that feeds the same resolved-name loader API, so the naming knowledge is now centralized and small, but routing MTP through the real plan needs weight-plan support for MTP layers first (no `Mtp*` tensor roles exist yet). This is the only Sprint C residue.
-- **Sprint D (inference extensibility) through Sprint F (extension ABI/orchestration): not started.**
+- **Sprint D — inference extensibility: done.**
+  - 12–15 Layer inference-rule catalog `ILayerInferenceRule` implemented in `src/model/inference/rules.hpp`, `rules.cpp`, `rules_attention.cpp`, and `rules_recurrent.cpp`. All 7 mixer grammar rules (`StandardAttentionRule`, `LatentAttentionRule`, `FusedGatedDeltaRule`, `FactorizedGatedDeltaRule`, `Mamba2Rule`, `ShortConvolutionRule`, `MlpOnlyRule`) emit both semantic mixer specs and physical tensor-role bindings directly. The central `has_mamba/has_mla/has_kda/...` ordered cascade and duplicate binding dispatch deleted — `afd1c27`.
+  - 16 `NormalizedModelMetadata` decomposed into typed fact groups (`CoreModelFacts`, `AttentionFacts`, `LatentAttentionFacts`, `ShortConvolutionFacts`, `GatedDeltaFacts`, `Mamba2Facts`, `MoeFacts`). Stringly-typed MoE fields replaced with `MoeRouterScoreFunction` and `MoeRouterSelectionMethod` enums.
+  - 17 Generic `input.is_gguf()` semantic branches replaced with `DecayParameterEncoding` on `GatedDeltaFacts` and `Mamba2Facts`, resolved at format boundary.
+  - Verified: CPU ctest 78/78, CUDA ctest 88/88; custom grammar extension test passing (`tests/layer_inference_rule_test.cpp`).
+- **Sprint E (backend planning) through Sprint F (extension ABI/orchestration): not started.**
 
 This plan consolidates the extensibility findings from the backend SOLID review,
 the follow-up source audit, the semantic-state cleanup work, and the discussion
@@ -1226,14 +1230,14 @@ Use small commits that each remove one old representation completely.
 10. [x] Delete equivalent CPU re-inference where found. (CPU was already plan-driven; picked up the existence-aware fix for free via `facb607`, the int4 virtual-name resolution fix, and the packed-branch shared-expert guards)
 11. [x] Add poisoning/alternate-spelling regression tests proving backends consume roles/locators. (`facb607`, extended for `moe_expert_tensor_names()`/`MoeRouterBias`)
 
-### Sprint D — inference extensibility
+### Sprint D — inference extensibility — DONE
 
-12. Introduce a layer inference-rule catalog.
-13. Move existing mixer grammar detection into rules without semantic change.
-14. Make each rule emit both semantics and tensor-role bindings.
-15. Delete the central ordered `has_mamba/has_mla/has_kda/...` cascade and duplicate binding dispatch.
-16. Decompose `NormalizedModelMetadata` into typed fact groups.
-17. Replace remaining generic `is_gguf()` semantic branches with normalized encoding facts.
+12. [x] Introduce a layer inference-rule catalog. (`afd1c27`)
+13. [x] Move existing mixer grammar detection into rules without semantic change. (`afd1c27`)
+14. [x] Make each rule emit both semantics and tensor-role bindings. (`afd1c27`)
+15. [x] Delete the central ordered `has_mamba/has_mla/has_kda/...` cascade and duplicate binding dispatch. (`afd1c27`)
+16. [x] Decompose `NormalizedModelMetadata` into typed fact groups.
+17. [x] Replace remaining generic `is_gguf()` semantic branches with normalized encoding facts (`DecayParameterEncoding`).
 
 ### Sprint E — backend planning
 
