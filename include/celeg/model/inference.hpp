@@ -138,66 +138,124 @@ public:
     }
 };
 
-struct NormalizedModelMetadata {
+/// Decay parameter encoding in checkpoint weights: LogA (log-space parameter,
+/// needs exp transform at load/runtime) or Pretransformed (linear/already-decayed).
+enum class DecayParameterEncoding : std::uint8_t {
+    LogA,
+    Pretransformed,
+};
+
+/// Scoring function for MoE routing.
+enum class MoeRouterScoreFunction : std::uint8_t {
+    Sigmoid,
+    Softmax,
+};
+
+/// Expert selection algorithm for MoE routing.
+enum class MoeRouterSelectionMethod : std::uint8_t {
+    TopK,
+    Greedy,
+    NoauxTc,
+};
+
+/// Core architectural dimensions and global parameters shared across layer families.
+struct CoreModelFacts {
     std::optional<int> hidden_size;
     LayerScopedValue<int> intermediate_size;
     std::optional<int> layer_count;
-    LayerScopedValue<int> query_heads;
-    LayerScopedValue<int> key_value_heads;
-    LayerScopedValue<int> head_dim;
-    std::optional<int> mamba_intermediate;
-    std::optional<int> mamba_state_size;
-    std::optional<int> mamba_time_step_rank;
-    std::optional<int> mamba_num_heads;
-    std::optional<int> mamba_head_dim;
-    std::optional<int> mamba_group_count;
-    std::optional<int> mamba_conv_kernel;
-    std::optional<int> mamba_chunk_size;
     std::optional<int> vocab_size;
     std::optional<int> context_length;
     std::optional<float> norm_epsilon;
     std::optional<float> embedding_multiplier;
-    std::optional<float> attention_multiplier;
     std::optional<float> residual_multiplier;
     std::optional<float> logits_multiplier;
     std::optional<float> logits_divisor;
-    std::optional<int> shortconv_cache;
-    InferredPositionEncoding position_encoding = UnresolvedPositionEncoding{};
     std::optional<int> bos_token_id;
     std::vector<int> eos_token_ids;
     std::optional<int> pad_token_id;
+    std::optional<bool> tied_embeddings;
+    std::optional<bool> feed_forward_auto_adjust;
+};
+
+/// Facts governing attention layer geometry, normalization, and positional encoding.
+struct AttentionFacts {
+    LayerScopedValue<int> query_heads;
+    LayerScopedValue<int> key_value_heads;
+    LayerScopedValue<int> head_dim;
+    std::optional<float> attention_multiplier;
+    InferredPositionEncoding position_encoding = UnresolvedPositionEncoding{};
     std::optional<bool> query_key_norm;
     std::optional<bool> xsa_projection;
     std::optional<float> xsa_minimum_norm_squared;
-    std::optional<bool> tied_embeddings;
-    std::vector<EvidenceItem> evidence;
-    std::optional<bool> feed_forward_auto_adjust;
+};
+
+/// Facts governing factorized/multi-head latent attention (MLA).
+struct LatentAttentionFacts {
+    std::optional<int> query_rank;
+    std::optional<int> kv_rank;
+    std::optional<int> query_head_dim;
+    std::optional<int> query_nope_dim;
+    std::optional<int> query_rope_dim;
+    std::optional<int> value_head_dim;
+};
+
+/// Facts governing short-convolution mixer layers.
+struct ShortConvolutionFacts {
+    std::optional<int> cache_length;
+};
+
+/// Facts governing recurrent gated-delta-net / linear-attention layers.
+struct GatedDeltaFacts {
+    std::optional<int> conv_kernel;
+    std::optional<int> key_heads;
+    std::optional<int> value_heads;
+    std::optional<int> key_dim;
+    std::optional<int> value_dim;
+    std::optional<bool> safe_decay;
+    std::optional<float> decay_lower_bound;
+    DecayParameterEncoding decay_encoding = DecayParameterEncoding::LogA;
+};
+
+/// Facts governing Mamba-2 SSM mixer layers.
+struct Mamba2Facts {
+    std::optional<int> intermediate;
+    std::optional<int> state_size;
+    std::optional<int> time_step_rank;
+    std::optional<int> num_heads;
+    std::optional<int> head_dim;
+    std::optional<int> group_count;
+    std::optional<int> conv_kernel;
+    std::optional<int> chunk_size;
+    DecayParameterEncoding decay_encoding = DecayParameterEncoding::LogA;
+};
+
+/// Facts governing mixture-of-experts (MoE) routing and layout.
+struct MoeFacts {
     std::optional<int> first_dense_layer;
-    std::optional<int> recurrent_conv_kernel;
-    std::optional<int> recurrent_key_heads;
-    std::optional<int> recurrent_value_heads;
-    std::optional<int> recurrent_key_dim;
-    std::optional<int> recurrent_value_dim;
-    std::optional<bool> recurrent_safe_decay;
-    std::optional<float> recurrent_decay_lower_bound;
-    std::optional<int> latent_query_rank;
-    std::optional<int> latent_kv_rank;
-    std::optional<int> latent_query_head_dim;
-    std::optional<int> latent_query_nope_dim;
-    std::optional<int> latent_query_rope_dim;
-    std::optional<int> latent_value_head_dim;
-    std::optional<int> moe_experts;
-    std::optional<int> moe_experts_per_token;
-    std::optional<int> moe_intermediate;
-    std::optional<int> moe_shared_intermediate;
-    std::optional<int> moe_routing_groups;
-    std::optional<int> moe_total_routing_groups;
-    std::optional<int> moe_group_score_top_k;
-    std::optional<bool> moe_normalize_topk;
-    std::optional<bool> moe_expert_bias;
-    std::optional<float> moe_routed_scaling;
-    std::optional<std::string> moe_score_function;
-    std::optional<std::string> moe_selection_method;
+    std::optional<int> experts;
+    std::optional<int> experts_per_token;
+    std::optional<int> intermediate;
+    std::optional<int> shared_intermediate;
+    std::optional<int> routing_groups;
+    std::optional<int> total_routing_groups;
+    std::optional<int> group_score_top_k;
+    std::optional<bool> normalize_topk;
+    std::optional<bool> expert_bias;
+    std::optional<float> routed_scaling;
+    std::optional<MoeRouterScoreFunction> score_function;
+    std::optional<MoeRouterSelectionMethod> selection_method;
+};
+
+/// Normalized checkpoint metadata decomposed into typed fact groups.
+struct NormalizedModelMetadata {
+    CoreModelFacts core;
+    AttentionFacts attention;
+    LatentAttentionFacts latent_attention;
+    ShortConvolutionFacts short_conv;
+    GatedDeltaFacts gated_delta;
+    Mamba2Facts mamba2;
+    MoeFacts moe;
+    std::vector<EvidenceItem> evidence;
 };
 
 struct TensorInventoryEntry {

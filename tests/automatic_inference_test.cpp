@@ -379,9 +379,9 @@ int main() {
     scoped.values["conventional.attention.head_count_kv"] =
         std::vector<int64_t>{2, 1};
     const auto scoped_facts = celeg::normalize_model_metadata(scoped);
-    CELEG_TEST_CHECK(scoped_facts.key_value_heads.global == std::nullopt);
-    CELEG_TEST_CHECK(scoped_facts.key_value_heads.value_for(0) == std::optional<int>{2});
-    CELEG_TEST_CHECK(scoped_facts.key_value_heads.value_for(1) == std::optional<int>{1});
+    CELEG_TEST_CHECK(scoped_facts.attention.key_value_heads.global == std::nullopt);
+    CELEG_TEST_CHECK(scoped_facts.attention.key_value_heads.value_for(0) == std::optional<int>{2});
+    CELEG_TEST_CHECK(scoped_facts.attention.key_value_heads.value_for(1) == std::optional<int>{1});
 
     auto invalid_length = scoped;
     invalid_length.values["conventional.attention.head_count_kv"] =
@@ -413,18 +413,18 @@ int main() {
     // InferredRopePosition carrying those values through unmodified.
     const auto no_rope_facts = celeg::normalize_model_metadata(no_rope_gguf_metadata());
     CELEG_TEST_CHECK(std::holds_alternative<celeg::NoPositionEncodingSpec>(
-        no_rope_facts.position_encoding));
+        no_rope_facts.attention.position_encoding));
     const auto rope_facts = celeg::normalize_model_metadata(gguf_metadata());
     CELEG_TEST_CHECK(std::holds_alternative<celeg::InferredRopePosition>(
-        rope_facts.position_encoding));
-    CELEG_TEST_CHECK(std::get<celeg::InferredRopePosition>(rope_facts.position_encoding).theta ==
+        rope_facts.attention.position_encoding));
+    CELEG_TEST_CHECK(std::get<celeg::InferredRopePosition>(rope_facts.attention.position_encoding).theta ==
         10000.0);
 
     auto ling_alias = metadata();
     ling_alias.values.erase("qk_norm");
     ling_alias.values["use_qk_norm"] = true;
     const auto ling_facts = celeg::normalize_model_metadata(ling_alias);
-    CELEG_TEST_CHECK(ling_facts.query_key_norm == std::optional<bool>{true});
+    CELEG_TEST_CHECK(ling_facts.attention.query_key_norm == std::optional<bool>{true});
 
     celeg::CheckpointView ling_checkpoint;
     ling_checkpoint.metadata = ling_metadata();

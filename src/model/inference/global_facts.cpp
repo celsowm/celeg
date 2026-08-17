@@ -46,7 +46,7 @@ const TensorInventoryEntry* find_embedding(const InferenceInput& input) {
             ResolutionFailureKind::MissingTensorRole,
             "automatic resolution could not find token embedding");
     }
-    if (!shape_is(*embedding, {*m.vocab_size, *m.hidden_size})) {
+    if (!shape_is(*embedding, {*m.core.vocab_size, *m.core.hidden_size})) {
         fail(
             ResolutionFailureKind::ShapeConstraintViolation,
             "token embedding shape does not agree with normalized metadata");
@@ -66,12 +66,12 @@ void validate_layer_inventory(const InferenceInput& input) {
         }
     }
 
-    if (layers.size() != static_cast<size_t>(*m.layer_count)) {
+    if (layers.size() != static_cast<size_t>(*m.core.layer_count)) {
         fail(
             ResolutionFailureKind::IncompleteLayerSchedule,
             "tensor inventory layer count does not agree with metadata");
     }
-    for (int layer = 0; layer < *m.layer_count; ++layer) {
+    for (int layer = 0; layer < *m.core.layer_count; ++layer) {
         if (!layers.contains(layer)) {
             fail(
                 ResolutionFailureKind::IncompleteLayerSchedule,
@@ -88,7 +88,7 @@ std::vector<int> infer_intermediate_sizes(
     result.reserve(static_cast<size_t>(context.layer_count));
 
     for (int layer = 0; layer < context.layer_count; ++layer) {
-        const std::optional<int> value = m.intermediate_size.value_for(layer);
+        const std::optional<int> value = m.core.intermediate_size.value_for(layer);
         const std::string index = std::to_string(layer);
 
         const TensorInventoryEntry* ffn_up =
@@ -121,7 +121,7 @@ std::vector<int> infer_intermediate_sizes(
 
         const bool tensor_defines_intermediate =
             ffn_up && ffn_up->shape.size() == 2 && ffn_up->shape[0] > 0 &&
-            m.feed_forward_auto_adjust.value_or(false);
+            m.core.feed_forward_auto_adjust.value_or(false);
         if (!value.has_value() || *value <= 0 || tensor_defines_intermediate) {
             if (ffn_up && ffn_up->shape.size() == 2 && ffn_up->shape[0] > 0) {
                 result.push_back(static_cast<int>(ffn_up->shape[0]));
@@ -140,7 +140,7 @@ void initialize_graph(CanonicalInferenceContext& context) {
     auto& graph = context.facts.graph;
     const auto& numerical_policy = context.facts.numerical_policy;
 
-    graph.hidden = *m.hidden_size;
+    graph.hidden = *m.core.hidden_size;
     graph.final_norm = {
         numerical_policy.norm_eps,
         NormWeightKind::Scale};
@@ -189,14 +189,14 @@ void initialize_graph(CanonicalInferenceContext& context) {
 CanonicalInferenceContext initialize_canonical_facts(
     const InferenceInput& input) {
     const auto& m = input.metadata;
-    require_positive(m.hidden_size, "hidden_size");
-    require_positive(m.layer_count, "layer_count");
-    require_positive(m.vocab_size, "vocab_size");
-    require_positive(m.context_length, "context_length");
+    require_positive(m.core.hidden_size, "hidden_size");
+    require_positive(m.core.layer_count, "layer_count");
+    require_positive(m.core.vocab_size, "vocab_size");
+    require_positive(m.core.context_length, "context_length");
 
-    if (!m.bos_token_id.has_value() || !m.pad_token_id.has_value() ||
-        *m.bos_token_id < 0 || *m.pad_token_id < 0 ||
-        m.eos_token_ids.empty()) {
+    if (!m.core.bos_token_id.has_value() || !m.core.pad_token_id.has_value() ||
+        *m.core.bos_token_id < 0 || *m.core.pad_token_id < 0 ||
+        m.core.eos_token_ids.empty()) {
         fail(
             ResolutionFailureKind::ConflictingMetadata,
             "token IDs are incomplete");
@@ -207,12 +207,12 @@ CanonicalInferenceContext initialize_canonical_facts(
     validate_layer_inventory(input);
 
     context.facts.resolution_mode = "automatic";
-    context.facts.tied_embeddings = m.tied_embeddings.value_or(false);
+    context.facts.tied_embeddings = m.core.tied_embeddings.value_or(false);
     context.facts.evidence = m.evidence;
 
-    context.layer_count = *m.layer_count;
+    context.layer_count = *m.core.layer_count;
     context.dense_start =
-        m.first_dense_layer.value_or(context.layer_count);
+        m.moe.first_dense_layer.value_or(context.layer_count);
     if (context.dense_start < 0 ||
         context.dense_start > context.layer_count) {
         fail(
@@ -220,19 +220,19 @@ CanonicalInferenceContext initialize_canonical_facts(
             "first dense layer is outside the layer schedule");
     }
 
-    const int num_experts = m.moe_experts.value_or(0);
-    const int experts_per_token = m.moe_experts_per_token.value_or(0);
+    const int num_experts = m.moe.experts.value_or(0);
+    const int experts_per_token = m.moe.experts_per_token.value_or(0);
     const bool has_moe =
         num_experts > 0 &&
         experts_per_token > 0 &&
         context.dense_start < context.layer_count;
 
     if (has_moe) {
-        const int routing_groups = m.moe_routing_groups.value_or(0);
+        const int routing_groups = m.moe.routing_groups.value_or(0);
         const int total_routing_groups =
-            m.moe_total_routing_groups.value_or(routing_groups);
+            m.moe.total_routing_groups.value_or(routing_groups);
         const int groups_per_token = routing_groups;
-        const int group_score_top_k = m.moe_group_score_top_k.value_or(0);
+        const int group_score_top_k = m.moe.group_score_top_k.value_or(0);
 
         MoeSelectionSpec selection = MoeTopKSelectionSpec{};
         if (total_routing_groups > 0) {
@@ -261,7 +261,7 @@ CanonicalInferenceContext initialize_canonical_facts(
 
         std::optional<SharedExpertSpec> shared;
         const int shared_expert_intermediate =
-            m.moe_shared_intermediate.value_or(0);
+            m.moe.shared_intermediate.value_or(0);
         if (shared_expert_intermediate > 0) {
             shared = SharedExpertSpec{
                 shared_expert_intermediate, MoeCombineOrder::RoutedThenShared};
@@ -270,33 +270,34 @@ CanonicalInferenceContext initialize_canonical_facts(
         context.moe = CanonicalMoeFacts{
             num_experts,
             experts_per_token,
-            m.moe_intermediate.value_or(0),
+            m.moe.intermediate.value_or(0),
             std::move(selection),
             std::move(shared),
-            m.moe_normalize_topk.value_or(false),
-            m.moe_expert_bias.value_or(false),
-            m.moe_routed_scaling.value_or(1.0f),
-            m.moe_score_function.value_or("sigmoid") == "softmax"};
+            m.moe.normalize_topk.value_or(false),
+            m.moe.expert_bias.value_or(false),
+            m.moe.routed_scaling.value_or(1.0f),
+            m.moe.score_function.value_or(MoeRouterScoreFunction::Sigmoid) ==
+                MoeRouterScoreFunction::Softmax};
     }
 
     auto& checkpoint = context.facts.checkpoint;
     auto& numerical_policy = context.facts.numerical_policy;
-    checkpoint.vocab_size = *m.vocab_size;
-    checkpoint.max_position_embeddings = *m.context_length;
+    checkpoint.vocab_size = *m.core.vocab_size;
+    checkpoint.max_position_embeddings = *m.core.context_length;
     checkpoint.token_policy = {
-        *m.bos_token_id,
-        m.eos_token_ids,
-        *m.pad_token_id};
+        *m.core.bos_token_id,
+        m.core.eos_token_ids,
+        *m.core.pad_token_id};
 
-    numerical_policy.norm_eps = *m.norm_epsilon;
+    numerical_policy.norm_eps = *m.core.norm_epsilon;
     numerical_policy.embedding_multiplier =
-        m.embedding_multiplier.value_or(1.0f);
+        m.core.embedding_multiplier.value_or(1.0f);
     numerical_policy.residual_multiplier =
-        m.residual_multiplier.value_or(1.0f);
+        m.core.residual_multiplier.value_or(1.0f);
     numerical_policy.logits_multiplier =
-        m.logits_multiplier.value_or(1.0f);
+        m.core.logits_multiplier.value_or(1.0f);
     numerical_policy.logits_divisor =
-        m.logits_divisor.value_or(1.0f);
+        m.core.logits_divisor.value_or(1.0f);
 
     context.intermediate_sizes =
         infer_intermediate_sizes(context);

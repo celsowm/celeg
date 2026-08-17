@@ -22,11 +22,11 @@ AttentionSpec make_attention(
     attention.key_value_heads = key_value_heads;
     attention.head_dim = head_dim;
     const auto optional_qk_norm = [&]() -> std::optional<NormSpec> {
-        if (!query_key_norm || !std::isfinite(*metadata.norm_epsilon) ||
-            *metadata.norm_epsilon <= 0.0f) {
+        if (!query_key_norm || !std::isfinite(*metadata.core.norm_epsilon) ||
+            *metadata.core.norm_epsilon <= 0.0f) {
             return std::nullopt;
         }
-        return NormSpec{*metadata.norm_epsilon, NormWeightKind::Scale};
+        return NormSpec{*metadata.core.norm_epsilon, NormWeightKind::Scale};
     };
     attention.query_norm = optional_qk_norm();
     attention.key_norm = attention.query_norm;
@@ -46,10 +46,10 @@ AttentionSpec make_attention(
         } else {
             static_assert(always_false_v<T>, "unhandled inferred position encoding alternative");
         }
-    }, metadata.position_encoding);
-    if (*metadata.xsa_projection) {
+    }, metadata.attention.position_encoding);
+    if (*metadata.attention.xsa_projection) {
         attention.output_transform = OrthogonalizeCurrentValueSpec{
-            *metadata.xsa_minimum_norm_squared};
+            *metadata.attention.xsa_minimum_norm_squared};
     }
     return attention;
 }
@@ -88,9 +88,9 @@ public:
         const std::string index = std::to_string(layer);
         const std::string layer_prefix = "blk." + index + ".";
 
-        const auto query_heads = m.query_heads.value_for(layer);
-        const auto key_value_heads = m.key_value_heads.value_for(layer);
-        const auto explicit_head_dim = m.head_dim.value_for(layer);
+        const auto query_heads = m.attention.query_heads.value_for(layer);
+        const auto key_value_heads = m.attention.key_value_heads.value_for(layer);
+        const auto explicit_head_dim = m.attention.head_dim.value_for(layer);
         if (!query_heads.has_value() || !key_value_heads.has_value()) {
             fail(
                 ResolutionFailureKind::MissingRequiredMetadata,
@@ -105,11 +105,11 @@ public:
         }
 
         const int head_dim =
-            explicit_head_dim.value_or(*m.hidden_size / *query_heads);
+            explicit_head_dim.value_or(*m.core.hidden_size / *query_heads);
         if (*key_value_heads <= 0 ||
             *query_heads % *key_value_heads != 0 ||
             head_dim <= 0 || head_dim % 2 != 0 ||
-            *key_value_heads * head_dim > *m.hidden_size) {
+            *key_value_heads * head_dim > *m.core.hidden_size) {
             fail(
                 ResolutionFailureKind::ConflictingInferenceFacts,
                 "attention head geometry is not a valid GQA layout for layer " +
@@ -120,12 +120,12 @@ public:
             return input.inventory.find(name) != nullptr;
         };
         const bool has_query_norm =
-            *m.query_key_norm ||
+            *m.attention.query_key_norm ||
             has_tensor(layer_prefix + "attn_q_norm.weight") ||
             has_tensor(
                 "model.layers." + index + ".self_attn.q_layernorm.weight");
         const bool has_key_norm =
-            *m.query_key_norm ||
+            *m.attention.query_key_norm ||
             has_tensor(layer_prefix + "attn_k_norm.weight") ||
             has_tensor(
                 "model.layers." + index + ".self_attn.k_layernorm.weight");
@@ -160,7 +160,7 @@ public:
         if (query &&
             shape_is(
                 *query,
-                {2 * attention.query_width(), *m.hidden_size})) {
+                {2 * attention.query_width(), *m.core.hidden_size})) {
             attention.output_gate = SigmoidAttentionGateSpec{
                 true,
                 AttentionGateGranularity::ElementWise};
@@ -173,17 +173,17 @@ public:
 
         const AttentionSpec& resolved =
             std::get<AttentionSpec>(semantic_layer.mixer);
-        const int query_head_count = *m.query_heads.value_for(layer);
-        const int key_value_head_count = *m.key_value_heads.value_for(layer);
-        const int layer_head_dim = m.head_dim.value_for(layer).value_or(
-            *m.hidden_size / query_head_count);
+        const int query_head_count = *m.attention.query_heads.value_for(layer);
+        const int key_value_head_count = *m.attention.key_value_heads.value_for(layer);
+        const int layer_head_dim = m.attention.head_dim.value_for(layer).value_or(
+            *m.core.hidden_size / query_head_count);
 
         const auto* q = find_unique(
             input.inventory,
             attention_tensor_candidates(layer, "q_proj.weight"),
             TensorRole::AttentionQuery,
             layer,
-            {resolved.query_projection_width(), *m.hidden_size},
+            {resolved.query_projection_width(), *m.core.hidden_size},
             {});
         add_binding(bindings, TensorRole::AttentionQuery, layer, *q, {});
 
@@ -192,7 +192,7 @@ public:
             attention_tensor_candidates(layer, "k_proj.weight"),
             TensorRole::AttentionKey,
             layer,
-            {key_value_head_count * layer_head_dim, *m.hidden_size},
+            {key_value_head_count * layer_head_dim, *m.core.hidden_size},
             {});
         add_binding(bindings, TensorRole::AttentionKey, layer, *k, {});
 
@@ -201,7 +201,7 @@ public:
             attention_tensor_candidates(layer, "v_proj.weight"),
             TensorRole::AttentionValue,
             layer,
-            {key_value_head_count * layer_head_dim, *m.hidden_size},
+            {key_value_head_count * layer_head_dim, *m.core.hidden_size},
             {});
         add_binding(bindings, TensorRole::AttentionValue, layer, *v, {});
 
@@ -210,7 +210,7 @@ public:
             attention_tensor_candidates(layer, "o_proj.weight"),
             TensorRole::AttentionOutput,
             layer,
-            {*m.hidden_size, query_head_count * layer_head_dim},
+            {*m.core.hidden_size, query_head_count * layer_head_dim},
             {});
         add_binding(bindings, TensorRole::AttentionOutput, layer, *o, {});
 
@@ -320,19 +320,19 @@ public:
         }
         const auto* gate = input.inventory.find(prefix + "g_proj.weight");
 
-        const int q_rank = m.latent_query_rank.value_or(0);
-        const int kv_rank = m.latent_kv_rank.value_or(0);
-        const int nope = m.latent_query_nope_dim.value_or(0);
-        const int rope = m.latent_query_rope_dim.value_or(0);
-        const int value_dim = m.latent_value_head_dim.value_or(0);
-        const int heads = *m.query_heads.value_for(layer);
+        const int q_rank = m.latent_attention.query_rank.value_or(0);
+        const int kv_rank = m.latent_attention.kv_rank.value_or(0);
+        const int nope = m.latent_attention.query_nope_dim.value_or(0);
+        const int rope = m.latent_attention.query_rope_dim.value_or(0);
+        const int value_dim = m.latent_attention.value_head_dim.value_or(0);
+        const int heads = *m.attention.query_heads.value_for(layer);
 
         const std::vector<std::int64_t> head_gate_shape = {
             heads,
-            *m.hidden_size};
+            *m.core.hidden_size};
         const std::vector<std::int64_t> element_gate_shape = {
             heads * value_dim,
-            *m.hidden_size};
+            *m.core.hidden_size};
         const bool head_wise_gate =
             gate && gate->shape == head_gate_shape;
         const bool element_wise_gate =
@@ -342,12 +342,12 @@ public:
             !out || !gate || q_rank <= 0 || kv_rank <= 0 ||
             nope <= 0 || rope <= 0 || value_dim <= 0 ||
             q_a->shape !=
-                std::vector<std::int64_t>{q_rank, *m.hidden_size} ||
+                std::vector<std::int64_t>{q_rank, *m.core.hidden_size} ||
             q_a_norm->shape != std::vector<std::int64_t>{q_rank} ||
             q_b->shape !=
                 std::vector<std::int64_t>{heads * (nope + rope), q_rank} ||
             kv_a->shape !=
-                std::vector<std::int64_t>{kv_rank + rope, *m.hidden_size} ||
+                std::vector<std::int64_t>{kv_rank + rope, *m.core.hidden_size} ||
             kv_a_norm->shape != std::vector<std::int64_t>{kv_rank} ||
             kv_b->shape !=
                 std::vector<std::int64_t>{
@@ -355,7 +355,7 @@ public:
                     kv_rank} ||
             out->shape !=
                 std::vector<std::int64_t>{
-                    *m.hidden_size,
+                    *m.core.hidden_size,
                     heads * value_dim} ||
             (!head_wise_gate && !element_wise_gate)) {
             fail(
@@ -385,8 +385,8 @@ public:
             FactorizedLatentProjection{
                 q_rank,
                 value_dim,
-                NormSpec{*m.norm_epsilon, NormWeightKind::Scale},
-                NormSpec{*m.norm_epsilon, NormWeightKind::Scale}}};
+                NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale},
+                NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale}}};
         attention.query_scale =
             std::sqrt(static_cast<float>(value_dim) /
                       static_cast<float>(nope + rope));
@@ -400,7 +400,7 @@ public:
             std::get<AttentionSpec>(semantic_layer.mixer);
         const auto& latent = *resolved.latent_state();
         const auto& factorized = *latent.factorized_projection();
-        const int query_head_count = *m.query_heads.value_for(layer);
+        const int query_head_count = *m.attention.query_heads.value_for(layer);
         auto& bindings = context.facts.bindings;
 
         const auto bind = [&](TensorRole role,
@@ -419,7 +419,7 @@ public:
         bind(
             TensorRole::AttentionLatentQueryProjection,
             "q_a_proj.weight",
-            {factorized.query_rank, *m.hidden_size});
+            {factorized.query_rank, *m.core.hidden_size});
         bind(
             TensorRole::AttentionLatentQueryNorm,
             "q_a_layernorm.weight",
@@ -432,7 +432,7 @@ public:
         bind(
             TensorRole::AttentionLatentKeyProjection,
             "kv_a_proj_with_mqa.weight",
-            {latent.latent_rank + latent.rope_head_dim, *m.hidden_size});
+            {latent.latent_rank + latent.rope_head_dim, *m.core.hidden_size});
         bind(
             TensorRole::AttentionLatentKeyNorm,
             "kv_a_layernorm.weight",
@@ -448,7 +448,7 @@ public:
             {prefix + "dense.weight", prefix + "o_proj.weight"},
             TensorRole::AttentionLatentOutput,
             layer,
-            {*m.hidden_size, resolved.latent_output_width()},
+            {*m.core.hidden_size, resolved.latent_output_width()},
             {});
         add_binding(
             bindings,
@@ -459,7 +459,7 @@ public:
         bind(
             TensorRole::AttentionGate,
             "g_proj.weight",
-            {resolved.output_gate_width(), *m.hidden_size});
+            {resolved.output_gate_width(), *m.core.hidden_size});
     }
 };
 

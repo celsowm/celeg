@@ -31,10 +31,10 @@ int main() {
 
     const auto flat_facts = celeg::normalize_model_metadata(flat);
     const auto component_facts = celeg::normalize_model_metadata(component);
-    CELEG_TEST_CHECK(flat_facts.hidden_size == component_facts.hidden_size);
-    CELEG_TEST_CHECK(flat_facts.layer_count == component_facts.layer_count);
-    CELEG_TEST_CHECK(flat_facts.query_heads == component_facts.query_heads);
-    CELEG_TEST_CHECK(flat_facts.vocab_size == component_facts.vocab_size);
+    CELEG_TEST_CHECK(flat_facts.core.hidden_size == component_facts.core.hidden_size);
+    CELEG_TEST_CHECK(flat_facts.core.layer_count == component_facts.core.layer_count);
+    CELEG_TEST_CHECK(flat_facts.attention.query_heads == component_facts.attention.query_heads);
+    CELEG_TEST_CHECK(flat_facts.core.vocab_size == component_facts.core.vocab_size);
 
     std::cout << "semantic_identity_test: ok\n";
 }

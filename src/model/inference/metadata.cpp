@@ -347,74 +347,78 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
 NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metadata) {
     reject_unknown_semantic_metadata(metadata);
     NormalizedModelMetadata result;
-    result.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
-                                      result.evidence, "hidden_size", "embedding_length");
-    result.intermediate_size = scoped_aliases<int>(
+    result.core.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
+                                           result.evidence, "hidden_size", "embedding_length");
+    result.core.intermediate_size = scoped_aliases<int>(
         metadata, {"intermediate_size", "n_inner", "ffn_dim"}, result.evidence,
         "intermediate_size", "feed_forward_length");
-    result.layer_count = aliases<int>(
+    result.core.layer_count = aliases<int>(
         metadata, {"num_hidden_layers", "n_layer", "num_layers"}, result.evidence,
         "layer_count", "block_count");
-    validate_scoped_alias(result.intermediate_size, result.layer_count, "intermediate_size");
-    result.query_heads = scoped_aliases<int>(
+    validate_scoped_alias(result.core.intermediate_size, result.core.layer_count, "intermediate_size");
+    result.attention.query_heads = scoped_aliases<int>(
         metadata, {"num_attention_heads", "n_head"}, result.evidence, "query_heads",
         "attention.head_count");
-    result.key_value_heads = scoped_aliases<int>(
+    result.attention.key_value_heads = scoped_aliases<int>(
         metadata, {"num_key_value_heads", "n_kv_heads"}, result.evidence, "key_value_heads",
         "attention.head_count_kv");
-    result.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
-                                         "attention.key_length");
-    result.mamba_intermediate = aliases<int>(
+    result.attention.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
+                                                    "attention.key_length");
+    result.mamba2.intermediate = aliases<int>(
         metadata, {"mamba_intermediate", "ssm_inner_size"}, result.evidence,
         "mamba_intermediate", "ssm.inner_size");
-    result.mamba_state_size = aliases<int>(
+    result.mamba2.state_size = aliases<int>(
         metadata, {"mamba_state_size", "ssm_state_size", "state_size"}, result.evidence,
         "mamba_state_size", "ssm.state_size");
-    result.mamba_time_step_rank = aliases<int>(
+    result.mamba2.time_step_rank = aliases<int>(
         metadata, {"mamba_time_step_rank", "ssm_time_step_rank", "time_step_rank"}, result.evidence,
         "mamba_time_step_rank", "ssm.time_step_rank");
-    result.mamba_num_heads = aliases<int>(
+    result.mamba2.num_heads = aliases<int>(
         metadata, {"mamba_num_heads", "mamba_heads", "num_heads"}, result.evidence,
         "mamba_num_heads", "ssm.time_step_rank");
-    result.mamba_head_dim = aliases<int>(
+    result.mamba2.head_dim = aliases<int>(
         metadata, {"mamba_head_dim"}, result.evidence, "mamba_head_dim");
-    result.mamba_group_count = aliases<int>(
+    result.mamba2.group_count = aliases<int>(
         metadata, {"n_groups", "mamba_groups"}, result.evidence,
         "mamba_group_count", "ssm.group_count");
-    result.mamba_conv_kernel = aliases<int>(
+    result.mamba2.conv_kernel = aliases<int>(
         metadata, {"conv_kernel", "mamba_conv_kernel"}, result.evidence,
         "mamba_conv_kernel", "ssm.conv_kernel");
-    result.mamba_chunk_size = aliases<int>(
+    result.mamba2.chunk_size = aliases<int>(
         metadata, {"chunk_size", "mamba_chunk_size"}, result.evidence,
         "mamba_chunk_size", "ssm.chunk_size");
-    result.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
-                                     "vocab_size", "vocab_size");
-    if (!result.vocab_size.has_value()) {
-        result.vocab_size = tokenizer_vocabulary_size(metadata, result.evidence);
+    result.mamba2.decay_encoding = metadata.is_gguf()
+        ? DecayParameterEncoding::Pretransformed
+        : DecayParameterEncoding::LogA;
+
+    result.core.vocab_size = aliases<int>(metadata, {"vocab_size", "n_vocab"}, result.evidence,
+                                          "vocab_size", "vocab_size");
+    if (!result.core.vocab_size.has_value()) {
+        result.core.vocab_size = tokenizer_vocabulary_size(metadata, result.evidence);
     }
-    result.context_length = aliases<int>(
+    result.core.context_length = aliases<int>(
         metadata, {"max_position_embeddings", "max_seq_len", "context_length"},
         result.evidence, "context_length", "context_length");
-    result.norm_epsilon = aliases<float>(
+    result.core.norm_epsilon = aliases<float>(
         metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
-    result.embedding_multiplier = aliases<float>(
+    result.core.embedding_multiplier = aliases<float>(
         metadata, {"embedding_multiplier"}, result.evidence,
         "embedding_multiplier");
-    result.attention_multiplier = aliases<float>(
+    result.attention.attention_multiplier = aliases<float>(
         metadata, {"attention_multiplier"}, result.evidence,
         "attention_multiplier");
-    result.residual_multiplier = aliases<float>(
+    result.core.residual_multiplier = aliases<float>(
         metadata, {"residual_multiplier"}, result.evidence,
         "residual_multiplier");
-    result.logits_multiplier = aliases<float>(
+    result.core.logits_multiplier = aliases<float>(
         metadata, {"logits_multiplier"}, result.evidence,
         "logits_multiplier");
-    result.logits_divisor = aliases<float>(
+    result.core.logits_divisor = aliases<float>(
         metadata, {"logits_divisor", "logits_scaling"}, result.evidence,
         "logits_divisor");
-    result.shortconv_cache = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
-                                          "shortconv_cache", "shortconv.l_cache");
+    result.short_conv.cache_length = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
+                                                  "shortconv_cache", "shortconv.l_cache");
     std::optional<double> rope_theta = aliases<double>(
         metadata, {"rope_theta", "rope_parameters.rope_theta"}, result.evidence,
         "rope_theta", "rope.freq_base");
@@ -423,19 +427,19 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     const bool architecture_never_applies_rope = metadata.is_gguf() &&
         gguf_architecture_never_applies_rope(metadata.architecture_type());
     if (!architecture_never_applies_rope && !rotary_fraction.has_value() && metadata.is_gguf()) {
-        // GGUF stores partial rotary as an absolute dimension count
-        // ("<arch>.rope.dimension_count"), not a fraction of head_dim like the
-        // HF-config "rotary_fraction"/"partial_rotary_factor" convention does.
+        /// GGUF stores partial rotary as an absolute dimension count
+        /// ("<arch>.rope.dimension_count"), not a fraction of head_dim like the
+        /// HF-config "rotary_fraction"/"partial_rotary_factor" convention does.
         const std::string rope_dim_key =
             metadata.architecture_type() + ".rope.dimension_count";
         const std::optional<int> rope_dimension_count =
             gguf_scalar_or_uniform_schedule<int>(metadata, rope_dim_key);
         if (rope_dimension_count.has_value()) {
-            const std::optional<int> effective_head_dim = result.head_dim.global.has_value()
-                ? result.head_dim.global
-                : (result.hidden_size.has_value() && result.query_heads.global.has_value() &&
-                   *result.query_heads.global > 0)
-                      ? std::optional<int>(*result.hidden_size / *result.query_heads.global)
+            const std::optional<int> effective_head_dim = result.attention.head_dim.global.has_value()
+                ? result.attention.head_dim.global
+                : (result.core.hidden_size.has_value() && result.attention.query_heads.global.has_value() &&
+                   *result.attention.query_heads.global > 0)
+                      ? std::optional<int>(*result.core.hidden_size / *result.attention.query_heads.global)
                       : std::nullopt;
             if (effective_head_dim.has_value() && *effective_head_dim > 0) {
                 rotary_fraction = static_cast<float>(*rope_dimension_count) /
@@ -445,136 +449,148 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
             }
         }
     }
-    result.bos_token_id = aliases<int>(metadata,
-                                       {"bos_token_id", "tokenizer.ggml.bos_token_id"},
-                                       result.evidence, "bos_token_id");
-    result.pad_token_id = aliases<int>(metadata,
-                                       {"pad_token_id", "tokenizer.ggml.padding_token_id"},
-                                       result.evidence, "pad_token_id");
-    result.query_key_norm = aliases<bool>(
+    result.core.bos_token_id = aliases<int>(metadata,
+                                            {"bos_token_id", "tokenizer.ggml.bos_token_id"},
+                                            result.evidence, "bos_token_id");
+    result.core.pad_token_id = aliases<int>(metadata,
+                                            {"pad_token_id", "tokenizer.ggml.padding_token_id"},
+                                            result.evidence, "pad_token_id");
+    result.attention.query_key_norm = aliases<bool>(
         metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
         "query_key_norm");
-    result.feed_forward_auto_adjust = aliases<bool>(
+    result.core.feed_forward_auto_adjust = aliases<bool>(
         metadata, {"block_auto_adjust_ff_dim"}, result.evidence,
         "feed_forward_auto_adjust");
-    result.first_dense_layer = aliases<int>(
+    result.moe.first_dense_layer = aliases<int>(
         metadata, {"first_k_dense_replace", "num_dense_layers"}, result.evidence,
         "first_dense_layer");
-    result.recurrent_conv_kernel = aliases<int>(
+    result.gated_delta.conv_kernel = aliases<int>(
         metadata, {"short_conv_kernel_size", "recurrent_conv_kernel"}, result.evidence,
         "recurrent_conv_kernel");
-    result.recurrent_key_heads = aliases<int>(
+    result.gated_delta.key_heads = aliases<int>(
         metadata, {"num_attention_heads", "num_heads_for_linear_attn"}, result.evidence,
         "recurrent_key_heads");
-    result.recurrent_value_heads = aliases<int>(
+    result.gated_delta.value_heads = aliases<int>(
         metadata, {"num_attention_heads", "num_heads_for_linear_attn"}, result.evidence,
         "recurrent_value_heads");
-    result.recurrent_key_dim = aliases<int>(
+    result.gated_delta.key_dim = aliases<int>(
         metadata, {"head_dim"}, result.evidence, "recurrent_key_dim");
-    result.recurrent_value_dim = aliases<int>(
+    result.gated_delta.value_dim = aliases<int>(
         metadata, {"v_head_dim", "head_dim"}, result.evidence, "recurrent_value_dim");
-    result.recurrent_safe_decay = aliases<bool>(
+    result.gated_delta.safe_decay = aliases<bool>(
         metadata, {"kda_safe_gate", "safe_decay"}, result.evidence,
         "recurrent_safe_decay");
-    result.recurrent_decay_lower_bound = aliases<float>(
+    result.gated_delta.decay_lower_bound = aliases<float>(
         metadata, {"kda_lower_bound", "decay_lower_bound"}, result.evidence,
         "recurrent_decay_lower_bound");
-    result.latent_query_rank = aliases<int>(
+    result.gated_delta.decay_encoding = metadata.is_gguf()
+        ? DecayParameterEncoding::Pretransformed
+        : DecayParameterEncoding::LogA;
+
+    result.latent_attention.query_rank = aliases<int>(
         metadata, {"q_lora_rank"}, result.evidence, "latent_query_rank");
-    result.latent_kv_rank = aliases<int>(
+    result.latent_attention.kv_rank = aliases<int>(
         metadata, {"kv_lora_rank"}, result.evidence, "latent_kv_rank");
-    result.latent_query_head_dim = aliases<int>(
+    result.latent_attention.query_head_dim = aliases<int>(
         metadata, {"qk_head_dim"}, result.evidence, "latent_query_head_dim");
-    result.latent_query_nope_dim = aliases<int>(
+    result.latent_attention.query_nope_dim = aliases<int>(
         metadata, {"qk_nope_head_dim"}, result.evidence, "latent_query_nope_dim");
-    result.latent_query_rope_dim = aliases<int>(
+    result.latent_attention.query_rope_dim = aliases<int>(
         metadata, {"qk_rope_head_dim"}, result.evidence, "latent_query_rope_dim");
-    result.latent_value_head_dim = aliases<int>(
+    result.latent_attention.value_head_dim = aliases<int>(
         metadata, {"v_head_dim"}, result.evidence, "latent_value_head_dim");
-    result.moe_experts = aliases<int>(
+    result.moe.experts = aliases<int>(
         metadata, {"num_experts"}, result.evidence, "moe_experts");
-    result.moe_experts_per_token = aliases<int>(
+    result.moe.experts_per_token = aliases<int>(
         metadata, {"num_experts_per_tok", "experts_per_token"}, result.evidence,
         "moe_experts_per_token");
-    result.moe_intermediate = aliases<int>(
+    result.moe.intermediate = aliases<int>(
         metadata, {"moe_intermediate_size"}, result.evidence, "moe_intermediate");
-    result.moe_shared_intermediate = aliases<int>(
+    result.moe.shared_intermediate = aliases<int>(
         metadata, {"moe_shared_expert_intermediate_size"}, result.evidence,
         "moe_shared_intermediate");
-    result.moe_routing_groups = aliases<int>(
+    result.moe.routing_groups = aliases<int>(
         metadata, {"topk_group"}, result.evidence, "moe_routing_groups");
-    result.moe_total_routing_groups = aliases<int>(
+    result.moe.total_routing_groups = aliases<int>(
         metadata, {"n_group", "num_routing_groups"}, result.evidence,
         "moe_total_routing_groups");
-    result.moe_group_score_top_k = aliases<int>(
+    result.moe.group_score_top_k = aliases<int>(
         metadata, {"routing_group_score_top_k"}, result.evidence,
         "moe_group_score_top_k");
-    result.moe_normalize_topk = aliases<bool>(
+    result.moe.normalize_topk = aliases<bool>(
         metadata, {"norm_topk_prob"}, result.evidence, "moe_normalize_topk");
-    result.moe_expert_bias = aliases<bool>(
+    result.moe.expert_bias = aliases<bool>(
         metadata, {"moe_router_enable_expert_bias"}, result.evidence, "moe_expert_bias");
-    result.moe_routed_scaling = aliases<float>(
+    result.moe.routed_scaling = aliases<float>(
         metadata, {"routed_scaling_factor"}, result.evidence, "moe_routed_scaling");
     if (metadata.contains("score_function") || metadata.contains("scoring_func")) {
         const std::string primary = metadata.contains("score_function")
             ? "score_function" : "scoring_func";
         const std::string score = metadata.string(primary);
-        if (score != "sigmoid" && score != "softmax") {
+        if (score == "sigmoid") {
+            result.moe.score_function = MoeRouterScoreFunction::Sigmoid;
+        } else if (score == "softmax") {
+            result.moe.score_function = MoeRouterScoreFunction::Softmax;
+        } else {
             inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
                                    "unsupported MoE router score function: " + score);
         }
-    result.moe_score_function = score;
         result.evidence.push_back({EvidenceKind::ExplicitMetadata, primary,
                                    "moe_score_function"});
     }
     if (metadata.contains("topk_method")) {
         const std::string method = metadata.string("topk_method");
-        if (method != "noaux_tc" && method != "greedy" && method != "topk") {
+        if (method == "noaux_tc") {
+            result.moe.selection_method = MoeRouterSelectionMethod::NoauxTc;
+        } else if (method == "greedy") {
+            result.moe.selection_method = MoeRouterSelectionMethod::Greedy;
+        } else if (method == "topk") {
+            result.moe.selection_method = MoeRouterSelectionMethod::TopK;
+        } else {
             inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
                                    "unsupported MoE selection method: " + method);
         }
-        result.moe_selection_method = method;
-        if (method == "noaux_tc" && !result.moe_group_score_top_k.has_value()) {
-            result.moe_group_score_top_k = 2;
+        if (method == "noaux_tc" && !result.moe.group_score_top_k.has_value()) {
+            result.moe.group_score_top_k = 2;
         }
         result.evidence.push_back({EvidenceKind::ExplicitMetadata, "topk_method",
                                    "moe_selection_method"});
     }
-    result.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,
-                                          "xsa_projection");
-    result.xsa_minimum_norm_squared = aliases<float>(
+    result.attention.xsa_projection = aliases<bool>(metadata, {"xsa_projection"}, result.evidence,
+                                                    "xsa_projection");
+    result.attention.xsa_minimum_norm_squared = aliases<float>(
         metadata, {"xsa_projection_minimum_norm_squared"}, result.evidence,
         "xsa_minimum_norm_squared");
-    result.tied_embeddings = aliases<bool>(
+    result.core.tied_embeddings = aliases<bool>(
         metadata, {"tie_word_embeddings", "tied_embeddings", "tie_embedding"}, result.evidence,
         "tied_embeddings");
 
-    validate_scoped_alias(result.query_heads, result.layer_count, "query_heads");
-    validate_scoped_alias(result.key_value_heads, result.layer_count, "key_value_heads");
-    validate_scoped_alias(result.head_dim, result.layer_count, "head_dim");
+    validate_scoped_alias(result.attention.query_heads, result.core.layer_count, "query_heads");
+    validate_scoped_alias(result.attention.key_value_heads, result.core.layer_count, "key_value_heads");
+    validate_scoped_alias(result.attention.head_dim, result.core.layer_count, "head_dim");
 
     const std::vector<int> eos = token_list(metadata, "eos_token_id");
-    result.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
-    if (!result.bos_token_id.has_value()) result.bos_token_id = 0;
-    if (result.eos_token_ids.empty()) result.eos_token_ids = {0};
-    if (!result.pad_token_id.has_value()) result.pad_token_id = 1;
-    if (!result.norm_epsilon.has_value()) result.norm_epsilon = 1.0e-6f;
-    if (!result.embedding_multiplier.has_value()) result.embedding_multiplier = 1.0f;
-    if (!result.residual_multiplier.has_value()) result.residual_multiplier = 1.0f;
-    if (!result.logits_multiplier.has_value()) result.logits_multiplier = 1.0f;
-    if (!result.logits_divisor.has_value()) result.logits_divisor = 1.0f;
-    if (!result.query_key_norm.has_value()) result.query_key_norm = false;
-    if (!result.xsa_projection.has_value()) result.xsa_projection = false;
-    if (!result.xsa_minimum_norm_squared.has_value()) result.xsa_minimum_norm_squared = 1.0e-6f;
+    result.core.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
+    if (!result.core.bos_token_id.has_value()) result.core.bos_token_id = 0;
+    if (result.core.eos_token_ids.empty()) result.core.eos_token_ids = {0};
+    if (!result.core.pad_token_id.has_value()) result.core.pad_token_id = 1;
+    if (!result.core.norm_epsilon.has_value()) result.core.norm_epsilon = 1.0e-6f;
+    if (!result.core.embedding_multiplier.has_value()) result.core.embedding_multiplier = 1.0f;
+    if (!result.core.residual_multiplier.has_value()) result.core.residual_multiplier = 1.0f;
+    if (!result.core.logits_multiplier.has_value()) result.core.logits_multiplier = 1.0f;
+    if (!result.core.logits_divisor.has_value()) result.core.logits_divisor = 1.0f;
+    if (!result.attention.query_key_norm.has_value()) result.attention.query_key_norm = false;
+    if (!result.attention.xsa_projection.has_value()) result.attention.xsa_projection = false;
+    if (!result.attention.xsa_minimum_norm_squared.has_value()) result.attention.xsa_minimum_norm_squared = 1.0e-6f;
 
     if (architecture_never_applies_rope) {
-        // Some GGUF architectures (mostly hybrid recurrent/attention models
-        // whose position information already flows through the recurrent
-        // state) carry vestigial RoPE hparams that the reference graph
-        // builder never actually applies to the attention layers. Applying
-        // RoPE anyway corrupts every attention layer's positional structure,
-        // so the GGUF format boundary overrides any rope metadata present.
-        result.position_encoding = NoPositionEncodingSpec{};
+        /// Some GGUF architectures (mostly hybrid recurrent/attention models
+        /// whose position information already flows through the recurrent
+        /// state) carry vestigial RoPE hparams that the reference graph
+        /// builder never actually applies to the attention layers. Applying
+        /// RoPE anyway corrupts every attention layer's positional structure,
+        /// so the GGUF format boundary overrides any rope metadata present.
+        result.attention.position_encoding = NoPositionEncodingSpec{};
         result.evidence.push_back({EvidenceKind::FormatGuarantee, "architecture",
                                    metadata.architecture_type() + " does not use RoPE"});
     } else {
@@ -593,12 +609,12 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
                 inference_detail::fail(ResolutionFailureKind::UnsupportedSemanticFeature,
                                        "unsupported RoPE pairing: " + pairing_value);
             }
-        } else if (*result.xsa_projection) {
+        } else if (*result.attention.xsa_projection) {
             pairing = RopePairingKind::AdjacentPairs;
             result.evidence.push_back({EvidenceKind::FormatGuarantee, "xsa_projection",
                                        "RoPE pairing = adjacent_pairs"});
         }
-        result.position_encoding = InferredRopePosition{
+        result.attention.position_encoding = InferredRopePosition{
             *rope_theta,
             rotary_fraction.value_or(1.0f),
             pairing};

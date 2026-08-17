@@ -33,12 +33,12 @@ public:
         LayerSpec& semantic_layer =
             context.facts.graph.layers[static_cast<size_t>(layer)];
 
-        if (!m.shortconv_cache.has_value() || *m.shortconv_cache <= 0) {
+        if (!m.short_conv.cache_length.has_value() || *m.short_conv.cache_length <= 0) {
             fail(
                 ResolutionFailureKind::MissingRequiredMetadata,
                 "short-convolution layer has no positive cache length");
         }
-        const ShortConvolutionSpec spec{*m.shortconv_cache, *m.hidden_size,
+        const ShortConvolutionSpec spec{*m.short_conv.cache_length, *m.core.hidden_size,
                                         false};
         semantic_layer.mixer = spec;
         if (!layer_has_feed_forward(context, layer)) {
@@ -50,7 +50,7 @@ public:
             shortconv_tensor_candidates(layer, "in_proj.weight"),
             TensorRole::ShortConvInput,
             layer,
-            {3 * *m.hidden_size, *m.hidden_size},
+            {3 * *m.core.hidden_size, *m.core.hidden_size},
             {});
         add_binding(
             bindings,
@@ -64,7 +64,7 @@ public:
             shortconv_tensor_candidates(layer, "conv.weight"),
             TensorRole::ShortConvKernel,
             layer,
-            {*m.hidden_size, 1, spec.cache_length},
+            {*m.core.hidden_size, 1, spec.cache_length},
             {});
         add_binding(
             bindings,
@@ -78,7 +78,7 @@ public:
             shortconv_tensor_candidates(layer, "out_proj.weight"),
             TensorRole::ShortConvOutput,
             layer,
-            {*m.hidden_size, *m.hidden_size},
+            {*m.core.hidden_size, *m.core.hidden_size},
             {});
         add_binding(
             bindings,
@@ -122,7 +122,7 @@ public:
             feed_forward_tensor_candidates(layer, "w_up.weight"),
             TensorRole::FfnUp,
             layer,
-            {layer_intermediate, *m.hidden_size},
+            {layer_intermediate, *m.core.hidden_size},
             {});
         add_binding(bindings, TensorRole::FfnUp, layer, *up, {});
 
@@ -131,7 +131,7 @@ public:
             feed_forward_tensor_candidates(layer, "w_down.weight"),
             TensorRole::FfnDown,
             layer,
-            {*m.hidden_size, layer_intermediate},
+            {*m.core.hidden_size, layer_intermediate},
             {});
         add_binding(bindings, TensorRole::FfnDown, layer, *down, {});
     }

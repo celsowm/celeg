@@ -45,7 +45,7 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
         }
     }
     if (head == nullptr) {
-        if (input.is_gguf() && !m.tied_embeddings.has_value()) {
+        if (input.is_gguf() && !m.core.tied_embeddings.has_value()) {
             facts.tied_embeddings = true;
             facts.evidence.push_back({
                 EvidenceKind::FormatGuarantee,
@@ -61,7 +61,7 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
             EvidenceKind::Derived,
             context.embedding->name,
             "language-model head is tied to token embedding"});
-    } else if (!shape_is(*head, {*m.vocab_size, *m.hidden_size})) {
+    } else if (!shape_is(*head, {*m.core.vocab_size, *m.core.hidden_size})) {
         fail(
             ResolutionFailureKind::ShapeConstraintViolation,
             "language-model head shape does not agree with normalized metadata");
@@ -94,7 +94,7 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
             ResolutionFailureKind::MissingTensorRole,
             "automatic resolution could not find final norm");
     }
-    if (!shape_is(*final_norm, {*m.hidden_size})) {
+    if (!shape_is(*final_norm, {*m.core.hidden_size})) {
         fail(
             ResolutionFailureKind::ShapeConstraintViolation,
             "final norm shape mismatch");
@@ -114,7 +114,7 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
         feed_forward_tensor_candidates(layer, "w_gate.weight"),
         TensorRole::FfnGate,
         layer,
-        {layer_intermediate, *m.hidden_size},
+        {layer_intermediate, *m.core.hidden_size},
         {});
     add_binding(bindings, TensorRole::FfnGate, layer, *gate, {});
 
@@ -123,7 +123,7 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
         feed_forward_tensor_candidates(layer, "w_up.weight"),
         TensorRole::FfnUp,
         layer,
-        {layer_intermediate, *m.hidden_size},
+        {layer_intermediate, *m.core.hidden_size},
         {});
     add_binding(bindings, TensorRole::FfnUp, layer, *up, {});
 
@@ -132,7 +132,7 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
         feed_forward_tensor_candidates(layer, "w_down.weight"),
         TensorRole::FfnDown,
         layer,
-        {*m.hidden_size, layer_intermediate},
+        {*m.core.hidden_size, layer_intermediate},
         {});
     add_binding(bindings, TensorRole::FfnDown, layer, *down, {});
 }
@@ -195,7 +195,7 @@ void bind_moe(CanonicalInferenceContext& context,
     bind(
         TensorRole::MoeRouter,
         prefix + "gate.weight",
-        {num_experts, *m.hidden_size});
+        {num_experts, *m.core.hidden_size});
     /// The router-bias tensor spelling is a checkpoint-family fact: resolve
     /// it here, once, so backends read the bound name from the plan instead
     /// of each probing their own literal fallback chain.
@@ -257,17 +257,17 @@ void bind_moe(CanonicalInferenceContext& context,
             bind(
                 TensorRole::MoeExpertGate,
                 expert_prefix + "gate_proj.weight",
-                {expert_intermediate, *m.hidden_size},
+                {expert_intermediate, *m.core.hidden_size},
                 expert);
             bind(
                 TensorRole::MoeExpertUp,
                 expert_prefix + "up_proj.weight",
-                {expert_intermediate, *m.hidden_size},
+                {expert_intermediate, *m.core.hidden_size},
                 expert);
             bind(
                 TensorRole::MoeExpertDown,
                 expert_prefix + "down_proj.weight",
-                {*m.hidden_size, expert_intermediate},
+                {*m.core.hidden_size, expert_intermediate},
                 expert);
         }
     } else if (raw_individual) {
@@ -277,17 +277,17 @@ void bind_moe(CanonicalInferenceContext& context,
             bind(
                 TensorRole::MoeExpertGate,
                 expert_prefix + "w1.weight",
-                {expert_intermediate, *m.hidden_size},
+                {expert_intermediate, *m.core.hidden_size},
                 expert);
             bind(
                 TensorRole::MoeExpertUp,
                 expert_prefix + "w3.weight",
-                {expert_intermediate, *m.hidden_size},
+                {expert_intermediate, *m.core.hidden_size},
                 expert);
             bind(
                 TensorRole::MoeExpertDown,
                 expert_prefix + "w2.weight",
-                {*m.hidden_size, expert_intermediate},
+                {*m.core.hidden_size, expert_intermediate},
                 expert);
         }
     } else if (packed_prefix) {
@@ -306,15 +306,15 @@ void bind_moe(CanonicalInferenceContext& context,
         bind(
             TensorRole::MoeSharedGate,
             shared + "gate_proj.weight",
-            {shared_intermediate, *m.hidden_size});
+            {shared_intermediate, *m.core.hidden_size});
         bind(
             TensorRole::MoeSharedUp,
             shared + "up_proj.weight",
-            {shared_intermediate, *m.hidden_size});
+            {shared_intermediate, *m.core.hidden_size});
         bind(
             TensorRole::MoeSharedDown,
             shared + "down_proj.weight",
-            {*m.hidden_size, shared_intermediate});
+            {*m.core.hidden_size, shared_intermediate});
     }
 }
 
@@ -339,7 +339,7 @@ void resolve_layer_feed_forward(CanonicalInferenceContext& context,
         ffn_norm_candidates,
         TensorRole::FfnInputNorm,
         layer,
-        {*m.hidden_size},
+        {*m.core.hidden_size},
         {});
     add_binding(
         facts.bindings,
@@ -364,9 +364,9 @@ void apply_attention_output_scale(CanonicalInferenceContext& context) {
     auto& graph = context.facts.graph;
     auto& numerical_policy = context.facts.numerical_policy;
 
-    if (m.attention_multiplier.has_value()) {
+    if (m.attention.attention_multiplier.has_value()) {
         numerical_policy.attention_multiplier =
-            *m.attention_multiplier;
+            *m.attention.attention_multiplier;
     } else {
         int attention_head_dim = 0;
         for (int layer = 0; layer < context.layer_count; ++layer) {
@@ -431,7 +431,7 @@ void resolve_canonical_layers(CanonicalInferenceContext& context) {
             norm_candidates,
             TensorRole::AttentionInputNorm,
             layer,
-            {*m.hidden_size},
+            {*m.core.hidden_size},
             {});
         add_binding(
             facts.bindings,

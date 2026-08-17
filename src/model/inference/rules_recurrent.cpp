@@ -56,9 +56,9 @@ public:
         const auto* output =
             input.inventory.find(layer_prefix + "ssm_out.weight");
 
-        const int key_dim = m.mamba_state_size.value_or(0);
-        const int key_heads = m.mamba_group_count.value_or(0);
-        const int value_heads = m.mamba_time_step_rank.value_or(0);
+        const int key_dim = m.mamba2.state_size.value_or(0);
+        const int key_heads = m.mamba2.group_count.value_or(0);
+        const int value_heads = m.mamba2.time_step_rank.value_or(0);
         const int value_width =
             output && output->shape.size() == 2
                 ? static_cast<int>(output->shape[1])
@@ -72,17 +72,17 @@ public:
         if (!qkv || !z || !alpha || !beta || !convolution || !dt_bias ||
             !a_log || !norm || !output || key_dim <= 0 || key_heads <= 0 ||
             value_heads <= 0 || value_dim <= 0 ||
-            !shape_is(*qkv, {qkv_width, *m.hidden_size}) ||
-            !shape_is(*z, {value_width, *m.hidden_size}) ||
-            !shape_is(*alpha, {value_heads, *m.hidden_size}) ||
-            !shape_is(*beta, {value_heads, *m.hidden_size}) ||
+            !shape_is(*qkv, {qkv_width, *m.core.hidden_size}) ||
+            !shape_is(*z, {value_width, *m.core.hidden_size}) ||
+            !shape_is(*alpha, {value_heads, *m.core.hidden_size}) ||
+            !shape_is(*beta, {value_heads, *m.core.hidden_size}) ||
             !shape_is(
                 *convolution,
-                {qkv_width, 1, m.mamba_conv_kernel.value_or(0)}) ||
+                {qkv_width, 1, m.mamba2.conv_kernel.value_or(0)}) ||
             !shape_is(*dt_bias, {value_heads}) ||
             !shape_is(*a_log, {value_heads}) ||
             !shape_is(*norm, {value_dim}) ||
-            !shape_is(*output, {*m.hidden_size, value_width})) {
+            !shape_is(*output, {*m.core.hidden_size, value_width})) {
             fail(
                 ResolutionFailureKind::ShapeConstraintViolation,
                 "fused recurrent linear-attention tensor shapes do not agree with "
@@ -91,7 +91,7 @@ public:
         }
 
         semantic_layer.mixer = GatedDeltaNetSpec{
-            m.mamba_conv_kernel.value_or(0),
+            m.mamba2.conv_kernel.value_or(0),
             key_dim,
             value_dim,
             key_heads,
@@ -101,7 +101,7 @@ public:
             -5.0f,
             false,
             false,
-            !input.is_gguf()};
+            m.gated_delta.decay_encoding == DecayParameterEncoding::LogA};
         if (!layer_has_feed_forward(context, layer)) {
             semantic_layer.feed_forward = std::monostate{};
         }
@@ -127,19 +127,19 @@ public:
         bind(
             TensorRole::GatedDeltaNetQkv,
             "attn_qkv.weight",
-            {resolved_qkv_width, *m.hidden_size});
+            {resolved_qkv_width, *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetZ,
             "attn_gate.weight",
-            {spec.value_width(), *m.hidden_size});
+            {spec.value_width(), *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetAlpha,
             "ssm_alpha.weight",
-            {spec.value_heads, *m.hidden_size});
+            {spec.value_heads, *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetBeta,
             "ssm_beta.weight",
-            {spec.value_heads, *m.hidden_size});
+            {spec.value_heads, *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetDtBias,
             "ssm_dt.bias",
@@ -156,7 +156,7 @@ public:
         bind(
             TensorRole::GatedDeltaNetOutput,
             "ssm_out.weight",
-            {*m.hidden_size, spec.value_width()});
+            {*m.core.hidden_size, spec.value_width()});
     }
 };
 
@@ -203,13 +203,13 @@ public:
         const auto* out = input.inventory.find(prefix + "o_proj.weight");
 
         const int heads =
-            m.recurrent_key_heads.value_or(*m.query_heads.value_for(layer));
+            m.gated_delta.key_heads.value_or(*m.attention.query_heads.value_for(layer));
         const int key_dim =
-            m.recurrent_key_dim.value_or(*m.head_dim.value_for(layer));
+            m.gated_delta.key_dim.value_or(*m.attention.head_dim.value_for(layer));
         const int value_dim =
-            m.recurrent_value_dim.value_or(key_dim);
+            m.gated_delta.value_dim.value_or(key_dim);
         const int width = heads * key_dim;
-        const int conv_kernel = m.recurrent_conv_kernel.value_or(
+        const int conv_kernel = m.gated_delta.conv_kernel.value_or(
             qc && qc->shape.size() == 3
                 ? static_cast<int>(qc->shape[2])
                 : 0);
@@ -217,12 +217,12 @@ public:
         if (!q || !k || !v || !f || !b || !g || !qc || !kc || !vc ||
             !dt || !a_log || !norm || !out || heads <= 0 ||
             key_dim <= 0 || value_dim <= 0 ||
-            q->shape != std::vector<std::int64_t>{width, *m.hidden_size} ||
-            k->shape != std::vector<std::int64_t>{width, *m.hidden_size} ||
-            v->shape != std::vector<std::int64_t>{width, *m.hidden_size} ||
-            f->shape != std::vector<std::int64_t>{width, *m.hidden_size} ||
-            b->shape != std::vector<std::int64_t>{heads, *m.hidden_size} ||
-            g->shape != std::vector<std::int64_t>{width, *m.hidden_size} ||
+            q->shape != std::vector<std::int64_t>{width, *m.core.hidden_size} ||
+            k->shape != std::vector<std::int64_t>{width, *m.core.hidden_size} ||
+            v->shape != std::vector<std::int64_t>{width, *m.core.hidden_size} ||
+            f->shape != std::vector<std::int64_t>{width, *m.core.hidden_size} ||
+            b->shape != std::vector<std::int64_t>{heads, *m.core.hidden_size} ||
+            g->shape != std::vector<std::int64_t>{width, *m.core.hidden_size} ||
             qc->shape != std::vector<std::int64_t>{width, 1, conv_kernel} ||
             kc->shape != std::vector<std::int64_t>{width, 1, conv_kernel} ||
             vc->shape != std::vector<std::int64_t>{width, 1, conv_kernel} ||
@@ -230,7 +230,7 @@ public:
             a_log->shape != std::vector<std::int64_t>{heads} ||
             norm->shape != std::vector<std::int64_t>{value_dim} ||
             out->shape !=
-                std::vector<std::int64_t>{*m.hidden_size, width}) {
+                std::vector<std::int64_t>{*m.core.hidden_size, width}) {
             fail(
                 ResolutionFailureKind::ShapeConstraintViolation,
                 "recurrent linear-attention tensor shapes do not agree with "
@@ -245,11 +245,11 @@ public:
             heads,
             heads,
             true,
-            m.recurrent_safe_decay.value_or(false),
-            m.recurrent_decay_lower_bound.value_or(-5.0f),
+            m.gated_delta.safe_decay.value_or(false),
+            m.gated_delta.decay_lower_bound.value_or(-5.0f),
             true,
             true,
-            !input.is_gguf()};
+            m.gated_delta.decay_encoding == DecayParameterEncoding::LogA};
         if (!layer_has_feed_forward(context, layer)) {
             semantic_layer.feed_forward = std::monostate{};
         }
@@ -274,23 +274,23 @@ public:
         bind(
             TensorRole::GatedDeltaNetQuery,
             "q_proj.weight",
-            {spec.key_heads * spec.key_head_dim, *m.hidden_size});
+            {spec.key_heads * spec.key_head_dim, *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetKey,
             "k_proj.weight",
-            {spec.key_heads * spec.key_head_dim, *m.hidden_size});
+            {spec.key_heads * spec.key_head_dim, *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetValue,
             "v_proj.weight",
-            {spec.value_width(), *m.hidden_size});
+            {spec.value_width(), *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetDecay,
             "f_proj.weight",
-            {spec.decay_width(), *m.hidden_size});
+            {spec.decay_width(), *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetOutputGate,
             "g_proj.weight",
-            {spec.value_width(), *m.hidden_size});
+            {spec.value_width(), *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetQueryConv,
             "q_conv1d.weight",
@@ -306,7 +306,7 @@ public:
         bind(
             TensorRole::GatedDeltaNetBeta,
             "b_proj.weight",
-            {spec.value_heads, *m.hidden_size});
+            {spec.value_heads, *m.core.hidden_size});
         bind(
             TensorRole::GatedDeltaNetDtBias,
             "dt_bias",
@@ -319,7 +319,7 @@ public:
         bind(
             TensorRole::GatedDeltaNetOutput,
             "o_proj.weight",
-            {*m.hidden_size, spec.value_width()});
+            {*m.core.hidden_size, spec.value_width()});
     }
 };
 
@@ -369,23 +369,23 @@ public:
                     std::to_string(layer));
         }
 
-        const int inner = m.mamba_intermediate.value_or(
+        const int inner = m.mamba2.intermediate.value_or(
             static_cast<int>(output_projection->shape.at(1)));
-        const int heads = m.mamba_num_heads.value_or(
+        const int heads = m.mamba2.num_heads.value_or(
             static_cast<int>(dt_bias->shape.at(0)));
-        const int head_dim = m.mamba_head_dim.value_or(
+        const int head_dim = m.mamba2.head_dim.value_or(
             heads > 0 && inner % heads == 0
                 ? inner / heads
                 : 0);
-        const int state_size = m.mamba_state_size.value_or(0);
-        const int group_count = m.mamba_group_count.value_or(0);
-        const int conv_kernel = m.mamba_conv_kernel.value_or(
+        const int state_size = m.mamba2.state_size.value_or(0);
+        const int group_count = m.mamba2.group_count.value_or(0);
+        const int conv_kernel = m.mamba2.conv_kernel.value_or(
             convolution->shape.size() == 3
                 ? static_cast<int>(convolution->shape.at(2))
                 : 0);
         const int time_step_rank =
-            m.mamba_time_step_rank.value_or(heads);
-        const int chunk_size = m.mamba_chunk_size.value_or(0);
+            m.mamba2.time_step_rank.value_or(heads);
+        const int chunk_size = m.mamba2.chunk_size.value_or(0);
         const int conv_dim =
             inner + 2 * group_count * state_size;
 
@@ -396,7 +396,7 @@ public:
             input_projection->shape !=
                 std::vector<std::int64_t>{
                     2 * inner + 2 * group_count * state_size + heads,
-                    *m.hidden_size} ||
+                    *m.core.hidden_size} ||
             convolution->shape !=
                 std::vector<std::int64_t>{conv_dim, 1, conv_kernel} ||
             convolution_bias->shape !=
@@ -406,7 +406,7 @@ public:
             d->shape != std::vector<std::int64_t>{heads} ||
             norm->shape != std::vector<std::int64_t>{inner} ||
             output_projection->shape !=
-                std::vector<std::int64_t>{*m.hidden_size, inner}) {
+                std::vector<std::int64_t>{*m.core.hidden_size, inner}) {
             fail(
                 ResolutionFailureKind::ShapeConstraintViolation,
                 "Mamba-2 tensor shapes do not agree with recurrent geometry for "
@@ -425,7 +425,7 @@ public:
             chunk_size,
             true,
             false,
-            !input.is_gguf()};
+            m.mamba2.decay_encoding == DecayParameterEncoding::LogA};
         semantic_layer.feed_forward = std::monostate{};
 
         const Mamba2Spec& spec = std::get<Mamba2Spec>(semantic_layer.mixer);
@@ -451,7 +451,7 @@ public:
             "in_proj.weight",
             {2 * spec.intermediate_size +
                  2 * spec.group_count * spec.state_size + spec.num_heads,
-             *m.hidden_size});
+             *m.core.hidden_size});
         bind(
             TensorRole::Mamba2Conv,
             "conv1d.weight",
@@ -467,7 +467,7 @@ public:
         bind(
             TensorRole::Mamba2Output,
             "out_proj.weight",
-            {*m.hidden_size, spec.intermediate_size});
+            {*m.core.hidden_size, spec.intermediate_size});
     }
 };
 
