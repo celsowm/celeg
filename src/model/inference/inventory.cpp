@@ -4,12 +4,148 @@
 
 
 #include <algorithm>
+#include <limits>
 #include <regex>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace celeg {
+namespace {
 
+AttentionPatternKind parse_attention_pattern(std::string_view value,
+                                             std::string_view source) {
+    if (value == "full_attention" || value == "full" || value == "causal" ||
+        value == "full_causal") {
+        return AttentionPatternKind::FullCausal;
+    }
+    if (value == "sliding_attention" || value == "sliding_window" ||
+        value == "sliding") {
+        return AttentionPatternKind::SlidingWindow;
+    }
+    inference_detail::fail(
+        ResolutionFailureKind::UnsupportedSemanticFeature,
+        "unknown attention layer pattern token in " + std::string(source) + ": " +
+            std::string(value));
+}
+
+const MetadataValue* metadata_alias(const CheckpointMetadata& metadata,
+                                    std::string_view key) {
+    if (metadata.contains(key)) return &metadata.value(key);
+    const std::string text_key = "text_config." + std::string(key);
+    return metadata.contains(text_key) ? &metadata.value(text_key) : nullptr;
+}
+
+std::optional<int> integer_alias(const CheckpointMetadata& metadata,
+                                 std::string_view key) {
+    const MetadataValue* value = metadata_alias(metadata, key);
+    if (value == nullptr) return std::nullopt;
+    if (const auto* integer = std::get_if<int64_t>(value)) {
+        if (*integer < std::numeric_limits<int>::min() ||
+            *integer > std::numeric_limits<int>::max()) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "attention metadata integer is outside the supported range: " +
+                    std::string(key));
+        }
+        return static_cast<int>(*integer);
+    }
+    inference_detail::fail(
+        ResolutionFailureKind::ConflictingMetadata,
+        "attention metadata key has an incompatible type: " + std::string(key));
+}
+
+LayerScopedValue<AttentionPatternKind> attention_pattern_metadata(
+    const CheckpointMetadata& metadata,
+    const std::optional<int>& layer_count,
+    std::vector<EvidenceItem>& evidence) {
+    LayerScopedValue<AttentionPatternKind> result;
+    std::string accepted_source;
+    const auto consider = [&](std::string_view key) {
+        const MetadataValue* raw = metadata_alias(metadata, key);
+        if (raw == nullptr) return;
+        LayerScopedValue<AttentionPatternKind> candidate;
+        if (const auto* value = std::get_if<std::string>(raw)) {
+            candidate.global = parse_attention_pattern(*value, key);
+        } else if (const auto* values = std::get_if<std::vector<std::string>>(raw)) {
+            if (!layer_count.has_value() ||
+                values->size() != static_cast<size_t>(*layer_count)) {
+                inference_detail::fail(
+                    ResolutionFailureKind::IncompleteLayerSchedule,
+                    "attention layer schedule length does not match layer_count: " +
+                        std::string(key));
+            }
+            candidate.per_layer.reserve(values->size());
+            for (const std::string& value : *values) {
+                candidate.per_layer.push_back(parse_attention_pattern(value, key));
+            }
+        } else {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "attention layer schedule has an incompatible type: " + std::string(key));
+        }
+        if (result.has_value() && !(result == candidate)) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting attention layer schedules: " + accepted_source + " and " +
+                    std::string(key));
+        }
+        result = std::move(candidate);
+        accepted_source = std::string(key);
+    };
+    consider("layer_types");
+    consider("layer_layouts");
+    if (result.has_value()) {
+        evidence.push_back({EvidenceKind::AliasMetadata, accepted_source,
+                            result.per_layer.empty()
+                                ? "attention_pattern = global"
+                                : "attention_pattern = layer-scoped schedule"});
+    }
+    return result;
+}
+
+void normalize_attention_schedule(const CheckpointMetadata& source,
+                                  NormalizedModelMetadata& metadata) {
+    metadata.attention.pattern = attention_pattern_metadata(
+        source, metadata.core.layer_count, metadata.evidence);
+
+    std::optional<int> window;
+    for (const std::string_view key : {std::string_view("sliding_window"),
+                                       std::string_view("sliding_window_size")}) {
+        const std::optional<int> candidate = integer_alias(source, key);
+        if (!candidate.has_value()) continue;
+        if (window.has_value() && *window != *candidate) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting sliding-window metadata aliases");
+        }
+        window = candidate;
+    }
+    if (window.has_value()) {
+        if (*window <= 0) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "sliding_window must be positive");
+        }
+        metadata.attention.sliding_window = window;
+        metadata.evidence.push_back({EvidenceKind::AliasMetadata, "sliding_window",
+                                     "sliding_window = " + std::to_string(*window)});
+    }
+
+    bool needs_window = false;
+    if (metadata.attention.pattern.global == AttentionPatternKind::SlidingWindow) {
+        needs_window = true;
+    }
+    for (const auto& pattern : metadata.attention.pattern.per_layer) {
+        if (pattern == AttentionPatternKind::SlidingWindow) needs_window = true;
+    }
+    if (needs_window && !metadata.attention.sliding_window.has_value()) {
+        inference_detail::fail(
+            ResolutionFailureKind::MissingRequiredMetadata,
+            "sliding attention schedule requires sliding_window metadata");
+    }
+}
+
+}
 
 TensorInventory::TensorInventory(std::vector<TensorInventoryEntry> entries)
     : entries_(std::move(entries)) {
@@ -89,8 +225,10 @@ InferenceInput build_inference_input(const CheckpointView& checkpoint) {
         inference_detail::fail(ResolutionFailureKind::MissingTensorRole,
                                "automatic checkpoint resolution requires a tensor repository");
     }
-    return {normalize_model_metadata(checkpoint.metadata),
-            build_tensor_inventory(*checkpoint.repository), checkpoint.metadata.source_format};
+    NormalizedModelMetadata metadata = normalize_model_metadata(checkpoint.metadata);
+    normalize_attention_schedule(checkpoint.metadata, metadata);
+    return {std::move(metadata), build_tensor_inventory(*checkpoint.repository),
+            checkpoint.metadata.source_format};
 }
 
 }
