@@ -7,8 +7,11 @@ name: Lizzy Transformers semantic oracle
     paths:
       - ".github/workflows/lizzy-semantic.yml"
       - "benchmarks/inspect_safetensors.py"
+      - "benchmarks/materialize_sparse_safetensors.py"
       - "benchmarks/compare_transformers.py"
       - "src/model/**"
+      - "src/checkpoint/**"
+      - "src/app/**"
   workflow_dispatch:
     inputs:
       run_semantic:
@@ -66,14 +69,17 @@ jobs:
   inspect-checkpoint:
     needs: hf-auth
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install Hugging Face client
-        run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+          python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
       - name: Inspect real Lizzy safetensors metadata
         shell: bash
         run: |
@@ -83,6 +89,28 @@ jobs:
             --revision "$HF_REVISION" \
             --json-out lizzy-tensors.json \
             2>&1 | tee lizzy-tensors.log
+      - name: Materialize metadata-only sparse checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python benchmarks/materialize_sparse_safetensors.py \
+            --model "$HF_REPO" \
+            --revision "$HF_REVISION" \
+            --output lizzy-sparse \
+            2>&1 | tee lizzy-sparse.log
+          du -h lizzy-sparse/model.safetensors
+          ls -lh lizzy-sparse/model.safetensors
+      - name: Build CELEG CPU resolver
+        run: python scripts/dev.py build --backend cpu --build-type Release --jobs 2
+      - name: Resolve real Lizzy config and tensor grammar in CELEG
+        shell: bash
+        run: |
+          set -euo pipefail
+          out/linux-cpu-release/celeg-cpu-run \
+            --model lizzy-sparse \
+            --print-config \
+            --context 512 \
+            2>&1 | tee lizzy-celeg-resolution.log
       - name: Upload checkpoint metadata
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,6 +119,8 @@ jobs:
           path: |
             lizzy-tensors.json
             lizzy-tensors.log
+            lizzy-sparse.log
+            lizzy-celeg-resolution.log
           if-no-files-found: ignore
 
   semantic-oracle:
