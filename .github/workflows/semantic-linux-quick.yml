@@ -5,7 +5,7 @@ name: Semantic Linux smoke verification
     branches:
       - agent/automatic-semantic-model-support
     paths:
-      - scripts/apply_semantic_model_refactor_phase14.py
+      - scripts/apply_semantic_model_refactor_phase15.py
       - .github/workflows/semantic-linux-quick.yml
 
 permissions:
@@ -24,8 +24,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
-      - name: Apply canonical residual ordering
-        run: python scripts/apply_semantic_model_refactor_phase14.py
+      - name: Apply exact residual cleanup
+        run: python scripts/apply_semantic_model_refactor_phase15.py
       - name: Build and test
         shell: bash
         run: |
