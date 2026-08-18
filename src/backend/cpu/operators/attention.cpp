@@ -16,13 +16,23 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     const int q_width = layout.query_width();
     const bool has_key = key != nullptr && !weights.k.segments.empty();
     const RopePositionSpec* rope = layout.rope_position();
+
+    const auto apply_norm_only = [&](float* data, const float* norm_weight,
+                                     int heads, const NormSpec& norm) {
+        if (norm.granularity == NormGranularity::PerHead) {
+            cpu_qk_norm_only(data, norm_weight, heads, layout.head_dim, norm.epsilon);
+        } else {
+            cpu_qk_norm_only(data, norm_weight, 1, heads * layout.head_dim, norm.epsilon);
+        }
+    };
+
     if (rope == nullptr) {
         if (layout.has_query_key_norm()) {
-            cpu_qk_norm_only(query, weights.q_norm.data(), layout.query_heads,
-                             layout.head_dim, layout.query_norm->epsilon);
+            apply_norm_only(query, weights.q_norm.data(), layout.query_heads,
+                            *layout.query_norm);
             if (has_key) {
-                cpu_qk_norm_only(key, weights.k_norm.data(), layout.key_value_heads,
-                                 layout.head_dim, layout.key_norm->epsilon);
+                apply_norm_only(key, weights.k_norm.data(), layout.key_value_heads,
+                                *layout.key_norm);
             }
             for (int i = 0; i < q_width; ++i) query[i] *= layout.query_scale;
             return;
@@ -34,26 +44,38 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     }
 
     if (layout.has_query_key_norm()) {
-        if (const auto* multi = layout.multi_axis_position()) {
-            cpu_qk_norm_rope_mrope(query, weights.q_norm.data(), layout.query_heads,
-                layout.head_dim, rope_position, multi->sections, multi->interleaved,
-                *rope, layout.query_norm->epsilon);
-            if (has_key) {
-                cpu_qk_norm_rope_mrope(key, weights.k_norm.data(), layout.key_value_heads,
-                    layout.head_dim, rope_position, multi->sections, multi->interleaved,
-                    *rope, layout.key_norm->epsilon);
+        const auto apply_norm_and_rope = [&](float* data, const float* norm_weight,
+                                             int heads, const NormSpec& norm) {
+            if (norm.granularity == NormGranularity::PerHead) {
+                if (const auto* multi = layout.multi_axis_position()) {
+                    cpu_qk_norm_rope_mrope(
+                        data, norm_weight, heads, layout.head_dim, rope_position,
+                        multi->sections, multi->interleaved, *rope, norm.epsilon);
+                } else {
+                    cpu_qk_norm_rope(data, norm_weight, heads, layout.head_dim,
+                                     scalar_position, *rope, norm.epsilon);
+                }
+                return;
             }
-        } else {
-            cpu_qk_norm_rope(query, weights.q_norm.data(), layout.query_heads,
-                             layout.head_dim, scalar_position,
-                             *rope, layout.query_norm->epsilon);
-            if (has_key) {
-                cpu_qk_norm_rope(key, weights.k_norm.data(), layout.key_value_heads,
-                                 layout.head_dim, scalar_position,
-                                 *rope, layout.key_norm->epsilon);
+
+            cpu_qk_norm_only(data, norm_weight, 1, heads * layout.head_dim,
+                             norm.epsilon);
+            if (const auto* multi = layout.multi_axis_position()) {
+                cpu_rope_mrope(data, heads, layout.head_dim, rope_position,
+                               multi->sections, multi->interleaved, *rope);
+            } else {
+                cpu_rope(data, heads, layout.head_dim, scalar_position, *rope);
             }
+        };
+
+        apply_norm_and_rope(query, weights.q_norm.data(), layout.query_heads,
+                            *layout.query_norm);
+        if (has_key) {
+            apply_norm_and_rope(key, weights.k_norm.data(), layout.key_value_heads,
+                                *layout.key_norm);
         }
-        const float query_scale = layout.query_scale * rope_attention_scale(*rope, scalar_position);
+        const float query_scale = layout.query_scale *
+            rope_attention_scale(*rope, scalar_position);
         for (int i = 0; i < q_width; ++i) query[i] *= query_scale;
         return;
     }
