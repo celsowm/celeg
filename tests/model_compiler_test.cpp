@@ -228,9 +228,14 @@ int main() {
     CELEG_TEST_CHECK(celeg::rope_frequency(long_rope, 2, 8, 16) !=
                      celeg::rope_frequency(long_rope, 2, 8, 64));
     celeg::RopePositionSpec yarn_rope{10000.0, 1.0,
-        celeg::YarnRopeScaling{2.0, 1.25, 1.0, 4.0}};
-    CELEG_TEST_CHECK(celeg::rope_frequency(yarn_rope, 0, 8, 64) !=
-                     celeg::rope_frequency(yarn_rope, 3, 8, 64));
+        celeg::YarnRopeScaling{2.0, 1.25, 32.0, 1.0, 32}};
+    const celeg::RopePositionSpec unscaled_rope{10000.0, 1.0, {}};
+    CELEG_TEST_CHECK(std::abs(
+        celeg::rope_frequency(yarn_rope, 0, 8, 64) -
+        celeg::rope_frequency(unscaled_rope, 0, 8, 64)) < 1.0e-12);
+    CELEG_TEST_CHECK(std::abs(
+        celeg::rope_frequency(yarn_rope, 1, 8, 64) -
+        celeg::rope_frequency(unscaled_rope, 1, 8, 64) / 2.0) < 1.0e-12);
     celeg::RopePositionSpec llama3_rope{10000.0, 1.0,
         celeg::Llama3FrequencyScaling{2.0, 32, 1.0, 8.0}};
     CELEG_TEST_CHECK(celeg::rope_frequency(llama3_rope, 0, 8, 64) !=
