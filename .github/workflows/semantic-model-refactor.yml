@@ -1,4 +1,4 @@
-name: Semantic model refactor runner
+name: Semantic model verification
 
 "on":
   push:
@@ -7,12 +7,144 @@ name: Semantic model refactor runner
     paths:
       - .github/workflows/semantic-model-refactor.yml
 
+permissions:
+  contents: write
+
 concurrency:
-  group: semantic-model-refactor
+  group: semantic-model-verification
   cancel-in-progress: true
 
 jobs:
-  done:
+  linux-cpu:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "semantic model transform already materialized; official CI is authoritative"
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Verify
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/dev.py verify --backend cpu --build-type Release --jobs 2 > verify-linux-cpu.log 2>&1
+          code=$?
+          if [ "$code" -eq 0 ]; then
+            BUILD_DIR=out/linux-cpu-release bash ./scripts/cpu_vnni_check.sh >> verify-linux-cpu.log 2>&1
+            code=$?
+          fi
+          if [ "$code" -eq 0 ] && ldd out/linux-cpu-release/libceleg_cpu.so | grep -Eqi 'cuda|cublas'; then
+            echo 'CPU ABI unexpectedly links CUDA' >> verify-linux-cpu.log
+            code=1
+          fi
+          echo "EXIT_CODE=$code" > linux-cpu.txt
+          tail -n 240 verify-linux-cpu.log >> linux-cpu.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-linux-cpu
+          path: linux-cpu.txt
+
+  linux-cuda:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.8.1-devel-ubuntu22.04
+    env:
+      CC: /usr/bin/gcc-12
+      CXX: /usr/bin/g++-12
+      CUDAHOSTCXX: /usr/bin/g++-12
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-12 g++-12 python3 python3-pip
+          python3 -m pip install --no-cache-dir cmake==3.31.6 ninja==1.13.0
+      - name: Verify
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/dev.py verify --backend cuda --arch 80 --celeg-tests off --build-type Release --jobs 2 > verify-linux-cuda.log 2>&1
+          code=$?
+          echo "EXIT_CODE=$code" > linux-cuda.txt
+          tail -n 240 verify-linux-cuda.log >> linux-cuda.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-linux-cuda
+          path: linux-cuda.txt
+
+  windows-cpu:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ninja
+      - name: Verify
+        shell: pwsh
+        run: |
+          python scripts/dev.py verify --backend cpu --build-type Release --jobs 2 *> verify-windows-cpu.log
+          $code = $LASTEXITCODE
+          "EXIT_CODE=$code" | Out-File windows-cpu.txt -Encoding utf8
+          Get-Content verify-windows-cpu.log -Tail 240 | Add-Content windows-cpu.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-windows-cpu
+          path: windows-cpu.txt
+
+  windows-cuda:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Jimver/cuda-toolkit@v0.2.32
+        with:
+          cuda: "12.8.1"
+          method: network
+      - run: python -m pip install ninja
+      - name: Verify
+        shell: pwsh
+        run: |
+          python scripts/dev.py build --backend cuda --arch 80 --celeg-tests off --build-type Release --jobs 2 *> verify-windows-cuda.log
+          $code = $LASTEXITCODE
+          "EXIT_CODE=$code" | Out-File windows-cuda.txt -Encoding utf8
+          Get-Content verify-windows-cuda.log -Tail 240 | Add-Content windows-cuda.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semantic-windows-cuda
+          path: windows-cuda.txt
+
+  report:
+    if: always()
+    needs: [linux-cpu, linux-cuda, windows-cpu, windows-cuda]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/automatic-semantic-model-support
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: semantic-*
+          path: semantic-results
+          merge-multiple: true
+      - name: Consolidate
+        run: |
+          : > semantic-final-verify.txt
+          for file in linux-cpu.txt linux-cuda.txt windows-cpu.txt windows-cuda.txt; do
+            echo "===== $file =====" >> semantic-final-verify.txt
+            if [ -f "semantic-results/$file" ]; then
+              cat "semantic-results/$file" >> semantic-final-verify.txt
+            else
+              echo "MISSING_RESULT" >> semantic-final-verify.txt
+            fi
+            echo >> semantic-final-verify.txt
+          done
+      - name: Publish report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f semantic-final-verify.txt
+          git commit -m "ci: record semantic model verification"
+          git push origin HEAD:agent/automatic-semantic-model-support
