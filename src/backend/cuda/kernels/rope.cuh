@@ -256,6 +256,15 @@ void launch_rope_batch_positions(
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__device__ __forceinline__ float dynamic_yarn_correction_dimension(
+    float rotations, int rotary_dimension, float theta, int original_context) {
+    const float numerator = static_cast<float>(rotary_dimension) *
+        logf(static_cast<float>(original_context) /
+             (rotations * 6.28318530717958647692f));
+    const float denominator = 2.0f * logf(theta);
+    return numerator / denominator;
+}
+
 __device__ __forceinline__ float scaled_rope_frequency(
     float theta, int pair, int rotary_dimension, int position,
     CudaRopeScaling scaling) {
@@ -275,10 +284,18 @@ __device__ __forceinline__ float scaled_rope_frequency(
     if (scaling.kind == 1) {
         frequency /= scaling.factor;
     } else if (scaling.kind == 3) {
-        const float span = fmaxf(1.0f, scaling.beta_slow - scaling.beta_fast);
+        const float low = floorf(dynamic_yarn_correction_dimension(
+            scaling.beta_fast, rotary_dimension, theta, scaling.original_context));
+        const float high = ceilf(dynamic_yarn_correction_dimension(
+            scaling.beta_slow, rotary_dimension, theta, scaling.original_context));
+        const float clipped_low = fmaxf(0.0f, low);
+        const float clipped_high = fminf(
+            static_cast<float>(rotary_dimension - 1), high);
+        const float span = fmaxf(0.001f, clipped_high - clipped_low);
         const float ramp = fminf(1.0f, fmaxf(0.0f,
-            (static_cast<float>(pair) - scaling.beta_fast) / span));
-        frequency /= 1.0f + ramp * (scaling.factor - 1.0f);
+            (static_cast<float>(pair) - clipped_low) / span));
+        const float interpolated = frequency / scaling.factor;
+        frequency = frequency * (1.0f - ramp) + interpolated * ramp;
     } else if (scaling.kind == 4) {
         if (pair < scaling.factor_count) {
             const float factor = position > scaling.original_context
@@ -370,10 +387,12 @@ void launch_dynamic_qk_norm_rope(
     CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const float query_attention_scale = scaling.kind == 3
+        ? scaling.attention_factor * scaling.attention_factor
+        : 1.0f;
     dynamic_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, position, nullptr, 0,
-        rope_theta, pairs, eps, normalize, scaling,
-        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
+        rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, position, nullptr, 0,
@@ -390,10 +409,12 @@ void launch_dynamic_qk_norm_rope_device(
     CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const float query_attention_scale = scaling.kind == 3
+        ? scaling.attention_factor * scaling.attention_factor
+        : 1.0f;
     dynamic_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, 0, position, 1,
-        rope_theta, pairs, eps, normalize, scaling,
-        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
+        rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, 0, position, 1,
@@ -410,10 +431,12 @@ void launch_dynamic_qk_norm_rope_prefill(
     CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const float query_attention_scale = scaling.kind == 3
+        ? scaling.attention_factor * scaling.attention_factor
+        : 1.0f;
     dynamic_qk_norm_rope_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, q_norm, rows, q_heads, head_dim, 0, nullptr, 2,
-        rope_theta, pairs, eps, normalize, scaling,
-        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
+        rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<rows * kv_heads, threads, 0, stream>>>(
             k, k_norm, rows, kv_heads, head_dim, 0, nullptr, 2,
@@ -494,10 +517,12 @@ void launch_dynamic_mrope_qk_norm_rope(
     bool normalize, CudaRopeScaling scaling, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
+    const float query_attention_scale = scaling.kind == 3
+        ? scaling.attention_factor * scaling.attention_factor
+        : 1.0f;
     dynamic_mrope_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, positions, section0, section1, section2,
-        interleaved, rope_theta, pairs, eps, normalize, scaling,
-        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
+        interleaved, rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
     if (k) {
         dynamic_mrope_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, positions, section0, section1, section2,
