@@ -31,6 +31,12 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
     return cuda_tensor_name(requests, role, layer);
 }
 
+int attention_norm_width(const NormSpec& norm, int heads, int head_dim) {
+    return norm.granularity == NormGranularity::PerHead
+        ? head_dim
+        : heads * head_dim;
+}
+
 }
 
 void CudaCompiledModel::load_checkpoint_weights(
@@ -450,15 +456,19 @@ void CudaCompiledModel::load_checkpoint_weights(
                 repo, tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionOutput, i),
                 {resources_.program_.hidden, layout.query_width()});
             if (layout.has_query_key_norm()) {
+                const int query_norm_width = attention_norm_width(
+                    *layout.query_norm, layout.query_heads, layout.head_dim);
                 attention_layer.q_norm = resources_.weight_loader_->load_rms_norm_weight(
                     repo, layout.query_norm->weightless() ? std::string{} :
                         tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionQueryNorm, i),
-                    {layout.head_dim}, layout.query_norm->weight_kind);
+                    {query_norm_width}, layout.query_norm->weight_kind);
                 if (attention_layer.key) {
+                    const int key_norm_width = attention_norm_width(
+                        *layout.key_norm, layout.key_value_heads, layout.head_dim);
                     attention_layer.k_norm = resources_.weight_loader_->load_rms_norm_weight(
                         repo, layout.key_norm->weightless() ? std::string{} :
                             tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionKeyNorm, i),
-                        {layout.head_dim}, layout.key_norm->weight_kind);
+                        {key_norm_width}, layout.key_norm->weight_kind);
                 }
             }
 
