@@ -458,6 +458,40 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.attention.query_key_norm = aliases<bool>(
         metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
         "query_key_norm");
+    if (result.attention.query_key_norm.value_or(false)) {
+        std::optional<std::string> qk_norm_type;
+        std::string qk_norm_type_source;
+        for (const std::string_view key : {
+                 std::string_view("qk_norm_type"),
+                 std::string_view("text_config.qk_norm_type")}) {
+            if (!metadata.contains(key)) continue;
+            const MetadataValue& raw = metadata.value(key);
+            const auto* value = std::get_if<std::string>(&raw);
+            if (value == nullptr) {
+                inference_detail::fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "Q/K normalization type metadata is not a string: " +
+                        std::string(key));
+            }
+            if (qk_norm_type.has_value() && *qk_norm_type != *value) {
+                inference_detail::fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "conflicting Q/K normalization type metadata");
+            }
+            qk_norm_type = *value;
+            qk_norm_type_source = std::string(key);
+        }
+        if (qk_norm_type.has_value()) {
+            if (*qk_norm_type != "rmsnorm") {
+                inference_detail::fail(
+                    ResolutionFailureKind::UnsupportedSemanticFeature,
+                    "unsupported Q/K normalization mathematics: " + *qk_norm_type);
+            }
+            result.evidence.push_back({EvidenceKind::ExplicitMetadata,
+                                       qk_norm_type_source,
+                                       "query_key_norm = rmsnorm"});
+        }
+    }
     result.core.feed_forward_auto_adjust = aliases<bool>(
         metadata, {"block_auto_adjust_ff_dim"}, result.evidence,
         "feed_forward_auto_adjust");
