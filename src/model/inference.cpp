@@ -7,6 +7,34 @@
 #include <utility>
 
 namespace celeg {
+namespace {
+
+void apply_attention_patterns(ModelGraph& graph,
+                              const NormalizedModelMetadata& metadata) {
+    for (int layer = 0; layer < static_cast<int>(graph.layers.size()); ++layer) {
+        auto* attention = std::get_if<AttentionSpec>(
+            &graph.layers[static_cast<size_t>(layer)].mixer);
+        if (attention == nullptr) continue;
+        const AttentionPatternKind pattern = metadata.attention.pattern.value_for(layer)
+            .value_or(AttentionPatternKind::FullCausal);
+        switch (pattern) {
+        case AttentionPatternKind::FullCausal:
+            attention->pattern = FullCausalPattern{};
+            break;
+        case AttentionPatternKind::SlidingWindow:
+            if (!metadata.attention.sliding_window.has_value()) {
+                inference_detail::fail(
+                    ResolutionFailureKind::MissingRequiredMetadata,
+                    "sliding attention layer has no resolved sliding_window");
+            }
+            attention->pattern = SlidingWindowPattern{
+                *metadata.attention.sliding_window};
+            break;
+        }
+    }
+}
+
+}
 
 ResolutionError::ResolutionError(
     ResolutionFailureKind kind,
@@ -19,6 +47,7 @@ ResolutionError::ResolutionError(
 CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     auto context = inference_detail::initialize_canonical_facts(input);
     inference_detail::resolve_canonical_layers(context);
+    apply_attention_patterns(context.facts.graph, input.metadata);
     context.facts.validate();
     return std::move(context.facts);
 }
