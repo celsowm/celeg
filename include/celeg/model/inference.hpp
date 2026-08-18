@@ -88,7 +88,18 @@ struct LayerScopedValue {
         return global;
     }
 
-    friend bool operator==(const LayerScopedValue&, const LayerScopedValue&) = default;
+    friend bool operator==(const LayerScopedValue& left,
+                           const LayerScopedValue& right) {
+        const size_t layers = std::max(left.per_layer.size(), right.per_layer.size());
+        if (layers == 0) return left.global == right.global;
+        for (size_t layer = 0; layer < layers; ++layer) {
+            if (left.value_for(static_cast<int>(layer)) !=
+                right.value_for(static_cast<int>(layer))) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 enum class AttentionPatternKind : std::uint8_t {
