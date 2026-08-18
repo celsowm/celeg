@@ -17,10 +17,10 @@ namespace celeg {
 
 
 struct LayerCommon {
-    const __nv_bfloat16* operator_norm = nullptr;
-    const __nv_bfloat16* post_attention_norm = nullptr;
-    const __nv_bfloat16* ffn_norm = nullptr;
-    const __nv_bfloat16* post_feed_forward_norm = nullptr;
+    const __nv_bfloat16* mixer_norm_before = nullptr;
+    const __nv_bfloat16* mixer_norm_after = nullptr;
+    const __nv_bfloat16* feed_forward_norm_before = nullptr;
+    const __nv_bfloat16* feed_forward_norm_after = nullptr;
     FeedForwardWeights feed_forward;
     const LinearWeight* per_layer_input_gate = nullptr;
     const LinearWeight* per_layer_projection = nullptr;
@@ -28,16 +28,6 @@ struct LayerCommon {
     const __nv_bfloat16* layer_scalar = nullptr;
 };
 
-// Mutually exclusive CUDA KV-cache runtime state families. Each attention
-// layer belongs to exactly one family, matching the semantic taxonomy in
-// `AttentionStateSpec` (celeg/model/graph.hpp): `OrdinaryKvStateSpec` splits
-// further into BF16 vs INT8 storage based on the runtime `KvCacheMode`
-// option, and `LatentAttentionStateSpec` maps to
-// `LatentAttentionRuntimeState`. A layer never owns buffers for a family it
-// does not use (e.g. an ordinary BF16 layer never allocates INT8 or latent
-// buffers). Buffers start empty and are lazily sized by `reset()`; a
-// shared-KV consumer layer (see `kv_owner_layer` below) keeps its buffers
-// empty forever and always reads through its owner instead.
 struct OrdinaryBf16KvState {
     DeviceBuffer<__nv_bfloat16> key_cache;
     DeviceBuffer<__nv_bfloat16> value_cache;
