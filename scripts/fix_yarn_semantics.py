@@ -2,17 +2,14 @@ from pathlib import Path
 
 ROOT = Path('.')
 
-
 def replace(path: str, old: str, new: str, count: int = 1) -> None:
     file = ROOT / path
     text = file.read_text(encoding='utf-8')
     if old not in text:
         if new in text:
             return
-        raise SystemExit(f'missing fragment in {path}: {old[:160]!r}')
+        raise SystemExit(f'missing fragment in {path}: {old[:180]!r}')
     file.write_text(text.replace(old, new, count), encoding='utf-8')
-
-# prepare_yarn_definition.py establishes the canonical struct shape first.
 
 replace('src/model/definition.cpp',
 '''            if (!std::isfinite(value.beta_fast) || !std::isfinite(value.beta_slow) ||
@@ -55,24 +52,23 @@ replace('include/celeg/model/position.hpp',
                     (static_cast<double>(pair) - low) / (high - low), 0.0, 1.0);
                 const double extrapolation = 1.0 - ramp;
                 const double interpolated = result / scaling.factor;
-                result = interpolated * (1.0 - extrapolation) +
-                    result * extrapolation;
+                result = interpolated * (1.0 - extrapolation) + result * extrapolation;
                 return result;''')
 
 replace('include/celeg/backend/cuda/kernels/rope.hpp',
 '''        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
-            out.kind = 3;
-            out.factor = static_cast<float>(value.factor);
-            out.attention_factor = static_cast<float>(value.attention_factor);
-            out.beta_fast = static_cast<float>(value.beta_fast);
-            out.beta_slow = static_cast<float>(value.beta_slow);''',
+            result.kind = 3;
+            result.factor = static_cast<float>(scaling.factor);
+            result.attention_factor = static_cast<float>(scaling.attention_factor);
+            result.beta_fast = static_cast<float>(scaling.beta_fast);
+            result.beta_slow = static_cast<float>(scaling.beta_slow);''',
 '''        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
-            out.kind = 3;
-            out.factor = static_cast<float>(value.factor);
-            out.original_context = value.original_context;
-            out.attention_factor = static_cast<float>(value.attention_factor);
-            out.beta_fast = static_cast<float>(value.beta_fast);
-            out.beta_slow = static_cast<float>(value.beta_slow);''')
+            result.kind = 3;
+            result.factor = static_cast<float>(scaling.factor);
+            result.original_context = scaling.original_context;
+            result.attention_factor = static_cast<float>(scaling.attention_factor);
+            result.beta_fast = static_cast<float>(scaling.beta_fast);
+            result.beta_slow = static_cast<float>(scaling.beta_slow);''')
 
 replace('src/backend/cuda/kernels/rope.cuh',
 '''    } else if (scaling.kind == 3) {
@@ -83,12 +79,10 @@ replace('src/backend/cuda/kernels/rope.cuh',
 '''    } else if (scaling.kind == 3) {
         constexpr float two_pi = 6.28318530717958647692f;
         const float denominator = 2.0f * logf(theta);
-        const float low_dimension =
-            static_cast<float>(rotary_dimension) *
+        const float low_dimension = static_cast<float>(rotary_dimension) *
             logf(static_cast<float>(scaling.original_context) /
                  (scaling.beta_fast * two_pi)) / denominator;
-        const float high_dimension =
-            static_cast<float>(rotary_dimension) *
+        const float high_dimension = static_cast<float>(rotary_dimension) *
             logf(static_cast<float>(scaling.original_context) /
                  (scaling.beta_slow * two_pi)) / denominator;
         const float low = fmaxf(0.0f, floorf(low_dimension));
@@ -99,8 +93,7 @@ replace('src/backend/cuda/kernels/rope.cuh',
             (static_cast<float>(pair) - low) / (high - low)));
         const float extrapolation = 1.0f - ramp;
         const float interpolated = frequency / scaling.factor;
-        frequency = interpolated * (1.0f - extrapolation) +
-            frequency * extrapolation;''')
+        frequency = interpolated * (1.0f - extrapolation) + frequency * extrapolation;''')
 
 replace('src/model/inference/metadata.cpp',
 '''                const double beta_fast = metadata.number_or("rope_scaling.beta_fast", 32.0);
