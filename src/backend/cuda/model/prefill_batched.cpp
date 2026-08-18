@@ -40,7 +40,7 @@ void run_mixer(
             run_attention(model, *attention, common_layer, semantics, rows);
         },
         [&](ConvolutionLayer* convolution) {
-            run_convolution(model, *convolution, rows);
+            run_convolution(model, *convolution, semantics, rows);
         });
 }
 
