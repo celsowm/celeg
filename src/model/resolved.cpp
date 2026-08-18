@@ -13,7 +13,8 @@ namespace celeg {
 namespace {
 
 void append_norm(std::ostringstream& out, const NormSpec& norm) {
-    out << norm.epsilon << ':' << static_cast<int>(norm.weight_kind) << ';';
+    out << norm.epsilon << ':' << static_cast<int>(norm.weight_kind) << ':'
+        << static_cast<int>(norm.granularity) << ';';
 }
 
 void append_optional_norm(std::ostringstream& out, const std::optional<NormSpec>& norm) {
