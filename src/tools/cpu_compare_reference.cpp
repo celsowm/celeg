@@ -39,17 +39,31 @@ std::vector<size_t> top_indices(const std::vector<float>& values, size_t count) 
     indices.resize(count);
     return indices;
 }
+
+void print_tokens(std::string_view label, const std::vector<int32_t>& tokens) {
+    std::cout << label << '=';
+    for (size_t index = 0; index < tokens.size(); ++index) {
+        if (index != 0) std::cout << ',';
+        std::cout << tokens[index];
+    }
+    std::cout << '\n';
+}
 }
 
 int main(int argc, char** argv) {
     try {
         if (argc < 3) {
-            std::cerr << "usage: celeg-cpu-compare-reference MODEL.safetensors REFERENCE_DIR [KV] [ISA] [THREADS]\n";
+            std::cerr << "usage: celeg-cpu-compare-reference MODEL REFERENCE_DIR [KV] [ISA] [THREADS]\n";
             return 2;
         }
         const std::filesystem::path reference(argv[2]);
         const auto tokens = read_binary<int32_t>(reference / "tokens.i32");
         const auto expected = read_binary<float>(reference / "prefill_logits.f32");
+        const std::filesystem::path generated_path = reference / "generated_tokens.i32";
+        const std::vector<int32_t> expected_generation =
+            std::filesystem::exists(generated_path)
+                ? read_binary<int32_t>(generated_path)
+                : std::vector<int32_t>{};
         if (tokens.empty()) throw std::runtime_error("reference token sequence is empty");
         celeg::CpuModelOptions options;
         options.kv_cache_mode = celeg::parse_cpu_kv_cache_mode(argc > 3 ? argv[3] : "fp32");
@@ -59,8 +73,11 @@ int main(int argc, char** argv) {
         celeg::GenerationConfig generation;
         generation.temperature = 0.0f;
         generation.top_k = 1;
-        celeg::CpuModel model(argv[1], static_cast<int>(tokens.size() + 8),
-                            options, generation);
+        generation.top_p = 1.0f;
+        generation.repetition_penalty = 1.0f;
+        celeg::CpuModel model(argv[1],
+                             static_cast<int>(tokens.size() + expected_generation.size() + 8),
+                             options, generation);
         if (expected.size() != model.diagnostics().copy_logits().size()) {
             throw std::runtime_error("reference logits have the wrong vocabulary size");
         }
@@ -89,18 +106,43 @@ int main(int argc, char** argv) {
                 ++intersection;
             }
         }
+        const bool top1_equal = actual_top.front() == expected_top.front();
         const double cosine = dot / std::sqrt(actual_norm * expected_norm);
+
+        std::vector<int32_t> actual_generation;
+        actual_generation.reserve(expected_generation.size());
+        size_t first_generation_mismatch = expected_generation.size();
+        for (size_t index = 0; index < expected_generation.size(); ++index) {
+            const int32_t token = model.session().decode();
+            actual_generation.push_back(token);
+            if (first_generation_mismatch == expected_generation.size() &&
+                token != expected_generation[index]) {
+                first_generation_mismatch = index;
+            }
+        }
+        const bool generation_equal =
+            first_generation_mismatch == expected_generation.size();
+
         std::cout << std::fixed << std::setprecision(8)
                   << "tokens=" << tokens.size() << '\n'
                   << "max_abs_error=" << maximum << '\n'
                   << "mean_abs_error=" << absolute_sum / actual.size() << '\n'
                   << "rmse=" << std::sqrt(squared_sum / actual.size()) << '\n'
                   << "cosine_similarity=" << cosine << '\n'
-                  << "top1_equal=" << (actual_top.front() == expected_top.front()) << '\n'
+                  << "top1_equal=" << top1_equal << '\n'
                   << "top10_intersection=" << intersection << '\n'
                   << "actual_top1=" << actual_top.front() << '\n'
-                  << "expected_top1=" << expected_top.front() << '\n';
-        return 0;
+                  << "expected_top1=" << expected_top.front() << '\n'
+                  << "generated_token_count=" << expected_generation.size() << '\n'
+                  << "generation_equal=" << generation_equal << '\n';
+        if (!generation_equal) {
+            std::cout << "first_generation_mismatch=" << first_generation_mismatch << '\n';
+        }
+        if (!expected_generation.empty()) {
+            print_tokens("expected_generation", expected_generation);
+            print_tokens("actual_generation", actual_generation);
+        }
+        return top1_equal && generation_equal ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
         return 1;
