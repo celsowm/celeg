@@ -34,6 +34,22 @@ void apply_attention_patterns(ModelGraph& graph,
     }
 }
 
+void apply_position_scaling(ModelGraph& graph,
+                            const NormalizedModelMetadata& metadata) {
+    const auto* inferred = std::get_if<InferredRopePosition>(
+        &metadata.attention.position_encoding);
+    if (inferred == nullptr) return;
+    for (LayerSpec& layer : graph.layers) {
+        auto* attention = std::get_if<AttentionSpec>(&layer.mixer);
+        if (attention == nullptr) continue;
+        if (auto* rope = std::get_if<RopePositionSpec>(&attention->position)) {
+            rope->scaling = inferred->scaling;
+        } else if (auto* multi = std::get_if<MultiAxisRopeSpec>(&attention->position)) {
+            multi->base.scaling = inferred->scaling;
+        }
+    }
+}
+
 }
 
 ResolutionError::ResolutionError(
@@ -48,6 +64,7 @@ CanonicalModelFacts infer_canonical_model_facts(const InferenceInput& input) {
     auto context = inference_detail::initialize_canonical_facts(input);
     inference_detail::resolve_canonical_layers(context);
     apply_attention_patterns(context.facts.graph, input.metadata);
+    apply_position_scaling(context.facts.graph, input.metadata);
     context.facts.validate();
     return std::move(context.facts);
 }
