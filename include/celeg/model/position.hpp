@@ -28,12 +28,23 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
             } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
                 return result;
             } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+                constexpr double pi = 3.14159265358979323846;
+                const auto correction_dimension = [&](double rotations) {
+                    return static_cast<double>(rotary_dimension) *
+                        std::log(static_cast<double>(scaling.original_context) /
+                                 (rotations * 2.0 * pi)) /
+                        (2.0 * std::log(base));
+                };
+                double low = std::floor(correction_dimension(scaling.beta_fast));
+                double high = std::ceil(correction_dimension(scaling.beta_slow));
+                low = std::max(low, 0.0);
+                high = std::min(high, static_cast<double>(rotary_dimension - 1));
+                if (low == high) high += 0.001;
                 const double ramp = std::clamp(
-                    (static_cast<double>(pair) - scaling.beta_fast) /
-                        std::max(1.0, scaling.beta_slow - scaling.beta_fast),
-                    0.0, 1.0);
-                result /= 1.0 + ramp * (scaling.factor - 1.0);
-                return result;
+                    (static_cast<double>(pair) - low) / (high - low), 0.0, 1.0);
+                const double extrapolation = 1.0 - ramp;
+                return result *
+                    (extrapolation + (1.0 - extrapolation) / scaling.factor);
             } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
                 const auto& factors = context > static_cast<double>(scaling.original_context)
                     ? scaling.long_factors : scaling.short_factors;
