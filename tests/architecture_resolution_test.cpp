@@ -258,7 +258,7 @@ int main() {
         if (architecture_id == "topology_fixture_dense") {
             CELEG_TEST_CHECK(std::get<celeg::DenseFeedForwardSpec>(
                                  fixture_model.graph.layers[2].feed_forward).intermediate_size == 8);
-            CELEG_TEST_CHECK(fixture_model.graph.layers[2].post_attention_norm.has_value());
+            CELEG_TEST_CHECK(fixture_model.graph.layers[2].mixer_norm.after.has_value());
             CELEG_TEST_CHECK(std::get<celeg::CompiledDenseFeedForwardProgram>(
                                  compiled.layers[2].feed_forward).intermediate_size == 8);
         } else {
