@@ -115,6 +115,97 @@ private:
     std::unordered_map<std::string, std::vector<int64_t>> shapes_;
 };
 
+class PostnormEvidenceRepository final : public celeg::IWeightRepository {
+public:
+    PostnormEvidenceRepository() {
+        shapes_["model.embed_tokens.weight"] = {32, 8};
+        shapes_["model.norm.weight"] = {8};
+        shapes_["lm_head.weight"] = {32, 8};
+        for (int layer = 0; layer < 4; ++layer) {
+            const std::string prefix = "model.layers." + std::to_string(layer);
+            shapes_[prefix + ".self_attn.q_proj.weight"] = {8, 8};
+            shapes_[prefix + ".self_attn.k_proj.weight"] = {8, 8};
+            shapes_[prefix + ".self_attn.v_proj.weight"] = {8, 8};
+            shapes_[prefix + ".self_attn.o_proj.weight"] = {8, 8};
+            shapes_[prefix + ".self_attn.q_norm.weight"] = {4};
+            shapes_[prefix + ".self_attn.k_norm.weight"] = {4};
+            shapes_[prefix + ".post_attn_norm.weight"] = {8};
+            shapes_[prefix + ".mlp.gate_proj.weight"] = {16, 8};
+            shapes_[prefix + ".mlp.up_proj.weight"] = {16, 8};
+            shapes_[prefix + ".mlp.down_proj.weight"] = {8, 16};
+            shapes_[prefix + ".post_mlp_norm.weight"] = {8};
+        }
+    }
+
+    bool contains(std::string_view name) const override {
+        return shapes_.contains(std::string(name));
+    }
+
+    celeg::HostTensorView tensor(std::string_view name) const override {
+        return {celeg::TensorDType::BF16, shapes_.at(std::string(name)), nullptr, 0};
+    }
+
+    std::vector<std::string> names() const override {
+        std::vector<std::string> result;
+        result.reserve(shapes_.size());
+        for (const auto& [name, shape] : shapes_) {
+            (void)shape;
+            result.push_back(name);
+        }
+        return result;
+    }
+
+private:
+    std::unordered_map<std::string, std::vector<int64_t>> shapes_;
+};
+
+celeg::CheckpointMetadata postnorm_evidence_metadata(std::string model_type) {
+    celeg::CheckpointMetadata metadata;
+    metadata.values["model_type"] = std::move(model_type);
+    metadata.values["hidden_size"] = int64_t(8);
+    metadata.values["intermediate_size"] = int64_t(16);
+    metadata.values["num_hidden_layers"] = int64_t(4);
+    metadata.values["num_attention_heads"] = int64_t(2);
+    metadata.values["num_key_value_heads"] = int64_t(2);
+    metadata.values["head_dim"] = int64_t(4);
+    metadata.values["vocab_size"] = int64_t(32);
+    metadata.values["max_position_embeddings"] = int64_t(32768);
+    metadata.values["bos_token_id"] = int64_t(1);
+    metadata.values["eos_token_id"] = int64_t(2);
+    metadata.values["pad_token_id"] = int64_t(0);
+    metadata.values["norm_eps"] = 1.0e-6;
+    metadata.values["rope_theta"] = 500000.0;
+    metadata.values["tie_word_embeddings"] = false;
+    metadata.values["use_qk_norm"] = true;
+    metadata.values["use_pre_attn_norm"] = false;
+    metadata.values["use_post_attn_norm"] = true;
+    metadata.values["use_pre_mlp_norm"] = false;
+    metadata.values["use_post_mlp_norm"] = true;
+    metadata.values["layer_types"] = std::vector<std::string>{
+        "sliding_attention", "sliding_attention", "sliding_attention", "full_attention"};
+    metadata.values["layer_layouts"] = std::vector<std::string>{
+        "decoder_postnorm", "decoder_postnorm", "decoder_postnorm", "decoder_postnorm"};
+    metadata.values["sliding_window"] = int64_t(4096);
+    metadata.values["rope_scaling.rope_type"] = std::string("yarn");
+    metadata.values["rope_scaling.factor"] = 8.0;
+    metadata.values["rope_scaling.original_max_position_embeddings"] = int64_t(8192);
+    metadata.values["rope_scaling.attention_factor"] = 1.2079441541679836;
+    metadata.values["rope_scaling.beta_fast"] = 32.0;
+    metadata.values["rope_scaling.beta_slow"] = 1.0;
+    return metadata;
+}
+
+celeg::ResolvedModel resolve_postnorm_evidence(
+    const celeg::ArchitectureCatalog& catalog,
+    std::string model_type) {
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = postnorm_evidence_metadata(std::move(model_type));
+    checkpoint.repository = std::make_shared<PostnormEvidenceRepository>();
+    const auto& architecture = catalog.select(checkpoint.metadata);
+    CELEG_TEST_CHECK(architecture.id() == "automatic");
+    return architecture.resolve(checkpoint);
+}
+
 bool equivalent_weight_plan(const celeg::WeightPlan& a, const celeg::WeightPlan& b) {
     if (a.requests.size() != b.requests.size()) return false;
     for (std::size_t index = 0; index < a.requests.size(); ++index) {
@@ -356,6 +447,55 @@ int main() {
     CELEG_TEST_CHECK(yarn_scaling.beta_fast == 32.0);
     CELEG_TEST_CHECK(yarn_scaling.beta_slow == 1.0);
 
+    const auto evidence_a = resolve_postnorm_evidence(catalog, "arbitrary_evidence_model");
+    const auto evidence_b = resolve_postnorm_evidence(catalog, "another_arbitrary_identity");
+    CELEG_TEST_CHECK(evidence_a.graph.fingerprint() == evidence_b.graph.fingerprint());
+    CELEG_TEST_CHECK(equivalent_weight_plan(evidence_a.weight_plan, evidence_b.weight_plan));
+    CELEG_TEST_CHECK(evidence_a.graph.layers.size() == 4);
+    for (int layer = 0; layer < 4; ++layer) {
+        const auto& semantic_layer = evidence_a.graph.layers[static_cast<size_t>(layer)];
+        CELEG_TEST_CHECK(!semantic_layer.mixer_norm.before.has_value());
+        CELEG_TEST_CHECK(semantic_layer.mixer_norm.after.has_value());
+        CELEG_TEST_CHECK(!semantic_layer.feed_forward_norm.before.has_value());
+        CELEG_TEST_CHECK(semantic_layer.feed_forward_norm.after.has_value());
+        CELEG_TEST_CHECK(has_weight_role(evidence_a.weight_plan,
+                                         celeg::TensorRole::AttentionPostNorm, layer));
+        CELEG_TEST_CHECK(has_weight_role(evidence_a.weight_plan,
+                                         celeg::TensorRole::FfnOutputNorm, layer));
+        CELEG_TEST_CHECK(!has_weight_role(evidence_a.weight_plan,
+                                          celeg::TensorRole::AttentionInputNorm, layer));
+        CELEG_TEST_CHECK(!has_weight_role(evidence_a.weight_plan,
+                                          celeg::TensorRole::FfnInputNorm, layer));
+        CELEG_TEST_CHECK(has_weight_role(evidence_a.weight_plan,
+                                         celeg::TensorRole::AttentionQueryNorm, layer));
+        CELEG_TEST_CHECK(has_weight_role(evidence_a.weight_plan,
+                                         celeg::TensorRole::AttentionKeyNorm, layer));
+        const auto& attention = std::get<celeg::AttentionSpec>(semantic_layer.mixer);
+        CELEG_TEST_CHECK(attention.query_norm.has_value());
+        CELEG_TEST_CHECK(attention.key_norm.has_value());
+        if (layer < 3) {
+            CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
+                attention.pattern));
+            CELEG_TEST_CHECK(std::get<celeg::SlidingWindowPattern>(attention.pattern).window ==
+                             4096);
+        } else {
+            CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
+                attention.pattern));
+        }
+        const auto& rope = std::get<celeg::RopePositionSpec>(attention.position);
+        const auto& scaling = std::get<celeg::YarnRopeScaling>(rope.scaling);
+        CELEG_TEST_CHECK(scaling.factor == 8.0);
+        CELEG_TEST_CHECK(scaling.original_context == 8192);
+    }
+
+    auto conflicting_layout = structural_metadata("unknown_layout_conflict");
+    conflicting_layout.values["layer_layouts"] =
+        std::vector<std::string>{"decoder_postnorm"};
+    conflicting_layout.values["use_pre_attn_norm"] = true;
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(conflicting_layout),
+        celeg::ResolutionFailureKind::ConflictingMetadata));
+
     auto incomplete_yarn = structural_metadata("unknown_incomplete_yarn");
     incomplete_yarn.values["rope_scaling.rope_type"] = std::string("yarn");
     incomplete_yarn.values["rope_scaling.factor"] = 4.0;
@@ -371,7 +511,7 @@ int main() {
         celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
 
     auto full_metadata = structural_metadata("another_unknown_name");
-    full_metadata.values["layer_layouts"] =
+    full_metadata.values["layer_types"] =
         std::vector<std::string>{"full_attention"};
     celeg::CheckpointView full_checkpoint;
     full_checkpoint.metadata = std::move(full_metadata);
