@@ -24,15 +24,21 @@ struct TransformerDimensions {
     void validate() const;
 };
 
-struct NoRopeScaling {};
+struct NoRopeScaling {
+    friend bool operator==(const NoRopeScaling&, const NoRopeScaling&) = default;
+};
 
 struct LinearRopeScaling {
     double factor = 1.0;
+
+    friend bool operator==(const LinearRopeScaling&, const LinearRopeScaling&) = default;
 };
 
 struct DynamicNtkRopeScaling {
     double factor = 1.0;
     int original_context = 0;
+
+    friend bool operator==(const DynamicNtkRopeScaling&, const DynamicNtkRopeScaling&) = default;
 };
 
 struct YarnRopeScaling {
@@ -41,12 +47,16 @@ struct YarnRopeScaling {
     double beta_fast = 32.0;
     double beta_slow = 1.0;
     int original_context = 0;
+
+    friend bool operator==(const YarnRopeScaling&, const YarnRopeScaling&) = default;
 };
 
 struct LongRopeScaling {
     int original_context = 0;
     std::vector<float> short_factors;
     std::vector<float> long_factors;
+
+    friend bool operator==(const LongRopeScaling&, const LongRopeScaling&) = default;
 };
 
 struct Llama3FrequencyScaling {
@@ -54,6 +64,8 @@ struct Llama3FrequencyScaling {
     int original_context = 0;
     double low_frequency_factor = 1.0;
     double high_frequency_factor = 1.0;
+
+    friend bool operator==(const Llama3FrequencyScaling&, const Llama3FrequencyScaling&) = default;
 };
 
 using RopeScalingSpec = std::variant<
