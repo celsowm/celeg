@@ -68,6 +68,7 @@ struct Args {
     bool fused_projections = true;
     bool print_config = false;
     bool tokens_only = false;
+    bool runtime_tokens = false;
     bool no_cuda_graph = false;
     bool lt_autotune = true;
     bool memory_report = false;
@@ -133,6 +134,7 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--fused-projections") args.fused_projections = true;
         else if (key == "--print-config") args.print_config = true;
         else if (key == "--tokens-only") args.tokens_only = true;
+        else if (key == "--runtime-tokens") args.runtime_tokens = true;
         else if (key == "--no-cuda-graph") args.no_cuda_graph = true;
         else if (key == "--lt-autotune") args.lt_autotune = true;
         else if (key == "--memory-report") args.memory_report = true;
@@ -174,7 +176,7 @@ Args parse_args(int argc, char** argv) {
                 << "  [--repetition-penalty F] [--seed N]\n"
                 << "  [--dump-logits FILE.f32] [--print-top N]\n"
                 << "  [--save-session FILE] [--load-session FILE]\n"
-                << "  [--runtime-metrics]\n"
+                << "  [--runtime-metrics] [--runtime-tokens]\n"
                 << "  [--mtp] [--mtp-speculative-tokens N]\n"
                 << "  [--expert-offload none|auto|host]\n"
                 << "  [--expert-host-mode mapped|pinned-copy|staged]\n"
@@ -556,11 +558,19 @@ int main(int argc, char** argv) {
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t next = engine.session().decode();
-            if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, next)) break;
             generated.push_back(next);
+            if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, next)) break;
             std::cout << prepared.tokenizer->decode({next}, true) << std::flush;
         }
         std::cout << '\n';
+        if (args.runtime_tokens) {
+            std::cout << "CELEG_GENERATED_TOKEN_IDS=[";
+            for (size_t i = 0; i < generated.size(); ++i) {
+                if (i) std::cout << ',';
+                std::cout << generated[i];
+            }
+            std::cout << "]\n";
+        }
         if (!args.save_session.empty()) engine.persistence().save_session(args.save_session);
         if (args.runtime_metrics) {
             const celeg::RuntimeMetrics runtime = engine.diagnostics().runtime_metrics();
