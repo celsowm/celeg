@@ -92,8 +92,7 @@ void run_projected_latent_attention(
                 ? workspace.prefill_latent_key_rope_.data()
                 : nullptr,
             owner.latent_key_cache_ptr(), owner.latent_value_cache_ptr(),
-            owner.latent_key_rope_cache_ptr(),
-            rows, latent.latent_rank,
+            owner.latent_key_rope_cache_ptr(), rows, latent.latent_rank,
             latent.decoupled_rope ? latent.rope_head_dim : 0,
             model.stream_.get());
     }
@@ -120,12 +119,13 @@ void run_projected_latent_attention(
     prof.end(PrefillPhase::Attention, model.stream_.get());
 
     prof.begin(model.stream_.get());
+    const bool fuse_residual = model.resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     model.linear(
         workspace.prefill_op_output_.data(), *attention.out,
-        workspace.prefill_hidden_.data(),
-        rows, hidden, layout.latent_query_content_width(),
-        model.resources_.options_.fused_residuals && !semantics.mixer_norm.after
-            ? 1.0f : 0.0f);
+        workspace.prefill_hidden_.data(), rows, hidden,
+        layout.latent_query_content_width(), fuse_residual ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,
         semantics.residual.multiplier, model.stream_.get());
