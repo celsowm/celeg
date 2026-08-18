@@ -3,6 +3,7 @@
 #include "support.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <regex>
 #include <unordered_map>
@@ -51,6 +52,90 @@ std::optional<int> integer_alias(const CheckpointMetadata& metadata,
     inference_detail::fail(
         ResolutionFailureKind::ConflictingMetadata,
         "attention metadata key has an incompatible type: " + std::string(key));
+}
+
+std::optional<double> numeric_alias(const CheckpointMetadata& metadata,
+                                    std::string_view key) {
+    const MetadataValue* value = metadata_alias(metadata, key);
+    if (value == nullptr) return std::nullopt;
+    if (const auto* number = std::get_if<double>(value)) {
+        if (!std::isfinite(*number)) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "RoPE metadata value is not finite: " + std::string(key));
+        }
+        return *number;
+    }
+    if (const auto* integer = std::get_if<int64_t>(value)) {
+        return static_cast<double>(*integer);
+    }
+    inference_detail::fail(
+        ResolutionFailureKind::ConflictingMetadata,
+        "RoPE metadata key has an incompatible numeric type: " + std::string(key));
+}
+
+std::optional<std::string> string_alias(const CheckpointMetadata& metadata,
+                                        std::string_view key) {
+    const MetadataValue* value = metadata_alias(metadata, key);
+    if (value == nullptr) return std::nullopt;
+    if (const auto* text = std::get_if<std::string>(value)) return *text;
+    inference_detail::fail(
+        ResolutionFailureKind::ConflictingMetadata,
+        "RoPE metadata key has an incompatible string type: " + std::string(key));
+}
+
+std::optional<std::string> string_aliases(
+    const CheckpointMetadata& metadata,
+    std::initializer_list<std::string_view> keys,
+    std::string_view fact) {
+    std::optional<std::string> result;
+    for (const std::string_view key : keys) {
+        const auto value = string_alias(metadata, key);
+        if (!value.has_value()) continue;
+        if (result.has_value() && *result != *value) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting RoPE metadata aliases for " + std::string(fact));
+        }
+        result = value;
+    }
+    return result;
+}
+
+std::optional<double> numeric_aliases(
+    const CheckpointMetadata& metadata,
+    std::initializer_list<std::string_view> keys,
+    std::string_view fact) {
+    std::optional<double> result;
+    for (const std::string_view key : keys) {
+        const auto value = numeric_alias(metadata, key);
+        if (!value.has_value()) continue;
+        if (result.has_value() && *result != *value) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting RoPE metadata aliases for " + std::string(fact));
+        }
+        result = value;
+    }
+    return result;
+}
+
+std::optional<int> integer_aliases(
+    const CheckpointMetadata& metadata,
+    std::initializer_list<std::string_view> keys,
+    std::string_view fact) {
+    std::optional<int> result;
+    for (const std::string_view key : keys) {
+        const auto value = integer_alias(metadata, key);
+        if (!value.has_value()) continue;
+        if (result.has_value() && *result != *value) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting RoPE metadata aliases for " + std::string(fact));
+        }
+        result = value;
+    }
+    return result;
 }
 
 LayerScopedValue<AttentionPatternKind> attention_pattern_metadata(
@@ -230,6 +315,79 @@ void normalize_structural_norm_schedule(const CheckpointMetadata& source,
         layer_count, metadata.evidence, "feed_forward_norm.after");
 }
 
+void normalize_rope_scaling(const CheckpointMetadata& source,
+                            NormalizedModelMetadata& metadata) {
+    auto* rope = std::get_if<InferredRopePosition>(
+        &metadata.attention.position_encoding);
+    if (rope == nullptr) return;
+
+    const auto kind = string_aliases(
+        source,
+        {"rope_scaling.rope_type", "rope_scaling.type",
+         "rope_parameters.rope_type", "rope_parameters.type"},
+        "rope_scaling.type");
+    if (!kind.has_value() || *kind == "none" || *kind == "default") {
+        rope->scaling = NoRopeScaling{};
+        return;
+    }
+    if (*kind != "yarn") {
+        inference_detail::fail(
+            ResolutionFailureKind::UnsupportedSemanticFeature,
+            "automatic resolution does not support declared RoPE scaling type: " + *kind);
+    }
+
+    const auto factor = numeric_aliases(
+        source, {"rope_scaling.factor", "rope_parameters.factor"},
+        "rope_scaling.factor");
+    const auto original_context = integer_aliases(
+        source,
+        {"rope_scaling.original_max_position_embeddings",
+         "rope_scaling.original_context",
+         "rope_parameters.original_max_position_embeddings",
+         "rope_parameters.original_context",
+         "original_max_position_embeddings"},
+        "rope_scaling.original_context");
+    if (!factor.has_value() || !original_context.has_value()) {
+        inference_detail::fail(
+            ResolutionFailureKind::MissingRequiredMetadata,
+            "YaRN scaling requires factor and original context metadata");
+    }
+
+    const double attention_factor = numeric_aliases(
+        source,
+        {"rope_scaling.attention_factor", "rope_parameters.attention_factor"},
+        "rope_scaling.attention_factor")
+        .value_or(0.1 * std::log(*factor) + 1.0);
+    const double beta_fast = numeric_aliases(
+        source, {"rope_scaling.beta_fast", "rope_parameters.beta_fast"},
+        "rope_scaling.beta_fast").value_or(32.0);
+    const double beta_slow = numeric_aliases(
+        source, {"rope_scaling.beta_slow", "rope_parameters.beta_slow"},
+        "rope_scaling.beta_slow").value_or(1.0);
+
+    YarnRopeScaling yarn;
+    yarn.factor = *factor;
+    yarn.original_context = *original_context;
+    yarn.attention_factor = attention_factor;
+    yarn.beta_fast = beta_fast;
+    yarn.beta_slow = beta_slow;
+    try {
+        validate_rope_scaling(
+            RopeScalingSpec{yarn},
+            static_cast<int>(
+                metadata.attention.head_dim.global.value_or(0) * rope->rotary_fraction));
+    } catch (const std::invalid_argument& error) {
+        inference_detail::fail(
+            ResolutionFailureKind::ConflictingMetadata,
+            std::string("invalid YaRN metadata: ") + error.what());
+    }
+    rope->scaling = yarn;
+    metadata.evidence.push_back({
+        EvidenceKind::AliasMetadata,
+        "rope_scaling",
+        "rope_scaling = yarn"});
+}
+
 }
 
 TensorInventory::TensorInventory(std::vector<TensorInventoryEntry> entries)
@@ -313,6 +471,7 @@ InferenceInput build_inference_input(const CheckpointView& checkpoint) {
     NormalizedModelMetadata metadata = normalize_model_metadata(checkpoint.metadata);
     normalize_attention_schedule(checkpoint.metadata, metadata);
     normalize_structural_norm_schedule(checkpoint.metadata, metadata);
+    normalize_rope_scaling(checkpoint.metadata, metadata);
     return {std::move(metadata), build_tensor_inventory(*checkpoint.repository),
             checkpoint.metadata.source_format};
 }
