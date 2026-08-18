@@ -23,6 +23,12 @@ std::string tensor_name(std::span<const TensorRequest> requests, TensorRole role
     return resolved_tensor_name(requests, role, layer, expert);
 }
 
+int attention_norm_width(const NormSpec& norm, int heads, int head_dim) {
+    return norm.granularity == NormGranularity::PerHead
+        ? head_dim
+        : heads * head_dim;
+}
+
 }
 
 CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
@@ -278,19 +284,27 @@ void CpuCompiledModel::Shared::load_weights() {
             layer.out = load_matrix(source, reader.get(), writer.get(),
                 tensor_name(weight_requests, TensorRole::AttentionOutput, index),
                 {program.hidden, attention.query_width()});
+            const int query_norm_width = attention.query_norm
+                ? attention_norm_width(*attention.query_norm,
+                                       attention.query_heads, attention.head_dim)
+                : attention.head_dim;
+            const int key_norm_width = attention.key_norm
+                ? attention_norm_width(*attention.key_norm,
+                                       attention.key_value_heads, attention.head_dim)
+                : attention.head_dim;
             layer.q_norm = attention.query_norm.has_value()
                 ? (attention.query_norm->weightless()
-                    ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
+                    ? std::vector<float>(static_cast<size_t>(query_norm_width), 1.0f)
                     : load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionQueryNorm, index),
-                        {attention.head_dim}))
+                        {query_norm_width}))
                 : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
             layer.k_norm = attention.key_norm.has_value()
                 ? (attention.key_norm->weightless()
-                    ? std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f)
+                    ? std::vector<float>(static_cast<size_t>(key_norm_width), 1.0f)
                     : load_vector(source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionKeyNorm, index),
-                        {attention.head_dim}))
+                        {key_norm_width}))
                 : std::vector<float>(static_cast<size_t>(attention.head_dim), 1.0f);
             if (attention.query_norm && attention.query_norm->weight_kind == NormWeightKind::OnePlusScale) {
                 for (float& value : layer.q_norm) value += 1.0f;
