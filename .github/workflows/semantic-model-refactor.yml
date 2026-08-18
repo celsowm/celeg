@@ -5,8 +5,8 @@ name: Semantic model refactor runner
     branches:
       - agent/automatic-semantic-model-support
     paths:
-      - scripts/apply_semantic_model_refactor_phase10.py
-      - scripts/apply_semantic_model_refactor_phase11.py
+      - scripts/apply_semantic_model_refactor_phase12.py
+      - scripts/apply_semantic_model_refactor_phase13.py
       - .github/workflows/semantic-model-refactor.yml
 
 concurrency:
@@ -27,11 +27,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Apply contract cleanup
+      - name: Apply metadata hardening
         run: |
-          python scripts/apply_semantic_model_refactor_phase10.py
-          python scripts/apply_semantic_model_refactor_phase11.py
-      - name: Publish cleanup
+          python scripts/apply_semantic_model_refactor_phase12.py
+          python scripts/apply_semantic_model_refactor_phase13.py
+      - name: Publish hardening
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -40,5 +40,5 @@ jobs:
             echo "No generated changes"
             exit 0
           fi
-          git commit -m "refactor: finish automatic semantic model support"
+          git commit -m "test: harden automatic semantic model support"
           git push origin HEAD:agent/automatic-semantic-model-support
