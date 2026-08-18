@@ -25,11 +25,17 @@ void CudaCompiledModel::warmup_decode_gemms() {
         throw std::runtime_error("compiled layer map is empty");
     }
     if (!attention_layer) {
-        launch_rmsnorm(workspace_.hidden_.data(),
-                       common(resources_.layers_.front()).operator_norm,
-                       workspace_.normed_.data(), 1, resources_.program_.hidden,
-                       resources_.program_.layers.front().operator_norm.epsilon,
-                       stream_.get());
+        const CompiledLayerProgram& semantics = resources_.program_.layers.front();
+        const LayerCommon& first_common = common(resources_.layers_.front());
+        if (semantics.mixer_norm.before) {
+            launch_rmsnorm(workspace_.hidden_.data(), first_common.mixer_norm_before,
+                           workspace_.normed_.data(), 1, resources_.program_.hidden,
+                           semantics.mixer_norm.before->epsilon, stream_.get());
+        } else {
+            CELEG_CUDA(cudaMemcpyAsync(
+                workspace_.normed_.data(), workspace_.hidden_.data(),
+                workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice, stream_.get()));
+        }
         enqueue_decode_non_attention_mixer(resources_.layers_.front(), 0);
         linear(workspace_.normed_.data(), *logits_weight(), workspace_.logits_.data(),
                1, resources_.dims_.vocab_size, resources_.program_.hidden);
@@ -128,4 +134,3 @@ void CudaCompiledModel::warmup_prefill_attention_gemm() {
 }
 
 }
-
