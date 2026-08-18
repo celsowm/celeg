@@ -9,28 +9,10 @@ def replace(path: str, old: str, new: str, count: int = 1) -> None:
     if old not in text:
         if new in text:
             return
-        raise SystemExit(f'missing fragment in {path}: {old[:120]!r}')
+        raise SystemExit(f'missing fragment in {path}: {old[:160]!r}')
     file.write_text(text.replace(old, new, count), encoding='utf-8')
 
-
-replace('include/celeg/model/definition.hpp',
-'''struct YarnRopeScaling {
-    double factor = 1.0;
-    double attention_factor = 1.0;
-    double beta_fast = 32.0;
-    double beta_slow = 1.0;
-
-    friend bool operator==(const YarnRopeScaling&, const YarnRopeScaling&) = default;
-};''',
-'''struct YarnRopeScaling {
-    double factor = 1.0;
-    int original_context = 0;
-    double attention_factor = 1.0;
-    double beta_fast = 32.0;
-    double beta_slow = 1.0;
-
-    friend bool operator==(const YarnRopeScaling&, const YarnRopeScaling&) = default;
-};''')
+# prepare_yarn_definition.py establishes the canonical struct shape first.
 
 replace('src/model/definition.cpp',
 '''            if (!std::isfinite(value.beta_fast) || !std::isfinite(value.beta_slow) ||
@@ -48,30 +30,34 @@ replace('src/model/definition.cpp',
             }''')
 
 replace('include/celeg/model/position.hpp',
-'''        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
-            const double span = std::max(1.0, scaling.beta_slow - scaling.beta_fast);
-            const double ramp = std::clamp(
-                (static_cast<double>(pair) - scaling.beta_fast) / span, 0.0, 1.0);
-            return base_frequency / (1.0 + ramp * (scaling.factor - 1.0));''',
-'''        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
-            constexpr double two_pi = 6.28318530717958647692;
-            const auto correction_dimension = [&](double rotations) {
-                return static_cast<double>(rotary_dimension) *
-                    std::log(static_cast<double>(scaling.original_context) /
-                             (rotations * two_pi)) /
-                    (2.0 * std::log(rope.theta));
-            };
-            double low = std::max(0.0, std::floor(correction_dimension(scaling.beta_fast)));
-            double high = std::min(
-                static_cast<double>(rotary_dimension / 2 - 1),
-                std::ceil(correction_dimension(scaling.beta_slow)));
-            if (high <= low) high = low + 1.0e-3;
-            const double ramp = std::clamp(
-                (static_cast<double>(pair) - low) / (high - low), 0.0, 1.0);
-            const double extrapolation = 1.0 - ramp;
-            const double interpolated = base_frequency / scaling.factor;
-            return interpolated * (1.0 - extrapolation) +
-                base_frequency * extrapolation;''')
+'''            } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+                const double ramp = std::clamp(
+                    (static_cast<double>(pair) - scaling.beta_fast) /
+                        std::max(1.0, scaling.beta_slow - scaling.beta_fast),
+                    0.0, 1.0);
+                result /= 1.0 + ramp * (scaling.factor - 1.0);
+                return result;''',
+'''            } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
+                constexpr double two_pi = 6.28318530717958647692;
+                const auto correction_dimension = [&](double rotations) {
+                    return static_cast<double>(rotary_dimension) *
+                        std::log(static_cast<double>(scaling.original_context) /
+                                 (rotations * two_pi)) /
+                        (2.0 * std::log(base));
+                };
+                const double low = std::max(
+                    0.0, std::floor(correction_dimension(scaling.beta_fast)));
+                double high = std::min(
+                    static_cast<double>(rotary_dimension / 2 - 1),
+                    std::ceil(correction_dimension(scaling.beta_slow)));
+                if (high <= low) high = low + 1.0e-3;
+                const double ramp = std::clamp(
+                    (static_cast<double>(pair) - low) / (high - low), 0.0, 1.0);
+                const double extrapolation = 1.0 - ramp;
+                const double interpolated = result / scaling.factor;
+                result = interpolated * (1.0 - extrapolation) +
+                    result * extrapolation;
+                return result;''')
 
 replace('include/celeg/backend/cuda/kernels/rope.hpp',
 '''        } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
