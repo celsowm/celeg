@@ -91,8 +91,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         const CommonWeights& common = layer.common;
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-        cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
-                    shared->program.hidden, semantics.operator_norm.epsilon);
+        if (semantics.mixer_norm.before.has_value()) {
+            cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
+                        shared->program.hidden, semantics.mixer_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+        }
         bool mixer_owns_layer = false;
         visit_operator_weights(layer.mixer,
           [&](const CpuCompiledModel::AttentionWeights* attention) {
@@ -130,9 +134,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (semantics.residual.multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
-        if (semantics.post_attention_norm.has_value()) {
+        if (semantics.mixer_norm.after.has_value()) {
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
-                                shared->program.hidden, semantics.post_attention_norm->epsilon);
+                                shared->program.hidden, semantics.mixer_norm.after->epsilon);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
         if (getenv("CELEG_DEBUG_LAYER_STATS")) {
@@ -143,8 +147,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
 
         if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
 
-        cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
-                    shared->program.hidden, semantics.feed_forward_norm->epsilon);
+        if (semantics.feed_forward_norm.before.has_value()) {
+            cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
+                        shared->program.hidden, semantics.feed_forward_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+        }
 
         const auto* moe = std::get_if<MoeWeights>(&layer.feed_forward);
         const auto* dense = std::get_if<DenseFeedForwardWeights>(&layer.feed_forward);
@@ -155,9 +163,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
-            if (semantics.post_feed_forward_norm.has_value()) {
+            if (semantics.feed_forward_norm.after.has_value()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->program.hidden, semantics.post_feed_forward_norm->epsilon);
+                                    shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else if (dense) {
@@ -165,9 +173,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
-            if (semantics.post_feed_forward_norm.has_value()) {
+            if (semantics.feed_forward_norm.after.has_value()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->program.hidden, semantics.post_feed_forward_norm->epsilon);
+                                    shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else {
