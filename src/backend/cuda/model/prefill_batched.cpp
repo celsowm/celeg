@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-
 #include "prefill_batched/non_attention.cpp"
 #include "prefill_batched/attention.cpp"
 
@@ -56,9 +55,9 @@ void run_layer(
     const CompiledLayerProgram& semantics =
         model.resources_.program_.layers.at(static_cast<size_t>(layer_index));
     const int hidden = model.resources_.program_.hidden;
+    const bool mixer_after = semantics.mixer_norm.after.has_value();
 
-    if (!model.resources_.options_.fused_residuals ||
-        common_layer.post_attention_norm) {
+    if (!model.resources_.options_.fused_residuals || mixer_after) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace.prefill_residual_.data(),
             workspace.prefill_hidden_.data(),
@@ -67,29 +66,33 @@ void run_layer(
     }
 
     prof.begin(model.stream_.get());
-    launch_rmsnorm(
-        workspace.prefill_hidden_.data(), common_layer.operator_norm,
-        workspace.prefill_normed_.data(),
-        rows, hidden, semantics.operator_norm.epsilon, model.stream_.get());
+    if (semantics.mixer_norm.before) {
+        launch_rmsnorm(
+            workspace.prefill_hidden_.data(), common_layer.mixer_norm_before,
+            workspace.prefill_normed_.data(), rows, hidden,
+            semantics.mixer_norm.before->epsilon, model.stream_.get());
+    } else {
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace.prefill_normed_.data(), workspace.prefill_hidden_.data(),
+            workspace.prefill_hidden_.bytes(), cudaMemcpyDeviceToDevice,
+            model.stream_.get()));
+    }
     prof.end(PrefillPhase::Norm, model.stream_.get());
 
     run_mixer(model, layer, common_layer, semantics, rows);
 
-    if (common_layer.post_attention_norm) {
+    if (mixer_after) {
         launch_rmsnorm(
-            workspace.prefill_hidden_.data(), common_layer.post_attention_norm,
-            workspace.prefill_hidden_.data(),
-            rows, hidden, semantics.post_attention_norm->epsilon,
-            model.stream_.get());
+            workspace.prefill_hidden_.data(), common_layer.mixer_norm_after,
+            workspace.prefill_hidden_.data(), rows, hidden,
+            semantics.mixer_norm.after->epsilon, model.stream_.get());
     }
 
-    if (!model.resources_.options_.fused_residuals ||
-        common_layer.post_attention_norm ||
+    if (!model.resources_.options_.fused_residuals || mixer_after ||
         std::holds_alternative<std::monostate>(semantics.feed_forward)) {
         prof.begin(model.stream_.get());
         launch_residual_add(
-            workspace.prefill_hidden_.data(),
-            workspace.prefill_residual_.data(),
+            workspace.prefill_hidden_.data(), workspace.prefill_residual_.data(),
             rows * hidden, model.stream_.get());
         prof.end(PrefillPhase::Other, model.stream_.get());
     }
@@ -100,13 +103,11 @@ void run_layer(
     }
     if (std::binary_search(
             model.resources_.program_.norm_after_layers.begin(),
-            model.resources_.program_.norm_after_layers.end(),
-            layer_index)) {
+            model.resources_.program_.norm_after_layers.end(), layer_index)) {
         launch_rmsnorm(
             workspace.prefill_hidden_.data(), model.resources_.final_norm_,
-            workspace.prefill_hidden_.data(),
-            rows, hidden, model.resources_.program_.final_norm.epsilon,
-            model.stream_.get());
+            workspace.prefill_hidden_.data(), rows, hidden,
+            model.resources_.program_.final_norm.epsilon, model.stream_.get());
     }
     prof.end(PrefillPhase::Mlp, model.stream_.get());
 }
@@ -123,8 +124,7 @@ void run_logits(CudaCompiledModel& model, int rows) {
     auto& workspace = model.workspace_;
     const int hidden = model.resources_.program_.hidden;
     const __nv_bfloat16* last_hidden =
-        workspace.prefill_hidden_.data() +
-        static_cast<size_t>(rows - 1) * hidden;
+        workspace.prefill_hidden_.data() + static_cast<size_t>(rows - 1) * hidden;
 
     launch_rmsnorm(
         last_hidden, model.resources_.final_norm_, workspace.normed_.data(),
@@ -165,29 +165,23 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
 
     CELEG_CUDA(cudaMemcpyAsync(
         workspace_.prefill_tokens_.data(), tokens.data(),
-        tokens.size() * sizeof(int32_t),
-        cudaMemcpyHostToDevice, stream_.get()));
+        tokens.size() * sizeof(int32_t), cudaMemcpyHostToDevice, stream_.get()));
 
     prof.begin(stream_.get());
     launch_mark_seen_batch(
         workspace_.prefill_tokens_.data(), rows, sampling_.seen_tokens.data(),
         resources_.dims_.vocab_size, stream_.get());
     resources_.weight_layout_->embed_batch(
-        workspace_.prefill_tokens_.data(), rows,
-        workspace_.prefill_hidden_.data(),
+        workspace_.prefill_tokens_.data(), rows, workspace_.prefill_hidden_.data(),
         resources_.program_.hidden, stream_.get());
     launch_scale(
-        workspace_.prefill_hidden_.data(),
-        rows * resources_.program_.hidden,
-        resources_.program_.embedding_transform.multiplier,
-        stream_.get());
+        workspace_.prefill_hidden_.data(), rows * resources_.program_.hidden,
+        resources_.program_.embedding_transform.multiplier, stream_.get());
     if (resources_.program_.embedding_transform.post_norm) {
         launch_rmsnorm(
             workspace_.prefill_hidden_.data(), resources_.embedding_norm_,
-            workspace_.prefill_hidden_.data(),
-            rows, resources_.program_.hidden,
-            resources_.program_.embedding_transform.post_norm->epsilon,
-            stream_.get());
+            workspace_.prefill_hidden_.data(), rows, resources_.program_.hidden,
+            resources_.program_.embedding_transform.post_norm->epsilon, stream_.get());
     }
     initialize_per_layer_input_batch(workspace_.prefill_tokens_.data(), rows);
     prof.end(PrefillPhase::Embed, stream_.get());
@@ -200,8 +194,8 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
 
     session_.position_ = rows;
     CELEG_CUDA(cudaMemcpyAsync(
-        position_device_.data(), &session_.position_,
-        sizeof(session_.position_), cudaMemcpyHostToDevice, stream_.get()));
+        position_device_.data(), &session_.position_, sizeof(session_.position_),
+        cudaMemcpyHostToDevice, stream_.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream_.get()));
 
     prof.report();
