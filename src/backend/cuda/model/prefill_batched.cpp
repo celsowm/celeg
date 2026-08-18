@@ -56,8 +56,10 @@ void run_layer(
         model.resources_.program_.layers.at(static_cast<size_t>(layer_index));
     const int hidden = model.resources_.program_.hidden;
     const bool mixer_after = semantics.mixer_norm.after.has_value();
+    const bool mixer_only =
+        std::holds_alternative<std::monostate>(semantics.feed_forward);
 
-    if (!model.resources_.options_.fused_residuals || mixer_after) {
+    if (!model.resources_.options_.fused_residuals || mixer_after || mixer_only) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace.prefill_residual_.data(),
             workspace.prefill_hidden_.data(),
@@ -88,8 +90,7 @@ void run_layer(
             semantics.mixer_norm.after->epsilon, model.stream_.get());
     }
 
-    if (!model.resources_.options_.fused_residuals || mixer_after ||
-        std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+    if (!model.resources_.options_.fused_residuals || mixer_after || mixer_only) {
         prof.begin(model.stream_.get());
         launch_residual_add(
             workspace.prefill_hidden_.data(), workspace.prefill_residual_.data(),
@@ -98,7 +99,7 @@ void run_layer(
     }
 
     prof.begin(model.stream_.get());
-    if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+    if (!mixer_only) {
         model.run_mlp_prefill(common_layer, rows, layer_index);
     }
     if (std::binary_search(
