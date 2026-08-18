@@ -209,10 +209,12 @@ void launch_qk_norm_rope_positions(
     const int pairs = rotary_dimension / 2;
     const int threads = rope_threads(head_dim);
     const bool adjacent_pairs = pairing == RopePairingKind::AdjacentPairs;
+    const float query_attention_scale = scaling.kind == 3
+        ? scaling.attention_factor * scaling.attention_factor
+        : 1.0f;
     paired_qk_norm_rope_kernel<<<rows * query_heads, threads, 0, stream>>>(
         query, query_norm, rows, query_heads, head_dim, positions, rope_theta,
-        pairs, epsilon, normalize, adjacent_pairs, scaling,
-        scaling.kind == 3 ? scaling.attention_factor : 1.0f);
+        pairs, epsilon, normalize, adjacent_pairs, scaling, query_attention_scale);
     if (key) {
         paired_qk_norm_rope_kernel<<<rows * key_value_heads, threads, 0, stream>>>(
             key, key_norm, rows, key_value_heads, head_dim, positions, rope_theta,
