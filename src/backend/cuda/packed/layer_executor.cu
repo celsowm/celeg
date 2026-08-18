@@ -104,7 +104,9 @@ void PackedLayerExecutor::run_transformer_layers(
         const auto& layer = reference.layers()[layer_index];
         const auto& common_layer = common(layer);
         const bool mixer_after = semantics.mixer_norm.after.has_value();
-        if (!reference.options().fused_residuals || mixer_after) {
+        const bool mixer_only =
+            std::holds_alternative<std::monostate>(semantics.feed_forward);
+        if (!reference.options().fused_residuals || mixer_after || mixer_only) {
             CELEG_CUDA(cudaMemcpyAsync(
                 workspace_.residual.data(), workspace_.hidden.data(),
                 static_cast<size_t>(rows) * workspace_.program_.hidden *
@@ -193,13 +195,12 @@ void PackedLayerExecutor::run_transformer_layers(
                            semantics.mixer_norm.after->epsilon,
                            workspace_.stream.get());
         }
-        if (!reference.options().fused_residuals || mixer_after ||
-            std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+        if (!reference.options().fused_residuals || mixer_after || mixer_only) {
             launch_residual_add(workspace_.hidden.data(), workspace_.residual.data(),
                                 rows * workspace_.program_.hidden,
                                 workspace_.stream.get());
         }
-        if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+        if (!mixer_only) {
             run_mlp_layer(reference, common_layer, rows, batch_models,
                           static_cast<int>(layer_index));
         }
