@@ -1,6 +1,6 @@
 # Lizzy real checkpoint validation
 
-- commit: 456ee95c32c69832b589f0e2fea1049b6bf661ed
+- commit: 163805bae20c1c7bb5fbfb4d0a5f583ad2a6c188
 - model: flwrlabs/Lizzy-7B
 - build: 1
 - download: 125
