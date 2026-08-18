@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
       - name: Diagnose
         run: python3 scripts/dev.py doctor --backend cpu --json > doctor-linux-cpu.json
       - name: Build and verify
@@ -48,7 +48,7 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-12 g++-12 python3 python3-pip
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-12 g++-12 python3 python3-pip libcurl4-openssl-dev
           python3 -m pip install --no-cache-dir cmake==3.31.6 ninja==1.13.0
       - name: Diagnose
         run: python3 scripts/dev.py doctor --backend cuda --arch 80 --json > doctor-linux-cuda.json
