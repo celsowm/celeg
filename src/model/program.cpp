@@ -56,6 +56,11 @@ void validate_attention_state_layout(const CompiledAttentionStateLayout& layout)
     std::visit([](const auto& state) { state.validate(); }, layout);
 }
 
+void validate_sublayer_norm(const SublayerNormSpec& norm) {
+    if (norm.before) norm.before->validate();
+    if (norm.after) norm.after->validate();
+}
+
 }
 
 void ExpertPayloadSchema::validate() const {
@@ -284,6 +289,14 @@ void CompiledModelProgram::validate() const {
             if (index >= weight_request_count) {
                 throw std::invalid_argument("compiled layer has invalid weight index");
             }
+        }
+        validate_sublayer_norm(layer.mixer_norm);
+        validate_sublayer_norm(layer.feed_forward_norm);
+        if (std::holds_alternative<std::monostate>(layer.feed_forward) &&
+            (layer.feed_forward_norm.before.has_value() ||
+             layer.feed_forward_norm.after.has_value())) {
+            throw std::invalid_argument(
+                "compiled layer has feed-forward normalization without feed-forward semantics");
         }
         if (const auto* attention = std::get_if<CompiledAttentionProgram>(&layer.mixer)) {
             validate_attention_state_layout(attention->state_layout);
