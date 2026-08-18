@@ -6,6 +6,7 @@ name: Semantic model refactor runner
       - agent/automatic-semantic-model-support
     paths:
       - scripts/apply_semantic_model_refactor_phase3.py
+      - scripts/apply_semantic_model_refactor_phase4.py
       - .github/workflows/semantic-model-refactor.yml
 
 permissions:
@@ -25,7 +26,9 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
       - name: Apply semantic cleanup
-        run: python scripts/apply_semantic_model_refactor_phase3.py
+        run: |
+          python scripts/apply_semantic_model_refactor_phase3.py
+          python scripts/apply_semantic_model_refactor_phase4.py
       - name: Verify CPU
         run: |
           set +e
