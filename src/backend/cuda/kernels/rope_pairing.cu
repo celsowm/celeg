@@ -45,7 +45,7 @@ __device__ __forceinline__ float scaled_rope_frequency_for_pairing(
         const float ramp = fminf(1.0f, fmaxf(0.0f,
             (static_cast<float>(pair) - clipped_low) / span));
         const float interpolated = frequency / scaling.factor;
-        frequency = interpolated * (1.0f - ramp) + frequency * ramp;
+        frequency = frequency * (1.0f - ramp) + interpolated * ramp;
     } else if (scaling.kind == 4) {
         if (pair < scaling.factor_count) {
             const float factor = position > scaling.original_context
