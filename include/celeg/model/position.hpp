@@ -88,9 +88,10 @@ inline double rope_frequency(const RopePositionSpec& spec, int pair,
 }
 
 inline float rope_attention_scale(const RopePositionSpec& spec, int position) {
-    if (position <= 0) return 1.0f;
+    if (position < 0) return 1.0f;
     if (const auto* yarn = std::get_if<YarnRopeScaling>(&spec.scaling)) {
-        return static_cast<float>(yarn->attention_factor);
+        const float scale = static_cast<float>(yarn->attention_factor);
+        return scale * scale;
     }
     return 1.0f;
 }
