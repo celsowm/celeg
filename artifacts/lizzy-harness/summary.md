@@ -1,56 +1,323 @@
 # Lizzy real checkpoint validation
 
-- commit: 163805bae20c1c7bb5fbfb4d0a5f583ad2a6c188
+- commit: ef19569eda5b721cac0c0136837acfdd075858ad
 - model: flwrlabs/Lizzy-7B
-- build: 1
+- build: 0
+- inventory: 1
+- resolve: 125
 - download: 125
-- CELEG semantic resolution: 125
-- Transformers reference: 125
-- logits/token comparison: 125
-
-## build stderr
-```text
-build: FAIL: CMake configure failed.
-```
+- reference: 125
+- compare: 125
 
 ## build stdout
 ```text
-doctor: platform       linux
-doctor: backend        cpu (requested cpu)
-doctor: cmake          /usr/local/bin/cmake (3.31.6)
-doctor: ninja          /usr/local/bin/ninja (1.13.2)
-doctor: compiler       /usr/bin/x86_64-linux-gnu-g++-13 (13.3.0)
-doctor: nvcc           <not found>
-doctor: gpu            <not detected>
-doctor: driver         <not detected>
-doctor: architecture   native
-doctor: checkpoint     <not cached>
-doctor: RESULT: ready
-+ /usr/local/bin/cmake --fresh -S /home/runner/work/celeg/celeg -B /home/runner/work/celeg/celeg/out/linux-cpu-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCELEG_ENABLE_CUDA=OFF -DCELEG_BUILD_TESTS=ON -DCELEG_RUN_CUDA_TESTS=ON
--- The C compiler identification is GNU 13.3.0
--- The CXX compiler identification is GNU 13.3.0
--- Detecting C compiler ABI info
--- Detecting C compiler ABI info - done
--- Check for working C compiler: /usr/bin/cc - skipped
--- Detecting C compile features
--- Detecting C compile features - done
--- Detecting CXX compiler ABI info
--- Detecting CXX compiler ABI info - done
--- Check for working CXX compiler: /usr/bin/c++ - skipped
--- Detecting CXX compile features
--- Detecting CXX compile features - done
--- Found Python3: /opt/hostedtoolcache/Python/3.12.13/x64/bin/python3.12 (found version "3.12.13") found components: Interpreter
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
--- Found Threads: TRUE
-CMake Error at /usr/local/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:233 (message):
-  Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR)
-Call Stack (most recent call first):
-  /usr/local/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:603 (_FPHSA_FAILURE_MESSAGE)
-  /usr/local/share/cmake-3.31/Modules/FindCURL.cmake:203 (find_package_handle_standard_args)
-  CMakeLists.txt:99 (find_package)
+    inlined from ‘constexpr _Res std::__invoke_impl(__invoke_other, _Fn&&, _Args&& ...) [with _Res = void; _Fn = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:61:36,
+    inlined from ‘constexpr std::enable_if_t<is_invocable_r_v<_Res, _Callable, _Args ...>, _Res> std::__invoke_r(_Callable&&, _Args&& ...) [with _Res = void; _Callable = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:111:28,
+    inlined from ‘static constexpr decltype(auto) std::__detail::__variant::__gen_vtable_impl<std::__detail::__variant::_Multi_array<_Result_type (*)(_Visitor, _Variants ...)>, std::integer_sequence<long unsigned int, __indices ...> >::__visit_invoke(_Visitor&&, _Variants ...) [with _Result_type = void; _Visitor = std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>&&; _Variants = {std::variant<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >&}; long unsigned int ...__indices = {3}]’ at /usr/include/c++/13/variant:1064:40,
+    inlined from ‘constexpr decltype(auto) std::__do_visit(_Visitor&&, _Variants&& ...) [with _Result_type = void; _Visitor = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Variants = {variant<std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >&}]’ at /usr/include/c++/13/variant:1818:5,
+    inlined from ‘constexpr void std::__detail::__variant::_Variant_storage<false, _Types ...>::_M_reset() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:496:23,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_storage<false, _Types ...>::~_Variant_storage() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:506:17,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_ctor_base()’ at /usr/include/c++/13/variant:581:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_ctor_base()’ at /usr/include/c++/13/variant:618:12,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_assign_base()’ at /usr/include/c++/13/variant:656:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_assign_base()’ at /usr/include/c++/13/variant:708:12,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_base<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Variant_base()’ at /usr/include/c++/13/variant:762:12,
+    inlined from ‘constexpr std::variant<_Types>::~variant() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:1432:28,
+    inlined from ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’ at /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49:
+/usr/include/c++/13/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on unallocated object ‘<anonymous>’ [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp: In member function ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49: note: declared here
+   73 |             case '{': return Json(parse_object());
+      |                                                 ^
+[245/422] Building CXX object CMakeFiles/tokenizer_benchmark.dir/src/checkpoint/formats/gguf.cpp.o
+[246/422] Building CXX object CMakeFiles/tokenizer_benchmark.dir/src/checkpoint/metadata.cpp.o
+[247/422] Building CXX object CMakeFiles/tokenizer_benchmark.dir/src/text/chat/template.cpp.o
+[248/422] Building CXX object CMakeFiles/tokenizer_probe.dir/tests/tokenizer_probe.cpp.o
+[249/422] Building CXX object CMakeFiles/tokenizer_probe.dir/src/text/tokenizer_json_loader.cpp.o
+[250/422] Building CXX object CMakeFiles/tokenizer_probe.dir/src/text/tokenizer.cpp.o
+[251/422] Building CXX object CMakeFiles/tokenizer_probe.dir/src/checkpoint/formats/json.cpp.o
+In file included from /usr/include/x86_64-linux-gnu/c++/13/bits/c++allocator.h:33,
+                 from /usr/include/c++/13/bits/allocator.h:46,
+                 from /usr/include/c++/13/string:43,
+                 from /home/runner/work/celeg/celeg/include/celeg/checkpoint/formats/json.hpp:4,
+                 from /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:1:
+In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type) [with _Tp = char]’,
+    inlined from ‘constexpr void std::allocator< <template-parameter-1-1> >::deallocate(_Tp*, std::size_t) [with _Tp = char]’ at /usr/include/c++/13/bits/allocator.h:210:35,
+    inlined from ‘static constexpr void std::allocator_traits<std::allocator<_CharT> >::deallocate(allocator_type&, pointer, size_type) [with _Tp = char]’ at /usr/include/c++/13/bits/alloc_traits.h:517:23,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_destroy(size_type) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:289:34,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_dispose() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:283:14,
+    inlined from ‘constexpr std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::~basic_string() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:804:19,
+    inlined from ‘constexpr void std::destroy_at(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:88:18,
+    inlined from ‘constexpr void std::_Destroy(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:149:22,
+    inlined from ‘std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)> mutable [with auto:16 = std::__cxx11::basic_string<char>&]’ at /usr/include/c++/13/variant:498:19,
+    inlined from ‘constexpr _Res std::__invoke_impl(__invoke_other, _Fn&&, _Args&& ...) [with _Res = void; _Fn = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:61:36,
+    inlined from ‘constexpr std::enable_if_t<is_invocable_r_v<_Res, _Callable, _Args ...>, _Res> std::__invoke_r(_Callable&&, _Args&& ...) [with _Res = void; _Callable = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:111:28,
+    inlined from ‘static constexpr decltype(auto) std::__detail::__variant::__gen_vtable_impl<std::__detail::__variant::_Multi_array<_Result_type (*)(_Visitor, _Variants ...)>, std::integer_sequence<long unsigned int, __indices ...> >::__visit_invoke(_Visitor&&, _Variants ...) [with _Result_type = void; _Visitor = std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>&&; _Variants = {std::variant<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >&}; long unsigned int ...__indices = {3}]’ at /usr/include/c++/13/variant:1064:40,
+    inlined from ‘constexpr decltype(auto) std::__do_visit(_Visitor&&, _Variants&& ...) [with _Result_type = void; _Visitor = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Variants = {variant<std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >&}]’ at /usr/include/c++/13/variant:1818:5,
+    inlined from ‘constexpr void std::__detail::__variant::_Variant_storage<false, _Types ...>::_M_reset() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:496:23,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_storage<false, _Types ...>::~_Variant_storage() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:506:17,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_ctor_base()’ at /usr/include/c++/13/variant:581:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_ctor_base()’ at /usr/include/c++/13/variant:618:12,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_assign_base()’ at /usr/include/c++/13/variant:656:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_assign_base()’ at /usr/include/c++/13/variant:708:12,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_base<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Variant_base()’ at /usr/include/c++/13/variant:762:12,
+    inlined from ‘constexpr std::variant<_Types>::~variant() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:1432:28,
+    inlined from ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’ at /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49:
+/usr/include/c++/13/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on unallocated object ‘<anonymous>’ [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp: In member function ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49: note: declared here
+   73 |             case '{': return Json(parse_object());
+      |                                                 ^
+[252/422] Building CXX object CMakeFiles/tokenizer_probe.dir/src/checkpoint/formats/gguf.cpp.o
+[253/422] Building CXX object CMakeFiles/tokenizer_probe.dir/src/checkpoint/metadata.cpp.o
+[254/422] Building CXX object CMakeFiles/tokenizer_probe.dir/src/text/chat/template.cpp.o
+[255/422] Building CXX object CMakeFiles/safetensors_test.dir/tests/safetensors_test.cpp.o
+[256/422] Building CXX object CMakeFiles/safetensors_test.dir/src/checkpoint/formats/json.cpp.o
+In file included from /usr/include/x86_64-linux-gnu/c++/13/bits/c++allocator.h:33,
+                 from /usr/include/c++/13/bits/allocator.h:46,
+                 from /usr/include/c++/13/string:43,
+                 from /home/runner/work/celeg/celeg/include/celeg/checkpoint/formats/json.hpp:4,
+                 from /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:1:
+In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type) [with _Tp = char]’,
+    inlined from ‘constexpr void std::allocator< <template-parameter-1-1> >::deallocate(_Tp*, std::size_t) [with _Tp = char]’ at /usr/include/c++/13/bits/allocator.h:210:35,
+    inlined from ‘static constexpr void std::allocator_traits<std::allocator<_CharT> >::deallocate(allocator_type&, pointer, size_type) [with _Tp = char]’ at /usr/include/c++/13/bits/alloc_traits.h:517:23,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_destroy(size_type) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:289:34,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_dispose() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:283:14,
+    inlined from ‘constexpr std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::~basic_string() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:804:19,
+    inlined from ‘constexpr void std::destroy_at(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:88:18,
+    inlined from ‘constexpr void std::_Destroy(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:149:22,
+    inlined from ‘std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)> mutable [with auto:16 = std::__cxx11::basic_string<char>&]’ at /usr/include/c++/13/variant:498:19,
+    inlined from ‘constexpr _Res std::__invoke_impl(__invoke_other, _Fn&&, _Args&& ...) [with _Res = void; _Fn = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:61:36,
+    inlined from ‘constexpr std::enable_if_t<is_invocable_r_v<_Res, _Callable, _Args ...>, _Res> std::__invoke_r(_Callable&&, _Args&& ...) [with _Res = void; _Callable = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:111:28,
+    inlined from ‘static constexpr decltype(auto) std::__detail::__variant::__gen_vtable_impl<std::__detail::__variant::_Multi_array<_Result_type (*)(_Visitor, _Variants ...)>, std::integer_sequence<long unsigned int, __indices ...> >::__visit_invoke(_Visitor&&, _Variants ...) [with _Result_type = void; _Visitor = std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>&&; _Variants = {std::variant<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >&}; long unsigned int ...__indices = {3}]’ at /usr/include/c++/13/variant:1064:40,
+    inlined from ‘constexpr decltype(auto) std::__do_visit(_Visitor&&, _Variants&& ...) [with _Result_type = void; _Visitor = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Variants = {variant<std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >&}]’ at /usr/include/c++/13/variant:1818:5,
+    inlined from ‘constexpr void std::__detail::__variant::_Variant_storage<false, _Types ...>::_M_reset() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:496:23,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_storage<false, _Types ...>::~_Variant_storage() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:506:17,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_ctor_base()’ at /usr/include/c++/13/variant:581:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_ctor_base()’ at /usr/include/c++/13/variant:618:12,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_assign_base()’ at /usr/include/c++/13/variant:656:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_assign_base()’ at /usr/include/c++/13/variant:708:12,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_base<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Variant_base()’ at /usr/include/c++/13/variant:762:12,
+    inlined from ‘constexpr std::variant<_Types>::~variant() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:1432:28,
+    inlined from ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’ at /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49:
+/usr/include/c++/13/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on unallocated object ‘<anonymous>’ [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp: In member function ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49: note: declared here
+   73 |             case '{': return Json(parse_object());
+      |                                                 ^
+[257/422] Building CXX object CMakeFiles/safetensors_test.dir/src/checkpoint/formats/safetensors.cpp.o
+[258/422] Building CXX object CMakeFiles/safetensors_repo_test.dir/tests/safetensors_repo_test.cpp.o
+[259/422] Building CXX object CMakeFiles/safetensors_repo_test.dir/src/checkpoint/formats/safetensors.cpp.o
+[260/422] Building CXX object CMakeFiles/safetensors_repo_test.dir/src/checkpoint/repositories/safetensors.cpp.o
+[261/422] Building CXX object CMakeFiles/safetensors_repo_test.dir/src/checkpoint/formats/json.cpp.o
+In file included from /usr/include/x86_64-linux-gnu/c++/13/bits/c++allocator.h:33,
+                 from /usr/include/c++/13/bits/allocator.h:46,
+                 from /usr/include/c++/13/string:43,
+                 from /home/runner/work/celeg/celeg/include/celeg/checkpoint/formats/json.hpp:4,
+                 from /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:1:
+In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type) [with _Tp = char]’,
+    inlined from ‘constexpr void std::allocator< <template-parameter-1-1> >::deallocate(_Tp*, std::size_t) [with _Tp = char]’ at /usr/include/c++/13/bits/allocator.h:210:35,
+    inlined from ‘static constexpr void std::allocator_traits<std::allocator<_CharT> >::deallocate(allocator_type&, pointer, size_type) [with _Tp = char]’ at /usr/include/c++/13/bits/alloc_traits.h:517:23,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_destroy(size_type) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:289:34,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_dispose() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:283:14,
+    inlined from ‘constexpr std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::~basic_string() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:804:19,
+    inlined from ‘constexpr void std::destroy_at(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:88:18,
+    inlined from ‘constexpr void std::_Destroy(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:149:22,
+    inlined from ‘std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)> mutable [with auto:16 = std::__cxx11::basic_string<char>&]’ at /usr/include/c++/13/variant:498:19,
+    inlined from ‘constexpr _Res std::__invoke_impl(__invoke_other, _Fn&&, _Args&& ...) [with _Res = void; _Fn = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:61:36,
+    inlined from ‘constexpr std::enable_if_t<is_invocable_r_v<_Res, _Callable, _Args ...>, _Res> std::__invoke_r(_Callable&&, _Args&& ...) [with _Res = void; _Callable = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:111:28,
+    inlined from ‘static constexpr decltype(auto) std::__detail::__variant::__gen_vtable_impl<std::__detail::__variant::_Multi_array<_Result_type (*)(_Visitor, _Variants ...)>, std::integer_sequence<long unsigned int, __indices ...> >::__visit_invoke(_Visitor&&, _Variants ...) [with _Result_type = void; _Visitor = std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>&&; _Variants = {std::variant<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >&}; long unsigned int ...__indices = {3}]’ at /usr/include/c++/13/variant:1064:40,
+    inlined from ‘constexpr decltype(auto) std::__do_visit(_Visitor&&, _Variants&& ...) [with _Result_type = void; _Visitor = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Variants = {variant<std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >&}]’ at /usr/include/c++/13/variant:1818:5,
+    inlined from ‘constexpr void std::__detail::__variant::_Variant_storage<false, _Types ...>::_M_reset() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:496:23,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_storage<false, _Types ...>::~_Variant_storage() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:506:17,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_ctor_base()’ at /usr/include/c++/13/variant:581:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_ctor_base()’ at /usr/include/c++/13/variant:618:12,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_assign_base()’ at /usr/include/c++/13/variant:656:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_assign_base()’ at /usr/include/c++/13/variant:708:12,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_base<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Variant_base()’ at /usr/include/c++/13/variant:762:12,
+    inlined from ‘constexpr std::variant<_Types>::~variant() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:1432:28,
+    inlined from ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’ at /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49:
+/usr/include/c++/13/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on unallocated object ‘<anonymous>’ [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp: In member function ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49: note: declared here
+   73 |             case '{': return Json(parse_object());
+      |                                                 ^
+[262/422] Building CXX object CMakeFiles/gguf_parse_test.dir/tests/gguf_parse_test.cpp.o
+[263/422] Building CXX object CMakeFiles/gguf_parse_test.dir/src/checkpoint/formats/gguf.cpp.o
+[264/422] Building CXX object CMakeFiles/gguf_repository_test.dir/tests/gguf_repository_test.cpp.o
+[265/422] Building CXX object CMakeFiles/moe_router_test.dir/tests/moe_router_test.cpp.o
+[266/422] Building CXX object CMakeFiles/concurrent_policy_test.dir/tests/concurrent_policy_test.cpp.o
+[267/422] Building CXX object CMakeFiles/concurrent_policy_test.dir/src/runtime/concurrency/policy.cpp.o
+[268/422] Building CXX object CMakeFiles/prefix_radix_test.dir/tests/prefix_radix_test.cpp.o
+[269/422] Building CXX object CMakeFiles/prefix_radix_test.dir/src/runtime/cache/prefix_radix.cpp.o
+[270/422] Building C object CMakeFiles/api_header_test.dir/tests/api_header_test.c.o
+[271/422] Building CXX object CMakeFiles/page_lease_test.dir/tests/page_lease_test.cpp.o
+[272/422] Building CXX object CMakeFiles/neutral_headers_compile_test.dir/tests/neutral_headers_compile_test.cpp.o
+[273/422] Building CXX object CMakeFiles/model_compiler_test.dir/src/backend/cpu/compiler.cpp.o
+[274/422] Building CXX object CMakeFiles/model_compiler_test.dir/tests/model_compiler_test.cpp.o
+[275/422] Building CXX object CMakeFiles/model_compiler_test.dir/src/backend/cuda/compiler.cpp.o
+[276/422] Building CXX object CMakeFiles/fake_repository_backend_boundary_test.dir/src/backend/cpu/compiler.cpp.o
+[277/422] Building CXX object CMakeFiles/fake_repository_backend_boundary_test.dir/tests/fake_repository_backend_boundary_test.cpp.o
+[278/422] Building CXX object CMakeFiles/fake_repository_backend_boundary_test.dir/src/backend/cuda/compiler.cpp.o
+[279/422] Building CXX object CMakeFiles/numerical_compare_test.dir/tests/numerical_compare_test.cpp.o
+[280/422] Building CXX object CMakeFiles/checkpoint_capabilities_test.dir/tests/checkpoint_capabilities_test.cpp.o
+[281/422] Building CXX object CMakeFiles/unsupported_moe_policy_test.dir/tests/quant/unsupported_moe_policy_test.cpp.o
+[282/422] Building CXX object CMakeFiles/checkpoint_format_catalog_test.dir/tests/checkpoint_format_catalog_test.cpp.o
+[283/422] Building CXX object CMakeFiles/concurrent_metrics_test.dir/tests/concurrent_metrics_test.cpp.o
+[284/422] Building CXX object CMakeFiles/runtime_context_test.dir/tests/runtime_context_test.cpp.o
+[285/422] Building CXX object CMakeFiles/execution_plan_test.dir/tests/execution_plan_test.cpp.o
+[286/422] Building CXX object CMakeFiles/execution_plan_test.dir/src/backend/cuda/execution_plan.cpp.o
+[287/422] Building CXX object CMakeFiles/prefix_cache_test.dir/tests/prefix_cache_test.cpp.o
+[288/422] Building CXX object CMakeFiles/public_facade_test.dir/tests/public_facade_test.cpp.o
+[289/422] Building CXX object CMakeFiles/request_registry_test.dir/tests/request_registry_test.cpp.o
+[290/422] Building CXX object CMakeFiles/generation_dispatcher_test.dir/tests/generation_dispatcher_test.cpp.o
+[291/422] Building CXX object CMakeFiles/request_lifecycle_test.dir/tests/request_lifecycle_test.cpp.o
+[292/422] Building CXX object CMakeFiles/visual_request_test.dir/tests/visual_request_test.cpp.o
+[293/422] Building CXX object CMakeFiles/gemma4_vision_test.dir/tests/gemma4_vision_test.cpp.o
+[294/422] Building CXX object CMakeFiles/qwen35_vision_test.dir/tests/qwen35_vision_test.cpp.o
+[295/422] Building CXX object CMakeFiles/batch_planner_test.dir/tests/batch_planner_test.cpp.o
+[296/422] Building CXX object CMakeFiles/engine_worker_test.dir/tests/engine_worker_test.cpp.o
+[297/422] Building CXX object CMakeFiles/expert_offload_test.dir/tests/expert_offload_test.cpp.o
+[298/422] Building CXX object CMakeFiles/host_expert_cache_test.dir/tests/host_expert_cache_test.cpp.o
+[299/422] Building CXX object CMakeFiles/expert_policy_test.dir/tests/expert_policy_test.cpp.o
+[300/422] Building CXX object CMakeFiles/chat_protocol_mapping_test.dir/tests/chat_protocol_mapping_test.cpp.o
+[301/422] Building CXX object CMakeFiles/cpu_isa_test.dir/tests/cpu_isa_test.cpp.o
+[302/422] Building CXX object CMakeFiles/cpu_topology_test.dir/tests/cpu_topology_test.cpp.o
+[303/422] Building CXX object CMakeFiles/cpu_thread_pool_test.dir/tests/cpu_thread_pool_test.cpp.o
+[304/422] Building CXX object CMakeFiles/cpu_quantization_test.dir/tests/cpu_quantization_test.cpp.o
+[305/422] Building CXX object CMakeFiles/cpu_kv_topology_test.dir/tests/cpu_kv_topology_test.cpp.o
+[306/422] Building CXX object CMakeFiles/cpu_kernels_test.dir/tests/cpu_kernels_test.cpp.o
+[307/422] Building CXX object CMakeFiles/cpu_kv_cache_test.dir/tests/cpu_kv_cache_test.cpp.o
+[308/422] Building CXX object CMakeFiles/cpu_gguf_kernels_test.dir/tests/cpu_gguf_kernels_test.cpp.o
+[309/422] Building CXX object CMakeFiles/cpu_paged_kv_test.dir/tests/cpu_paged_kv_test.cpp.o
+[310/422] Building CXX object CMakeFiles/cpu_parallel_attention_test.dir/tests/cpu_parallel_attention_test.cpp.o
+[311/422] Building CXX object CMakeFiles/cpu_numa_test.dir/tests/cpu_numa_test.cpp.o
+[312/422] Building CXX object CMakeFiles/cpu_prefix_cache_test.dir/tests/cpu_prefix_cache_test.cpp.o
+[313/422] Building CXX object CMakeFiles/cpu_concurrent_metrics_test.dir/tests/cpu_concurrent_metrics_test.cpp.o
+[314/422] Building CXX object CMakeFiles/cpu_model_options_test.dir/tests/cpu_model_options_test.cpp.o
+[315/422] Building CXX object CMakeFiles/cpu_batch_scheduler_test.dir/tests/cpu_batch_scheduler_test.cpp.o
+[316/422] Building CXX object CMakeFiles/cpu_sampler_test.dir/tests/cpu_sampler_test.cpp.o
+[317/422] Building CXX object CMakeFiles/cpu_moe_route_test.dir/tests/cpu_moe_route_test.cpp.o
+[318/422] Building CXX object CMakeFiles/cpu_granite_test.dir/tests/cpu_granite_test.cpp.o
+[319/422] Building C object CMakeFiles/cpu_c_api_smoke_test.dir/tests/api_smoke_test.c.o
+[320/422] Building CXX object CMakeFiles/cpu_mrope_test.dir/tests/cpu_mrope_test.cpp.o
+[321/422] Building CXX object CMakeFiles/runtime_backend_extension_test.dir/tests/runtime_backend_extension_test.cpp.o
+[322/422] Building CXX object CMakeFiles/image_codec_test.dir/tests/image_codec_test.cpp.o
+[323/422] Building CXX object CMakeFiles/cuda_attention_capability_test.dir/tests/cuda_attention_capability_test.cpp.o
+[324/422] Building CXX object CMakeFiles/cpu_expert_cache_test.dir/tests/cpu_expert_cache_test.cpp.o
+[325/422] Building CXX object CMakeFiles/latent_prefill_path_test.dir/tests/latent_prefill_path_test.cpp.o
+[326/422] Building CXX object CMakeFiles/attention_semantics_test.dir/tests/attention_semantics_test.cpp.o
+[327/422] Building CXX object CMakeFiles/program_fingerprint_test.dir/tests/program_fingerprint_test.cpp.o
+[328/422] Linking CXX executable celeg-cpu-run
+[329/422] Linking CXX executable celeg-cpu-pack
+[330/422] Linking CXX executable celeg-cpu-kernel-benchmark
+[331/422] Linking C executable celeg-c-api-example
+[332/422] Linking CXX executable celeg-cpu-concurrent-benchmark
+[333/422] Linking CXX executable celeg-cpu-prefill-benchmark
+[334/422] Building CXX object CMakeFiles/layer_inference_rule_test.dir/tests/layer_inference_rule_test.cpp.o
+[335/422] Linking CXX executable celeg-cpu-prefix-cache-benchmark
+[336/422] Linking CXX executable celeg-cpu-compare-reference
+[337/422] Linking CXX executable celeg-bench
+[338/422] Linking CXX executable celeg-download
+[339/422] Linking CXX executable celeg-compare-logits
+[340/422] Linking CXX executable celeg-serve
+[341/422] Linking CXX executable celeg-pack-experts
+[342/422] Linking CXX executable layer_dispatch_exhaustiveness_test
+[343/422] Linking CXX executable json_test
+[344/422] Linking CXX executable packed_int8_test
+[345/422] Linking CXX executable packed_int4_test
+[346/422] Linking CXX executable architecture_resolution_test
+[347/422] Linking CXX executable semantic_identity_test
+[348/422] Linking CXX executable chat_template_test
+[349/422] Linking CXX executable automatic_inference_test
+[350/422] Linking CXX executable protocol_utils_test
+[351/422] Linking CXX executable chat_template_resolution_test
+[352/422] Linking CXX executable conversation_test
+[353/422] Linking CXX executable reference_test
+[354/422] Linking CXX executable tensor_resolver_test
+[355/422] Linking CXX executable policy_test
+[356/422] Linking CXX executable weight_plan_test
+[357/422] Linking CXX executable quantization_test
+[358/422] Linking CXX executable tokenizer_test
+[359/422] Linking CXX executable tokenizer_benchmark
+[360/422] Linking CXX executable tokenizer_probe
+[361/422] Linking CXX executable safetensors_test
+[362/422] Linking CXX executable safetensors_repo_test
+[363/422] Linking CXX executable gguf_parse_test
+[364/422] Linking CXX executable moe_router_test
+[365/422] Linking CXX executable gguf_repository_test
+[366/422] Linking CXX executable concurrent_policy_test
+[367/422] Linking CXX executable prefix_radix_test
+[368/422] Linking C executable api_header_test
+[369/422] Linking CXX executable page_lease_test
+[370/422] Linking CXX executable neutral_headers_compile_test
+[371/422] Linking CXX executable model_compiler_test
+[372/422] Linking CXX executable fake_repository_backend_boundary_test
+[373/422] Linking CXX executable numerical_compare_test
+[374/422] Linking CXX executable unsupported_moe_policy_test
+[375/422] Linking CXX executable checkpoint_capabilities_test
+[376/422] Linking CXX executable checkpoint_format_catalog_test
+[377/422] Linking CXX executable concurrent_metrics_test
+[378/422] Linking CXX executable runtime_context_test
+[379/422] Linking CXX executable execution_plan_test
+[380/422] Linking CXX executable prefix_cache_test
+[381/422] Linking CXX executable public_facade_test
+[382/422] Linking CXX executable request_registry_test
+[383/422] Linking CXX executable generation_dispatcher_test
+[384/422] Linking CXX executable request_lifecycle_test
+[385/422] Linking CXX executable visual_request_test
+[386/422] Linking CXX executable chat_protocol_mapping_test
+[387/422] Linking CXX executable gemma4_vision_test
+[388/422] Linking CXX executable qwen35_vision_test
+[389/422] Linking CXX executable batch_planner_test
+[390/422] Linking CXX executable engine_worker_test
+[391/422] Linking CXX executable expert_offload_test
+[392/422] Linking CXX executable host_expert_cache_test
+[393/422] Linking CXX executable expert_policy_test
+[394/422] Linking CXX executable cpu_isa_test
+[395/422] Linking CXX executable cpu_thread_pool_test
+[396/422] Linking CXX executable cpu_topology_test
+[397/422] Linking CXX executable cpu_kv_topology_test
+[398/422] Linking CXX executable cpu_quantization_test
+[399/422] Linking CXX executable cpu_kernels_test
+[400/422] Linking CXX executable cpu_kv_cache_test
+[401/422] Linking CXX executable cpu_gguf_kernels_test
+[402/422] Linking CXX executable cpu_paged_kv_test
+[403/422] Linking CXX executable cpu_parallel_attention_test
+[404/422] Linking CXX executable cpu_prefix_cache_test
+[405/422] Linking CXX executable cpu_numa_test
+[406/422] Linking CXX executable cpu_concurrent_metrics_test
+[407/422] Linking CXX executable cpu_batch_scheduler_test
+[408/422] Linking CXX executable cpu_model_options_test
+[409/422] Linking CXX executable cpu_moe_route_test
+[410/422] Linking CXX executable cpu_sampler_test
+[411/422] Linking CXX executable cpu_granite_test
+[412/422] Linking CXX executable cpu_mrope_test
+[413/422] Linking C executable cpu_c_api_smoke_test
+[414/422] Linking CXX executable cuda_attention_capability_test
+[415/422] Linking CXX executable runtime_backend_extension_test
+[416/422] Linking CXX executable image_codec_test
+[417/422] Linking CXX executable cpu_expert_cache_test
+[418/422] Linking CXX executable attention_semantics_test
+[419/422] Linking CXX executable latent_prefill_path_test
+[420/422] Linking CXX executable program_fingerprint_test
+[421/422] Linking CXX executable layer_inference_rule_test
+build: PASS (cpu, Release, /home/runner/work/celeg/celeg/out/linux-cpu-release)
+```
 
-
--- Configuring incomplete, errors occurred!
+## inventory stderr
+```text
+Traceback (most recent call last):
+  File "/home/runner/work/celeg/celeg/scripts/materialize_hf_safetensors_header.py", line 9, in <module>
+    import requests
+ModuleNotFoundError: No module named 'requests'
 ```
 
