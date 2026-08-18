@@ -26,8 +26,10 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     const CompiledLayerProgram& semantics =
         resources_.program_.layers.at(static_cast<size_t>(layer_index));
     const bool mixer_after = semantics.mixer_norm.after.has_value();
+    const bool mixer_only =
+        std::holds_alternative<std::monostate>(semantics.feed_forward);
 
-    if (!resources_.options_.fused_residuals || mixer_after) {
+    if (!resources_.options_.fused_residuals || mixer_after || mixer_only) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
             cudaMemcpyDeviceToDevice, stream_.get()));
@@ -49,12 +51,11 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        semantics.mixer_norm.after->epsilon, stream_.get());
     }
-    if (!resources_.options_.fused_residuals || mixer_after ||
-        std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+    if (!resources_.options_.fused_residuals || mixer_after || mixer_only) {
         launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                             resources_.program_.hidden, stream_.get());
     }
-    if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+    if (!mixer_only) {
         run_mlp_decode(common_layer, layer_index);
     }
     if (std::binary_search(resources_.program_.norm_after_layers.begin(),
