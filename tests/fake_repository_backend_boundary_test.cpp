@@ -123,7 +123,8 @@ public:
 
 celeg::LayerSpec make_moe_layer(int intermediate, int num_experts, int hidden) {
     celeg::LayerSpec layer;
-    layer.operator_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+    layer.mixer_norm.before = celeg::NormSpec{1.0e-5f, celeg::NormWeightKind::Scale};
+    layer.feed_forward_norm.before = celeg::NormSpec{1.0e-5f, celeg::NormWeightKind::Scale};
     celeg::AttentionSpec attention;
     attention.query_heads = 1;
     attention.key_value_heads = 1;
@@ -232,7 +233,8 @@ int main() {
     attention.key_value_heads = 1;
     attention.head_dim = 4;
     attention.position = celeg::RopePositionSpec{10000.0, 1.0, {}};
-    layer.operator_norm = {1.0e-5f, celeg::NormWeightKind::Scale};
+    layer.mixer_norm.before = celeg::NormSpec{1.0e-5f, celeg::NormWeightKind::Scale};
+    layer.feed_forward_norm.before = celeg::NormSpec{1.0e-5f, celeg::NormWeightKind::Scale};
     layer.mixer = attention;
     layer.feed_forward = celeg::DenseFeedForwardSpec{8, celeg::ActivationKind::SwiGLU};
     model.graph.layers.push_back(layer);
@@ -253,4 +255,3 @@ int main() {
     run_poisoned_moe_layout_test();
     return 0;
 }
-
