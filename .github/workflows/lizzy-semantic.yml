@@ -34,7 +34,142 @@ env:
   HF_REVISION: 830c14022d19d80e3b09a6a3264dc0fd33a55f23
 
 jobs:
+  apply-qk-semantic-fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply generic QK norm semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          metadata_path = Path("src/model/inference/metadata.cpp")
+          text = metadata_path.read_text(encoding="utf-8")
+          changed = False
+
+          old_known = '        "qk_norm", "query_key_norm", "use_qk_norm", "xsa_projection",'
+          new_known = '        "qk_norm", "query_key_norm", "use_qk_norm", "qk_norm_type", "xsa_projection",'
+          if old_known in text:
+              if text.count(old_known) != 1:
+                  raise SystemExit("unexpected qk semantic allowlist shape")
+              text = text.replace(old_known, new_known)
+              changed = True
+
+          old_assignment = '''    result.attention.query_key_norm = aliases<bool>(
+              metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
+              "query_key_norm");
+          '''
+          new_assignment = '''    result.attention.query_key_norm = aliases<bool>(
+              metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,
+              "query_key_norm");
+              if (result.attention.query_key_norm.value_or(false)) {
+                  std::optional<std::string> qk_norm_type;
+                  std::string qk_norm_type_source;
+                  for (const std::string_view key : {
+                           std::string_view("qk_norm_type"),
+                           std::string_view("text_config.qk_norm_type")}) {
+                      if (!metadata.contains(key)) continue;
+                      const MetadataValue& raw = metadata.value(key);
+                      const auto* value = std::get_if<std::string>(&raw);
+                      if (value == nullptr) {
+                          inference_detail::fail(
+                              ResolutionFailureKind::ConflictingMetadata,
+                              "Q/K normalization type metadata is not a string: " +
+                                  std::string(key));
+                      }
+                      if (qk_norm_type.has_value() && *qk_norm_type != *value) {
+                          inference_detail::fail(
+                              ResolutionFailureKind::ConflictingMetadata,
+                              "conflicting Q/K normalization type metadata");
+                      }
+                      qk_norm_type = *value;
+                      qk_norm_type_source = std::string(key);
+                  }
+                  if (qk_norm_type.has_value()) {
+                      if (*qk_norm_type != "rmsnorm") {
+                          inference_detail::fail(
+                              ResolutionFailureKind::UnsupportedSemanticFeature,
+                              "unsupported Q/K normalization mathematics: " + *qk_norm_type);
+                      }
+                      result.evidence.push_back({EvidenceKind::ExplicitMetadata,
+                                                 qk_norm_type_source,
+                                                 "query_key_norm = rmsnorm"});
+                  }
+              }
+          '''
+          if old_assignment in text:
+              if text.count(old_assignment) != 1:
+                  raise SystemExit("unexpected query_key_norm assignment shape")
+              text = text.replace(old_assignment, new_assignment)
+              changed = True
+
+          if changed:
+              metadata_path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/checkpoint_capabilities_test.cpp")
+          test = test_path.read_text(encoding="utf-8")
+          test_changed = False
+          include_old = '#include "celeg/checkpoint/metadata.hpp"\n'
+          include_new = '#include "celeg/checkpoint/metadata.hpp"\n#include "celeg/model/inference.hpp"\n'
+          if '#include "celeg/model/inference.hpp"' not in test:
+              if test.count(include_old) != 1:
+                  raise SystemExit("unexpected checkpoint test include shape")
+              test = test.replace(include_old, include_new)
+              test_changed = True
+
+          marker = '''    CELEG_TEST_CHECK(flags[2] == 1);
+          '''
+          addition = '''    CELEG_TEST_CHECK(flags[2] == 1);
+
+              const auto rms_qk_metadata = celeg::CheckpointMetadata::from_json(
+                  celeg::Json::parse(
+                      R"({"rope_theta":10000,"use_qk_norm":true,"qk_norm_type":"rmsnorm"})"));
+              const auto rms_qk = celeg::normalize_model_metadata(rms_qk_metadata);
+              CELEG_TEST_CHECK(rms_qk.attention.query_key_norm.value_or(false));
+
+              bool rejected_qk_math = false;
+              try {
+                  const auto unsupported_qk_metadata = celeg::CheckpointMetadata::from_json(
+                      celeg::Json::parse(
+                          R"({"rope_theta":10000,"use_qk_norm":true,"qk_norm_type":"layernorm"})"));
+                  (void)celeg::normalize_model_metadata(unsupported_qk_metadata);
+              } catch (const celeg::ResolutionError& error) {
+                  rejected_qk_math =
+                      error.kind() == celeg::ResolutionFailureKind::UnsupportedSemanticFeature;
+              }
+              CELEG_TEST_CHECK(rejected_qk_math);
+          '''
+          if 'rejected_qk_math' not in test:
+              if test.count(marker) != 1:
+                  raise SystemExit("unexpected checkpoint test marker shape")
+              test = test.replace(marker, addition)
+              test_changed = True
+          if test_changed:
+              test_path.write_text(test, encoding="utf-8")
+
+          if not changed and not test_changed:
+              print("QK norm semantic fix already present")
+          PY
+
+          if git diff --quiet -- src/model/inference/metadata.cpp tests/checkpoint_capabilities_test.cpp; then
+            echo "No source changes to commit"
+            exit 0
+          fi
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/model/inference/metadata.cpp tests/checkpoint_capabilities_test.cpp
+          git commit -m "model: validate declared qk norm mathematics"
+          git push origin HEAD:master
+
   hf-auth:
+    needs: apply-qk-semantic-fix
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
