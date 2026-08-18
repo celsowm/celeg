@@ -90,10 +90,12 @@ public:
                     metadata, descriptor_.rope_scaling_original_context);
             } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
                 value.factor = scaling_number_value(metadata, descriptor_.rope_scaling_factor, 1.0);
+                value.original_context = scaling_integer_value(
+                    metadata, descriptor_.rope_scaling_original_context);
                 value.attention_factor = scaling_number_value(
                     metadata, descriptor_.rope_scaling_attention_factor, 1.0);
-                value.beta_fast = scaling_number_value(metadata, descriptor_.rope_scaling_beta_fast, 0.0);
-                value.beta_slow = scaling_number_value(metadata, descriptor_.rope_scaling_beta_slow, 0.0);
+                value.beta_fast = scaling_number_value(metadata, descriptor_.rope_scaling_beta_fast, 32.0);
+                value.beta_slow = scaling_number_value(metadata, descriptor_.rope_scaling_beta_slow, 1.0);
             } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
                 value.original_context = scaling_integer_value(
                     metadata, descriptor_.rope_scaling_original_context);
