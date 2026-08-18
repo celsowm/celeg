@@ -150,32 +150,22 @@ jobs:
             echo "- Transformers reference: $reference"
             echo "- logits/token comparison: $compare"
             echo
-            if [ -f "$RESULT_DIR/compare.stdout.log" ]; then
-              echo '```text'
-              cat "$RESULT_DIR/compare.stdout.log"
-              echo '```'
-            fi
-            if [ "$resolve" != "0" ] && [ -f "$RESULT_DIR/resolve.stderr.log" ]; then
-              echo
-              echo "## Resolution failure"
-              echo '```text'
-              cat "$RESULT_DIR/resolve.stderr.log"
-              echo '```'
-            fi
-            if [ "$reference" != "0" ] && [ -f "$RESULT_DIR/reference.stderr.log" ]; then
-              echo
-              echo "## Transformers failure"
-              echo '```text'
-              tail -200 "$RESULT_DIR/reference.stderr.log"
-              echo '```'
-            fi
-            if [ "$compare" != "0" ] && [ -f "$RESULT_DIR/compare.stderr.log" ]; then
-              echo
-              echo "## CELEG comparison failure"
-              echo '```text'
-              cat "$RESULT_DIR/compare.stderr.log"
-              echo '```'
-            fi
+            for stage in build download resolve reference compare; do
+              if [ -f "$RESULT_DIR/$stage.stderr.log" ] && [ -s "$RESULT_DIR/$stage.stderr.log" ]; then
+                echo "## $stage stderr"
+                echo '```text'
+                tail -300 "$RESULT_DIR/$stage.stderr.log"
+                echo '```'
+                echo
+              fi
+              if [ -f "$RESULT_DIR/$stage.stdout.log" ] && [ -s "$RESULT_DIR/$stage.stdout.log" ]; then
+                echo "## $stage stdout"
+                echo '```text'
+                tail -300 "$RESULT_DIR/$stage.stdout.log"
+                echo '```'
+                echo
+              fi
+            done
           } >"$RESULT_DIR/summary.md"
 
       - name: Persist validation result on branch
@@ -184,7 +174,7 @@ jobs:
         run: |
           git config user.name "celeg-validation-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add "$RESULT_DIR"
+          git add -f "$RESULT_DIR"
           if git diff --cached --quiet; then
             exit 0
           fi
