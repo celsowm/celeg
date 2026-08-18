@@ -423,13 +423,15 @@ using FeedForwardSpec = std::variant<
     DenseFeedForwardSpec,
     MixtureOfExpertsSpec>;
 
+struct SublayerNormSpec {
+    std::optional<NormSpec> before;
+    std::optional<NormSpec> after;
+};
+
 struct LayerSpec {
-    NormSpec operator_norm;
-    std::optional<NormSpec> post_attention_norm;
-    std::optional<NormSpec> pre_feed_forward_norm;
-    std::optional<NormSpec> post_feed_forward_norm;
+    SublayerNormSpec mixer_norm;
     MixerSpec mixer;
-    std::optional<NormSpec> feed_forward_norm;
+    SublayerNormSpec feed_forward_norm;
     FeedForwardSpec feed_forward;
     ResidualSpec residual;
     float layer_scalar = 1.0f;
