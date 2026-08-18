@@ -114,6 +114,18 @@ int main() {
         celeg::RopePositionSpec{500000.0, 1.0, {}};
     expect_fingerprint_change(baseline, rope);
 
+    celeg::ResolvedModel yarn_a = baseline;
+    celeg::YarnRopeScaling yarn_scaling_a;
+    yarn_scaling_a.factor = 4.0;
+    yarn_scaling_a.original_context = 2048;
+    std::get<celeg::AttentionSpec>(yarn_a.graph.layers[0].mixer).position =
+        celeg::RopePositionSpec{10000.0, 1.0, yarn_scaling_a};
+    celeg::ResolvedModel yarn_b = yarn_a;
+    auto& yarn_position_b = std::get<celeg::RopePositionSpec>(
+        std::get<celeg::AttentionSpec>(yarn_b.graph.layers[0].mixer).position);
+    std::get<celeg::YarnRopeScaling>(yarn_position_b.scaling).original_context = 4096;
+    expect_fingerprint_change(yarn_a, yarn_b);
+
     celeg::ResolvedModel feed_forward = baseline;
     std::get<celeg::DenseFeedForwardSpec>(feed_forward.graph.layers[0].feed_forward)
         .intermediate_size = 32;
