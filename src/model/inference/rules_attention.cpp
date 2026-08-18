@@ -135,6 +135,20 @@ public:
     bool probe(const CanonicalInferenceContext& context, int layer)
         const override {
         const auto& inventory = context.input.inventory;
+
+        // Factorized Gated Delta Net checkpoints such as Ling intentionally
+        // store q/k/v/o projections below an `.attention.` prefix.  Those
+        // projection names alone therefore do not establish standard
+        // attention.  Recurrent-only f_proj + q_conv1d are discriminators for
+        // the more specific factorized_gated_delta grammar; let that rule own
+        // the layer instead of manufacturing a cross-family ambiguity.
+        const std::string recurrent_prefix =
+            "model.layers." + std::to_string(layer) + ".attention.";
+        if (inventory.find(recurrent_prefix + "f_proj.weight") != nullptr &&
+            inventory.find(recurrent_prefix + "q_conv1d.weight") != nullptr) {
+            return false;
+        }
+
         for (const std::string& candidate :
              attention_tensor_candidates(layer, "q_proj.weight")) {
             if (inventory.find(candidate) != nullptr) return true;
