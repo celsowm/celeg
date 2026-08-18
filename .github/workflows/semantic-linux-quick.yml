@@ -15,6 +15,9 @@ concurrency:
   group: semantic-linux-smoke
   cancel-in-progress: true
 
+env:
+  SEMANTIC_SMOKE_REVISION: "15-exact"
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -30,9 +33,10 @@ jobs:
         shell: bash
         run: |
           set +e
-          python scripts/dev.py verify --backend cpu --build-type Release --jobs 2 > semantic-linux-smoke-full.txt 2>&1
+          python3 scripts/dev.py verify --backend cpu --build-type Release --jobs 2 > semantic-linux-smoke-full.txt 2>&1
           code=$?
-          echo "EXIT_CODE=$code" > semantic-linux-smoke.txt
+          echo "REVISION=$SEMANTIC_SMOKE_REVISION" > semantic-linux-smoke.txt
+          echo "EXIT_CODE=$code" >> semantic-linux-smoke.txt
           tail -n 500 semantic-linux-smoke-full.txt >> semantic-linux-smoke.txt
           exit 0
       - name: Publish source and result
