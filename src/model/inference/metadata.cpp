@@ -398,7 +398,7 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
 
 void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
     static const std::unordered_set<std::string> known = {
-        "qk_norm", "query_key_norm", "use_qk_norm", "xsa_projection",
+        "qk_norm", "query_key_norm", "use_qk_norm", "qk_norm_type", "xsa_projection",
         "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
         "rope_theta", "rotary_fraction", "rope_scaling", "rope_parameters",
         "embedding_multiplier", "attention_multiplier", "residual_multiplier",
@@ -424,6 +424,26 @@ void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
 
 NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metadata) {
     reject_unknown_semantic_metadata(metadata);
+    const auto require_supported_rms_norm = [&](std::string_view key) {
+        for (const std::string& candidate : {std::string(key), "text_config." + std::string(key)}) {
+            if (!metadata.contains(candidate)) continue;
+            const MetadataValue& value = metadata.value(candidate);
+            const auto* name = std::get_if<std::string>(&value);
+            if (name == nullptr) {
+                inference_detail::fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "normalization metadata has an incompatible type: " + candidate);
+            }
+            if (*name != "rmsnorm" && *name != "rms_norm" && *name != "rms") {
+                inference_detail::fail(
+                    ResolutionFailureKind::UnsupportedSemanticFeature,
+                    "automatic resolution only represents RMS normalization for metadata key: " +
+                        candidate);
+            }
+        }
+    };
+    require_supported_rms_norm("norm_type");
+    require_supported_rms_norm("qk_norm_type");
     NormalizedModelMetadata result;
     result.core.hidden_size = aliases<int>(metadata, {"hidden_size", "n_embd", "d_model"},
                                            result.evidence, "hidden_size", "embedding_length");
@@ -497,7 +517,7 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"max_position_embeddings", "max_seq_len", "context_length"},
         result.evidence, "context_length", "context_length");
     result.core.norm_epsilon = aliases<float>(
-        metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
+        metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon", "norm_eps"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
     result.core.embedding_multiplier = aliases<float>(
         metadata, {"embedding_multiplier"}, result.evidence,

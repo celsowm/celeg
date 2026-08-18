@@ -39,7 +39,7 @@ std::string CanonicalModelFacts::fingerprint() const {
         << ":tied=" << tied_embeddings;
     for (const auto& binding : bindings.values) {
         out << ':' << static_cast<int>(binding.role) << ':' << binding.layer << ':'
-            << binding.expert << ':' << binding.source_name;
+            << binding.expert;
         for (const auto dimension : binding.shape) {
             out << ':' << dimension;
         }
