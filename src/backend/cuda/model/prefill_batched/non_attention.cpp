@@ -13,6 +13,9 @@ void run_gated_delta(
         2 * spec.key_heads * spec.key_head_dim +
         spec.value_heads * spec.value_head_dim;
     const int value_width = spec.value_heads * spec.value_head_dim;
+    const float mixer_epsilon = semantics.mixer_norm.before
+        ? semantics.mixer_norm.before->epsilon
+        : model.resources_.program_.final_norm.epsilon;
 
     prof.begin(model.stream_.get());
     {
@@ -69,7 +72,7 @@ void run_gated_delta(
         gated_delta.recurrent_state.data(),
         workspace.prefill_gated_delta_output_.data(),
         rows, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
-        spec.key_heads, spec.value_heads, semantics.operator_norm.epsilon,
+        spec.key_heads, spec.value_heads, mixer_epsilon,
         spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
         spec.sigmoid_output_gate, model.stream_.get());
     prof.end(PrefillPhase::Conv, model.stream_.get());
@@ -95,6 +98,11 @@ void run_mamba2(
     const int projection_width =
         2 * spec.intermediate_size +
         2 * spec.group_count * spec.state_size + spec.num_heads;
+    const float mixer_epsilon = semantics.mixer_norm.before
+        ? semantics.mixer_norm.before->epsilon
+        : (semantics.mixer_norm.after
+            ? semantics.mixer_norm.after->epsilon
+            : model.resources_.program_.final_norm.epsilon);
 
     model.linear(
         workspace.prefill_normed_.data(), *mamba.in,
@@ -110,7 +118,7 @@ void run_mamba2(
     launch_rmsnorm(
         workspace.prefill_mamba_inner_.data(), mamba.norm,
         workspace.prefill_mamba_inner_.data(),
-        rows, spec.intermediate_size, semantics.operator_norm.epsilon,
+        rows, spec.intermediate_size, mixer_epsilon,
         model.stream_.get());
     launch_multiply(
         workspace.prefill_mamba_inner_.data(),
