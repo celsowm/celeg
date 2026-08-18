@@ -61,8 +61,7 @@ void run_regular_attention(
     if (output_gate) {
         if (gate_packed) {
             launch_extract_attention_output_gate(
-                workspace.prefill_qkv_.data(),
-                workspace.prefill_q_.data(),
+                workspace.prefill_qkv_.data(), workspace.prefill_q_.data(),
                 workspace.prefill_attention_gate_.data(),
                 rows, layout.query_width(), model.stream_.get());
         } else {
@@ -72,6 +71,11 @@ void run_regular_attention(
                 rows, layout.query_width(), hidden);
         }
     }
+    const float qk_epsilon = layout.query_norm
+        ? layout.query_norm->epsilon
+        : (layout.key_norm
+            ? layout.key_norm->epsilon
+            : model.resources_.program_.final_norm.epsilon);
     if (const auto* rope = layout.rope_position()) {
         launch_dynamic_qk_norm_rope_prefill(
             workspace.prefill_q_.data(),
@@ -80,8 +84,7 @@ void run_regular_attention(
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            layout.query_norm->epsilon,
-            layout.has_query_key_norm(),
+            qk_epsilon, layout.has_query_key_norm(),
             lower_cuda_rope_scaling(*rope), model.stream_.get());
     } else if (layout.has_query_key_norm()) {
         launch_dynamic_qk_norm_rope_prefill(
@@ -89,7 +92,7 @@ void run_regular_attention(
             attention.key ? workspace.prefill_k_.data() : nullptr,
             attention.q_norm, attention.k_norm,
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
-            1.0f, 0.0f, layout.query_norm->epsilon, true,
+            1.0f, 0.0f, qk_epsilon, true,
             CudaRopeScaling{}, model.stream_.get());
     }
     launch_scale(
@@ -116,7 +119,7 @@ void run_regular_attention(
         workspace.prefill_op_output_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
         rows, hidden, layout.query_width(),
-        model.resources_.options_.fused_residuals && !common_layer.post_attention_norm
+        model.resources_.options_.fused_residuals && !semantics.mixer_norm.after
             ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,
