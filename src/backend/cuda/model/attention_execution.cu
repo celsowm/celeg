@@ -19,7 +19,11 @@ void CudaCompiledModel::enqueue_decode_attention(
     AttentionLayer* attention = as_attention(layer);
     if (!attention) throw std::logic_error("CUDA layer is not attention");
             const AttentionSpec& layout = attention->layout;
-            const float qk_norm_epsilon = layout.query_norm->epsilon;
+            const float qk_norm_epsilon = layout.query_norm
+                ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
+            const bool fuse_mixer_residual = resources_.options_.fused_residuals &&
+                !semantics.mixer_norm.after.has_value() &&
+                !std::holds_alternative<std::monostate>(semantics.feed_forward);
             AttentionLayer* owner = attention;
             if (attention->kv_owner_layer >= 0) {
                 owner = as_attention(resources_.layers_.at(
@@ -130,8 +134,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                     }
                     linear(workspace_.latent_decompressed_.data(), *attention->out,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           layout.latent_output_width(),
-                           resources_.options_.fused_residuals && !common_layer.post_attention_norm ? 1.0f : 0.0f);
+                           layout.latent_output_width(), fuse_mixer_residual ? 1.0f : 0.0f);
                     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                                  semantics.residual.multiplier, stream_.get());
                     return;
@@ -219,8 +222,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                 linear(workspace_.op_output_.data(), *attention->out,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        layout.latent_query_content_width(),
-                       resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                           std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+                       fuse_mixer_residual ? 1.0f : 0.0f);
                 launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                              semantics.residual.multiplier,
                              stream_.get());
@@ -421,8 +423,7 @@ void CudaCompiledModel::enqueue_decode_attention(
             decode_phase_profile().begin(stream_.get());
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, layout.query_width(),
-                   resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
-                       std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+                   fuse_mixer_residual ? 1.0f : 0.0f);
             launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                          semantics.residual.multiplier,
                          stream_.get());
