@@ -37,6 +37,7 @@ inline CudaRopeScaling lower_cuda_rope_scaling(const RopePositionSpec& rope) {
         } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
             result.kind = 3;
             result.factor = static_cast<float>(scaling.factor);
+            result.original_context = scaling.original_context;
             result.attention_factor = static_cast<float>(scaling.attention_factor);
             result.beta_fast = static_cast<float>(scaling.beta_fast);
             result.beta_slow = static_cast<float>(scaling.beta_slow);
