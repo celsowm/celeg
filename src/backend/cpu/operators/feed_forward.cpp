@@ -49,8 +49,6 @@ void execute_cpu_mlp_only_token(CpuExecutionContext& context, size_t layer,
     cpu_relu2(workspace.activated.data(), workspace.activated.data(), intermediate);
     shared.linear.gemv(weights.w2, workspace.activated.data(),
                        workspace.hidden.data());
-    cpu_residual_add(workspace.hidden.data(), workspace.residual.data(),
-                     shared.program.hidden);
 }
 
 void execute_cpu_dense_feed_forward_token(
