@@ -25,9 +25,11 @@ void CudaCompiledModel::configure_model(
         [](const CompiledLayerProgram& layer) {
             return layer.residual.multiplier != 1.0f;
         });
+    if (non_default_residual) {
+        resources_.options_.fused_residuals = false;
+    }
     if (resources_.shape_.conv_layer_count == 0 &&
         (resources_.program_.embedding_transform.multiplier != 1.0f ||
-         non_default_residual ||
          resources_.program_.logits_multiplier != 1.0f ||
          resources_.program_.logits_divisor != 1.0f)) {
         resources_.options_.fused_residuals = false;
@@ -37,4 +39,3 @@ void CudaCompiledModel::configure_model(
 }
 
 }
-
