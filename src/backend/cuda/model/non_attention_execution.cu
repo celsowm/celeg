@@ -15,6 +15,9 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
     const float mixer_epsilon = semantics.mixer_norm.before
         ? semantics.mixer_norm.before->epsilon
         : resources_.program_.final_norm.epsilon;
+    const bool fuse_residual = resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     visit_layer(layer,
       [&](AttentionLayer*) {
         throw std::logic_error("attention layer routed to the non-attention mixer");
@@ -65,7 +68,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
             spec.sigmoid_output_gate, stream_.get());
         linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
-               value_width);
+               value_width, fuse_residual ? 1.0f : 0.0f);
         decode_phase_profile().end(DecodePhase::Other, stream_.get());
       },
       [&](Mamba2Layer* mamba) {
@@ -87,7 +90,8 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
         launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
                         spec.intermediate_size, stream_.get());
         linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),
-               1, resources_.program_.hidden, spec.intermediate_size);
+               1, resources_.program_.hidden, spec.intermediate_size,
+               fuse_residual ? 1.0f : 0.0f);
       },
       [&](MlpOnlyLayer* mlp) {
         linear(workspace_.normed_.data(), *mlp->up, workspace_.gate_up_.data(),
@@ -95,7 +99,8 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
         launch_relu2(workspace_.gate_up_.data(), workspace_.activated_.data(),
                      mlp->spec.intermediate_size, stream_.get());
         linear(workspace_.activated_.data(), *mlp->down, workspace_.hidden_.data(),
-               1, resources_.program_.hidden, mlp->spec.intermediate_size);
+               1, resources_.program_.hidden, mlp->spec.intermediate_size,
+               fuse_residual ? 1.0f : 0.0f);
       },
       [&](ConvolutionLayer* convolution) {
         decode_phase_profile().begin(stream_.get());
@@ -109,8 +114,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
             position_device_.data(), stream_.get());
         linear(workspace_.op_output_.data(), *convolution->conv_out,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
-               resources_.program_.hidden,
-               resources_.options_.fused_residuals ? 1.0f : 0.0f);
+               resources_.program_.hidden, fuse_residual ? 1.0f : 0.0f);
         decode_phase_profile().end(DecodePhase::Conv, stream_.get());
       });
 }
