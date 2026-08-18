@@ -123,12 +123,7 @@ void run_projected_latent_attention(
     model.linear(
         workspace.prefill_op_output_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
-        rows, hidden, layout.latent_query_content_width(),
-        model.resources_.options_.fused_residuals && !common_layer.mixer_norm_after
-            ? 1.0f : 0.0f);
-    launch_scale(
-        workspace.prefill_hidden_.data(), rows * hidden,
-        semantics.residual.multiplier, model.stream_.get());
+        rows, hidden, layout.latent_query_content_width(), 0.0f);
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
