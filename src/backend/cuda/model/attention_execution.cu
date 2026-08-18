@@ -220,8 +220,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                 linear(workspace_.op_output_.data(), *attention->out,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        layout.latent_query_content_width(),
-                       resources_.options_.fused_residuals && !common_layer.mixer_norm_after &&
-                           std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+                       0.0f);
                 launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                              semantics.residual.multiplier,
                              stream_.get());
@@ -422,8 +421,7 @@ void CudaCompiledModel::enqueue_decode_attention(
             decode_phase_profile().begin(stream_.get());
             linear(workspace_.op_output_.data(), *attention->out, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, layout.query_width(),
-                   resources_.options_.fused_residuals && !common_layer.mixer_norm_after &&
-                       std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+                   0.0f);
             launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                          semantics.residual.multiplier,
                          stream_.get());

@@ -48,6 +48,10 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        semantics.mixer_norm.after->epsilon, stream_.get());
     }
+    if (semantics.residual.multiplier != 1.0f) {
+        launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
+                     semantics.residual.multiplier, stream_.get());
+    }
     launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                         resources_.program_.hidden, stream_.get());
     if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) run_mlp_decode(common_layer, layer_index);
@@ -584,8 +588,9 @@ void CudaCompiledModel::run_token_mamba2(Mamba2Layer& mamba,
                        workspace_.mamba_inner_.data(), spec.intermediate_size,
                        spec.state_size, spec.num_heads, spec.head_dim,
                        spec.group_count, spec.conv_kernel, stream_.get());
-    const float epsilon = kv.paged() ? semantics.mixer_norm.before ? semantics.mixer_norm.before->epsilon : resources_.program_.final_norm.epsilon
-                                     : semantics.mixer_norm.after->epsilon;
+    const float epsilon = semantics.mixer_norm.before
+        ? semantics.mixer_norm.before->epsilon
+        : resources_.program_.final_norm.epsilon;
     launch_rmsnorm(workspace_.mamba_inner_.data(), mamba.norm,
                    workspace_.op_output_.data(), 1, spec.intermediate_size,
                    epsilon, stream_.get());

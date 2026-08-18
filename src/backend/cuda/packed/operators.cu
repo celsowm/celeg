@@ -78,7 +78,7 @@ void project_attention_qkv(PackedOperatorContext& context,
             attention.k_norm, rows, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            layout.query_norm->epsilon, layout.has_query_key_norm(),
+            layout.query_norm ? layout.query_norm->epsilon : reference.program().final_norm.epsilon, layout.has_query_key_norm(),
             rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
@@ -502,8 +502,6 @@ void PackedAttentionExecutor::run(
     context.linear(w.op_output.data(), *attention.out, w.hidden.data(), rows,
                    context.program.hidden, query_width,
                    0.0f);
-    launch_scale(w.hidden.data(), rows * context.program.hidden,
-                 semantics.residual.multiplier, w.stream.get());
 }
 
 void PackedDenseFfnExecutor::run(
@@ -556,12 +554,14 @@ void PackedDenseFfnExecutor::run(
     }
     context.linear(w.activated.data(), *dense->w2, w.mlp_output.data(), rows,
                    context.program.hidden, intermediate);
-    launch_scale(w.mlp_output.data(), rows * context.program.hidden,
-                 semantics.residual.multiplier, w.stream.get());
     if (semantics.feed_forward_norm.after) {
         launch_rmsnorm(w.mlp_output.data(), common_layer.feed_forward_norm_after,
                        w.mlp_output.data(), rows, context.program.hidden,
                        semantics.feed_forward_norm.after->epsilon, w.stream.get());
+    }
+    if (semantics.residual.multiplier != 1.0f) {
+        launch_scale(w.mlp_output.data(), rows * context.program.hidden,
+                 semantics.residual.multiplier, w.stream.get());
     }
     launch_residual_add(w.hidden.data(), w.mlp_output.data(),
                         rows * context.program.hidden, w.stream.get());
@@ -624,12 +624,14 @@ void PackedMoeExecutor::run(
                    w.moe_act_scratch.data(), w.stream.get());
     launch_finalize_moe_output(w.moe_output_accum.data(), w.moe_output.data(),
                                rows * context.program.hidden, w.stream.get());
-    launch_scale(w.moe_output.data(), rows * context.program.hidden,
-                 semantics.residual.multiplier, w.stream.get());
     if (semantics.feed_forward_norm.after) {
         launch_rmsnorm(w.moe_output.data(), common_layer.feed_forward_norm_after,
                        w.moe_output.data(), rows, context.program.hidden,
                        semantics.feed_forward_norm.after->epsilon, w.stream.get());
+    }
+    if (semantics.residual.multiplier != 1.0f) {
+        launch_scale(w.moe_output.data(), rows * context.program.hidden,
+                 semantics.residual.multiplier, w.stream.get());
     }
     launch_residual_add(w.hidden.data(), w.moe_output.data(),
                         rows * context.program.hidden, w.stream.get());

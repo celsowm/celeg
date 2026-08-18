@@ -526,13 +526,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             }
           });
 
-        if (semantics.residual.multiplier != 1.0f) {
-            scale(workspace_.chunk_hidden, rows * hidden,
-                  semantics.residual.multiplier);
-        }
         if (semantics.mixer_norm.after.has_value()) {
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.mixer_norm_after, hidden,
                                  semantics.mixer_norm.after->epsilon);
+        }
+        if (semantics.residual.multiplier != 1.0f) {
+            scale(workspace_.chunk_hidden, rows * hidden,
+                  semantics.residual.multiplier);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
         if (semantics.feed_forward_norm.before) {
@@ -559,13 +559,13 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             throw std::logic_error(
                 "CPU chunk layer has non-monostate FFN semantics but no feed-forward weights");
         }
-        if (semantics.residual.multiplier != 1.0f) {
-            scale(workspace_.chunk_mlp, rows * hidden,
-                  semantics.residual.multiplier);
-        }
         if (semantics.feed_forward_norm.after.has_value()) {
             rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.feed_forward_norm_after, hidden,
                                  semantics.feed_forward_norm.after->epsilon);
+        }
+        if (semantics.residual.multiplier != 1.0f) {
+            scale(workspace_.chunk_mlp, rows * hidden,
+                  semantics.residual.multiplier);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_mlp.data(), hidden);
 

@@ -186,6 +186,10 @@ void PackedLayerExecutor::run_transformer_layers(
                            workspace_.hidden.data(), rows, workspace_.program_.hidden,
                            semantics.mixer_norm.after->epsilon, workspace_.stream.get());
         }
+        if (semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.hidden.data(), rows * workspace_.program_.hidden,
+                         semantics.residual.multiplier, workspace_.stream.get());
+        }
         launch_residual_add(workspace_.hidden.data(), workspace_.residual.data(),
                             rows * workspace_.program_.hidden, workspace_.stream.get());
         if (layer_program_.kind(layer_index) != PackedLayerKind::Mamba2) {

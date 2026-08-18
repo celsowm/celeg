@@ -85,6 +85,10 @@ void run_layer(
             rows, hidden, semantics.mixer_norm.after->epsilon,
             model.stream_.get());
     }
+    if (semantics.residual.multiplier != 1.0f) {
+        launch_scale(workspace.prefill_hidden_.data(), rows * hidden,
+                     semantics.residual.multiplier, model.stream_.get());
+    }
 
     prof.begin(model.stream_.get());
     launch_residual_add(

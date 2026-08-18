@@ -261,15 +261,15 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
-    if (layer_semantics.residual.multiplier != 1.0f) {
-        launch_scale(workspace_.moe_output_.data(), resources_.program_.hidden,
-                     layer_semantics.residual.multiplier, stream_.get());
-    }
     if (layer_semantics.feed_forward_norm.after) {
         launch_rmsnorm(workspace_.moe_output_.data(), common_layer.feed_forward_norm_after,
                        workspace_.moe_output_.data(), 1, resources_.program_.hidden,
                        layer_semantics.feed_forward_norm.after->epsilon, stream_.get());
     }
+    if (layer_semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.moe_output_.data(), resources_.program_.hidden,
+                         layer_semantics.residual.multiplier, stream_.get());
+        }
     launch_residual_add(workspace_.hidden_.data(), workspace_.moe_output_.data(),
                         resources_.program_.hidden, stream_.get());
 }
@@ -356,15 +356,15 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
-    if (layer_semantics.residual.multiplier != 1.0f) {
-        launch_scale(workspace_.moe_pf_output_.data(), rows * resources_.program_.hidden,
-                     layer_semantics.residual.multiplier, stream_.get());
-    }
     if (layer_semantics.feed_forward_norm.after) {
         launch_rmsnorm(workspace_.moe_pf_output_.data(), common_layer.feed_forward_norm_after,
                        workspace_.moe_pf_output_.data(), rows, resources_.program_.hidden,
                        layer_semantics.feed_forward_norm.after->epsilon, stream_.get());
     }
+    if (layer_semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.moe_pf_output_.data(), rows * resources_.program_.hidden,
+                         layer_semantics.residual.multiplier, stream_.get());
+        }
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),
                         rows * resources_.program_.hidden, stream_.get());
 }

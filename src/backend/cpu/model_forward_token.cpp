@@ -124,12 +124,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             for (float v : workspace_.hidden) { sq += (double)v*v; mx = std::max(mx, std::fabs(v)); if (!std::isfinite(v)) bad = true; }
             fprintf(stderr, "[layer %zu mixer-out] norm=%.4f max=%.4f bad=%d\n", index, std::sqrt(sq), mx, bad);
         }
-        if (semantics.residual.multiplier != 1.0f) {
-            for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
-        }
         if (semantics.mixer_norm.after.has_value()) {
             cpu_rmsnorm_inplace(workspace_.hidden.data(), common.mixer_norm_after.data(),
                                 shared->program.hidden, semantics.mixer_norm.after->epsilon);
+        }
+        if (semantics.residual.multiplier != 1.0f) {
+            for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
         if (getenv("CELEG_DEBUG_LAYER_STATS")) {
@@ -154,22 +154,22 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             const MoeLayerProgram& moe_semantics =
                 std::get<MoeLayerProgram>(shared->program.layers[index].feed_forward);
             execute_cpu_moe_token(execution, index, *moe, moe_semantics);
-            if (semantics.residual.multiplier != 1.0f) {
-                for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
-            }
             if (semantics.feed_forward_norm.after.has_value()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after.data(),
                                     shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
+            }
+            if (semantics.residual.multiplier != 1.0f) {
+                for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else if (dense) {
             execute_cpu_dense_feed_forward_token(execution, index, *dense);
-            if (semantics.residual.multiplier != 1.0f) {
-                for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
-            }
             if (semantics.feed_forward_norm.after.has_value()) {
                 cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after.data(),
                                     shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
+            }
+            if (semantics.residual.multiplier != 1.0f) {
+                for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else {

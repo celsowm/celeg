@@ -332,14 +332,15 @@ struct CpuCompiledModel::BatchScratch {
                 layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 }
               });
+            if (layer_semantics.mixer_norm.after.has_value()) {
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.mixer_norm_after, hidden,
+                                     layer_semantics.mixer_norm.after->epsilon);
+            }
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.hidden.data() + row * hidden;
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
-            }
-            if (layer_semantics.mixer_norm.after.has_value()) {
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.mixer_norm_after, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
             if (layer_semantics.feed_forward_norm.before) {
@@ -509,14 +510,15 @@ struct CpuCompiledModel::BatchScratch {
                 });
                 layer_gemm(dense_weights->w2, workspace_.activated.data(), workspace_.mlp_output.data());
             }
+            if (layer_semantics.feed_forward_norm.after.has_value()) {
+                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after, hidden,
+                                     layer_semantics.feed_forward_norm.after->epsilon);
+            }
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.mlp_output.data() + row * hidden;
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
-            }
-            if (layer_semantics.feed_forward_norm.after.has_value()) {
-                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);
             normed_q8_ready = false;

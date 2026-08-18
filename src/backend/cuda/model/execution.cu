@@ -76,6 +76,10 @@ void CudaCompiledModel::enqueue_decode_forward() {
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            semantics.mixer_norm.after->epsilon, stream_.get());
         }
+        if (semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
+                         semantics.residual.multiplier, stream_.get());
+        }
         decode_phase_profile().begin(stream_.get());
         launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                             resources_.program_.hidden, stream_.get());
