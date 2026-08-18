@@ -31,3 +31,4 @@ model/
 .externals/
 benchmarks/results/
 run_asan_qwen.bat
+.hermes/
