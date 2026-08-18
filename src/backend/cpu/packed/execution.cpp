@@ -331,8 +331,8 @@ struct CpuCompiledModel::BatchScratch {
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_attention_norm.has_value()) {
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.post_attention_norm, hidden);
+            if (layer_semantics.mixer_norm.after.has_value()) {
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.mixer_norm.after, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
             rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm, workspace_.normed.data(), hidden);
@@ -502,8 +502,8 @@ struct CpuCompiledModel::BatchScratch {
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_feed_forward_norm.has_value()) {
-                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm, hidden);
+            if (layer_semantics.feed_forward_norm.after.has_value()) {
+                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.feed_forward_norm.after, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);
             normed_q8_ready = false;

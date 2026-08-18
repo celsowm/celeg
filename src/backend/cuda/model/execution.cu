@@ -67,12 +67,12 @@ void CudaCompiledModel::enqueue_decode_forward() {
         } else {
             enqueue_decode_non_attention_mixer(layer, layer_idx);
         }
-        if (common_layer.post_attention_norm) {
-            launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
+        if (common_layer.mixer_norm.after) {
+            launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm.after,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           semantics.post_attention_norm->epsilon, stream_.get());
+                           semantics.mixer_norm.after->epsilon, stream_.get());
         }
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
+        if (!resources_.options_.fused_residuals || common_layer.mixer_norm.after ||
             std::holds_alternative<std::monostate>(semantics.feed_forward)) {
             decode_phase_profile().begin(stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),

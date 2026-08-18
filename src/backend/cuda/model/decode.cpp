@@ -28,7 +28,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     const CompiledLayerProgram& semantics =
         resources_.program_.layers.at(static_cast<size_t>(layer_index));
 
-    if (!resources_.options_.fused_residuals || common_layer.post_attention_norm) {
+    if (!resources_.options_.fused_residuals || common_layer.mixer_norm.after) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
             cudaMemcpyDeviceToDevice, stream_.get()));
@@ -39,12 +39,12 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
 
     run_token_mixer(layer, common_layer, semantics, layer_index, kv);
 
-    if (common_layer.post_attention_norm) {
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
+    if (common_layer.mixer_norm.after) {
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm.after,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                       semantics.post_attention_norm->epsilon, stream_.get());
+                       semantics.mixer_norm.after->epsilon, stream_.get());
     }
-    if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
+    if (!resources_.options_.fused_residuals || common_layer.mixer_norm.after ||
         std::holds_alternative<std::monostate>(semantics.feed_forward)) {
         launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                             resources_.program_.hidden, stream_.get());
@@ -407,7 +407,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
     linear(workspace_.op_output_.data(), *attention.out,
            workspace_.hidden_.data(), 1, resources_.program_.hidden,
            layout.latent_query_content_width(),
-           resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
+           resources_.options_.fused_residuals && !common_layer.mixer_norm.after &&
                std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  semantics.residual.multiplier,
@@ -515,7 +515,7 @@ void CudaCompiledModel::run_token_attention(
     }
     linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
            1, resources_.program_.hidden, layout.query_width(),
-           resources_.options_.fused_residuals && !common_layer.post_attention_norm &&
+           resources_.options_.fused_residuals && !common_layer.mixer_norm.after &&
                std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  semantics.residual.multiplier, stream_.get());
@@ -586,7 +586,7 @@ void CudaCompiledModel::run_token_mamba2(Mamba2Layer& mamba,
                        spec.state_size, spec.num_heads, spec.head_dim,
                        spec.group_count, spec.conv_kernel, stream_.get());
     const float epsilon = kv.paged() ? semantics.operator_norm.epsilon
-                                     : semantics.post_attention_norm->epsilon;
+                                     : semantics.mixer_norm.after->epsilon;
     launch_rmsnorm(workspace_.mamba_inner_.data(), mamba.norm,
                    workspace_.op_output_.data(), 1, spec.intermediate_size,
                    epsilon, stream_.get());

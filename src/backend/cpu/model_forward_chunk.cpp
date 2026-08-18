@@ -525,9 +525,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             scale(workspace_.chunk_hidden, rows * hidden,
                   semantics.residual.multiplier);
         }
-        if (semantics.post_attention_norm.has_value()) {
-            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.post_attention_norm, hidden,
-                                 semantics.post_attention_norm->epsilon);
+        if (semantics.mixer_norm.after.has_value()) {
+            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.mixer_norm.after, hidden,
+                                 semantics.mixer_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
         rmsnorm_rows(workspace_.chunk_hidden.data(), common.ffn_norm,
@@ -553,9 +553,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             scale(workspace_.chunk_mlp, rows * hidden,
                   semantics.residual.multiplier);
         }
-        if (semantics.post_feed_forward_norm.has_value()) {
-            rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.post_feed_forward_norm, hidden,
-                                 semantics.post_feed_forward_norm->epsilon);
+        if (semantics.feed_forward_norm.after.has_value()) {
+            rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.feed_forward_norm.after, hidden,
+                                 semantics.feed_forward_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_mlp.data(), hidden);
 

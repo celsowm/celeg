@@ -116,7 +116,7 @@ void run_regular_attention(
         workspace.prefill_op_output_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
         rows, hidden, layout.query_width(),
-        model.resources_.options_.fused_residuals && !common_layer.post_attention_norm
+        model.resources_.options_.fused_residuals && !common_layer.mixer_norm.after
             ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,

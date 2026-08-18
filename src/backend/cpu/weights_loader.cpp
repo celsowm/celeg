@@ -49,15 +49,15 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         common.ffn_norm = common.operator_norm;
         return common;
     }
-    if (layer_program.post_attention_norm) {
-        common.post_attention_norm = load_norm(TensorRole::AttentionPostNorm,
-                                               *layer_program.post_attention_norm);
+    if (layer_program.mixer_norm.after) {
+        common.mixer_norm.after = load_norm(TensorRole::AttentionPostNorm,
+                                               *layer_program.mixer_norm.after);
     }
     common.ffn_norm = load_norm(TensorRole::FfnInputNorm,
                                 *layer_program.feed_forward_norm);
-    if (layer_program.post_feed_forward_norm) {
-        common.post_feed_forward_norm = load_norm(TensorRole::FfnOutputNorm,
-                                                  *layer_program.post_feed_forward_norm);
+    if (layer_program.feed_forward_norm.after) {
+        common.feed_forward_norm.after = load_norm(TensorRole::FfnOutputNorm,
+                                                  *layer_program.feed_forward_norm.after);
     }
     if (program.per_layer_input.enabled) {
         common.per_layer_input_norm = load_vector(source, reader, writer,

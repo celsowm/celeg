@@ -386,9 +386,7 @@ void bind_moe(CanonicalInferenceContext& context,
 /// already ran: the input norm plus either the routed-expert MoE grammar or
 /// the dense projections. Layers whose feed-forward is monostate (no FFN
 /// grammar, Mamba-2, or MLP-only mixers) bind nothing here.
-void resolve_layer_feed_forward(CanonicalInferenceContext& context,
-                                int layer,
-                                const std::vector<std::string>& ffn_norm_candidates) {
+void resolve_layer_feed_forward(CanonicalInferenceContext& context, int layer) {
     const auto& input = context.input;
     const auto& m = input.metadata;
     auto& facts = context.facts;
@@ -398,19 +396,15 @@ void resolve_layer_feed_forward(CanonicalInferenceContext& context,
     if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) return;
     if (std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) return;
 
-    const auto* ffn_norm = find_unique(
-        input.inventory,
-        ffn_norm_candidates,
-        TensorRole::FfnInputNorm,
-        layer,
-        {*m.core.hidden_size},
-        {});
-    add_binding(
-        facts.bindings,
-        TensorRole::FfnInputNorm,
-        layer,
-        *ffn_norm,
-        {});
+    const auto bind_norm = [&](TensorRole role, const std::optional<NormSpec>& spec) {
+        if (!spec || spec->weightless()) return;
+        const auto* tensor = find_unique(
+            input.inventory, norm_tensor_candidates(layer, role), role, layer,
+            {*m.core.hidden_size}, {});
+        add_binding(facts.bindings, role, layer, *tensor, {});
+    };
+    bind_norm(TensorRole::FfnInputNorm, semantic_layer.feed_forward_norm.before);
+    bind_norm(TensorRole::FfnOutputNorm, semantic_layer.feed_forward_norm.after);
 
     if (std::holds_alternative<MixtureOfExpertsSpec>(semantic_layer.feed_forward)) {
         bind_moe(context, layer, std::to_string(layer));
@@ -472,44 +466,21 @@ void resolve_canonical_layers(CanonicalInferenceContext& context) {
     for (int layer = 0; layer < context.layer_count; ++layer) {
         const std::string index = std::to_string(layer);
 
-        const std::vector<std::string> norm_candidates = {
-            "transformer.h." + index + ".ln_1.weight",
-            "model.layers." + index + ".input_layernorm.weight",
-            "model.layers." + index + ".self_attn_layer_norm.weight",
-            "model.language_model.layers." + index + ".input_layernorm.weight",
-            "model.language_model.layers." + index + ".operator_norm.weight",
-            "model.layers." + index + ".operator_norm.weight",
-            "backbone.layers." + index + ".norm.weight",
-            "blk." + index + ".attn_norm.weight",
+        const LayerSpec& semantic_layer = facts.graph.layers[static_cast<size_t>(layer)];
+        const auto bind_norm = [&](TensorRole role, const std::optional<NormSpec>& spec) {
+            if (!spec || spec->weightless()) return;
+            const auto* tensor = find_unique(
+                input.inventory, norm_tensor_candidates(layer, role), role, layer,
+                {*m.core.hidden_size}, {});
+            add_binding(facts.bindings, role, layer, *tensor, {});
         };
-        const std::vector<std::string> ffn_norm_candidates = {
-            "transformer.h." + index + ".ln_2.weight",
-            "model.layers." + index + ".post_attention_layernorm.weight",
-            "model.language_model.layers." + index + ".post_attention_layernorm.weight",
-            "model.language_model.layers." + index + ".ffn_norm.weight",
-            "model.layers." + index + ".ffn_norm.weight",
-            "blk." + index + ".ffn_norm.weight",
-            "blk." + index + ".post_attention_norm.weight",
-        };
-
-        const auto* attention_norm = find_unique(
-            input.inventory,
-            norm_candidates,
-            TensorRole::AttentionInputNorm,
-            layer,
-            {*m.core.hidden_size},
-            {});
-        add_binding(
-            facts.bindings,
-            TensorRole::AttentionInputNorm,
-            layer,
-            *attention_norm,
-            {});
+        bind_norm(TensorRole::AttentionInputNorm, semantic_layer.mixer_norm.before);
+        bind_norm(TensorRole::AttentionPostNorm, semantic_layer.mixer_norm.after);
 
         const ILayerInferenceRule& rule =
             select_layer_inference_rule(rules, context, layer);
         rule.resolve(context, layer);
-        resolve_layer_feed_forward(context, layer, ffn_norm_candidates);
+        resolve_layer_feed_forward(context, layer);
     }
 
     apply_attention_output_scale(context);

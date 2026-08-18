@@ -153,12 +153,44 @@ void initialize_graph(CanonicalInferenceContext& context) {
     for (int layer = 0; layer < context.layer_count; ++layer) {
         LayerSpec& semantic_layer =
             graph.layers[static_cast<size_t>(layer)];
-        semantic_layer.operator_norm = {
-            numerical_policy.norm_eps,
-            NormWeightKind::Scale};
-        semantic_layer.feed_forward_norm = {
-            numerical_policy.norm_eps,
-            NormWeightKind::Scale};
+        const auto layout = m.norms.layer_layout.value_for(layer);
+        const auto layout_flag = [&](bool before) -> std::optional<bool> {
+            if (!layout) return std::nullopt;
+            if (*layout == "decoder_prenorm" || *layout == "prenorm") return before;
+            if (*layout == "decoder_postnorm" || *layout == "postnorm") return !before;
+            if (*layout == "decoder_sandwich" || *layout == "sandwich") return true;
+            fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                 "unsupported layer layout token: " + *layout);
+        };
+        const auto resolve_norm = [&](const LayerScopedValue<bool>& metadata_flag,
+                                      TensorRole role, bool before) -> std::optional<NormSpec> {
+            const std::optional<bool> explicit_flag = metadata_flag.value_for(layer);
+            const std::optional<bool> layout_default = layout_flag(before);
+            const bool tensor_present = has_any_tensor(
+                context.input.inventory, norm_tensor_candidates(layer, role));
+            const std::optional<bool> selected = explicit_flag.has_value()
+                ? explicit_flag : layout_default;
+            if (selected.has_value()) {
+                if (!*selected && tensor_present) {
+                    fail(ResolutionFailureKind::ConflictingInferenceFacts,
+                         "normalization metadata disables a tensor-backed norm for layer " +
+                             std::to_string(layer));
+                }
+                if (!*selected) return std::nullopt;
+                return NormSpec{numerical_policy.norm_eps, NormWeightKind::Scale};
+            }
+            return tensor_present
+                ? std::optional<NormSpec>{NormSpec{numerical_policy.norm_eps, NormWeightKind::Scale}}
+                : std::nullopt;
+        };
+        semantic_layer.mixer_norm.before = resolve_norm(
+            m.norms.mixer_before, TensorRole::AttentionInputNorm, true);
+        semantic_layer.mixer_norm.after = resolve_norm(
+            m.norms.mixer_after, TensorRole::AttentionPostNorm, false);
+        semantic_layer.feed_forward_norm.before = resolve_norm(
+            m.norms.feed_forward_before, TensorRole::FfnInputNorm, true);
+        semantic_layer.feed_forward_norm.after = resolve_norm(
+            m.norms.feed_forward_after, TensorRole::FfnOutputNorm, false);
         semantic_layer.residual.multiplier =
             numerical_policy.residual_multiplier;
         semantic_layer.mixer = AttentionSpec{};

@@ -214,7 +214,8 @@ LayerScopedValue<T> scoped_aliases(const CheckpointMetadata& metadata,
     return result;
 }
 
-void validate_scoped_alias(const LayerScopedValue<int>& value,
+template <typename T>
+void validate_scoped_alias(const LayerScopedValue<T>& value,
                            const std::optional<int>& layer_count,
                            std::string_view fact) {
     if (value.per_layer.empty()) return;
@@ -232,6 +233,56 @@ void validate_scoped_alias(const LayerScopedValue<int>& value,
                 "layer-scoped metadata has a missing layer for " + std::string(fact));
         }
     }
+}
+
+LayerScopedValue<std::string> scoped_string_aliases(
+    const CheckpointMetadata& metadata,
+    std::initializer_list<std::string_view> keys,
+    std::vector<EvidenceItem>& evidence,
+    std::string_view fact) {
+    LayerScopedValue<std::string> result;
+    std::string source;
+    const auto consider = [&](std::string_view key) {
+        if (!metadata.contains(key)) return;
+        const MetadataValue& value = metadata.value(key);
+        if (const auto* scalar_value = std::get_if<std::string>(&value)) {
+            if (result.global && *result.global != *scalar_value) {
+                inference_detail::fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "conflicting metadata aliases for " + std::string(fact));
+            }
+            result.global = *scalar_value;
+            source = key;
+            return;
+        }
+        if (const auto* values = std::get_if<std::vector<std::string>>(&value)) {
+            std::vector<std::optional<std::string>> schedule;
+            schedule.reserve(values->size());
+            for (const std::string& item : *values) schedule.push_back(item);
+            if (!result.per_layer.empty() && result.per_layer != schedule) {
+                inference_detail::fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "conflicting layer-scoped metadata for " + std::string(fact));
+            }
+            result.per_layer = std::move(schedule);
+            source = key;
+            return;
+        }
+        inference_detail::fail(
+            ResolutionFailureKind::ConflictingMetadata,
+            "metadata key has an incompatible type: " + std::string(key));
+    };
+    for (const std::string_view key : keys) {
+        consider(key);
+        consider("text_config." + std::string(key));
+    }
+    if (result.has_value()) {
+        evidence.push_back({EvidenceKind::AliasMetadata, source,
+                            std::string(fact) + (result.per_layer.empty()
+                                ? " = " + *result.global
+                                : " = layer-scoped schedule")});
+    }
+    return result;
 }
 
 template <typename T>
@@ -364,6 +415,25 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "attention.head_count_kv");
     result.attention.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
                                                     "attention.key_length");
+    result.attention.layer_type = scoped_string_aliases(
+        metadata, {"layer_types", "attention_types"}, result.evidence, "layer_type");
+    result.attention.sliding_window = scoped_aliases<int>(
+        metadata, {"sliding_window", "sliding_window_size"}, result.evidence,
+        "sliding_window", "attention.sliding_window");
+    result.norms.mixer_before = scoped_aliases<bool>(
+        metadata, {"use_pre_attn_norm", "use_pre_attention_norm"}, result.evidence,
+        "mixer_norm.before");
+    result.norms.mixer_after = scoped_aliases<bool>(
+        metadata, {"use_post_attn_norm", "use_post_attention_norm"}, result.evidence,
+        "mixer_norm.after");
+    result.norms.feed_forward_before = scoped_aliases<bool>(
+        metadata, {"use_pre_mlp_norm", "use_pre_ffn_norm"}, result.evidence,
+        "feed_forward_norm.before");
+    result.norms.feed_forward_after = scoped_aliases<bool>(
+        metadata, {"use_post_mlp_norm", "use_post_ffn_norm"}, result.evidence,
+        "feed_forward_norm.after");
+    result.norms.layer_layout = scoped_string_aliases(
+        metadata, {"layer_layouts"}, result.evidence, "layer_layout");
     result.mamba2.intermediate = aliases<int>(
         metadata, {"mamba_intermediate", "ssm_inner_size"}, result.evidence,
         "mamba_intermediate", "ssm.inner_size");
@@ -568,6 +638,13 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     validate_scoped_alias(result.attention.query_heads, result.core.layer_count, "query_heads");
     validate_scoped_alias(result.attention.key_value_heads, result.core.layer_count, "key_value_heads");
     validate_scoped_alias(result.attention.head_dim, result.core.layer_count, "head_dim");
+    validate_scoped_alias(result.attention.layer_type, result.core.layer_count, "layer_type");
+    validate_scoped_alias(result.attention.sliding_window, result.core.layer_count, "sliding_window");
+    validate_scoped_alias(result.norms.mixer_before, result.core.layer_count, "mixer_norm.before");
+    validate_scoped_alias(result.norms.mixer_after, result.core.layer_count, "mixer_norm.after");
+    validate_scoped_alias(result.norms.feed_forward_before, result.core.layer_count, "feed_forward_norm.before");
+    validate_scoped_alias(result.norms.feed_forward_after, result.core.layer_count, "feed_forward_norm.after");
+    validate_scoped_alias(result.norms.layer_layout, result.core.layer_count, "layer_layout");
 
     const std::vector<int> eos = token_list(metadata, "eos_token_id");
     result.core.eos_token_ids = eos.empty() ? token_list(metadata, "eos_token_ids") : eos;
@@ -579,7 +656,6 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     if (!result.core.residual_multiplier.has_value()) result.core.residual_multiplier = 1.0f;
     if (!result.core.logits_multiplier.has_value()) result.core.logits_multiplier = 1.0f;
     if (!result.core.logits_divisor.has_value()) result.core.logits_divisor = 1.0f;
-    if (!result.attention.query_key_norm.has_value()) result.attention.query_key_norm = false;
     if (!result.attention.xsa_projection.has_value()) result.attention.xsa_projection = false;
     if (!result.attention.xsa_minimum_norm_squared.has_value()) result.attention.xsa_minimum_norm_squared = 1.0e-6f;
 
@@ -614,10 +690,30 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
             result.evidence.push_back({EvidenceKind::FormatGuarantee, "xsa_projection",
                                        "RoPE pairing = adjacent_pairs"});
         }
+        RopeScalingSpec scaling = NoRopeScaling{};
+        const std::string rope_type = metadata.string_or(
+            "rope_scaling.rope_type", metadata.string_or("rope_scaling.type", {}));
+        if (!rope_type.empty()) {
+            if (rope_type == "yarn") {
+                const double factor = metadata.number_or("rope_scaling.factor", 1.0);
+                const double attention_factor = metadata.number_or("rope_scaling.attention_factor",
+                    0.1 * std::log(std::max(1.0, factor)) + 1.0);
+                const double beta_fast = metadata.number_or("rope_scaling.beta_fast", 32.0);
+                const double beta_slow = metadata.number_or("rope_scaling.beta_slow", 1.0);
+                scaling = YarnRopeScaling{factor, attention_factor, beta_fast, beta_slow};
+            } else if (rope_type == "linear") {
+                scaling = LinearRopeScaling{metadata.number_or("rope_scaling.factor", 1.0)};
+            } else if (rope_type != "default" && rope_type != "none") {
+                inference_detail::fail(
+                    ResolutionFailureKind::UnsupportedSemanticFeature,
+                    "unsupported RoPE scaling type: " + rope_type);
+            }
+        }
         result.attention.position_encoding = InferredRopePosition{
             *rope_theta,
             rotary_fraction.value_or(1.0f),
-            pairing};
+            pairing,
+            std::move(scaling)};
     }
     return result;
 }

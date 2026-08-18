@@ -57,6 +57,7 @@ struct InferredRopePosition {
     double theta = 0.0;
     float rotary_fraction = 1.0f;
     RopePairingKind pairing = RopePairingKind::SplitHalf;
+    RopeScalingSpec scaling;
 
     friend bool operator==(const InferredRopePosition&, const InferredRopePosition&) = default;
 };
@@ -182,11 +183,21 @@ struct AttentionFacts {
     LayerScopedValue<int> query_heads;
     LayerScopedValue<int> key_value_heads;
     LayerScopedValue<int> head_dim;
+    LayerScopedValue<std::string> layer_type;
+    LayerScopedValue<int> sliding_window;
     std::optional<float> attention_multiplier;
     InferredPositionEncoding position_encoding = UnresolvedPositionEncoding{};
     std::optional<bool> query_key_norm;
     std::optional<bool> xsa_projection;
     std::optional<float> xsa_minimum_norm_squared;
+};
+
+struct NormTopologyFacts {
+    LayerScopedValue<bool> mixer_before;
+    LayerScopedValue<bool> mixer_after;
+    LayerScopedValue<bool> feed_forward_before;
+    LayerScopedValue<bool> feed_forward_after;
+    LayerScopedValue<std::string> layer_layout;
 };
 
 /// Facts governing factorized/multi-head latent attention (MLA).
@@ -250,6 +261,7 @@ struct MoeFacts {
 struct NormalizedModelMetadata {
     CoreModelFacts core;
     AttentionFacts attention;
+    NormTopologyFacts norms;
     LatentAttentionFacts latent_attention;
     ShortConvolutionFacts short_conv;
     GatedDeltaFacts gated_delta;

@@ -78,13 +78,13 @@ void CudaCompiledModel::load_checkpoint_weights(
             common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
                                               *semantic_layer.feed_forward_norm);
         }
-        if (!mixer_only_layer && semantic_layer.post_attention_norm.has_value()) {
-            common_layer.post_attention_norm = load_norm(
-                TensorRole::AttentionPostNorm, *semantic_layer.post_attention_norm);
+        if (!mixer_only_layer && semantic_layer.mixer_norm.after.has_value()) {
+            common_layer.mixer_norm.after = load_norm(
+                TensorRole::AttentionPostNorm, *semantic_layer.mixer_norm.after);
         }
-        if (!mixer_only_layer && semantic_layer.post_feed_forward_norm.has_value()) {
-            common_layer.post_feed_forward_norm = load_norm(
-                TensorRole::FfnOutputNorm, *semantic_layer.post_feed_forward_norm);
+        if (!mixer_only_layer && semantic_layer.feed_forward_norm.after.has_value()) {
+            common_layer.feed_forward_norm.after = load_norm(
+                TensorRole::FfnOutputNorm, *semantic_layer.feed_forward_norm.after);
         }
         if (resources_.program_.per_layer_input.enabled) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(

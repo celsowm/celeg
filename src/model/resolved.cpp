@@ -285,12 +285,11 @@ std::string ModelGraph::fingerprint() const {
     }
     out << ":layers=";
     for (const LayerSpec& layer : layers) {
-        append_norm(out, layer.operator_norm);
-        append_optional_norm(out, layer.post_attention_norm);
-        append_optional_norm(out, layer.pre_feed_forward_norm);
-        append_optional_norm(out, layer.post_feed_forward_norm);
+        append_optional_norm(out, layer.mixer_norm.before);
+        append_optional_norm(out, layer.mixer_norm.after);
         append_mixer(out, layer);
-        append_optional_norm(out, layer.feed_forward_norm);
+        append_optional_norm(out, layer.feed_forward_norm.before);
+        append_optional_norm(out, layer.feed_forward_norm.after);
         append_feed_forward(out, layer);
         out << ":residual=" << layer.residual.multiplier
             << ":scalar=" << layer.layer_scalar << ';';
@@ -370,16 +369,14 @@ void ModelGraph::validate() const {
         }
     }
     for (const LayerSpec& layer : layers) {
-        if (!(layer.operator_norm.epsilon > 0.0f) ||
-            !std::isfinite(layer.residual.multiplier) ||
+        if (!std::isfinite(layer.residual.multiplier) ||
             !std::isfinite(layer.layer_scalar)) {
             throw std::runtime_error("resolved model graph has invalid layer policy");
         }
-        layer.operator_norm.validate();
-        if (layer.feed_forward_norm) layer.feed_forward_norm->validate();
-        if (layer.post_attention_norm) layer.post_attention_norm->validate();
-        if (layer.pre_feed_forward_norm) layer.pre_feed_forward_norm->validate();
-        if (layer.post_feed_forward_norm) layer.post_feed_forward_norm->validate();
+        if (layer.mixer_norm.before) layer.mixer_norm.before->validate();
+        if (layer.mixer_norm.after) layer.mixer_norm.after->validate();
+        if (layer.feed_forward_norm.before) layer.feed_forward_norm.before->validate();
+        if (layer.feed_forward_norm.after) layer.feed_forward_norm.after->validate();
         std::visit([](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
             if constexpr (std::is_same_v<FeedForward, std::monostate>) {

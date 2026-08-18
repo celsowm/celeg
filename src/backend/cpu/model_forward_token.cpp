@@ -130,9 +130,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         if (semantics.residual.multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
-        if (semantics.post_attention_norm.has_value()) {
-            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.post_attention_norm.data(),
-                                shared->program.hidden, semantics.post_attention_norm->epsilon);
+        if (semantics.mixer_norm.after.has_value()) {
+            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.mixer_norm.after.data(),
+                                shared->program.hidden, semantics.mixer_norm.after->epsilon);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
         if (getenv("CELEG_DEBUG_LAYER_STATS")) {
@@ -155,9 +155,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
-            if (semantics.post_feed_forward_norm.has_value()) {
-                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->program.hidden, semantics.post_feed_forward_norm->epsilon);
+            if (semantics.feed_forward_norm.after.has_value()) {
+                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm.after.data(),
+                                    shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else if (dense) {
@@ -165,9 +165,9 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             if (semantics.residual.multiplier != 1.0f) {
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
-            if (semantics.post_feed_forward_norm.has_value()) {
-                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm.data(),
-                                    shared->program.hidden, semantics.post_feed_forward_norm->epsilon);
+            if (semantics.feed_forward_norm.after.has_value()) {
+                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm.after.data(),
+                                    shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
         } else {

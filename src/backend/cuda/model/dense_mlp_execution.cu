@@ -39,7 +39,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
                                 intermediate, stream_.get());
         }
-        const bool split_output = common_layer.post_feed_forward_norm != nullptr;
+        const bool split_output = common_layer.feed_forward_norm.after != nullptr;
         if (resources_.options_.fused_residuals && !split_output) {
             linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, intermediate, 1.0f);
@@ -47,9 +47,9 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.mlp_output_.data(),
                    1, resources_.program_.hidden, intermediate);
             if (split_output) {
-                launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.post_feed_forward_norm,
+                launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.feed_forward_norm.after,
                                workspace_.mlp_output_.data(), 1, resources_.program_.hidden,
-                               semantics.post_feed_forward_norm->epsilon,
+                               semantics.feed_forward_norm.after->epsilon,
                                stream_.get());
             }
             launch_scale(workspace_.mlp_output_.data(), resources_.program_.hidden,
@@ -108,7 +108,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
                                 static_cast<int>(matrix_elements), stream_.get());
         }
         }
-        const bool split_output = common_layer.post_feed_forward_norm != nullptr;
+        const bool split_output = common_layer.feed_forward_norm.after != nullptr;
         if (resources_.options_.fused_residuals && !split_output) {
         linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_hidden_.data(),
                rows, resources_.program_.hidden, intermediate, 1.0f);
@@ -116,9 +116,9 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_mlp_output_.data(),
                 rows, resources_.program_.hidden, intermediate);
         if (split_output) {
-            launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.post_feed_forward_norm,
+            launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.feed_forward_norm.after,
                            workspace_.prefill_mlp_output_.data(), rows, resources_.program_.hidden,
-                           semantics.post_feed_forward_norm->epsilon,
+                           semantics.feed_forward_norm.after->epsilon,
                            stream_.get());
         }
         launch_scale(workspace_.prefill_mlp_output_.data(), rows * resources_.program_.hidden,

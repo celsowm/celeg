@@ -58,7 +58,7 @@ void run_layer(
     const int hidden = model.resources_.program_.hidden;
 
     if (!model.resources_.options_.fused_residuals ||
-        common_layer.post_attention_norm) {
+        common_layer.mixer_norm.after) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace.prefill_residual_.data(),
             workspace.prefill_hidden_.data(),
@@ -75,16 +75,16 @@ void run_layer(
 
     run_mixer(model, layer, common_layer, semantics, rows);
 
-    if (common_layer.post_attention_norm) {
+    if (common_layer.mixer_norm.after) {
         launch_rmsnorm(
-            workspace.prefill_hidden_.data(), common_layer.post_attention_norm,
+            workspace.prefill_hidden_.data(), common_layer.mixer_norm.after,
             workspace.prefill_hidden_.data(),
-            rows, hidden, semantics.post_attention_norm->epsilon,
+            rows, hidden, semantics.mixer_norm.after->epsilon,
             model.stream_.get());
     }
 
     if (!model.resources_.options_.fused_residuals ||
-        common_layer.post_attention_norm ||
+        common_layer.mixer_norm.after ||
         std::holds_alternative<std::monostate>(semantics.feed_forward)) {
         prof.begin(model.stream_.get());
         launch_residual_add(
