@@ -1,4 +1,5 @@
 #include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/attention_norm.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/paged_kv.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
@@ -462,6 +463,11 @@ void CudaCompiledModel::run_token_attention(
     const float qk_epsilon = layout.query_norm
         ? layout.query_norm->epsilon
         : (layout.key_norm ? layout.key_norm->epsilon : resources_.program_.final_norm.epsilon);
+    if (layout.has_query_key_norm()) {
+        launch_attention_qk_norm(
+            layout, q, attention.key ? k : nullptr,
+            attention.q_norm, attention.k_norm, 1, stream_.get());
+    }
     if (const auto* rope = layout.rope_position()) {
         const auto* multi = kv.paged() ? nullptr : layout.multi_axis_position();
         if (multi) {
@@ -471,27 +477,21 @@ void CudaCompiledModel::run_token_attention(
                                        sizeof(position), cudaMemcpyHostToDevice,
                                        stream_.get()));
             launch_dynamic_mrope_qk_norm_rope(
-                q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
+                q, attention.key ? k : nullptr, nullptr, nullptr,
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 mrope_position_device_.data(), multi->sections[0], multi->sections[1],
                 multi->sections[2], multi->interleaved,
                 static_cast<float>(rope->theta), static_cast<float>(rope->rotary_fraction),
-                qk_epsilon, layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope),
+                qk_epsilon, false, lower_cuda_rope_scaling(*rope),
                 stream_.get());
         } else {
             launch_dynamic_qk_norm_rope(
-                q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
+                q, attention.key ? k : nullptr, nullptr, nullptr,
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 session_.position_, static_cast<float>(rope->theta),
                 static_cast<float>(rope->rotary_fraction), qk_epsilon,
-                layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
+                false, lower_cuda_rope_scaling(*rope), stream_.get());
         }
-    } else if (kv.paged() && layout.has_query_key_norm()) {
-        launch_dynamic_qk_norm_rope(
-            q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
-            layout.query_heads, layout.key_value_heads, layout.head_dim,
-            session_.position_, 1.0f, 0.0f, qk_epsilon, true,
-            CudaRopeScaling{}, stream_.get());
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
 
