@@ -26,6 +26,10 @@ int main() {
     celeg::ResolvedModel model;
     model.provenance.identity = "compiler-fixture";
     celeg::LayerSpec attention_layer;
+    attention_layer.mixer_norm.before = celeg::NormSpec{
+        1.0e-5f, celeg::NormWeightKind::Scale};
+    attention_layer.feed_forward_norm.before = celeg::NormSpec{
+        1.0e-5f, celeg::NormWeightKind::Scale};
     celeg::AttentionSpec attention;
     attention.query_heads = 1;
     attention.key_value_heads = 1;
@@ -37,6 +41,10 @@ int main() {
     model.graph.layers.push_back(attention_layer);
 
     celeg::LayerSpec convolution_layer;
+    convolution_layer.mixer_norm.before = celeg::NormSpec{
+        1.0e-5f, celeg::NormWeightKind::Scale};
+    convolution_layer.feed_forward_norm.before = celeg::NormSpec{
+        1.0e-5f, celeg::NormWeightKind::Scale};
     convolution_layer.mixer = celeg::ShortConvolutionSpec{3, 8, false};
     convolution_layer.feed_forward = celeg::MixtureOfExpertsSpec{
         16, 4, 2, true, true, 1.5f};
