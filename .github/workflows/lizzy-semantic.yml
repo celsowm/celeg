@@ -78,7 +78,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
           python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
       - name: Inspect real Lizzy safetensors metadata
         shell: bash
