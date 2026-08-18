@@ -69,7 +69,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     LayerCommon& common_layer = common(layer);
     copy_async(workspace_.residual_.data(), workspace_.hidden_.data(),
                workspace_.hidden_.bytes(), stream);
-    launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm,
+    launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_before,
                    workspace_.normed_.data(), 1, hidden, eps, stream);
 
     const AttentionSpec& layout = attention->layout;

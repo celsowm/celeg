@@ -70,21 +70,21 @@ void CudaCompiledModel::load_checkpoint_weights(
             return resources_.weight_loader_->load_rms_norm_weight(
                 repo, name, {resources_.program_.hidden}, spec.weight_kind);
         };
-        common_layer.operator_norm = resources_.weight_loader_->load_rms_norm_weight(
-            repo, semantic_layer.operator_norm.weightless() ? std::string{} :
-                tensor_name(resources_.model_.weight_plan.requests, TensorRole::AttentionInputNorm, i),
-            {resources_.program_.hidden}, semantic_layer.operator_norm.weight_kind);
-        if (!mixer_only_layer) {
-            common_layer.ffn_norm = load_norm(TensorRole::FfnInputNorm,
-                                              *semantic_layer.feed_forward_norm);
+        if (semantic_layer.mixer_norm.before) {
+            common_layer.mixer_norm_before = load_norm(
+                TensorRole::AttentionInputNorm, *semantic_layer.mixer_norm.before);
         }
-        if (!mixer_only_layer && semantic_layer.post_attention_norm.has_value()) {
-            common_layer.post_attention_norm = load_norm(
-                TensorRole::AttentionPostNorm, *semantic_layer.post_attention_norm);
+        if (semantic_layer.mixer_norm.after) {
+            common_layer.mixer_norm_after = load_norm(
+                TensorRole::AttentionPostNorm, *semantic_layer.mixer_norm.after);
         }
-        if (!mixer_only_layer && semantic_layer.post_feed_forward_norm.has_value()) {
-            common_layer.post_feed_forward_norm = load_norm(
-                TensorRole::FfnOutputNorm, *semantic_layer.post_feed_forward_norm);
+        if (!mixer_only_layer && semantic_layer.feed_forward_norm.before) {
+            common_layer.feed_forward_norm_before = load_norm(
+                TensorRole::FfnInputNorm, *semantic_layer.feed_forward_norm.before);
+        }
+        if (!mixer_only_layer && semantic_layer.feed_forward_norm.after) {
+            common_layer.feed_forward_norm_after = load_norm(
+                TensorRole::FfnOutputNorm, *semantic_layer.feed_forward_norm.after);
         }
         if (resources_.program_.per_layer_input.enabled) {
             common_layer.per_layer_input_gate = resources_.weight_loader_->load_linear_weight(

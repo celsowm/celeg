@@ -17,10 +17,10 @@ namespace celeg {
 
 
 struct LayerCommon {
-    const __nv_bfloat16* operator_norm = nullptr;
-    const __nv_bfloat16* post_attention_norm = nullptr;
-    const __nv_bfloat16* ffn_norm = nullptr;
-    const __nv_bfloat16* post_feed_forward_norm = nullptr;
+    const __nv_bfloat16* mixer_norm_before = nullptr;
+    const __nv_bfloat16* mixer_norm_after = nullptr;
+    const __nv_bfloat16* feed_forward_norm_before = nullptr;
+    const __nv_bfloat16* feed_forward_norm_after = nullptr;
     FeedForwardWeights feed_forward;
     const LinearWeight* per_layer_input_gate = nullptr;
     const LinearWeight* per_layer_projection = nullptr;

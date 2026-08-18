@@ -57,17 +57,16 @@ struct CpuCompiledModel::BatchScratch {
         };
         auto rows_for = [&](const auto& body) { parallel_for(rows, body); };
         auto rmsnorm_rows = [&](const float* input, const std::vector<float>& weight,
-                                float* output, size_t width) {
+                                float* output, size_t width, float epsilon) {
             rows_for([&](size_t row) {
                 cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
-                            width, shared.program.final_norm.epsilon);
+                            width, epsilon);
             });
         };
         auto rmsnorm_rows_inplace = [&](float* values, const std::vector<float>& weight,
-                                        size_t width) {
+                                        size_t width, float epsilon) {
             rows_for([&](size_t row) {
-                cpu_rmsnorm_inplace(values + row * width, weight.data(), width,
-                                    shared.program.final_norm.epsilon);
+                cpu_rmsnorm_inplace(values + row * width, weight.data(), width, epsilon);
             });
         };
         auto residual_rows = [&](float* values, const float* residual, size_t width) {
@@ -125,8 +124,13 @@ struct CpuCompiledModel::BatchScratch {
             const CommonWeights& common = sessions.front()->common_weights(index);
             const CompiledLayerProgram& layer_semantics = shared.program.layers.at(index);
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-            rmsnorm_rows(workspace_.hidden.data(), common.operator_norm,
-                         workspace_.normed.data(), hidden);
+            if (layer_semantics.mixer_norm.before) {
+                rmsnorm_rows(workspace_.hidden.data(), common.mixer_norm_before,
+                             workspace_.normed.data(), hidden,
+                             layer_semantics.mixer_norm.before->epsilon);
+            } else {
+                std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+            }
             bool normed_q8_ready = false;
             auto layer_gemm = [&](const CpuLinearWeight& weight, const float* input,
                                   float* output, float beta = 0.0f) {
@@ -171,7 +175,9 @@ struct CpuCompiledModel::BatchScratch {
                         workspace_.gated_delta_output.data() + row * value_width,
                         spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                         spec.key_heads, spec.value_heads,
-                        layer_semantics.operator_norm.epsilon, spec.vector_decay,
+                        layer_semantics.mixer_norm.before.has_value()
+                            ? layer_semantics.mixer_norm.before->epsilon
+                            : shared.program.final_norm.epsilon, spec.vector_decay,
                         spec.safe_decay, spec.decay_lower_bound,
                         spec.sigmoid_output_gate);
                 });
@@ -325,17 +331,24 @@ struct CpuCompiledModel::BatchScratch {
                 layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 }
               });
+            if (layer_semantics.mixer_norm.after.has_value()) {
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.mixer_norm_after, hidden,
+                                     layer_semantics.mixer_norm.after->epsilon);
+            }
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.hidden.data() + row * hidden;
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_attention_norm.has_value()) {
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.post_attention_norm, hidden);
-            }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
-            rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm, workspace_.normed.data(), hidden);
+            if (layer_semantics.feed_forward_norm.before) {
+                rmsnorm_rows(workspace_.hidden.data(), common.feed_forward_norm_before,
+                             workspace_.normed.data(), hidden,
+                             layer_semantics.feed_forward_norm.before->epsilon);
+            } else {
+                std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+            }
             if (const auto* moe = std::get_if<MoeWeights>(&layer_program.feed_forward)) {
                 const MoeLayerProgram& semantics =
                     std::get<MoeLayerProgram>(shared.program.layers[index].feed_forward);
@@ -496,14 +509,15 @@ struct CpuCompiledModel::BatchScratch {
                 });
                 layer_gemm(dense_weights->w2, workspace_.activated.data(), workspace_.mlp_output.data());
             }
+            if (layer_semantics.feed_forward_norm.after.has_value()) {
+                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after, hidden,
+                                     layer_semantics.feed_forward_norm.after->epsilon);
+            }
             if (layer_semantics.residual.multiplier != 1.0f) {
                 rows_for([&](size_t row) {
                     float* values = workspace_.mlp_output.data() + row * hidden;
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
-            }
-            if (layer_semantics.post_feed_forward_norm.has_value()) {
-                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);
             normed_q8_ready = false;
@@ -528,7 +542,8 @@ struct CpuCompiledModel::BatchScratch {
                 });
                 shared.linear.gemm(dense_weights->per_layer_projection, workspace_.per_layer_gate.data(),
                                    workspace_.hidden.data(), rows);
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.per_layer_input_norm, hidden);
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.per_layer_input_norm, hidden,
+                                     input_plan.norm_epsilon);
                 if (common.layer_scalar != 1.0f) {
                     rows_for([&](size_t row) {
                         float* values = workspace_.hidden.data() + row * hidden;
@@ -541,7 +556,8 @@ struct CpuCompiledModel::BatchScratch {
                                    shared.program.norm_after_layers.end(),
                                    static_cast<int>(index))) {
                 rmsnorm_rows_inplace(workspace_.hidden.data(),
-                                     shared.weight_store.final_norm, hidden);
+                                     shared.weight_store.final_norm, hidden,
+                                     shared.program.final_norm.epsilon);
             }
         }
         for (size_t row = 0; row < rows; ++row) {

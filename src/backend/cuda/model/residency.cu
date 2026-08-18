@@ -204,8 +204,15 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
         static_cast<size_t>(layer));
     const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
         resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
-    launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                    1, resources_.program_.hidden, layer_semantics.feed_forward_norm->epsilon, stream_.get());
+    if (layer_semantics.feed_forward_norm.before) {
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.feed_forward_norm_before,
+                       workspace_.normed_.data(), 1, resources_.program_.hidden,
+                       layer_semantics.feed_forward_norm.before->epsilon, stream_.get());
+    } else {
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace_.normed_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
+            cudaMemcpyDeviceToDevice, stream_.get()));
+    }
     launch_cast_bf16_to_float(workspace_.normed_.data(), workspace_.moe_hidden_float_.data(),
                                resources_.program_.hidden, stream_.get());
     const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
@@ -254,8 +261,17 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
+    if (layer_semantics.feed_forward_norm.after) {
+        launch_rmsnorm(workspace_.moe_output_.data(), common_layer.feed_forward_norm_after,
+                       workspace_.moe_output_.data(), 1, resources_.program_.hidden,
+                       layer_semantics.feed_forward_norm.after->epsilon, stream_.get());
+    }
+    if (layer_semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.moe_output_.data(), resources_.program_.hidden,
+                         layer_semantics.residual.multiplier, stream_.get());
+        }
     launch_residual_add(workspace_.hidden_.data(), workspace_.moe_output_.data(),
-                         resources_.program_.hidden, stream_.get());
+                        resources_.program_.hidden, stream_.get());
 }
 
 void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int rows,
@@ -278,9 +294,16 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         static_cast<size_t>(rows) * semantics.router.experts_per_token *
         semantics.routed.mlp.intermediate_size);
 
-    launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
-                   workspace_.prefill_normed_.data(), rows, resources_.program_.hidden, layer_semantics.feed_forward_norm->epsilon,
-                   stream_.get());
+    if (layer_semantics.feed_forward_norm.before) {
+        launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.feed_forward_norm_before,
+                       workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
+                       layer_semantics.feed_forward_norm.before->epsilon, stream_.get());
+    } else {
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace_.prefill_normed_.data(), workspace_.prefill_hidden_.data(),
+            static_cast<size_t>(rows) * resources_.program_.hidden * sizeof(__nv_bfloat16),
+            cudaMemcpyDeviceToDevice, stream_.get()));
+    }
     launch_cast_bf16_to_float(workspace_.prefill_normed_.data(), workspace_.moe_pf_hidden_float_.data(),
                               rows * resources_.program_.hidden, stream_.get());
     const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
@@ -333,6 +356,15 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
     }
     CELEG_CUDA(cudaEventRecord(workspace_.ffn_done_event_.get(), stream_.get()));
 
+    if (layer_semantics.feed_forward_norm.after) {
+        launch_rmsnorm(workspace_.moe_pf_output_.data(), common_layer.feed_forward_norm_after,
+                       workspace_.moe_pf_output_.data(), rows, resources_.program_.hidden,
+                       layer_semantics.feed_forward_norm.after->epsilon, stream_.get());
+    }
+    if (layer_semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.moe_pf_output_.data(), rows * resources_.program_.hidden,
+                         layer_semantics.residual.multiplier, stream_.get());
+        }
     launch_residual_add(workspace_.prefill_hidden_.data(), workspace_.moe_pf_output_.data(),
                         rows * resources_.program_.hidden, stream_.get());
 }

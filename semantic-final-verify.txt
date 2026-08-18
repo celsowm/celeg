@@ -1,0 +1,232 @@
+===== linux-cpu.txt =====
+EXIT_CODE=1
+doctor: platform       linux
+doctor: backend        cpu (requested cpu)
+doctor: cmake          /usr/local/bin/cmake (3.31.6)
+doctor: ninja          /usr/local/bin/ninja (1.13.2)
+doctor: compiler       /usr/bin/x86_64-linux-gnu-g++-13 (13.3.0)
+doctor: nvcc           <not found>
+doctor: gpu            <not detected>
+doctor: driver         <not detected>
+doctor: architecture   native
+doctor: checkpoint     <not cached>
+doctor: RESULT: ready
++ /usr/local/bin/cmake --fresh -S /home/runner/work/celeg/celeg -B /home/runner/work/celeg/celeg/out/linux-cpu-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCELEG_ENABLE_CUDA=OFF -DCELEG_BUILD_TESTS=ON -DCELEG_RUN_CUDA_TESTS=ON
+-- The C compiler identification is GNU 13.3.0
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Python3: /usr/bin/python3.12 (found version "3.12.3") found components: Interpreter
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+CMake Error at /usr/local/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:233 (message):
+  Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR)
+Call Stack (most recent call first):
+  /usr/local/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:603 (_FPHSA_FAILURE_MESSAGE)
+  /usr/local/share/cmake-3.31/Modules/FindCURL.cmake:203 (find_package_handle_standard_args)
+  CMakeLists.txt:99 (find_package)
+
+
+-- Configuring incomplete, errors occurred!
+verify: FAIL: CMake configure failed.
+
+===== linux-cuda.txt =====
+EXIT_CODE=1
+doctor: platform       linux
+doctor: backend        cuda (requested cuda)
+doctor: cmake          /usr/local/bin/cmake (3.31.6)
+doctor: ninja          /usr/local/bin/ninja (1.13.0)
+doctor: compiler       /usr/bin/x86_64-linux-gnu-g++-12 (12.3.0)
+doctor: nvcc           /usr/local/cuda-12.8/bin/nvcc (12.8)
+doctor: gpu            <not detected>
+doctor: driver         <not detected>
+doctor: architecture   80
+doctor: checkpoint     <not cached>
+doctor: RESULT: ready
++ /usr/local/bin/cmake --fresh -S /__w/celeg/celeg -B /__w/celeg/celeg/out/linux-cuda-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCELEG_ENABLE_CUDA=ON -DCELEG_BUILD_TESTS=ON -DCELEG_RUN_CUDA_TESTS=OFF -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES=80 -DCMAKE_CUDA_FLAGS_INIT=--use-local-env
+-- The C compiler identification is GNU 12.3.0
+-- The CXX compiler identification is GNU 12.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/gcc-12 - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/g++-12 - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Python3: /usr/bin/python3.10 (found version "3.10.12") found components: Interpreter
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+CMake Error at /usr/local/lib/python3.10/dist-packages/cmake/data/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:233 (message):
+  Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR)
+Call Stack (most recent call first):
+  /usr/local/lib/python3.10/dist-packages/cmake/data/share/cmake-3.31/Modules/FindPackageHandleStandardArgs.cmake:603 (_FPHSA_FAILURE_MESSAGE)
+  /usr/local/lib/python3.10/dist-packages/cmake/data/share/cmake-3.31/Modules/FindCURL.cmake:203 (find_package_handle_standard_args)
+  CMakeLists.txt:99 (find_package)
+
+
+-- Configuring incomplete, errors occurred!
+verify: FAIL: CMake configure failed.
+
+===== windows-cpu.txt =====
+EXIT_CODE=1
+doctor: platform       windows
+doctor: backend        cpu (requested cpu)
+doctor: cmake          C:\Program Files\CMake\bin\cmake.exe (4.4.2)
+doctor: ninja          C:\hostedtoolcache\windows\Python\3.12.10\x64\Scripts\ninja.exe (1.13.0)
+doctor: compiler       C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\cl.exe (19.51.36252)
+doctor: nvcc           <not found>
+doctor: gpu            <not detected>
+doctor: driver         <not detected>
+doctor: architecture   native
+doctor: checkpoint     <not cached>
+doctor: RESULT: ready
++ "C:\Program Files\CMake\bin\cmake.exe" --fresh -S D:\a\celeg\celeg -B D:\a\celeg\celeg\out\windows-cpu-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCELEG_ENABLE_CUDA=OFF -DCELEG_BUILD_TESTS=ON -DCELEG_RUN_CUDA_TESTS=ON "-DCMAKE_C_COMPILER=C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\cl.exe" "-DCMAKE_CXX_COMPILER=C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\cl.exe" -C D:\a\celeg\celeg\out\windows-cpu-release\celeg_msvc_showincludes_prefix.cmake
+loading initial cache file D:\a\celeg\celeg\out\windows-cpu-release\celeg_msvc_showincludes_prefix.cmake
+-- The C compiler identification is MSVC 19.51.36252.0
+-- The CXX compiler identification is MSVC 19.51.36252.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Python3: C:/hostedtoolcache/windows/Python/3.12.10/x64/python3.exe (found version "3.12.10") found components: Interpreter
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+CMake Warning (deprecated) at out/windows-cpu-release/_celeg_deps/libuv-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Performing Test UV_LINT_W4
+-- Performing Test UV_LINT_W4 - Success
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER_MSVC
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER_MSVC - Success
+-- Performing Test UV_LINT_NO_CONDITIONAL_CONSTANT_MSVC
+-- Performing Test UV_LINT_NO_CONDITIONAL_CONSTANT_MSVC - Success
+-- Performing Test UV_LINT_NO_NONSTANDARD_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_MSVC - Success
+-- Performing Test UV_LINT_NO_NONSTANDARD_EMPTY_TU_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_EMPTY_TU_MSVC - Success
+-- Performing Test UV_LINT_NO_NONSTANDARD_FILE_SCOPE_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_FILE_SCOPE_MSVC - Success
+-- Performing Test UV_LINT_NO_NONSTANDARD_NONSTATIC_DLIMPORT_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_NONSTATIC_DLIMPORT_MSVC - Success
+-- Performing Test UV_LINT_NO_HIDES_LOCAL
+-- Performing Test UV_LINT_NO_HIDES_LOCAL - Success
+-- Performing Test UV_LINT_NO_HIDES_PARAM
+-- Performing Test UV_LINT_NO_HIDES_PARAM - Success
+-- Performing Test UV_LINT_NO_HIDES_GLOBAL
+-- Performing Test UV_LINT_NO_HIDES_GLOBAL - Success
+-- Performing Test UV_LINT_NO_CONDITIONAL_ASSIGNMENT_MSVC
+-- Performing Test UV_LINT_NO_CONDITIONAL_ASSIGNMENT_MSVC - Success
+-- Performing Test UV_LINT_NO_UNSAFE_MSVC
+-- Performing Test UV_LINT_NO_UNSAFE_MSVC - Success
+-- Performing Test UV_LINT_WALL
+-- Performing Test UV_LINT_WALL - Success
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER - Failed
+-- Performing Test UV_LINT_STRICT_PROTOTYPES
+-- Performing Test UV_LINT_STRICT_PROTOTYPES - Failed
+-- Performing Test UV_LINT_EXTRA
+-- Performing Test UV_LINT_EXTRA - Failed
+-- Performing Test UV_LINT_UTF8_MSVC
+-- Performing Test UV_LINT_UTF8_MSVC - Success
+-- Performing Test UV_F_STRICT_ALIASING
+-- Performing Test UV_F_STRICT_ALIASING - Failed
+-- summary of build options:
+    Install prefix:  C:/Program Files (x86)/celeg
+    Target system:   Windows
+    Compiler:
+      C compiler:    C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe (MSVC)
+      CFLAGS:         /DWIN32 /D_WINDOWS
+
+CMake Warning (author) at C:/Program Files/CMake/share/cmake-4.4/Modules/FetchContent.cmake:1968 (message):
+  Calling FetchContent_Populate(usockets) is deprecated, call
+  FetchContent_MakeAvailable(usockets) instead.  Policy CMP0169 can be set to
+  OLD to allow FetchContent_Populate(usockets) to be called directly for now,
+  but the ability to call it with declared details will be removed completely
+  in a future version.
+Call Stack (most recent call first):
+  CMakeLists.txt:216 (FetchContent_Populate)
+This warning is for project developers.  Use -Wno-author to suppress it.
+
+CMake Warning (author) at C:/Program Files/CMake/share/cmake-4.4/Modules/FetchContent.cmake:1968 (message):
+  Calling FetchContent_Populate(uwebsockets) is deprecated, call
+  FetchContent_MakeAvailable(uwebsockets) instead.  Policy CMP0169 can be set
+  to OLD to allow FetchContent_Populate(uwebsockets) to be called directly
+  for now, but the ability to call it with declared details will be removed
+  completely in a future version.
+Call Stack (most recent call first):
+  CMakeLists.txt:232 (FetchContent_Populate)
+This warning is for project developers.  Use -Wno-author to suppress it.
+
+CMake Warning (author) at C:/Program Files/CMake/share/cmake-4.4/Modules/FetchContent.cmake:1968 (message):
+  Calling FetchContent_Populate(swaggerui) is deprecated, call
+  FetchContent_MakeAvailable(swaggerui) instead.  Policy CMP0169 can be set
+  to OLD to allow FetchContent_Populate(swaggerui) to be called directly for
+  now, but the ability to call it with declared details will be removed
+  completely in a future version.
+Call Stack (most recent call first):
+  CMakeLists.txt:246 (FetchContent_Populate)
+This warning is for project developers.  Use -Wno-author to suppress it.
+
+-- Configuring done (16.7s)
+-- Generating done (0.2s)
+-- Build files have been written to: D:/a/celeg/celeg/out/windows-cpu-release
++ "C:\Program Files\CMake\bin\cmake.exe" --build D:\a\celeg\celeg\out\windows-cpu-release --parallel 2
+[0/2] Re-checking globbed directories...
+[1/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\formats\json.cpp.obj
+[2/423] Building CXX object CMakeFiles\celeg_base.dir\src\app\run_preparation.cpp.obj
+[3/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\packed\int8.cpp.obj
+[4/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\formats\safetensors.cpp.obj
+[5/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\packed\int4.cpp.obj
+[6/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\formats\gguf.cpp.obj
+[7/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\catalog.cpp.obj
+[8/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\gguf_position_profile.cpp.obj
+[9/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\metadata.cpp.obj
+[10/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\repositories\gguf.cpp.obj
+[11/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\repositories\detail\gguf_tensor_mapper.cpp.obj
+[12/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\repositories\safetensors.cpp.obj
+[13/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\repositories\detail\gguf_tensor_adapter.cpp.obj
+[14/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\repositories\detail\gguf_tensor_resolver.cpp.obj
+[15/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\formats\detail\gguf_tokenizer_metadata.cpp.obj
+[16/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\hf_http.cpp.obj
+FAILED: [code=2] CMakeFiles/celeg_base.dir/src/checkpoint/hf_http.cpp.obj 
+"C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\cl.exe"  /nologo /TP -DCELEG_DESCRIPTOR_DIRECTORY=\"D:/a/celeg/celeg/descriptors\" -DCELEG_DESCRIPTOR_INSTALL_DIRECTORY="\"C:/Program Files (x86)/celeg/share/celeg/descriptors\"" -ID:\a\celeg\celeg\include /DWIN32 /D_WINDOWS /EHsc /O2 /Ob2 /DNDEBUG -std:c++20 -MD /utf-8 /showIncludes /FoCMakeFiles\celeg_base.dir\src\checkpoint\hf_http.cpp.obj /FdCMakeFiles\celeg_base.dir\celeg_base.pdb /FS -c D:\a\celeg\celeg\src\checkpoint\hf_http.cpp
+D:\a\celeg\celeg\src\checkpoint\hf_http.cpp(415): error C2059: syntax error: '}'
+D:\a\celeg\celeg\src\checkpoint\hf_http.cpp(415): error C2143: syntax error: missing ';' before '}'
+[17/423] Building CXX object CMakeFiles\celeg_base.dir\src\checkpoint\downloader.cpp.obj
+ninja: build stopped: subcommand failed.
+verify: FAIL: Build failed.
+
+===== windows-cuda.txt =====
+MISSING_RESULT
+

@@ -171,10 +171,8 @@ struct CompiledLayerProgram {
     CompiledMixerProgram mixer;
     CompiledFeedForwardProgram feed_forward;
     std::vector<std::size_t> weight_request_indices;
-    NormSpec operator_norm;
-    std::optional<NormSpec> post_attention_norm;
-    std::optional<NormSpec> feed_forward_norm;
-    std::optional<NormSpec> post_feed_forward_norm;
+    SublayerNormSpec mixer_norm;
+    SublayerNormSpec feed_forward_norm;
     ResidualSpec residual;
 };
 

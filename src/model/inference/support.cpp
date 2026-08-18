@@ -2,6 +2,9 @@
 
 #include "canonical_internal.hpp"
 
+#include <stdexcept>
+#include <stdexcept>
+#include <stdexcept>
 #include <string>
 
 namespace celeg::inference_detail {
@@ -59,9 +62,12 @@ std::vector<std::string> attention_tensor_candidates(int layer,
     const std::string index = std::to_string(layer);
     std::string gguf_suffix;
     if (suffix == "q_proj.weight") gguf_suffix = "attn_q.weight";
-    if (suffix == "k_proj.weight") gguf_suffix = "attn_k.weight";
-    if (suffix == "v_proj.weight") gguf_suffix = "attn_v.weight";
-    if (suffix == "o_proj.weight") gguf_suffix = "attn_output.weight";
+    else if (suffix == "k_proj.weight") gguf_suffix = "attn_k.weight";
+    else if (suffix == "v_proj.weight") gguf_suffix = "attn_v.weight";
+    else if (suffix == "o_proj.weight") gguf_suffix = "attn_output.weight";
+    else if (suffix == "q_norm.weight") gguf_suffix = "attn_q_norm.weight";
+    else if (suffix == "k_norm.weight") gguf_suffix = "attn_k_norm.weight";
+    else gguf_suffix = std::string(suffix);
     std::vector<std::string> result = {
         "transformer.h." + index + ".attn." + std::string(suffix),
         "model.language_model.layers." + index + ".self_attn." + std::string(suffix),
@@ -139,6 +145,66 @@ std::vector<std::string> mamba2_tensor_candidates(int layer,
         "layers." + index + ".mixer." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };
+}
+
+std::vector<std::string> norm_tensor_candidates(int layer, TensorRole role) {
+    const std::string index = std::to_string(layer);
+    switch (role) {
+    case TensorRole::AttentionInputNorm:
+        return {
+            "transformer.h." + index + ".ln_1.weight",
+            "model.layers." + index + ".input_layernorm.weight",
+            "model.layers." + index + ".self_attn_layer_norm.weight",
+            "model.language_model.layers." + index + ".input_layernorm.weight",
+            "model.language_model.layers." + index + ".operator_norm.weight",
+            "model.layers." + index + ".operator_norm.weight",
+            "model.layers." + index + ".pre_attn_norm.weight",
+            "model.language_model.layers." + index + ".pre_attn_norm.weight",
+            "backbone.layers." + index + ".norm.weight",
+            "blk." + index + ".attn_norm.weight",
+        };
+    case TensorRole::AttentionPostNorm:
+        return {
+            "model.layers." + index + ".post_attn_norm.weight",
+            "model.language_model.layers." + index + ".post_attn_norm.weight",
+            "model.layers." + index + ".post_attention_norm.weight",
+            "model.language_model.layers." + index + ".post_attention_norm.weight",
+            "blk." + index + ".post_attention_norm.weight",
+        };
+    case TensorRole::FfnInputNorm:
+        return {
+            "transformer.h." + index + ".ln_2.weight",
+            "model.layers." + index + ".post_attention_layernorm.weight",
+            "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+            "model.layers." + index + ".pre_feedforward_layernorm.weight",
+            "model.language_model.layers." + index + ".pre_feedforward_layernorm.weight",
+            "model.language_model.layers." + index + ".ffn_norm.weight",
+            "model.layers." + index + ".ffn_norm.weight",
+            "model.layers." + index + ".pre_mlp_norm.weight",
+            "model.language_model.layers." + index + ".pre_mlp_norm.weight",
+            "blk." + index + ".ffn_norm.weight",
+        };
+    case TensorRole::FfnOutputNorm:
+        return {
+            "model.layers." + index + ".post_mlp_norm.weight",
+            "model.language_model.layers." + index + ".post_mlp_norm.weight",
+            "model.layers." + index + ".post_feedforward_layernorm.weight",
+            "model.language_model.layers." + index + ".post_feedforward_layernorm.weight",
+            "model.layers." + index + ".post_feed_forward_norm.weight",
+            "model.language_model.layers." + index + ".post_feed_forward_norm.weight",
+            "blk." + index + ".post_ffw_norm.weight",
+        };
+    default:
+        throw std::invalid_argument("tensor role is not a sublayer norm role");
+    }
+}
+
+bool has_any_tensor(const TensorInventory& inventory,
+                    const std::vector<std::string>& candidates) {
+    for (const std::string& candidate : candidates) {
+        if (inventory.find(candidate) != nullptr) return true;
+    }
+    return false;
 }
 
 void add_binding(TensorRoleBindings& bindings, TensorRole role, int layer,

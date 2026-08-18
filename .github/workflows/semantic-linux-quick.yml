@@ -1,0 +1,45 @@
+name: Semantic Linux smoke verification
+
+"on":
+  push:
+    branches:
+      - agent/automatic-semantic-model-support
+    paths:
+      - .github/workflows/semantic-linux-quick.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-linux-smoke
+  cancel-in-progress: true
+
+env:
+  SEMANTIC_SMOKE_REVISION: "16-build"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
+      - name: Build and test
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/dev.py verify --backend cpu --build-type Release --jobs 2 > semantic-linux-smoke-full.txt 2>&1
+          code=$?
+          echo "REVISION=$SEMANTIC_SMOKE_REVISION" > semantic-linux-smoke.txt
+          echo "EXIT_CODE=$code" >> semantic-linux-smoke.txt
+          tail -n 500 semantic-linux-smoke-full.txt >> semantic-linux-smoke.txt
+          exit 0
+      - name: Publish result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f semantic-linux-smoke.txt
+          git commit -m "ci: record semantic Linux build result"
+          git push origin HEAD:agent/automatic-semantic-model-support

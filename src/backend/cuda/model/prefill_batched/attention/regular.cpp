@@ -35,6 +35,10 @@ void run_regular_attention(
     const int query_projection_width = attention.query->rows;
     const bool output_gate = layout.output_gate.has_value();
     const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
+    const float qk_norm_epsilon = layout.query_norm
+        ? layout.query_norm->epsilon
+        : (semantics.mixer_norm.before ? semantics.mixer_norm.before->epsilon
+                                       : model.resources_.program_.final_norm.epsilon);
 
     prof.begin(model.stream_.get());
     {
@@ -80,7 +84,7 @@ void run_regular_attention(
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            layout.query_norm->epsilon,
+            qk_norm_epsilon,
             layout.has_query_key_norm(),
             lower_cuda_rope_scaling(*rope), model.stream_.get());
     } else if (layout.has_query_key_norm()) {
@@ -89,7 +93,7 @@ void run_regular_attention(
             attention.key ? workspace.prefill_k_.data() : nullptr,
             attention.q_norm, attention.k_norm,
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
-            1.0f, 0.0f, layout.query_norm->epsilon, true,
+            1.0f, 0.0f, qk_norm_epsilon, true,
             CudaRopeScaling{}, model.stream_.get());
     }
     launch_scale(
@@ -115,12 +119,7 @@ void run_regular_attention(
     model.linear(
         workspace.prefill_op_output_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
-        rows, hidden, layout.query_width(),
-        model.resources_.options_.fused_residuals && !common_layer.post_attention_norm
-            ? 1.0f : 0.0f);
-    launch_scale(
-        workspace.prefill_hidden_.data(), rows * hidden,
-        semantics.residual.multiplier, model.stream_.get());
+        rows, hidden, layout.query_width(), 0.0f);
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 

@@ -1,0 +1,40 @@
+name: Semantic model patch runner
+
+"on":
+  push:
+    branches:
+      - agent/automatic-semantic-model-support
+    paths:
+      - scripts/prepare_yarn_definition.py
+      - scripts/fix_yarn_semantics.py
+      - .github/workflows/semantic-model-refactor.yml
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-model-patch
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/automatic-semantic-model-support
+      - name: Prepare YaRN definition
+        run: python3 scripts/prepare_yarn_definition.py
+      - name: Apply complete YaRN semantics
+        run: python3 scripts/fix_yarn_semantics.py
+      - name: Publish source fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add include/celeg/model/definition.hpp include/celeg/model/position.hpp include/celeg/backend/cuda/kernels/rope.hpp src/backend/cuda/kernels/rope.cuh src/model/definition.cpp src/model/inference/metadata.cpp src/model/descriptor/architecture.cpp src/model/resolved.cpp tests/model_compiler_test.cpp tests/automatic_inference_test.cpp
+          git commit -m "fix: model complete YaRN semantics"
+          git push origin HEAD:agent/automatic-semantic-model-support

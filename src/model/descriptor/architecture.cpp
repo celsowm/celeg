@@ -142,10 +142,10 @@ public:
             semantic_layer.mixer = AttentionSpec{};
             semantic_layer.feed_forward = DenseFeedForwardSpec{
                 intermediate, descriptor_.feed_forward_activation};
-            semantic_layer.operator_norm = {numerical_policy.norm_eps,
-                                             descriptor_.operator_norm_kind};
-            semantic_layer.feed_forward_norm = NormSpec{numerical_policy.norm_eps,
-                                                 descriptor_.feed_forward_norm_kind};
+            semantic_layer.mixer_norm.before = NormSpec{
+                numerical_policy.norm_eps, descriptor_.operator_norm_kind};
+            semantic_layer.feed_forward_norm.before = NormSpec{
+                numerical_policy.norm_eps, descriptor_.feed_forward_norm_kind};
             semantic_layer.residual.multiplier = numerical_policy.residual_multiplier;
         }
         const std::vector<std::string> scheduled_mixer = mixer_schedule_values(metadata, descriptor_);

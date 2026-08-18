@@ -139,10 +139,8 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
         CompiledLayerProgram compiled;
         compiled.mixer = lower_mixer(layer);
         compiled.feed_forward = lower_feed_forward(layer, model.graph.hidden);
-        compiled.operator_norm = layer.operator_norm;
-        compiled.post_attention_norm = layer.post_attention_norm;
+        compiled.mixer_norm = layer.mixer_norm;
         compiled.feed_forward_norm = layer.feed_forward_norm;
-        compiled.post_feed_forward_norm = layer.post_feed_forward_norm;
         compiled.residual = layer.residual;
 
         for (std::size_t request_index = 0;

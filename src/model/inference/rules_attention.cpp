@@ -15,6 +15,7 @@ AttentionSpec make_attention(
     const NormalizedModelMetadata& metadata,
     int query_heads,
     int key_value_heads,
+    int layer,
     int head_dim,
     bool query_key_norm) {
     AttentionSpec attention;
@@ -30,14 +31,29 @@ AttentionSpec make_attention(
     };
     attention.query_norm = optional_qk_norm();
     attention.key_norm = attention.query_norm;
-    attention.pattern = FullCausalPattern{};
+    const auto layer_type = metadata.attention.layer_type.value_for(layer);
+    if (!layer_type || *layer_type == "full_attention" || *layer_type == "full") {
+        attention.pattern = FullCausalPattern{};
+    } else if (*layer_type == "sliding_attention" || *layer_type == "sliding_window" ||
+               *layer_type == "sliding") {
+        const auto window = metadata.attention.sliding_window.value_for(layer);
+        if (!window || *window <= 0) {
+            fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+                 "sliding attention requires a positive sliding_window for layer " +
+                     std::to_string(layer));
+        }
+        attention.pattern = SlidingWindowPattern{*window};
+    } else {
+        fail(ResolutionFailureKind::UnsupportedSemanticFeature,
+             "unsupported attention layer type token: " + *layer_type);
+    }
     attention.query_scale = 1.0f;
     std::visit([&](const auto& position) {
         using T = std::decay_t<decltype(position)>;
         if constexpr (std::is_same_v<T, NoPositionEncodingSpec>) {
             attention.position = NoPositionEncodingSpec{};
         } else if constexpr (std::is_same_v<T, InferredRopePosition>) {
-            RopePositionSpec rope{position.theta, position.rotary_fraction, RopeScalingSpec{}};
+            RopePositionSpec rope{position.theta, position.rotary_fraction, position.scaling};
             rope.pairing = position.pairing;
             attention.position = rope;
         } else if constexpr (std::is_same_v<T, UnresolvedPositionEncoding>) {
@@ -119,29 +135,33 @@ public:
         const auto has_tensor = [&](std::string_view name) {
             return input.inventory.find(name) != nullptr;
         };
-        const bool has_query_norm =
-            *m.attention.query_key_norm ||
-            has_tensor(layer_prefix + "attn_q_norm.weight") ||
-            has_tensor(
-                "model.layers." + index + ".self_attn.q_layernorm.weight");
-        const bool has_key_norm =
-            *m.attention.query_key_norm ||
-            has_tensor(layer_prefix + "attn_k_norm.weight") ||
-            has_tensor(
-                "model.layers." + index + ".self_attn.k_layernorm.weight");
-        if (has_query_norm != has_key_norm) {
+        const bool tensor_query_norm =
+            has_any_tensor(input.inventory, attention_tensor_candidates(layer, "q_norm.weight")) ||
+            has_tensor("model.layers." + index + ".self_attn.q_layernorm.weight");
+        const bool tensor_key_norm =
+            has_any_tensor(input.inventory, attention_tensor_candidates(layer, "k_norm.weight")) ||
+            has_tensor("model.layers." + index + ".self_attn.k_layernorm.weight");
+        if (tensor_query_norm != tensor_key_norm) {
             fail(
                 ResolutionFailureKind::ConflictingInferenceFacts,
                 "query/key normalization evidence is incomplete for layer " +
                     std::to_string(layer));
         }
+        if (m.attention.query_key_norm.has_value() &&
+            !*m.attention.query_key_norm && tensor_query_norm) {
+            fail(ResolutionFailureKind::ConflictingInferenceFacts,
+                 "query/key norm metadata conflicts with checkpoint tensors for layer " +
+                     std::to_string(layer));
+        }
+        const bool has_query_key_norm = m.attention.query_key_norm.value_or(tensor_query_norm);
 
         AttentionSpec attention = make_attention(
             m,
             *query_heads,
             *key_value_heads,
+            layer,
             head_dim,
-            has_query_norm);
+            has_query_key_norm);
 
         const auto q_candidates =
             attention_tensor_candidates(layer, "q_proj.weight");
@@ -214,15 +234,12 @@ public:
             {});
         add_binding(bindings, TensorRole::AttentionOutput, layer, *o, {});
 
-        const std::string q_norm_alias =
-            "model.layers." + index + ".self_attn.q_layernorm.weight";
-        const std::string k_norm_alias =
-            "model.layers." + index + ".self_attn.k_layernorm.weight";
-
-        if (has_tensor(layer_prefix + "attn_q_norm.weight")) {
+        if (has_query_key_norm) {
+            auto q_norm_candidates = attention_tensor_candidates(layer, "q_norm.weight");
+            q_norm_candidates.push_back("model.layers." + index + ".self_attn.q_layernorm.weight");
             const auto* q_norm = find_unique(
                 input.inventory,
-                {layer_prefix + "attn_q_norm.weight"},
+                q_norm_candidates,
                 TensorRole::AttentionQueryNorm,
                 layer,
                 {layer_head_dim},
@@ -233,40 +250,12 @@ public:
                 layer,
                 *q_norm,
                 {});
-        } else if (has_tensor(q_norm_alias)) {
-            const auto* q_norm = find_unique(
-                input.inventory,
-                {q_norm_alias},
-                TensorRole::AttentionQueryNorm,
-                layer,
-                {layer_head_dim},
-                {});
-            add_binding(
-                bindings,
-                TensorRole::AttentionQueryNorm,
-                layer,
-                *q_norm,
-                {});
-        }
 
-        if (has_tensor(layer_prefix + "attn_k_norm.weight")) {
+            auto k_norm_candidates = attention_tensor_candidates(layer, "k_norm.weight");
+            k_norm_candidates.push_back("model.layers." + index + ".self_attn.k_layernorm.weight");
             const auto* k_norm = find_unique(
                 input.inventory,
-                {layer_prefix + "attn_k_norm.weight"},
-                TensorRole::AttentionKeyNorm,
-                layer,
-                {layer_head_dim},
-                {});
-            add_binding(
-                bindings,
-                TensorRole::AttentionKeyNorm,
-                layer,
-                *k_norm,
-                {});
-        } else if (has_tensor(k_norm_alias)) {
-            const auto* k_norm = find_unique(
-                input.inventory,
-                {k_norm_alias},
+                k_norm_candidates,
                 TensorRole::AttentionKeyNorm,
                 layer,
                 {layer_head_dim},
@@ -366,7 +355,7 @@ public:
         }
 
         AttentionSpec attention =
-            make_attention(m, heads, 1, value_dim, false);
+            make_attention(m, heads, 1, layer, value_dim, false);
         attention.query_heads = heads;
         attention.key_value_heads = 1;
         attention.head_dim = value_dim;

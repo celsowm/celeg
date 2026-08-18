@@ -51,34 +51,39 @@ void CudaCompiledModel::enqueue_decode_forward() {
         LayerCommon& common_layer = common(layer);
         const CompiledLayerProgram& semantics =
             resources_.program_.layers.at(static_cast<size_t>(layer_idx));
-        if (!resources_.options_.fused_residuals) {
-            CELEG_CUDA(cudaMemcpyAsync(
-                workspace_.residual_.data(), workspace_.hidden_.data(),
-                workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice,
-                stream_.get()));
-        }
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace_.residual_.data(), workspace_.hidden_.data(),
+            workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice,
+            stream_.get()));
         decode_phase_profile().begin(stream_.get());
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm,
-                       workspace_.normed_.data(), 1, resources_.program_.hidden,
-                       semantics.operator_norm.epsilon, stream_.get());
+        if (semantics.mixer_norm.before) {
+            launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_before,
+                           workspace_.normed_.data(), 1, resources_.program_.hidden,
+                           semantics.mixer_norm.before->epsilon, stream_.get());
+        } else {
+            CELEG_CUDA(cudaMemcpyAsync(
+                workspace_.normed_.data(), workspace_.hidden_.data(),
+                workspace_.hidden_.bytes(), cudaMemcpyDeviceToDevice, stream_.get()));
+        }
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (as_attention(layer)) {
             enqueue_decode_attention(layer, common_layer, layer_idx);
         } else {
             enqueue_decode_non_attention_mixer(layer, layer_idx);
         }
-        if (common_layer.post_attention_norm) {
-            launch_rmsnorm(workspace_.hidden_.data(), common_layer.post_attention_norm,
+        if (common_layer.mixer_norm_after) {
+            launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_after,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
-                           semantics.post_attention_norm->epsilon, stream_.get());
+                           semantics.mixer_norm.after->epsilon, stream_.get());
         }
-        if (!resources_.options_.fused_residuals || common_layer.post_attention_norm ||
-            std::holds_alternative<std::monostate>(semantics.feed_forward)) {
-            decode_phase_profile().begin(stream_.get());
-            launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
-                                resources_.program_.hidden, stream_.get());
-            decode_phase_profile().end(DecodePhase::Other, stream_.get());
+        if (semantics.residual.multiplier != 1.0f) {
+            launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
+                         semantics.residual.multiplier, stream_.get());
         }
+        decode_phase_profile().begin(stream_.get());
+        launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
+                            resources_.program_.hidden, stream_.get());
+        decode_phase_profile().end(DecodePhase::Other, stream_.get());
         decode_phase_profile().begin(stream_.get());
         if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) run_mlp_decode(common_layer, layer_idx);
         if (std::binary_search(resources_.program_.norm_after_layers.begin(),

@@ -31,6 +31,9 @@ std::vector<std::string> shortconv_tensor_candidates(int layer,
                                                      std::string_view suffix);
 std::vector<std::string> mamba2_tensor_candidates(int layer,
                                                   std::string_view suffix);
+std::vector<std::string> norm_tensor_candidates(int layer, TensorRole role);
+bool has_any_tensor(const TensorInventory& inventory,
+                    const std::vector<std::string>& candidates);
 
 const TensorInventoryEntry* find_mamba_tensor(const InferenceInput& input,
                                               int layer,

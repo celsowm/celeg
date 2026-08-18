@@ -1,0 +1,241 @@
+doctor: platform       linux
+doctor: backend        cpu (requested cpu)
+doctor: cmake          /usr/local/bin/cmake (3.31.6)
+doctor: ninja          /usr/local/bin/ninja (1.13.2)
+doctor: compiler       /usr/bin/x86_64-linux-gnu-g++-13 (13.3.0)
+doctor: nvcc           <not found>
+doctor: gpu            <not detected>
+doctor: driver         <not detected>
+doctor: architecture   native
+doctor: checkpoint     <not cached>
+doctor: RESULT: ready
++ /usr/local/bin/cmake --fresh -S /home/runner/work/celeg/celeg -B /home/runner/work/celeg/celeg/out/linux-cpu-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCELEG_ENABLE_CUDA=OFF -DCELEG_BUILD_TESTS=ON -DCELEG_RUN_CUDA_TESTS=ON
+-- The C compiler identification is GNU 13.3.0
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Python3: /opt/hostedtoolcache/Python/3.12.13/x64/bin/python3.12 (found version "3.12.13") found components: Interpreter
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Found CURL: /usr/lib/x86_64-linux-gnu/libcurl.so (found version "8.5.0")
+CMake Deprecation Warning at out/linux-cpu-release/_celeg_deps/libuv-src/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+-- Performing Test UV_LINT_W4
+-- Performing Test UV_LINT_W4 - Failed
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER_MSVC
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER_MSVC - Failed
+-- Performing Test UV_LINT_NO_CONDITIONAL_CONSTANT_MSVC
+-- Performing Test UV_LINT_NO_CONDITIONAL_CONSTANT_MSVC - Failed
+-- Performing Test UV_LINT_NO_NONSTANDARD_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_MSVC - Failed
+-- Performing Test UV_LINT_NO_NONSTANDARD_EMPTY_TU_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_EMPTY_TU_MSVC - Failed
+-- Performing Test UV_LINT_NO_NONSTANDARD_FILE_SCOPE_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_FILE_SCOPE_MSVC - Failed
+-- Performing Test UV_LINT_NO_NONSTANDARD_NONSTATIC_DLIMPORT_MSVC
+-- Performing Test UV_LINT_NO_NONSTANDARD_NONSTATIC_DLIMPORT_MSVC - Failed
+-- Performing Test UV_LINT_NO_HIDES_LOCAL
+-- Performing Test UV_LINT_NO_HIDES_LOCAL - Failed
+-- Performing Test UV_LINT_NO_HIDES_PARAM
+-- Performing Test UV_LINT_NO_HIDES_PARAM - Failed
+-- Performing Test UV_LINT_NO_HIDES_GLOBAL
+-- Performing Test UV_LINT_NO_HIDES_GLOBAL - Failed
+-- Performing Test UV_LINT_NO_CONDITIONAL_ASSIGNMENT_MSVC
+-- Performing Test UV_LINT_NO_CONDITIONAL_ASSIGNMENT_MSVC - Failed
+-- Performing Test UV_LINT_NO_UNSAFE_MSVC
+-- Performing Test UV_LINT_NO_UNSAFE_MSVC - Failed
+-- Performing Test UV_LINT_WALL
+-- Performing Test UV_LINT_WALL - Success
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER
+-- Performing Test UV_LINT_NO_UNUSED_PARAMETER - Success
+-- Performing Test UV_LINT_STRICT_PROTOTYPES
+-- Performing Test UV_LINT_STRICT_PROTOTYPES - Success
+-- Performing Test UV_LINT_EXTRA
+-- Performing Test UV_LINT_EXTRA - Success
+-- Performing Test UV_LINT_UTF8_MSVC
+-- Performing Test UV_LINT_UTF8_MSVC - Failed
+-- Performing Test UV_F_STRICT_ALIASING
+-- Performing Test UV_F_STRICT_ALIASING - Success
+-- summary of build options:
+    Install prefix:  /usr/local
+    Target system:   Linux
+    Compiler:
+      C compiler:    /usr/bin/cc (GNU)
+      CFLAGS:         
+
+CMake Warning (dev) at /usr/local/share/cmake-3.31/Modules/FetchContent.cmake:1953 (message):
+  Calling FetchContent_Populate(usockets) is deprecated, call
+  FetchContent_MakeAvailable(usockets) instead.  Policy CMP0169 can be set to
+  OLD to allow FetchContent_Populate(usockets) to be called directly for now,
+  but the ability to call it with declared details will be removed completely
+  in a future version.
+Call Stack (most recent call first):
+  CMakeLists.txt:216 (FetchContent_Populate)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+CMake Warning (dev) at /usr/local/share/cmake-3.31/Modules/FetchContent.cmake:1953 (message):
+  Calling FetchContent_Populate(uwebsockets) is deprecated, call
+  FetchContent_MakeAvailable(uwebsockets) instead.  Policy CMP0169 can be set
+  to OLD to allow FetchContent_Populate(uwebsockets) to be called directly
+  for now, but the ability to call it with declared details will be removed
+  completely in a future version.
+Call Stack (most recent call first):
+  CMakeLists.txt:232 (FetchContent_Populate)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+CMake Warning (dev) at /usr/local/share/cmake-3.31/Modules/FetchContent.cmake:1953 (message):
+  Calling FetchContent_Populate(swaggerui) is deprecated, call
+  FetchContent_MakeAvailable(swaggerui) instead.  Policy CMP0169 can be set
+  to OLD to allow FetchContent_Populate(swaggerui) to be called directly for
+  now, but the ability to call it with declared details will be removed
+  completely in a future version.
+Call Stack (most recent call first):
+  CMakeLists.txt:246 (FetchContent_Populate)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Configuring done (5.4s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/runner/work/celeg/celeg/out/linux-cpu-release
++ /usr/local/bin/cmake --build /home/runner/work/celeg/celeg/out/linux-cpu-release --parallel 2
+[0/2] Re-checking globbed directories...
+[1/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/formats/json.cpp.o
+In file included from /usr/include/x86_64-linux-gnu/c++/13/bits/c++allocator.h:33,
+                 from /usr/include/c++/13/bits/allocator.h:46,
+                 from /usr/include/c++/13/string:43,
+                 from /home/runner/work/celeg/celeg/include/celeg/checkpoint/formats/json.hpp:4,
+                 from /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:1:
+In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type) [with _Tp = char]’,
+    inlined from ‘constexpr void std::allocator< <template-parameter-1-1> >::deallocate(_Tp*, std::size_t) [with _Tp = char]’ at /usr/include/c++/13/bits/allocator.h:210:35,
+    inlined from ‘static constexpr void std::allocator_traits<std::allocator<_CharT> >::deallocate(allocator_type&, pointer, size_type) [with _Tp = char]’ at /usr/include/c++/13/bits/alloc_traits.h:517:23,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_destroy(size_type) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:289:34,
+    inlined from ‘constexpr void std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::_M_dispose() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:283:14,
+    inlined from ‘constexpr std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::~basic_string() [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]’ at /usr/include/c++/13/bits/basic_string.h:804:19,
+    inlined from ‘constexpr void std::destroy_at(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:88:18,
+    inlined from ‘constexpr void std::_Destroy(_Tp*) [with _Tp = __cxx11::basic_string<char>]’ at /usr/include/c++/13/bits/stl_construct.h:149:22,
+    inlined from ‘std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)> mutable [with auto:16 = std::__cxx11::basic_string<char>&]’ at /usr/include/c++/13/variant:498:19,
+    inlined from ‘constexpr _Res std::__invoke_impl(__invoke_other, _Fn&&, _Args&& ...) [with _Res = void; _Fn = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:61:36,
+    inlined from ‘constexpr std::enable_if_t<is_invocable_r_v<_Res, _Callable, _Args ...>, _Res> std::__invoke_r(_Callable&&, _Args&& ...) [with _Res = void; _Callable = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Args = {__cxx11::basic_string<char, char_traits<char>, allocator<char> >&}]’ at /usr/include/c++/13/bits/invoke.h:111:28,
+    inlined from ‘static constexpr decltype(auto) std::__detail::__variant::__gen_vtable_impl<std::__detail::__variant::_Multi_array<_Result_type (*)(_Visitor, _Variants ...)>, std::integer_sequence<long unsigned int, __indices ...> >::__visit_invoke(_Visitor&&, _Variants ...) [with _Result_type = void; _Visitor = std::__detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>&&; _Variants = {std::variant<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >&}; long unsigned int ...__indices = {3}]’ at /usr/include/c++/13/variant:1064:40,
+    inlined from ‘constexpr decltype(auto) std::__do_visit(_Visitor&&, _Variants&& ...) [with _Result_type = void; _Visitor = __detail::__variant::_Variant_storage<false, std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >::_M_reset()::<lambda(auto:16&&)>; _Variants = {variant<std::nullptr_t, bool, double, __cxx11::basic_string<char, char_traits<char>, allocator<char> >, vector<celeg::Json, allocator<celeg::Json> >, unordered_map<__cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json, hash<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, equal_to<__cxx11::basic_string<char, char_traits<char>, allocator<char> > >, allocator<pair<const __cxx11::basic_string<char, char_traits<char>, allocator<char> >, celeg::Json> > > >&}]’ at /usr/include/c++/13/variant:1818:5,
+    inlined from ‘constexpr void std::__detail::__variant::_Variant_storage<false, _Types ...>::_M_reset() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:496:23,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_storage<false, _Types ...>::~_Variant_storage() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:506:17,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_ctor_base()’ at /usr/include/c++/13/variant:581:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_ctor_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_ctor_base()’ at /usr/include/c++/13/variant:618:12,
+    inlined from ‘constexpr std::__detail::__variant::_Copy_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Copy_assign_base()’ at /usr/include/c++/13/variant:656:12,
+    inlined from ‘constexpr std::__detail::__variant::_Move_assign_base<false, std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Move_assign_base()’ at /usr/include/c++/13/variant:708:12,
+    inlined from ‘constexpr std::__detail::__variant::_Variant_base<std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > > >::~_Variant_base()’ at /usr/include/c++/13/variant:762:12,
+    inlined from ‘constexpr std::variant<_Types>::~variant() [with _Types = {std::nullptr_t, bool, double, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::vector<celeg::Json, std::allocator<celeg::Json> >, std::unordered_map<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::allocator<std::pair<const std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, celeg::Json> > >}]’ at /usr/include/c++/13/variant:1432:28,
+    inlined from ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’ at /home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49:
+/usr/include/c++/13/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on unallocated object ‘<anonymous>’ [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp: In member function ‘celeg::Json celeg::{anonymous}::Parser::parse_value()’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/json.cpp:73:49: note: declared here
+   73 |             case '{': return Json(parse_object());
+      |                                                 ^
+[2/422] Building CXX object CMakeFiles/celeg_base.dir/src/app/run_preparation.cpp.o
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp: In function ‘std::vector<int> celeg::app::prepare_prompt(const RunInputs&, const PreparedRun&)’:
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:85:51: warning: missing initializer for member ‘celeg::ChatMessage::tool_calls’ [-Wmissing-field-initializers]
+   85 |     if (!inputs.system.empty()) messages.push_back({ChatRole::System, inputs.system});
+      |                                 ~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:85:51: warning: missing initializer for member ‘celeg::ChatMessage::tool_call_id’ [-Wmissing-field-initializers]
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:85:51: warning: missing initializer for member ‘celeg::ChatMessage::name’ [-Wmissing-field-initializers]
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:85:51: warning: missing initializer for member ‘celeg::ChatMessage::reasoning_content’ [-Wmissing-field-initializers]
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:86:23: warning: missing initializer for member ‘celeg::ChatMessage::tool_calls’ [-Wmissing-field-initializers]
+   86 |     messages.push_back({ChatRole::User, inputs.prompt});
+      |     ~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:86:23: warning: missing initializer for member ‘celeg::ChatMessage::tool_call_id’ [-Wmissing-field-initializers]
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:86:23: warning: missing initializer for member ‘celeg::ChatMessage::name’ [-Wmissing-field-initializers]
+/home/runner/work/celeg/celeg/src/app/run_preparation.cpp:86:23: warning: missing initializer for member ‘celeg::ChatMessage::reasoning_content’ [-Wmissing-field-initializers]
+[3/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/packed/int8.cpp.o
+/home/runner/work/celeg/celeg/src/checkpoint/packed/int8.cpp:11:8: warning: ‘size_t celeg::{anonymous}::element_count(const std::vector<long int>&, const char*)’ defined but not used [-Wunused-function]
+   11 | size_t element_count(const std::vector<int64_t>& shape, const char* label) {
+      |        ^~~~~~~~~~~~~
+[4/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/packed/int4.cpp.o
+/home/runner/work/celeg/celeg/src/checkpoint/packed/int4.cpp:12:8: warning: ‘size_t celeg::{anonymous}::elements(const std::vector<long int>&, const char*)’ defined but not used [-Wunused-function]
+   12 | size_t elements(const std::vector<int64_t>& shape, const char* label) {
+      |        ^~~~~~~~
+[5/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/formats/safetensors.cpp.o
+/home/runner/work/celeg/celeg/src/checkpoint/formats/safetensors.cpp: In function ‘size_t celeg::{anonymous}::dtype_size(celeg::TensorDType)’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/safetensors.cpp:39:12: warning: enumeration value ‘Quantized’ not handled in switch [-Wswitch]
+   39 |     switch (dtype) {
+      |            ^
+/home/runner/work/celeg/celeg/src/checkpoint/formats/safetensors.cpp: In member function ‘celeg::HostTensorView celeg::SafeTensorFile::tensor(std::string_view) const’:
+/home/runner/work/celeg/celeg/src/checkpoint/formats/safetensors.cpp:291:5: warning: missing initializer for member ‘celeg::HostTensorView::block_encoding’ [-Wmissing-field-initializers]
+  291 |     };
+      |     ^
+[6/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/formats/gguf.cpp.o
+[7/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/catalog.cpp.o
+[8/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/gguf_position_profile.cpp.o
+[9/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/metadata.cpp.o
+[10/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/repositories/gguf.cpp.o
+[11/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/repositories/detail/gguf_tensor_mapper.cpp.o
+[12/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/repositories/detail/gguf_tensor_adapter.cpp.o
+[13/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/repositories/safetensors.cpp.o
+[14/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/repositories/detail/gguf_tensor_resolver.cpp.o
+[15/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/formats/detail/gguf_tokenizer_metadata.cpp.o
+[16/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/hf_http.cpp.o
+[17/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/downloader.cpp.o
+[18/422] Building CXX object CMakeFiles/celeg_base.dir/src/checkpoint/bootstrap.cpp.o
+[19/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/definition.cpp.o
+[20/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/registration.cpp.o
+[21/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/parser.cpp.o
+[22/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/probe_matcher.cpp.o
+[23/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/field_resolver.cpp.o
+[24/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/graph_builder.cpp.o
+[25/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/binding_parser.cpp.o
+[26/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/field_parser.cpp.o
+[27/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o
+/home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp: In member function ‘virtual celeg::ResolvedModel celeg::descriptor_detail::DescriptorArchitecture::resolve(const celeg::CheckpointView&) const’:
+/home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp:420:54: warning: missing initializer for member ‘celeg::LatentAttentionStateSpec::storage’ [-Wmissing-field-initializers]
+  420 |                     descriptor_.latent_decoupled_rope};
+      |                                                      ^
+[28/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/naming_policy.cpp.o
+[29/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/probe.cpp.o
+[30/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/role_codec.cpp.o
+[31/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/architecture.cpp.o
+[32/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/automatic_architecture.cpp.o
+[33/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference.cpp.o
+[34/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/layer_bindings.cpp.o
+[35/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/rules.cpp.o
+[36/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/global_facts.cpp.o
+[37/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o
+FAILED: [code=1] CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o 
+/usr/bin/c++ -DCELEG_DESCRIPTOR_DIRECTORY=\"/home/runner/work/celeg/celeg/descriptors\" -DCELEG_DESCRIPTOR_INSTALL_DIRECTORY=\"/usr/local/share/celeg/descriptors\" -I/home/runner/work/celeg/celeg/include -O3 -DNDEBUG -std=gnu++20 -fPIC -Wall -Wextra -Wpedantic -MD -MT CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o -MF CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o.d -o CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o -c /home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:19:9: error: redefinition of ‘int layer’
+   19 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:18:9: note: ‘int layer’ previously declared here
+   18 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:20:9: error: redefinition of ‘int layer’
+   20 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:18:9: note: ‘int layer’ previously declared here
+   18 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp: In member function ‘virtual void celeg::inference_detail::{anonymous}::LatentAttentionRule::resolve(celeg::inference_detail::CanonicalInferenceContext&, int) const’:
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:380:71: warning: missing initializer for member ‘celeg::LatentAttentionStateSpec::storage’ [-Wmissing-field-initializers]
+  380 |                 NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale}}};
+      |                                                                       ^
+[38/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/rules_recurrent.cpp.o
+ninja: build stopped: subcommand failed.
+verify: FAIL: Build failed.
+
+VERIFY_EXIT_CODE=1

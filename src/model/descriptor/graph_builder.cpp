@@ -64,12 +64,11 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
         LayerSpec& layer = graph.layers[static_cast<size_t>(layer_index)];
         const float epsilon = numerical_policy.norm_eps;
         const float post_epsilon = numerical_policy.post_norm_eps;
-        layer.operator_norm = {epsilon, descriptor.operator_norm_kind};
-        layer.feed_forward_norm = {epsilon, descriptor.feed_forward_norm_kind};
+        layer.mixer_norm.before = NormSpec{epsilon, descriptor.operator_norm_kind};
+        layer.feed_forward_norm.before = NormSpec{epsilon, descriptor.feed_forward_norm_kind};
         if (descriptor.split_attention_norms) {
-            layer.post_attention_norm = {post_epsilon, descriptor.operator_norm_kind};
-            layer.pre_feed_forward_norm = {epsilon, descriptor.feed_forward_norm_kind};
-            layer.post_feed_forward_norm = {post_epsilon, descriptor.feed_forward_norm_kind};
+            layer.mixer_norm.after = NormSpec{post_epsilon, descriptor.operator_norm_kind};
+            layer.feed_forward_norm.after = NormSpec{post_epsilon, descriptor.feed_forward_norm_kind};
         }
         if (const auto* current_attention = std::get_if<AttentionSpec>(&layer.mixer)) {
             AttentionSpec attention = *current_attention;

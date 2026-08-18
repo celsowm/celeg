@@ -339,12 +339,11 @@ struct CpuCompiledModel {
     struct CommonWeights {
         CommonWeights() : layer_scalar(1.0f) {}
 
-        std::vector<float> operator_norm;
-        std::vector<float> post_attention_norm;
-        std::vector<float> pre_feed_forward_norm;
-        std::vector<float> post_feed_forward_norm;
+        std::vector<float> mixer_norm_before;
+        std::vector<float> mixer_norm_after;
+        std::vector<float> feed_forward_norm_before;
+        std::vector<float> feed_forward_norm_after;
         std::vector<float> per_layer_input_norm;
-        std::vector<float> ffn_norm;
         float layer_scalar;
     };
     struct AttentionWeights {
