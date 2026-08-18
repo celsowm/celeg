@@ -61,7 +61,8 @@ enum class NormFixtureLayout {
 
 class GptxRepository final : public celeg::IWeightRepository {
 public:
-    explicit GptxRepository(NormFixtureLayout norms = NormFixtureLayout::PreOnly) {
+    explicit GptxRepository(NormFixtureLayout norms = NormFixtureLayout::PreOnly,
+                            bool query_key_norms = false) {
         shapes_["transformer.wte.weight"] = {32770, 576};
         shapes_["transformer.ln_f.weight"] = {576};
         for (int layer = 0; layer < 1; ++layer) {
@@ -82,6 +83,10 @@ public:
             shapes_[prefix + ".attn.k_proj.weight"] = {192, 576};
             shapes_[prefix + ".attn.v_proj.weight"] = {192, 576};
             shapes_[prefix + ".attn.o_proj.weight"] = {576, 576};
+            if (query_key_norms) {
+                shapes_["blk." + std::to_string(layer) + ".attn_q_norm.weight"] = {64};
+                shapes_["blk." + std::to_string(layer) + ".attn_k_norm.weight"] = {64};
+            }
             shapes_[prefix + ".mlp.w_gate.weight"] = {1728, 576};
             shapes_[prefix + ".mlp.w_up.weight"] = {1728, 576};
             shapes_[prefix + ".mlp.w_down.weight"] = {576, 1728};
@@ -152,6 +157,22 @@ celeg::ResolvedModel resolve_norm_layout(const celeg::ArchitectureCatalog& catal
     const auto& architecture = catalog.select(checkpoint.metadata);
     CELEG_TEST_CHECK(architecture.id() == "automatic");
     return architecture.resolve(checkpoint);
+}
+
+bool resolution_fails_with(const celeg::ArchitectureCatalog& catalog,
+                           celeg::CheckpointMetadata metadata,
+                           NormFixtureLayout norms,
+                           bool query_key_norms,
+                           celeg::ResolutionFailureKind expected) {
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = std::move(metadata);
+    checkpoint.repository = std::make_shared<GptxRepository>(norms, query_key_norms);
+    try {
+        (void)catalog.select(checkpoint.metadata).resolve(checkpoint);
+    } catch (const celeg::ResolutionError& error) {
+        return error.kind() == expected;
+    }
+    return false;
 }
 
 bool normalize_fails_with(celeg::CheckpointMetadata metadata,
@@ -248,6 +269,37 @@ int main() {
     CELEG_TEST_CHECK(!no_norm.graph.layers[0].mixer_norm.after.has_value());
     CELEG_TEST_CHECK(!no_norm.graph.layers[0].feed_forward_norm.before.has_value());
     CELEG_TEST_CHECK(!no_norm.graph.layers[0].feed_forward_norm.after.has_value());
+
+    auto truncated_norm_schedule = structural_metadata("unknown_norm_schedule");
+    truncated_norm_schedule.values["num_hidden_layers"] = int64_t(2);
+    truncated_norm_schedule.values["mixer_pre_norm"] = std::vector<int64_t>{1};
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(truncated_norm_schedule),
+        celeg::ResolutionFailureKind::IncompleteLayerSchedule));
+
+    auto disabled_present_norm = structural_metadata("unknown_norm_conflict");
+    disabled_present_norm.values["mixer_pre_norm"] = false;
+    CELEG_TEST_CHECK(resolution_fails_with(
+        catalog, std::move(disabled_present_norm), NormFixtureLayout::PreOnly, false,
+        celeg::ResolutionFailureKind::ConflictingInferenceFacts));
+
+    auto required_missing_norm = structural_metadata("unknown_norm_missing");
+    required_missing_norm.values["mixer_pre_norm"] = true;
+    CELEG_TEST_CHECK(resolution_fails_with(
+        catalog, std::move(required_missing_norm), NormFixtureLayout::None, false,
+        celeg::ResolutionFailureKind::MissingTensorRole));
+
+    auto disabled_qk_norm = structural_metadata("unknown_qk_conflict");
+    disabled_qk_norm.values["qk_norm"] = false;
+    CELEG_TEST_CHECK(resolution_fails_with(
+        catalog, std::move(disabled_qk_norm), NormFixtureLayout::PreOnly, true,
+        celeg::ResolutionFailureKind::ConflictingInferenceFacts));
+
+    auto required_qk_norm = structural_metadata("unknown_qk_missing");
+    required_qk_norm.values["qk_norm"] = true;
+    CELEG_TEST_CHECK(resolution_fails_with(
+        catalog, std::move(required_qk_norm), NormFixtureLayout::PreOnly, false,
+        celeg::ResolutionFailureKind::MissingTensorRole));
 
     auto truncated_schedule = structural_metadata("unknown_test_model");
     truncated_schedule.values["num_hidden_layers"] = int64_t(2);
