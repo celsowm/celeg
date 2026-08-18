@@ -222,22 +222,26 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
         "backbone.layers." + index + ".norm.weight",
         "blk." + index + ".attn_norm.weight",
     };
-    const std::vector<std::string> mixer_after_candidates = {
-        "model.layers." + index + ".post_attention_layernorm.weight",
-        "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+    const std::vector<std::string> explicit_mixer_after_candidates = {
         "model.layers." + index + ".post_attention_norm.weight",
         "model.language_model.layers." + index + ".post_attention_norm.weight",
         "blk." + index + ".post_attention_norm.weight",
     };
-    const std::vector<std::string> ffn_before_candidates = {
+    const std::vector<std::string> post_attention_layernorm_candidates = {
+        "model.layers." + index + ".post_attention_layernorm.weight",
+        "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+    };
+    const std::vector<std::string> explicit_ffn_before_candidates = {
         "transformer.h." + index + ".ln_2.weight",
+        "model.language_model.layers." + index + ".ffn_norm.weight",
+        "model.layers." + index + ".ffn_norm.weight",
+        "blk." + index + ".ffn_norm.weight",
+    };
+    const std::vector<std::string> pre_feedforward_candidates = {
         "model.layers." + index + ".pre_feedforward_layernorm.weight",
         "model.language_model.layers." + index + ".pre_feedforward_layernorm.weight",
         "model.layers." + index + ".pre_feed_forward_layernorm.weight",
         "model.language_model.layers." + index + ".pre_feed_forward_layernorm.weight",
-        "model.language_model.layers." + index + ".ffn_norm.weight",
-        "model.layers." + index + ".ffn_norm.weight",
-        "blk." + index + ".ffn_norm.weight",
     };
     const std::vector<std::string> ffn_after_candidates = {
         "model.layers." + index + ".post_feedforward_layernorm.weight",
@@ -253,15 +257,50 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
     const TensorInventoryEntry* mixer_before = find_optional_norm(
         input.inventory, mixer_before_candidates,
         TensorRole::AttentionInputNorm, layer, hidden);
-    const TensorInventoryEntry* mixer_after = find_optional_norm(
-        input.inventory, mixer_after_candidates,
+    const TensorInventoryEntry* explicit_mixer_after = find_optional_norm(
+        input.inventory, explicit_mixer_after_candidates,
         TensorRole::AttentionPostNorm, layer, hidden);
-    const TensorInventoryEntry* ffn_before = find_optional_norm(
-        input.inventory, ffn_before_candidates,
+    const TensorInventoryEntry* post_attention_layernorm = find_optional_norm(
+        input.inventory, post_attention_layernorm_candidates,
+        TensorRole::AttentionPostNorm, layer, hidden);
+    const TensorInventoryEntry* explicit_ffn_before = find_optional_norm(
+        input.inventory, explicit_ffn_before_candidates,
+        TensorRole::FfnInputNorm, layer, hidden);
+    const TensorInventoryEntry* pre_feedforward = find_optional_norm(
+        input.inventory, pre_feedforward_candidates,
         TensorRole::FfnInputNorm, layer, hidden);
     const TensorInventoryEntry* ffn_after = find_optional_norm(
         input.inventory, ffn_after_candidates,
         TensorRole::FfnOutputNorm, layer, hidden);
+
+    const TensorInventoryEntry* mixer_after = explicit_mixer_after;
+    const TensorInventoryEntry* ffn_before = explicit_ffn_before;
+    if (pre_feedforward != nullptr) {
+        if (explicit_ffn_before != nullptr) {
+            fail(
+                ResolutionFailureKind::AmbiguousTensorBinding,
+                "automatic resolution found multiple pre-feed-forward norms for layer " +
+                    std::to_string(layer));
+        }
+        ffn_before = pre_feedforward;
+        if (post_attention_layernorm != nullptr) {
+            if (explicit_mixer_after != nullptr) {
+                fail(
+                    ResolutionFailureKind::AmbiguousTensorBinding,
+                    "automatic resolution found multiple post-attention norms for layer " +
+                        std::to_string(layer));
+            }
+            mixer_after = post_attention_layernorm;
+        }
+    } else if (post_attention_layernorm != nullptr) {
+        if (explicit_ffn_before != nullptr) {
+            fail(
+                ResolutionFailureKind::AmbiguousTensorBinding,
+                "post_attention_layernorm conflicts with another feed-forward input norm "
+                "for layer " + std::to_string(layer));
+        }
+        ffn_before = post_attention_layernorm;
+    }
 
     bind_structural_norm(
         context, layer, TensorRole::AttentionInputNorm,
