@@ -1,6 +1,7 @@
 name: Apply QK norm semantic fix
 
 on:
+  workflow_dispatch:
   push:
     branches: [master]
     paths:
