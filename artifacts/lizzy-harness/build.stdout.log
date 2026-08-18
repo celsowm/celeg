@@ -1,20 +1,3 @@
-# Lizzy real checkpoint validation
-
-- commit: 456ee95c32c69832b589f0e2fea1049b6bf661ed
-- model: flwrlabs/Lizzy-7B
-- build: 1
-- download: 125
-- CELEG semantic resolution: 125
-- Transformers reference: 125
-- logits/token comparison: 125
-
-## build stderr
-```text
-build: FAIL: CMake configure failed.
-```
-
-## build stdout
-```text
 doctor: platform       linux
 doctor: backend        cpu (requested cpu)
 doctor: cmake          /usr/local/bin/cmake (3.31.6)
@@ -52,5 +35,3 @@ Call Stack (most recent call first):
 
 
 -- Configuring incomplete, errors occurred!
-```
-
