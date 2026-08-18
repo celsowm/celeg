@@ -22,11 +22,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
       - name: Apply refactor
         run: python scripts/apply_semantic_model_refactor.py
-      - name: Commit generated refactor
+      - name: Verify CPU
         run: |
-          if git diff --quiet; then
+          set +e
+          python scripts/dev.py verify --backend cpu --build-type Release --jobs 2 > semantic-refactor-build-full.log 2>&1
+          status=$?
+          tail -n 600 semantic-refactor-build-full.log > semantic-refactor-build.log
+          printf '\nVERIFY_EXIT_CODE=%s\n' "$status" >> semantic-refactor-build.log
+          rm semantic-refactor-build-full.log
+          exit 0
+      - name: Commit generated refactor and status
+        run: |
+          if git diff --quiet && [ ! -f semantic-refactor-build.log ]; then
             echo "No generated changes"
             exit 0
           fi
