@@ -5,11 +5,8 @@ name: Semantic model refactor runner
     branches:
       - agent/automatic-semantic-model-support
     paths:
-      - scripts/apply_semantic_model_refactor_phase3.py
-      - scripts/apply_semantic_model_refactor_phase4.py
-      - scripts/apply_semantic_model_refactor_phase5.py
-      - scripts/apply_semantic_model_refactor_phase6.py
-      - scripts/apply_semantic_model_refactor_phase7.py
+      - scripts/apply_semantic_model_refactor_phase8.py
+      - scripts/apply_semantic_model_refactor_phase9.py
       - .github/workflows/semantic-model-refactor.yml
 
 concurrency:
@@ -30,14 +27,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Apply semantic transform
+      - name: Apply regression coverage
         run: |
-          python scripts/apply_semantic_model_refactor_phase3.py
-          python scripts/apply_semantic_model_refactor_phase4.py
-          python scripts/apply_semantic_model_refactor_phase5.py
-          python scripts/apply_semantic_model_refactor_phase6.py
-          python scripts/apply_semantic_model_refactor_phase7.py
-      - name: Publish transform
+          python scripts/apply_semantic_model_refactor_phase8.py
+          python scripts/apply_semantic_model_refactor_phase9.py
+      - name: Publish coverage
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -46,5 +40,5 @@ jobs:
             echo "No generated changes"
             exit 0
           fi
-          git commit -m "feat: implement automatic semantic model support"
+          git commit -m "test: cover automatic semantic model support"
           git push origin HEAD:agent/automatic-semantic-model-support
