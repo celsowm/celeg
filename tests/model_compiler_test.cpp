@@ -79,6 +79,43 @@ int main() {
                      ordinary_state.persistent_elements() == 16);
     CELEG_TEST_CHECK(cuda.layers.size() == cpu.layers.size());
 
+    const auto check_norm_topology = [&](bool before, bool after) {
+        celeg::ResolvedModel topology_model = model;
+        auto& layer = topology_model.graph.layers[0];
+        layer.mixer_norm.before.reset();
+        layer.mixer_norm.after.reset();
+        layer.feed_forward_norm.before.reset();
+        layer.feed_forward_norm.after.reset();
+        if (before) {
+            layer.mixer_norm.before = celeg::NormSpec{
+                1.0e-5f, celeg::NormWeightKind::Scale};
+            layer.feed_forward_norm.before = celeg::NormSpec{
+                2.0e-5f, celeg::NormWeightKind::Scale};
+        }
+        if (after) {
+            layer.mixer_norm.after = celeg::NormSpec{
+                3.0e-5f, celeg::NormWeightKind::Scale};
+            layer.feed_forward_norm.after = celeg::NormSpec{
+                4.0e-5f, celeg::NormWeightKind::Scale};
+        }
+        const auto cpu_topology = celeg::CpuModelCompiler{}.compile(topology_model);
+        const auto cuda_topology = celeg::CudaModelCompiler{}.compile(topology_model);
+        for (const celeg::CompiledModelProgram* program :
+             {&cpu_topology, &cuda_topology}) {
+            const auto& compiled = program->layers[0];
+            CELEG_TEST_CHECK(compiled.mixer_norm.before.has_value() == before);
+            CELEG_TEST_CHECK(compiled.mixer_norm.after.has_value() == after);
+            CELEG_TEST_CHECK(
+                compiled.feed_forward_norm.before.has_value() == before);
+            CELEG_TEST_CHECK(
+                compiled.feed_forward_norm.after.has_value() == after);
+        }
+    };
+    check_norm_topology(true, false);
+    check_norm_topology(false, true);
+    check_norm_topology(true, true);
+    check_norm_topology(false, false);
+
     celeg::ModelGraph mlp_only_graph;
     mlp_only_graph.hidden = 8;
     celeg::LayerSpec mlp_only_layer;
