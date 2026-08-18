@@ -400,7 +400,7 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"max_position_embeddings", "max_seq_len", "context_length"},
         result.evidence, "context_length", "context_length");
     result.core.norm_epsilon = aliases<float>(
-        metadata, {"rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
+        metadata, {"norm_eps", "rms_norm_eps", "rms_norm_epsilon", "layer_norm_epsilon"},
         result.evidence, "norm_epsilon", "attention.layer_norm_rms_epsilon");
     result.core.embedding_multiplier = aliases<float>(
         metadata, {"embedding_multiplier"}, result.evidence,
