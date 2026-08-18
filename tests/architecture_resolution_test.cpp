@@ -52,19 +52,36 @@ celeg::CheckpointMetadata structural_metadata(std::string model_type) {
     return metadata;
 }
 
+enum class NormFixtureLayout {
+    PreOnly,
+    PostOnly,
+    Sandwich,
+    None,
+};
+
 class GptxRepository final : public celeg::IWeightRepository {
 public:
-    GptxRepository() {
+    explicit GptxRepository(NormFixtureLayout norms = NormFixtureLayout::PreOnly) {
         shapes_["transformer.wte.weight"] = {32770, 576};
         shapes_["transformer.ln_f.weight"] = {576};
         for (int layer = 0; layer < 1; ++layer) {
             const std::string prefix = "transformer.h." + std::to_string(layer);
-            shapes_[prefix + ".ln_1.weight"] = {576};
+            const std::string model_prefix =
+                "model.layers." + std::to_string(layer);
+            if (norms == NormFixtureLayout::PreOnly ||
+                norms == NormFixtureLayout::Sandwich) {
+                shapes_[prefix + ".ln_1.weight"] = {576};
+                shapes_[prefix + ".ln_2.weight"] = {576};
+            }
+            if (norms == NormFixtureLayout::PostOnly ||
+                norms == NormFixtureLayout::Sandwich) {
+                shapes_[model_prefix + ".post_attention_layernorm.weight"] = {576};
+                shapes_[model_prefix + ".post_feedforward_layernorm.weight"] = {576};
+            }
             shapes_[prefix + ".attn.q_proj.weight"] = {576, 576};
             shapes_[prefix + ".attn.k_proj.weight"] = {192, 576};
             shapes_[prefix + ".attn.v_proj.weight"] = {192, 576};
             shapes_[prefix + ".attn.o_proj.weight"] = {576, 576};
-            shapes_[prefix + ".ln_2.weight"] = {576};
             shapes_[prefix + ".mlp.w_gate.weight"] = {1728, 576};
             shapes_[prefix + ".mlp.w_up.weight"] = {1728, 576};
             shapes_[prefix + ".mlp.w_down.weight"] = {576, 1728};
@@ -115,6 +132,16 @@ celeg::ResolvedModel resolve_structural_identity(const celeg::ArchitectureCatalo
     celeg::CheckpointView checkpoint;
     checkpoint.metadata = std::move(metadata);
     checkpoint.repository = std::make_shared<GptxRepository>();
+    const auto& architecture = catalog.select(checkpoint.metadata);
+    CELEG_TEST_CHECK(architecture.id() == "automatic");
+    return architecture.resolve(checkpoint);
+}
+
+celeg::ResolvedModel resolve_norm_layout(const celeg::ArchitectureCatalog& catalog,
+                                         NormFixtureLayout norms) {
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = structural_metadata("unknown_norm_layout");
+    checkpoint.repository = std::make_shared<GptxRepository>(norms);
     const auto& architecture = catalog.select(checkpoint.metadata);
     CELEG_TEST_CHECK(architecture.id() == "automatic");
     return architecture.resolve(checkpoint);
@@ -178,6 +205,36 @@ int main() {
     CELEG_TEST_CHECK(equivalent_weight_plan(identity_a.weight_plan, identity_b.weight_plan));
     CELEG_TEST_CHECK(equivalent_weight_plan(identity_a.weight_plan,
                                             poisoned_identity.weight_plan));
+
+    const auto pre_only = resolve_norm_layout(catalog, NormFixtureLayout::PreOnly);
+    CELEG_TEST_CHECK(pre_only.graph.layers[0].mixer_norm.before.has_value());
+    CELEG_TEST_CHECK(!pre_only.graph.layers[0].mixer_norm.after.has_value());
+    CELEG_TEST_CHECK(pre_only.graph.layers[0].feed_forward_norm.before.has_value());
+    CELEG_TEST_CHECK(!pre_only.graph.layers[0].feed_forward_norm.after.has_value());
+    CELEG_TEST_CHECK(pre_only.weight_plan.find(celeg::TensorRole::AttentionInputNorm, 0) != nullptr);
+    CELEG_TEST_CHECK(pre_only.weight_plan.find(celeg::TensorRole::AttentionPostNorm, 0) == nullptr);
+
+    const auto post_only = resolve_norm_layout(catalog, NormFixtureLayout::PostOnly);
+    CELEG_TEST_CHECK(!post_only.graph.layers[0].mixer_norm.before.has_value());
+    CELEG_TEST_CHECK(post_only.graph.layers[0].mixer_norm.after.has_value());
+    CELEG_TEST_CHECK(!post_only.graph.layers[0].feed_forward_norm.before.has_value());
+    CELEG_TEST_CHECK(post_only.graph.layers[0].feed_forward_norm.after.has_value());
+    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::AttentionInputNorm, 0) == nullptr);
+    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::AttentionPostNorm, 0) != nullptr);
+    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::FfnInputNorm, 0) == nullptr);
+    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::FfnOutputNorm, 0) != nullptr);
+
+    const auto sandwich = resolve_norm_layout(catalog, NormFixtureLayout::Sandwich);
+    CELEG_TEST_CHECK(sandwich.graph.layers[0].mixer_norm.before.has_value());
+    CELEG_TEST_CHECK(sandwich.graph.layers[0].mixer_norm.after.has_value());
+    CELEG_TEST_CHECK(sandwich.graph.layers[0].feed_forward_norm.before.has_value());
+    CELEG_TEST_CHECK(sandwich.graph.layers[0].feed_forward_norm.after.has_value());
+
+    const auto no_norm = resolve_norm_layout(catalog, NormFixtureLayout::None);
+    CELEG_TEST_CHECK(!no_norm.graph.layers[0].mixer_norm.before.has_value());
+    CELEG_TEST_CHECK(!no_norm.graph.layers[0].mixer_norm.after.has_value());
+    CELEG_TEST_CHECK(!no_norm.graph.layers[0].feed_forward_norm.before.has_value());
+    CELEG_TEST_CHECK(!no_norm.graph.layers[0].feed_forward_norm.after.has_value());
 
     auto truncated_schedule = structural_metadata("unknown_test_model");
     truncated_schedule.values["num_hidden_layers"] = int64_t(2);
