@@ -103,17 +103,20 @@ void PackedLayerExecutor::run_transformer_layers(
         const CompiledLayerProgram& semantics = reference.program().layers.at(layer_index);
         const auto& layer = reference.layers()[layer_index];
         const auto& common_layer = common(layer);
-        if (!reference.options().fused_residuals) {
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace_.residual.data(), workspace_.hidden.data(),
+            static_cast<size_t>(rows) * workspace_.program_.hidden * sizeof(__nv_bfloat16),
+            cudaMemcpyDeviceToDevice, workspace_.stream.get()));
+        if (semantics.mixer_norm.before) {
+            launch_rmsnorm(workspace_.hidden.data(), common_layer.mixer_norm_before,
+                           workspace_.normed.data(), rows, workspace_.program_.hidden,
+                           semantics.mixer_norm.before->epsilon, workspace_.stream.get());
+        } else {
             CELEG_CUDA(cudaMemcpyAsync(
-                workspace_.residual.data(), workspace_.hidden.data(),
-                static_cast<size_t>(rows) * workspace_.program_.hidden *
-                    sizeof(__nv_bfloat16),
+                workspace_.normed.data(), workspace_.hidden.data(),
+                static_cast<size_t>(rows) * workspace_.program_.hidden * sizeof(__nv_bfloat16),
                 cudaMemcpyDeviceToDevice, workspace_.stream.get()));
         }
-        launch_rmsnorm(workspace_.hidden.data(), common_layer.mixer_norm_before,
-                       workspace_.normed.data(), rows, workspace_.program_.hidden,
-                       semantics.mixer_norm.before->epsilon,
-                       workspace_.stream.get());
         PackedOperatorContext context{
             workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};
         const PackedLayerKind kind = layer_program_.kind(layer_index);
@@ -178,11 +181,13 @@ void PackedLayerExecutor::run_transformer_layers(
             run_convolution_layer(reference, *convolution, rows,
                                   static_cast<int>(layer_index), ragged_requests);
           });
-        if (!reference.options().fused_residuals) {
-            launch_residual_add(workspace_.hidden.data(), workspace_.residual.data(),
-                                rows * workspace_.program_.hidden,
-                                workspace_.stream.get());
+        if (semantics.mixer_norm.after) {
+            launch_rmsnorm(workspace_.hidden.data(), common_layer.mixer_norm_after,
+                           workspace_.hidden.data(), rows, workspace_.program_.hidden,
+                           semantics.mixer_norm.after->epsilon, workspace_.stream.get());
         }
+        launch_residual_add(workspace_.hidden.data(), workspace_.residual.data(),
+                            rows * workspace_.program_.hidden, workspace_.stream.get());
         if (layer_program_.kind(layer_index) != PackedLayerKind::Mamba2) {
             run_mlp_layer(reference, common_layer, rows, batch_models,
                           static_cast<int>(layer_index));

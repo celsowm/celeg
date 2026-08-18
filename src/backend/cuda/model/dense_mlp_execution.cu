@@ -11,10 +11,15 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         (void)moe;
         run_mlp_moe_decode(common_layer, layer);
     } else {
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.feed_forward_norm_before, workspace_.normed_.data(),
-                       1, resources_.program_.hidden,
-                       semantics.feed_forward_norm.before->epsilon,
-                       stream_.get());
+        if (semantics.feed_forward_norm.before) {
+            launch_rmsnorm(workspace_.hidden_.data(), common_layer.feed_forward_norm_before,
+                           workspace_.normed_.data(), 1, resources_.program_.hidden,
+                           semantics.feed_forward_norm.before->epsilon, stream_.get());
+        } else {
+            CELEG_CUDA(cudaMemcpyAsync(
+                workspace_.normed_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
+                cudaMemcpyDeviceToDevice, stream_.get()));
+        }
         const auto& dense_semantics =
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
         const int intermediate = dense_semantics.intermediate_size;
@@ -74,10 +79,16 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
         const int intermediate = dense_semantics.intermediate_size;
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
-        launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.feed_forward_norm_before,
-                       workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
-                       semantics.feed_forward_norm.before->epsilon,
-                       stream_.get());
+        if (semantics.feed_forward_norm.before) {
+            launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.feed_forward_norm_before,
+                           workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
+                           semantics.feed_forward_norm.before->epsilon, stream_.get());
+        } else {
+            CELEG_CUDA(cudaMemcpyAsync(
+                workspace_.prefill_normed_.data(), workspace_.prefill_hidden_.data(),
+                static_cast<size_t>(rows) * resources_.program_.hidden * sizeof(__nv_bfloat16),
+                cudaMemcpyDeviceToDevice, stream_.get()));
+        }
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
                rows, 2 * intermediate, resources_.program_.hidden);

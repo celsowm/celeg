@@ -16,8 +16,6 @@ AttentionSpec make_attention(
     int query_heads,
     int key_value_heads,
     int layer,
-    int layer,
-    int layer,
     int head_dim,
     bool query_key_norm) {
     AttentionSpec attention;

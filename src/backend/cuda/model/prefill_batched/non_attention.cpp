@@ -69,7 +69,7 @@ void run_gated_delta(
         gated_delta.recurrent_state.data(),
         workspace.prefill_gated_delta_output_.data(),
         rows, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
-        spec.key_heads, spec.value_heads, semantics.mixer_norm.before->epsilon,
+        spec.key_heads, spec.value_heads, semantics.mixer_norm.before ? semantics.mixer_norm.before->epsilon : model.resources_.program_.final_norm.epsilon,
         spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
         spec.sigmoid_output_gate, model.stream_.get());
     prof.end(PrefillPhase::Conv, model.stream_.get());
@@ -110,7 +110,7 @@ void run_mamba2(
     launch_rmsnorm(
         workspace.prefill_mamba_inner_.data(), mamba.norm,
         workspace.prefill_mamba_inner_.data(),
-        rows, spec.intermediate_size, semantics.mixer_norm.before->epsilon,
+        rows, spec.intermediate_size, semantics.mixer_norm.before ? semantics.mixer_norm.before->epsilon : model.resources_.program_.final_norm.epsilon,
         model.stream_.get());
     launch_multiply(
         workspace.prefill_mamba_inner_.data(),
@@ -178,7 +178,7 @@ void run_convolution(
         workspace.prefill_op_output_.data(), *convolution.conv_out,
         workspace.prefill_hidden_.data(),
         rows, hidden, hidden,
-        model.resources_.options_.fused_residuals ? 1.0f : 0.0f);
+        0.0f);
     prof.end(PrefillPhase::Conv, model.stream_.get());
 }
 

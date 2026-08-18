@@ -242,30 +242,57 @@ LayerScopedValue<std::string> scoped_string_aliases(
     std::string_view fact) {
     LayerScopedValue<std::string> result;
     std::string source;
+    const auto consider_scalar = [&](const std::string& value, std::string_view key) {
+        if (result.global && *result.global != value) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting metadata aliases for " + std::string(fact));
+        }
+        if (!result.per_layer.empty()) {
+            for (const auto& layer_value : result.per_layer) {
+                if (layer_value && *layer_value != value) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::ConflictingMetadata,
+                        "conflicting global and layer-scoped metadata for " +
+                            std::string(fact));
+                }
+            }
+        }
+        result.global = value;
+        source = key;
+    };
+    const auto consider_vector = [&](const std::vector<std::string>& values,
+                                     std::string_view key) {
+        std::vector<std::optional<std::string>> schedule;
+        schedule.reserve(values.size());
+        for (const std::string& value : values) schedule.push_back(value);
+        if (!result.per_layer.empty() && result.per_layer != schedule) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting layer-scoped metadata for " + std::string(fact));
+        }
+        if (result.global) {
+            for (const auto& layer_value : schedule) {
+                if (layer_value && *layer_value != *result.global) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::ConflictingMetadata,
+                        "conflicting global and layer-scoped metadata for " +
+                            std::string(fact));
+                }
+            }
+        }
+        result.per_layer = std::move(schedule);
+        source = key;
+    };
     const auto consider = [&](std::string_view key) {
         if (!metadata.contains(key)) return;
         const MetadataValue& value = metadata.value(key);
         if (const auto* scalar_value = std::get_if<std::string>(&value)) {
-            if (result.global && *result.global != *scalar_value) {
-                inference_detail::fail(
-                    ResolutionFailureKind::ConflictingMetadata,
-                    "conflicting metadata aliases for " + std::string(fact));
-            }
-            result.global = *scalar_value;
-            source = key;
+            consider_scalar(*scalar_value, key);
             return;
         }
         if (const auto* values = std::get_if<std::vector<std::string>>(&value)) {
-            std::vector<std::optional<std::string>> schedule;
-            schedule.reserve(values->size());
-            for (const std::string& item : *values) schedule.push_back(item);
-            if (!result.per_layer.empty() && result.per_layer != schedule) {
-                inference_detail::fail(
-                    ResolutionFailureKind::ConflictingMetadata,
-                    "conflicting layer-scoped metadata for " + std::string(fact));
-            }
-            result.per_layer = std::move(schedule);
-            source = key;
+            consider_vector(*values, key);
             return;
         }
         inference_detail::fail(
@@ -415,44 +442,6 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "attention.head_count_kv");
     result.attention.head_dim = scoped_aliases<int>(metadata, {"head_dim"}, result.evidence, "head_dim",
                                                     "attention.key_length");
-    result.attention.layer_type = scoped_string_aliases(
-        metadata, {"layer_types", "attention_types"}, result.evidence, "layer_type");
-    result.attention.sliding_window = scoped_aliases<int>(
-        metadata, {"sliding_window", "sliding_window_size"}, result.evidence,
-        "sliding_window", "attention.sliding_window");
-    result.norms.mixer_before = scoped_aliases<bool>(
-        metadata, {"use_pre_attn_norm", "use_pre_attention_norm"}, result.evidence,
-        "mixer_norm.before");
-    result.norms.mixer_after = scoped_aliases<bool>(
-        metadata, {"use_post_attn_norm", "use_post_attention_norm"}, result.evidence,
-        "mixer_norm.after");
-    result.norms.feed_forward_before = scoped_aliases<bool>(
-        metadata, {"use_pre_mlp_norm", "use_pre_ffn_norm"}, result.evidence,
-        "feed_forward_norm.before");
-    result.norms.feed_forward_after = scoped_aliases<bool>(
-        metadata, {"use_post_mlp_norm", "use_post_ffn_norm"}, result.evidence,
-        "feed_forward_norm.after");
-    result.norms.layer_layout = scoped_string_aliases(
-        metadata, {"layer_layouts"}, result.evidence, "layer_layout");
-    result.attention.layer_type = scoped_string_aliases(
-        metadata, {"layer_types", "attention_types"}, result.evidence, "layer_type");
-    result.attention.sliding_window = scoped_aliases<int>(
-        metadata, {"sliding_window", "sliding_window_size"}, result.evidence,
-        "sliding_window", "attention.sliding_window");
-    result.norms.mixer_before = scoped_aliases<bool>(
-        metadata, {"use_pre_attn_norm", "use_pre_attention_norm"}, result.evidence,
-        "mixer_norm.before");
-    result.norms.mixer_after = scoped_aliases<bool>(
-        metadata, {"use_post_attn_norm", "use_post_attention_norm"}, result.evidence,
-        "mixer_norm.after");
-    result.norms.feed_forward_before = scoped_aliases<bool>(
-        metadata, {"use_pre_mlp_norm", "use_pre_ffn_norm"}, result.evidence,
-        "feed_forward_norm.before");
-    result.norms.feed_forward_after = scoped_aliases<bool>(
-        metadata, {"use_post_mlp_norm", "use_post_ffn_norm"}, result.evidence,
-        "feed_forward_norm.after");
-    result.norms.layer_layout = scoped_string_aliases(
-        metadata, {"layer_layouts"}, result.evidence, "layer_layout");
     result.attention.layer_type = scoped_string_aliases(
         metadata, {"layer_types", "attention_types"}, result.evidence, "layer_type");
     result.attention.sliding_window = scoped_aliases<int>(
@@ -676,20 +665,6 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     validate_scoped_alias(result.attention.query_heads, result.core.layer_count, "query_heads");
     validate_scoped_alias(result.attention.key_value_heads, result.core.layer_count, "key_value_heads");
     validate_scoped_alias(result.attention.head_dim, result.core.layer_count, "head_dim");
-    validate_scoped_alias(result.attention.layer_type, result.core.layer_count, "layer_type");
-    validate_scoped_alias(result.attention.sliding_window, result.core.layer_count, "sliding_window");
-    validate_scoped_alias(result.norms.mixer_before, result.core.layer_count, "mixer_norm.before");
-    validate_scoped_alias(result.norms.mixer_after, result.core.layer_count, "mixer_norm.after");
-    validate_scoped_alias(result.norms.feed_forward_before, result.core.layer_count, "feed_forward_norm.before");
-    validate_scoped_alias(result.norms.feed_forward_after, result.core.layer_count, "feed_forward_norm.after");
-    validate_scoped_alias(result.norms.layer_layout, result.core.layer_count, "layer_layout");
-    validate_scoped_alias(result.attention.layer_type, result.core.layer_count, "layer_type");
-    validate_scoped_alias(result.attention.sliding_window, result.core.layer_count, "sliding_window");
-    validate_scoped_alias(result.norms.mixer_before, result.core.layer_count, "mixer_norm.before");
-    validate_scoped_alias(result.norms.mixer_after, result.core.layer_count, "mixer_norm.after");
-    validate_scoped_alias(result.norms.feed_forward_before, result.core.layer_count, "feed_forward_norm.before");
-    validate_scoped_alias(result.norms.feed_forward_after, result.core.layer_count, "feed_forward_norm.after");
-    validate_scoped_alias(result.norms.layer_layout, result.core.layer_count, "layer_layout");
     validate_scoped_alias(result.attention.layer_type, result.core.layer_count, "layer_type");
     validate_scoped_alias(result.attention.sliding_window, result.core.layer_count, "sliding_window");
     validate_scoped_alias(result.norms.mixer_before, result.core.layer_count, "mixer_norm.before");

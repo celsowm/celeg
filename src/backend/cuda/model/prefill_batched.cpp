@@ -57,20 +57,23 @@ void run_layer(
         model.resources_.program_.layers.at(static_cast<size_t>(layer_index));
     const int hidden = model.resources_.program_.hidden;
 
-    if (!model.resources_.options_.fused_residuals ||
-        common_layer.mixer_norm_after) {
-        CELEG_CUDA(cudaMemcpyAsync(
-            workspace.prefill_residual_.data(),
-            workspace.prefill_hidden_.data(),
-            workspace.prefill_hidden_.bytes(),
-            cudaMemcpyDeviceToDevice, model.stream_.get()));
-    }
+    CELEG_CUDA(cudaMemcpyAsync(
+        workspace.prefill_residual_.data(), workspace.prefill_hidden_.data(),
+        static_cast<size_t>(rows) * hidden * sizeof(__nv_bfloat16),
+        cudaMemcpyDeviceToDevice, model.stream_.get()));
 
     prof.begin(model.stream_.get());
-    launch_rmsnorm(
-        workspace.prefill_hidden_.data(), common_layer.mixer_norm_before,
-        workspace.prefill_normed_.data(),
-        rows, hidden, semantics.mixer_norm.before->epsilon, model.stream_.get());
+    if (semantics.mixer_norm.before) {
+        launch_rmsnorm(
+            workspace.prefill_hidden_.data(), common_layer.mixer_norm_before,
+            workspace.prefill_normed_.data(), rows, hidden,
+            semantics.mixer_norm.before->epsilon, model.stream_.get());
+    } else {
+        CELEG_CUDA(cudaMemcpyAsync(
+            workspace.prefill_normed_.data(), workspace.prefill_hidden_.data(),
+            static_cast<size_t>(rows) * hidden * sizeof(__nv_bfloat16),
+            cudaMemcpyDeviceToDevice, model.stream_.get()));
+    }
     prof.end(PrefillPhase::Norm, model.stream_.get());
 
     run_mixer(model, layer, common_layer, semantics, rows);
@@ -83,16 +86,11 @@ void run_layer(
             model.stream_.get());
     }
 
-    if (!model.resources_.options_.fused_residuals ||
-        common_layer.mixer_norm_after ||
-        std::holds_alternative<std::monostate>(semantics.feed_forward)) {
-        prof.begin(model.stream_.get());
-        launch_residual_add(
-            workspace.prefill_hidden_.data(),
-            workspace.prefill_residual_.data(),
-            rows * hidden, model.stream_.get());
-        prof.end(PrefillPhase::Other, model.stream_.get());
-    }
+    prof.begin(model.stream_.get());
+    launch_residual_add(
+        workspace.prefill_hidden_.data(), workspace.prefill_residual_.data(),
+        rows * hidden, model.stream_.get());
+    prof.end(PrefillPhase::Other, model.stream_.get());
 
     prof.begin(model.stream_.get());
     if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {

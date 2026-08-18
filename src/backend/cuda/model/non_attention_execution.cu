@@ -57,7 +57,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
             gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
             workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
             spec.key_head_dim, spec.value_head_dim, spec.key_heads,
-            spec.value_heads, semantics.mixer_norm.before->epsilon,
+            spec.value_heads, semantics.mixer_norm.before ? semantics.mixer_norm.before->epsilon : resources_.program_.final_norm.epsilon,
             spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
             spec.sigmoid_output_gate, stream_.get());
         linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
@@ -80,7 +80,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
                            spec.group_count, spec.conv_kernel, stream_.get());
         launch_rmsnorm(workspace_.mamba_inner_.data(), mamba->norm,
                        workspace_.op_output_.data(), 1, spec.intermediate_size,
-                       semantics.mixer_norm.before->epsilon, stream_.get());
+                       semantics.mixer_norm.before ? semantics.mixer_norm.before->epsilon : resources_.program_.final_norm.epsilon, stream_.get());
         launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
                         spec.intermediate_size, stream_.get());
         linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),
@@ -107,7 +107,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
         linear(workspace_.op_output_.data(), *convolution->conv_out,
                workspace_.hidden_.data(), 1, resources_.program_.hidden,
                resources_.program_.hidden,
-               resources_.options_.fused_residuals ? 1.0f : 0.0f);
+               0.0f);
         decode_phase_profile().end(DecodePhase::Conv, stream_.get());
       });
 }

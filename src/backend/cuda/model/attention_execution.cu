@@ -19,7 +19,8 @@ void CudaCompiledModel::enqueue_decode_attention(
     AttentionLayer* attention = as_attention(layer);
     if (!attention) throw std::logic_error("CUDA layer is not attention");
             const AttentionSpec& layout = attention->layout;
-            const float qk_norm_epsilon = layout.query_norm->epsilon;
+            const float qk_norm_epsilon = layout.query_norm
+                ? layout.query_norm->epsilon : resources_.program_.final_norm.epsilon;
             AttentionLayer* owner = attention;
             if (attention->kv_owner_layer >= 0) {
                 owner = as_attention(resources_.layers_.at(
@@ -131,7 +132,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                     linear(workspace_.latent_decompressed_.data(), *attention->out,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            layout.latent_output_width(),
-                           resources_.options_.fused_residuals && !common_layer.mixer_norm_after ? 1.0f : 0.0f);
+                           0.0f);
                     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                                  semantics.residual.multiplier, stream_.get());
                     return;
