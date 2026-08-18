@@ -1,5 +1,6 @@
 #include "celeg/backend/cuda/packed/operators.hpp"
 
+#include "celeg/backend/cuda/attention_norm.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/kernels/gated_delta.hpp"
 #include "celeg/backend/cuda/kernels/mamba2.hpp"
@@ -66,7 +67,6 @@ void project_attention_qkv(PackedOperatorContext& context,
                            const PackedSessionContext& reference,
                            const AttentionLayer& attention,
                            int rows) {
-    (void)reference;
     PackedWorkspace& w = context.workspace;
     const AttentionSpec& layout = attention.layout;
     context.linear(w.normed.data(), *attention.query, w.q.data(), rows,
@@ -77,13 +77,21 @@ void project_attention_qkv(PackedOperatorContext& context,
         context.linear(w.normed.data(), *attention.value, w.v.data(), rows,
                        layout.key_value_width(), context.program.hidden);
     }
+    if (layout.has_query_key_norm()) {
+        launch_attention_qk_norm(
+            layout, w.q.data(), attention.key ? w.k.data() : nullptr,
+            attention.q_norm, attention.k_norm, rows, w.stream.get());
+    }
     if (const auto* rope = layout.rope_position()) {
+        const float qk_epsilon = layout.query_norm
+            ? layout.query_norm->epsilon
+            : reference.program().final_norm.epsilon;
         launch_qk_norm_rope_positions(
-            w.q.data(), attention.key ? w.k.data() : nullptr, attention.q_norm,
-            attention.k_norm, rows, layout.query_heads, layout.key_value_heads,
+            w.q.data(), attention.key ? w.k.data() : nullptr, nullptr,
+            nullptr, rows, layout.query_heads, layout.key_value_heads,
             layout.head_dim, w.positions.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            layout.query_norm->epsilon, layout.has_query_key_norm(),
+            qk_epsilon, false,
             rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
