@@ -97,7 +97,8 @@ static void run(celeg::CpuKvCacheMode mode) {
     CELEG_TEST_CHECK(max_error < 1e-5f);
 
     if (mode == celeg::CpuKvCacheMode::Fp32) {
-        const std::array<std::pair<celeg::AttentionPatternSpec, int>, 4> patterns = {{
+        const std::array<std::pair<celeg::AttentionPatternSpec, int>, 5> patterns = {{
+            {celeg::SlidingWindowPattern{3}, sequence - 1},
             {celeg::BidirectionalPattern{}, 5},
             {celeg::PrefixLmPattern{4}, 2},
             {celeg::BlockSparsePattern{4, 1, 1}, 9},
@@ -116,6 +117,13 @@ static void run(celeg::CpuKvCacheMode mode) {
                 CELEG_TEST_CHECK(std::abs(actual_pattern[i] - expected_pattern[i]) < 1e-5f);
             }
         }
+
+        const auto full = celeg::CpuAttentionPattern::lower(celeg::FullCausalPattern{});
+        const auto sliding = celeg::CpuAttentionPattern::lower(celeg::SlidingWindowPattern{3});
+        CELEG_TEST_CHECK(full.first_candidate(sequence - 1) == 0);
+        CELEG_TEST_CHECK(sliding.first_candidate(sequence - 1) == sequence - 3);
+        CELEG_TEST_CHECK(full.allows(sequence - 1, 0));
+        CELEG_TEST_CHECK(!sliding.allows(sequence - 1, 0));
 
         const std::vector<float> slopes(q_heads, 0.05f);
         const celeg::CpuAttentionBias alibi{
