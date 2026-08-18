@@ -21,6 +21,7 @@ jobs:
     env:
       TOKENIZERS_PARALLELISM: "false"
       HF_HUB_DISABLE_TELEMETRY: "1"
+      HEADER_DIR: /tmp/lizzy-header
       MODEL_DIR: /tmp/lizzy-7b
       RESULT_DIR: artifacts/lizzy-harness
     steps:
@@ -35,7 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
 
-      - name: Install reference dependencies
+      - name: Install validation dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -52,46 +53,79 @@ jobs:
           echo "$status" >"$RESULT_DIR/build.status"
           exit 0
 
-      - name: Download exact Lizzy checkpoint
+      - name: Materialize exact Lizzy tensor inventory
         shell: bash
         run: |
-          mkdir -p "$RESULT_DIR"
           if [ "$(cat "$RESULT_DIR/build.status")" != "0" ]; then
-            echo 125 >"$RESULT_DIR/download.status"
+            echo 125 >"$RESULT_DIR/inventory.status"
             exit 0
           fi
           set +e
-          python - <<'PY' >"$RESULT_DIR/download.stdout.log" 2>"$RESULT_DIR/download.stderr.log"
-          from huggingface_hub import snapshot_download
-          path = snapshot_download(
-              repo_id="flwrlabs/Lizzy-7B",
-              local_dir="/tmp/lizzy-7b",
-          )
-          print(path)
-          PY
+          python scripts/materialize_hf_safetensors_header.py \
+            --repo flwrlabs/Lizzy-7B --output "$HEADER_DIR" \
+            >"$RESULT_DIR/inventory.stdout.log" 2>"$RESULT_DIR/inventory.stderr.log"
           status=$?
-          echo "$status" >"$RESULT_DIR/download.status"
+          echo "$status" >"$RESULT_DIR/inventory.status"
           exit 0
 
-      - name: Resolve real checkpoint with CELEG
+      - name: Resolve real Lizzy keys and shapes with CELEG
         shell: bash
         run: |
-          if [ "$(cat "$RESULT_DIR/download.status")" != "0" ]; then
+          if [ "$(cat "$RESULT_DIR/inventory.status")" != "0" ]; then
             echo 125 >"$RESULT_DIR/resolve.status"
             exit 0
           fi
           set +e
           out/linux-cpu-release/celeg-cpu-run \
-            --model "$MODEL_DIR" --print-config --context 128 \
+            --model "$HEADER_DIR" --print-config --context 128 \
             >"$RESULT_DIR/resolve.stdout.log" 2>"$RESULT_DIR/resolve.stderr.log"
           status=$?
           echo "$status" >"$RESULT_DIR/resolve.status"
           exit 0
 
-      - name: Export Transformers golden logits and tokens
+      - name: Download the pinned full Lizzy checkpoint
         shell: bash
         run: |
           if [ "$(cat "$RESULT_DIR/resolve.status")" != "0" ]; then
+            echo 125 >"$RESULT_DIR/download.status"
+            exit 0
+          fi
+          revision=$(grep '^revision=' "$RESULT_DIR/inventory.stdout.log" | cut -d= -f2-)
+          if [ -z "$revision" ]; then
+            echo "missing pinned revision" >"$RESULT_DIR/download.stderr.log"
+            echo 2 >"$RESULT_DIR/download.status"
+            exit 0
+          fi
+          set +e
+          REVISION="$revision" python - <<'PY' \
+            >"$RESULT_DIR/download.stdout.log" 2>"$RESULT_DIR/download.stderr.log"
+          import os
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(
+              repo_id="flwrlabs/Lizzy-7B",
+              revision=os.environ["REVISION"],
+              local_dir="/tmp/lizzy-7b",
+          ))
+          PY
+          status=$?
+          echo "$status" >"$RESULT_DIR/download.status"
+          exit 0
+
+      - name: Add swap for the Transformers oracle
+        if: always()
+        shell: bash
+        run: |
+          if [ "$(cat "$RESULT_DIR/download.status" 2>/dev/null || echo 125)" = "0" ]; then
+            sudo fallocate -l 24G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+
+      - name: Export Transformers golden logits and tokens
+        shell: bash
+        run: |
+          if [ "$(cat "$RESULT_DIR/download.status")" != "0" ]; then
             echo 125 >"$RESULT_DIR/reference.status"
             exit 0
           fi
@@ -134,23 +168,16 @@ jobs:
           value() {
             if [ -f "$RESULT_DIR/$1.status" ]; then cat "$RESULT_DIR/$1.status"; else echo 126; fi
           }
-          build=$(value build)
-          download=$(value download)
-          resolve=$(value resolve)
-          reference=$(value reference)
-          compare=$(value compare)
           {
             echo "# Lizzy real checkpoint validation"
             echo
             echo "- commit: $GITHUB_SHA"
             echo "- model: flwrlabs/Lizzy-7B"
-            echo "- build: $build"
-            echo "- download: $download"
-            echo "- CELEG semantic resolution: $resolve"
-            echo "- Transformers reference: $reference"
-            echo "- logits/token comparison: $compare"
+            for stage in build inventory resolve download reference compare; do
+              echo "- $stage: $(value "$stage")"
+            done
             echo
-            for stage in build download resolve reference compare; do
+            for stage in build inventory resolve download reference compare; do
               if [ -f "$RESULT_DIR/$stage.stderr.log" ] && [ -s "$RESULT_DIR/$stage.stderr.log" ]; then
                 echo "## $stage stderr"
                 echo '```text'
@@ -185,7 +212,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          for stage in build download resolve reference compare; do
+          for stage in build inventory resolve download reference compare; do
             status=126
             if [ -f "$RESULT_DIR/$stage.status" ]; then status=$(cat "$RESULT_DIR/$stage.status"); fi
             if [ "$status" != "0" ]; then
