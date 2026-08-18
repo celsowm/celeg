@@ -130,6 +130,19 @@ bool normalize_fails_with(celeg::CheckpointMetadata metadata,
     return false;
 }
 
+bool inference_input_fails_with(celeg::CheckpointMetadata metadata,
+                                celeg::ResolutionFailureKind expected) {
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = std::move(metadata);
+    checkpoint.repository = std::make_shared<GptxRepository>();
+    try {
+        (void)celeg::build_inference_input(checkpoint);
+    } catch (const celeg::ResolutionError& error) {
+        return error.kind() == expected;
+    }
+    return false;
+}
+
 }
 
 int main() {
@@ -183,6 +196,51 @@ int main() {
     CELEG_TEST_CHECK(normalize_fails_with(
         std::move(unknown_semantic_metadata),
         celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+
+    auto sliding_metadata = structural_metadata("completely_unknown_name");
+    sliding_metadata.values["layer_types"] =
+        std::vector<std::string>{"sliding_attention"};
+    sliding_metadata.values["sliding_window"] = int64_t(4096);
+    celeg::CheckpointView sliding_checkpoint;
+    sliding_checkpoint.metadata = std::move(sliding_metadata);
+    sliding_checkpoint.repository = std::make_shared<GptxRepository>();
+    const auto sliding_model = catalog.select(sliding_checkpoint.metadata)
+                                   .resolve(sliding_checkpoint);
+    const auto& sliding_attention =
+        std::get<celeg::AttentionSpec>(sliding_model.graph.layers[0].mixer);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::SlidingWindowPattern>(
+        sliding_attention.pattern));
+    CELEG_TEST_CHECK(std::get<celeg::SlidingWindowPattern>(sliding_attention.pattern).window ==
+                     4096);
+
+    auto full_metadata = structural_metadata("another_unknown_name");
+    full_metadata.values["layer_layouts"] =
+        std::vector<std::string>{"full_attention"};
+    celeg::CheckpointView full_checkpoint;
+    full_checkpoint.metadata = std::move(full_metadata);
+    full_checkpoint.repository = std::make_shared<GptxRepository>();
+    const auto full_model = catalog.select(full_checkpoint.metadata).resolve(full_checkpoint);
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::FullCausalPattern>(
+        std::get<celeg::AttentionSpec>(full_model.graph.layers[0].mixer).pattern));
+
+    auto unknown_pattern = structural_metadata("unknown_test_model");
+    unknown_pattern.values["layer_types"] =
+        std::vector<std::string>{"mystery_attention"};
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(unknown_pattern), celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+
+    auto sliding_without_window = structural_metadata("unknown_test_model");
+    sliding_without_window.values["layer_types"] =
+        std::vector<std::string>{"sliding_attention"};
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(sliding_without_window), celeg::ResolutionFailureKind::MissingRequiredMetadata));
+
+    auto truncated_pattern = structural_metadata("unknown_test_model");
+    truncated_pattern.values["num_hidden_layers"] = int64_t(2);
+    truncated_pattern.values["layer_types"] =
+        std::vector<std::string>{"full_attention"};
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(truncated_pattern), celeg::ResolutionFailureKind::IncompleteLayerSchedule));
 
     for (const auto& [model_type, architecture_id] : {
              std::pair<std::string, std::string>{
