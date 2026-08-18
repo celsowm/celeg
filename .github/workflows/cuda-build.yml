@@ -8,6 +8,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SEMANTIC_VALIDATION_REVISION: "packed-epsilon-1"
+
 jobs:
   linux-cpu:
     runs-on: ubuntu-latest
