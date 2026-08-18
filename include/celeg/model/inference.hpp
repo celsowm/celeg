@@ -90,6 +90,11 @@ struct LayerScopedValue {
     friend bool operator==(const LayerScopedValue&, const LayerScopedValue&) = default;
 };
 
+enum class AttentionPatternKind : std::uint8_t {
+    FullCausal,
+    SlidingWindow,
+};
+
 enum class ResolutionFailureKind : std::uint8_t {
     MissingRequiredMetadata,
     ConflictingMetadata,
@@ -182,6 +187,8 @@ struct AttentionFacts {
     LayerScopedValue<int> query_heads;
     LayerScopedValue<int> key_value_heads;
     LayerScopedValue<int> head_dim;
+    LayerScopedValue<AttentionPatternKind> pattern;
+    std::optional<int> sliding_window;
     std::optional<float> attention_multiplier;
     InferredPositionEncoding position_encoding = UnresolvedPositionEncoding{};
     std::optional<bool> query_key_norm;
