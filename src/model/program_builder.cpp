@@ -135,14 +135,23 @@ CompiledModelProgram build_model_program(const ResolvedModel& model) {
     for (std::size_t layer_index = 0;
          layer_index < model.graph.layers.size(); ++layer_index) {
         const LayerSpec& layer = model.graph.layers[layer_index];
+        if (!layer.mixer_norm.before.has_value()) {
+            throw std::invalid_argument(
+                "compiled backend lowering does not yet execute a mixer without pre-norm");
+        }
+        if (!std::holds_alternative<std::monostate>(layer.feed_forward) &&
+            !layer.feed_forward_norm.before.has_value()) {
+            throw std::invalid_argument(
+                "compiled backend lowering does not yet execute an FFN without pre-norm");
+        }
 
         CompiledLayerProgram compiled;
         compiled.mixer = lower_mixer(layer);
         compiled.feed_forward = lower_feed_forward(layer, model.graph.hidden);
-        compiled.operator_norm = layer.operator_norm;
-        compiled.post_attention_norm = layer.post_attention_norm;
-        compiled.feed_forward_norm = layer.feed_forward_norm;
-        compiled.post_feed_forward_norm = layer.post_feed_forward_norm;
+        compiled.operator_norm = *layer.mixer_norm.before;
+        compiled.post_attention_norm = layer.mixer_norm.after;
+        compiled.feed_forward_norm = layer.feed_forward_norm.before;
+        compiled.post_feed_forward_norm = layer.feed_forward_norm.after;
         compiled.residual = layer.residual;
 
         for (std::size_t request_index = 0;
