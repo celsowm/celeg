@@ -153,10 +153,10 @@ void initialize_graph(CanonicalInferenceContext& context) {
     for (int layer = 0; layer < context.layer_count; ++layer) {
         LayerSpec& semantic_layer =
             graph.layers[static_cast<size_t>(layer)];
-        semantic_layer.operator_norm = {
+        semantic_layer.mixer_norm.before = NormSpec{
             numerical_policy.norm_eps,
             NormWeightKind::Scale};
-        semantic_layer.feed_forward_norm = {
+        semantic_layer.feed_forward_norm.before = NormSpec{
             numerical_policy.norm_eps,
             NormWeightKind::Scale};
         semantic_layer.residual.multiplier =
