@@ -149,7 +149,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                 if (input_plan.context_scale != 1.0f) {
                     for (size_t d = 0; d < input_size; ++d) {
                         values[d] *= input_plan.context_scale;
-                }
+                    }
                 }
                 cpu_rmsnorm_inplace(values,
                                     shared->weight_store.per_layer_projection_norm.data(),
@@ -168,9 +168,14 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
                   workspace_.chunk_residual.begin());
-        rmsnorm_rows(workspace_.chunk_hidden.data(), common.operator_norm,
-                     workspace_.chunk_normed.data(), hidden,
-                     semantics.operator_norm.epsilon);
+        if (semantics.mixer_norm.before) {
+            rmsnorm_rows(workspace_.chunk_hidden.data(), common.operator_norm,
+                         workspace_.chunk_normed.data(), hidden,
+                         semantics.mixer_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
+                      workspace_.chunk_normed.begin());
+        }
         bool normed_q8_ready = false;
         auto layer_gemm = [&](const CpuLinearWeight& weight, const float* input,
                               float* output, float beta = 0.0f,
@@ -258,8 +263,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                             gate = workspace_.chunk_attention_gate.data() + row * q_width;
                         }
                         apply_cpu_attention_output_gate(workspace_.chunk_op.data() + row * q_width,
-                                             gate,
-                                             q_width);
+                                                       gate, q_width);
                     }
                 }
                 linear_started = Clock::now();
@@ -434,90 +438,85 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                            workspace_.chunk_hidden.data());
                 session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             } else {
-            const size_t q_width = static_cast<size_t>(layout.query_width());
-            const size_t q_projection_width = static_cast<size_t>(layout.query_projection_width());
-            const size_t kv_width = static_cast<size_t>(layout.key_value_width());
-            linear_started = Clock::now();
-            layer_gemm(attention->q, workspace_.chunk_normed.data(),
-                       workspace_.chunk_qkv.data());
-            if (!attention->k.segments.empty()) {
-                layer_gemm(attention->k, workspace_.chunk_normed.data(),
-                           workspace_.chunk_op.data());
-                layer_gemm(attention->v, workspace_.chunk_normed.data(),
-                           workspace_.chunk_conv.data());
-            }
-            session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
-            const bool packed_gate = layout.output_gate.has_value() &&
-                layout.output_gate->packed_with_query;
-            // The packed Q+Gate projection interleaves [query, gate] per head
-            // (not as two contiguous halves) and has a wider per-row stride
-            // than q_width, so it cannot be processed in place: deinterleave
-            // into a compact q_width-strided query buffer (and the existing
-            // gate buffer) before anything that assumes q_width striding runs.
-            std::vector<float> packed_query;
-            if (packed_gate) packed_query.resize(rows * q_width);
-            float* const query_base = packed_gate
-                ? packed_query.data() : workspace_.chunk_qkv.data();
-            const size_t query_stride = packed_gate ? q_width : q_projection_width;
-            parallel_rows(shared->pool, rows, [&](size_t row) {
-                if (packed_gate) {
-                    const float* source = workspace_.chunk_qkv.data() + row * q_projection_width;
-                    float* dest_q = query_base + row * query_stride;
-                    float* dest_gate = workspace_.chunk_attention_gate.data() + row * q_width;
-                    const int head_dim = layout.head_dim;
-                    for (int head = 0; head < layout.query_heads; ++head) {
-                        const float* head_source = source + static_cast<size_t>(head) * 2 * head_dim;
-                        std::copy(head_source, head_source + head_dim,
-                                 dest_q + static_cast<size_t>(head) * head_dim);
-                        std::copy(head_source + head_dim, head_source + 2 * head_dim,
-                                 dest_gate + static_cast<size_t>(head) * head_dim);
+                const size_t q_width = static_cast<size_t>(layout.query_width());
+                const size_t q_projection_width = static_cast<size_t>(layout.query_projection_width());
+                const size_t kv_width = static_cast<size_t>(layout.key_value_width());
+                linear_started = Clock::now();
+                layer_gemm(attention->q, workspace_.chunk_normed.data(),
+                           workspace_.chunk_qkv.data());
+                if (!attention->k.segments.empty()) {
+                    layer_gemm(attention->k, workspace_.chunk_normed.data(),
+                               workspace_.chunk_op.data());
+                    layer_gemm(attention->v, workspace_.chunk_normed.data(),
+                               workspace_.chunk_conv.data());
+                }
+                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+                const bool packed_gate = layout.output_gate.has_value() &&
+                    layout.output_gate->packed_with_query;
+                std::vector<float> packed_query;
+                if (packed_gate) packed_query.resize(rows * q_width);
+                float* const query_base = packed_gate
+                    ? packed_query.data() : workspace_.chunk_qkv.data();
+                const size_t query_stride = packed_gate ? q_width : q_projection_width;
+                parallel_rows(shared->pool, rows, [&](size_t row) {
+                    if (packed_gate) {
+                        const float* source = workspace_.chunk_qkv.data() + row * q_projection_width;
+                        float* dest_q = query_base + row * query_stride;
+                        float* dest_gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                        const int head_dim = layout.head_dim;
+                        for (int head = 0; head < layout.query_heads; ++head) {
+                            const float* head_source = source + static_cast<size_t>(head) * 2 * head_dim;
+                            std::copy(head_source, head_source + head_dim,
+                                     dest_q + static_cast<size_t>(head) * head_dim);
+                            std::copy(head_source + head_dim, head_source + 2 * head_dim,
+                                     dest_gate + static_cast<size_t>(head) * head_dim);
+                        }
+                    }
+                    float* q = query_base + row * query_stride;
+                    float* k = workspace_.chunk_op.data() + row * kv_width;
+                    const int position = base_position + static_cast<int>(row);
+                    const auto* explicit_rope = embeddings
+                        ? embeddings->rope_at_position(static_cast<size_t>(position)) : nullptr;
+                    const std::array<int32_t, 3> scalar_rope = {
+                        position, position, position};
+                    const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
+                    apply_cpu_attention_qk(layout, *attention, q, k, position,
+                                           rope_position);
+                });
+                const int owner = shared->layer_to_kv_owner.at(index);
+                AttentionState& state = attention_state(static_cast<size_t>(owner));
+                if (!attention->k.segments.empty()) {
+                    for (size_t row = 0; row < rows; ++row) {
+                        store_kv(state, base_position + static_cast<int>(row),
+                                 workspace_.chunk_op.data() + row * kv_width,
+                                 workspace_.chunk_conv.data() + row * kv_width);
                     }
                 }
-                float* q = query_base + row * query_stride;
-                float* k = workspace_.chunk_op.data() + row * kv_width;
-                const int position = base_position + static_cast<int>(row);
-                const auto* explicit_rope = embeddings
-                    ? embeddings->rope_at_position(static_cast<size_t>(position)) : nullptr;
-                const std::array<int32_t, 3> scalar_rope = {
-                    position, position, position};
-                const auto& rope_position = explicit_rope ? *explicit_rope : scalar_rope;
-                apply_cpu_attention_qk(layout, *attention, q, k, position,
-                                       rope_position);
-            });
-            const int owner = shared->layer_to_kv_owner.at(index);
-            AttentionState& state = attention_state(static_cast<size_t>(owner));
-            if (!attention->k.segments.empty()) {
-                for (size_t row = 0; row < rows; ++row) {
-                    store_kv(state, base_position + static_cast<int>(row),
-                             workspace_.chunk_op.data() + row * kv_width,
-                             workspace_.chunk_conv.data() + row * kv_width);
+                auto attention_started = Clock::now();
+                const CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
+                cpu_gqa_prefill_paged(query_base, rows, q_width, pool,
+                                      state.pages, workspace_.chunk_op.data(), base_position,
+                                      layout.query_heads, layout.key_value_heads, layout.head_dim,
+                                      shared->pool,
+                                      CpuAttentionPattern::lower(layout.pattern),
+                                      CpuAttentionBias::lower(layout.bias, attention->relative_bias,
+                                                              layout.query_heads));
+                if (layout.output_gate.has_value()) {
+                    if (!packed_gate) {
+                        layer_gemm(attention->gate, workspace_.chunk_normed.data(),
+                                   workspace_.chunk_attention_gate.data());
+                    }
+                    for (size_t row = 0; row < rows; ++row) {
+                        const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
+                        float* output = workspace_.chunk_op.data() + row * q_width;
+                        apply_cpu_attention_output_gate(output, gate, q_width);
+                    }
                 }
-            }
-            auto attention_started = Clock::now();
-            const CpuKvPagePool& pool = *shared->kv_pools.at(state.pool_index);
-            cpu_gqa_prefill_paged(query_base, rows, q_width, pool,
-                                  state.pages, workspace_.chunk_op.data(), base_position,
-                                  layout.query_heads, layout.key_value_heads, layout.head_dim,
-                                  shared->pool,
-                                  CpuAttentionPattern::lower(layout.pattern),
-                                  CpuAttentionBias::lower(layout.bias, attention->relative_bias,
-                                                          layout.query_heads));
-            if (layout.output_gate.has_value()) {
-                if (!packed_gate) {
-                    layer_gemm(attention->gate, workspace_.chunk_normed.data(),
-                               workspace_.chunk_attention_gate.data());
-                }
-                for (size_t row = 0; row < rows; ++row) {
-                    const float* gate = workspace_.chunk_attention_gate.data() + row * q_width;
-                    float* output = workspace_.chunk_op.data() + row * q_width;
-                    apply_cpu_attention_output_gate(output, gate, q_width);
-                }
-            }
-            session_.prefill_profile.attention_ms += milliseconds_since(attention_started);
-            linear_started = Clock::now();
-            layer_gemm(attention->out, workspace_.chunk_op.data(),
-                       workspace_.chunk_hidden.data());
-            session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
+                session_.prefill_profile.attention_ms += milliseconds_since(attention_started);
+                linear_started = Clock::now();
+                layer_gemm(attention->out, workspace_.chunk_op.data(),
+                           workspace_.chunk_hidden.data());
+                session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
             }
           });
 
@@ -525,14 +524,22 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             scale(workspace_.chunk_hidden, rows * hidden,
                   semantics.residual.multiplier);
         }
-        if (semantics.post_attention_norm.has_value()) {
+        if (semantics.mixer_norm.after) {
             rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.post_attention_norm, hidden,
-                                 semantics.post_attention_norm->epsilon);
+                                 semantics.mixer_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
-        rmsnorm_rows(workspace_.chunk_hidden.data(), common.ffn_norm,
-                     workspace_.chunk_normed.data(), hidden,
-                     semantics.feed_forward_norm->epsilon);
+        if (std::holds_alternative<std::monostate>(semantics.feed_forward)) {
+            continue;
+        }
+        if (semantics.feed_forward_norm.before) {
+            rmsnorm_rows(workspace_.chunk_hidden.data(), common.ffn_norm,
+                         workspace_.chunk_normed.data(), hidden,
+                         semantics.feed_forward_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
+                      workspace_.chunk_normed.begin());
+        }
         normed_q8_ready = false;
 
         const auto* moe = std::get_if<MoeWeights>(&layer.feed_forward);
@@ -553,9 +560,9 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             scale(workspace_.chunk_mlp, rows * hidden,
                   semantics.residual.multiplier);
         }
-        if (semantics.post_feed_forward_norm.has_value()) {
+        if (semantics.feed_forward_norm.after) {
             rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.post_feed_forward_norm, hidden,
-                                 semantics.post_feed_forward_norm->epsilon);
+                                 semantics.feed_forward_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_mlp.data(), hidden);
 
@@ -582,7 +589,8 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
             shared->linear.gemm(dense->per_layer_projection, workspace_.per_layer_gate.data(),
                                 workspace_.chunk_hidden.data(), rows);
             session_.prefill_profile.linear_ms += milliseconds_since(linear_started);
-            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.per_layer_input_norm, hidden);
+            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.per_layer_input_norm, hidden,
+                                 input_plan.norm_epsilon);
             if (common.layer_scalar != 1.0f) {
                 scale(workspace_.chunk_hidden, rows * hidden, common.layer_scalar);
             }
