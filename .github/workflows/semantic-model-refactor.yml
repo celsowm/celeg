@@ -6,6 +6,7 @@ name: Semantic model refactor runner
       - agent/automatic-semantic-model-support
     paths:
       - scripts/apply_semantic_model_refactor.py
+      - scripts/apply_semantic_model_refactor_phase2.py
       - .github/workflows/semantic-model-refactor.yml
 
 permissions:
@@ -25,7 +26,9 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
       - name: Apply refactor
-        run: python scripts/apply_semantic_model_refactor.py
+        run: |
+          python scripts/apply_semantic_model_refactor.py
+          python scripts/apply_semantic_model_refactor_phase2.py
       - name: Verify CPU
         run: |
           set +e
@@ -37,12 +40,12 @@ jobs:
           exit 0
       - name: Commit generated refactor and status
         run: |
-          if git diff --quiet && [ ! -f semantic-refactor-build.log ]; then
-            echo "No generated changes"
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
           git commit -m "feat: implement automatic semantic model support"
           git push origin HEAD:agent/automatic-semantic-model-support
