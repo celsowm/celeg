@@ -92,6 +92,33 @@ private:
     std::unordered_map<std::string, std::vector<int64_t>> shapes_;
 };
 
+bool equivalent_weight_plan(const celeg::WeightPlan& a, const celeg::WeightPlan& b) {
+    if (a.requests.size() != b.requests.size()) return false;
+    for (std::size_t index = 0; index < a.requests.size(); ++index) {
+        const auto& lhs = a.requests[index];
+        const auto& rhs = b.requests[index];
+        if (lhs.role != rhs.role || lhs.layer != rhs.layer || lhs.expert != rhs.expert ||
+            lhs.expected_shape != rhs.expected_shape || lhs.source_name != rhs.source_name ||
+            lhs.physical_layer != rhs.physical_layer ||
+            lhs.norm_weight_kind != rhs.norm_weight_kind) {
+            return false;
+        }
+    }
+    return true;
+}
+
+celeg::ResolvedModel resolve_structural_identity(const celeg::ArchitectureCatalog& catalog,
+                                                 std::string model_type) {
+    auto metadata = structural_metadata(std::move(model_type));
+    metadata.repository_hint = "synthetic/identity-invariance";
+    celeg::CheckpointView checkpoint;
+    checkpoint.metadata = std::move(metadata);
+    checkpoint.repository = std::make_shared<GptxRepository>();
+    const auto& architecture = catalog.select(checkpoint.metadata);
+    CELEG_TEST_CHECK(architecture.id() == "automatic");
+    return architecture.resolve(checkpoint);
+}
+
 }
 
 int main() {
@@ -118,6 +145,15 @@ int main() {
     CELEG_TEST_CHECK(model.graph.tied_embeddings);
     CELEG_TEST_CHECK(std::get<celeg::AttentionSpec>(model.graph.layers[0].mixer).query_scale ==
                      0.125f);
+
+    const auto identity_a = resolve_structural_identity(catalog, "lizzy");
+    const auto identity_b = resolve_structural_identity(catalog, "unknown_test_model");
+    const auto poisoned_identity = resolve_structural_identity(catalog, "gemma4");
+    CELEG_TEST_CHECK(identity_a.graph.fingerprint() == identity_b.graph.fingerprint());
+    CELEG_TEST_CHECK(identity_a.graph.fingerprint() == poisoned_identity.graph.fingerprint());
+    CELEG_TEST_CHECK(equivalent_weight_plan(identity_a.weight_plan, identity_b.weight_plan));
+    CELEG_TEST_CHECK(equivalent_weight_plan(identity_a.weight_plan,
+                                            poisoned_identity.weight_plan));
 
     for (const auto& [model_type, architecture_id] : {
              std::pair<std::string, std::string>{
