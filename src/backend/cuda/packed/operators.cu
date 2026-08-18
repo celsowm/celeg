@@ -53,7 +53,8 @@ void PackedConvolutionExecutor::run(
             rows, context.program.hidden, convolution.spec.cache_length, w.stream.get());
     }
     const bool fuse_residual = reference.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value();
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     context.linear(w.op_output.data(), *convolution.conv_out, w.hidden.data(), rows,
                    context.program.hidden, context.program.hidden,
                    fuse_residual ? 1.0f : 0.0f);
@@ -401,7 +402,8 @@ void PackedGatedDeltaNetExecutor::run(
         throw std::invalid_argument("packed GatedDeltaNet row mapping is incomplete");
     }
     const bool fuse_residual = reference.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value();
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     context.linear(w.gated_delta_output.data(), *gated_delta.out, w.hidden.data(),
                    rows, context.program.hidden, value_width,
                    fuse_residual ? 1.0f : 0.0f);
@@ -474,7 +476,8 @@ void PackedMamba2Executor::run(
     launch_multiply(w.mamba_inner.data(), w.mamba_projected.data(),
                     rows * spec.intermediate_size, w.stream.get());
     const bool fuse_residual = reference.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value();
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     context.linear(w.mamba_inner.data(), *mamba.out, w.hidden.data(), rows,
                    context.program.hidden, spec.intermediate_size,
                    fuse_residual ? 1.0f : 0.0f);
@@ -508,7 +511,8 @@ void PackedAttentionExecutor::run(
     }
     const int query_width = layout.query_width();
     const bool fuse_residual = reference.options().fused_residuals &&
-        !semantics.mixer_norm.after.has_value();
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     context.linear(w.op_output.data(), *attention.out, w.hidden.data(), rows,
                    context.program.hidden, query_width,
                    fuse_residual ? 1.0f : 0.0f);
