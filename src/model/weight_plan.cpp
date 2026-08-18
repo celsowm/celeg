@@ -264,13 +264,13 @@ void build_weight_plan_from_graph(ResolvedModel& model,
             ? layer_index
             : dimensions.checkpoint_layer_for_layer.at(static_cast<size_t>(layer_index));
         add_norm_request(model, TensorRole::AttentionInputNorm, layer_index,
-                         std::optional<NormSpec>{layer.operator_norm}, {graph.hidden}, physical_layer);
+                         layer.mixer_norm.before, {graph.hidden}, physical_layer);
         append_mixer(model, layer, layer_index, physical_layer);
         const bool has_feed_forward =
             !std::holds_alternative<std::monostate>(layer.feed_forward);
         if (has_feed_forward) {
             add_norm_request(model, TensorRole::FfnInputNorm, layer_index,
-                             layer.feed_forward_norm, {graph.hidden}, physical_layer);
+                             layer.feed_forward_norm.before, {graph.hidden}, physical_layer);
         }
         std::visit([&](const auto& feed_forward) {
             using FeedForward = std::decay_t<decltype(feed_forward)>;
@@ -292,9 +292,9 @@ void build_weight_plan_from_graph(ResolvedModel& model,
             }
         }, layer.feed_forward);
         add_norm_request(model, TensorRole::AttentionPostNorm, layer_index,
-                         layer.post_attention_norm, {graph.hidden}, physical_layer);
+                         layer.mixer_norm.after, {graph.hidden}, physical_layer);
         add_norm_request(model, TensorRole::FfnOutputNorm, layer_index,
-                         layer.post_feed_forward_norm, {graph.hidden}, physical_layer);
+                         layer.feed_forward_norm.after, {graph.hidden}, physical_layer);
         if (graph.per_layer_input) {
             add_request(model, TensorRole::PerLayerInputGate, layer_index, -1,
                         {graph.per_layer_input->input_size, graph.hidden}, physical_layer);
