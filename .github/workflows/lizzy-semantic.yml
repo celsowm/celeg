@@ -1,6 +1,14 @@
 name: Lizzy Transformers semantic oracle
 
 "on":
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/lizzy-semantic.yml"
+      - "benchmarks/inspect_safetensors.py"
+      - "benchmarks/compare_transformers.py"
+      - "src/model/**"
   workflow_dispatch:
     inputs:
       run_semantic:
@@ -20,6 +28,7 @@ env:
   HF_TOKEN: ${{ secrets.HF_TOKEN }}
   HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
   HF_REPO: flwrlabs/Lizzy-7B
+  HF_REVISION: 830c14022d19d80e3b09a6a3264dc0fd33a55f23
 
 jobs:
   hf-auth:
@@ -48,14 +57,47 @@ jobs:
           path = hf_hub_download(
               repo_id=os.environ["HF_REPO"],
               filename="config.json",
+              revision=os.environ["HF_REVISION"],
               token=token,
           )
           print(f"Lizzy config access: {path}")
           PY
 
-  semantic-oracle:
-    if: ${{ inputs.run_semantic }}
+  inspect-checkpoint:
     needs: hf-auth
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Hugging Face client
+        run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
+      - name: Inspect real Lizzy safetensors metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python benchmarks/inspect_safetensors.py \
+            --model "$HF_REPO" \
+            --revision "$HF_REVISION" \
+            --json-out lizzy-tensors.json \
+            2>&1 | tee lizzy-tensors.log
+      - name: Upload checkpoint metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lizzy-checkpoint-metadata
+          path: |
+            lizzy-tensors.json
+            lizzy-tensors.log
+          if-no-files-found: ignore
+
+  semantic-oracle:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_semantic }}
+    needs:
+      - hf-auth
+      - inspect-checkpoint
     runs-on: [self-hosted, linux, x64, gpu]
     timeout-minutes: 120
     steps:
@@ -83,7 +125,7 @@ jobs:
           identity = whoami(token=token)
           print(f"Hugging Face authentication: {identity['name']}")
           PY
-      - name: Download real Lizzy checkpoint
+      - name: Download pinned real Lizzy checkpoint
         shell: bash
         run: |
           set -euo pipefail
@@ -93,9 +135,12 @@ jobs:
 
           path = snapshot_download(
               repo_id=os.environ["HF_REPO"],
+              revision=os.environ["HF_REVISION"],
               token=os.environ["HF_TOKEN"],
           )
           print(f"Lizzy snapshot: {path}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"LIZZY_MODEL_DIR={path}\n")
           PY
       - name: Build CELEG CUDA
         run: python scripts/dev.py build --backend cuda --build-type Release --jobs 4
@@ -104,7 +149,7 @@ jobs:
         run: |
           set -euo pipefail
           python benchmarks/compare_transformers.py \
-            --model "$HF_REPO" \
+            --model "$LIZZY_MODEL_DIR" \
             --celeg-run out/linux-cuda-release/celeg-run \
             --context 512 \
             --max-new-tokens 16 \
