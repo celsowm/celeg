@@ -1,11 +1,12 @@
 name: Apply QK norm semantic fix
 
-on:
+"on":
   workflow_dispatch:
   push:
     branches: [master]
     paths:
-      - .github/workflows/apply-qk-norm-type-fix.yml
+      - ".github/workflows/apply-qk-norm-type-fix.yml"
+      - ".github/scripts/apply_qk_norm_semantic_fix.py"
 
 permissions:
   contents: write
@@ -17,75 +18,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Patch QK norm type semantics
+      - name: Apply semantic source fix
+        run: python .github/scripts/apply_qk_norm_semantic_fix.py
+      - name: Commit source fix
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("src/model/inference/metadata.cpp")
-          text = path.read_text(encoding="utf-8")
-
-          if "qk_norm_type_source" in text:
-              print("QK norm type semantics already present")
-              raise SystemExit(0)
-
-          needle = (
-              '    result.attention.query_key_norm = aliases<bool>(\n'
-              '        metadata, {"qk_norm", "query_key_norm", "use_qk_norm"}, result.evidence,\n'
-              '        "query_key_norm");\n'
-          )
-          if text.count(needle) != 1:
-              raise SystemExit("unexpected query_key_norm assignment shape")
-
-          validation = '''    if (result.attention.query_key_norm.value_or(false)) {
-              std::optional<std::string> qk_norm_type;
-              std::string qk_norm_type_source;
-              for (const std::string_view key : {
-                       std::string_view("qk_norm_type"),
-                       std::string_view("text_config.qk_norm_type")}) {
-                  if (!metadata.contains(key)) continue;
-                  const MetadataValue& raw = metadata.value(key);
-                  const auto* value = std::get_if<std::string>(&raw);
-                  if (value == nullptr) {
-                      inference_detail::fail(
-                          ResolutionFailureKind::ConflictingMetadata,
-                          "Q/K normalization type metadata is not a string: " +
-                              std::string(key));
-                  }
-                  if (qk_norm_type.has_value() && *qk_norm_type != *value) {
-                      inference_detail::fail(
-                          ResolutionFailureKind::ConflictingMetadata,
-                          "conflicting Q/K normalization type metadata");
-                  }
-                  qk_norm_type = *value;
-                  qk_norm_type_source = std::string(key);
-              }
-              if (qk_norm_type.has_value()) {
-                  if (*qk_norm_type != "rmsnorm") {
-                      inference_detail::fail(
-                          ResolutionFailureKind::UnsupportedSemanticFeature,
-                          "unsupported Q/K normalization mathematics: " + *qk_norm_type);
-                  }
-                  result.evidence.push_back({EvidenceKind::ExplicitMetadata,
-                                             qk_norm_type_source,
-                                             "query_key_norm = rmsnorm"});
-              }
-          }
-'''
-          text = text.replace(needle, needle + validation)
-          path.write_text(text, encoding="utf-8")
-          PY
-
-          if git diff --quiet -- src/model/inference/metadata.cpp; then
+          if git diff --quiet -- src/model/inference/metadata.cpp CMakeLists.txt; then
             echo "No source changes to commit"
             exit 0
           fi
           git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/model/inference/metadata.cpp
-          git commit -m "model: enforce declared qk norm mathematics"
+          git add src/model/inference/metadata.cpp CMakeLists.txt
+          git commit -m "model: enforce qk norm type semantics"
           git push origin HEAD:master
