@@ -167,12 +167,7 @@ void run_factorized_latent_attention(
     model.linear(
         workspace.prefill_latent_decompressed_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
-        rows, hidden, layout.latent_output_width(),
-        model.resources_.options_.fused_residuals && !common_layer.mixer_norm_after
-            ? 1.0f : 0.0f);
-    launch_scale(
-        workspace.prefill_hidden_.data(), rows * hidden,
-        semantics.residual.multiplier, model.stream_.get());
+        rows, hidden, layout.latent_output_width(), 0.0f);
     prof.end(PrefillPhase::AttnOut, model.stream_.get());
 }
 
