@@ -77,7 +77,7 @@ void run_projected_latent_attention(
             nullptr, nullptr,
             rows, layout.query_heads, 1, latent.rope_head_dim,
             static_cast<float>(rope->theta), 1.0f,
-            layout.query_norm->epsilon, false,
+            model.resources_.program_.final_norm.epsilon, false,
             lower_cuda_rope_scaling(*rope), model.stream_.get());
     }
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
@@ -124,7 +124,7 @@ void run_projected_latent_attention(
         workspace.prefill_op_output_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
         rows, hidden, layout.latent_query_content_width(),
-        model.resources_.options_.fused_residuals && !common_layer.post_attention_norm
+        model.resources_.options_.fused_residuals && !semantics.mixer_norm.after
             ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,
