@@ -5,40 +5,14 @@ name: Semantic model refactor runner
     branches:
       - agent/automatic-semantic-model-support
     paths:
-      - scripts/apply_semantic_model_refactor_phase12.py
-      - scripts/apply_semantic_model_refactor_phase13.py
       - .github/workflows/semantic-model-refactor.yml
 
 concurrency:
   group: semantic-model-refactor
   cancel-in-progress: true
 
-permissions:
-  contents: write
-
 jobs:
-  apply:
-    if: github.actor != 'github-actions[bot]'
+  done:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/automatic-semantic-model-support
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Apply metadata hardening
-        run: |
-          python scripts/apply_semantic_model_refactor_phase12.py
-          python scripts/apply_semantic_model_refactor_phase13.py
-      - name: Publish hardening
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No generated changes"
-            exit 0
-          fi
-          git commit -m "test: harden automatic semantic model support"
-          git push origin HEAD:agent/automatic-semantic-model-support
+      - run: echo "semantic model transform already materialized; official CI is authoritative"
