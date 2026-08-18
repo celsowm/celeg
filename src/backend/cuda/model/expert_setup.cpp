@@ -24,14 +24,16 @@ std::size_t estimate_non_expert_weights(const CheckpointDimensions& dims,
     bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
 
     for (const CompiledLayerProgram& layer : program.layers) {
-        bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
-        if (!std::holds_alternative<std::monostate>(layer.feed_forward)) {
+        if (layer.mixer_norm.before) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
-        if (layer.post_attention_norm.has_value()) {
+        if (layer.mixer_norm.after) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
-        if (layer.post_feed_forward_norm.has_value()) {
+        if (layer.feed_forward_norm.before) {
+            bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
+        }
+        if (layer.feed_forward_norm.after) {
             bytes += bf16_bytes(static_cast<std::size_t>(program.hidden));
         }
 
