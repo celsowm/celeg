@@ -16,6 +16,9 @@ void run_gated_delta(
     const float mixer_epsilon = semantics.mixer_norm.before
         ? semantics.mixer_norm.before->epsilon
         : model.resources_.program_.final_norm.epsilon;
+    const bool fuse_residual = model.resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
 
     prof.begin(model.stream_.get());
     {
@@ -80,7 +83,8 @@ void run_gated_delta(
     prof.begin(model.stream_.get());
     model.linear(
         workspace.prefill_gated_delta_output_.data(), *gated_delta.out,
-        workspace.prefill_hidden_.data(), rows, hidden, value_width);
+        workspace.prefill_hidden_.data(), rows, hidden, value_width,
+        fuse_residual ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,
         semantics.residual.multiplier, model.stream_.get());
@@ -103,6 +107,9 @@ void run_mamba2(
         : (semantics.mixer_norm.after
             ? semantics.mixer_norm.after->epsilon
             : model.resources_.program_.final_norm.epsilon);
+    const bool fuse_residual = model.resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
 
     model.linear(
         workspace.prefill_normed_.data(), *mamba.in,
@@ -127,7 +134,7 @@ void run_mamba2(
     model.linear(
         workspace.prefill_mamba_inner_.data(), *mamba.out,
         workspace.prefill_hidden_.data(),
-        rows, hidden, spec.intermediate_size);
+        rows, hidden, spec.intermediate_size, fuse_residual ? 1.0f : 0.0f);
 }
 
 void run_mlp_only(
@@ -168,10 +175,14 @@ void run_mlp_only(
 void run_convolution(
     CudaCompiledModel& model,
     ConvolutionLayer& convolution,
+    const CompiledLayerProgram& semantics,
     int rows) {
     auto& workspace = model.workspace_;
     auto& prof = prefill_phase_profile();
     const int hidden = model.resources_.program_.hidden;
+    const bool fuse_residual = model.resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
 
     prof.begin(model.stream_.get());
     model.linear(
@@ -185,10 +196,8 @@ void run_convolution(
     model.linear(
         workspace.prefill_op_output_.data(), *convolution.conv_out,
         workspace.prefill_hidden_.data(),
-        rows, hidden, hidden,
-        model.resources_.options_.fused_residuals ? 1.0f : 0.0f);
+        rows, hidden, hidden, fuse_residual ? 1.0f : 0.0f);
     prof.end(PrefillPhase::Conv, model.stream_.get());
 }
 
 }
-
