@@ -203,6 +203,40 @@ void require_explicit_norm_consistency(std::optional<bool> explicit_value,
     }
 }
 
+bool query_key_norm_was_explicit(const NormalizedModelMetadata& metadata) {
+    for (const EvidenceItem& evidence : metadata.evidence) {
+        if ((evidence.kind == EvidenceKind::AliasMetadata ||
+             evidence.kind == EvidenceKind::ExplicitMetadata) &&
+            evidence.fact.starts_with("query_key_norm =")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void validate_query_key_norm_consistency(CanonicalInferenceContext& context,
+                                         int layer) {
+    const auto& metadata = context.input.metadata;
+    if (!query_key_norm_was_explicit(metadata)) return;
+    const bool requested = metadata.attention.query_key_norm.value_or(false);
+    const bool query_bound =
+        context.facts.bindings.find(TensorRole::AttentionQueryNorm, layer) != nullptr;
+    const bool key_bound =
+        context.facts.bindings.find(TensorRole::AttentionKeyNorm, layer) != nullptr;
+    if (requested && (!query_bound || !key_bound)) {
+        fail(
+            ResolutionFailureKind::MissingTensorRole,
+            "metadata requires query/key normalization but both norm tensors are not "
+            "bound for layer " + std::to_string(layer));
+    }
+    if (!requested && (query_bound || key_bound)) {
+        fail(
+            ResolutionFailureKind::ConflictingInferenceFacts,
+            "metadata disables query/key normalization but checkpoint tensors prove it "
+            "for layer " + std::to_string(layer));
+    }
+}
+
 void bind_structural_norm(CanonicalInferenceContext& context,
                           int layer,
                           TensorRole role,
@@ -650,6 +684,7 @@ void resolve_canonical_layers(CanonicalInferenceContext& context) {
         const ILayerInferenceRule& rule =
             select_layer_inference_rule(rules, context, layer);
         rule.resolve(context, layer);
+        validate_query_key_norm_consistency(context, layer);
         infer_and_bind_layer_norms(context, layer);
         resolve_layer_feed_forward(context, layer);
     }
