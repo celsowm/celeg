@@ -5,6 +5,7 @@ name: Semantic model patch runner
     branches:
       - agent/automatic-semantic-model-support
     paths:
+      - scripts/prepare_yarn_definition.py
       - scripts/fix_yarn_semantics.py
       - .github/workflows/semantic-model-refactor.yml
 
@@ -23,6 +24,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/automatic-semantic-model-support
+      - name: Prepare YaRN definition
+        run: python3 scripts/prepare_yarn_definition.py
       - name: Apply complete YaRN semantics
         run: python3 scripts/fix_yarn_semantics.py
       - name: Publish source fix
