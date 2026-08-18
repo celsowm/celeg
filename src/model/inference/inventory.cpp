@@ -365,22 +365,22 @@ void normalize_rope_scaling(const CheckpointMetadata& source,
         source, {"rope_scaling.beta_slow", "rope_parameters.beta_slow"},
         "rope_scaling.beta_slow").value_or(1.0);
 
+    if (!std::isfinite(*factor) || *factor < 1.0 ||
+        *original_context <= 0 ||
+        !std::isfinite(attention_factor) || attention_factor <= 0.0 ||
+        !std::isfinite(beta_fast) || !std::isfinite(beta_slow) ||
+        beta_fast < 0.0 || beta_slow < 0.0 || beta_fast < beta_slow) {
+        inference_detail::fail(
+            ResolutionFailureKind::ConflictingMetadata,
+            "invalid YaRN scaling metadata");
+    }
+
     YarnRopeScaling yarn;
     yarn.factor = *factor;
     yarn.original_context = *original_context;
     yarn.attention_factor = attention_factor;
     yarn.beta_fast = beta_fast;
     yarn.beta_slow = beta_slow;
-    try {
-        validate_rope_scaling(
-            RopeScalingSpec{yarn},
-            static_cast<int>(
-                metadata.attention.head_dim.global.value_or(0) * rope->rotary_fraction));
-    } catch (const std::invalid_argument& error) {
-        inference_detail::fail(
-            ResolutionFailureKind::ConflictingMetadata,
-            std::string("invalid YaRN metadata: ") + error.what());
-    }
     rope->scaling = yarn;
     metadata.evidence.push_back({
         EvidenceKind::AliasMetadata,
