@@ -182,6 +182,27 @@ const TensorInventoryEntry* find_optional_norm(
     return match;
 }
 
+void require_explicit_norm_consistency(std::optional<bool> explicit_value,
+                                       const TensorInventoryEntry* tensor,
+                                       TensorRole role,
+                                       int layer) {
+    if (!explicit_value.has_value()) return;
+    if (*explicit_value && tensor == nullptr) {
+        fail(
+            ResolutionFailureKind::MissingTensorRole,
+            "metadata requires " + std::string(tensor_role_name(role)) +
+                " but checkpoint has no matching tensor for layer " +
+                std::to_string(layer));
+    }
+    if (!*explicit_value && tensor != nullptr) {
+        fail(
+            ResolutionFailureKind::ConflictingInferenceFacts,
+            "metadata disables " + std::string(tensor_role_name(role)) +
+                " but checkpoint tensor proves it for layer " +
+                std::to_string(layer));
+    }
+}
+
 void bind_structural_norm(CanonicalInferenceContext& context,
                           int layer,
                           TensorRole role,
@@ -207,6 +228,7 @@ void bind_structural_norm(CanonicalInferenceContext& context,
 void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
                                 int layer) {
     const auto& input = context.input;
+    const auto& norm_facts = input.metadata.norms;
     const int hidden = *input.metadata.core.hidden_size;
     const std::string index = std::to_string(layer);
     LayerSpec& semantic_layer =
@@ -273,6 +295,11 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
         input.inventory, ffn_after_candidates,
         TensorRole::FfnOutputNorm, layer, hidden);
 
+    const std::optional<bool> metadata_mixer_after =
+        norm_facts.mixer_after.value_for(layer);
+    const std::optional<bool> metadata_ffn_before =
+        norm_facts.feed_forward_before.value_for(layer);
+
     const TensorInventoryEntry* mixer_after = explicit_mixer_after;
     const TensorInventoryEntry* ffn_before = explicit_ffn_before;
     if (pre_feedforward != nullptr) {
@@ -286,8 +313,18 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
     }
 
     if (post_attention_layernorm != nullptr) {
+        if (metadata_mixer_after == true && metadata_ffn_before == true) {
+            fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "one post_attention_layernorm tensor cannot satisfy both mixer-after and "
+                "feed-forward-before metadata for layer " + std::to_string(layer));
+        }
+        const bool explicitly_mixer_after = metadata_mixer_after == true;
+        const bool explicitly_ffn_before = metadata_ffn_before == true;
         const bool post_norm_topology =
-            pre_feedforward != nullptr || ffn_after != nullptr;
+            explicitly_mixer_after ||
+            (!explicitly_ffn_before &&
+             (pre_feedforward != nullptr || ffn_after != nullptr));
         if (post_norm_topology) {
             if (explicit_mixer_after != nullptr) {
                 fail(
@@ -306,6 +343,19 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
             ffn_before = post_attention_layernorm;
         }
     }
+
+    require_explicit_norm_consistency(
+        norm_facts.mixer_before.value_for(layer), mixer_before,
+        TensorRole::AttentionInputNorm, layer);
+    require_explicit_norm_consistency(
+        metadata_mixer_after, mixer_after,
+        TensorRole::AttentionPostNorm, layer);
+    require_explicit_norm_consistency(
+        metadata_ffn_before, ffn_before,
+        TensorRole::FfnInputNorm, layer);
+    require_explicit_norm_consistency(
+        norm_facts.feed_forward_after.value_for(layer), ffn_after,
+        TensorRole::FfnOutputNorm, layer);
 
     bind_structural_norm(
         context, layer, TensorRole::AttentionInputNorm,
