@@ -1,3 +1,5 @@
+#include "celeg/backend/cuda/attention_norm.hpp"
+
 namespace celeg::prefill_detail {
 
 void require_regular_attention_bindings(const AttentionLayer& attention) {
@@ -76,24 +78,24 @@ void run_regular_attention(
         : (layout.key_norm
             ? layout.key_norm->epsilon
             : model.resources_.program_.final_norm.epsilon);
+    if (layout.has_query_key_norm()) {
+        launch_attention_qk_norm(
+            layout,
+            workspace.prefill_q_.data(),
+            attention.key ? workspace.prefill_k_.data() : nullptr,
+            attention.q_norm, attention.k_norm,
+            rows, model.stream_.get());
+    }
     if (const auto* rope = layout.rope_position()) {
         launch_dynamic_qk_norm_rope_prefill(
             workspace.prefill_q_.data(),
             attention.key ? workspace.prefill_k_.data() : nullptr,
-            attention.q_norm, attention.k_norm,
+            nullptr, nullptr,
             rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
-            qk_epsilon, layout.has_query_key_norm(),
+            qk_epsilon, false,
             lower_cuda_rope_scaling(*rope), model.stream_.get());
-    } else if (layout.has_query_key_norm()) {
-        launch_dynamic_qk_norm_rope_prefill(
-            workspace.prefill_q_.data(),
-            attention.key ? workspace.prefill_k_.data() : nullptr,
-            attention.q_norm, attention.k_norm,
-            rows, layout.query_heads, layout.key_value_heads, layout.head_dim,
-            1.0f, 0.0f, qk_epsilon, true,
-            CudaRopeScaling{}, model.stream_.get());
     }
     launch_scale(
         workspace.prefill_q_.data(),
