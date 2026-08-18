@@ -2,7 +2,6 @@
 
 #include "support.hpp"
 
-
 #include <algorithm>
 #include <limits>
 #include <regex>
@@ -103,6 +102,69 @@ LayerScopedValue<AttentionPatternKind> attention_pattern_metadata(
     return result;
 }
 
+LayerScopedValue<bool> boolean_schedule_metadata(
+    const CheckpointMetadata& metadata,
+    std::initializer_list<std::string_view> aliases,
+    const std::optional<int>& layer_count,
+    std::vector<EvidenceItem>& evidence,
+    std::string_view fact) {
+    LayerScopedValue<bool> result;
+    std::string accepted_source;
+    const auto consider = [&](std::string_view key) {
+        const MetadataValue* raw = metadata_alias(metadata, key);
+        if (raw == nullptr) return;
+        LayerScopedValue<bool> candidate;
+        if (const auto* value = std::get_if<bool>(raw)) {
+            candidate.global = *value;
+        } else if (const auto* value = std::get_if<int64_t>(raw)) {
+            if (*value != 0 && *value != 1) {
+                inference_detail::fail(
+                    ResolutionFailureKind::ConflictingMetadata,
+                    "boolean norm metadata must be 0 or 1: " + std::string(key));
+            }
+            candidate.global = *value != 0;
+        } else if (const auto* values = std::get_if<std::vector<int64_t>>(raw)) {
+            if (!layer_count.has_value() ||
+                values->size() != static_cast<size_t>(*layer_count)) {
+                inference_detail::fail(
+                    ResolutionFailureKind::IncompleteLayerSchedule,
+                    "norm schedule length does not match layer_count: " +
+                        std::string(key));
+            }
+            candidate.per_layer.reserve(values->size());
+            for (const int64_t value : *values) {
+                if (value != 0 && value != 1) {
+                    inference_detail::fail(
+                        ResolutionFailureKind::ConflictingMetadata,
+                        "boolean norm schedule must contain only 0 or 1: " +
+                            std::string(key));
+                }
+                candidate.per_layer.push_back(value != 0);
+            }
+        } else {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "norm topology metadata has an incompatible type: " + std::string(key));
+        }
+        if (result.has_value() && !(result == candidate)) {
+            inference_detail::fail(
+                ResolutionFailureKind::ConflictingMetadata,
+                "conflicting metadata aliases for " + std::string(fact));
+        }
+        result = std::move(candidate);
+        accepted_source = std::string(key);
+    };
+    for (const std::string_view key : aliases) consider(key);
+    if (result.has_value()) {
+        evidence.push_back({
+            EvidenceKind::AliasMetadata,
+            accepted_source,
+            std::string(fact) +
+                (result.per_layer.empty() ? " = global" : " = layer-scoped schedule")});
+    }
+    return result;
+}
+
 void normalize_attention_schedule(const CheckpointMetadata& source,
                                   NormalizedModelMetadata& metadata) {
     metadata.attention.pattern = attention_pattern_metadata(
@@ -143,6 +205,29 @@ void normalize_attention_schedule(const CheckpointMetadata& source,
             ResolutionFailureKind::MissingRequiredMetadata,
             "sliding attention schedule requires sliding_window metadata");
     }
+}
+
+void normalize_structural_norm_schedule(const CheckpointMetadata& source,
+                                        NormalizedModelMetadata& metadata) {
+    const auto layer_count = metadata.core.layer_count;
+    metadata.norms.mixer_before = boolean_schedule_metadata(
+        source,
+        {"mixer_pre_norm", "attention_pre_norm", "pre_attention_norm"},
+        layer_count, metadata.evidence, "mixer_norm.before");
+    metadata.norms.mixer_after = boolean_schedule_metadata(
+        source,
+        {"mixer_post_norm", "attention_post_norm", "post_attention_norm"},
+        layer_count, metadata.evidence, "mixer_norm.after");
+    metadata.norms.feed_forward_before = boolean_schedule_metadata(
+        source,
+        {"ffn_pre_norm", "feed_forward_pre_norm", "pre_feed_forward_norm",
+         "pre_feedforward_norm"},
+        layer_count, metadata.evidence, "feed_forward_norm.before");
+    metadata.norms.feed_forward_after = boolean_schedule_metadata(
+        source,
+        {"ffn_post_norm", "feed_forward_post_norm", "post_feed_forward_norm",
+         "post_feedforward_norm"},
+        layer_count, metadata.evidence, "feed_forward_norm.after");
 }
 
 }
@@ -227,6 +312,7 @@ InferenceInput build_inference_input(const CheckpointView& checkpoint) {
     }
     NormalizedModelMetadata metadata = normalize_model_metadata(checkpoint.metadata);
     normalize_attention_schedule(checkpoint.metadata, metadata);
+    normalize_structural_norm_schedule(checkpoint.metadata, metadata);
     return {std::move(metadata), build_tensor_inventory(*checkpoint.repository),
             checkpoint.metadata.source_format};
 }
