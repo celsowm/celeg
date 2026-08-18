@@ -353,11 +353,30 @@ void normalize_rope_scaling(const CheckpointMetadata& source,
             "YaRN scaling requires factor and original context metadata");
     }
 
-    const double attention_factor = numeric_aliases(
+    const auto explicit_attention_factor = numeric_aliases(
         source,
         {"rope_scaling.attention_factor", "rope_parameters.attention_factor"},
-        "rope_scaling.attention_factor")
-        .value_or(0.1 * std::log(*factor) + 1.0);
+        "rope_scaling.attention_factor");
+    const auto mscale = numeric_aliases(
+        source, {"rope_scaling.mscale", "rope_parameters.mscale"},
+        "rope_scaling.mscale");
+    const auto mscale_all_dim = numeric_aliases(
+        source, {"rope_scaling.mscale_all_dim", "rope_parameters.mscale_all_dim"},
+        "rope_scaling.mscale_all_dim");
+    const auto inferred_mscale = [&](double scale, double multiplier) {
+        return scale <= 1.0 ? 1.0 : 0.1 * multiplier * std::log(scale) + 1.0;
+    };
+    double attention_factor = 1.0;
+    if (explicit_attention_factor.has_value()) {
+        attention_factor = *explicit_attention_factor;
+    } else if (mscale.has_value() && mscale_all_dim.has_value()) {
+        attention_factor =
+            inferred_mscale(*factor, *mscale) /
+            inferred_mscale(*factor, *mscale_all_dim);
+    } else {
+        attention_factor = inferred_mscale(*factor, 1.0);
+    }
+
     const double beta_fast = numeric_aliases(
         source, {"rope_scaling.beta_fast", "rope_parameters.beta_fast"},
         "rope_scaling.beta_fast").value_or(32.0);
@@ -368,8 +387,10 @@ void normalize_rope_scaling(const CheckpointMetadata& source,
     if (!std::isfinite(*factor) || *factor < 1.0 ||
         *original_context <= 0 ||
         !std::isfinite(attention_factor) || attention_factor <= 0.0 ||
+        (mscale.has_value() && !std::isfinite(*mscale)) ||
+        (mscale_all_dim.has_value() && !std::isfinite(*mscale_all_dim)) ||
         !std::isfinite(beta_fast) || !std::isfinite(beta_slow) ||
-        beta_fast < 0.0 || beta_slow < 0.0 || beta_fast < beta_slow) {
+        beta_fast <= 0.0 || beta_slow <= 0.0 || beta_fast < beta_slow) {
         inference_detail::fail(
             ResolutionFailureKind::ConflictingMetadata,
             "invalid YaRN scaling metadata");
