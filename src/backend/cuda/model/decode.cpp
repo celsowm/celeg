@@ -28,8 +28,11 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     const bool mixer_after = semantics.mixer_norm.after.has_value();
     const bool mixer_only =
         std::holds_alternative<std::monostate>(semantics.feed_forward);
+    const bool fuse_mixer_residual = resources_.options_.fused_residuals &&
+        std::holds_alternative<CompiledAttentionProgram>(semantics.mixer) &&
+        !mixer_after && !mixer_only;
 
-    if (!resources_.options_.fused_residuals || mixer_after || mixer_only) {
+    if (!fuse_mixer_residual) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
             cudaMemcpyDeviceToDevice, stream_.get()));
@@ -51,7 +54,7 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        semantics.mixer_norm.after->epsilon, stream_.get());
     }
-    if (!resources_.options_.fused_residuals || mixer_after || mixer_only) {
+    if (!fuse_mixer_residual) {
         launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                             resources_.program_.hidden, stream_.get());
     }
@@ -405,11 +408,12 @@ void CudaCompiledModel::run_token_latent_attention_paged(
                      .score_scale = layout.query_scale,
                      .sliding_window = layout.sliding_window_size()},
         .stream = stream_.get()});
+    const bool fuse_residual = resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     linear(workspace_.op_output_.data(), *attention.out,
            workspace_.hidden_.data(), 1, resources_.program_.hidden,
-           layout.latent_query_content_width(),
-           resources_.options_.fused_residuals && !semantics.mixer_norm.after &&
-               std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+           layout.latent_query_content_width(), fuse_residual ? 1.0f : 0.0f);
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  semantics.residual.multiplier, stream_.get());
 }
@@ -513,10 +517,12 @@ void CudaCompiledModel::run_token_attention(
         launch_sigmoid_multiply(workspace_.op_output_.data(), gate,
                                 layout.query_width(), stream_.get());
     }
+    const bool fuse_residual = resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
            1, resources_.program_.hidden, layout.query_width(),
-           resources_.options_.fused_residuals && !semantics.mixer_norm.after &&
-               std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
+           fuse_residual ? 1.0f : 0.0f);
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  semantics.residual.multiplier, stream_.get());
 }
@@ -615,8 +621,7 @@ void CudaCompiledModel::run_token_convolution(ConvolutionLayer& convolution) {
         resources_.program_.hidden, convolution.spec.cache_length, session_.position_,
         stream_.get());
     linear(workspace_.op_output_.data(), *convolution.conv_out, workspace_.hidden_.data(),
-           1, resources_.program_.hidden, resources_.program_.hidden,
-           resources_.options_.fused_residuals ? 1.0f : 0.0f);
+           1, resources_.program_.hidden, resources_.program_.hidden);
 }
 
 void CudaCompiledModel::run_token_logits() {
