@@ -16,20 +16,26 @@ AttentionSpec make_attention(
     int query_heads,
     int key_value_heads,
     int head_dim,
-    bool query_key_norm) {
+    bool query_key_norm,
+    NormGranularity query_norm_granularity = NormGranularity::PerHead,
+    NormGranularity key_norm_granularity = NormGranularity::PerHead) {
     AttentionSpec attention;
     attention.query_heads = query_heads;
     attention.key_value_heads = key_value_heads;
     attention.head_dim = head_dim;
-    const auto optional_qk_norm = [&]() -> std::optional<NormSpec> {
+    const auto optional_qk_norm = [&](NormGranularity granularity)
+        -> std::optional<NormSpec> {
         if (!query_key_norm || !std::isfinite(*metadata.core.norm_epsilon) ||
             *metadata.core.norm_epsilon <= 0.0f) {
             return std::nullopt;
         }
-        return NormSpec{*metadata.core.norm_epsilon, NormWeightKind::Scale};
+        return NormSpec{
+            *metadata.core.norm_epsilon,
+            NormWeightKind::Scale,
+            granularity};
     };
-    attention.query_norm = optional_qk_norm();
-    attention.key_norm = attention.query_norm;
+    attention.query_norm = optional_qk_norm(query_norm_granularity);
+    attention.key_norm = optional_qk_norm(key_norm_granularity);
     attention.pattern = FullCausalPattern{};
     attention.query_scale = 1.0f;
     std::visit([&](const auto& position) {
@@ -80,8 +86,7 @@ const TensorInventoryEntry* find_optional_unique(
     const TensorInventory& inventory,
     const std::vector<std::string>& candidates,
     TensorRole role,
-    int layer,
-    int head_dim) {
+    int layer) {
     const TensorInventoryEntry* found = nullptr;
     for (const std::string& candidate : candidates) {
         if (const auto* tensor = inventory.find(candidate)) {
@@ -95,13 +100,28 @@ const TensorInventoryEntry* find_optional_unique(
             found = tensor;
         }
     }
-    if (found != nullptr && !shape_is(*found, {head_dim})) {
-        fail(
-            ResolutionFailureKind::ShapeConstraintViolation,
-            "tensor " + found->name + " has a shape inconsistent with " +
-                std::string(tensor_role_name(role)));
-    }
     return found;
+}
+
+NormGranularity infer_qk_norm_granularity(
+    const TensorInventoryEntry& tensor,
+    TensorRole role,
+    int layer,
+    int per_head_width,
+    int whole_width) {
+    if (shape_is(tensor, {per_head_width})) {
+        return NormGranularity::PerHead;
+    }
+    if (shape_is(tensor, {whole_width})) {
+        return NormGranularity::WholeVector;
+    }
+    fail(
+        ResolutionFailureKind::ShapeConstraintViolation,
+        "tensor " + tensor.name + " has a shape inconsistent with " +
+            std::string(tensor_role_name(role)) + " for layer " +
+            std::to_string(layer) + "; expected per-head width " +
+            std::to_string(per_head_width) + " or whole-projection width " +
+            std::to_string(whole_width));
 }
 
 /// Recognizes the ordinary GQA attention grammar (q/k/v/o projections and
@@ -158,13 +178,21 @@ public:
                     std::to_string(layer));
         }
 
+        const int query_width = *query_heads * head_dim;
+        const int key_value_width = *key_value_heads * head_dim;
         const TensorInventoryEntry* query_norm = find_optional_unique(
             input.inventory, query_norm_candidates(layer),
-            TensorRole::AttentionQueryNorm, layer, head_dim);
+            TensorRole::AttentionQueryNorm, layer);
         const TensorInventoryEntry* key_norm = find_optional_unique(
             input.inventory, key_norm_candidates(layer),
-            TensorRole::AttentionKeyNorm, layer, head_dim);
+            TensorRole::AttentionKeyNorm, layer);
         const bool metadata_qk_norm = *m.attention.query_key_norm;
+        if (metadata_qk_norm && (query_norm == nullptr || key_norm == nullptr)) {
+            fail(
+                ResolutionFailureKind::MissingTensorRole,
+                "query/key normalization is declared but its tensors are incomplete for layer " +
+                    std::to_string(layer));
+        }
         const bool has_query_norm = metadata_qk_norm || query_norm != nullptr;
         const bool has_key_norm = metadata_qk_norm || key_norm != nullptr;
         if (has_query_norm != has_key_norm) {
@@ -174,12 +202,31 @@ public:
                     std::to_string(layer));
         }
 
+        const NormGranularity query_norm_granularity = query_norm
+            ? infer_qk_norm_granularity(
+                  *query_norm,
+                  TensorRole::AttentionQueryNorm,
+                  layer,
+                  head_dim,
+                  query_width)
+            : NormGranularity::PerHead;
+        const NormGranularity key_norm_granularity = key_norm
+            ? infer_qk_norm_granularity(
+                  *key_norm,
+                  TensorRole::AttentionKeyNorm,
+                  layer,
+                  head_dim,
+                  key_value_width)
+            : NormGranularity::PerHead;
+
         AttentionSpec attention = make_attention(
             m,
             *query_heads,
             *key_value_heads,
             head_dim,
-            has_query_norm);
+            has_query_norm,
+            query_norm_granularity,
+            key_norm_granularity);
 
         const auto q_candidates =
             attention_tensor_candidates(layer, "q_proj.weight");
