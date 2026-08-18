@@ -47,9 +47,18 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir(parents=True)
 
+    info = HfApi().model_info(
+        args.repo,
+        revision=args.revision,
+        files_metadata=True,
+    )
+    revision = info.sha
+    if not revision:
+        raise RuntimeError("Hugging Face did not return a resolved revision")
+
     snapshot_download(
         repo_id=args.repo,
-        revision=args.revision,
+        revision=revision,
         local_dir=output,
         allow_patterns=[
             "*.json",
@@ -59,11 +68,6 @@ def main() -> None:
         ],
     )
 
-    info = HfApi().model_info(
-        args.repo,
-        revision=args.revision,
-        files_metadata=True,
-    )
     sibling = next(
         (entry for entry in info.siblings if entry.rfilename == args.filename),
         None,
@@ -74,7 +78,7 @@ def main() -> None:
     url = hf_hub_url(
         repo_id=args.repo,
         filename=args.filename,
-        revision=args.revision,
+        revision=revision,
     )
     prefix8 = read_prefix(url, 8)
     header_size = int.from_bytes(prefix8, "little", signed=False)
@@ -88,7 +92,7 @@ def main() -> None:
         handle.truncate(int(sibling.size))
 
     print(f"repo={args.repo}")
-    print(f"revision={info.sha}")
+    print(f"revision={revision}")
     print(f"file={args.filename}")
     print(f"remote_size={sibling.size}")
     print(f"header_size={header_size}")
