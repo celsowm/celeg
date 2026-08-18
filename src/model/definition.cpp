@@ -38,15 +38,18 @@ void validate_rope_scaling(const RopeScalingSpec& scaling, int rotary_dimension)
                 throw std::invalid_argument("scaled RoPE requires an original context length");
             }
         } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
-            if (!(value.factor > 0.0) || !std::isfinite(value.factor)) {
-                throw std::invalid_argument("RoPE scaling factor must be positive");
+            if (!(value.factor >= 1.0) || !std::isfinite(value.factor)) {
+                throw std::invalid_argument("YaRN scaling factor must be at least one");
+            }
+            if (value.original_context <= 0) {
+                throw std::invalid_argument("YaRN requires an original context length");
             }
             if (!std::isfinite(value.attention_factor) || value.attention_factor <= 0.0) {
                 throw std::invalid_argument("RoPE attention factor must be positive");
             }
             if (!std::isfinite(value.beta_fast) || !std::isfinite(value.beta_slow) ||
-                value.beta_fast < 0.0 || value.beta_slow < 0.0 ||
-                value.beta_fast > value.beta_slow) {
+                value.beta_fast <= 0.0 || value.beta_slow <= 0.0 ||
+                value.beta_fast < value.beta_slow) {
                 throw std::invalid_argument("invalid YaRN beta range");
             }
         } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
