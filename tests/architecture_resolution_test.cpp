@@ -125,6 +125,13 @@ bool equivalent_weight_plan(const celeg::WeightPlan& a, const celeg::WeightPlan&
     return true;
 }
 
+bool has_weight_role(const celeg::WeightPlan& plan, celeg::TensorRole role, int layer) {
+    for (const auto& request : plan.requests) {
+        if (request.role == role && request.layer == layer) return true;
+    }
+    return false;
+}
+
 celeg::ResolvedModel resolve_structural_identity(const celeg::ArchitectureCatalog& catalog,
                                                  std::string model_type) {
     auto metadata = structural_metadata(std::move(model_type));
@@ -211,18 +218,24 @@ int main() {
     CELEG_TEST_CHECK(!pre_only.graph.layers[0].mixer_norm.after.has_value());
     CELEG_TEST_CHECK(pre_only.graph.layers[0].feed_forward_norm.before.has_value());
     CELEG_TEST_CHECK(!pre_only.graph.layers[0].feed_forward_norm.after.has_value());
-    CELEG_TEST_CHECK(pre_only.weight_plan.find(celeg::TensorRole::AttentionInputNorm, 0) != nullptr);
-    CELEG_TEST_CHECK(pre_only.weight_plan.find(celeg::TensorRole::AttentionPostNorm, 0) == nullptr);
+    CELEG_TEST_CHECK(has_weight_role(pre_only.weight_plan,
+                                     celeg::TensorRole::AttentionInputNorm, 0));
+    CELEG_TEST_CHECK(!has_weight_role(pre_only.weight_plan,
+                                      celeg::TensorRole::AttentionPostNorm, 0));
 
     const auto post_only = resolve_norm_layout(catalog, NormFixtureLayout::PostOnly);
     CELEG_TEST_CHECK(!post_only.graph.layers[0].mixer_norm.before.has_value());
     CELEG_TEST_CHECK(post_only.graph.layers[0].mixer_norm.after.has_value());
     CELEG_TEST_CHECK(!post_only.graph.layers[0].feed_forward_norm.before.has_value());
     CELEG_TEST_CHECK(post_only.graph.layers[0].feed_forward_norm.after.has_value());
-    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::AttentionInputNorm, 0) == nullptr);
-    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::AttentionPostNorm, 0) != nullptr);
-    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::FfnInputNorm, 0) == nullptr);
-    CELEG_TEST_CHECK(post_only.weight_plan.find(celeg::TensorRole::FfnOutputNorm, 0) != nullptr);
+    CELEG_TEST_CHECK(!has_weight_role(post_only.weight_plan,
+                                      celeg::TensorRole::AttentionInputNorm, 0));
+    CELEG_TEST_CHECK(has_weight_role(post_only.weight_plan,
+                                     celeg::TensorRole::AttentionPostNorm, 0));
+    CELEG_TEST_CHECK(!has_weight_role(post_only.weight_plan,
+                                      celeg::TensorRole::FfnInputNorm, 0));
+    CELEG_TEST_CHECK(has_weight_role(post_only.weight_plan,
+                                     celeg::TensorRole::FfnOutputNorm, 0));
 
     const auto sandwich = resolve_norm_layout(catalog, NormFixtureLayout::Sandwich);
     CELEG_TEST_CHECK(sandwich.graph.layers[0].mixer_norm.before.has_value());
