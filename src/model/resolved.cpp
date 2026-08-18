@@ -37,8 +37,9 @@ void append_rope(std::ostringstream& out, const RopePositionSpec& rope) {
         } else if constexpr (std::is_same_v<Scaling, DynamicNtkRopeScaling>) {
             out << "dynamic_ntk:" << scaling.factor << ':' << scaling.original_context;
         } else if constexpr (std::is_same_v<Scaling, YarnRopeScaling>) {
-            out << "yarn:" << scaling.factor << ':' << scaling.attention_factor << ':'
-                << scaling.beta_fast << ':' << scaling.beta_slow;
+            out << "yarn:" << scaling.factor << ':' << scaling.original_context << ':'
+                << scaling.attention_factor << ':' << scaling.beta_fast << ':'
+                << scaling.beta_slow;
         } else if constexpr (std::is_same_v<Scaling, LongRopeScaling>) {
             out << "long:" << scaling.original_context << ":short=";
             for (float value : scaling.short_factors) out << value << ',';
@@ -434,6 +435,19 @@ void ModelGraph::validate() const {
         if (const auto* attention = std::get_if<AttentionSpec>(&layer.mixer)) {
             if (attention->query_norm) attention->query_norm->validate();
             if (attention->key_norm) attention->key_norm->validate();
+            std::visit([&](const auto& position) {
+                using Position = std::decay_t<decltype(position)>;
+                if constexpr (std::is_same_v<Position, NoPositionEncodingSpec>) {
+                    return;
+                } else if constexpr (std::is_same_v<Position, RopePositionSpec>) {
+                    position.validate(attention->head_dim);
+                } else if constexpr (std::is_same_v<Position, MultiAxisRopeSpec>) {
+                    position.validate(attention->head_dim);
+                } else {
+                    static_assert(always_false_v<Position>,
+                                  "unhandled position validation variant");
+                }
+            }, attention->position);
             if (const auto* sliding = std::get_if<SlidingWindowPattern>(&attention->pattern);
                 sliding && sliding->window <= 0) {
                 throw std::runtime_error("sliding-window attention has invalid window");
