@@ -125,8 +125,6 @@ void execute_cpu_mamba2_token(
     }
     shared.linear.gemv(weights.out, workspace.op_output.data(),
                        workspace.hidden.data());
-    cpu_residual_add(workspace.hidden.data(), workspace.residual.data(),
-                     shared.program.hidden);
 }
 
 void execute_cpu_short_convolution_token(
