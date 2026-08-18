@@ -18,7 +18,20 @@ jobs:
       - name: Diagnose
         run: python3 scripts/dev.py doctor --backend cpu --json > doctor-linux-cpu.json
       - name: Build and verify
-        run: python3 scripts/dev.py verify --backend cpu --build-type Release --jobs 2
+        shell: bash
+        run: |
+          set +e
+          python3 scripts/dev.py verify --backend cpu --build-type Release --jobs 2 > verify-linux-cpu.log 2>&1
+          code=$?
+          echo "EXIT_CODE=$code" >> verify-linux-cpu.log
+          exit "$code"
+      - name: Upload CPU compile log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-linux-cpu
+          path: verify-linux-cpu.log
+          if-no-files-found: ignore
       - name: Inspect VNNI code generation
         run: BUILD_DIR=out/linux-cpu-release bash ./scripts/cpu_vnni_check.sh
       - name: Verify no CUDA dependency
