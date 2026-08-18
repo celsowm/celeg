@@ -5,6 +5,7 @@
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/model/resolved.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
