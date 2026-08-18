@@ -147,11 +147,13 @@ void run_factorized_latent_attention(
             workspace.prefill_attention_gate_.data(),
             rows * layout.latent_output_width(), model.stream_.get());
     }
+    const bool fuse_residual = model.resources_.options_.fused_residuals &&
+        !semantics.mixer_norm.after.has_value() &&
+        !std::holds_alternative<std::monostate>(semantics.feed_forward);
     model.linear(
         workspace.prefill_latent_decompressed_.data(), *attention.out,
-        workspace.prefill_hidden_.data(), rows, hidden, layout.latent_output_width(),
-        model.resources_.options_.fused_residuals && !semantics.mixer_norm.after
-            ? 1.0f : 0.0f);
+        workspace.prefill_hidden_.data(), rows, hidden,
+        layout.latent_output_width(), fuse_residual ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,
         semantics.residual.multiplier, model.stream_.get());
