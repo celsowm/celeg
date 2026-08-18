@@ -6,6 +6,15 @@
 namespace celeg {
 namespace {
 
+__device__ __forceinline__ float yarn_correction_dimension(
+    float rotations, int rotary_dimension, float theta, int original_context) {
+    const float numerator = static_cast<float>(rotary_dimension) *
+        logf(static_cast<float>(original_context) /
+             (rotations * 6.28318530717958647692f));
+    const float denominator = 2.0f * logf(theta);
+    return numerator / denominator;
+}
+
 __device__ __forceinline__ float scaled_rope_frequency_for_pairing(
     float theta, int pair, int rotary_dimension, int position,
     CudaRopeScaling scaling) {
@@ -25,10 +34,18 @@ __device__ __forceinline__ float scaled_rope_frequency_for_pairing(
     if (scaling.kind == 1) {
         frequency /= scaling.factor;
     } else if (scaling.kind == 3) {
-        const float span = fmaxf(1.0f, scaling.beta_slow - scaling.beta_fast);
+        const float low = floorf(yarn_correction_dimension(
+            scaling.beta_fast, rotary_dimension, theta, scaling.original_context));
+        const float high = ceilf(yarn_correction_dimension(
+            scaling.beta_slow, rotary_dimension, theta, scaling.original_context));
+        const float clipped_low = fmaxf(0.0f, low);
+        const float clipped_high = fminf(
+            static_cast<float>(rotary_dimension - 1), high);
+        const float span = fmaxf(0.001f, clipped_high - clipped_low);
         const float ramp = fminf(1.0f, fmaxf(0.0f,
-            (static_cast<float>(pair) - scaling.beta_fast) / span));
-        frequency /= 1.0f + ramp * (scaling.factor - 1.0f);
+            (static_cast<float>(pair) - clipped_low) / span));
+        const float interpolated = frequency / scaling.factor;
+        frequency = interpolated * (1.0f - ramp) + frequency * ramp;
     } else if (scaling.kind == 4) {
         if (pair < scaling.factor_count) {
             const float factor = position > scaling.original_context
