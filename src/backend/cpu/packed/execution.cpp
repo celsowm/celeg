@@ -57,17 +57,17 @@ struct CpuCompiledModel::BatchScratch {
         };
         auto rows_for = [&](const auto& body) { parallel_for(rows, body); };
         auto rmsnorm_rows = [&](const float* input, const std::vector<float>& weight,
-                                float* output, size_t width) {
+                                float* output, size_t width, float epsilon) {
             rows_for([&](size_t row) {
                 cpu_rmsnorm(input + row * width, weight.data(), output + row * width,
-                            width, shared.program.final_norm.epsilon);
+                            width, epsilon);
             });
         };
         auto rmsnorm_rows_inplace = [&](float* values, const std::vector<float>& weight,
-                                        size_t width) {
+                                        size_t width, float epsilon) {
             rows_for([&](size_t row) {
                 cpu_rmsnorm_inplace(values + row * width, weight.data(), width,
-                                    shared.program.final_norm.epsilon);
+                                    epsilon);
             });
         };
         auto residual_rows = [&](float* values, const float* residual, size_t width) {
@@ -125,8 +125,13 @@ struct CpuCompiledModel::BatchScratch {
             const CommonWeights& common = sessions.front()->common_weights(index);
             const CompiledLayerProgram& layer_semantics = shared.program.layers.at(index);
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-            rmsnorm_rows(workspace_.hidden.data(), common.operator_norm,
-                         workspace_.normed.data(), hidden);
+            if (layer_semantics.mixer_norm.before) {
+                rmsnorm_rows(workspace_.hidden.data(), common.operator_norm,
+                             workspace_.normed.data(), hidden,
+                             layer_semantics.mixer_norm.before->epsilon);
+            } else {
+                std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+            }
             bool normed_q8_ready = false;
             auto layer_gemm = [&](const CpuLinearWeight& weight, const float* input,
                                   float* output, float beta = 0.0f) {
@@ -158,6 +163,9 @@ struct CpuCompiledModel::BatchScratch {
                            workspace_.gated_delta_b.data());
                 layer_gemm(gated_delta->a, workspace_.normed.data(),
                            workspace_.gated_delta_a.data());
+                const float recurrent_epsilon = layer_semantics.mixer_norm.before
+                    ? layer_semantics.mixer_norm.before->epsilon
+                    : shared.program.final_norm.epsilon;
                 rows_for([&](size_t row) {
                     GatedDeltaNetState& state = sessions[row]->gated_delta_net_state(index);
                     cpu_gated_delta_net_decode(
@@ -171,7 +179,7 @@ struct CpuCompiledModel::BatchScratch {
                         workspace_.gated_delta_output.data() + row * value_width,
                         spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                         spec.key_heads, spec.value_heads,
-                        layer_semantics.operator_norm.epsilon, spec.vector_decay,
+                        recurrent_epsilon, spec.vector_decay,
                         spec.safe_decay, spec.decay_lower_bound,
                         spec.sigmoid_output_gate);
                 });
@@ -284,45 +292,45 @@ struct CpuCompiledModel::BatchScratch {
                     }
                     layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 } else {
-                const size_t q_width = static_cast<size_t>(layout.query_width());
-                const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
-            const bool attention_output_gate = layout.output_gate.has_value() ||
-                    q_projection_width == 2 * q_width;
-                const size_t kv_width = static_cast<size_t>(layout.key_value_width());
-                layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());
-                if (!attention->k.segments.empty()) {
-                    layer_gemm(attention->k, workspace_.normed.data(), workspace_.op_output.data());
-                    layer_gemm(attention->v, workspace_.normed.data(), workspace_.conv_projected.data());
-                }
-                rows_for([&](size_t row) {
-                    float* q = workspace_.qkv.data() + row * q_projection_width;
-                    float* k = workspace_.op_output.data() + row * kv_width;
-                    const int position = sessions[row]->session_.position_value;
-                    const std::array<int32_t, 3> rope_position = {
-                        position, position, position};
-                    apply_cpu_attention_qk(layout, *attention, q, k,
-                                           position, rope_position);
-                });
-                for (size_t row = 0; row < rows; ++row) {
-                    const int owner = shared.layer_to_kv_owner.at(index);
-                    AttentionState& state = sessions[row]->attention_state(static_cast<size_t>(owner));
+                    const size_t q_width = static_cast<size_t>(layout.query_width());
+                    const size_t q_projection_width = static_cast<size_t>(attention->q.rows);
+                    const bool attention_output_gate = layout.output_gate.has_value() ||
+                        q_projection_width == 2 * q_width;
+                    const size_t kv_width = static_cast<size_t>(layout.key_value_width());
+                    layer_gemm(attention->q, workspace_.normed.data(), workspace_.qkv.data());
                     if (!attention->k.segments.empty()) {
-                        sessions[row]->store_kv(state, sessions[row]->session_.position_value,
-                                                workspace_.op_output.data() + row * kv_width,
-                                                workspace_.conv_projected.data() + row * kv_width);
+                        layer_gemm(attention->k, workspace_.normed.data(), workspace_.op_output.data());
+                        layer_gemm(attention->v, workspace_.normed.data(), workspace_.conv_projected.data());
                     }
-                    sessions[row]->run_attention(state, layout,
-                                                 workspace_.qkv.data() + row * q_projection_width,
-                                                 workspace_.op_output.data() + row * q_width,
-                                                 sessions[row]->session_.position_value + 1,
-                                                 attention->relative_bias);
-                    if (attention_output_gate) {
-                        const float* gate = workspace_.qkv.data() + row * q_projection_width + q_width;
-                        float* output = workspace_.op_output.data() + row * q_width;
-                        apply_cpu_attention_output_gate(output, gate, q_width);
+                    rows_for([&](size_t row) {
+                        float* q = workspace_.qkv.data() + row * q_projection_width;
+                        float* k = workspace_.op_output.data() + row * kv_width;
+                        const int position = sessions[row]->session_.position_value;
+                        const std::array<int32_t, 3> rope_position = {
+                            position, position, position};
+                        apply_cpu_attention_qk(layout, *attention, q, k,
+                                               position, rope_position);
+                    });
+                    for (size_t row = 0; row < rows; ++row) {
+                        const int owner = shared.layer_to_kv_owner.at(index);
+                        AttentionState& state = sessions[row]->attention_state(static_cast<size_t>(owner));
+                        if (!attention->k.segments.empty()) {
+                            sessions[row]->store_kv(state, sessions[row]->session_.position_value,
+                                                    workspace_.op_output.data() + row * kv_width,
+                                                    workspace_.conv_projected.data() + row * kv_width);
+                        }
+                        sessions[row]->run_attention(state, layout,
+                                                     workspace_.qkv.data() + row * q_projection_width,
+                                                     workspace_.op_output.data() + row * q_width,
+                                                     sessions[row]->session_.position_value + 1,
+                                                     attention->relative_bias);
+                        if (attention_output_gate) {
+                            const float* gate = workspace_.qkv.data() + row * q_projection_width + q_width;
+                            float* output = workspace_.op_output.data() + row * q_width;
+                            apply_cpu_attention_output_gate(output, gate, q_width);
+                        }
                     }
-                }
-                layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
+                    layer_gemm(attention->out, workspace_.op_output.data(), workspace_.hidden.data());
                 }
               });
             if (layer_semantics.residual.multiplier != 1.0f) {
@@ -331,11 +339,22 @@ struct CpuCompiledModel::BatchScratch {
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_attention_norm.has_value()) {
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.post_attention_norm, hidden);
+            if (layer_semantics.mixer_norm.after) {
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.post_attention_norm, hidden,
+                                     layer_semantics.mixer_norm.after->epsilon);
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
-            rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm, workspace_.normed.data(), hidden);
+            if (std::holds_alternative<std::monostate>(layer_semantics.feed_forward)) {
+                continue;
+            }
+            if (layer_semantics.feed_forward_norm.before) {
+                rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm,
+                             workspace_.normed.data(), hidden,
+                             layer_semantics.feed_forward_norm.before->epsilon);
+            } else {
+                std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+            }
+            normed_q8_ready = false;
             if (const auto* moe = std::get_if<MoeWeights>(&layer_program.feed_forward)) {
                 const MoeLayerProgram& semantics =
                     std::get<MoeLayerProgram>(shared.program.layers[index].feed_forward);
@@ -502,8 +521,9 @@ struct CpuCompiledModel::BatchScratch {
                     for (size_t d = 0; d < hidden; ++d) values[d] *= layer_semantics.residual.multiplier;
                 });
             }
-            if (layer_semantics.post_feed_forward_norm.has_value()) {
-                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm, hidden);
+            if (layer_semantics.feed_forward_norm.after) {
+                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.post_feed_forward_norm, hidden,
+                                     layer_semantics.feed_forward_norm.after->epsilon);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);
             normed_q8_ready = false;
@@ -528,7 +548,8 @@ struct CpuCompiledModel::BatchScratch {
                 });
                 shared.linear.gemm(dense_weights->per_layer_projection, workspace_.per_layer_gate.data(),
                                    workspace_.hidden.data(), rows);
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.per_layer_input_norm, hidden);
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.per_layer_input_norm, hidden,
+                                     input_plan.norm_epsilon);
                 if (common.layer_scalar != 1.0f) {
                     rows_for([&](size_t row) {
                         float* values = workspace_.hidden.data() + row * hidden;
@@ -541,7 +562,8 @@ struct CpuCompiledModel::BatchScratch {
                                    shared.program.norm_after_layers.end(),
                                    static_cast<int>(index))) {
                 rmsnorm_rows_inplace(workspace_.hidden.data(),
-                                     shared.weight_store.final_norm, hidden);
+                                     shared.weight_store.final_norm, hidden,
+                                     shared.program.final_norm.epsilon);
             }
         }
         for (size_t row = 0; row < rows; ++row) {
