@@ -43,21 +43,23 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         }
         return values;
     };
-    common.operator_norm = load_norm(TensorRole::AttentionInputNorm,
-                                     layer_program.operator_norm);
-    if (std::holds_alternative<std::monostate>(layer_program.feed_forward)) {
-        common.ffn_norm = common.operator_norm;
-        return common;
+    if (layer_program.mixer_norm.before) {
+        common.operator_norm = load_norm(
+            TensorRole::AttentionInputNorm, *layer_program.mixer_norm.before);
     }
-    if (layer_program.post_attention_norm) {
-        common.post_attention_norm = load_norm(TensorRole::AttentionPostNorm,
-                                               *layer_program.post_attention_norm);
+    if (layer_program.mixer_norm.after) {
+        common.post_attention_norm = load_norm(
+            TensorRole::AttentionPostNorm, *layer_program.mixer_norm.after);
     }
-    common.ffn_norm = load_norm(TensorRole::FfnInputNorm,
-                                *layer_program.feed_forward_norm);
-    if (layer_program.post_feed_forward_norm) {
-        common.post_feed_forward_norm = load_norm(TensorRole::FfnOutputNorm,
-                                                  *layer_program.post_feed_forward_norm);
+    if (!std::holds_alternative<std::monostate>(layer_program.feed_forward)) {
+        if (layer_program.feed_forward_norm.before) {
+            common.ffn_norm = load_norm(
+                TensorRole::FfnInputNorm, *layer_program.feed_forward_norm.before);
+        }
+        if (layer_program.feed_forward_norm.after) {
+            common.post_feed_forward_norm = load_norm(
+                TensorRole::FfnOutputNorm, *layer_program.feed_forward_norm.after);
+        }
     }
     if (program.per_layer_input.enabled) {
         common.per_layer_input_norm = load_vector(source, reader, writer,
@@ -130,7 +132,7 @@ void CpuCompiledModel::Shared::load_weights() {
             CpuPackMetadata metadata;
             metadata.source_id = checkpoint.source_id;
             metadata.isa = cpu_isa_name(options.isa);
-            metadata.group_size = static_cast<uint32_t>(group_size);
+            metadata.group_size = group_size;
             writer = std::make_unique<CpuPackWriter>(checkpoint.pack_file, std::move(metadata));
         }
     }
@@ -196,7 +198,7 @@ void CpuCompiledModel::Shared::load_weights() {
                     layer.latent_q_projection = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryProjection, index),
-        {factorized->query_rank, program.hidden});
+                        {factorized->query_rank, program.hidden});
                     layer.latent_q_expansion = load_matrix(
                         source, reader.get(), writer.get(),
                         tensor_name(weight_requests, TensorRole::AttentionLatentQueryExpansion, index),
@@ -238,10 +240,10 @@ void CpuCompiledModel::Shared::load_weights() {
                 }
                 layer.k = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentKey, index),
-                        {latent.latent_rank, program.hidden});
+                    {latent.latent_rank, program.hidden});
                 layer.v = load_matrix(source, reader.get(), writer.get(),
                     tensor_name(weight_requests, TensorRole::AttentionLatentValue, index),
-                        {latent.latent_rank, program.hidden});
+                    {latent.latent_rank, program.hidden});
                 if (latent.decoupled_rope && latent.rope_head_dim != 0) {
                     layer.latent_k_rope = load_matrix(
                         source, reader.get(), writer.get(),
@@ -471,6 +473,7 @@ void CpuCompiledModel::Shared::load_weights() {
             }
 
             CpuLayerWeights layer;
+            layer.common = load_common(source, reader.get(), writer.get(), index);
             MoeWeights moe;
             const auto has_request = [&](TensorRole role, int expert = -1) {
                 return std::any_of(weight_requests.begin(), weight_requests.end(),
@@ -479,29 +482,12 @@ void CpuCompiledModel::Shared::load_weights() {
                                request.expert == expert;
                     });
             };
-            // The routed-expert checkpoint layout (packed vs individual) was
-            // already decided once, from real checkpoint evidence, when the
-            // weight plan was built (see append_moe() / bind_moe()); it is
-            // read here purely from which tensor roles the plan requested,
-            // never re-derived from tensor-name spellings.
             const bool individual_expert_model =
                 has_request(TensorRole::MoeExpertGate, 0);
             const bool packed_expert_model =
                 has_request(TensorRole::MoePackedGateUp);
             const MoeLayerProgram& moe_semantics = std::get<MoeLayerProgram>(
                 program.layers.at(static_cast<size_t>(index)).feed_forward);
-            layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
-                has_request(TensorRole::AttentionInputNorm)
-                    ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
-                    : layer_name(index, "operator_norm.weight"), {program.hidden});
-            layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
-                has_request(TensorRole::FfnInputNorm)
-                    ? tensor_name(weight_requests, TensorRole::FfnInputNorm, index)
-                    : layer_name(index, "ffn_norm.weight"), {program.hidden});
-            if (packed_expert_model) {
-                for (float& value : layer.common.operator_norm) value += 1.0f;
-                for (float& value : layer.common.ffn_norm) value += 1.0f;
-            }
             layer.mixer = load_operator(index, layer_program);
             moe.num_experts = moe_semantics.router.expert_count;
             moe.experts_per_token = moe_semantics.router.experts_per_token;
@@ -510,9 +496,7 @@ void CpuCompiledModel::Shared::load_weights() {
             moe.use_expert_bias = moe_semantics.router.has_expert_bias;
             moe.routed_scaling_factor = moe_semantics.router.routed_scaling;
             moe.router = load_vector(source, reader.get(), writer.get(),
-                has_request(TensorRole::MoeRouter)
-                    ? tensor_name(weight_requests, TensorRole::MoeRouter, index)
-                    : layer_name(index, "feed_forward.gate.weight"),
+                tensor_name(weight_requests, TensorRole::MoeRouter, index),
                 {moe_semantics.router.expert_count, program.hidden});
 
             if (packed_expert_model) {
@@ -562,13 +546,10 @@ void CpuCompiledModel::Shared::load_weights() {
                     {program.hidden, shared_intermediate});
             }
 
-            const std::string bias_name = has_request(TensorRole::MoeRouterBias)
-                ? tensor_name(weight_requests, TensorRole::MoeRouterBias, index)
-                : layer_name(index, "feed_forward.expert_bias.weight");
-            if ((source && source->contains(bias_name)) ||
-                (reader && reader->contains(bias_name))) {
+            if (has_request(TensorRole::MoeRouterBias)) {
                 moe.router_bias = load_vector(source, reader.get(), writer.get(),
-                    bias_name, {moe_semantics.router.expert_count});
+                    tensor_name(weight_requests, TensorRole::MoeRouterBias, index),
+                    {moe_semantics.router.expert_count});
             }
 
             if (!disk_cached_experts) {
