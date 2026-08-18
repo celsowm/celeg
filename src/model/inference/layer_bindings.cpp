@@ -45,10 +45,6 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
         }
     }
     if (head == nullptr) {
-        // Models with a nested language-model trunk (e.g. multimodal/VL
-        // checkpoints) prefix the head and final norm with a subtree name such
-        // as "model.language_model.". Match any tensor whose final component is
-        // a known language-model head name regardless of its prefix.
         const std::vector<std::string> head_suffixes = {
             ".lm_head.weight",
             ".output.weight",
@@ -74,11 +70,6 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
         if (const bool already_determined =
                 m.core.tied_embeddings.has_value();
             !already_determined && context.embedding != nullptr) {
-            // Safetensors checkpoints frequently omit the language-model head
-            // when it is tied to the token embedding (transformers' default for
-            // many families). The GGUF path infers this from the format; mirror
-            // that here so the head is recovered generically from the embedding
-            // rather than failing on a missing tensor.
             facts.tied_embeddings = true;
             facts.evidence.push_back({
                 EvidenceKind::Derived,
@@ -125,9 +116,6 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
         }
     }
     if (final_norm == nullptr) {
-        // Same nested-prefix handling as the language-model head: a multimodal
-        // or otherwise nested checkpoint may place the final norm under a trunk
-        // prefix (e.g. "model.language_model."). Match the trailing component.
         const std::vector<std::string> final_norm_suffixes = {
             ".embedding_norm.weight",
             ".norm.weight",
@@ -164,6 +152,142 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
             "final norm shape mismatch");
     }
     add_global_binding(context, TensorRole::FinalNorm, *final_norm);
+}
+
+const TensorInventoryEntry* find_optional_norm(
+    const TensorInventory& inventory,
+    const std::vector<std::string>& candidates,
+    TensorRole role,
+    int layer,
+    int hidden) {
+    const TensorInventoryEntry* match = nullptr;
+    for (const std::string& candidate : candidates) {
+        if (const auto* tensor = inventory.find(candidate)) {
+            if (match != nullptr) {
+                fail(
+                    ResolutionFailureKind::AmbiguousTensorBinding,
+                    "automatic resolution found multiple bindings for " +
+                        std::string(tensor_role_name(role)) + " for layer " +
+                        std::to_string(layer));
+            }
+            match = tensor;
+        }
+    }
+    if (match != nullptr && !shape_is(*match, {hidden})) {
+        fail(
+            ResolutionFailureKind::ShapeConstraintViolation,
+            "tensor " + match->name + " has a shape inconsistent with " +
+                std::string(tensor_role_name(role)));
+    }
+    return match;
+}
+
+void bind_structural_norm(CanonicalInferenceContext& context,
+                          int layer,
+                          TensorRole role,
+                          const TensorInventoryEntry* tensor,
+                          std::optional<NormSpec>& slot) {
+    if (tensor == nullptr) {
+        slot.reset();
+        return;
+    }
+    slot = NormSpec{
+        context.facts.numerical_policy.norm_eps,
+        NormWeightKind::Scale};
+    add_binding(
+        context.facts.bindings,
+        role,
+        layer,
+        *tensor,
+        {{EvidenceKind::TensorName,
+          tensor->name,
+          std::string(tensor_role_name(role))}});
+}
+
+void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
+                                int layer) {
+    const auto& input = context.input;
+    const int hidden = *input.metadata.core.hidden_size;
+    const std::string index = std::to_string(layer);
+    LayerSpec& semantic_layer =
+        context.facts.graph.layers[static_cast<size_t>(layer)];
+
+    const std::vector<std::string> mixer_before_candidates = {
+        "transformer.h." + index + ".ln_1.weight",
+        "model.layers." + index + ".input_layernorm.weight",
+        "model.layers." + index + ".self_attn_layer_norm.weight",
+        "model.language_model.layers." + index + ".input_layernorm.weight",
+        "model.language_model.layers." + index + ".operator_norm.weight",
+        "model.layers." + index + ".operator_norm.weight",
+        "backbone.layers." + index + ".norm.weight",
+        "blk." + index + ".attn_norm.weight",
+    };
+    const std::vector<std::string> mixer_after_candidates = {
+        "model.layers." + index + ".post_attention_layernorm.weight",
+        "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+        "model.layers." + index + ".post_attention_norm.weight",
+        "model.language_model.layers." + index + ".post_attention_norm.weight",
+        "blk." + index + ".post_attention_norm.weight",
+    };
+    const std::vector<std::string> ffn_before_candidates = {
+        "transformer.h." + index + ".ln_2.weight",
+        "model.layers." + index + ".pre_feedforward_layernorm.weight",
+        "model.language_model.layers." + index + ".pre_feedforward_layernorm.weight",
+        "model.layers." + index + ".pre_feed_forward_layernorm.weight",
+        "model.language_model.layers." + index + ".pre_feed_forward_layernorm.weight",
+        "model.language_model.layers." + index + ".ffn_norm.weight",
+        "model.layers." + index + ".ffn_norm.weight",
+        "blk." + index + ".ffn_norm.weight",
+    };
+    const std::vector<std::string> ffn_after_candidates = {
+        "model.layers." + index + ".post_feedforward_layernorm.weight",
+        "model.language_model.layers." + index + ".post_feedforward_layernorm.weight",
+        "model.layers." + index + ".post_feed_forward_layernorm.weight",
+        "model.language_model.layers." + index + ".post_feed_forward_layernorm.weight",
+        "model.layers." + index + ".post_ffn_norm.weight",
+        "model.language_model.layers." + index + ".post_ffn_norm.weight",
+        "blk." + index + ".post_ffn_norm.weight",
+        "blk." + index + ".ffn_post_norm.weight",
+    };
+
+    const TensorInventoryEntry* mixer_before = find_optional_norm(
+        input.inventory, mixer_before_candidates,
+        TensorRole::AttentionInputNorm, layer, hidden);
+    const TensorInventoryEntry* mixer_after = find_optional_norm(
+        input.inventory, mixer_after_candidates,
+        TensorRole::AttentionPostNorm, layer, hidden);
+    const TensorInventoryEntry* ffn_before = find_optional_norm(
+        input.inventory, ffn_before_candidates,
+        TensorRole::FfnInputNorm, layer, hidden);
+    const TensorInventoryEntry* ffn_after = find_optional_norm(
+        input.inventory, ffn_after_candidates,
+        TensorRole::FfnOutputNorm, layer, hidden);
+
+    bind_structural_norm(
+        context, layer, TensorRole::AttentionInputNorm,
+        mixer_before, semantic_layer.mixer_norm.before);
+    bind_structural_norm(
+        context, layer, TensorRole::AttentionPostNorm,
+        mixer_after, semantic_layer.mixer_norm.after);
+
+    const bool has_feed_forward =
+        !std::holds_alternative<std::monostate>(semantic_layer.feed_forward);
+    if (!has_feed_forward && (ffn_before != nullptr || ffn_after != nullptr)) {
+        fail(
+            ResolutionFailureKind::ConflictingInferenceFacts,
+            "checkpoint exposes feed-forward normalization for a layer with no "
+            "feed-forward semantics: " + std::to_string(layer));
+    }
+    if (has_feed_forward) {
+        bind_structural_norm(
+            context, layer, TensorRole::FfnInputNorm,
+            ffn_before, semantic_layer.feed_forward_norm.before);
+        bind_structural_norm(
+            context, layer, TensorRole::FfnOutputNorm,
+            ffn_after, semantic_layer.feed_forward_norm.after);
+    } else {
+        semantic_layer.feed_forward_norm = {};
+    }
 }
 
 void bind_dense_ffn(CanonicalInferenceContext& context,
@@ -237,11 +361,6 @@ void bind_moe(CanonicalInferenceContext& context,
         });
     };
 
-    // Binds a tensor whose on-disk shape may legitimately vary between a
-    // packed [num_experts, rows, cols] layout and a flattened
-    // [num_experts * rows, cols] layout. The physical family (packed vs
-    // individual) is decided here, once, from real checkpoint evidence, so
-    // that backends never need to re-derive it from tensor-name spellings.
     const auto bind_packed = [&](TensorRole role, const std::string& name) {
         const auto* tensor = input.inventory.find(name);
         if (tensor == nullptr) {
@@ -260,9 +379,6 @@ void bind_moe(CanonicalInferenceContext& context,
         TensorRole::MoeRouter,
         prefix + "gate.weight",
         {num_experts, *m.core.hidden_size});
-    /// The router-bias tensor spelling is a checkpoint-family fact: resolve
-    /// it here, once, so backends read the bound name from the plan instead
-    /// of each probing their own literal fallback chain.
     std::optional<std::string> bias_name;
     for (const std::string& candidate : {
              prefix + "gate.expert_bias",
@@ -290,13 +406,6 @@ void bind_moe(CanonicalInferenceContext& context,
                 std::to_string(layer));
     }
 
-    // Decide the routed-expert checkpoint's physical layout (family) once,
-    // here, from real checkpoint evidence: individually-named
-    // "gate_proj/up_proj/down_proj" tensors per expert, individually-named
-    // "w1/w2/w3" tensors per expert (the convention GGUF native storage
-    // answers to), or a single tensor packing every expert's weights
-    // together. Backends must consume the resulting role set rather than
-    // re-probing the repository for these spellings themselves.
     const int expert_intermediate = moe->intermediate_size;
     const bool named_individual = has_tensor(prefix + "experts.0.gate_proj.weight");
     const bool raw_individual = !named_individual &&
@@ -382,35 +491,14 @@ void bind_moe(CanonicalInferenceContext& context,
     }
 }
 
-/// Binds the orthogonal feed-forward axis for one layer whose mixer rule
-/// already ran: the input norm plus either the routed-expert MoE grammar or
-/// the dense projections. Layers whose feed-forward is monostate (no FFN
-/// grammar, Mamba-2, or MLP-only mixers) bind nothing here.
 void resolve_layer_feed_forward(CanonicalInferenceContext& context,
-                                int layer,
-                                const std::vector<std::string>& ffn_norm_candidates) {
-    const auto& input = context.input;
-    const auto& m = input.metadata;
+                                int layer) {
     auto& facts = context.facts;
     const LayerSpec& semantic_layer =
         facts.graph.layers[static_cast<size_t>(layer)];
 
     if (std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer)) return;
     if (std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) return;
-
-    const auto* ffn_norm = find_unique(
-        input.inventory,
-        ffn_norm_candidates,
-        TensorRole::FfnInputNorm,
-        layer,
-        {*m.core.hidden_size},
-        {});
-    add_binding(
-        facts.bindings,
-        TensorRole::FfnInputNorm,
-        layer,
-        *ffn_norm,
-        {});
 
     if (std::holds_alternative<MixtureOfExpertsSpec>(semantic_layer.feed_forward)) {
         bind_moe(context, layer, std::to_string(layer));
@@ -420,9 +508,6 @@ void resolve_layer_feed_forward(CanonicalInferenceContext& context,
     }
 }
 
-/// Derives the default attention output scale from the first attention
-/// layer when the checkpoint metadata does not state one, and applies it to
-/// every attention layer's query scale.
 void apply_attention_output_scale(CanonicalInferenceContext& context) {
     const auto& m = context.input.metadata;
     auto& graph = context.facts.graph;
@@ -463,53 +548,16 @@ void apply_attention_output_scale(CanonicalInferenceContext& context) {
 }
 
 void resolve_canonical_layers(CanonicalInferenceContext& context) {
-    const auto& input = context.input;
-    const auto& m = input.metadata;
     auto& facts = context.facts;
     const auto rules = make_builtin_layer_inference_rules();
 
     bind_global_tensors(context);
     for (int layer = 0; layer < context.layer_count; ++layer) {
-        const std::string index = std::to_string(layer);
-
-        const std::vector<std::string> norm_candidates = {
-            "transformer.h." + index + ".ln_1.weight",
-            "model.layers." + index + ".input_layernorm.weight",
-            "model.layers." + index + ".self_attn_layer_norm.weight",
-            "model.language_model.layers." + index + ".input_layernorm.weight",
-            "model.language_model.layers." + index + ".operator_norm.weight",
-            "model.layers." + index + ".operator_norm.weight",
-            "backbone.layers." + index + ".norm.weight",
-            "blk." + index + ".attn_norm.weight",
-        };
-        const std::vector<std::string> ffn_norm_candidates = {
-            "transformer.h." + index + ".ln_2.weight",
-            "model.layers." + index + ".post_attention_layernorm.weight",
-            "model.language_model.layers." + index + ".post_attention_layernorm.weight",
-            "model.language_model.layers." + index + ".ffn_norm.weight",
-            "model.layers." + index + ".ffn_norm.weight",
-            "blk." + index + ".ffn_norm.weight",
-            "blk." + index + ".post_attention_norm.weight",
-        };
-
-        const auto* attention_norm = find_unique(
-            input.inventory,
-            norm_candidates,
-            TensorRole::AttentionInputNorm,
-            layer,
-            {*m.core.hidden_size},
-            {});
-        add_binding(
-            facts.bindings,
-            TensorRole::AttentionInputNorm,
-            layer,
-            *attention_norm,
-            {});
-
         const ILayerInferenceRule& rule =
             select_layer_inference_rule(rules, context, layer);
         rule.resolve(context, layer);
-        resolve_layer_feed_forward(context, layer, ffn_norm_candidates);
+        infer_and_bind_layer_norms(context, layer);
+        resolve_layer_feed_forward(context, layer);
     }
 
     apply_attention_output_scale(context);
