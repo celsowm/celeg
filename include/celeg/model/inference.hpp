@@ -56,8 +56,8 @@ struct UnresolvedPositionEncoding {};
 struct InferredRopePosition {
     double theta = 0.0;
     float rotary_fraction = 1.0f;
-    RopeScalingSpec scaling;
     RopePairingKind pairing = RopePairingKind::SplitHalf;
+    RopeScalingSpec scaling;
 
     friend bool operator==(const InferredRopePosition&, const InferredRopePosition&) = default;
 };
