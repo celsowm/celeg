@@ -38,8 +38,9 @@ struct DynamicNtkRopeScaling {
 struct YarnRopeScaling {
     double factor = 1.0;
     double attention_factor = 1.0;
-    double beta_fast = 0.0;
-    double beta_slow = 0.0;
+    double beta_fast = 32.0;
+    double beta_slow = 1.0;
+    int original_context = 0;
 };
 
 struct LongRopeScaling {
