@@ -218,6 +218,11 @@ void validate_query_key_norm_consistency(CanonicalInferenceContext& context,
                                          int layer) {
     const auto& metadata = context.input.metadata;
     if (!query_key_norm_was_explicit(metadata)) return;
+    const bool ordinary_attention =
+        context.facts.bindings.find(TensorRole::AttentionQuery, layer) != nullptr &&
+        context.facts.bindings.find(TensorRole::AttentionKey, layer) != nullptr &&
+        context.facts.bindings.find(TensorRole::AttentionValue, layer) != nullptr;
+    if (!ordinary_attention) return;
     const bool requested = metadata.attention.query_key_norm.value_or(false);
     const bool query_bound =
         context.facts.bindings.find(TensorRole::AttentionQueryNorm, layer) != nullptr;
