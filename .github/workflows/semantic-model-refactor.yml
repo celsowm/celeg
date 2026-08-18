@@ -8,6 +8,9 @@ name: Semantic model patch runner
       - scripts/prepare_yarn_definition.py
       - scripts/fix_yarn_semantics.py
       - .github/workflows/semantic-model-refactor.yml
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
