@@ -283,7 +283,12 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
                     std::to_string(layer));
         }
         ffn_before = pre_feedforward;
-        if (post_attention_layernorm != nullptr) {
+    }
+
+    if (post_attention_layernorm != nullptr) {
+        const bool post_norm_topology =
+            pre_feedforward != nullptr || ffn_after != nullptr;
+        if (post_norm_topology) {
             if (explicit_mixer_after != nullptr) {
                 fail(
                     ResolutionFailureKind::AmbiguousTensorBinding,
@@ -291,15 +296,15 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
                         std::to_string(layer));
             }
             mixer_after = post_attention_layernorm;
+        } else {
+            if (explicit_ffn_before != nullptr) {
+                fail(
+                    ResolutionFailureKind::AmbiguousTensorBinding,
+                    "post_attention_layernorm conflicts with another feed-forward input norm "
+                    "for layer " + std::to_string(layer));
+            }
+            ffn_before = post_attention_layernorm;
         }
-    } else if (post_attention_layernorm != nullptr) {
-        if (explicit_ffn_before != nullptr) {
-            fail(
-                ResolutionFailureKind::AmbiguousTensorBinding,
-                "post_attention_layernorm conflicts with another feed-forward input norm "
-                "for layer " + std::to_string(layer));
-        }
-        ffn_before = post_attention_layernorm;
     }
 
     bind_structural_norm(
