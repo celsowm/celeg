@@ -8,6 +8,8 @@ name: Semantic model refactor runner
       - scripts/apply_semantic_model_refactor_phase3.py
       - scripts/apply_semantic_model_refactor_phase4.py
       - scripts/apply_semantic_model_refactor_phase5.py
+      - scripts/apply_semantic_model_refactor_phase6.py
+      - scripts/apply_semantic_model_refactor_phase7.py
       - .github/workflows/semantic-model-refactor.yml
 
 permissions:
@@ -31,6 +33,8 @@ jobs:
           python scripts/apply_semantic_model_refactor_phase3.py
           python scripts/apply_semantic_model_refactor_phase4.py
           python scripts/apply_semantic_model_refactor_phase5.py
+          python scripts/apply_semantic_model_refactor_phase6.py
+          python scripts/apply_semantic_model_refactor_phase7.py
       - name: Verify CPU
         run: |
           set +e
