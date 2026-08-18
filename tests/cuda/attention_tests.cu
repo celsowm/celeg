@@ -72,6 +72,49 @@ void run_attention_tests(celeg::CudaStream& stream) {
 }
 
 {
+    const std::vector<__nv_bfloat16> q = {to_bf16(1), to_bf16(0)};
+    const std::vector<__nv_bfloat16> k = {
+        to_bf16(8), to_bf16(0),
+        to_bf16(0), to_bf16(1),
+        to_bf16(1), to_bf16(0)};
+    const std::vector<__nv_bfloat16> v = {
+        to_bf16(100), to_bf16(200),
+        to_bf16(10), to_bf16(20),
+        to_bf16(3), to_bf16(7)};
+    celeg::DeviceBuffer<__nv_bfloat16> dq(q.size()), dk(k.size()), dv(v.size());
+    celeg::DeviceBuffer<__nv_bfloat16> full_out(2), sliding_out(2);
+    CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
+    celeg::launch_gqa_decode_strict({
+        .query = dq.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = full_out.data(),
+        .geometry = {.q_heads = 1, .kv_heads = 1, .head_dim = 2,
+                     .sliding_window = 0},
+        .extent = {.seq_len = 3},
+        .stream = stream.get()});
+    celeg::launch_gqa_decode_strict({
+        .query = dq.data(),
+        .kv = {.keys = dk.data(), .values = dv.data()},
+        .out = sliding_out.data(),
+        .geometry = {.q_heads = 1, .kv_heads = 1, .head_dim = 2,
+                     .sliding_window = 1},
+        .extent = {.seq_len = 3},
+        .stream = stream.get()});
+    std::array<__nv_bfloat16, 2> full_host{};
+    std::array<__nv_bfloat16, 2> sliding_host{};
+    CELEG_CUDA(cudaMemcpyAsync(full_host.data(), full_out.data(), full_out.bytes(),
+                               cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaMemcpyAsync(sliding_host.data(), sliding_out.data(), sliding_out.bytes(),
+                               cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    expect_near(to_float(sliding_host[0]), 3.0f, 0.01f);
+    expect_near(to_float(sliding_host[1]), 7.0f, 0.01f);
+    CELEG_TEST_CHECK(std::abs(to_float(full_host[0]) - to_float(sliding_host[0])) > 1.0f);
+}
+
+{
     const std::vector<float> qf = {1, 0};
     const std::vector<float> kf = {1, 0, 0, 1};
     const std::vector<float> vf = {2, 4, 6, 8};
