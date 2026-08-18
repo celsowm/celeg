@@ -47,6 +47,10 @@ struct InferenceProposal {
     friend bool operator==(const InferenceProposal&, const InferenceProposal&) = default;
 };
 
+// Inferred positional-encoding outcome for a checkpoint's attention layers.
+// Exactly one alternative is ever populated, so an inferred RoPE payload can
+// never coexist with a "no position encoding" conclusion, and generic
+// semantic code consumes only this variant -- never an architecture name.
 struct UnresolvedPositionEncoding {};
 
 struct InferredRopePosition {
@@ -139,22 +143,27 @@ public:
     }
 };
 
+/// Decay parameter encoding in checkpoint weights: LogA (log-space parameter,
+/// needs exp transform at load/runtime) or Pretransformed (linear/already-decayed).
 enum class DecayParameterEncoding : std::uint8_t {
     LogA,
     Pretransformed,
 };
 
+/// Scoring function for MoE routing.
 enum class MoeRouterScoreFunction : std::uint8_t {
     Sigmoid,
     Softmax,
 };
 
+/// Expert selection algorithm for MoE routing.
 enum class MoeRouterSelectionMethod : std::uint8_t {
     TopK,
     Greedy,
     NoauxTc,
 };
 
+/// Core architectural dimensions and global parameters shared across layer families.
 struct CoreModelFacts {
     std::optional<int> hidden_size;
     LayerScopedValue<int> intermediate_size;
@@ -173,6 +182,7 @@ struct CoreModelFacts {
     std::optional<bool> feed_forward_auto_adjust;
 };
 
+/// Facts governing attention layer geometry, normalization, and positional encoding.
 struct AttentionFacts {
     LayerScopedValue<int> query_heads;
     LayerScopedValue<int> key_value_heads;
@@ -186,6 +196,7 @@ struct AttentionFacts {
     std::optional<float> xsa_minimum_norm_squared;
 };
 
+/// Facts governing before/after normalization placement around each sublayer.
 struct StructuralNormFacts {
     LayerScopedValue<bool> mixer_before;
     LayerScopedValue<bool> mixer_after;
@@ -193,6 +204,7 @@ struct StructuralNormFacts {
     LayerScopedValue<bool> feed_forward_after;
 };
 
+/// Facts governing factorized/multi-head latent attention (MLA).
 struct LatentAttentionFacts {
     std::optional<int> query_rank;
     std::optional<int> kv_rank;
@@ -202,10 +214,12 @@ struct LatentAttentionFacts {
     std::optional<int> value_head_dim;
 };
 
+/// Facts governing short-convolution mixer layers.
 struct ShortConvolutionFacts {
     std::optional<int> cache_length;
 };
 
+/// Facts governing recurrent gated-delta-net / linear-attention layers.
 struct GatedDeltaFacts {
     std::optional<int> conv_kernel;
     std::optional<int> key_heads;
@@ -217,6 +231,7 @@ struct GatedDeltaFacts {
     DecayParameterEncoding decay_encoding = DecayParameterEncoding::LogA;
 };
 
+/// Facts governing Mamba-2 SSM mixer layers.
 struct Mamba2Facts {
     std::optional<int> intermediate;
     std::optional<int> state_size;
@@ -229,6 +244,7 @@ struct Mamba2Facts {
     DecayParameterEncoding decay_encoding = DecayParameterEncoding::LogA;
 };
 
+/// Facts governing mixture-of-experts (MoE) routing and layout.
 struct MoeFacts {
     std::optional<int> first_dense_layer;
     std::optional<int> experts;
@@ -245,6 +261,7 @@ struct MoeFacts {
     std::optional<MoeRouterSelectionMethod> selection_method;
 };
 
+/// Normalized checkpoint metadata decomposed into typed fact groups.
 struct NormalizedModelMetadata {
     CoreModelFacts core;
     AttentionFacts attention;
@@ -349,6 +366,10 @@ public:
 
 class ResolutionAssembler {
 public:
+    // `repository` lets weight-plan resolution confirm candidate tensor
+    // names actually exist in the checkpoint rather than trusting the
+    // first candidate blindly. Pass nullptr only when no checkpoint
+    // repository is available (e.g. synthetic facts in tests).
     ResolvedModel assemble(const CanonicalModelFacts& facts,
                            const IWeightRepository* repository) const;
 };
