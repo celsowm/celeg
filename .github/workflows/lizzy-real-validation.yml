@@ -33,7 +33,7 @@ jobs:
       - name: Install native build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev
 
       - name: Install reference dependencies
         run: |
