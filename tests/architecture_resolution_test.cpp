@@ -1,6 +1,7 @@
 #include "celeg/checkpoint/metadata.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/model/architecture.hpp"
+#include "celeg/model/inference.hpp"
 #include "celeg/model/program.hpp"
 #include "celeg/runtime/context.hpp"
 #include "support/assertions.hpp"
@@ -119,6 +120,16 @@ celeg::ResolvedModel resolve_structural_identity(const celeg::ArchitectureCatalo
     return architecture.resolve(checkpoint);
 }
 
+bool normalize_fails_with(celeg::CheckpointMetadata metadata,
+                          celeg::ResolutionFailureKind expected) {
+    try {
+        (void)celeg::normalize_model_metadata(metadata);
+    } catch (const celeg::ResolutionError& error) {
+        return error.kind() == expected;
+    }
+    return false;
+}
+
 }
 
 int main() {
@@ -154,6 +165,24 @@ int main() {
     CELEG_TEST_CHECK(equivalent_weight_plan(identity_a.weight_plan, identity_b.weight_plan));
     CELEG_TEST_CHECK(equivalent_weight_plan(identity_a.weight_plan,
                                             poisoned_identity.weight_plan));
+
+    auto truncated_schedule = structural_metadata("unknown_test_model");
+    truncated_schedule.values["num_hidden_layers"] = int64_t(2);
+    truncated_schedule.values["intermediate_size"] = std::vector<int64_t>{1728};
+    CELEG_TEST_CHECK(normalize_fails_with(
+        std::move(truncated_schedule), celeg::ResolutionFailureKind::IncompleteLayerSchedule));
+
+    auto contradictory_qk_norm = structural_metadata("unknown_test_model");
+    contradictory_qk_norm.values["qk_norm"] = true;
+    contradictory_qk_norm.values["query_key_norm"] = false;
+    CELEG_TEST_CHECK(normalize_fails_with(
+        std::move(contradictory_qk_norm), celeg::ResolutionFailureKind::ConflictingMetadata));
+
+    auto unknown_semantic_metadata = structural_metadata("unknown_test_model");
+    unknown_semantic_metadata.values["qk_norm_strategy"] = std::string("mystery");
+    CELEG_TEST_CHECK(normalize_fails_with(
+        std::move(unknown_semantic_metadata),
+        celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
 
     for (const auto& [model_type, architecture_id] : {
              std::pair<std::string, std::string>{
