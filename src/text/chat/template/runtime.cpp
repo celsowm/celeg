@@ -589,9 +589,17 @@ private:
             return TemplateValue{
                 !std::holds_alternative<std::monostate>(value.value)};
         }
+        if (name == "is not defined") {
+            return TemplateValue{
+                std::holds_alternative<std::monostate>(value.value)};
+        }
         if (name == "is undefined") {
             return TemplateValue{
                 std::holds_alternative<std::monostate>(value.value)};
+        }
+        if (name == "is not undefined") {
+            return TemplateValue{
+                !std::holds_alternative<std::monostate>(value.value)};
         }
         if (name == "is none") {
             return TemplateValue{

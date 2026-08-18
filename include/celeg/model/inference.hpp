@@ -104,6 +104,10 @@ struct LayerScopedValue {
 };
 
 enum class AttentionPatternKind : std::uint8_t {
+    /// Layer carries no attention mixer (e.g. a short-convolution or recurrent
+    /// mixer resolved by its own inference rule); the attention-pattern schedule
+    /// is simply not applicable to it.
+    None,
     FullCausal,
     SlidingWindow,
 };

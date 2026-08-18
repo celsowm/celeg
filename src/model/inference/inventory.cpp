@@ -23,6 +23,16 @@ AttentionPatternKind parse_attention_pattern(std::string_view value,
         value == "sliding") {
         return AttentionPatternKind::SlidingWindow;
     }
+    /// Non-attention mixer tokens describe layers whose mixer is a convolutional
+    /// or recurrent primitive (resolved by the dedicated inference rules), not an
+    /// attention pattern. Treat them as "no attention pattern" rather than an
+    /// error so hybrid schedules (e.g. conv/attention interleaving) resolve.
+    if (value == "conv" || value == "short_convolution" ||
+        value == "recurrent" || value == "mamba" || value == "mamba2" ||
+        value == "gdn" || value == "gated_delta" ||
+        value == "gated_delta_net") {
+        return AttentionPatternKind::None;
+    }
     inference_detail::fail(
         ResolutionFailureKind::UnsupportedSemanticFeature,
         "unknown attention layer pattern token in " + std::string(source) + ": " +

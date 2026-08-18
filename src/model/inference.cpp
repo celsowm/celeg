@@ -18,6 +18,8 @@ void apply_attention_patterns(ModelGraph& graph,
         const AttentionPatternKind pattern = metadata.attention.pattern.value_for(layer)
             .value_or(AttentionPatternKind::FullCausal);
         switch (pattern) {
+        case AttentionPatternKind::None:
+            break;
         case AttentionPatternKind::FullCausal:
             attention->pattern = FullCausalPattern{};
             break;

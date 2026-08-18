@@ -80,7 +80,7 @@ void validate_expression(
         return;
 
     case Expression::Kind::Binary: {
-        static constexpr std::array<std::string_view, 22> kAllowed{
+        static constexpr std::array<std::string_view, 24> kAllowed{
             "and",
             "or",
             "+",
@@ -95,7 +95,9 @@ void validate_expression(
             ">=",
             "<=",
             "is defined",
+            "is not defined",
             "is undefined",
+            "is not undefined",
             "is none",
             "is not none",
             "is string",

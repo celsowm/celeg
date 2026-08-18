@@ -46,18 +46,41 @@ void CudaCompiledModel::warmup_decode_gemms() {
 
     const AttentionSpec& layout = attention_layer->layout;
     if (layout.uses_latent_state()) {
-        linear(workspace_.normed_.data(), *attention_layer->latent_query,
-               workspace_.latent_query_content_.data(), 1,
-               layout.latent_query_content_width(), resources_.program_.hidden);
-        if (layout.latent_query_rope_width() != 0) {
-            linear(workspace_.normed_.data(), *attention_layer->latent_query_rope,
-                   workspace_.latent_query_rope_.data(), 1,
-                   layout.latent_query_rope_width(), resources_.program_.hidden);
+        const auto& latent = *layout.latent_state();
+        if (const auto* factorized = latent.factorized_projection()) {
+            linear(workspace_.normed_.data(), *attention_layer->latent_query_projection,
+                   workspace_.latent_projection_.data(), 1, factorized->query_rank,
+                   resources_.program_.hidden);
+            linear(workspace_.latent_projection_.data(), *attention_layer->latent_query_expansion,
+                   workspace_.qkv_output_.data(), 1,
+                   layout.query_heads * (latent.nope_head_dim + latent.rope_head_dim),
+                   factorized->query_rank);
+            linear(workspace_.normed_.data(), *attention_layer->latent_key_projection,
+                   workspace_.qkv_output_.data(), 1, latent.latent_rank + latent.rope_head_dim,
+                   resources_.program_.hidden);
+            if (attention_layer->gate) {
+                linear(workspace_.normed_.data(), *attention_layer->gate,
+                       workspace_.attention_gate_.data(), 1, layout.output_gate_width(),
+                       resources_.program_.hidden);
+            }
+            linear(workspace_.latent_decompressed_.data(), *attention_layer->out,
+                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
+                   layout.latent_output_width(),
+                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
+        } else {
+            linear(workspace_.normed_.data(), *attention_layer->latent_query,
+                   workspace_.latent_query_content_.data(), 1,
+                   layout.latent_query_content_width(), resources_.program_.hidden);
+            if (layout.latent_query_rope_width() != 0) {
+                linear(workspace_.normed_.data(), *attention_layer->latent_query_rope,
+                       workspace_.latent_query_rope_.data(), 1,
+                       layout.latent_query_rope_width(), resources_.program_.hidden);
+            }
+            linear(workspace_.op_output_.data(), *attention_layer->out,
+                   workspace_.hidden_.data(), 1, resources_.program_.hidden,
+                   layout.latent_query_content_width(),
+                   resources_.options_.fused_residuals ? 1.0f : 0.0f);
         }
-        linear(workspace_.op_output_.data(), *attention_layer->out,
-               workspace_.hidden_.data(), 1, resources_.program_.hidden,
-               layout.latent_query_content_width(),
-               resources_.options_.fused_residuals ? 1.0f : 0.0f);
     } else {
     const int query_projection_width = attention_layer->query->rows;
     linear(workspace_.normed_.data(), *attention_layer->query, workspace_.qkv_output_.data(),

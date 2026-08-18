@@ -10,10 +10,12 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
         result.tokens = tokens.array_strings;
     }
 
-    const auto& merges = file.value("tokenizer.ggml.merges");
-    if (merges.kind == GgufValueKind::Array &&
-        merges.array_kind == GgufValueKind::String) {
-        result.merges = merges.array_strings;
+    if (file.has("tokenizer.ggml.merges")) {
+        const auto& merges = file.value("tokenizer.ggml.merges");
+        if (merges.kind == GgufValueKind::Array &&
+            merges.array_kind == GgufValueKind::String) {
+            result.merges = merges.array_strings;
+        }
     }
 
     if (file.has("tokenizer.ggml.token_type")) {
