@@ -42,13 +42,17 @@ void flatten_json(const Json& value, const std::string& prefix,
     } else if (value.is_string()) {
         metadata.values[prefix] = value.as_string();
     } else if (value.is_array()) {
+        bool all_bools = true;
         bool all_strings = true;
         bool all_numbers = true;
         bool all_integers = true;
+        std::vector<int64_t> booleans;
         std::vector<std::string> strings;
         std::vector<double> numbers;
         std::vector<int64_t> integers;
         for (const Json& item : value.as_array()) {
+            if (!item.is_bool()) all_bools = false;
+            else booleans.push_back(item.as_bool() ? int64_t{1} : int64_t{0});
             if (!item.is_string()) all_strings = false;
             else strings.push_back(item.as_string());
             double special_number = 0.0;
@@ -65,7 +69,8 @@ void flatten_json(const Json& value, const std::string& prefix,
                 integers.push_back(is_special_number ? 0 : item.as_i64());
             }
         }
-        if (all_strings) metadata.values[prefix] = std::move(strings);
+        if (all_bools) metadata.values[prefix] = std::move(booleans);
+        else if (all_strings) metadata.values[prefix] = std::move(strings);
         else if (all_numbers && all_integers) metadata.values[prefix] = std::move(integers);
         else if (all_numbers) metadata.values[prefix] = std::move(numbers);
         else throw std::runtime_error("unsupported metadata array: " + prefix);
