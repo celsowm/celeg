@@ -1,4 +1,5 @@
 #include "celeg/checkpoint/formats/safetensors.hpp"
+#include "celeg/checkpoint/metadata.hpp"
 #include "support/assertions.hpp"
 
 #include <cstddef>
@@ -56,5 +57,13 @@ int main() {
     std::byte destination[1]{};
     reader.read(location, std::span<std::byte>(destination));
     CELEG_TEST_CHECK(destination[0] == std::byte{0x5a});
+
+    const auto metadata = celeg::CheckpointMetadata::from_json(
+        celeg::Json::parse(R"({"rope_layer_flags":[true,false,true]})"));
+    const auto flags = metadata.integers("rope_layer_flags");
+    CELEG_TEST_CHECK(flags.size() == 3);
+    CELEG_TEST_CHECK(flags[0] == 1);
+    CELEG_TEST_CHECK(flags[1] == 0);
+    CELEG_TEST_CHECK(flags[2] == 1);
     return 0;
 }
