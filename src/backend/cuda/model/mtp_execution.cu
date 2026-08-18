@@ -1,4 +1,5 @@
 #include "celeg/detail/model/compiled_model.hpp"
+#include "celeg/backend/cuda/attention_norm.hpp"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
 #include "celeg/backend/cuda/moe.hpp"
 
@@ -88,22 +89,26 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     const auto* rope = layout.rope_position();
     if (!rope) throw std::logic_error("MTP attention requires positional encoding");
     const float qk_epsilon = layout.query_norm ? layout.query_norm->epsilon : eps;
+    if (layout.has_query_key_norm()) {
+        launch_attention_qk_norm(
+            layout, q, k, attention->q_norm, attention->k_norm, 1, stream);
+    }
     if (const auto* multi = layout.multi_axis_position()) {
         launch_dynamic_mrope_qk_norm_rope(
-            q, k, attention->q_norm, attention->k_norm,
+            q, k, nullptr, nullptr,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
             mrope_position_device_.data(), multi->sections[0],
             multi->sections[1], multi->sections[2], multi->interleaved,
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction), qk_epsilon,
-            layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
+            false, lower_cuda_rope_scaling(*rope), stream);
     } else {
         launch_dynamic_qk_norm_rope_device(
-            q, k, attention->q_norm, attention->k_norm,
+            q, k, nullptr, nullptr,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
             position_device_.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction), qk_epsilon,
-            layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
+            false, lower_cuda_rope_scaling(*rope), stream);
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream);
     AttentionRequest attention_request;
