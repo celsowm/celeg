@@ -20,7 +20,7 @@ bool supported_name(
     std::string_view name,
     const std::vector<std::string>& macros) {
     return name == "namespace" || name == "range" ||
-           name == "raise_exception" ||
+           name == "raise_exception" || name == "strftime_now" ||
            std::find(macros.begin(), macros.end(), name) != macros.end();
 }
 

@@ -3,6 +3,7 @@
 #include "support/assertions.hpp"
 
 #include <cstdint>
+#include <ctime>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -76,6 +77,27 @@ int main() {
                          .find("<|im_start|>assistant") == std::string::npos);
     CELEG_TEST_CHECK(generation_resolved.format(inferred_messages, /*add_generation_prompt=*/true)
                          .find("<|im_start|>assistant") != std::string::npos);
+
+    // strftime_now must render the current local time via a C strftime format
+    // rather than emitting the literal format string.
+    celeg::CheckpointMetadata strftime_metadata;
+    strftime_metadata.values["chat_template"] =
+        std::string("Date: {{ strftime_now(\"%d %B %Y\") }}");
+    const celeg::ResolvedInteraction strftime_resolved =
+        celeg::resolve_interaction(strftime_metadata, tokenizer);
+    const std::string strftime_output = strftime_resolved.format({});
+    CELEG_TEST_CHECK(strftime_output.find("Date: ") == 0);
+    CELEG_TEST_CHECK(strftime_output.find("%d %B %Y") == std::string::npos);
+    const std::time_t now = std::time(nullptr);
+    std::tm now_tm{};
+#ifdef _WIN32
+    localtime_s(&now_tm, &now);
+#else
+    localtime_r(&now, &now_tm);
+#endif
+    char year[8]{};
+    std::strftime(year, sizeof(year), "%Y", &now_tm);
+    CELEG_TEST_CHECK(strftime_output.find(year) != std::string::npos);
 
     std::cout << "chat_template_test: ok\n";
 }

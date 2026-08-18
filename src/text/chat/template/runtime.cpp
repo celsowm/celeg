@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <ctime>
 #include <stdexcept>
 
 namespace celeg::chat_template_detail {
@@ -864,6 +866,36 @@ private:
                     stringify(eval(
                         expression.children.at(1),
                         state)));
+            }
+
+            if (target.text == "strftime_now") {
+                if (expression.children.size() != 2) {
+                    throw_error(
+                        state,
+                        "strftime_now() requires a format string");
+                }
+                const std::string format = stringify(
+                    eval(expression.children.at(1), state));
+                const std::time_t now =
+                    std::chrono::system_clock::to_time_t(
+                        std::chrono::system_clock::now());
+                std::tm components{};
+#ifdef _WIN32
+                localtime_s(&components, &now);
+#else
+                localtime_r(&now, &components);
+#endif
+                std::string formatted(format.size() + 64, '\0');
+                const std::size_t written = std::strftime(
+                    formatted.data(),
+                    formatted.size(),
+                    format.c_str(),
+                    &components);
+                if (written == 0) {
+                    throw_error(state, "invalid strftime format");
+                }
+                formatted.resize(written);
+                return TemplateValue{std::move(formatted)};
             }
 
             const auto macro = state.macros.find(target.text);
