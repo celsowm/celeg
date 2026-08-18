@@ -12,6 +12,10 @@ name: Semantic model refactor runner
       - scripts/apply_semantic_model_refactor_phase7.py
       - .github/workflows/semantic-model-refactor.yml
 
+concurrency:
+  group: semantic-model-refactor
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
