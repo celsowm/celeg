@@ -62,15 +62,12 @@ std::vector<std::string> attention_tensor_candidates(int layer,
     const std::string index = std::to_string(layer);
     std::string gguf_suffix;
     if (suffix == "q_proj.weight") gguf_suffix = "attn_q.weight";
-    if (suffix == "k_proj.weight") gguf_suffix = "attn_k.weight";
-    if (suffix == "v_proj.weight") gguf_suffix = "attn_v.weight";
-    if (suffix == "o_proj.weight") gguf_suffix = "attn_output.weight";
-    if (suffix == "q_norm.weight") gguf_suffix = "attn_q_norm.weight";
-    if (suffix == "k_norm.weight") gguf_suffix = "attn_k_norm.weight";
-    if (suffix == "q_norm.weight") gguf_suffix = "attn_q_norm.weight";
-    if (suffix == "k_norm.weight") gguf_suffix = "attn_k_norm.weight";
-    if (suffix == "q_norm.weight") gguf_suffix = "attn_q_norm.weight";
-    if (suffix == "k_norm.weight") gguf_suffix = "attn_k_norm.weight";
+    else if (suffix == "k_proj.weight") gguf_suffix = "attn_k.weight";
+    else if (suffix == "v_proj.weight") gguf_suffix = "attn_v.weight";
+    else if (suffix == "o_proj.weight") gguf_suffix = "attn_output.weight";
+    else if (suffix == "q_norm.weight") gguf_suffix = "attn_q_norm.weight";
+    else if (suffix == "k_norm.weight") gguf_suffix = "attn_k_norm.weight";
+    else gguf_suffix = std::string(suffix);
     std::vector<std::string> result = {
         "transformer.h." + index + ".attn." + std::string(suffix),
         "model.language_model.layers." + index + ".self_attn." + std::string(suffix),
@@ -82,15 +79,6 @@ std::vector<std::string> attention_tensor_candidates(int layer,
     if (suffix == "o_proj.weight") {
         result.push_back("model.language_model.layers." + index + ".self_attn.out_proj.weight");
         result.push_back("model.layers." + index + ".self_attn.out_proj.weight");
-    } else if (suffix == "q_norm.weight" || suffix == "k_norm.weight") {
-        result.push_back("model.language_model.layers." + index + ".self_attn." + std::string(suffix));
-        result.push_back("model.layers." + index + ".self_attn." + std::string(suffix));
-    } else if (suffix == "q_norm.weight" || suffix == "k_norm.weight") {
-        result.push_back("model.language_model.layers." + index + ".self_attn." + std::string(suffix));
-        result.push_back("model.layers." + index + ".self_attn." + std::string(suffix));
-    } else if (suffix == "q_norm.weight" || suffix == "k_norm.weight") {
-        result.push_back("model.language_model.layers." + index + ".self_attn." + std::string(suffix));
-        result.push_back("model.layers." + index + ".self_attn." + std::string(suffix));
     }
     return result;
 }
