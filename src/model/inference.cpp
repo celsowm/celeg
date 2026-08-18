@@ -100,7 +100,14 @@ void CanonicalModelFacts::validate() const {
          ++layer) {
         const LayerSpec& semantic_layer =
             graph.layers[static_cast<size_t>(layer)];
-        require(TensorRole::AttentionInputNorm, layer);
+        if (semantic_layer.mixer_norm.before &&
+            !semantic_layer.mixer_norm.before->weightless()) {
+            require(TensorRole::AttentionInputNorm, layer);
+        }
+        if (semantic_layer.mixer_norm.after &&
+            !semantic_layer.mixer_norm.after->weightless()) {
+            require(TensorRole::AttentionPostNorm, layer);
+        }
 
         if (const auto* attention_ptr =
                 std::get_if<AttentionSpec>(&semantic_layer.mixer)) {
@@ -122,6 +129,12 @@ void CanonicalModelFacts::validate() const {
                 require(TensorRole::AttentionQuery, layer);
                 require(TensorRole::AttentionKey, layer);
                 require(TensorRole::AttentionValue, layer);
+                if (attention.query_norm && !attention.query_norm->weightless()) {
+                    require(TensorRole::AttentionQueryNorm, layer);
+                }
+                if (attention.key_norm && !attention.key_norm->weightless()) {
+                    require(TensorRole::AttentionKeyNorm, layer);
+                }
             }
             require(
                 attention.uses_latent_state()
@@ -174,7 +187,14 @@ void CanonicalModelFacts::validate() const {
 
         if (!std::holds_alternative<MlpBlockSpec>(semantic_layer.mixer) &&
             !std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) {
-            require(TensorRole::FfnInputNorm, layer);
+            if (semantic_layer.feed_forward_norm.before &&
+                !semantic_layer.feed_forward_norm.before->weightless()) {
+                require(TensorRole::FfnInputNorm, layer);
+            }
+            if (semantic_layer.feed_forward_norm.after &&
+                !semantic_layer.feed_forward_norm.after->weightless()) {
+                require(TensorRole::FfnOutputNorm, layer);
+            }
             if (const auto* moe_ptr =
                     std::get_if<MixtureOfExpertsSpec>(&semantic_layer.feed_forward)) {
                 require(TensorRole::MoeRouter, layer);
