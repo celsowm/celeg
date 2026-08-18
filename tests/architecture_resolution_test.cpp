@@ -335,6 +335,41 @@ int main() {
     CELEG_TEST_CHECK(std::get<celeg::SlidingWindowPattern>(sliding_attention.pattern).window ==
                      4096);
 
+    auto yarn_metadata = structural_metadata("completely_unknown_yarn_model");
+    yarn_metadata.values["rope_scaling.rope_type"] = std::string("yarn");
+    yarn_metadata.values["rope_scaling.factor"] = 4.0;
+    yarn_metadata.values["rope_scaling.original_max_position_embeddings"] = int64_t(2048);
+    yarn_metadata.values["rope_scaling.attention_factor"] = 1.25;
+    yarn_metadata.values["rope_scaling.beta_fast"] = 32.0;
+    yarn_metadata.values["rope_scaling.beta_slow"] = 1.0;
+    celeg::CheckpointView yarn_checkpoint;
+    yarn_checkpoint.metadata = std::move(yarn_metadata);
+    yarn_checkpoint.repository = std::make_shared<GptxRepository>();
+    const auto yarn_model = catalog.select(yarn_checkpoint.metadata).resolve(yarn_checkpoint);
+    const auto& yarn_attention =
+        std::get<celeg::AttentionSpec>(yarn_model.graph.layers[0].mixer);
+    const auto& yarn_position = std::get<celeg::RopePositionSpec>(yarn_attention.position);
+    const auto& yarn_scaling = std::get<celeg::YarnRopeScaling>(yarn_position.scaling);
+    CELEG_TEST_CHECK(yarn_scaling.factor == 4.0);
+    CELEG_TEST_CHECK(yarn_scaling.original_context == 2048);
+    CELEG_TEST_CHECK(yarn_scaling.attention_factor == 1.25);
+    CELEG_TEST_CHECK(yarn_scaling.beta_fast == 32.0);
+    CELEG_TEST_CHECK(yarn_scaling.beta_slow == 1.0);
+
+    auto incomplete_yarn = structural_metadata("unknown_incomplete_yarn");
+    incomplete_yarn.values["rope_scaling.rope_type"] = std::string("yarn");
+    incomplete_yarn.values["rope_scaling.factor"] = 4.0;
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(incomplete_yarn),
+        celeg::ResolutionFailureKind::MissingRequiredMetadata));
+
+    auto unsupported_scaling = structural_metadata("unknown_scaling_kind");
+    unsupported_scaling.values["rope_scaling.rope_type"] = std::string("dynamic");
+    unsupported_scaling.values["rope_scaling.factor"] = 2.0;
+    CELEG_TEST_CHECK(inference_input_fails_with(
+        std::move(unsupported_scaling),
+        celeg::ResolutionFailureKind::UnsupportedSemanticFeature));
+
     auto full_metadata = structural_metadata("another_unknown_name");
     full_metadata.values["layer_layouts"] =
         std::vector<std::string>{"full_attention"};
