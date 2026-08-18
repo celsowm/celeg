@@ -320,7 +320,7 @@ std::vector<int> token_list(const CheckpointMetadata& metadata, std::string_view
 
 void reject_unknown_semantic_metadata(const CheckpointMetadata& metadata) {
     static const std::unordered_set<std::string> known = {
-        "qk_norm", "query_key_norm", "use_qk_norm", "xsa_projection",
+        "qk_norm", "query_key_norm", "use_qk_norm", "qk_norm_type", "xsa_projection",
         "xsa_projection_minimum_norm_squared", "rope_pairing", "rope_interleaved",
         "rope_theta", "rotary_fraction", "rope_scaling", "rope_parameters",
         "embedding_multiplier", "attention_multiplier", "residual_multiplier",

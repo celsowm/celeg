@@ -1,5 +1,6 @@
 #include "celeg/checkpoint/formats/safetensors.hpp"
 #include "celeg/checkpoint/metadata.hpp"
+#include "celeg/model/inference.hpp"
 #include "support/assertions.hpp"
 
 #include <cstddef>
@@ -65,5 +66,23 @@ int main() {
     CELEG_TEST_CHECK(flags[0] == 1);
     CELEG_TEST_CHECK(flags[1] == 0);
     CELEG_TEST_CHECK(flags[2] == 1);
+
+    const auto rms_qk_metadata = celeg::CheckpointMetadata::from_json(
+        celeg::Json::parse(
+            R"({"rope_theta":10000,"use_qk_norm":true,"qk_norm_type":"rmsnorm"})"));
+    const auto rms_qk = celeg::normalize_model_metadata(rms_qk_metadata);
+    CELEG_TEST_CHECK(rms_qk.attention.query_key_norm.value_or(false));
+
+    bool rejected_qk_math = false;
+    try {
+        const auto unsupported_qk_metadata = celeg::CheckpointMetadata::from_json(
+            celeg::Json::parse(
+                R"({"rope_theta":10000,"use_qk_norm":true,"qk_norm_type":"layernorm"})"));
+        (void)celeg::normalize_model_metadata(unsupported_qk_metadata);
+    } catch (const celeg::ResolutionError& error) {
+        rejected_qk_math =
+            error.kind() == celeg::ResolutionFailureKind::UnsupportedSemanticFeature;
+    }
+    CELEG_TEST_CHECK(rejected_qk_math);
     return 0;
 }
