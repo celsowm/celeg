@@ -27,6 +27,12 @@ void add_norm_request(ResolvedModel& model, TensorRole role, int layer,
                 spec->weight_kind);
 }
 
+int attention_norm_width(const NormSpec& norm, int per_head_width, int whole_width) {
+    return norm.granularity == NormGranularity::PerHead
+        ? per_head_width
+        : whole_width;
+}
+
 void append_attention(ResolvedModel& model, const AttentionSpec& attention,
                       int layer, int physical_layer) {
     const int hidden = model.graph.hidden;
@@ -76,13 +82,21 @@ void append_attention(ResolvedModel& model, const AttentionSpec& attention,
         append(TensorRole::AttentionQuery,
                {attention.query_projection_width(), hidden});
         if (attention.query_norm.has_value()) {
-            append(TensorRole::AttentionQueryNorm, {attention.head_dim});
+            append(
+                TensorRole::AttentionQueryNorm,
+                {attention_norm_width(*attention.query_norm,
+                                      attention.head_dim,
+                                      query_width)});
         }
         if (!std::holds_alternative<SharedKvConsumer>(attention.kv_sharing)) {
             append(TensorRole::AttentionKey, {key_value_width, hidden});
             append(TensorRole::AttentionValue, {key_value_width, hidden});
             if (attention.key_norm.has_value()) {
-                append(TensorRole::AttentionKeyNorm, {attention.head_dim});
+                append(
+                    TensorRole::AttentionKeyNorm,
+                    {attention_norm_width(*attention.key_norm,
+                                          attention.head_dim,
+                                          key_value_width)});
             }
         }
         append(TensorRole::AttentionOutput, {hidden, query_width});
