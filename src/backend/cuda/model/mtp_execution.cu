@@ -69,7 +69,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     LayerCommon& common_layer = common(layer);
     copy_async(workspace_.residual_.data(), workspace_.hidden_.data(),
                workspace_.hidden_.bytes(), stream);
-    launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm,
+    launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_before,
                    workspace_.normed_.data(), 1, hidden, eps, stream);
 
     const AttentionSpec& layout = attention->layout;
@@ -87,6 +87,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
     }
     const auto* rope = layout.rope_position();
     if (!rope) throw std::logic_error("MTP attention requires positional encoding");
+    const float qk_epsilon = layout.query_norm ? layout.query_norm->epsilon : eps;
     if (const auto* multi = layout.multi_axis_position()) {
         launch_dynamic_mrope_qk_norm_rope(
             q, k, attention->q_norm, attention->k_norm,
@@ -94,14 +95,14 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             mrope_position_device_.data(), multi->sections[0],
             multi->sections[1], multi->sections[2], multi->interleaved,
             static_cast<float>(rope->theta),
-            static_cast<float>(rope->rotary_fraction), eps,
+            static_cast<float>(rope->rotary_fraction), qk_epsilon,
             layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
     } else {
         launch_dynamic_qk_norm_rope_device(
             q, k, attention->q_norm, attention->k_norm,
             layout.query_heads, layout.key_value_heads, layout.head_dim,
             position_device_.data(), static_cast<float>(rope->theta),
-            static_cast<float>(rope->rotary_fraction), eps,
+            static_cast<float>(rope->rotary_fraction), qk_epsilon,
             layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream);
     }
     launch_scale(q, layout.query_width(), layout.query_scale, stream);
