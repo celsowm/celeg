@@ -671,6 +671,17 @@ private:
                 continue;
             }
 
+            if (tag == "generation") {
+                TemplateNode generation;
+                generation.kind = TemplateNode::Kind::Generation;
+                generation.line = line;
+                generation.body = parse_nodes({"endgeneration"});
+                require_pending("endgeneration",
+                                "missing endgeneration");
+                nodes.push_back(std::move(generation));
+                continue;
+            }
+
             if (tag.starts_with("macro ")) {
                 const std::string signature = tag.substr(6);
                 const std::size_t open = signature.find('(');

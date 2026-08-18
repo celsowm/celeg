@@ -175,6 +175,7 @@ struct RenderState {
     std::map<std::string, MacroDefinition, std::less<>> macros;
     std::string origin;
     int current_line = 1;
+    bool generation_prompt = false;
 };
 
 std::string role_name(ChatRole role) {
@@ -296,6 +297,7 @@ public:
         std::string_view bos_token) const {
         RenderState state;
         state.origin = origin;
+        state.generation_prompt = generation_prompt;
 
         ValueObject root;
         root.emplace("bos_token", std::string(bos_token));
@@ -315,7 +317,7 @@ public:
         state.scopes.push_back(std::move(root));
 
         std::string output;
-        render_nodes(nodes_, state, output);
+        render_nodes(nodes_, state, output, generation_prompt);
         return output;
     }
 
@@ -883,7 +885,8 @@ private:
                 render_nodes(
                     macro->second.node->body,
                     state,
-                    output);
+                    output,
+                    state.generation_prompt);
                 state.scopes.pop_back();
                 return TemplateValue{std::move(output)};
             }
@@ -992,6 +995,23 @@ private:
                         ? text.starts_with(needle)
                         : text.ends_with(needle)};
             }
+
+            if (member == "get") {
+                const TemplateValue key = eval(
+                    expression.children.at(1), state);
+                const TemplateValue fallback =
+                    expression.children.size() > 2
+                        ? eval(expression.children.at(2), state)
+                        : TemplateValue{};
+                if (const auto* obj =
+                        std::get_if<ValueObject>(&object.value)) {
+                    const auto found = obj->find(stringify(key));
+                    if (found != obj->end()) {
+                        return found->second;
+                    }
+                }
+                return fallback;
+            }
         }
 
         throw_error(state, "unsupported Jinja call");
@@ -1000,7 +1020,8 @@ private:
     void render_nodes(
         const std::vector<TemplateNode>& nodes,
         RenderState& state,
-        std::string& output) const {
+        std::string& output,
+        bool generation_prompt) const {
         for (const TemplateNode& node : nodes) {
             state.current_line = node.line;
             switch (node.kind) {
@@ -1020,7 +1041,7 @@ private:
                         state);
                 } else {
                     std::string captured;
-                    render_nodes(node.body, state, captured);
+                    render_nodes(node.body, state, captured, generation_prompt);
                     assign(
                         node.text,
                         TemplateValue{std::move(captured)},
@@ -1036,19 +1057,25 @@ private:
                 bool rendered = false;
                 for (const auto& [condition, body] : node.branches) {
                     if (truthy(eval(condition, state))) {
-                        render_nodes(body, state, output);
+                        render_nodes(body, state, output, generation_prompt);
                         rendered = true;
                         break;
                     }
                 }
                 if (!rendered) {
-                    render_nodes(node.otherwise, state, output);
+                    render_nodes(node.otherwise, state, output, generation_prompt);
                 }
                 break;
             }
 
             case TemplateNode::Kind::For:
-                render_loop(node, state, output);
+                render_loop(node, state, output, generation_prompt);
+                break;
+
+            case TemplateNode::Kind::Generation:
+                if (generation_prompt) {
+                    render_nodes(node.body, state, output, generation_prompt);
+                }
                 break;
             }
         }
@@ -1057,7 +1084,8 @@ private:
     void render_loop(
         const TemplateNode& node,
         RenderState& state,
-        std::string& output) const {
+        std::string& output,
+        bool generation_prompt) const {
         const TemplateValue sequence = eval(node.expression, state);
         const auto* values = std::get_if<ValueList>(&sequence.value);
         if (!values) {
@@ -1115,14 +1143,14 @@ private:
                 !node.condition ||
                 truthy(eval(*node.condition, state));
             if (selected) {
-                render_nodes(node.body, state, output);
+                render_nodes(node.body, state, output, generation_prompt);
             }
             state.scopes.pop_back();
             rendered_any = rendered_any || selected;
         }
 
         if (!rendered_any) {
-            render_nodes(node.otherwise, state, output);
+            render_nodes(node.otherwise, state, output, generation_prompt);
         }
     }
 

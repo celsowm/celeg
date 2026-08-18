@@ -28,7 +28,7 @@ bool supported_member_call(std::string_view member) {
     return member == "strip" || member == "lstrip" || member == "rstrip" ||
            member == "lower" || member == "upper" || member == "items" ||
            member == "split" || member == "replace" ||
-           member == "startswith" || member == "endswith";
+           member == "startswith" || member == "endswith" || member == "get";
 }
 
 bool supported_filter(std::string_view filter) {
@@ -216,6 +216,10 @@ void validate_nodes(
             break;
 
         case TemplateNode::Kind::Macro:
+            validate_nodes(node.body, origin, macros);
+            break;
+
+        case TemplateNode::Kind::Generation:
             validate_nodes(node.body, origin, macros);
             break;
 

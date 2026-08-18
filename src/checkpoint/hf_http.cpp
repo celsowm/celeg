@@ -232,4 +232,184 @@ void http_download_file(const std::string& path,
 
 }
 
+#else  // !_WIN32: POSIX libcurl transport
+
+#include <curl/curl.h>
+
+#include <cstdio>
+#include <fstream>
+#include <system_error>
+
+namespace celeg::hf_internal {
+namespace {
+
+constexpr const char* kHost = "huggingface.co";
+
+size_t body_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    auto* body = static_cast<std::string*>(userdata);
+    body->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
+constexpr size_t kProgressInterval = 16 * 1024 * 1024;
+
+struct DownloadWriteState {
+    std::ofstream stream;
+    std::filesystem::path output;
+    size_t total = 0;
+    size_t expected = 0;
+    bool quiet = false;
+    size_t last_report = 0;
+    std::string* error = nullptr;
+};
+
+size_t download_write_callback(char* ptr, size_t size, size_t nmemb,
+                              void* userdata) {
+    auto* st = static_cast<DownloadWriteState*>(userdata);
+    const size_t got = size * nmemb;
+    st->stream.write(ptr, static_cast<std::streamsize>(got));
+    if (!st->stream) {
+        *st->error = "write failed: " + st->output.string();
+        return static_cast<size_t>(0);
+    }
+    st->total += got;
+    if (!st->quiet && st->expected != 0 &&
+        (st->total - st->last_report >= kProgressInterval ||
+         st->total == st->expected)) {
+        const double percent = 100.0 * static_cast<double>(st->total) /
+                               static_cast<double>(st->expected);
+        std::fprintf(stderr, "\r  %zu / %zu bytes (%.1f%%)", st->total,
+                     st->expected, percent);
+        st->last_report = st->total;
+    }
+    return got;
+}
+
+}  // namespace
+
+std::string url_encode(const std::string& value) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string result;
+    for (unsigned char c : value) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~' ||
+            c == '/' || c == ':') {
+            result += static_cast<char>(c);
+        } else {
+            result += '%';
+            result += hex[c >> 4];
+            result += hex[c & 0xF];
+        }
+    }
+    return result;
+}
+
+HttpResponse http_request(const std::string& method,
+                          const std::string& path,
+                          bool follow_redirects) {
+    HttpResponse response;
+    CURL* curl = curl_easy_init();
+    if (!curl) throw std::runtime_error("curl_easy_init failed");
+
+    const std::string url = std::string("https://") + kHost + path;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION,
+                     follow_redirects ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, body_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+
+    CURLcode code = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    if (code != CURLE_OK) {
+        const std::string message = "HTTP " + method + " failed: " +
+                                    curl_easy_strerror(code);
+        curl_easy_cleanup(curl);
+        throw std::runtime_error(message);
+    }
+    response.status = static_cast<unsigned long>(status);
+    curl_easy_cleanup(curl);
+    return response;
+}
+
+void http_download_file(const std::string& path,
+                        const std::filesystem::path& output,
+                        size_t expected_size,
+                        bool quiet) {
+    std::error_code error;
+    size_t total = std::filesystem::exists(output, error)
+                       ? static_cast<size_t>(std::filesystem::file_size(output, error))
+                       : 0;
+    if (error) throw std::runtime_error("cannot inspect: " + output.string());
+    if (expected_size != 0 && total > expected_size) {
+        std::filesystem::resize_file(output, 0, error);
+        if (error) throw std::runtime_error("cannot reset: " + output.string());
+        total = 0;
+    }
+
+    constexpr int kAttempts = 5;
+    std::string last_error;
+
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        DownloadWriteState state;
+        state.output = output;
+        state.total = total;
+        state.expected = expected_size;
+        state.quiet = quiet;
+        state.last_report = total;
+        state.error = &last_error;
+        state.stream.open(output, std::ios::binary |
+                                       (total == 0 ? std::ios::trunc : std::ios::app));
+        if (!state.stream) {
+            throw std::runtime_error("cannot open: " + output.string());
+        }
+
+        CURL* curl = curl_easy_init();
+        if (!curl) throw std::runtime_error("curl_easy_init failed");
+
+        const std::string url = std::string("https://") + kHost + path;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, download_write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
+        if (total != 0) {
+            curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
+                             static_cast<curl_off_t>(total));
+        }
+
+        CURLcode code = curl_easy_perform(curl);
+        long status = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        curl_easy_cleanup(curl);
+        state.stream.close();
+
+        if (code == CURLE_OK &&
+            (status == 200 || (total != 0 && status == 206)) &&
+            (expected_size == 0 || state.total == expected_size)) {
+            if (!quiet && expected_size != 0) std::fprintf(stderr, "\n");
+            return;
+        }
+        if (code != CURLE_OK) {
+            last_error = "HTTP GET failed: " + std::string(curl_easy_strerror(code));
+            // Retry from scratch if the partial write is suspect.
+            std::filesystem::resize_file(output, 0, error);
+            total = 0;
+        } else if (status == 200 && total != 0) {
+            // Server ignored the range request; restart from scratch.
+            std::filesystem::resize_file(output, 0, error);
+            total = 0;
+            last_error = "server ignored resume; restarting";
+        } else {
+            last_error = "HTTP " + std::to_string(status) + " for " + path;
+        }
+    }
+    throw std::runtime_error("download failed after retries: " + last_error);
+}
+
 #endif
+
+}

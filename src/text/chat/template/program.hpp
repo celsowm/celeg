@@ -67,6 +67,7 @@ struct TemplateNode {
         For,
         Set,
         Macro,
+        Generation,
     };
 
     Kind kind = Kind::Text;

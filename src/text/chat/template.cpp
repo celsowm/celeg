@@ -176,9 +176,12 @@ std::string ResolvedInteraction::format(
 ToolParseResult ResolvedInteraction::parse_tool_calls(
     std::string_view generated) const {
     if (!tool_call_grammar_) {
-        return {
-            ToolParseStatus::NotToolCall,
-            std::string(generated),
+        return ToolParseResult{
+            .status = ToolParseStatus::NotToolCall,
+            .assistant_text = std::string(generated),
+            .calls = {},
+            .error = {},
+            .consumed_bytes = 0,
         };
     }
     return tool_call_grammar_->parse(generated);

@@ -45,13 +45,48 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
         }
     }
     if (head == nullptr) {
-        if (input.is_gguf() && !m.core.tied_embeddings.has_value()) {
+        // Models with a nested language-model trunk (e.g. multimodal/VL
+        // checkpoints) prefix the head and final norm with a subtree name such
+        // as "model.language_model.". Match any tensor whose final component is
+        // a known language-model head name regardless of its prefix.
+        const std::vector<std::string> head_suffixes = {
+            ".lm_head.weight",
+            ".output.weight",
+        };
+        for (const TensorInventoryEntry& entry : input.inventory.entries()) {
+            const std::string& name = entry.name;
+            for (const std::string& suffix : head_suffixes) {
+                if (name.size() >= suffix.size() &&
+                    name.compare(name.size() - suffix.size(),
+                                 suffix.size(), suffix) == 0) {
+                    if (head != nullptr) {
+                        fail(
+                            ResolutionFailureKind::AmbiguousTensorBinding,
+                            "multiple language-model heads are present");
+                    }
+                    head = &entry;
+                    break;
+                }
+            }
+        }
+    }
+    if (head == nullptr) {
+        if (const bool already_determined =
+                m.core.tied_embeddings.has_value();
+            !already_determined && context.embedding != nullptr) {
+            // Safetensors checkpoints frequently omit the language-model head
+            // when it is tied to the token embedding (transformers' default for
+            // many families). The GGUF path infers this from the format; mirror
+            // that here so the head is recovered generically from the embedding
+            // rather than failing on a missing tensor.
             facts.tied_embeddings = true;
             facts.evidence.push_back({
-                EvidenceKind::FormatGuarantee,
-                "output.weight",
-                "GGUF omits an independent language-model head"});
-        } else if (!facts.tied_embeddings) {
+                EvidenceKind::Derived,
+                context.embedding->name,
+                "safetensors checkpoint has no independent language-model head; "
+                "tied to token embedding"});
+        }
+        if (!facts.tied_embeddings) {
             fail(
                 ResolutionFailureKind::MissingTensorRole,
                 "untied checkpoint has no language-model head");
@@ -87,6 +122,35 @@ void bind_global_tensors(CanonicalInferenceContext& context) {
                     "multiple final norms are present");
             }
             final_norm = candidate;
+        }
+    }
+    if (final_norm == nullptr) {
+        // Same nested-prefix handling as the language-model head: a multimodal
+        // or otherwise nested checkpoint may place the final norm under a trunk
+        // prefix (e.g. "model.language_model."). Match the trailing component.
+        const std::vector<std::string> final_norm_suffixes = {
+            ".embedding_norm.weight",
+            ".norm.weight",
+            ".ln_f.weight",
+            ".output_norm.weight",
+            ".norm_f.weight",
+            ".token_embd_norm.weight",
+        };
+        for (const TensorInventoryEntry& entry : input.inventory.entries()) {
+            const std::string& name = entry.name;
+            for (const std::string& suffix : final_norm_suffixes) {
+                if (name.size() >= suffix.size() &&
+                    name.compare(name.size() - suffix.size(),
+                                 suffix.size(), suffix) == 0) {
+                    if (final_norm != nullptr) {
+                        fail(
+                            ResolutionFailureKind::AmbiguousTensorBinding,
+                            "multiple final norms are present");
+                    }
+                    final_norm = &entry;
+                    break;
+                }
+            }
         }
     }
     if (final_norm == nullptr) {
@@ -413,6 +477,7 @@ void resolve_canonical_layers(CanonicalInferenceContext& context) {
             "model.layers." + index + ".input_layernorm.weight",
             "model.layers." + index + ".self_attn_layer_norm.weight",
             "model.language_model.layers." + index + ".input_layernorm.weight",
+            "model.language_model.layers." + index + ".operator_norm.weight",
             "model.layers." + index + ".operator_norm.weight",
             "backbone.layers." + index + ".norm.weight",
             "blk." + index + ".attn_norm.weight",
@@ -421,6 +486,7 @@ void resolve_canonical_layers(CanonicalInferenceContext& context) {
             "transformer.h." + index + ".ln_2.weight",
             "model.layers." + index + ".post_attention_layernorm.weight",
             "model.language_model.layers." + index + ".post_attention_layernorm.weight",
+            "model.language_model.layers." + index + ".ffn_norm.weight",
             "model.layers." + index + ".ffn_norm.weight",
             "blk." + index + ".ffn_norm.weight",
             "blk." + index + ".post_attention_norm.weight",

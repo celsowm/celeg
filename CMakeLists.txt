@@ -93,6 +93,11 @@ endif()
 target_link_libraries(celeg_base PUBLIC Threads::Threads)
 if(WIN32)
     target_link_libraries(celeg_base PUBLIC winhttp windowscodecs ole32 shlwapi)
+else()
+    # The POSIX HuggingFace HTTP transport (hf_http.cpp) uses libcurl for
+    # TLS, redirects, and resumable range downloads. Windows keeps WinHTTP.
+    find_package(CURL REQUIRED)
+    target_link_libraries(celeg_base PUBLIC CURL::libcurl)
 endif()
 
 add_library(celeg_runtime INTERFACE)

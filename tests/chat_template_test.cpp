@@ -61,5 +61,21 @@ int main() {
     CELEG_TEST_CHECK(!inferred.diagnostics().empty());
     const std::vector<celeg::ChatMessage> inferred_messages{{celeg::ChatRole::User, "Hello"}};
     CELEG_TEST_CHECK(inferred.format(inferred_messages).find("<|im_start|>assistant") != std::string::npos);
+
+    // The {% generation %} block must render only when a generation prompt is
+    // requested, mirroring add_generation_prompt semantics, with no model-specific
+    // branching.
+    celeg::CheckpointMetadata generation_template;
+    generation_template.values["chat_template"] = std::string(
+        "{{ bos_token }}{% for message in messages %}<|im_start|>{{ message.role }}\n"
+        "{{ message.content }}<|im_end|>\n{% endfor %}"
+        "{% generation %}<|im_start|>assistant\n{% endgeneration %}");
+    const celeg::ResolvedInteraction generation_resolved =
+        celeg::resolve_interaction(generation_template, tokenizer);
+    CELEG_TEST_CHECK(generation_resolved.format(inferred_messages, /*add_generation_prompt=*/false)
+                         .find("<|im_start|>assistant") == std::string::npos);
+    CELEG_TEST_CHECK(generation_resolved.format(inferred_messages, /*add_generation_prompt=*/true)
+                         .find("<|im_start|>assistant") != std::string::npos);
+
     std::cout << "chat_template_test: ok\n";
 }

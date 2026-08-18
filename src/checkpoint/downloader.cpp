@@ -168,6 +168,100 @@ std::vector<TreeFile> list_repo_files(const std::string& repo_id,
 
 }
 
+#else  // !_WIN32
+
+namespace {
+
+bool create_link_or_copy(const std::filesystem::path& src,
+                         const std::filesystem::path& dst) {
+    std::error_code ec;
+    if (std::filesystem::exists(dst, ec))
+        std::filesystem::remove(dst, ec);
+    std::filesystem::create_hard_link(src, dst, ec);
+    if (!ec) return true;
+    std::filesystem::copy_file(src, dst,
+        std::filesystem::copy_options::overwrite_existing, ec);
+    return !ec;
+}
+
+struct TreeFile {
+    std::string path;
+    size_t size = 0;
+    std::string oid;
+    std::string lfs_oid;
+};
+
+std::filesystem::path resume_path_for(const std::filesystem::path& blob_path) {
+    std::filesystem::path canonical = blob_path;
+    canonical += ".incomplete";
+    std::error_code ec;
+    if (std::filesystem::exists(canonical, ec)) return canonical;
+
+    const std::string prefix = blob_path.filename().string() + ".";
+    constexpr std::string_view suffix = ".incomplete";
+    std::filesystem::path best = canonical;
+    uintmax_t best_size = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(
+             blob_path.parent_path(), ec)) {
+        if (ec || !entry.is_regular_file(ec)) continue;
+        const std::string name = entry.path().filename().string();
+        if (!name.starts_with(prefix) || !name.ends_with(suffix)) continue;
+        const uintmax_t size = entry.file_size(ec);
+        if (!ec && size > best_size) {
+            best = entry.path();
+            best_size = size;
+        }
+    }
+    return best;
+}
+
+std::string resolve_revision(const std::string& repo_id,
+                             const std::string& revision) {
+    std::string path = "/api/models/" + hf_internal::url_encode(repo_id)
+                     + "/revision/" + hf_internal::url_encode(revision);
+    hf_internal::HttpResponse resp = hf_internal::http_request("GET", path);
+    if (resp.status != 200)
+        throw std::runtime_error("cannot resolve revision " + revision
+            + " for " + repo_id + ": HTTP " + std::to_string(resp.status));
+    Json root = Json::parse(resp.body);
+    if (!root.contains("sha"))
+        throw std::runtime_error("API response missing 'sha' field");
+    return root["sha"].as_string();
+}
+
+std::vector<TreeFile> list_repo_files(const std::string& repo_id,
+                                      const std::string& commit) {
+    std::string path = "/api/models/" + hf_internal::url_encode(repo_id)
+                     + "/tree/" + hf_internal::url_encode(commit)
+                     + "?recursive=true&expand=true";
+    hf_internal::HttpResponse resp = hf_internal::http_request("GET", path);
+    if (resp.status != 200)
+        throw std::runtime_error("cannot list files: HTTP "
+            + std::to_string(resp.status));
+    Json root = Json::parse(resp.body);
+    if (!root.is_array())
+        throw std::runtime_error("tree API returned non-array");
+
+    std::vector<TreeFile> files;
+    for (const Json& entry : root.as_array()) {
+        if (entry["type"].as_string() != "file") continue;
+        TreeFile f;
+        f.path = entry["path"].as_string();
+        f.size = static_cast<size_t>(entry["size"].as_i64());
+        f.oid = entry["oid"].as_string();
+        if (entry.contains("lfs") && entry["lfs"].is_object()) {
+            const Json& lfs = entry["lfs"];
+            if (lfs.contains("oid")) f.lfs_oid = lfs["oid"].as_string();
+        }
+        files.push_back(std::move(f));
+    }
+    return files;
+}
+
+}
+
+#endif
+
 std::filesystem::path default_hf_cache_dir() {
     const char* env = std::getenv("HF_HUB_CACHE");
     if (env && *env) return std::filesystem::path(env);
@@ -355,92 +449,5 @@ std::filesystem::path resolve_hf_gguf(
         + ". Run: celeg-download " + repo_id);
 }
 
-#else
-
-std::filesystem::path default_hf_cache_dir() {
-    const char* env = std::getenv("HF_HUB_CACHE");
-    if (env && *env) return std::filesystem::path(env);
-    env = std::getenv("HUGGINGFACE_HUB_CACHE");
-    if (env && *env) return std::filesystem::path(env);
-    env = std::getenv("HF_HOME");
-    if (env && *env) return std::filesystem::path(env) / "hub";
-    env = std::getenv("HOME");
-    if (!env || !*env) env = ".";
-    return std::filesystem::path(env) / ".cache" / "huggingface" / "hub";
-}
-
-DownloadResult download_model(const DownloadOptions&) {
-    throw std::runtime_error(
-        "native downloader is only available on Windows (WinHTTP). "
-        "Use hf download or huggingface-cli instead.");
-}
-
-std::filesystem::path resolve_hf_model(
-    const std::string& repo_id,
-    const std::string& revision,
-    bool /*auto_download*/) {
-    std::filesystem::path cache = default_hf_cache_dir();
-    std::filesystem::path storage = cache / repo_folder_name(repo_id);
-    std::string commit = revision;
-
-    if (!is_commit_hash(commit)) {
-        std::filesystem::path ref_path = storage / "refs" / revision;
-        std::ifstream rf(ref_path);
-        if (rf) {
-            std::getline(rf, commit);
-            rf.close();
-        }
-    }
-
-    if (is_commit_hash(commit)) {
-        std::filesystem::path snap = storage / "snapshots" / commit;
-        if (std::filesystem::exists(snap / "model.safetensors") ||
-            std::filesystem::exists(snap / "model.safetensors.index.json"))
-            return snap;
-    }
-    throw std::runtime_error(
-        "model not found in HF cache: " + repo_id + " @ " + revision
-        + ". Run: hf download " + repo_id);
-}
-
-std::filesystem::path resolve_hf_gguf(
-    const std::string& repo_id,
-    const std::string& quant_tag) {
-    std::filesystem::path cache = default_hf_cache_dir();
-    std::filesystem::path storage = cache / repo_folder_name(repo_id);
-    std::error_code ec;
-    std::filesystem::path snapshots = storage / "snapshots";
-    if (!std::filesystem::exists(snapshots)) {
-        throw std::runtime_error(
-            "GGUF checkpoint not found (no snapshots): " + repo_id
-            + ". Run: hf download " + repo_id);
-    }
-    for (const auto& snap_entry :
-         std::filesystem::directory_iterator(snapshots, ec)) {
-        if (!snap_entry.is_directory()) continue;
-        const std::filesystem::path dir = snap_entry.path();
-        std::vector<std::filesystem::path> candidates;
-        for (const auto& f : std::filesystem::directory_iterator(dir, ec)) {
-            if (f.path().extension() == ".gguf") candidates.push_back(f.path());
-        }
-        if (candidates.empty()) continue;
-        if (!quant_tag.empty()) {
-            for (const auto& c : candidates) {
-                if (contains_case_insensitive(c.filename().string(), quant_tag))
-                    return c;
-            }
-        }
-        for (const auto& c : candidates) {
-            if (contains_case_insensitive(c.filename().string(), "Q4_K_M"))
-                return c;
-        }
-        return candidates.front();
-    }
-    throw std::runtime_error(
-        "GGUF checkpoint not found in HF cache: " + repo_id
-        + ". Run: celeg-download " + repo_id);
-}
-
-#endif
 
 }

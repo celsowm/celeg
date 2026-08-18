@@ -71,6 +71,7 @@ std::vector<std::string> attention_tensor_candidates(int layer,
         "blk." + index + "." + gguf_suffix,
     };
     if (suffix == "o_proj.weight") {
+        result.push_back("model.language_model.layers." + index + ".self_attn.out_proj.weight");
         result.push_back("model.layers." + index + ".self_attn.out_proj.weight");
     }
     return result;
@@ -87,6 +88,7 @@ std::vector<std::string> feed_forward_tensor_candidates(int layer,
         "transformer.h." + index + ".mlp." + std::string(suffix),
         "model.language_model.layers." + index + ".mlp." + std::string(suffix),
         "model.layers." + index + ".mlp." + std::string(suffix),
+        "model.language_model.layers." + index + ".feed_forward." + std::string(suffix),
         "layers." + index + ".feed_forward." + std::string(suffix),
         "blk." + index + "." + gguf_suffix,
     };
@@ -110,6 +112,7 @@ std::vector<std::string> shortconv_tensor_candidates(int layer,
                                                      std::string_view suffix) {
     const std::string index = std::to_string(layer);
     return {
+        "model.language_model.layers." + index + ".conv." + std::string(suffix),
         "model.layers." + index + ".conv." + std::string(suffix),
         "layers." + index + ".conv." + std::string(suffix),
         "blk." + index + ".shortconv." + std::string(suffix),
