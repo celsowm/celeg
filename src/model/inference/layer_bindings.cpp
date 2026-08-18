@@ -286,6 +286,9 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
     const std::vector<std::string> explicit_mixer_after_candidates = {
         "model.layers." + index + ".post_attention_norm.weight",
         "model.language_model.layers." + index + ".post_attention_norm.weight",
+        "model.layers." + index + ".post_attn_norm.weight",
+        "model.language_model.layers." + index + ".post_attn_norm.weight",
+        "layers." + index + ".post_attn_norm.weight",
         "blk." + index + ".post_attention_norm.weight",
     };
     const std::vector<std::string> post_attention_layernorm_candidates = {
@@ -311,8 +314,12 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
         "model.language_model.layers." + index + ".post_feed_forward_layernorm.weight",
         "model.layers." + index + ".post_ffn_norm.weight",
         "model.language_model.layers." + index + ".post_ffn_norm.weight",
+        "model.layers." + index + ".post_mlp_norm.weight",
+        "model.language_model.layers." + index + ".post_mlp_norm.weight",
+        "layers." + index + ".post_mlp_norm.weight",
         "blk." + index + ".post_ffn_norm.weight",
         "blk." + index + ".ffn_post_norm.weight",
+        "blk." + index + ".post_ffw_norm.weight",
     };
 
     const TensorInventoryEntry* mixer_before = find_optional_norm(
