@@ -434,6 +434,25 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         "feed_forward_norm.after");
     result.norms.layer_layout = scoped_string_aliases(
         metadata, {"layer_layouts"}, result.evidence, "layer_layout");
+    result.attention.layer_type = scoped_string_aliases(
+        metadata, {"layer_types", "attention_types"}, result.evidence, "layer_type");
+    result.attention.sliding_window = scoped_aliases<int>(
+        metadata, {"sliding_window", "sliding_window_size"}, result.evidence,
+        "sliding_window", "attention.sliding_window");
+    result.norms.mixer_before = scoped_aliases<bool>(
+        metadata, {"use_pre_attn_norm", "use_pre_attention_norm"}, result.evidence,
+        "mixer_norm.before");
+    result.norms.mixer_after = scoped_aliases<bool>(
+        metadata, {"use_post_attn_norm", "use_post_attention_norm"}, result.evidence,
+        "mixer_norm.after");
+    result.norms.feed_forward_before = scoped_aliases<bool>(
+        metadata, {"use_pre_mlp_norm", "use_pre_ffn_norm"}, result.evidence,
+        "feed_forward_norm.before");
+    result.norms.feed_forward_after = scoped_aliases<bool>(
+        metadata, {"use_post_mlp_norm", "use_post_ffn_norm"}, result.evidence,
+        "feed_forward_norm.after");
+    result.norms.layer_layout = scoped_string_aliases(
+        metadata, {"layer_layouts"}, result.evidence, "layer_layout");
     result.mamba2.intermediate = aliases<int>(
         metadata, {"mamba_intermediate", "ssm_inner_size"}, result.evidence,
         "mamba_intermediate", "ssm.inner_size");
@@ -638,6 +657,13 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     validate_scoped_alias(result.attention.query_heads, result.core.layer_count, "query_heads");
     validate_scoped_alias(result.attention.key_value_heads, result.core.layer_count, "key_value_heads");
     validate_scoped_alias(result.attention.head_dim, result.core.layer_count, "head_dim");
+    validate_scoped_alias(result.attention.layer_type, result.core.layer_count, "layer_type");
+    validate_scoped_alias(result.attention.sliding_window, result.core.layer_count, "sliding_window");
+    validate_scoped_alias(result.norms.mixer_before, result.core.layer_count, "mixer_norm.before");
+    validate_scoped_alias(result.norms.mixer_after, result.core.layer_count, "mixer_norm.after");
+    validate_scoped_alias(result.norms.feed_forward_before, result.core.layer_count, "feed_forward_norm.before");
+    validate_scoped_alias(result.norms.feed_forward_after, result.core.layer_count, "feed_forward_norm.after");
+    validate_scoped_alias(result.norms.layer_layout, result.core.layer_count, "layer_layout");
     validate_scoped_alias(result.attention.layer_type, result.core.layer_count, "layer_type");
     validate_scoped_alias(result.attention.sliding_window, result.core.layer_count, "sliding_window");
     validate_scoped_alias(result.norms.mixer_before, result.core.layer_count, "mixer_norm.before");

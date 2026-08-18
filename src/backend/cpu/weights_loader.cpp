@@ -43,21 +43,23 @@ CpuCompiledModel::CommonWeights CpuCompiledModel::Shared::load_common(
         }
         return values;
     };
-    common.operator_norm = load_norm(TensorRole::AttentionInputNorm,
-                                     layer_program.operator_norm);
-    if (std::holds_alternative<std::monostate>(layer_program.feed_forward)) {
-        common.ffn_norm = common.operator_norm;
-        return common;
+    if (layer_program.mixer_norm.before) {
+        common.mixer_norm_before = load_norm(
+            TensorRole::AttentionInputNorm, *layer_program.mixer_norm.before);
     }
     if (layer_program.mixer_norm.after) {
-        common.mixer_norm.after = load_norm(TensorRole::AttentionPostNorm,
-                                               *layer_program.mixer_norm.after);
+        common.mixer_norm_after = load_norm(
+            TensorRole::AttentionPostNorm, *layer_program.mixer_norm.after);
     }
-    common.ffn_norm = load_norm(TensorRole::FfnInputNorm,
-                                *layer_program.feed_forward_norm);
-    if (layer_program.feed_forward_norm.after) {
-        common.feed_forward_norm.after = load_norm(TensorRole::FfnOutputNorm,
-                                                  *layer_program.feed_forward_norm.after);
+    if (!std::holds_alternative<std::monostate>(layer_program.feed_forward)) {
+        if (layer_program.feed_forward_norm.before) {
+            common.feed_forward_norm_before = load_norm(
+                TensorRole::FfnInputNorm, *layer_program.feed_forward_norm.before);
+        }
+        if (layer_program.feed_forward_norm.after) {
+            common.feed_forward_norm_after = load_norm(
+                TensorRole::FfnOutputNorm, *layer_program.feed_forward_norm.after);
+        }
     }
     if (program.per_layer_input.enabled) {
         common.per_layer_input_norm = load_vector(source, reader, writer,
@@ -490,17 +492,17 @@ void CpuCompiledModel::Shared::load_weights() {
                 has_request(TensorRole::MoePackedGateUp);
             const MoeLayerProgram& moe_semantics = std::get<MoeLayerProgram>(
                 program.layers.at(static_cast<size_t>(index)).feed_forward);
-            layer.common.operator_norm = load_vector(source, reader.get(), writer.get(),
+            layer.common.mixer_norm_before = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::AttentionInputNorm)
                     ? tensor_name(weight_requests, TensorRole::AttentionInputNorm, index)
                     : layer_name(index, "operator_norm.weight"), {program.hidden});
-            layer.common.ffn_norm = load_vector(source, reader.get(), writer.get(),
+            layer.common.feed_forward_norm_before = load_vector(source, reader.get(), writer.get(),
                 has_request(TensorRole::FfnInputNorm)
                     ? tensor_name(weight_requests, TensorRole::FfnInputNorm, index)
                     : layer_name(index, "ffn_norm.weight"), {program.hidden});
             if (packed_expert_model) {
-                for (float& value : layer.common.operator_norm) value += 1.0f;
-                for (float& value : layer.common.ffn_norm) value += 1.0f;
+                for (float& value : layer.common.mixer_norm_before) value += 1.0f;
+                for (float& value : layer.common.feed_forward_norm_before) value += 1.0f;
             }
             layer.mixer = load_operator(index, layer_program);
             moe.num_experts = moe_semantics.router.expert_count;

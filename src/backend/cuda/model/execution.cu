@@ -58,21 +58,21 @@ void CudaCompiledModel::enqueue_decode_forward() {
                 stream_.get()));
         }
         decode_phase_profile().begin(stream_.get());
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm,
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_before,
                        workspace_.normed_.data(), 1, resources_.program_.hidden,
-                       semantics.operator_norm.epsilon, stream_.get());
+                       semantics.mixer_norm.before->epsilon, stream_.get());
         decode_phase_profile().end(DecodePhase::Norm, stream_.get());
         if (as_attention(layer)) {
             enqueue_decode_attention(layer, common_layer, layer_idx);
         } else {
             enqueue_decode_non_attention_mixer(layer, layer_idx);
         }
-        if (common_layer.mixer_norm.after) {
-            launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm.after,
+        if (common_layer.mixer_norm_after) {
+            launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_after,
                            workspace_.hidden_.data(), 1, resources_.program_.hidden,
                            semantics.mixer_norm.after->epsilon, stream_.get());
         }
-        if (!resources_.options_.fused_residuals || common_layer.mixer_norm.after ||
+        if (!resources_.options_.fused_residuals || common_layer.mixer_norm_after ||
             std::holds_alternative<std::monostate>(semantics.feed_forward)) {
             decode_phase_profile().begin(stream_.get());
             launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),

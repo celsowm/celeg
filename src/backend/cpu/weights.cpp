@@ -175,8 +175,8 @@ size_t CpuCompiledModel::Shared::weights_memory_bytes() const {
     size_t bytes = weight_store.embedding.memory_bytes() +
         weight_store.final_norm.size() * sizeof(float);
     for (const CpuLayerWeights& layer : weight_store.layers) {
-        bytes += layer.common.operator_norm.size() * sizeof(float) +
-                 layer.common.ffn_norm.size() * sizeof(float);
+        bytes += layer.common.mixer_norm_before.size() * sizeof(float) +
+                 layer.common.feed_forward_norm_before.size() * sizeof(float);
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, AttentionWeights>) {

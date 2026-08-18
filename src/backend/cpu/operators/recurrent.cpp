@@ -48,7 +48,9 @@ void execute_cpu_gated_delta_token(
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
         workspace.gated_delta_output.data(), spec.conv_kernel, spec.key_head_dim,
         spec.value_head_dim, spec.key_heads, spec.value_heads,
-        shared.program.layers.at(layer).operator_norm.epsilon,
+        shared.program.layers.at(layer).mixer_norm.before.has_value()
+            ? shared.program.layers.at(layer).mixer_norm.before->epsilon
+            : shared.program.final_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate,
         spec.a_log_needs_exp);
@@ -116,7 +118,9 @@ void execute_cpu_mamba2_token(
         workspace.mamba_inner[i] *= gate / (1.0f + std::exp(-gate));
     }
     const int norm_group_width = inner / spec.group_count;
-    const float norm_eps = shared.program.layers.at(layer).operator_norm.epsilon;
+    const float norm_eps = shared.program.layers.at(layer).mixer_norm.before.has_value()
+            ? shared.program.layers.at(layer).mixer_norm.before->epsilon
+            : shared.program.final_norm.epsilon;
     for (int group = 0; group < spec.group_count; ++group) {
         cpu_rmsnorm(workspace.mamba_inner.data() + group * norm_group_width,
                     weights.norm.data() + group * norm_group_width,
@@ -198,7 +202,9 @@ void execute_cpu_gated_delta_chunk(
         weights.norm.data(), state.conv.data(), state.recurrent.data(),
         workspace.chunk_gated_delta_output.data(), rows, spec.conv_kernel,
         spec.key_head_dim, spec.value_head_dim, spec.key_heads, spec.value_heads,
-        shared.program.layers.at(layer).operator_norm.epsilon,
+        shared.program.layers.at(layer).mixer_norm.before.has_value()
+            ? shared.program.layers.at(layer).mixer_norm.before->epsilon
+            : shared.program.final_norm.epsilon,
         spec.vector_decay, spec.safe_decay,
         spec.decay_lower_bound, spec.sigmoid_output_gate,
         spec.a_log_needs_exp);

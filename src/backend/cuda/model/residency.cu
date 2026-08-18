@@ -204,8 +204,8 @@ void CudaCompiledModel::run_mlp_moe_decode(const LayerCommon& common_layer,
         static_cast<size_t>(layer));
     const MoeLayerProgram& semantics = std::get<MoeLayerProgram>(
         resources_.program_.layers.at(static_cast<size_t>(layer)).feed_forward);
-    launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
-                    1, resources_.program_.hidden, layer_semantics.feed_forward_norm->epsilon, stream_.get());
+    launch_rmsnorm(workspace_.hidden_.data(), common_layer.feed_forward_norm_before, workspace_.normed_.data(),
+                    1, resources_.program_.hidden, layer_semantics.feed_forward_norm.before->epsilon, stream_.get());
     launch_cast_bf16_to_float(workspace_.normed_.data(), workspace_.moe_hidden_float_.data(),
                                resources_.program_.hidden, stream_.get());
     const celeg::MoeRouterConfig cfg = moe_router_config(semantics);
@@ -278,8 +278,8 @@ void CudaCompiledModel::run_mlp_moe_prefill(const LayerCommon& common_layer, int
         static_cast<size_t>(rows) * semantics.router.experts_per_token *
         semantics.routed.mlp.intermediate_size);
 
-    launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
-                   workspace_.prefill_normed_.data(), rows, resources_.program_.hidden, layer_semantics.feed_forward_norm->epsilon,
+    launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.feed_forward_norm_before,
+                   workspace_.prefill_normed_.data(), rows, resources_.program_.hidden, layer_semantics.feed_forward_norm.before->epsilon,
                    stream_.get());
     launch_cast_bf16_to_float(workspace_.prefill_normed_.data(), workspace_.moe_pf_hidden_float_.data(),
                               rows * resources_.program_.hidden, stream_.get());

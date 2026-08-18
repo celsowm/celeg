@@ -91,8 +91,13 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         const CommonWeights& common = layer.common;
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-        cpu_rmsnorm(workspace_.hidden.data(), common.operator_norm.data(), workspace_.normed.data(),
-                    shared->program.hidden, semantics.operator_norm.epsilon);
+        if (semantics.mixer_norm.before) {
+            cpu_rmsnorm(workspace_.hidden.data(), common.mixer_norm_before.data(),
+                        workspace_.normed.data(), shared->program.hidden,
+                        semantics.mixer_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+        }
         bool mixer_owns_layer = false;
         visit_operator_weights(layer.mixer,
           [&](const CpuCompiledModel::AttentionWeights* attention) {
@@ -131,7 +136,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
         if (semantics.mixer_norm.after.has_value()) {
-            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.mixer_norm.after.data(),
+            cpu_rmsnorm_inplace(workspace_.hidden.data(), common.mixer_norm_after.data(),
                                 shared->program.hidden, semantics.mixer_norm.after->epsilon);
         }
         cpu_residual_add(workspace_.hidden.data(), workspace_.residual.data(), shared->program.hidden);
@@ -143,8 +148,13 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
 
         if (std::holds_alternative<std::monostate>(semantics.feed_forward)) continue;
 
-        cpu_rmsnorm(workspace_.hidden.data(), common.ffn_norm.data(), workspace_.normed.data(),
-                    shared->program.hidden, semantics.feed_forward_norm->epsilon);
+        if (semantics.feed_forward_norm.before) {
+            cpu_rmsnorm(workspace_.hidden.data(), common.feed_forward_norm_before.data(),
+                        workspace_.normed.data(), shared->program.hidden,
+                        semantics.feed_forward_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+        }
 
         const auto* moe = std::get_if<MoeWeights>(&layer.feed_forward);
         const auto* dense = std::get_if<DenseFeedForwardWeights>(&layer.feed_forward);
@@ -156,7 +166,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
             if (semantics.feed_forward_norm.after.has_value()) {
-                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm.after.data(),
+                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after.data(),
                                     shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);
@@ -166,7 +176,7 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                 for (float& value : workspace_.mlp_output) value *= semantics.residual.multiplier;
             }
             if (semantics.feed_forward_norm.after.has_value()) {
-                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm.after.data(),
+                cpu_rmsnorm_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after.data(),
                                     shared->program.hidden, semantics.feed_forward_norm.after->epsilon);
             }
             cpu_residual_add(workspace_.hidden.data(), workspace_.mlp_output.data(), shared->program.hidden);

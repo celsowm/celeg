@@ -28,23 +28,23 @@ void CudaCompiledModel::run_token_layer(Layer& layer, int layer_index,
     const CompiledLayerProgram& semantics =
         resources_.program_.layers.at(static_cast<size_t>(layer_index));
 
-    if (!resources_.options_.fused_residuals || common_layer.mixer_norm.after) {
+    if (!resources_.options_.fused_residuals || common_layer.mixer_norm_after) {
         CELEG_CUDA(cudaMemcpyAsync(
             workspace_.residual_.data(), workspace_.hidden_.data(), workspace_.hidden_.bytes(),
             cudaMemcpyDeviceToDevice, stream_.get()));
     }
-    launch_rmsnorm(workspace_.hidden_.data(), common_layer.operator_norm,
+    launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_before,
                    workspace_.normed_.data(), 1, resources_.program_.hidden,
-                   semantics.operator_norm.epsilon, stream_.get());
+                   semantics.mixer_norm.before->epsilon, stream_.get());
 
     run_token_mixer(layer, common_layer, semantics, layer_index, kv);
 
-    if (common_layer.mixer_norm.after) {
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm.after,
+    if (common_layer.mixer_norm_after) {
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.mixer_norm_after,
                        workspace_.hidden_.data(), 1, resources_.program_.hidden,
                        semantics.mixer_norm.after->epsilon, stream_.get());
     }
-    if (!resources_.options_.fused_residuals || common_layer.mixer_norm.after ||
+    if (!resources_.options_.fused_residuals || common_layer.mixer_norm_after ||
         std::holds_alternative<std::monostate>(semantics.feed_forward)) {
         launch_residual_add(workspace_.hidden_.data(), workspace_.residual_.data(),
                             resources_.program_.hidden, stream_.get());
@@ -359,7 +359,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
             workspace_.latent_key_rope_.data(), nullptr, nullptr,
             layout.query_heads, 1, latent.rope_head_dim,
             session_.position_, static_cast<float>(rope->theta), 1.0f,
-            semantics.operator_norm.epsilon, false,
+            semantics.mixer_norm.before->epsilon, false,
             lower_cuda_rope_scaling(*rope), stream_.get());
     }
     const int cache_model_layer = attention.kv_owner_layer >= 0
@@ -407,7 +407,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
     linear(workspace_.op_output_.data(), *attention.out,
            workspace_.hidden_.data(), 1, resources_.program_.hidden,
            layout.latent_query_content_width(),
-           resources_.options_.fused_residuals && !common_layer.mixer_norm.after &&
+           resources_.options_.fused_residuals && !common_layer.mixer_norm_after &&
                std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  semantics.residual.multiplier,
@@ -471,7 +471,7 @@ void CudaCompiledModel::run_token_attention(
                 multi->sections[1], multi->sections[2], multi->interleaved,
                 static_cast<float>(rope->theta),
                 static_cast<float>(rope->rotary_fraction),
-                semantics.operator_norm.epsilon, layout.has_query_key_norm(),
+                semantics.mixer_norm.before->epsilon, layout.has_query_key_norm(),
                 lower_cuda_rope_scaling(*rope),
                 stream_.get());
         } else {
@@ -479,7 +479,7 @@ void CudaCompiledModel::run_token_attention(
                 q, attention.key ? k : nullptr, attention.q_norm, attention.k_norm,
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 session_.position_, static_cast<float>(rope->theta),
-                static_cast<float>(rope->rotary_fraction), semantics.operator_norm.epsilon,
+                static_cast<float>(rope->rotary_fraction), semantics.mixer_norm.before->epsilon,
                 layout.has_query_key_norm(), lower_cuda_rope_scaling(*rope), stream_.get());
         }
     } else if (kv.paged() && layout.has_query_key_norm()) {
@@ -515,7 +515,7 @@ void CudaCompiledModel::run_token_attention(
     }
     linear(workspace_.op_output_.data(), *attention.out, workspace_.hidden_.data(),
            1, resources_.program_.hidden, layout.query_width(),
-           resources_.options_.fused_residuals && !common_layer.mixer_norm.after &&
+           resources_.options_.fused_residuals && !common_layer.mixer_norm_after &&
                std::holds_alternative<std::monostate>(semantics.feed_forward) ? 0.0f : 1.0f);
     launch_scale(workspace_.hidden_.data(), resources_.program_.hidden,
                  semantics.residual.multiplier, stream_.get());
@@ -563,7 +563,7 @@ void CudaCompiledModel::run_token_gated_delta(GatedDeltaNetLayer& gated_delta,
         gated_delta.conv_state.data(), gated_delta.recurrent_state.data(),
         workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
         spec.key_head_dim, spec.value_head_dim, spec.key_heads,
-        spec.value_heads, semantics.operator_norm.epsilon,
+        spec.value_heads, semantics.mixer_norm.before->epsilon,
         spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
         spec.sigmoid_output_gate, stream_.get());
     linear(workspace_.gated_delta_output_.data(), *gated_delta.out,
@@ -585,7 +585,7 @@ void CudaCompiledModel::run_token_mamba2(Mamba2Layer& mamba,
                        workspace_.mamba_inner_.data(), spec.intermediate_size,
                        spec.state_size, spec.num_heads, spec.head_dim,
                        spec.group_count, spec.conv_kernel, stream_.get());
-    const float epsilon = kv.paged() ? semantics.operator_norm.epsilon
+    const float epsilon = kv.paged() ? semantics.mixer_norm.before->epsilon
                                      : semantics.mixer_norm.after->epsilon;
     launch_rmsnorm(workspace_.mamba_inner_.data(), mamba.norm,
                    workspace_.op_output_.data(), 1, spec.intermediate_size,

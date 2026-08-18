@@ -69,7 +69,7 @@ void run_gated_delta(
         gated_delta.recurrent_state.data(),
         workspace.prefill_gated_delta_output_.data(),
         rows, spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
-        spec.key_heads, spec.value_heads, semantics.operator_norm.epsilon,
+        spec.key_heads, spec.value_heads, semantics.mixer_norm.before->epsilon,
         spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
         spec.sigmoid_output_gate, model.stream_.get());
     prof.end(PrefillPhase::Conv, model.stream_.get());
@@ -110,7 +110,7 @@ void run_mamba2(
     launch_rmsnorm(
         workspace.prefill_mamba_inner_.data(), mamba.norm,
         workspace.prefill_mamba_inner_.data(),
-        rows, spec.intermediate_size, semantics.operator_norm.epsilon,
+        rows, spec.intermediate_size, semantics.mixer_norm.before->epsilon,
         model.stream_.get());
     launch_multiply(
         workspace.prefill_mamba_inner_.data(),

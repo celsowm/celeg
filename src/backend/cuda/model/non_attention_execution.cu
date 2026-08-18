@@ -57,7 +57,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
             gated_delta->conv_state.data(), gated_delta->recurrent_state.data(),
             workspace_.gated_delta_output_.data(), 1, spec.conv_kernel,
             spec.key_head_dim, spec.value_head_dim, spec.key_heads,
-            spec.value_heads, semantics.operator_norm.epsilon,
+            spec.value_heads, semantics.mixer_norm.before->epsilon,
             spec.vector_decay, spec.safe_decay, spec.decay_lower_bound,
             spec.sigmoid_output_gate, stream_.get());
         linear(workspace_.gated_delta_output_.data(), *gated_delta->out,
@@ -80,7 +80,7 @@ void CudaCompiledModel::enqueue_decode_non_attention_mixer(Layer& layer,
                            spec.group_count, spec.conv_kernel, stream_.get());
         launch_rmsnorm(workspace_.mamba_inner_.data(), mamba->norm,
                        workspace_.op_output_.data(), 1, spec.intermediate_size,
-                       semantics.operator_norm.epsilon, stream_.get());
+                       semantics.mixer_norm.before->epsilon, stream_.get());
         launch_multiply(workspace_.op_output_.data(), workspace_.mamba_projected_.data(),
                         spec.intermediate_size, stream_.get());
         linear(workspace_.op_output_.data(), *mamba->out, workspace_.hidden_.data(),

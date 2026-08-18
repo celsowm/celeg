@@ -124,7 +124,7 @@ void run_projected_latent_attention(
         workspace.prefill_op_output_.data(), *attention.out,
         workspace.prefill_hidden_.data(),
         rows, hidden, layout.latent_query_content_width(),
-        model.resources_.options_.fused_residuals && !common_layer.mixer_norm.after
+        model.resources_.options_.fused_residuals && !common_layer.mixer_norm_after
             ? 1.0f : 0.0f);
     launch_scale(
         workspace.prefill_hidden_.data(), rows * hidden,

@@ -11,9 +11,9 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
         (void)moe;
         run_mlp_moe_decode(common_layer, layer);
     } else {
-        launch_rmsnorm(workspace_.hidden_.data(), common_layer.ffn_norm, workspace_.normed_.data(),
+        launch_rmsnorm(workspace_.hidden_.data(), common_layer.feed_forward_norm_before, workspace_.normed_.data(),
                        1, resources_.program_.hidden,
-                       semantics.feed_forward_norm->epsilon,
+                       semantics.feed_forward_norm.before->epsilon,
                        stream_.get());
         const auto& dense_semantics =
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
@@ -39,7 +39,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             launch_swiglu_fused(workspace_.gate_up_.data(), workspace_.activated_.data(),
                                 intermediate, stream_.get());
         }
-        const bool split_output = common_layer.feed_forward_norm.after != nullptr;
+        const bool split_output = common_layer.feed_forward_norm_after != nullptr;
         if (resources_.options_.fused_residuals && !split_output) {
             linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.hidden_.data(),
                    1, resources_.program_.hidden, intermediate, 1.0f);
@@ -47,7 +47,7 @@ void CudaCompiledModel::run_mlp_decode(const LayerCommon& common_layer, int laye
             linear(workspace_.activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.mlp_output_.data(),
                    1, resources_.program_.hidden, intermediate);
             if (split_output) {
-                launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.feed_forward_norm.after,
+                launch_rmsnorm(workspace_.mlp_output_.data(), common_layer.feed_forward_norm_after,
                                workspace_.mlp_output_.data(), 1, resources_.program_.hidden,
                                semantics.feed_forward_norm.after->epsilon,
                                stream_.get());
@@ -74,9 +74,9 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
             std::get<CompiledDenseFeedForwardProgram>(semantics.feed_forward);
         const int intermediate = dense_semantics.intermediate_size;
         const size_t matrix_elements = static_cast<size_t>(rows) * intermediate;
-        launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.ffn_norm,
+        launch_rmsnorm(workspace_.prefill_hidden_.data(), common_layer.feed_forward_norm_before,
                        workspace_.prefill_normed_.data(), rows, resources_.program_.hidden,
-                       semantics.feed_forward_norm->epsilon,
+                       semantics.feed_forward_norm.before->epsilon,
                        stream_.get());
         if (resources_.options_.fused_projections) {
         linear(workspace_.prefill_normed_.data(), *as_dense_ffn(common_layer.feed_forward)->w13, workspace_.prefill_gate_up_.data(),
@@ -108,7 +108,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
                                 static_cast<int>(matrix_elements), stream_.get());
         }
         }
-        const bool split_output = common_layer.feed_forward_norm.after != nullptr;
+        const bool split_output = common_layer.feed_forward_norm_after != nullptr;
         if (resources_.options_.fused_residuals && !split_output) {
         linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_hidden_.data(),
                rows, resources_.program_.hidden, intermediate, 1.0f);
@@ -116,7 +116,7 @@ void CudaCompiledModel::run_mlp_prefill(const LayerCommon& common_layer, int row
         linear(workspace_.prefill_activated_.data(), *as_dense_ffn(common_layer.feed_forward)->w2, workspace_.prefill_mlp_output_.data(),
                 rows, resources_.program_.hidden, intermediate);
         if (split_output) {
-            launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.feed_forward_norm.after,
+            launch_rmsnorm(workspace_.prefill_mlp_output_.data(), common_layer.feed_forward_norm_after,
                            workspace_.prefill_mlp_output_.data(), rows, resources_.program_.hidden,
                            semantics.feed_forward_norm.after->epsilon,
                            stream_.get());

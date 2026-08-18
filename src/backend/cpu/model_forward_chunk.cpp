@@ -168,9 +168,14 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
         const CompiledLayerProgram& semantics = shared->program.layers[index];
         std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
                   workspace_.chunk_residual.begin());
-        rmsnorm_rows(workspace_.chunk_hidden.data(), common.operator_norm,
-                     workspace_.chunk_normed.data(), hidden,
-                     semantics.operator_norm.epsilon);
+        if (semantics.mixer_norm.before) {
+            rmsnorm_rows(workspace_.chunk_hidden.data(), common.mixer_norm_before,
+                         workspace_.chunk_normed.data(), hidden,
+                         semantics.mixer_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
+                      workspace_.chunk_normed.begin());
+        }
         bool normed_q8_ready = false;
         auto layer_gemm = [&](const CpuLinearWeight& weight, const float* input,
                               float* output, float beta = 0.0f,
@@ -526,13 +531,18 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                   semantics.residual.multiplier);
         }
         if (semantics.mixer_norm.after.has_value()) {
-            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.mixer_norm.after, hidden,
+            rmsnorm_rows_inplace(workspace_.chunk_hidden.data(), common.mixer_norm_after, hidden,
                                  semantics.mixer_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_residual.data(), hidden);
-        rmsnorm_rows(workspace_.chunk_hidden.data(), common.ffn_norm,
-                     workspace_.chunk_normed.data(), hidden,
-                     semantics.feed_forward_norm->epsilon);
+        if (semantics.feed_forward_norm.before) {
+            rmsnorm_rows(workspace_.chunk_hidden.data(), common.feed_forward_norm_before,
+                         workspace_.chunk_normed.data(), hidden,
+                         semantics.feed_forward_norm.before->epsilon);
+        } else {
+            std::copy(workspace_.chunk_hidden.begin(), workspace_.chunk_hidden.end(),
+                      workspace_.chunk_normed.begin());
+        }
         normed_q8_ready = false;
 
         const auto* moe = std::get_if<MoeWeights>(&layer.feed_forward);
@@ -554,7 +564,7 @@ void CpuCompiledModel::forward_chunk(std::span<const int32_t> tokens,
                   semantics.residual.multiplier);
         }
         if (semantics.feed_forward_norm.after.has_value()) {
-            rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.feed_forward_norm.after, hidden,
+            rmsnorm_rows_inplace(workspace_.chunk_mlp.data(), common.feed_forward_norm_after, hidden,
                                  semantics.feed_forward_norm.after->epsilon);
         }
         residual_rows(workspace_.chunk_hidden.data(), workspace_.chunk_mlp.data(), hidden);

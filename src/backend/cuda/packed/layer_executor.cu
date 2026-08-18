@@ -110,9 +110,9 @@ void PackedLayerExecutor::run_transformer_layers(
                     sizeof(__nv_bfloat16),
                 cudaMemcpyDeviceToDevice, workspace_.stream.get()));
         }
-        launch_rmsnorm(workspace_.hidden.data(), common_layer.operator_norm,
+        launch_rmsnorm(workspace_.hidden.data(), common_layer.mixer_norm_before,
                        workspace_.normed.data(), rows, workspace_.program_.hidden,
-                       semantics.operator_norm.epsilon,
+                       semantics.mixer_norm.before->epsilon,
                        workspace_.stream.get());
         PackedOperatorContext context{
             workspace_, gemm_.dispatcher(), plan_, workspace_.shape_, workspace_.program_};

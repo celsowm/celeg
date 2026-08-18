@@ -125,8 +125,13 @@ struct CpuCompiledModel::BatchScratch {
             const CommonWeights& common = sessions.front()->common_weights(index);
             const CompiledLayerProgram& layer_semantics = shared.program.layers.at(index);
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.residual.begin());
-            rmsnorm_rows(workspace_.hidden.data(), common.operator_norm,
-                         workspace_.normed.data(), hidden);
+            if (layer_semantics.mixer_norm.before) {
+                rmsnorm_rows(workspace_.hidden.data(), common.mixer_norm_before,
+                             workspace_.normed.data(), hidden,
+                             layer_semantics.mixer_norm.before->epsilon);
+            } else {
+                std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+            }
             bool normed_q8_ready = false;
             auto layer_gemm = [&](const CpuLinearWeight& weight, const float* input,
                                   float* output, float beta = 0.0f) {
@@ -171,7 +176,9 @@ struct CpuCompiledModel::BatchScratch {
                         workspace_.gated_delta_output.data() + row * value_width,
                         spec.conv_kernel, spec.key_head_dim, spec.value_head_dim,
                         spec.key_heads, spec.value_heads,
-                        layer_semantics.operator_norm.epsilon, spec.vector_decay,
+                        layer_semantics.mixer_norm.before.has_value()
+                            ? layer_semantics.mixer_norm.before->epsilon
+                            : shared.program.final_norm.epsilon, spec.vector_decay,
                         spec.safe_decay, spec.decay_lower_bound,
                         spec.sigmoid_output_gate);
                 });
@@ -332,10 +339,16 @@ struct CpuCompiledModel::BatchScratch {
                 });
             }
             if (layer_semantics.mixer_norm.after.has_value()) {
-                rmsnorm_rows_inplace(workspace_.hidden.data(), common.mixer_norm.after, hidden);
+                rmsnorm_rows_inplace(workspace_.hidden.data(), common.mixer_norm_after, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.residual.data(), hidden);
-            rmsnorm_rows(workspace_.hidden.data(), common.ffn_norm, workspace_.normed.data(), hidden);
+            if (layer_semantics.feed_forward_norm.before) {
+                rmsnorm_rows(workspace_.hidden.data(), common.feed_forward_norm_before,
+                             workspace_.normed.data(), hidden,
+                             layer_semantics.feed_forward_norm.before->epsilon);
+            } else {
+                std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
+            }
             if (const auto* moe = std::get_if<MoeWeights>(&layer_program.feed_forward)) {
                 const MoeLayerProgram& semantics =
                     std::get<MoeLayerProgram>(shared.program.layers[index].feed_forward);
@@ -503,7 +516,7 @@ struct CpuCompiledModel::BatchScratch {
                 });
             }
             if (layer_semantics.feed_forward_norm.after.has_value()) {
-                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.feed_forward_norm.after, hidden);
+                rmsnorm_rows_inplace(workspace_.mlp_output.data(), common.feed_forward_norm_after, hidden);
             }
             residual_rows(workspace_.hidden.data(), workspace_.mlp_output.data(), hidden);
             normed_q8_ready = false;

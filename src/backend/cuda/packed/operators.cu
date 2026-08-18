@@ -389,7 +389,7 @@ void PackedGatedDeltaNetExecutor::run(
             w.gated_delta_output.data() + flat * static_cast<size_t>(value_width),
             static_cast<int>(count), spec.conv_kernel, spec.key_head_dim,
             spec.value_head_dim, spec.key_heads, spec.value_heads,
-            semantics.operator_norm.epsilon, spec.vector_decay, spec.safe_decay,
+            semantics.mixer_norm.before->epsilon, spec.vector_decay, spec.safe_decay,
             spec.decay_lower_bound, spec.sigmoid_output_gate, w.stream.get());
         flat += count;
     }
@@ -463,7 +463,7 @@ void PackedMamba2Executor::run(
         throw std::invalid_argument("packed Mamba2 row mapping is incomplete");
     }
     launch_rmsnorm(w.mamba_inner.data(), mamba.norm, w.mamba_inner.data(), rows,
-                   spec.intermediate_size, semantics.operator_norm.epsilon,
+                   spec.intermediate_size, semantics.mixer_norm.before->epsilon,
                    w.stream.get());
     launch_multiply(w.mamba_inner.data(), w.mamba_projected.data(),
                     rows * spec.intermediate_size, w.stream.get());
@@ -515,8 +515,8 @@ void PackedDenseFfnExecutor::run(
     PackedWorkspace& w = context.workspace;
     const CompiledLayerProgram& semantics = reference.program().layers.at(
         static_cast<size_t>(layer_index));
-    launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.program.hidden, semantics.feed_forward_norm->epsilon, w.stream.get());
+    launch_rmsnorm(w.hidden.data(), common_layer.feed_forward_norm_before, w.normed.data(),
+                   rows, context.program.hidden, semantics.feed_forward_norm.before->epsilon, w.stream.get());
     const auto* dense_semantics =
         std::get_if<CompiledDenseFeedForwardProgram>(&semantics.feed_forward);
     if (!dense_semantics) {
@@ -571,8 +571,8 @@ void PackedMoeExecutor::run(
         static_cast<size_t>(layer_index));
     const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward);
     if (!moe) throw std::logic_error("packed MoE layer has no MoE FFN binding");
-    launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.program.hidden, semantics.feed_forward_norm->epsilon, w.stream.get());
+    launch_rmsnorm(w.hidden.data(), common_layer.feed_forward_norm_before, w.normed.data(),
+                   rows, context.program.hidden, semantics.feed_forward_norm.before->epsilon, w.stream.get());
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
                               rows * context.program.hidden, w.stream.get());
 

@@ -106,10 +106,10 @@ void load_mtp_weights(CudaCompiledModel& model, const IWeightRepository& repo) {
     for (int index = 0; index < mtp.layer_count; ++index) {
         const std::string prefix = "mtp.layers." + std::to_string(index);
         LayerCommon common_layer;
-        common_layer.operator_norm = resources.weight_loader_->load_rms_norm_weight(
+        common_layer.mixer_norm_before = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".input_layernorm.weight", {resources.program_.hidden},
             NormWeightKind::Scale);
-        common_layer.ffn_norm = resources.weight_loader_->load_rms_norm_weight(
+        common_layer.feed_forward_norm_before = resources.weight_loader_->load_rms_norm_weight(
             repo, prefix + ".post_attention_layernorm.weight", {resources.program_.hidden},
             NormWeightKind::Scale);
 
