@@ -35,6 +35,8 @@ void PackedConvolutionExecutor::run(
     int layer_index,
     int ragged_requests) {
     PackedWorkspace& w = context.workspace;
+    const CompiledLayerProgram& semantics = reference.program().layers.at(
+        static_cast<size_t>(layer_index));
     context.linear(w.normed.data(), *convolution.conv_in, w.conv_projected.data(),
                    rows, 3 * context.program.hidden, context.program.hidden);
     const size_t offset = static_cast<size_t>(layer_index) * w.maximum_batch;
@@ -50,9 +52,11 @@ void PackedConvolutionExecutor::run(
             w.d_conv_states.data() + offset, w.op_output.data(), w.positions.data(),
             rows, context.program.hidden, convolution.spec.cache_length, w.stream.get());
     }
+    const bool fuse_residual = reference.options().fused_residuals &&
+        !semantics.mixer_norm.after.has_value();
     context.linear(w.op_output.data(), *convolution.conv_out, w.hidden.data(), rows,
                    context.program.hidden, context.program.hidden,
-                   reference.options().fused_residuals ? 1.0f : 0.0f);
+                   fuse_residual ? 1.0f : 0.0f);
 }
 
 namespace {
@@ -389,16 +393,18 @@ void PackedGatedDeltaNetExecutor::run(
             w.gated_delta_output.data() + flat * static_cast<size_t>(value_width),
             static_cast<int>(count), spec.conv_kernel, spec.key_head_dim,
             spec.value_head_dim, spec.key_heads, spec.value_heads,
-            semantics.operator_norm.epsilon, spec.vector_decay, spec.safe_decay,
+            reference.program().final_norm.epsilon, spec.vector_decay, spec.safe_decay,
             spec.decay_lower_bound, spec.sigmoid_output_gate, w.stream.get());
         flat += count;
     }
     if (flat != static_cast<size_t>(rows)) {
         throw std::invalid_argument("packed GatedDeltaNet row mapping is incomplete");
     }
+    const bool fuse_residual = reference.options().fused_residuals &&
+        !semantics.mixer_norm.after.has_value();
     context.linear(w.gated_delta_output.data(), *gated_delta.out, w.hidden.data(),
                    rows, context.program.hidden, value_width,
-                   reference.options().fused_residuals ? 1.0f : 0.0f);
+                   fuse_residual ? 1.0f : 0.0f);
 }
 
 void PackedMamba2Executor::run(
@@ -463,13 +469,15 @@ void PackedMamba2Executor::run(
         throw std::invalid_argument("packed Mamba2 row mapping is incomplete");
     }
     launch_rmsnorm(w.mamba_inner.data(), mamba.norm, w.mamba_inner.data(), rows,
-                   spec.intermediate_size, semantics.operator_norm.epsilon,
+                   spec.intermediate_size, reference.program().final_norm.epsilon,
                    w.stream.get());
     launch_multiply(w.mamba_inner.data(), w.mamba_projected.data(),
                     rows * spec.intermediate_size, w.stream.get());
+    const bool fuse_residual = reference.options().fused_residuals &&
+        !semantics.mixer_norm.after.has_value();
     context.linear(w.mamba_inner.data(), *mamba.out, w.hidden.data(), rows,
                    context.program.hidden, spec.intermediate_size,
-                   reference.options().fused_residuals ? 1.0f : 0.0f);
+                   fuse_residual ? 1.0f : 0.0f);
 }
 
 void PackedAttentionExecutor::run(
@@ -499,9 +507,11 @@ void PackedAttentionExecutor::run(
             transform->minimum_norm_squared, w.stream.get());
     }
     const int query_width = layout.query_width();
+    const bool fuse_residual = reference.options().fused_residuals &&
+        !semantics.mixer_norm.after.has_value();
     context.linear(w.op_output.data(), *attention.out, w.hidden.data(), rows,
                    context.program.hidden, query_width,
-                   reference.options().fused_residuals ? 1.0f : 0.0f);
+                   fuse_residual ? 1.0f : 0.0f);
     launch_scale(w.hidden.data(), rows * context.program.hidden,
                  semantics.residual.multiplier, w.stream.get());
 }
@@ -515,8 +525,16 @@ void PackedDenseFfnExecutor::run(
     PackedWorkspace& w = context.workspace;
     const CompiledLayerProgram& semantics = reference.program().layers.at(
         static_cast<size_t>(layer_index));
-    launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.program.hidden, semantics.feed_forward_norm->epsilon, w.stream.get());
+    const size_t hidden_elements = static_cast<size_t>(rows) * context.program.hidden;
+    if (semantics.feed_forward_norm.before) {
+        launch_rmsnorm(w.hidden.data(), common_layer.feed_forward_norm_before,
+                       w.normed.data(), rows, context.program.hidden,
+                       semantics.feed_forward_norm.before->epsilon, w.stream.get());
+    } else {
+        CELEG_CUDA(cudaMemcpyAsync(w.normed.data(), w.hidden.data(),
+                                   hidden_elements * sizeof(__nv_bfloat16),
+                                   cudaMemcpyDeviceToDevice, w.stream.get()));
+    }
     const auto* dense_semantics =
         std::get_if<CompiledDenseFeedForwardProgram>(&semantics.feed_forward);
     if (!dense_semantics) {
@@ -546,12 +564,18 @@ void PackedDenseFfnExecutor::run(
         launch_swiglu_fused(w.gate_up.data(), w.activated.data(),
                             static_cast<int>(plane), w.stream.get());
     }
-    if (reference.options().fused_residuals) {
+    const bool split_output = semantics.feed_forward_norm.after.has_value();
+    if (reference.options().fused_residuals && !split_output) {
         context.linear(w.activated.data(), *dense->w2, w.hidden.data(), rows,
                        context.program.hidden, intermediate, 1.0f);
     } else {
         context.linear(w.activated.data(), *dense->w2, w.mlp_output.data(), rows,
                        context.program.hidden, intermediate);
+        if (split_output) {
+            launch_rmsnorm(w.mlp_output.data(), common_layer.feed_forward_norm_after,
+                           w.mlp_output.data(), rows, context.program.hidden,
+                           semantics.feed_forward_norm.after->epsilon, w.stream.get());
+        }
         launch_scale(w.mlp_output.data(), rows * context.program.hidden,
                      semantics.residual.multiplier, w.stream.get());
         launch_residual_add(w.hidden.data(), w.mlp_output.data(),
@@ -571,8 +595,16 @@ void PackedMoeExecutor::run(
         static_cast<size_t>(layer_index));
     const MoeFfnWeights* moe = as_moe_ffn(common_layer.feed_forward);
     if (!moe) throw std::logic_error("packed MoE layer has no MoE FFN binding");
-    launch_rmsnorm(w.hidden.data(), common_layer.ffn_norm, w.normed.data(),
-                   rows, context.program.hidden, semantics.feed_forward_norm->epsilon, w.stream.get());
+    const size_t hidden_elements = static_cast<size_t>(rows) * context.program.hidden;
+    if (semantics.feed_forward_norm.before) {
+        launch_rmsnorm(w.hidden.data(), common_layer.feed_forward_norm_before,
+                       w.normed.data(), rows, context.program.hidden,
+                       semantics.feed_forward_norm.before->epsilon, w.stream.get());
+    } else {
+        CELEG_CUDA(cudaMemcpyAsync(w.normed.data(), w.hidden.data(),
+                                   hidden_elements * sizeof(__nv_bfloat16),
+                                   cudaMemcpyDeviceToDevice, w.stream.get()));
+    }
     launch_cast_bf16_to_float(w.normed.data(), w.moe_hidden_float.data(),
                               rows * context.program.hidden, w.stream.get());
 
@@ -608,6 +640,13 @@ void PackedMoeExecutor::run(
                    w.moe_act_scratch.data(), w.stream.get());
     launch_finalize_moe_output(w.moe_output_accum.data(), w.moe_output.data(),
                                rows * context.program.hidden, w.stream.get());
+    if (semantics.feed_forward_norm.after) {
+        launch_rmsnorm(w.moe_output.data(), common_layer.feed_forward_norm_after,
+                       w.moe_output.data(), rows, context.program.hidden,
+                       semantics.feed_forward_norm.after->epsilon, w.stream.get());
+    }
+    launch_scale(w.moe_output.data(), rows * context.program.hidden,
+                 semantics.residual.multiplier, w.stream.get());
     launch_residual_add(w.hidden.data(), w.moe_output.data(),
                         rows * context.program.hidden, w.stream.get());
 }
