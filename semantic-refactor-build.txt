@@ -109,7 +109,7 @@ Call Stack (most recent call first):
   CMakeLists.txt:246 (FetchContent_Populate)
 This warning is for project developers.  Use -Wno-dev to suppress it.
 
--- Configuring done (7.4s)
+-- Configuring done (5.4s)
 -- Generating done (0.1s)
 -- Build files have been written to: /home/runner/work/celeg/celeg/out/linux-cpu-release
 + /usr/local/bin/cmake --build /home/runner/work/celeg/celeg/out/linux-cpu-release --parallel 2
@@ -199,31 +199,42 @@ In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type
 [22/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/probe_matcher.cpp.o
 [23/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/field_resolver.cpp.o
 [24/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/graph_builder.cpp.o
-[25/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o
-FAILED: [code=1] CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o 
-/usr/bin/c++ -DCELEG_DESCRIPTOR_DIRECTORY=\"/home/runner/work/celeg/celeg/descriptors\" -DCELEG_DESCRIPTOR_INSTALL_DIRECTORY=\"/usr/local/share/celeg/descriptors\" -I/home/runner/work/celeg/celeg/include -O3 -DNDEBUG -std=gnu++20 -fPIC -Wall -Wextra -Wpedantic -MD -MT CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o -MF CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o.d -o CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o -c /home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp
+[25/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/binding_parser.cpp.o
+[26/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/field_parser.cpp.o
+[27/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/architecture.cpp.o
 /home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp: In member function ‘virtual celeg::ResolvedModel celeg::descriptor_detail::DescriptorArchitecture::resolve(const celeg::CheckpointView&) const’:
-/home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp:145:28: error: ‘struct celeg::LayerSpec’ has no member named ‘operator_norm’
-  145 |             semantic_layer.operator_norm = {numerical_policy.norm_eps,
-      |                            ^~~~~~~~~~~~~
-/home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp:148:84: error: no match for ‘operator=’ (operand types are ‘celeg::SublayerNormSpec’ and ‘celeg::NormSpec’)
-  148 |                                                  descriptor_.feed_forward_norm_kind};
-      |                                                                                    ^
-In file included from /home/runner/work/celeg/celeg/include/celeg/model/resolved.hpp:3,
-                 from /home/runner/work/celeg/celeg/include/celeg/model/architecture.hpp:4,
-                 from /home/runner/work/celeg/celeg/include/celeg/model/descriptor.hpp:3,
-                 from /home/runner/work/celeg/celeg/src/model/descriptor/detail.hpp:3,
-                 from /home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp:1:
-/home/runner/work/celeg/celeg/include/celeg/model/graph.hpp:426:8: note: candidate: ‘constexpr celeg::SublayerNormSpec& celeg::SublayerNormSpec::operator=(const celeg::SublayerNormSpec&)’
-  426 | struct SublayerNormSpec {
-      |        ^~~~~~~~~~~~~~~~
-/home/runner/work/celeg/celeg/include/celeg/model/graph.hpp:426:8: note:   no known conversion for argument 1 from ‘celeg::NormSpec’ to ‘const celeg::SublayerNormSpec&’
-/home/runner/work/celeg/celeg/include/celeg/model/graph.hpp:426:8: note: candidate: ‘constexpr celeg::SublayerNormSpec& celeg::SublayerNormSpec::operator=(celeg::SublayerNormSpec&&)’
-/home/runner/work/celeg/celeg/include/celeg/model/graph.hpp:426:8: note:   no known conversion for argument 1 from ‘celeg::NormSpec’ to ‘celeg::SublayerNormSpec&&’
 /home/runner/work/celeg/celeg/src/model/descriptor/architecture.cpp:420:54: warning: missing initializer for member ‘celeg::LatentAttentionStateSpec::storage’ [-Wmissing-field-initializers]
   420 |                     descriptor_.latent_decoupled_rope};
       |                                                      ^
-[26/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/binding_parser.cpp.o
+[28/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/naming_policy.cpp.o
+[29/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/probe.cpp.o
+[30/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/descriptor/role_codec.cpp.o
+[31/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/architecture.cpp.o
+[32/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/automatic_architecture.cpp.o
+[33/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference.cpp.o
+[34/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/layer_bindings.cpp.o
+[35/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/rules.cpp.o
+[36/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/global_facts.cpp.o
+[37/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o
+FAILED: [code=1] CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o 
+/usr/bin/c++ -DCELEG_DESCRIPTOR_DIRECTORY=\"/home/runner/work/celeg/celeg/descriptors\" -DCELEG_DESCRIPTOR_INSTALL_DIRECTORY=\"/usr/local/share/celeg/descriptors\" -I/home/runner/work/celeg/celeg/include -O3 -DNDEBUG -std=gnu++20 -fPIC -Wall -Wextra -Wpedantic -MD -MT CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o -MF CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o.d -o CMakeFiles/celeg_base.dir/src/model/inference/rules_attention.cpp.o -c /home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:19:9: error: redefinition of ‘int layer’
+   19 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:18:9: note: ‘int layer’ previously declared here
+   18 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:20:9: error: redefinition of ‘int layer’
+   20 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:18:9: note: ‘int layer’ previously declared here
+   18 |     int layer,
+      |     ~~~~^~~~~
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp: In member function ‘virtual void celeg::inference_detail::{anonymous}::LatentAttentionRule::resolve(celeg::inference_detail::CanonicalInferenceContext&, int) const’:
+/home/runner/work/celeg/celeg/src/model/inference/rules_attention.cpp:380:71: warning: missing initializer for member ‘celeg::LatentAttentionStateSpec::storage’ [-Wmissing-field-initializers]
+  380 |                 NormSpec{*m.core.norm_epsilon, NormWeightKind::Scale}}};
+      |                                                                       ^
+[38/422] Building CXX object CMakeFiles/celeg_base.dir/src/model/inference/rules_recurrent.cpp.o
 ninja: build stopped: subcommand failed.
 verify: FAIL: Build failed.
 
