@@ -97,7 +97,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
         } else {
             std::copy(workspace_.hidden.begin(), workspace_.hidden.end(), workspace_.normed.begin());
         }
-        bool mixer_owns_layer = false;
         visit_operator_weights(layer.mixer,
           [&](const CpuCompiledModel::AttentionWeights* attention) {
             execute_cpu_attention_token(execution, attention_state, index, *attention, semantics,
@@ -111,7 +110,6 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
           },
           [&](const CpuCompiledModel::Mamba2Weights* mamba) {
             execute_cpu_mamba2_token(execution, recurrent_state, index, *mamba);
-            mixer_owns_layer = true;
           },
           [&](const CpuCompiledModel::MlpOnlyWeights* mlp) {
             if (!std::holds_alternative<std::monostate>(semantics.feed_forward)) {
@@ -119,18 +117,12 @@ void CpuCompiledModel::forward_token(int32_t token, bool compute_logits,
                     "CPU MLP-only layer cannot also run a feed-forward block");
             }
             execute_cpu_mlp_only_token(execution, index, *mlp);
-            mixer_owns_layer = true;
           });
         if (getenv("CELEG_DEBUG_LAYER_STATS")) {
             double sq = 0.0; float mx = 0.0f; bool bad = false;
             for (float v : workspace_.hidden) { sq += (double)v*v; mx = std::max(mx, std::fabs(v)); if (!std::isfinite(v)) bad = true; }
             fprintf(stderr, "[layer %zu mixer-out] norm=%.4f max=%.4f bad=%d\n", index, std::sqrt(sq), mx, bad);
         }
-        if (compute_logits && mixer_owns_layer) {
-            celeg_debug_dump_hidden(("layer_" + std::to_string(index)).c_str(),
-                                    workspace_.hidden.data(), shared->program.hidden);
-        }
-        if (mixer_owns_layer) continue;
         if (semantics.residual.multiplier != 1.0f) {
             for (float& value : workspace_.hidden) value *= semantics.residual.multiplier;
         }
