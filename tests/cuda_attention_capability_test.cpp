@@ -1,9 +1,11 @@
 
 #include "celeg/backend/cuda/attention_capability.hpp"
+#include "celeg/backend/cuda/attention_norm.hpp"
 #include "support/assertions.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -354,7 +356,36 @@ static_assert(resolve_attention_capability(
 static_assert(resolve_attention_capability(
     constexpr_prefill(KvCacheMode::Int8, false, 128)).supported);
 
+/// The regular attention kernels bake `1/sqrt(head_dim)` into their score
+/// computation, so whatever the caller pre-multiplies into Q has to cancel that
+/// factor out and leave exactly AttentionSpec::query_scale behind. Granite-style
+/// checkpoints, whose attention_multiplier is 1/head_dim rather than
+/// 1/sqrt(head_dim), are the case where applying query_scale directly silently
+/// squares the scale and destroys the softmax.
+void query_prescale_cancels_the_kernel_side_factor() {
+    const auto effective = [](const AttentionSpec& layout) {
+        return cuda_query_prescale(layout) /
+               std::sqrt(static_cast<float>(layout.head_dim));
+    };
+    AttentionSpec granite;
+    granite.head_dim = 64;
+    granite.query_scale = 0.015625f;
+    CELEG_TEST_CHECK(std::abs(effective(granite) - granite.query_scale) < 1e-7f);
+
+    AttentionSpec conventional;
+    conventional.head_dim = 128;
+    conventional.query_scale = 1.0f / std::sqrt(128.0f);
+    CELEG_TEST_CHECK(
+        std::abs(effective(conventional) - conventional.query_scale) < 1e-7f);
+
+    AttentionSpec degenerate;
+    degenerate.head_dim = 0;
+    degenerate.query_scale = 0.5f;
+    CELEG_TEST_CHECK(cuda_query_prescale(degenerate) == 0.5f);
+}
+
 void run_all() {
+    query_prescale_cancels_the_kernel_side_factor();
     matrix_rows_are_unique();
     resolution_never_contradicts_the_matrix();
     prefill_support_matrix_is_asymmetric();

@@ -100,7 +100,7 @@ void run_regular_attention(
     launch_scale(
         workspace.prefill_q_.data(),
         static_cast<size_t>(rows) * layout.query_width(),
-        layout.query_scale, model.stream_.get());
+        cuda_query_prescale(layout), model.stream_.get());
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 
     prof.begin(model.stream_.get());

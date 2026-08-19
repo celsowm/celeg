@@ -95,7 +95,7 @@ void project_attention_qkv(PackedOperatorContext& context,
             rope->pairing, lower_cuda_rope_scaling(*rope), w.stream.get());
     }
     launch_scale(w.q.data(), static_cast<size_t>(rows) * layout.query_width(),
-                 layout.query_scale, w.stream.get());
+                 cuda_query_prescale(layout), w.stream.get());
 }
 
 void run_paged_attention_cache(PackedOperatorContext& context,

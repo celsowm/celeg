@@ -110,7 +110,8 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             static_cast<float>(rope->rotary_fraction), qk_epsilon,
             false, lower_cuda_rope_scaling(*rope), stream);
     }
-    launch_scale(q, layout.query_width(), layout.query_scale, stream);
+    launch_scale(q, layout.query_width(),
+                 cuda_query_prescale(layout), stream);
     AttentionRequest attention_request;
     attention_request.kv_format = resources_.options_.kv_cache_mode;
     attention_request.operation = AttentionOperation::Decode;

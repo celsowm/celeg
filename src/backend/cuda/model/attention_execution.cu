@@ -273,7 +273,8 @@ void CudaCompiledModel::enqueue_decode_attention(
                         false, lower_cuda_rope_scaling(*rope), stream_.get());
                 }
             }
-            launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
+            launch_scale(q, layout.query_width(),
+                         cuda_query_prescale(layout), stream_.get());
             decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
             decode_phase_profile().begin(stream_.get());
             AttentionRequest attention_request;

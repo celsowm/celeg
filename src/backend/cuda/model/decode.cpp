@@ -493,7 +493,8 @@ void CudaCompiledModel::run_token_attention(
                 false, lower_cuda_rope_scaling(*rope), stream_.get());
         }
     }
-    launch_scale(q, layout.query_width(), layout.query_scale, stream_.get());
+    launch_scale(q, layout.query_width(),
+                 cuda_query_prescale(layout), stream_.get());
 
     const AttentionCapability plan = token_attention_plan(attention, owner_layout, kv);
     if (kv.paged()) {

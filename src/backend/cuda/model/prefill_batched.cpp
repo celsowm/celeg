@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -18,6 +20,37 @@
 #include "prefill_batched/attention.cpp"
 
 namespace celeg::prefill_detail {
+
+/// Mirrors the CPU backend's CELEG_DEBUG_LAYER_STATS hook so a CUDA-vs-CPU
+/// divergence can be bisected to the layer and stage where it first appears.
+/// Synchronizes and copies the whole prefill hidden buffer back to the host, so
+/// it is only ever enabled by the environment variable, never in normal runs.
+void debug_layer_stats(CudaCompiledModel& model, int layer_index, int rows,
+                       const char* stage) {
+    static const bool enabled = getenv("CELEG_DEBUG_LAYER_STATS") != nullptr;
+    if (!enabled) return;
+    const int hidden = model.resources_.program_.hidden;
+    const size_t count = static_cast<size_t>(rows) * static_cast<size_t>(hidden);
+    std::vector<__nv_bfloat16> host(count);
+    CELEG_CUDA(cudaStreamSynchronize(model.stream_.get()));
+    CELEG_CUDA(cudaMemcpy(host.data(), model.workspace_.prefill_hidden_.data(),
+                          count * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost));
+    double sq = 0.0;
+    double last_sq = 0.0;
+    float mx = 0.0f;
+    bool bad = false;
+    const size_t last_row_begin = static_cast<size_t>(rows - 1) * static_cast<size_t>(hidden);
+    for (size_t i = 0; i < count; ++i) {
+        const float value = __bfloat162float(host[i]);
+        const double squared = static_cast<double>(value) * static_cast<double>(value);
+        sq += squared;
+        if (i >= last_row_begin) last_sq += squared;
+        mx = std::max(mx, std::fabs(value));
+        if (!std::isfinite(value)) bad = true;
+    }
+    fprintf(stderr, "[cuda layer %d %s] norm=%.4f last_row=%.4f max=%.4f bad=%d\n",
+            layer_index, stage, std::sqrt(sq), std::sqrt(last_sq), mx, bad ? 1 : 0);
+}
 
 void run_mixer(
     CudaCompiledModel& model,
@@ -82,6 +115,7 @@ void run_layer(
     prof.end(PrefillPhase::Norm, model.stream_.get());
 
     run_mixer(model, layer, common_layer, semantics, rows);
+    debug_layer_stats(model, layer_index, rows, "mixer-out");
 
     if (mixer_after) {
         launch_rmsnorm(
@@ -97,11 +131,13 @@ void run_layer(
             rows * hidden, model.stream_.get());
         prof.end(PrefillPhase::Other, model.stream_.get());
     }
+    debug_layer_stats(model, layer_index, rows, "post-residual");
 
     prof.begin(model.stream_.get());
     if (!mixer_only) {
         model.run_mlp_prefill(common_layer, rows, layer_index);
     }
+    debug_layer_stats(model, layer_index, rows, "post-mlp");
     if (std::binary_search(
             model.resources_.program_.norm_after_layers.begin(),
             model.resources_.program_.norm_after_layers.end(), layer_index)) {
@@ -187,6 +223,7 @@ void CudaCompiledModel::prefill_batched(const std::vector<int32_t>& tokens) {
             resources_.program_.embedding_transform.post_norm->epsilon, stream_.get());
     }
     initialize_per_layer_input_batch(workspace_.prefill_tokens_.data(), rows);
+    prefill_detail::debug_layer_stats(*this, -1, rows, "embed");
     prof.end(PrefillPhase::Embed, stream_.get());
 
     prefill_detail::run_layers(*this, rows);
