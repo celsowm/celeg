@@ -18,6 +18,17 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
         }
     }
 
+    if (file.has("tokenizer.ggml.scores")) {
+        const auto& scores = file.value("tokenizer.ggml.scores");
+        if (scores.kind == GgufValueKind::Array &&
+            scores.array_kind == GgufValueKind::F32) {
+            result.scores.reserve(scores.array_numbers.size());
+            for (const double score : scores.array_numbers) {
+                result.scores.push_back(static_cast<float>(score));
+            }
+        }
+    }
+
     if (file.has("tokenizer.ggml.token_type")) {
         const auto& types = file.value("tokenizer.ggml.token_type");
         result.token_types.reserve(types.array_integers.size());
@@ -35,6 +46,8 @@ TokenizerData read_gguf_tokenizer_data(const GgufFile& file) {
     if (file.has("tokenizer.ggml.padding_token_id")) {
         result.pad_id = static_cast<int32_t>(file.i64("tokenizer.ggml.padding_token_id"));
     }
+
+    result.model = file.str_or("tokenizer.ggml.model", "");
 
     const std::string source = file.str_or("tokenizer.ggml.pre", "");
     if (source == "lfm2" || source == "smaug-bpe") {

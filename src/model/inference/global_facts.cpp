@@ -89,7 +89,7 @@ std::vector<int> infer_intermediate_sizes(
 
     for (int layer = 0; layer < context.layer_count; ++layer) {
         const std::optional<int> value = m.core.intermediate_size.value_for(layer);
-        const std::string index = std::to_string(layer);
+        const std::string index = std::to_string(context.physical_layer(layer));
 
         const TensorInventoryEntry* ffn_up =
             input.inventory.find("blk." + index + ".ffn_up.weight");
@@ -108,6 +108,10 @@ std::vector<int> infer_intermediate_sizes(
         if (!ffn_up) {
             ffn_up = input.inventory.find(
                 "model.layers." + index + ".feed_forward.w1.weight");
+        }
+        if (!ffn_up) {
+            ffn_up = input.inventory.find(
+                "model.language_model.layers." + index + ".feed_forward.w1.weight");
         }
         if (!ffn_up && context.moe && layer >= context.dense_start) {
             ffn_up = input.inventory.find(
@@ -205,6 +209,7 @@ CanonicalInferenceContext initialize_canonical_facts(
     context.facts.evidence = m.evidence;
 
     context.layer_count = *m.core.layer_count;
+    context.physical_layer_count = context.layer_count;
     context.dense_start =
         m.moe.first_dense_layer.value_or(context.layer_count);
     if (context.dense_start < 0 ||
@@ -213,6 +218,23 @@ CanonicalInferenceContext initialize_canonical_facts(
             ResolutionFailureKind::ConflictingMetadata,
             "first dense layer is outside the layer schedule");
     }
+
+    // Looped-transformer / recurrent-depth schedule (e.g. "num_loops"): the
+    // physical layer stack above is executed this many times, each physical
+    // layer's weights reused across every pass and a shared norm applied
+    // between passes. Tensor binding below resolves each virtual layer's
+    // weights via context.physical_layer(layer); MoE/mamba/gated-delta-net/
+    // shortconv layer families are not currently threaded through this
+    // remapping, so a checkpoint combining those with a repeat schedule will
+    // fail tensor resolution loudly rather than silently binding wrong
+    // weights.
+    const int layer_repeat_count = m.core.layer_repeat_count.value_or(1);
+    if (layer_repeat_count <= 0) {
+        fail(
+            ResolutionFailureKind::ConflictingMetadata,
+            "layer repeat count must be positive");
+    }
+    context.layer_count = context.physical_layer_count * layer_repeat_count;
 
     const int num_experts = m.moe.experts.value_or(0);
     const int experts_per_token = m.moe.experts_per_token.value_or(0);
@@ -296,6 +318,17 @@ CanonicalInferenceContext initialize_canonical_facts(
     context.intermediate_sizes =
         infer_intermediate_sizes(context);
     initialize_graph(context);
+
+    // Insert the shared final-norm after every physical block boundary
+    // except the last: the last one is already covered by the unconditional
+    // final-norm pass applied after the whole (virtual) layer stack, so
+    // repeating it here would apply the norm weights twice.
+    for (int boundary = context.physical_layer_count;
+         boundary < context.layer_count;
+         boundary += context.physical_layer_count) {
+        context.facts.graph.norm_after_layers.push_back(boundary - 1);
+    }
+
     return context;
 }
 

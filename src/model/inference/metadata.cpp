@@ -359,6 +359,8 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"num_hidden_layers", "n_layer", "num_layers"}, result.evidence,
         "layer_count", "block_count");
     validate_scoped_alias(result.core.intermediate_size, result.core.layer_count, "intermediate_size");
+    result.core.layer_repeat_count = aliases<int>(
+        metadata, {"num_loops"}, result.evidence, "layer_repeat_count", "num_loops");
     result.attention.query_heads = scoped_aliases<int>(
         metadata, {"num_attention_heads", "n_head"}, result.evidence, "query_heads",
         "attention.head_count");

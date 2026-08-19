@@ -135,6 +135,7 @@ public:
     bool probe(const CanonicalInferenceContext& context, int layer)
         const override {
         const auto& inventory = context.input.inventory;
+        const int physical_layer = context.physical_layer(layer);
 
         // Factorized Gated Delta Net checkpoints such as Ling intentionally
         // store q/k/v/o projections below an `.attention.` prefix.  Those
@@ -143,14 +144,14 @@ public:
         // the more specific factorized_gated_delta grammar; let that rule own
         // the layer instead of manufacturing a cross-family ambiguity.
         const std::string recurrent_prefix =
-            "model.layers." + std::to_string(layer) + ".attention.";
+            "model.layers." + std::to_string(physical_layer) + ".attention.";
         if (inventory.find(recurrent_prefix + "f_proj.weight") != nullptr &&
             inventory.find(recurrent_prefix + "q_conv1d.weight") != nullptr) {
             return false;
         }
 
         for (const std::string& candidate :
-             attention_tensor_candidates(layer, "q_proj.weight")) {
+             attention_tensor_candidates(physical_layer, "q_proj.weight")) {
             if (inventory.find(candidate) != nullptr) return true;
         }
         return false;
@@ -161,6 +162,7 @@ public:
         const auto& input = context.input;
         const auto& m = input.metadata;
         auto& bindings = context.facts.bindings;
+        const int physical_layer = context.physical_layer(layer);
         LayerSpec& semantic_layer =
             context.facts.graph.layers[static_cast<size_t>(layer)];
 
@@ -195,10 +197,10 @@ public:
         const int query_width = *query_heads * head_dim;
         const int key_value_width = *key_value_heads * head_dim;
         const TensorInventoryEntry* query_norm = find_optional_unique(
-            input.inventory, query_norm_candidates(layer),
+            input.inventory, query_norm_candidates(physical_layer),
             TensorRole::AttentionQueryNorm, layer);
         const TensorInventoryEntry* key_norm = find_optional_unique(
-            input.inventory, key_norm_candidates(layer),
+            input.inventory, key_norm_candidates(physical_layer),
             TensorRole::AttentionKeyNorm, layer);
         const bool metadata_qk_norm = *m.attention.query_key_norm;
         if (metadata_qk_norm && (query_norm == nullptr || key_norm == nullptr)) {
@@ -243,7 +245,7 @@ public:
             key_norm_granularity);
 
         const auto q_candidates =
-            attention_tensor_candidates(layer, "q_proj.weight");
+            attention_tensor_candidates(physical_layer, "q_proj.weight");
         const TensorInventoryEntry* query = nullptr;
         for (const std::string& name : q_candidates) {
             if (const auto* candidate = input.inventory.find(name)) {
@@ -279,7 +281,7 @@ public:
 
         const auto* q = find_unique(
             input.inventory,
-            attention_tensor_candidates(layer, "q_proj.weight"),
+            attention_tensor_candidates(physical_layer, "q_proj.weight"),
             TensorRole::AttentionQuery,
             layer,
             {resolved.query_projection_width(), *m.core.hidden_size},
@@ -288,7 +290,7 @@ public:
 
         const auto* k = find_unique(
             input.inventory,
-            attention_tensor_candidates(layer, "k_proj.weight"),
+            attention_tensor_candidates(physical_layer, "k_proj.weight"),
             TensorRole::AttentionKey,
             layer,
             {key_value_head_count * layer_head_dim, *m.core.hidden_size},
@@ -297,7 +299,7 @@ public:
 
         const auto* v = find_unique(
             input.inventory,
-            attention_tensor_candidates(layer, "v_proj.weight"),
+            attention_tensor_candidates(physical_layer, "v_proj.weight"),
             TensorRole::AttentionValue,
             layer,
             {key_value_head_count * layer_head_dim, *m.core.hidden_size},
@@ -306,7 +308,7 @@ public:
 
         const auto* o = find_unique(
             input.inventory,
-            attention_tensor_candidates(layer, "o_proj.weight"),
+            attention_tensor_candidates(physical_layer, "o_proj.weight"),
             TensorRole::AttentionOutput,
             layer,
             {*m.core.hidden_size, query_head_count * layer_head_dim},

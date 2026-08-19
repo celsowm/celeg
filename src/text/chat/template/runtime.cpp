@@ -309,9 +309,11 @@ public:
         root.emplace(
             "add_generation_prompt",
             TemplateValue{generation_prompt});
-        root.emplace(
-            "enable_thinking",
-            TemplateValue{options.enable_thinking.value_or(false)});
+        if (options.enable_thinking.has_value()) {
+            root.emplace(
+                "enable_thinking",
+                TemplateValue{*options.enable_thinking});
+        }
         root.emplace("keep_past_thinking", TemplateValue{false});
         root.emplace(
             "tool_choice",

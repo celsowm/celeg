@@ -41,12 +41,19 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
                               descriptor.final_norm_kind};
     graph.final_logit_softcap = descriptor.final_logit_softcap.has_value()
         ? static_cast<float>(number_value(metadata, *descriptor.final_logit_softcap)) : 0.0f;
+    graph.norm_after_layers.clear();
     if (descriptor.norm_after_physical_block) {
         const int physical_layer_count = integer_value(
             metadata, descriptor.dimensions.at("layers"));
-        graph.norm_after_layers = {physical_layer_count - 1};
-    } else {
-        graph.norm_after_layers.clear();
+        // Insert the shared final-norm after every physical block boundary
+        // except the last: the last one is already covered by the
+        // unconditional final-norm pass applied after the whole layer
+        // stack, so repeating it here would apply the norm weights twice.
+        for (int boundary = physical_layer_count;
+             boundary < static_cast<int>(graph.layers.size());
+             boundary += physical_layer_count) {
+            graph.norm_after_layers.push_back(boundary - 1);
+        }
     }
     const bool orthogonalize_current_value = boolean_value(
         metadata, descriptor.orthogonalize_current_value, false);

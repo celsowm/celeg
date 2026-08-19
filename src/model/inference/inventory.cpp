@@ -336,6 +336,29 @@ void normalize_attention_schedule(const CheckpointMetadata& source,
     metadata.attention.pattern = attention_pattern_metadata(
         source, metadata.core.layer_count, metadata.evidence);
 
+    /// Some checkpoints declare two head-dim values: a base one (`head_dim`)
+    /// and a wider one used only on the layers the layer_types schedule marks
+    /// as full/global attention (`global_head_dim`). Expand that into a
+    /// per-layer head_dim schedule so downstream resolution, which already
+    /// consults `head_dim.value_for(layer)`, sees the right width for every
+    /// layer instead of applying the base value everywhere.
+    if (metadata.attention.head_dim.per_layer.empty() &&
+        !metadata.attention.pattern.per_layer.empty()) {
+        const std::optional<int> global_variant = integer_alias(source, "global_head_dim");
+        const std::optional<int> base = metadata.attention.head_dim.global;
+        if (global_variant.has_value() && base.has_value() && *global_variant != *base) {
+            std::vector<std::optional<int>> per_layer;
+            per_layer.reserve(metadata.attention.pattern.per_layer.size());
+            for (const auto& pattern : metadata.attention.pattern.per_layer) {
+                per_layer.push_back(
+                    pattern == AttentionPatternKind::FullCausal ? *global_variant : *base);
+            }
+            metadata.attention.head_dim.per_layer = std::move(per_layer);
+            metadata.evidence.push_back({EvidenceKind::AliasMetadata, "global_head_dim",
+                "head_dim = layer-scoped schedule (full_attention layers use global_head_dim)"});
+        }
+    }
+
     std::optional<int> window;
     for (const std::string_view key : {std::string_view("sliding_window"),
                                        std::string_view("sliding_window_size")}) {
@@ -570,7 +593,7 @@ TensorInventory build_tensor_inventory(const IWeightRepository& repository) {
     std::vector<TensorInventoryEntry> entries;
     for (const std::string& name : repository.names()) {
         const HostTensorView tensor = repository.tensor(name);
-        if (name.empty() || tensor.shape.empty() || tensor.shape.size() > 4) {
+        if (name.empty() || tensor.shape.size() > 4) {
             inference_detail::fail(
                 ResolutionFailureKind::UnsupportedTensorLayout,
                 "tensor inventory contains invalid tensor metadata: " + name);

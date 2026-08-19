@@ -269,7 +269,7 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
     const auto& input = context.input;
     const auto& norm_facts = input.metadata.norms;
     const int hidden = *input.metadata.core.hidden_size;
-    const std::string index = std::to_string(layer);
+    const std::string index = std::to_string(context.physical_layer(layer));
     LayerSpec& semantic_layer =
         context.facts.graph.layers[static_cast<size_t>(layer)];
 
@@ -443,9 +443,10 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
     const auto& m = input.metadata;
     auto& bindings = context.facts.bindings;
 
+    const int physical_layer = context.physical_layer(layer);
     const auto* gate = find_unique(
         input.inventory,
-        feed_forward_tensor_candidates(layer, "w_gate.weight"),
+        feed_forward_tensor_candidates(physical_layer, "w_gate.weight"),
         TensorRole::FfnGate,
         layer,
         {layer_intermediate, *m.core.hidden_size},
@@ -454,7 +455,7 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
 
     const auto* up = find_unique(
         input.inventory,
-        feed_forward_tensor_candidates(layer, "w_up.weight"),
+        feed_forward_tensor_candidates(physical_layer, "w_up.weight"),
         TensorRole::FfnUp,
         layer,
         {layer_intermediate, *m.core.hidden_size},
@@ -463,7 +464,7 @@ void bind_dense_ffn(CanonicalInferenceContext& context,
 
     const auto* down = find_unique(
         input.inventory,
-        feed_forward_tensor_candidates(layer, "w_down.weight"),
+        feed_forward_tensor_candidates(physical_layer, "w_down.weight"),
         TensorRole::FfnDown,
         layer,
         {*m.core.hidden_size, layer_intermediate},
@@ -647,7 +648,7 @@ void resolve_layer_feed_forward(CanonicalInferenceContext& context,
     if (std::holds_alternative<std::monostate>(semantic_layer.feed_forward)) return;
 
     if (std::holds_alternative<MixtureOfExpertsSpec>(semantic_layer.feed_forward)) {
-        bind_moe(context, layer, std::to_string(layer));
+        bind_moe(context, layer, std::to_string(context.physical_layer(layer)));
     } else {
         bind_dense_ffn(context, layer,
                        context.intermediate_sizes.at(static_cast<size_t>(layer)));

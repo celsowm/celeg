@@ -185,6 +185,12 @@ struct CoreModelFacts {
     std::optional<int> hidden_size;
     LayerScopedValue<int> intermediate_size;
     std::optional<int> layer_count;
+    // Looped-transformer / recurrent-depth schedule: when > 1, the physical
+    // layer stack (layer_count layers) is executed this many times in
+    // sequence, each physical layer's weights reused across every pass, with
+    // a shared norm applied between passes. Absent or <= 1 means no
+    // repetition (the ordinary case).
+    std::optional<int> layer_repeat_count;
     std::optional<int> vocab_size;
     std::optional<int> context_length;
     std::optional<float> norm_epsilon;

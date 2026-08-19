@@ -96,14 +96,17 @@ std::vector<std::string> feed_forward_tensor_candidates(int layer,
         result.push_back("model.language_model.layers." + index + ".mlp.gate_proj.weight");
         result.push_back("model.layers." + index + ".mlp.gate_proj.weight");
         result.push_back("model.layers." + index + ".feed_forward.w1.weight");
+        result.push_back("model.language_model.layers." + index + ".feed_forward.w1.weight");
     } else if (suffix == "w_up.weight") {
         result.push_back("model.language_model.layers." + index + ".mlp.up_proj.weight");
         result.push_back("model.layers." + index + ".mlp.up_proj.weight");
         result.push_back("model.layers." + index + ".feed_forward.w3.weight");
+        result.push_back("model.language_model.layers." + index + ".feed_forward.w3.weight");
     } else if (suffix == "w_down.weight") {
         result.push_back("model.language_model.layers." + index + ".mlp.down_proj.weight");
         result.push_back("model.layers." + index + ".mlp.down_proj.weight");
         result.push_back("model.layers." + index + ".feed_forward.w2.weight");
+        result.push_back("model.language_model.layers." + index + ".feed_forward.w2.weight");
     }
     return result;
 }
@@ -173,13 +176,14 @@ bool layer_has_feed_forward(const CanonicalInferenceContext& context,
     const auto has_tensor = [&](std::string_view name) {
         return input.inventory.find(name) != nullptr;
     };
-    const std::string index = std::to_string(layer);
-    return find_mamba_tensor(input, layer, "in_proj.weight") == nullptr &&
+    const std::string index = std::to_string(context.physical_layer(layer));
+    return find_mamba_tensor(input, context.physical_layer(layer), "in_proj.weight") == nullptr &&
         (has_tensor("blk." + index + ".ffn_up.weight") ||
          has_tensor("model.layers." + index + ".mlp.up_proj.weight") ||
          has_tensor("model.language_model.layers." + index + ".mlp.up_proj.weight") ||
          has_tensor("transformer.h." + index + ".mlp.w_up.weight") ||
          has_tensor("model.layers." + index + ".feed_forward.w1.weight") ||
+         has_tensor("model.language_model.layers." + index + ".feed_forward.w1.weight") ||
          (context.moe &&
           has_tensor("model.layers." + index +
                      ".mlp.experts.0.gate_proj.weight")));

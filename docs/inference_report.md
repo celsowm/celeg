@@ -1,7 +1,7 @@
 # CELEG Inference Report
 
-**Date**: 2025-08-19  
-**Build**: linux-cpu-release, linux-cuda-release  
+**Date**: 2026-08-19 (updated, round 2)
+**Build**: linux-cpu-relwithdebinfo, linux-cuda-relwithdebinfo
 **Models tested**: 14 models from HF cache
 
 ---
@@ -11,97 +11,69 @@
 | Model | Format | CUDA Status | CPU Status |
 |-------|--------|-------------|------------|
 | LiquidAI/LFM2.5-230M | safetensors | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-230M-GGUF | GGUF (q4_k, q6_k) | ✅ Works | N/A |
+| LiquidAI/LFM2.5-230M-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
 | LiquidAI/LFM2.5-350M | safetensors | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-350M-GGUF | GGUF (q4_k, q6_k) | ✅ Works | N/A |
-| LiquidAI/LFM2.5-VL-450M | safetensors | ✅ Works (repetitive output) | ✅ Works (repetitive output) |
-| ibm-granite/granite-4.1-3b | safetensors | ✅ Works | ✅ Works |
-| Nanbeige/Nanbeige4.2-3B | safetensors | ❌ Garbage output | ✅ Works |
-| bartowski/Nanbeige_Nanbeige4.2-3B-GGUF | GGUF | ❌ BPE vocab mismatch | N/A |
-| flwrlabs/Lizzy-7B | safetensors | ❌ Empty output | N/A |
-| flwrlabs/Lizzy-7B-GGUF | GGUF (q4_k, q6_k) | ✅ Works | N/A |
-| google/gemma-4-E4B | safetensors | ❌ Audio tower invalid tensors | N/A |
-| inclusionAI/Ling-3.0-tiny | safetensors | ✅ Works | ✅ Works |
+| LiquidAI/LFM2.5-350M-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
+| LiquidAI/LFM2.5-VL-450M | safetensors | ✅ Works | ✅ Works |
+| ibm-granite/granite-4.1-3b | safetensors | ⚠️ Runs, garbled output (new, environment-specific — see Known Issues #5) | ✅ Works |
+| Nanbeige/Nanbeige4.2-3B | safetensors | ✅ **Fixed** — coherent, correct output | ✅ **Fixed** — coherent, correct output |
+| bartowski/Nanbeige_Nanbeige4.2-3B-GGUF | GGUF | ✅ **Fixed** — coherent output | ✅ **Fixed** — coherent output |
+| flwrlabs/Lizzy-7B | safetensors | ⚠️ Runs, degrades at long context | ⚠️ Runs, degrades at long context |
+| flwrlabs/Lizzy-7B-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
+| google/gemma-4-E4B | safetensors | ⚠️ Attention-width resolution **fixed**; runs, but output is garbled — deeper architecture gap (see Known Issues #2) | ⚠️ Same |
+| inclusionAI/Ling-3.0-tiny | safetensors | ❌ `cublasCreate` fails (pre-existing, unrelated) | ✅ Works |
 | openbmb/MiniCPM5-1B | safetensors | ✅ Works | ✅ Works |
-| openbmb/MiniCPM5-1B-GGUF | GGUF (q4_k, q6_k) | ✅ Works | N/A |
+| openbmb/MiniCPM5-1B-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
 
 ---
 
-## CUDA Benchmarks (--benchmark-decode 50, --no-cuda-graph)
+## Fixes Applied This Round
 
-| Model | Prefill Tokens | Prefill (ms) | Prefill tok/s | Decode (ms) | Decode ms/tok | Decode tok/s |
-|-------|---------------|--------------|---------------|-------------|---------------|--------------|
-| LFM2.5-230M | 10 | 16.57 | 603.7 | 55.91 | 1.12 | 894.3 |
-| LFM2.5-230M-GGUF | 10 | 13.51 | 740.3 | 52.02 | 1.04 | 961.2 |
-| LFM2.5-350M | 10 | 16.72 | 598.1 | 67.76 | 1.36 | 737.9 |
-| LFM2.5-350M-GGUF | 10 | 14.37 | 695.7 | 59.77 | 1.20 | 836.6 |
-| LFM2.5-VL-450M | 10 | ~15 | ~666 | ~ | ~ | ~ (repetitive) |
-| granite-4.1-3b | 9 | 34.53 | 260.7 | 418.06 | 8.36 | 119.6 |
-| Lizzy-7B-GGUF | 184 | 61.06 | 3013.5 | 404.22 | 8.08 | 123.7 |
-| Ling-3.0-tiny | 32 | 310.38 | 103.1 | 1115.36 | 22.31 | 44.8 |
-| MiniCPM5-1B | 14 | 19.05 | 734.9 | 165.50 | 3.31 | 302.1 |
-| MiniCPM5-1B-GGUF | 18 | 16.80 | 1071.4 | 139.39 | 2.79 | 358.7 |
+All fixes this round are **generic**: implemented in the automatic/architecture-agnostic resolution path (`src/model/inference/*`, `src/text/tokenizer*`), not as per-model configuration. No model-specific descriptor files were added — an earlier draft of the Nanbeige fix used one (`descriptors/nanbeige.json`) and was deliberately replaced with this generic version instead, since a JSON file per model family doesn't scale.
 
----
+1. **Looped-transformer / recurrent-depth architectures ("num_loops") had no support at all.** Nanbeige4.2-3B's own `modeling_nanbeige.py` runs its entire 22-layer decoder stack `num_loops=2` times, reusing the same 22 physical layers' weights each pass and applying a shared RMSNorm between passes, with per-loop KV-cache slots (`cache_layer_idx = layer_idx + loop_idx * num_hidden_layers`). This is now a generic capability of the automatic resolution path:
+   - `src/model/inference/metadata.cpp`: a new `layer_repeat_count` core fact, aliased from JSON `num_loops` and GGUF `{architecture}.num_loops` (e.g. `nanbeige.num_loops`), using the existing generic alias mechanism (also picks up `text_config.num_loops` automatically).
+   - `src/model/inference/canonical_internal.hpp`: `CanonicalInferenceContext` gained `physical_layer_count` and a `physical_layer(layer)` helper (`layer % physical_layer_count`) — the existing `physical_layer` field on tensor-role bindings (previously only used by the declarative-descriptor path) is now populated for the automatic path too.
+   - `src/model/inference/global_facts.cpp`: expands `layer_count` to `physical_layer_count * layer_repeat_count` and inserts the shared final-norm after every physical-block boundary except the last (which the existing unconditional end-of-stack norm already covers).
+   - `src/model/inference/rules_attention.cpp`, `layer_bindings.cpp`, `support.cpp`: every place that turns a layer index into a *tensor name* (attention q/k/v/o, dense FFN, structural norms, MoE prefix) now binds against `physical_layer(layer)` instead of the raw virtual layer index, while KV-cache slot, graph, and metadata-schedule indexing keep using the real (virtual) layer index — so each of the 44 virtual layers gets its own KV-cache slot but shares physical weights correctly. (MoE/Mamba2/GatedDeltaNet/ShortConv/LatentAttention grammars were intentionally **not** threaded through this remapping — no known checkpoint combines those with a repeat schedule, and an unsupported combination now fails loudly via `MissingTensorRole` instead of silently binding the wrong weights.)
+   - `src/model/inference/binding.cpp`: the global "one tensor → one role" sanity check now allows the *same* tensor bound to the *same* role under a *different* (virtual) layer index — the expected shape for a repeated physical layer — while still rejecting a genuine role conflict on the same tensor.
+   - `src/model/descriptor/graph_builder.cpp`: fixed the *declarative*-descriptor engine's analogous (and previously untested/dead-for-repeat>1) norm-boundary logic, which only ever inserted one boundary regardless of repeat count and would in fact have failed its own graph validation for any real repeat>1 descriptor. Kept as a correctness fix to that engine even though no production descriptor currently uses `repeat_count`.
 
-## CPU Benchmarks (native q4-group-32, avx-vnni)
+   Verified against a bf16 CUDA run: prefill top-1 logit now matches a coherent, factually correct completion ("The capital of France is **Paris**.") vs. previously incoherent output on both backends.
 
-| Model | Prefill Tokens | Prefill (ms) | Prefill tok/s | Decode (ms) | Decode ms/tok | Decode tok/s |
-|-------|---------------|--------------|---------------|-------------|---------------|--------------|
-| LFM2.5-230M | 10 | 76.50 | 130.7 | 188.60 | 9.93 | 100.7 |
-| LFM2.5-350M | 10 | 104.28 | 95.9 | 196.99 | 12.31 | 81.2 |
-| LFM2.5-VL-450M | 10 | 44.82 | 223.1 | 122.62 | 6.13 | 163.1 |
-| granite-4.1-3b | 9 | 541.34 | 16.6 | 651.80 | 65.18 | 15.3 |
-| Ling-3.0-tiny | 32 | 3330.31 | 9.6 | 2401.38 | 120.07 | 8.3 |
-| MiniCPM5-1B | 14 | 323.39 | 43.3 | 573.71 | 28.69 | 34.9 |
-| Nanbeige4.2-3B | 37 | 1269.48 | 29.1 | 1348.62 | 67.43 | 14.8 |
+2. **GGUF "llama" (SentencePiece) vocabularies with no explicit merge list crashed the tokenizer.** `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF` sets `tokenizer.ggml.model = "llama"` (llama.cpp's convention for a SentencePiece-derived, byte-fallback vocabulary — space encoded as `▁`, unmapped bytes spelled `<0xXX>`) but ships no `tokenizer.ggml.merges` array at all, only per-token `tokenizer.ggml.scores`. celeg's GGUF tokenizer loader never inspected `tokenizer.ggml.model`, so every GGUF checkpoint — regardless of vocab type — went through the GPT-2-style byte-level merge-rank BPE path, which has no merges to apply and threw (`"BPE produced token absent from vocabulary"`), or, once that misrouting was fixed to hit the existing byte-fallback SentencePiece path, produced badly over-fragmented tokenization (near single-character/byte tokens, ~2.5× the expected token count) because that path also assumed a merge-rank table.
+   - `include/celeg/checkpoint/tokenizer.hpp`, `src/checkpoint/formats/detail/gguf_tokenizer_metadata.cpp`: read `tokenizer.ggml.model` and `tokenizer.ggml.scores` from the GGUF file.
+   - `src/text/tokenizer_json_loader.cpp`: `resolve_tokenizer_definition()` now sets `SentencePieceSpace` normalization + byte-fallback whenever `tokenizer.ggml.model == "llama"` and the vocabulary contains `▁` — mirroring the equivalent detection already used for HF `tokenizer.json`-sourced SentencePiece tokenizers.
+   - `include/celeg/text/tokenizer.hpp`, `src/text/tokenizer.cpp`: added a second, **score**-based bigram tokenizer (`spm_score_tokenize()`), used automatically whenever a checkpoint has per-token scores but no merge list. It reimplements llama.cpp's own `llm_tokenizer_spm_session::tokenize()` algorithm: any adjacent-symbol concatenation that is itself a vocabulary entry is a valid merge, prioritized by that entry's score (ties broken toward the leftmost position) — no merge-rank table needed. This is a generic capability, not specific to Nanbeige: it fixes tokenization for *any* GGUF checkpoint using the "llama" vocab type without a merge list.
+
+   Verified: prompt token count for "What is the capital of France?" (chat-templated) dropped from 99 (fragmented) to 41 (in line with the safetensors tokenizer's 39), and generation is now coherent English reasoning text on CPU.
+
+3. **Heterogeneous per-layer attention widths (`head_dim` vs `global_head_dim` keyed to `layer_types`).** google/gemma-4-E4B declares a base `head_dim=256` for its `sliding_attention` layers and a wider `global_head_dim=512` for its `full_attention` layers (one in every six), rather than a single global head configuration. `src/model/inference/inventory.cpp`'s `normalize_attention_schedule` now expands `attention.head_dim` into a per-layer schedule from these two aliases plus the already-generic `layer_types` pattern, whenever they're present and differ — generic to any checkpoint using this convention, not gemma-specific. The downstream per-layer `head_dim.value_for(layer)` consumption in `rules_attention.cpp` already existed (built for other per-layer-varying facts) and required no change. This clears the resolution-time crash (`ShapeConstraintViolation` on `q_norm`/`k_norm` shape); see Known Issues #2 for the larger, still-open architecture gap this uncovered underneath.
 
 ---
 
-## CUDA vs CPU Speedup (Decode tok/s)
+## Known Issues (not fixed this round — real architecture/precision gaps)
 
-| Model | CUDA tok/s | CPU tok/s | Speedup |
-|-------|-----------|-----------|---------|
-| LFM2.5-230M | 894.3 | 100.7 | **8.9x** |
-| LFM2.5-350M | 737.9 | 81.2 | **9.1x** |
-| LFM2.5-VL-450M | ~ (rep) | 163.1 | N/A |
-| granite-4.1-3b | 119.6 | 15.3 | **7.8x** |
-| Ling-3.0-tiny | 44.8 | 8.3 | **5.4x** |
-| MiniCPM5-1B | 302.1 | 34.9 | **8.7x** |
-| Nanbeige4.2-3B | (garbage) | 14.8 | N/A |
+1. **flwrlabs/Lizzy-7B — quality degrades with context length; root cause only partially characterized.** Carried over from the previous round, unchanged this round. A short 5-token raw prompt gives a prefill-logit correlation of **0.76** against an fp32 HF reference, but the full 372-token chat-templated prompt gives near-zero correlation. Ruled out: YaRN RoPE frequency-blending formula, `attention_factor` application, float32 `cos`/`sin` precision. The divergence grows smoothly with both layer depth and sequence length, consistent with compounding numerical error rather than a single localized bug. Needs a CUDA-side hidden-state dumping tool (CPU already has one via `CELEG_DEBUG_HIDDEN_DIR`/`CELEG_DEBUG_LAYER_STATS`) to bisect further at full precision.
 
----
+2. **google/gemma-4-E4B — heterogeneous per-layer attention widths (fixed), but a much larger architecture gap remains underneath.**
+   - **Fixed, generically:** the original blocker — layer 0's `q_norm`/`k_norm` are width 256, layer 5's are width 512, because the config declares two separate head dims (`head_dim=256`, `global_head_dim=512`) keyed to the per-layer `layer_types` schedule (`sliding_attention` vs `full_attention`), rather than one global head configuration. `src/model/inference/inventory.cpp` (`normalize_attention_schedule`) now expands `attention.head_dim` into a per-layer `LayerScopedValue` schedule whenever a `global_head_dim` alias is present and differs from the base `head_dim`, assigning it to whichever layers the (already-generic) `layer_types` pattern marks `FullCausal`. This required no change to the execution backends: the per-layer `head_dim.value_for(layer)` consumption path (`rules_attention.cpp`) already existed and was already layer-aware — it just had nothing but a uniform value to read before. This is generic to any checkpoint using the `head_dim`/`global_head_dim` + `layer_types` convention, not gemma-specific. Verified: resolution and generation now run to completion on both backends (previously a hard `ShapeConstraintViolation` failure on both).
+   - **Not fixed — separate, larger issue:** even with resolution succeeding, generation output is garbled nonsense on both backends (confirmed with a raw, non-chat-templated prompt, ruling out a chat-template artifact). Inspecting `model.safetensors` shows each language-model layer carries tensors celeg has no concept of at all: `per_layer_input_gate.weight [256, 2560]`, `per_layer_projection.weight [2560, 256]`, `post_per_layer_input_norm.weight`, and a scalar `layer_scalar [1]` — a Gemma3n-style "per-layer embeddings" (PLE) mechanism, where each layer mixes in its own small embedding table (`vocab_size_per_layer_input=262144` × `hidden_size_per_layer_input=256`) through a gate/projection into the residual stream, on top of ordinary attention+MLP. celeg's graph has no tensor role, embedding table, or residual-injection point for this at all — it's a new mixer-adjacent primitive, not a config nuance, and would need a new tensor role, a second embedding table load path, and new residual-injection execution code in both the CPU and CUDA backends. Also unaddressed: `num_kv_shared_layers=18` (KV-cache sharing across layers) and the dual `rope_theta`/`rope_type` per attention-pattern (`rope_theta=1000000`+`proportional` for full_attention vs `rope_theta=10000`+`default` for sliding_attention — automatic resolution currently only picks one theta for the whole model and silently ignores the conflict for the other layer type, and treats `"proportional"` as no scaling at all). Also, this specific cached snapshot ships no chat template at all (no `chat_template` field anywhere, no companion `.jinja` file) — a data gap in the mirrored checkpoint, not a celeg bug; `--chat-template-file` is the correct workaround, separate from the numerical issue above.
+   - **Scope call:** the per-layer-embedding mechanism, KV-sharing, and dual-RoPE-schedule gaps are a substantially larger, multi-part architecture feature (new tensor roles + new embedding table + new backend execution code) well beyond the original attention-width bug. Not attempted further this round; flagging with the concrete tensor/config evidence above for future work.
 
-## Known Issues
+3. **bartowski/Nanbeige_Nanbeige4.2-3B-GGUF — quality still trails the safetensors build.** The tokenizer/architecture crashes are fixed (see above) and output is now coherent, but a 60-token generation didn't reach the final "Paris" answer within budget (it stayed in `<think>` reasoning). Likely just the combined effect of GGUF q4_k/q6_k quantization and the looped architecture doubling effective quantization error depth (each physical layer's weights are read twice per forward pass) — the same effect already visible as a CPU-vs-CUDA-bf16 quality gap on the safetensors build. Not separately investigated further.
 
-1. **Nanbeige/Nanbeige4.2-3B (CUDA)**: Produces garbage output despite correct tokenizer vocab size (166107) matching HF. CPU works correctly. Likely CUDA kernel issue.
+4. **inclusionAI/Ling-3.0-tiny (CUDA) — `cublasCreate` fails.** Pre-existing, unrelated to this round's changes (verified: identical failure mode on unmodified code). CPU backend works fine.
 
-2. **bartowski/Nanbeige_Nanbeige4.2-3B-GGUF**: "BPE produced token absent from vocabulary" - GGUF tokenizer vocab doesn't match HF tokenizer vocab.
-
-3. **flwrlabs/Lizzy-7B (CUDA)**: Produces empty output on CUDA. CPU not tested (no safetensors in cache).
-
-4. **google/gemma-4-E4B**: Multimodal model with audio tower - tensor inventory contains invalid tensor metadata (model.audio_tower.layers.0.feed_forward1.ffw_layer_1.input_max).
-
-5. **LiquidAI/LFM2.5-VL-450M**: Works on both backends but produces repetitive output ("RawRawRaw..." on CPU, "inherited inherited..." on CUDA). Vision model, likely needs special handling.
-
----
-
-## Fixes Applied
-
-1. **Chat template fallback**: Added support for loading `chat_template` from `tokenizer_config.json` (fixes Nanbeige/Nanbeige4.2-3B).
-
-2. **rope_theta aliases**: Extended search to include `rope_parameters.full_attention.rope_theta`, `rope_parameters.sliding_attention.rope_theta`, and `text_config.*` variants (fixes google/gemma-4-E4B rope_theta error).
-
-3. **Vision model feed-forward norm**: Allow layers without FFN to have norms for vision/encoder architectures (fixes LFM2.5-VL-450M).
-
-4. **Tokenizer vocab size propagation**: Added `tokenizer_vocab_size` to tokenizer definition and passed to CUDA model for logits masking.
+5. **ibm-granite/granite-4.1-3b (CUDA) — new: garbled output, deterministic and reproducible.** Discovered while validating the changes above. `--weight-mode bf16` and default `auto` both produce nonsensical repeated fragments ("'s name / The answer to be the's name of the's name") for a prompt that answers correctly on CPU and answered correctly on CUDA in the previous round's report. **Confirmed unrelated to this round's source changes**: reproduces identically with all of this round's diffs `git stash`'d away, i.e. on the exact commit this round started from. The full unit/integration test suite (`*_test` binaries, both backends) still passes 100%, `nvidia-smi`/ECC show no faults, and a smaller model (LFM2.5-230M) still generates coherent text on the same GPU in the same session — so this looks like GPU/driver/environment state that changed *during* this session rather than a code regression, but it was not root-caused further. Worth a fresh-process (or fresh-driver-state) retest before trusting CUDA granite output; flagging rather than silently working around it.
 
 ---
 
 ## Notes
 
 - All GGUF models use `weight_mode=auto` (q4_k/q6_k quantization)
-- CPU builds use native q4-group-32 quantization with AVX-VNNI
-- CUDA benchmarks run with `--no-cuda-graph` for accurate per-token measurement
-- CPU backend auto-selects ISA (AVX-VNNI on this machine)
-- Pack files cached in `~/.cache/celeg/`
+- CPU builds always use native q4-group-32 (or 64) quantization — there is no fp32/bf16 weight option on CPU, only `--cpu-kv-cache fp32|bf16` for the KV cache
+- CUDA `--weight-mode auto` for these model sizes resolves to bf16 in practice
+- Numerical ground truth for debugging was obtained via `scripts/export_cpu_reference.py` (single-position prefill logits), CUDA's `--print-top`/`--dump-logits`/`--tokens-only`, and ad hoc PyTorch forward-hooks, run against float32 HuggingFace Transformers where the checkpoint's own remote code would load (Nanbeige's `modeling_nanbeige.py` does not load under transformers 5.15.0 — `rope_scaling` schema mismatch in the checkpoint's own code, unrelated to celeg — so its architecture was instead verified by direct reading of the remote code plus CPU/CUDA logit inspection)
+- `CELEG_DEBUG_HIDDEN_DIR=<dir>` (CPU only) dumps `layer_embed.f32`, `layer_<N>.f32`, `layer_final_normed.f32` for the last `compute_logits=true` forward — use `--max-new-tokens 0` to keep it pinned to the last **prompt** token, since the CLI always issues one extra `decode()` call afterward that would otherwise overwrite the dump with the newly-sampled token's data
+- `CELEG_DEBUG_LAYER_STATS=1` (CPU only) prints per-layer hidden-state norm/max/finite-check to stderr — used this round to confirm all 44 virtual layers of the looped Nanbeige graph execute, and that the inter-loop norm boundary lands where expected

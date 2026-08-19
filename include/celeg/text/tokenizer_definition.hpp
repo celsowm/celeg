@@ -37,6 +37,10 @@ struct TokenizerPreTokenizerRule {
 struct TokenizerDefinition {
     std::vector<std::string> tokens;
     std::vector<std::string> merges;
+    // Per-token SentencePiece priority (GGUF `tokenizer.ggml.scores`), used
+    // by the score-based bigram tokenizer when `merges` is empty (see
+    // BpeTokenizer's SentencePiece-without-merges path).
+    std::vector<float> scores;
     std::vector<TokenizerSpecialToken> special_tokens;
     TokenizerPreTokenizerKind pre_tokenizer = TokenizerPreTokenizerKind::Default;
     TokenizerNormalizationKind normalization = TokenizerNormalizationKind::None;
