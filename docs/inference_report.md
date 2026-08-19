@@ -2,7 +2,7 @@
 
 **Date**: 2026-08-19 (updated, round 2)
 **Build**: linux-cpu-relwithdebinfo, linux-cuda-relwithdebinfo
-**Models tested**: 14 models from HF cache
+**Models tested**: 14 repos from HF cache (all cached repos; see Known Issues #5 for the GGUF quantization variants, which are *not* uniformly covered by a single row per repo)
 
 ---
 
@@ -11,19 +11,19 @@
 | Model | Format | CUDA Status | CPU Status |
 |-------|--------|-------------|------------|
 | LiquidAI/LFM2.5-230M | safetensors | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-230M-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
+| LiquidAI/LFM2.5-230M-GGUF | GGUF (Q4_K_M only) | ❌ Garbled | ❌ Wrong answer (see Known Issues #5) |
 | LiquidAI/LFM2.5-350M | safetensors | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-350M-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-VL-450M | safetensors | ✅ Works | ✅ Works |
+| LiquidAI/LFM2.5-350M-GGUF | GGUF | ⚠️ Variant-dependent: BF16/F16 ✅, Q6_K/Q4_K_M garbled, Q8_0/Q5_K_M/Q4_0 hard error | ⚠️ Variant-dependent: Q6_K/Q5_K_M ✅, BF16/Q4_K_M/Q4_0 wrong, F16/Q8_0 fail (see Known Issues #5) |
+| LiquidAI/LFM2.5-VL-450M | safetensors | ❌ Wrong answer (see Known Issues #6) | ❌ Wrong answer (see Known Issues #6) |
 | ibm-granite/granite-4.1-3b | safetensors | ✅ **Fixed** — coherent, correct output (see Fixes Applied #4) | ✅ Works |
 | Nanbeige/Nanbeige4.2-3B | safetensors | ✅ **Fixed** — coherent, correct output | ✅ **Fixed** — coherent, correct output |
-| bartowski/Nanbeige_Nanbeige4.2-3B-GGUF | GGUF | ✅ **Fixed** — coherent output | ✅ **Fixed** — coherent output |
+| bartowski/Nanbeige_Nanbeige4.2-3B-GGUF | GGUF (Q4_K_M checked) | ❌ Garbled Chinese repetition | ⚠️ Coherent but doesn't reach the answer (see Known Issues #3, #5) |
 | flwrlabs/Lizzy-7B | safetensors | ⚠️ Improved by Fixes Applied #4; still degrades at long context | ⚠️ Runs, degrades at long context |
-| flwrlabs/Lizzy-7B-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
+| flwrlabs/Lizzy-7B-GGUF | GGUF (Q4_K_M checked) | ❌ Incoherent | ❌ Incoherent (see Known Issues #5) |
 | google/gemma-4-E4B | safetensors | ⚠️ Attention-width resolution **fixed**; runs, but output is garbled — deeper architecture gap (see Known Issues #2) | ⚠️ Same |
 | inclusionAI/Ling-3.0-tiny | safetensors | ❌ `cublasCreate` fails (pre-existing, unrelated) | ✅ Works |
 | openbmb/MiniCPM5-1B | safetensors | ✅ **Fixed** — previously emitted `<font><font>` garbage on CUDA (see Fixes Applied #4) | ✅ Works |
-| openbmb/MiniCPM5-1B-GGUF | GGUF (q4_k, q6_k) | ✅ Works | ✅ Works |
+| openbmb/MiniCPM5-1B-GGUF | GGUF | ⚠️ Q4_K_M ✅, F16 wrong, Q8_0 hard error | ⚠️ Q8_0/Q4_K_M partial, F16 fails (see Known Issues #5) |
 
 ---
 
@@ -73,13 +73,29 @@ All fixes this round are **generic**: implemented in the automatic/architecture-
 
 4. **inclusionAI/Ling-3.0-tiny (CUDA) — `cublasCreate` fails.** Pre-existing, unrelated to this round's changes (verified: identical failure mode on unmodified code). CPU backend works fine.
 
+5. **GGUF support is variant-dependent and largely broken; earlier "✅ Works" rows were sweep false positives.** Every GGUF row in previous versions of this table was validated only by `scripts/run_model_sweep.py`, which marks a model OK on exit code 0 plus the presence of `chat.template=` in the output and never checks semantic coherence — and only ever at one quantization. Re-tested by hand (prompt: "What is the capital of France?"), the LFM2.5-350M-GGUF ladder alone gives seven different outcomes:
+
+   | Variant | CPU | CUDA |
+   |---|---|---|
+   | BF16 | ❌ wrong ("a country called France") | ✅ correct |
+   | F16 | ❌ `CPU load_matrix 'token_embd.weight': ... must be BF16 or F32` | ✅ correct |
+   | Q8_0 | ❌ empty output | ❌ `mixed dense/unsupported quantized concat ... feed_forward.w13.weight` |
+   | Q6_K | ✅ correct | ❌ garbled repetition |
+   | Q5_K_M | ✅ correct | ❌ `mixed dense/unsupported quantized concat` |
+   | Q4_K_M | ❌ wrong | ❌ garbled repetition |
+   | Q4_0 | ❌ wrong (answers about the United Kingdom) | ❌ `execution plan requires INT8 weights` |
+
+   The same shape repeats elsewhere: MiniCPM5-1B-GGUF is fine at Q4_K_M on CUDA but wrong at F16 and errors at Q8_0; Nanbeige_Nanbeige4.2-3B-GGUF Q4_K_M emits pure garbage on CUDA (repeated `也是十分`/`不仅如此`); Lizzy-7B-GGUF Q4_K_M is incoherent on both backends. Note the safetensors build of the *same* model is correct in every one of these cases, and CUDA GGUF BF16/F16 is correct — so this is not the attention-scale bug fixed in Fixes Applied #4, and it is not merely quantization loss: correctness is non-monotonic in bit width (Q6_K/Q5_K_M pass on CPU while the higher-precision BF16 and Q8_0 fail), which points at per-quant-format dequantization/packing bugs plus at least two unimplemented CUDA paths (mixed dense/quantized concat for fused `w13`, and Q4_0). Not investigated further this round; documented so the table stops overstating GGUF support.
+
+6. **LiquidAI/LFM2.5-VL-450M — wrong answers on both backends.** Also a sweep false positive. Answers "The capital city of France is a city in the United States of America." (CPU, both with and without the int4 pack cache) and "The capital city of France is a country in Europe, located in Europe." (CUDA). Its non-vision sibling LFM2.5-350M answers correctly on the same backends, so this is unlikely to be model capacity alone and more likely a resolution gap in the VL checkpoint's text tower. Not root-caused.
+
 ---
 
 ## Notes
 
-- All GGUF models use `weight_mode=auto` (q4_k/q6_k quantization)
+- GGUF runs use `weight_mode=auto`; the resolved quantization depends on the specific `.gguf` file, and results vary sharply between them (Known Issues #5). Passing a snapshot *directory* for a GGUF repo fails with `no registered checkpoint format matches` — the CLI needs the `.gguf` file path.
 - CPU builds always use native q4-group-32 (or 64) quantization — there is no fp32/bf16 weight option on CPU, only `--cpu-kv-cache fp32|bf16` for the KV cache
 - CUDA `--weight-mode auto` for these model sizes resolves to bf16 in practice
 - Numerical ground truth for debugging was obtained via `scripts/export_cpu_reference.py` (single-position prefill logits), CUDA's `--print-top`/`--dump-logits`/`--tokens-only`, and ad hoc PyTorch forward-hooks, run against float32 HuggingFace Transformers where the checkpoint's own remote code would load (Nanbeige's `modeling_nanbeige.py` does not load under transformers 5.15.0 — `rope_scaling` schema mismatch in the checkpoint's own code, unrelated to celeg — so its architecture was instead verified by direct reading of the remote code plus CPU/CUDA logit inspection)
 - `CELEG_DEBUG_HIDDEN_DIR=<dir>` (CPU only) dumps `layer_embed.f32`, `layer_<N>.f32`, `layer_final_normed.f32` for the last `compute_logits=true` forward — use `--max-new-tokens 0` to keep it pinned to the last **prompt** token, since the CLI always issues one extra `decode()` call afterward that would otherwise overwrite the dump with the newly-sampled token's data
-- `CELEG_DEBUG_LAYER_STATS=1` (CPU only) prints per-layer hidden-state norm/max/finite-check to stderr — used this round to confirm all 44 virtual layers of the looped Nanbeige graph execute, and that the inter-loop norm boundary lands where expected
+- `CELEG_DEBUG_LAYER_STATS=1` (CPU and, as of this round, CUDA — `debug_layer_stats` in `src/backend/cuda/model/prefill_batched.cpp`) prints per-layer hidden-state norm/max/finite-check to stderr — used this round to confirm all 44 virtual layers of the looped Nanbeige graph execute, and that the inter-loop norm boundary lands where expected
