@@ -590,7 +590,7 @@ InferenceInput build_inference_input(const CheckpointView& checkpoint) {
     normalize_structural_norm_schedule(checkpoint.metadata, metadata);
     normalize_rope_scaling(checkpoint.metadata, metadata);
     return {std::move(metadata), build_tensor_inventory(*checkpoint.repository),
-            checkpoint.metadata.source_format};
+            checkpoint.metadata.source_format, checkpoint.metadata.architecture_type()};
 }
 
 }

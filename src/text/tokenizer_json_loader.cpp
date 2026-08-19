@@ -81,6 +81,10 @@ void apply_tokenizer_config(TokenizerDefinition& definition, const std::string& 
 }
 
 TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
+    return load_tokenizer_definition_json(path, std::nullopt);
+}
+
+TokenizerDefinition load_tokenizer_definition_json(const std::string& path, std::optional<int> target_vocab_size) {
     const Json root = Json::parse_file(path);
     const Json& model = root["model"];
     if (model["type"].as_string() != "BPE") {
@@ -168,6 +172,7 @@ TokenizerDefinition load_tokenizer_definition_json(const std::string& path) {
         definition.has_bos = true;
     }
     apply_tokenizer_config(definition, path);
+    definition.tokenizer_vocab_size = static_cast<int>(definition.tokens.size());
     return definition;
 }
 
@@ -210,6 +215,7 @@ TokenizerDefinition resolve_tokenizer_definition(
     if (definition.pre_tokenizer == TokenizerPreTokenizerKind::NumericTriplets) {
         add_reasoning_delimiters(definition);
     }
+    definition.tokenizer_vocab_size = static_cast<int>(definition.tokens.size());
     return definition;
 }
 

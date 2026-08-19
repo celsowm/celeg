@@ -24,6 +24,7 @@ public:
     std::int32_t bos_id() const override { return 1; }
     std::int32_t eos_id() const override { return 2; }
     std::int32_t pad_id() const override { return 0; }
+    int vocab_size() const override { return 4; }
 };
 
 }

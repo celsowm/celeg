@@ -11,13 +11,15 @@ CudaCompiledModel::CudaCompiledModel(const std::string& model_path,
                    int max_context,
                    CudaModelOptions options,
                    GenerationConfig generation,
-                   std::shared_ptr<const RuntimeContext> runtime)
+                   std::shared_ptr<const RuntimeContext> runtime,
+                   int tokenizer_vocab_size)
     : resources_(CudaExecutionPlan::compile(
           options, max_context, discover_cuda_device_capabilities())),
       runtime_(runtime ? std::move(runtime) : create_builtin_runtime_context()),
       session_(generation),
       stream_(),
-      max_context_(max_context) {
+      max_context_(max_context),
+      tokenizer_vocab_size_(tokenizer_vocab_size) {
     session_.generation_.validate();
     if (max_context_ <= 0) {
         throw std::invalid_argument("max_context must be positive");

@@ -8,10 +8,11 @@ CudaModel::CudaModel(const std::string& model_path,
                    int max_context,
                    CudaModelOptions options,
                    GenerationConfig generation,
-                   std::shared_ptr<const RuntimeContext> runtime)
+                   std::shared_ptr<const RuntimeContext> runtime,
+                   int tokenizer_vocab_size)
     : state_(std::make_unique<CudaCompiledModel>(model_path, max_context,
                                    std::move(options), std::move(generation),
-                                   std::move(runtime))) {}
+                                   std::move(runtime), tokenizer_vocab_size)) {}
 
 CudaModel::~CudaModel() = default;
 

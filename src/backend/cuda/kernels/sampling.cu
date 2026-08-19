@@ -518,6 +518,22 @@ void launch_sample_topk(const float* selected_values,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+__global__ void mask_logits_kernel(__nv_bfloat16* logits, int vocab_size, int tokenizer_vocab_size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < vocab_size && idx >= tokenizer_vocab_size) {
+        logits[idx] = __float2bfloat16(-FLT_MAX);
+    }
+}
+
+void launch_mask_logits(__nv_bfloat16* logits, int vocab_size, int tokenizer_vocab_size, cudaStream_t stream) {
+    if (tokenizer_vocab_size > 0 && tokenizer_vocab_size < vocab_size) {
+        const int block_size = 256;
+        const int grid_size = (vocab_size + block_size - 1) / block_size;
+        mask_logits_kernel<<<grid_size, block_size, 0, stream>>>(logits, vocab_size, tokenizer_vocab_size);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
+    }
+}
+
 void launch_fused_sample_topk(const __nv_bfloat16* logits,
                               uint8_t* seen,
                               float* scores,

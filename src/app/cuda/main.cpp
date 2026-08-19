@@ -495,7 +495,9 @@ int main(int argc, char** argv) {
                       }();
         celeg::CudaModel engine(
             model_path, args.context,
-            model_options, celeg::app::generation_config(run_inputs));
+            model_options, celeg::app::generation_config(run_inputs),
+            prepared.runtime,
+            prepared.tokenizer ? static_cast<int>(prepared.tokenizer->vocab_size()) : 0);
         if (prepared.is_gguf) {
             std::cerr << "source=gguf(q4_k,q6_k)\n"
                       << "weight_mode=" << args.weight_mode << "\n"

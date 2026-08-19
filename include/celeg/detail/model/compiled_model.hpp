@@ -77,7 +77,8 @@ struct CudaCompiledModel {
          int max_context,
          CudaModelOptions options,
          GenerationConfig generation,
-         std::shared_ptr<const RuntimeContext> runtime = nullptr);
+         std::shared_ptr<const RuntimeContext> runtime = nullptr,
+         int tokenizer_vocab_size = 0);
     ~CudaCompiledModel();
 
     void linear(const __nv_bfloat16* x, const LinearWeight& weight,
@@ -259,6 +260,7 @@ struct CudaCompiledModel {
     CudaDecodeGraphs decode_graphs_;
     CudaWorkspace workspace_;
     int max_context_;
+    int tokenizer_vocab_size_ = 0;
     bool local_kv_cache_available_ = true;
     uint64_t storage_generation_ = 0;
     std::chrono::steady_clock::time_point decode_async_begin_time_{};

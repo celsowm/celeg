@@ -637,6 +637,8 @@ void CudaCompiledModel::run_token_logits() {
         launch_tanh_softcap(workspace_.logits_.data(), resources_.dims_.vocab_size,
                             resources_.program_.final_logit_softcap, stream_.get());
     }
+    launch_mask_logits(workspace_.logits_.data(), resources_.dims_.vocab_size,
+                       tokenizer_vocab_size_, stream_.get());
 }
 
 void CudaCompiledModel::forward_token_host(int32_t token, bool compute_logits,

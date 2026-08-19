@@ -41,7 +41,11 @@ public:
             throw std::runtime_error("tokenizer provider found no tokenizer data: " +
                                      path.string());
         }
-        return std::make_unique<BpeTokenizer>(load_tokenizer_definition_json(path.string()));
+        std::optional<int> target_vocab_size = std::nullopt;
+        if (checkpoint.metadata.contains("vocab_size")) {
+            target_vocab_size = static_cast<int>(checkpoint.metadata.integer("vocab_size"));
+        }
+        return std::make_unique<BpeTokenizer>(load_tokenizer_definition_json(path.string(), target_vocab_size));
     }
 private:
     std::vector<TokenizerPreTokenizerRule> rules_;

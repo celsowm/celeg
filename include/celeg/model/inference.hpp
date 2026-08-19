@@ -337,6 +337,7 @@ struct InferenceInput {
     NormalizedModelMetadata metadata;
     TensorInventory inventory;
     CheckpointSourceFormat source_format = CheckpointSourceFormat::Safetensors;
+    std::string architecture_type;
 
     bool is_gguf() const noexcept { return source_format == CheckpointSourceFormat::Gguf; }
 };

@@ -413,10 +413,16 @@ void infer_and_bind_layer_norms(CanonicalInferenceContext& context,
     const bool has_feed_forward =
         !std::holds_alternative<std::monostate>(semantic_layer.feed_forward);
     if (!has_feed_forward && (ffn_before != nullptr || ffn_after != nullptr)) {
-        fail(
-            ResolutionFailureKind::ConflictingInferenceFacts,
-            "checkpoint exposes feed-forward normalization for a layer with no "
-            "feed-forward semantics: " + std::to_string(layer));
+        const std::string arch = context.input.architecture_type;
+        if (arch.find("vision") != std::string::npos || arch.find("vl") != std::string::npos || arch.find("VL") != std::string::npos) {
+            // Vision/encoder layers may have norms without FFN - allow this
+            semantic_layer.feed_forward_norm = {};
+        } else {
+            fail(
+                ResolutionFailureKind::ConflictingInferenceFacts,
+                "checkpoint exposes feed-forward normalization for a layer with no "
+                "feed-forward semantics: " + std::to_string(layer));
+        }
     }
     if (has_feed_forward) {
         bind_structural_norm(

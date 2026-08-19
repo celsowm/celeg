@@ -45,6 +45,8 @@ void launch_fused_sample_topk(const __nv_bfloat16* logits,
                               uint64_t* rng_state,
                               int32_t* result,
                               cudaStream_t stream);
+void launch_mask_logits(__nv_bfloat16* logits, int vocab_size, int tokenizer_vocab_size,
+                        cudaStream_t stream);
 
 void launch_packed_sample_topk(
     __nv_bfloat16* const* logits,

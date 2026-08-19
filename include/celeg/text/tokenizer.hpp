@@ -27,6 +27,7 @@ public:
     virtual int32_t bos_id() const = 0;
     virtual int32_t eos_id() const = 0;
     virtual int32_t pad_id() const = 0;
+    virtual int vocab_size() const = 0;
 };
 
 class BpeTokenizer final : public ITokenizer {
@@ -39,6 +40,7 @@ public:
     int32_t bos_id() const override { return bos_id_; }
     int32_t eos_id() const override { return eos_id_; }
     int32_t pad_id() const override { return pad_id_; }
+    int vocab_size() const override { return static_cast<int>(id_to_token_.size()); }
     std::optional<int32_t> token_id(std::string_view text) const override;
 
 private:

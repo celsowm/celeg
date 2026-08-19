@@ -94,10 +94,11 @@ class CudaModel {
     friend PackedSessionContext packed_session_context(CudaModel& model);
 public:
     CudaModel(const std::string& model_path,
-             int max_context = 4096,
-             CudaModelOptions options = {},
-             GenerationConfig generation = {},
-             std::shared_ptr<const RuntimeContext> runtime = nullptr);
+              int max_context = 4096,
+              CudaModelOptions options = {},
+              GenerationConfig generation = {},
+              std::shared_ptr<const RuntimeContext> runtime = nullptr,
+              int tokenizer_vocab_size = 0);
     ~CudaModel();
 
     CudaModel(const CudaModel&) = delete;

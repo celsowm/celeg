@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,9 +45,11 @@ struct TokenizerDefinition {
     int32_t eos_id = 7;
     int32_t pad_id = 0;
     bool has_bos = false;
+    int tokenizer_vocab_size = 0;
 };
 
 TokenizerDefinition load_tokenizer_definition_json(const std::string& path);
+TokenizerDefinition load_tokenizer_definition_json(const std::string& path, std::optional<int> target_vocab_size);
 TokenizerDefinition resolve_tokenizer_definition(
     const TokenizerData& data,
     const std::vector<TokenizerPreTokenizerRule>& rules = {});

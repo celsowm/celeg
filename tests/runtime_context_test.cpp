@@ -62,6 +62,7 @@ public:
         int32_t bos_id() const override { return 1; }
         int32_t eos_id() const override { return 2; }
         int32_t pad_id() const override { return 0; }
+        int vocab_size() const override { return 256; }
     };
 
     std::string_view id() const override { return "test-tokenizer"; }

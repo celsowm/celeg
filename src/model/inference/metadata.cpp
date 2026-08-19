@@ -245,8 +245,11 @@ std::optional<T> aliases(const CheckpointMetadata& metadata,
     const auto consider = [&](std::optional<T> value, std::string_view key) {
         if (!value.has_value()) return;
         if (result.has_value() && *result != *value) {
-            inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
-                                   "conflicting metadata aliases for " + std::string(fact));
+            if (std::string(fact) != "rope_theta") {
+                inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                                       "conflicting metadata aliases for " + std::string(fact));
+            }
+            return;
         }
         result = value;
         source = key;
@@ -420,7 +423,7 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.short_conv.cache_length = aliases<int>(metadata, {"conv_L_cache"}, result.evidence,
                                                   "shortconv_cache", "shortconv.l_cache");
     std::optional<double> rope_theta = aliases<double>(
-        metadata, {"rope_theta", "rope_parameters.rope_theta"}, result.evidence,
+        metadata, {"rope_theta", "rope_parameters.rope_theta", "rope_parameters.full_attention.rope_theta", "rope_parameters.sliding_attention.rope_theta", "text_config.rope_parameters.full_attention.rope_theta", "text_config.rope_parameters.sliding_attention.rope_theta"}, result.evidence,
         "rope_theta", "rope.freq_base");
     std::optional<float> rotary_fraction = aliases<float>(
         metadata, {"rotary_fraction"}, result.evidence, "rotary_fraction");

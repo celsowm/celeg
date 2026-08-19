@@ -149,6 +149,8 @@ void run_logits(CudaCompiledModel& model, int rows) {
                 model.stream_.get());
         }
     }
+    launch_mask_logits(workspace.logits_.data(), model.resources_.dims_.vocab_size,
+                       model.tokenizer_vocab_size_, model.stream_.get());
 }
 
 }

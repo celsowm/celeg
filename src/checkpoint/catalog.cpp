@@ -77,6 +77,21 @@ public:
             result.metadata.values["chat_template"] = std::string(
                 std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
         }
+        const auto tokenizer_config = root / "tokenizer_config.json";
+        if (std::filesystem::is_regular_file(tokenizer_config) &&
+            !result.metadata.contains("chat_template") &&
+            !result.metadata.contains("tokenizer.chat_template")) {
+            std::ifstream stream(tokenizer_config, std::ios::binary);
+            if (stream) {
+                try {
+                    const auto tok_json = Json::parse_file(tokenizer_config.string());
+                    if (tok_json.contains("chat_template")) {
+                        result.metadata.values["tokenizer.chat_template"] = tok_json["chat_template"].as_string();
+                    }
+                } catch (...) {
+                }
+            }
+        }
         result.repository = std::make_shared<SafeTensorRepository>(path);
         return result;
     }
