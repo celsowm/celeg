@@ -45,10 +45,10 @@ ModelGraph finalize_descriptor_graph(ModelGraph graph, const Descriptor& descrip
     if (descriptor.norm_after_physical_block) {
         const int physical_layer_count = integer_value(
             metadata, descriptor.dimensions.at("layers"));
-        // Insert the shared final-norm after every physical block boundary
-        // except the last: the last one is already covered by the
-        // unconditional final-norm pass applied after the whole layer
-        // stack, so repeating it here would apply the norm weights twice.
+        /// Insert the shared final-norm after every physical block boundary
+        /// except the last: the last one is already covered by the
+        /// unconditional final-norm pass applied after the whole layer
+        /// stack, so repeating it here would apply the norm weights twice.
         for (int boundary = physical_layer_count;
              boundary < static_cast<int>(graph.layers.size());
              boundary += physical_layer_count) {

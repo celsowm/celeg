@@ -219,15 +219,15 @@ CanonicalInferenceContext initialize_canonical_facts(
             "first dense layer is outside the layer schedule");
     }
 
-    // Looped-transformer / recurrent-depth schedule (e.g. "num_loops"): the
-    // physical layer stack above is executed this many times, each physical
-    // layer's weights reused across every pass and a shared norm applied
-    // between passes. Tensor binding below resolves each virtual layer's
-    // weights via context.physical_layer(layer); MoE/mamba/gated-delta-net/
-    // shortconv layer families are not currently threaded through this
-    // remapping, so a checkpoint combining those with a repeat schedule will
-    // fail tensor resolution loudly rather than silently binding wrong
-    // weights.
+    /// Looped-transformer / recurrent-depth schedule (e.g. "num_loops"): the
+    /// physical layer stack above is executed this many times, each physical
+    /// layer's weights reused across every pass and a shared norm applied
+    /// between passes. Tensor binding below resolves each virtual layer's
+    /// weights via context.physical_layer(layer); MoE/mamba/gated-delta-net/
+    /// shortconv layer families are not currently threaded through this
+    /// remapping, so a checkpoint combining those with a repeat schedule will
+    /// fail tensor resolution loudly rather than silently binding wrong
+    /// weights.
     const int layer_repeat_count = m.core.layer_repeat_count.value_or(1);
     if (layer_repeat_count <= 0) {
         fail(
@@ -319,10 +319,10 @@ CanonicalInferenceContext initialize_canonical_facts(
         infer_intermediate_sizes(context);
     initialize_graph(context);
 
-    // Insert the shared final-norm after every physical block boundary
-    // except the last: the last one is already covered by the unconditional
-    // final-norm pass applied after the whole (virtual) layer stack, so
-    // repeating it here would apply the norm weights twice.
+    /// Insert the shared final-norm after every physical block boundary
+    /// except the last: the last one is already covered by the unconditional
+    /// final-norm pass applied after the whole (virtual) layer stack, so
+    /// repeating it here would apply the norm weights twice.
     for (int boundary = context.physical_layer_count;
          boundary < context.layer_count;
          boundary += context.physical_layer_count) {

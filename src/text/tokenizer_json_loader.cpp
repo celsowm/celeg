@@ -190,11 +190,11 @@ TokenizerDefinition resolve_tokenizer_definition(
     definition.eos_id = data.eos_id;
     definition.pad_id = data.pad_id;
     definition.has_bos = data.has_bos;
-    // GGUF `tokenizer.ggml.model == "llama"` is llama.cpp's convention for a
-    // SentencePiece-derived, byte-fallback vocabulary (space encoded as "▁",
-    // unmapped bytes spelled "<0xXX>") -- distinct from a GPT-2-style
-    // byte-level BPE vocabulary ("gpt2" and friends). Mirrors the equivalent
-    // byte_fallback-based detection in load_tokenizer_definition_json().
+    /// GGUF `tokenizer.ggml.model == "llama"` is llama.cpp's convention for a
+    /// SentencePiece-derived, byte-fallback vocabulary (space encoded as "▁",
+    /// unmapped bytes spelled "<0xXX>") -- distinct from a GPT-2-style
+    /// byte-level BPE vocabulary ("gpt2" and friends). Mirrors the equivalent
+    /// byte_fallback-based detection in load_tokenizer_definition_json().
     if (data.model == "llama" &&
         std::find(data.tokens.begin(), data.tokens.end(), "▁") != data.tokens.end()) {
         definition.normalization = TokenizerNormalizationKind::SentencePieceSpace;

@@ -682,12 +682,25 @@ void apply_attention_output_scale(CanonicalInferenceContext& context) {
                 : 1.0f;
     }
 
+    /// Derive the query scale from each layer's own head_dim rather than the
+    /// policy-wide multiplier: checkpoints that declare a per-layer head_dim
+    /// schedule (a narrow width for sliding-attention layers and a wider one
+    /// for the global/full-attention layers) need 1/sqrt(head_dim) computed
+    /// per layer, otherwise the wider layers get their pre-softmax scores
+    /// scaled by the narrower layers' factor. An explicit attention_multiplier
+    /// in the checkpoint metadata still overrides the whole schedule.
     for (LayerSpec& semantic_layer : graph.layers) {
         if (auto* attention =
                 std::get_if<AttentionSpec>(&semantic_layer.mixer);
             attention != nullptr && attention->query_heads > 0) {
-            attention->query_scale *=
-                numerical_policy.attention_multiplier;
+            const float layer_multiplier =
+                m.attention.attention_multiplier.has_value()
+                    ? *m.attention.attention_multiplier
+                    : (attention->head_dim > 0
+                           ? 1.0f / std::sqrt(
+                                        static_cast<float>(attention->head_dim))
+                           : 1.0f);
+            attention->query_scale *= layer_multiplier;
         }
     }
 }

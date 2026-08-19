@@ -40,11 +40,11 @@ void TensorRoleBindings::validate() const {
                   binding.role == TensorRole::LanguageModelHead) ||
                  (tensor_it->second == TensorRole::LanguageModelHead &&
                   binding.role == TensorRole::TokenEmbedding));
-            // A looped-transformer / recurrent-depth schedule (e.g.
-            // "num_loops") binds the same physical layer's weights to
-            // multiple virtual layers, so the same source tensor legitimately
-            // recurs under the same role at a different `layer` index. Only
-            // a genuine role mismatch on the same tensor is a real conflict.
+            /// A looped-transformer / recurrent-depth schedule (e.g.
+            /// "num_loops") binds the same physical layer's weights to
+            /// multiple virtual layers, so the same source tensor legitimately
+            /// recurs under the same role at a different `layer` index. Only
+            /// a genuine role mismatch on the same tensor is a real conflict.
             const bool repeated_same_role = tensor_it->second == binding.role;
             if (!tied_embedding_pair && !repeated_same_role) {
                 inference_detail::fail(

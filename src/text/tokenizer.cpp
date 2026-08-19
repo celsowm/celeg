@@ -557,11 +557,11 @@ std::vector<std::string> BpeTokenizer::bpe_symbols(std::vector<std::string> symb
     return result;
 }
 
-// SentencePiece's own tokenizer (llama.cpp's "llama" GGUF vocab type) has no
-// explicit merge-rank table: any substring that is itself a vocabulary entry
-// is a valid merge, prioritized by that entry's own score (higher merges
-// first; ties broken toward the leftmost position). This mirrors
-// llm_tokenizer_spm_session::tokenize() in llama.cpp's llama-vocab.cpp.
+/// SentencePiece's own tokenizer (llama.cpp's "llama" GGUF vocab type) has no
+/// explicit merge-rank table: any substring that is itself a vocabulary entry
+/// is a valid merge, prioritized by that entry's own score (higher merges
+/// first; ties broken toward the leftmost position). This mirrors
+/// llm_tokenizer_spm_session::tokenize() in llama.cpp's llama-vocab.cpp.
 std::vector<int32_t> BpeTokenizer::spm_score_tokenize(std::string_view normalized) const {
     struct Node {
         std::string text;

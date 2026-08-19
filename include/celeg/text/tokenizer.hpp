@@ -64,11 +64,11 @@ private:
     std::unordered_map<std::string, int32_t> vocab_;
     std::vector<std::string> id_to_token_;
     std::unordered_map<std::string, int32_t> merge_rank_;
-    // Per-token SentencePiece priority, indexed by id; parallels
-    // id_to_token_. Only populated (and only consulted, via
-    // spm_score_mode_) when the checkpoint ships scores but no merge list --
-    // e.g. GGUF's "llama" vocab type, which derives valid merges from vocab
-    // membership itself rather than an explicit merge-rank table.
+    /// Per-token SentencePiece priority, indexed by id; parallels
+    /// id_to_token_. Only populated (and only consulted, via
+    /// spm_score_mode_) when the checkpoint ships scores but no merge list --
+    /// e.g. GGUF's "llama" vocab type, which derives valid merges from vocab
+    /// membership itself rather than an explicit merge-rank table.
     std::vector<float> id_score_;
     bool spm_score_mode_ = false;
     std::vector<SpecialToken> specials_;

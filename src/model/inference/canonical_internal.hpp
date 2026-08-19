@@ -32,16 +32,16 @@ struct CanonicalInferenceContext {
     int dense_start = 0;
     std::optional<CanonicalMoeFacts> moe;
 
-    // Physical layer count from the checkpoint's own layer-count metadata
-    // (e.g. num_hidden_layers). Equal to layer_count unless the checkpoint
-    // declares a layer-repeat schedule (e.g. "num_loops"), in which case
-    // layer_count = physical_layer_count * repeat_count and each physical
-    // layer's weights are reused across multiple virtual layers.
+    /// Physical layer count from the checkpoint's own layer-count metadata
+    /// (e.g. num_hidden_layers). Equal to layer_count unless the checkpoint
+    /// declares a layer-repeat schedule (e.g. "num_loops"), in which case
+    /// layer_count = physical_layer_count * repeat_count and each physical
+    /// layer's weights are reused across multiple virtual layers.
     int physical_layer_count = 0;
 
-    // Maps a virtual layer index (used for graph/KV-cache/binding identity)
-    // to the physical layer index whose weights it should bind to (used for
-    // tensor-name candidate generation only).
+    /// Maps a virtual layer index (used for graph/KV-cache/binding identity)
+    /// to the physical layer index whose weights it should bind to (used for
+    /// tensor-name candidate generation only).
     int physical_layer(int layer) const {
         return physical_layer_count > 0 ? layer % physical_layer_count : layer;
     }

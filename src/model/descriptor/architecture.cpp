@@ -135,9 +135,6 @@ public:
         graph.final_norm = {numerical_policy.norm_eps, descriptor_.final_norm_kind};
         graph.final_logit_softcap = descriptor_.final_logit_softcap.has_value()
             ? static_cast<float>(number_value(metadata, *descriptor_.final_logit_softcap)) : 0.0f;
-        if (descriptor_.norm_after_physical_block) {
-            graph.norm_after_layers = {physical_layer_count - 1};
-        }
         graph.layers.resize(static_cast<size_t>(layer_count));
         for (int layer = 0; layer < layer_count; ++layer) {
             LayerSpec& semantic_layer = graph.layers[static_cast<size_t>(layer)];
