@@ -197,10 +197,40 @@ entirely (not just "untested combinations" — these code paths did not exist):
 **Phase 3 — FP8 W8A8 kernel.**
 New `Fp8LinearStorage` (per-channel fp32 scale + e4m3 packed weight), new
 `LinearKernelKind::Fp8W8A8`, a dynamic **per-token** activation-quantization kernel (modeled on
-`launch_quantize_q8_1`) producing e4m3 activations, and a cuBLASLt fp8 matmul (`CUDA_R_8F_E4M3`
-operands, appropriate compute/scale types). **Spike the cuBLASLt call standalone first** (throwaway
-scratchpad program, not committed) — celeg has zero existing fp8 cuBLASLt usage to copy from.
-Validate against a small synthetic fp8 GEMM with a scalar reference before wiring into the loader.
+`launch_quantize_q8_1`) producing e4m3 activations, and an fp8 matmul with a manual per-channel/
+per-token scale post-multiply (see spike findings below — not cuBLASLt's native scale-vector mode).
+
+*Standalone cuBLASLt spike, done (throwaway scratchpad program at
+`/tmp/.../scratchpad/fp8spike/`, not committed — celeg had zero existing fp8 cuBLASLt usage to copy
+from). Findings, on this machine's RTX 5090 (sm_120) / CUDA 13.2:*
+  - **Plain (unscaled) `CUDA_R_8F_E4M3 × CUDA_R_8F_E4M3 → fp32`/`bf16` matmul works and is exact**:
+    ran a 4×8×32 GEMM through `cublasLtMatmul` with the same TRANSA=T/TRANSB=N layout convention
+    `gemm_dispatcher.cpp`'s bf16 path already uses, compared against a scalar dot-product reference on
+    the same quantized e4m3 values — bit-exact (`max_abs_err=0`). The core fp8 tensor-core path is
+    real and usable here.
+  - **cuBLASLt's native per-channel/per-token scaling
+    (`CUBLASLT_MATMUL_MATRIX_SCALE_OUTER_VEC_32F` on `CUBLASLT_MATMUL_DESC_A_SCALE_MODE`/
+    `B_SCALE_MODE`) is *not* supported on this GPU/toolkit combination** — `cublasLtMatmulAlgoGetHeuristic`
+    returns `CUBLAS_STATUS_NOT_SUPPORTED` for every variant tried (fp32 and bf16 output, K=32 and
+    K=128, both operands using outer-vec scale). This is despite the CUDA 13.2 header declaring the
+    mode and it being exactly what our checkpoint's per-channel-weight + per-token-activation W8A8
+    scheme needs semantically. Consumer Blackwell (RTX 50-series) most likely lacks this specific
+    kernel in cuBLAS's selection tables even though the fp8 tensor cores themselves work fine for the
+    unscaled case — a library/SKU gap, not a math or API-usage error (confirmed by testing several
+    transpose/dtype/K-size combinations, not just one).
+  - **Conclusion — do not depend on cuBLASLt for the scale application.** Run the raw fp8×fp8→fp32
+    matmul unscaled (as validated above), then apply `y[m,n] *= act_scale[m] * weight_scale[n]`
+    (+ bias) as a separate elementwise kernel. This is exactly the pattern
+    `launch_w8a16_linear` (`src/backend/cuda/kernels/linear.cuh`) already uses for the existing
+    W8A16 int8-weight path (`accum * row_scale` inside a hand-written kernel) — Phase 3's W8A8 kernel
+    should follow that same in-house convention (custom kernel with the scale multiply built in, not a
+    cuBLASLt scale-mode attribute) for both the matmul-epilogue scale and, if throughput matters more
+    than the cuBLASLt call overhead at small M, potentially the whole GEMM. No W8A8 kernel of any kind
+    exists yet (confirmed via grep) — this is genuinely net-new, not an extension of `launch_w8a16_linear`.
+  - Still open before writing the production kernel: confirm the scale-application math against a
+    scalar reference matching the checkpoint's actual per-channel weight-scale shape (`[out_features,1]`)
+    and per-token dynamic activation quant (not yet spiked — only the raw unscaled matmul and the
+    scale-mode-unsupported finding are validated so far).
 
 **Phase 4 — NVFP4 W4A4 kernel.**
 `Nvfp4LinearStorage` (packed e2m1 + per-16-block `UE4M3` scale + per-tensor fp32 global scale),
