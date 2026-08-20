@@ -1,6 +1,7 @@
 #include "celeg/app/run_preparation.hpp"
 #include "celeg/runtime/request_types.hpp"
 #include "celeg/backend/cuda/model.hpp"
+#include "celeg/text/utf8.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -558,12 +559,17 @@ int main(int argc, char** argv) {
 
         std::vector<int32_t> generated;
         generated.reserve(static_cast<size_t>(args.max_new_tokens));
+        std::string pending_text;
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t next = engine.session().decode();
             generated.push_back(next);
             if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, next)) break;
-            std::cout << prepared.tokenizer->decode({next}, true) << std::flush;
+            pending_text += prepared.tokenizer->decode({next}, true);
+            const std::size_t safe_size = celeg::text::complete_utf8_prefix(pending_text);
+            std::cout << pending_text.substr(0, safe_size) << std::flush;
+            pending_text.erase(0, safe_size);
         }
+        std::cout << pending_text;
         std::cout << '\n';
         if (args.runtime_tokens) {
             std::cout << "CELEG_GENERATED_TOKEN_IDS=[";

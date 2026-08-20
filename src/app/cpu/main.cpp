@@ -3,6 +3,7 @@
 #include "celeg/backend/cpu/topology.hpp"
 #include "celeg/app/run_preparation.hpp"
 #include "celeg/runtime/request_types.hpp"
+#include "celeg/text/utf8.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -230,9 +231,11 @@ int main(int argc, char** argv) {
             const int32_t token = engine.session().decode();
             if (celeg::is_stop_token(topology.dims.token_policy.eos_token_ids, token)) break;
             pending += prepared.tokenizer->decode({token}, true);
-            std::cout << pending << std::flush;
-            pending.clear();
+            const std::size_t safe_size = celeg::text::complete_utf8_prefix(pending);
+            std::cout << pending.substr(0, safe_size) << std::flush;
+            pending.erase(0, safe_size);
         }
+        std::cout << pending;
         std::cout << '\n';
         const celeg::RuntimeMetrics metrics = engine.diagnostics().runtime_metrics();
         std::cerr << std::fixed << std::setprecision(3)

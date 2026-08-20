@@ -503,6 +503,36 @@ that the Phase 2 synthetic tests didn't exercise). Isolating it further needs ei
 reference dequantizer extended to a full single-layer numerical comparison, or `--dump-logits` diffing
 against a real bf16 baseline run -- neither done yet.
 
+**A separate, real, generic bug found and fixed while investigating the byte-garbage tail**: the CLI
+streaming print loops in both `src/app/cuda/main.cpp` and `src/app/cpu/main.cpp` decoded and printed
+each new token in isolation (`tokenizer->decode({next}, true)`), with no buffering across token
+boundaries. Byte-level BPE routinely splits one multi-byte UTF-8 codepoint (any non-ASCII output, e.g.
+CJK) across two or more token ids, so printing token-by-token produces genuinely invalid byte sequences
+even when the underlying token ids are correct -- a display bug indistinguishable from a computation
+bug by eyeballing terminal output. `src/serve/chat_generation.cpp`'s server-side path already handled
+this correctly (buffers and only emits the longest complete-UTF-8 prefix, via a local
+`complete_utf8_prefix` helper); extracted that helper to a shared `include/celeg/text/utf8.hpp` and
+applied the identical buffering fix to both CLI print loops. Confirmed independent of the checkpoint --
+this bug exists for any model producing multi-token UTF-8 output, not just Qwen3.5. Kept as a real fix
+regardless of the outcome below.
+
+That fix did **not** resolve incoherence, however -- re-running the real checkpoint after the fix still
+produces near-uniform, low-margin logits at the very first prefill-derived token (`--print-top 5` shows
+a ~0.3-logit spread across the top 5 candidates, essentially noise-level for a 27B model), and generation
+still collapses into a repeating-token loop after a few steps. This rules out the streaming-decode bug
+and the sampling loop as the cause of the previously-observed byte garbage, and narrows the remaining
+problem to the forward pass itself (something upstream of logits is producing near-random output even
+on the very first decode step). Checked and ruled out as an easy lever: `--weight-mode bf16` has no
+effect on this checkpoint's per-tensor FP8/NVFP4 storage (the flag doesn't reach `weight_plan.cpp`'s
+self-describing quant-format resolution at all, confirming the plan's own noted risk that there is no
+dequant-on-load path to a true bf16 baseline for this checkpoint). Re-derived the NVFP4 native
+cuBLASLt block-scaled path's `total_scale = 1/(global_w * global_a)` from first principles against the
+already-verified weight dequant convention and confirmed it is self-consistent -- not the bug. The
+remaining candidates are unchanged from before (residual NVFP4/FP8 precision/swizzle issue, or an
+architecture-level bug in the gated-deltanet/attention/MRoPE path specific to this checkpoint's exact
+configuration) and isolating further needs per-layer activation tracing against a Python reference,
+which has not been done.
+
 Not yet done: `scripts/run_model_sweep.py` entry, `docs/inference_report.md` write-up (both explicitly
 deferred until generation is actually coherent -- no point recording a broken baseline).
 

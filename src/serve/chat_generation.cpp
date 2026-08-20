@@ -1,36 +1,11 @@
 #include "celeg/serve/chat_generation.hpp"
+#include "celeg/text/utf8.hpp"
 
 #include <algorithm>
 
-namespace {
-
-std::size_t complete_utf8_prefix(std::string_view text) {
-    std::size_t cursor = 0;
-    while (cursor < text.size()) {
-        const auto lead = static_cast<unsigned char>(text[cursor]);
-        std::size_t width = 1;
-        if ((lead & 0x80u) == 0) width = 1;
-        else if ((lead & 0xe0u) == 0xc0u) width = 2;
-        else if ((lead & 0xf0u) == 0xe0u) width = 3;
-        else if ((lead & 0xf8u) == 0xf0u) width = 4;
-        else { ++cursor; continue; }
-        if (cursor + width > text.size()) break;
-        bool valid = true;
-        for (std::size_t i = 1; i < width; ++i) {
-            if ((static_cast<unsigned char>(text[cursor + i]) & 0xc0u) != 0x80u) {
-                valid = false;
-                break;
-            }
-        }
-        if (!valid) { ++cursor; continue; }
-        cursor += width;
-    }
-    return cursor;
-}
-
-}
-
 namespace celeg::serve {
+
+using celeg::text::complete_utf8_prefix;
 
 ChatGenerationInterpreter::ChatGenerationInterpreter(
     const ITokenizer& tokenizer, const ResolvedInteraction& interaction)
