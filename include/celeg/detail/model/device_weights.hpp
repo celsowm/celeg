@@ -20,6 +20,9 @@ struct DeviceWeight {
     DeviceBuffer<uint8_t> gguf_expert_storage;
     std::vector<DeviceBuffer<uint8_t>> gguf_segment_storage;
     DeviceBuffer<float> scales_storage;
+    DeviceBuffer<uint8_t> fp8_storage;
+    DeviceBuffer<uint8_t> nvfp4_packed_storage;
+    DeviceBuffer<uint8_t> nvfp4_block_scale_storage;
     std::vector<int64_t> shape;
     LinearWeight linear;
 };

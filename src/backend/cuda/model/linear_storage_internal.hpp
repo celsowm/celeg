@@ -40,6 +40,39 @@ inline void bind_int4_storage(DeviceWeight& weight,
         weight.int4_storage.data(), weight.scales_storage.data(), bf16_fallback};
 }
 
+inline void bind_fp8_storage(DeviceWeight& weight,
+                             const std::vector<uint8_t>& values,
+                             const std::vector<float>& scales) {
+    weight.fp8_storage.reset(values.size());
+    weight.scales_storage.reset(scales.size());
+    CELEG_CUDA(cudaMemcpy(weight.fp8_storage.data(), values.data(),
+                          values.size() * sizeof(uint8_t), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(weight.scales_storage.data(), scales.data(),
+                          scales.size() * sizeof(float), cudaMemcpyHostToDevice));
+    weight.linear.storage = Fp8LinearStorage{
+        reinterpret_cast<const __nv_fp8_e4m3*>(weight.fp8_storage.data()),
+        weight.scales_storage.data()};
+    weight.linear.kernel = LinearKernelKind::Fp8W8A8;
+}
+
+inline void bind_nvfp4_storage(DeviceWeight& weight,
+                               const std::vector<uint8_t>& packed,
+                               const std::vector<uint8_t>& block_scales,
+                               float global_scale,
+                               float input_global_scale) {
+    weight.nvfp4_packed_storage.reset(packed.size());
+    weight.nvfp4_block_scale_storage.reset(block_scales.size());
+    CELEG_CUDA(cudaMemcpy(weight.nvfp4_packed_storage.data(), packed.data(),
+                          packed.size() * sizeof(uint8_t), cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(weight.nvfp4_block_scale_storage.data(), block_scales.data(),
+                          block_scales.size() * sizeof(uint8_t), cudaMemcpyHostToDevice));
+    weight.linear.storage = Nvfp4LinearStorage{
+        weight.nvfp4_packed_storage.data(),
+        reinterpret_cast<const __nv_fp8_e4m3*>(weight.nvfp4_block_scale_storage.data()),
+        global_scale, input_global_scale};
+    weight.linear.kernel = LinearKernelKind::Nvfp4W4A4;
+}
+
 inline void quantize_and_bind(DeviceWeight& weight,
                               const std::byte* dense_data,
                               size_t rows,

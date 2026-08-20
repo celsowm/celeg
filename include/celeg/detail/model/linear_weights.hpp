@@ -53,11 +53,10 @@ struct GgufLinearStorage {
 };
 
 // FP8 E4M3 weight, per-channel static scale (one scale per output row) --
-// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3. Not yet populated by
-// any loader; the storage variant and the matching LinearKernelKind::Fp8W8A8
-// dispatch case exist ahead of the loader-side wiring so the kernel/dispatch
-// path can be built and tested independently, the same staged approach
-// Phase 1 used for the per-tensor kernel-override plumbing.
+// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3. Populated by
+// WeightLoader::load_linear_weight when the checkpoint carries a
+// "<name>_scale" sidecar next to an F8_E4M3-dtype weight tensor (see
+// celeg/checkpoint/packed/fp8.hpp) -- Phase 5.
 struct Fp8LinearStorage {
     const __nv_fp8_e4m3* data = nullptr;
     const float* scales = nullptr;
@@ -66,18 +65,19 @@ struct Fp8LinearStorage {
 // NVFP4 (e2m1) weight: 2 values packed per byte, one UE4M3 scale per
 // kNvfp4BlockSize-element block along the row, plus one per-tensor fp32
 // global scale (the checkpoint's static calibration scale, applied on top
-// of the per-block scale). See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
-// Phase 4: this is dequantized to bf16 (via launch_dequant_nvfp4) and run
-// through the existing bf16 GEMM rather than cuBLASLt's native block-scaled
-// fp4 matmul, because that mode's scale-factor tensor layout is
-// undocumented in the local CUDA 13.2 headers and a naive row-major layout
-// was empirically wrong (~28% mean error). Not yet populated by any loader.
+// of the per-block scale), and one per-tensor fp32 global scale for the
+// dynamically-quantized activation side. Run through cuBLASLt's native
+// block-scaled fp4 matmul (see GemmDispatcher::linear_nvfp4_w4a4) --
+// Phase 4. Populated by WeightLoader::load_linear_weight from the
+// "<name>_packed"/"<name>_scale"/"<name>_global_scale" sidecars (see
+// celeg/checkpoint/packed/nvfp4.hpp) -- Phase 5.
 inline constexpr int kNvfp4BlockSize = 16;
 
 struct Nvfp4LinearStorage {
     const uint8_t* data = nullptr;
     const __nv_fp8_e4m3* block_scales = nullptr;
     float global_scale = 1.0f;
+    float input_global_scale = 1.0f;
 };
 
 using LinearStorage = std::variant<

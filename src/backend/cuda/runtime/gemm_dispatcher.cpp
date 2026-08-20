@@ -635,13 +635,9 @@ void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
     }
 
     const int k_scale = k / kNvfp4BlockSize;
-    // Activations don't yet carry a checkpoint-calibrated global scale
-    // (that's the `input_global_scale` the real quantization_config
-    // supplies -- Phase 5 loader work); until then, treat it as 1.0.
-    constexpr float kActGlobalScale = 1.0f;
     launch_quantize_e2m1_per_block(x, nvfp4_workspace_.act_packed.data(),
                                    nvfp4_workspace_.act_scale_raw.data(),
-                                   m, k, kNvfp4BlockSize, kActGlobalScale, stream_);
+                                   m, k, kNvfp4BlockSize, weight.input_global_scale, stream_);
 
     nvfp4_workspace_.act_scale_swizzled.zero_async(stream_);
     nvfp4_workspace_.weight_scale_swizzled.zero_async(stream_);
@@ -666,7 +662,7 @@ void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
         nvfp4_workspace_.raw.data(), plan.d,
         &plan.algorithm, lt_workspace_.data(), plan.workspace_size, stream_));
 
-    const float total_scale = weight.global_scale * kActGlobalScale;
+    const float total_scale = weight.global_scale * weight.input_global_scale;
     launch_nvfp4_global_scale_apply(nvfp4_workspace_.raw.data(), total_scale, y, m, n, beta, stream_);
 }
 

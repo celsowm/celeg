@@ -6,6 +6,8 @@
 #include "celeg/checkpoint/tensor_names.hpp"
 #include "celeg/checkpoint/packed/int8.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
+#include "celeg/checkpoint/packed/fp8.hpp"
+#include "celeg/checkpoint/packed/nvfp4.hpp"
 #include "weight_loader_internal.hpp"
 #include "linear_storage_internal.hpp"
 
@@ -71,6 +73,36 @@ const LinearWeight* WeightLoader::load_linear_weight(
         if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
         return &it->second.linear;
     }
+    // Compressed-tensors on-disk quantized formats (FP8 W8A8, NVFP4 W4A4):
+    // self-describing from the sidecar tensors the checkpoint actually
+    // ships, exactly like the INT8/INT4 packed checks above -- no
+    // quantization_config parsing needed, so a checkpoint that mixes
+    // formats per tensor (e.g. Qwen3.5-NVFP4's FP8-for-some-layers,
+    // NVFP4-for-others split) resolves correctly with no per-tensor-name
+    // rules in this loader. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
+    // Phase 5.
+    if (has_packed_fp8_matrix(repo, name)) {
+        const PackedFp8Matrix packed = load_packed_fp8_matrix(repo, name, expected);
+        DeviceWeight weight;
+        weight.shape = expected;
+        cuda_loader_detail::bind_fp8_storage(weight, packed.values, packed.scales);
+        cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
+        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+        return &it->second.linear;
+    }
+    if (has_packed_nvfp4_matrix(repo, name)) {
+        const PackedNvfp4Matrix packed = load_packed_nvfp4_matrix(repo, name, expected);
+        DeviceWeight weight;
+        weight.shape = expected;
+        cuda_loader_detail::bind_nvfp4_storage(weight, packed.packed, packed.block_scales,
+                                               packed.global_scale, packed.input_global_scale);
+        cuda_loader_detail::finish_linear_binding(weight, packed.rows, packed.cols);
+        auto [it, inserted] = weights_->tensors.emplace(name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate linear weight: " + name);
+        return &it->second.linear;
+    }
+
     const HostTensorView tensor = repo.tensor(name);
     if (tensor.shape != expected || tensor.shape.size() != 2) {
         throw std::runtime_error("unexpected linear tensor: " + name);

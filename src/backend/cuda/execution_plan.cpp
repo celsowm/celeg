@@ -146,7 +146,7 @@ std::string CudaExecutionPlan::description() const {
         case LinearKernelKind::MixedBf16AndGgufMmq:
             out << "mixed-bf16-and-gguf-mmq"; break;
         case LinearKernelKind::Fp8W8A8: out << "fp8-w8a8"; break;
-        case LinearKernelKind::Nvfp4W4A4: out << "nvfp4-w4a4-bf16dequant"; break;
+        case LinearKernelKind::Nvfp4W4A4: out << "nvfp4-w4a4"; break;
     }
     out << ", sampling=fused, attention=";
     switch (options_.attention_mode) {

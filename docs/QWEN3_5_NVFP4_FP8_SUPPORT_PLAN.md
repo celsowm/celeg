@@ -8,7 +8,7 @@ multi-phase, multi-session effort — see Sequencing. Update the phase checklist
 - [x] Phase 2 — `linear_attn` binding + vision/MTP fit, running in bf16
 - [x] Phase 3 — FP8 W8A8 kernel
 - [x] Phase 4 — NVFP4 W4A4 kernel (native block-scaled tensor-core path, verified bit-exact; dequant-to-bf16 fallback for unsupported shapes)
-- [ ] Phase 5 — wire real `quantization_config` into the per-tensor resolver
+- [x] Phase 5 — per-tensor FP8/NVFP4 loading, self-describing (no `quantization_config` regex parser)
 - [ ] Phase 6 — end-to-end verification against the real checkpoint + docs
 
 > **Naming, not a typo.** The repo is `unsloth/Qwen3.8-27B-NVFP4` (base `Qwen/Qwen3.8-27B`), but its
@@ -112,10 +112,10 @@ instead, since a JSON file per model family doesn't scale") applies to every pha
 - Phase 2's `linear_attn` binding must be a **name dialect** on the existing gated-DeltaNet rule
   (probe on the tensor grammar, exactly as the two existing dialects do), not a `qwen3_5` branch.
   Likewise the ViT's merger width must come from the tensor shape, not from a model check.
-- Phase 5's `quantization_config` parser must interpret `config_groups[*].format` + `targets`
-  generically — any compressed-tensors-style checkpoint should resolve correctly. Derive
-  quantized-vs-not per tensor by matching the `targets` regexes against the tensor's own name; never
-  hardcode "layers 56–63".
+- Phase 5's per-tensor FP8/NVFP4 detection must generalize to any compressed-tensors-style checkpoint,
+  never hardcode "layers 56–63". Landed as sidecar-tensor autodetection rather than a
+  `config_groups[*].targets` regex parser — see Phase 5 below for why that's the more generic of the
+  two, not a lesser substitute for it.
 - If a generic rule and a per-model shortcut both solve a step, prefer the generic rule, even if it
   takes more work — this has already paid off once here (the Nanbeige fix cited above) and is a hard
   constraint, not a style preference.
@@ -360,13 +360,60 @@ With the layout verified, `GemmDispatcher::linear_nvfp4_w4a4` now calls cuBLASLt
     `quantization_config`; still unconfirmed whether it implies a permutation that must be undone at
     load time (Phase 5 concern, not resolved here).
 
-**Phase 5 — Wire the real `quantization_config` into the Phase-1 per-tensor resolver.**
-Parse `config_groups` (`format: "float-quantized"` → FP8, `"nvfp4-pack-quantized"` → NVFP4) plus the
-`ignore` list into the Phase-1 resolver, matching each group's `targets` regexes against tensor names
-with first-match-wins so the layers-56–63 overlap resolves the way vLLM/compressed-tensors resolves
-it. Also honor `weights.strategy` (`channel` vs `tensor_group`) and `input_activations.dynamic`
-(`true` per-token vs `"local"` per-group-16) rather than assuming them per format. This is what makes
-the loader pick FP8 vs NVFP4 vs bf16 per tensor instead of one global `--weight-mode`.
+**Phase 5 — Per-tensor FP8/NVFP4 loading, done.**
+Landed as **self-describing autodetection from the checkpoint's own tensor layout**, not a
+`quantization_config`/`config_groups` regex parser — a deliberate design change from the original
+plan, reasoned through at the start of this phase rather than assumed:
+  - Every quantized-vs-not, and FP8-vs-NVFP4, decision the checkpoint needs is already fully implied
+    by which sidecar tensors physically exist for a given weight name: a plain `<name>` tensor of
+    dtype `F8_E4M3` plus `<name>_scale` means FP8; `<name>_packed` + `<name>_scale` (dtype `F8_E4M3`)
+    + `<name>_global_scale` means NVFP4; neither means dense (bf16/f16/f32, handled unchanged by the
+    existing path). This resolves the layers-56–63 group_0/group_1 overlap correctly with zero
+    knowledge of "layers 56–63" anywhere in the code, because the two formats are told apart by what's
+    actually on disk for that exact tensor, not by a name pattern matched against a JSON schema copy
+    of the same information. It generalizes to any compressed-tensors-style checkpoint that mixes
+    formats per tensor, including ones this plan never saw.
+  - This is the same convention `has_packed_int8_matrix` (`src/checkpoint/packed/int8.cpp`) already
+    used for a different checkpoint format, pre-dating this plan — Phase 5 extends that precedent
+    rather than introducing a second, JSON-driven mechanism alongside it.
+  - `weights.strategy`/`input_activations.dynamic` don't need to be read from JSON either: they're
+    exactly what the Phase 3/4 kernels already do unconditionally per storage format (FP8 → per-token
+    dynamic e4m3 activation quant; NVFP4 → per-16-block dynamic e2m1 activation quant with the
+    checkpoint's calibrated `input_global_scale`) — there is no second strategy either kernel would
+    need to switch on.
+  - `CheckpointMetadata::from_json` (`src/checkpoint/metadata.cpp`) would have thrown on this
+    checkpoint's `config.json` before any weight loading even started: `quantization_config` nests
+    `config_groups`, an array of *objects*, which `flatten_json`'s scalar/vector-only scheme can't
+    represent (`"unsupported metadata array: config_groups"`). Found by reading the code, not by
+    running against the real checkpoint (not downloaded yet). Fixed by skipping that one top-level key
+    during flattening — nothing currently reads it, matching the autodetection design above.
+  - New: `TensorDType::F8_E4M3` and `::U8` (`include/celeg/checkpoint/tensor.hpp`,
+    `src/checkpoint/formats/safetensors.cpp`); `celeg/checkpoint/packed/fp8.hpp`+`.cpp` and
+    `.../nvfp4.hpp`+`.cpp` (`has_packed_fp8_matrix`/`load_packed_fp8_matrix`,
+    `has_packed_nvfp4_matrix`/`load_packed_nvfp4_matrix`), unit-tested against a synthetic in-memory
+    repository (`tests/packed/{fp8,nvfp4}_test.cpp`) the same way `packed_int8_test`/`packed_int4_test`
+    already are. `Nvfp4LinearStorage` gained `input_global_scale` (default `1.0`, matching the
+    checkpoint's field of the same name when a `<module>.input_global_scale` sidecar is present);
+    `GemmDispatcher::linear_nvfp4_w4a4` now multiplies by `weight.input_global_scale` instead of the
+    hardcoded `1.0` placeholder from Phase 4.
+  - `WeightLoader::load_linear_weight` (`src/backend/cuda/model/linear_loader.cpp`) checks
+    `has_packed_fp8_matrix`/`has_packed_nvfp4_matrix` right alongside the existing
+    `has_packed_int8_matrix`/`has_packed_int4_matrix` checks, before falling through to the dense
+    tensor path, and sets `weight.linear.kernel` to `Fp8W8A8`/`Nvfp4W4A4` — the per-tensor override
+    Phase 1 built for exactly this. `load_concat_linear_weight` was deliberately left untouched: its
+    only quantization-config-targeted callers are MoE shared-expert fusion, and this checkpoint has no
+    MoE experts (confirmed in Phase 2), so it isn't exercised by the real checkpoint.
+  - **Still open, and correctly Phase 6's job, not Phase 5's:** the exact on-disk safetensors dtype
+    spellings (`"F8_E4M3"` vs e.g. `"F8_E4M3FN"`, `"U8"` for `weight_packed`) and sidecar tensor names
+    (`weight_scale`, `weight_global_scale`, `input_global_scale`) are taken from the Phase 2
+    quantization_config summary quoted at the top of this doc, not re-verified byte-for-byte against
+    the checkpoint here — it still hasn't been downloaded. Same for the `weights.actorder: "static"`
+    flag noted in Phase 4: still unconfirmed whether it implies a column permutation that must be
+    undone at load time, or is a no-op for this weight/activation strategy combination. If the real
+    checkpoint's dtype string or sidecar names differ, `has_packed_fp8_matrix`/`has_packed_nvfp4_matrix`
+    simply won't detect it and the tensor falls through to the dense path, which throws a clear
+    "unexpected linear tensor dtype" error rather than silently mis-loading — fail loud, not
+    fail silent.
 
 **Phase 6 — End-to-end verification and docs.**
 Full quantized run of the real 27B checkpoint; compare output against the Phase-2 bf16 baseline for
@@ -384,8 +431,9 @@ coherence/consistency; add to `scripts/run_model_sweep.py`; write up in `docs/in
   confirmed for existing models on both backends.
 - Phase 3 & 4: synthetic-weight kernel correctness tests (dequant/matmul vs. scalar reference) per
   format, before wiring into the loader.
-- Phase 5: a `quantization_config` parser test against a minimal `config.json` fragment matching the
-  real schema, including the deliberate layers-56–63 overlap between the two groups.
+- Phase 5 (done): `tests/packed/{fp8,nvfp4}_test.cpp` — `has_packed_*`/`load_packed_*` against a
+  synthetic in-memory repository, including the "sidecar missing → not detected" negative case and
+  (NVFP4) both with and without an `input_global_scale` sidecar. Full `ctest` (91/91) green throughout.
 - Phase 6: full model run, `classify_output()` coherence/correctness check (reuse from
   `scripts/run_model_sweep.py`), VRAM sanity check (~14–17GB expected).
 

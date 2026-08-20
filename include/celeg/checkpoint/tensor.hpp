@@ -6,7 +6,7 @@
 
 namespace celeg {
 
-enum class TensorDType { BF16, F16, F32, I8, I32, I64, Quantized, Unknown };
+enum class TensorDType { BF16, F16, F32, I8, U8, I32, I64, F8_E4M3, Quantized, Unknown };
 
 struct TensorBlockEncoding {
     std::int32_t id = 0;
