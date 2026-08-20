@@ -447,10 +447,12 @@ int main() {
     // from "is the quantization rounding bit-for-bit what a host
     // reimplementation would produce" -- the latter isn't this kernel's
     // contract (it only needs to round *some* IEEE-754-correct e4m3 way).
-    {
-        constexpr int m = 4;
-        constexpr int n = 8;
-        constexpr int k = 32;
+    // Run the FP8 W8A8 check for two shapes: one aligned enough for the
+    // cuBLASLt fp8 heuristic to find an algorithm, and one (n=3) that isn't
+    // -- exercising GemmDispatcher's naive-kernel fallback for shapes with
+    // no available fp8 cuBLASLt algorithm (see
+    // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3).
+    for (const auto& [m, n, k] : {std::tuple{4, 8, 32}, std::tuple{2, 3, 32}}) {
         std::mt19937 rng(11);
         std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
         std::vector<__nv_bfloat16> x(m * k), w(n * k);

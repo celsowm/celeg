@@ -466,7 +466,13 @@ void GemmDispatcher::linear_fp8_w8a8(const __nv_bfloat16* x,
 
     LtPlan& plan = get_or_create_fp8_lt_plan(m, n, k);
     if (!plan.available) {
-        throw std::runtime_error("no fp8 cuBLASLt algorithm available for this shape");
+        // No cuBLASLt fp8 algorithm exists for this shape (observed for
+        // small/unaligned n on RTX 5090/CUDA 13.2 -- see
+        // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3). Fall back to a
+        // naive kernel that is correct for every shape instead of failing.
+        launch_fp8_w8a8_naive(fp8_workspace_.act_q.data(), fp8_workspace_.act_scales.data(),
+                              weight.data, weight.scales, y, m, n, k, beta, stream_);
+        return;
     }
     const float alpha = 1.0f;
     const float raw_beta = 0.0f;

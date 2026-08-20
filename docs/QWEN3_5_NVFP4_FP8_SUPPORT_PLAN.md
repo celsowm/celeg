@@ -251,12 +251,16 @@ from). Findings, on this machine's RTX 5090 (sm_120) / CUDA 13.2:*
     `GemmDispatcher::linear()` (not just the raw kernels in isolation) against a reference built from
     the kernel's own quantized values (round-tripped through the same quantize kernel under test, not
     an independently reimplemented e4m3 rounding rule) — passes at 2% relative tolerance.
-  - **New finding: fp8 cuBLASLt heuristics need aligned shapes.** `n=3` (an arbitrary small test size)
-    returned no available algorithm (`cublasLtMatmulAlgoGetHeuristic` succeeds but returns zero
-    results) while `n=8` works; real Qwen3.5 tensor widths (5120, 6144, 10240, 17408, head_dim
-    multiples of 128) are almost certainly always aligned in practice, but this needs an explicit
-    guard or bf16 fallback for the general case before Phase 5 wires real checkpoints through this
-    path — don't assume every shape works just because the common ones do.
+  - **Finding resolved: fp8 cuBLASLt heuristics need aligned shapes, now guarded.** `n=3` (an
+    arbitrary small test size) returned no available algorithm (`cublasLtMatmulAlgoGetHeuristic`
+    succeeds but returns zero results) while `n=8` works; real Qwen3.5 tensor widths (5120, 6144,
+    10240, 17408, head_dim multiples of 128) are almost certainly always aligned in practice, but
+    rather than assume that, `GemmDispatcher::linear_fp8_w8a8` now falls back to
+    `launch_fp8_w8a8_naive` (`src/backend/cuda/kernels/linear.cuh`) — a plain one-thread-per-output
+    dot-product kernel, correct for any m/n/k — whenever `get_or_create_fp8_lt_plan` can't produce
+    an algorithm, instead of throwing. Slow but correct is safer than a runtime crash on an
+    unanticipated shape. `tests/cuda_kernels_test.cu`'s FP8 test now runs both a `n=8` (cuBLASLt)
+    and `n=3` (naive fallback) shape against the same reference to cover both paths.
 
 **Phase 4 — NVFP4 W4A4 kernel.**
 `Nvfp4LinearStorage` (packed e2m1 + per-16-block `UE4M3` scale + per-tensor fp32 global scale),

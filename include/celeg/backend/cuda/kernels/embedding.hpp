@@ -69,4 +69,11 @@ void launch_fp8_scale_apply(const float* raw, const float* act_scale,
                            const float* weight_scale, __nv_bfloat16* y,
                            int m, int n, float beta, cudaStream_t stream);
 
+// Naive (non-cuBLASLt) FP8 W8A8 matmul, correct for any m/n/k. Fallback for
+// shapes the fp8 cuBLASLt heuristic can't find an algorithm for.
+void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
+                          const __nv_fp8_e4m3* w_q, const float* weight_scale,
+                          __nv_bfloat16* y, int m, int n, int k, float beta,
+                          cudaStream_t stream);
+
 }

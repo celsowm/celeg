@@ -196,3 +196,41 @@ void launch_fp8_scale_apply(const float* raw, const float* act_scale,
         raw, act_scale, weight_scale, y, m, n, beta);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
+
+// Naive fallback matmul for shapes the fp8 cuBLASLt heuristic can't produce
+// an algorithm for (e.g. n not a multiple of the tensor-core tile size --
+// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3). One thread per output
+// element, straight-line dot product. Not fast, but every shape is valid, so
+// GemmDispatcher can fall back to it instead of throwing.
+__global__ void fp8_w8a8_naive_kernel(const __nv_fp8_e4m3* __restrict__ x_q,
+                                      const float* __restrict__ act_scale,
+                                      const __nv_fp8_e4m3* __restrict__ w_q,
+                                      const float* __restrict__ weight_scale,
+                                      __nv_bfloat16* __restrict__ y,
+                                      int m, int n, int k, float beta) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (col >= n || row >= m) return;
+    const __nv_fp8_e4m3* x_row = x_q + static_cast<size_t>(row) * k;
+    const __nv_fp8_e4m3* w_row = w_q + static_cast<size_t>(col) * k;
+    float acc = 0.0f;
+    for (int i = 0; i < k; ++i) {
+        acc += float(x_row[i]) * float(w_row[i]);
+    }
+    float value = acc * act_scale[row] * weight_scale[col];
+    const size_t idx = static_cast<size_t>(row) * n + col;
+    if (beta != 0.0f) value += beta * bf16_float(y[idx]);
+    y[idx] = __float2bfloat16(value);
+}
+
+void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
+                           const __nv_fp8_e4m3* w_q, const float* weight_scale,
+                           __nv_bfloat16* y, int m, int n, int k, float beta,
+                           cudaStream_t stream) {
+    constexpr int threads = 128;
+    const dim3 grid(static_cast<unsigned>((n + threads - 1) / threads),
+                    static_cast<unsigned>(m));
+    fp8_w8a8_naive_kernel<<<grid, threads, 0, stream>>>(
+        x_q, act_scale, w_q, weight_scale, y, m, n, k, beta);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
