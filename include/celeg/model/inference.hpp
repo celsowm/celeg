@@ -60,6 +60,12 @@ struct InferredRopePosition {
     RopePairingKind pairing = RopePairingKind::SplitHalf;
     RopeScalingSpec scaling;
 
+    // Multi-axis (M-RoPE) sectioning, e.g. Qwen-VL/Qwen3.5's [temporal,
+    // height, width] rotary split. Empty when the checkpoint uses ordinary
+    // single-axis RoPE.
+    std::vector<int> mrope_sections;
+    bool mrope_interleaved = false;
+
     friend bool operator==(const InferredRopePosition&, const InferredRopePosition&) = default;
 };
 
@@ -252,6 +258,17 @@ struct GatedDeltaFacts {
     std::optional<bool> safe_decay;
     std::optional<float> decay_lower_bound;
     DecayParameterEncoding decay_encoding = DecayParameterEncoding::LogA;
+
+    // Fused-projection dialects (HF `linear_num_key_heads` etc.) keep
+    // independent key/value geometry, unlike the factorized dialect above
+    // where a single head count serves both roles — a separate set of
+    // fields avoids `aliases()` treating differing key vs. value head
+    // counts as conflicting metadata for the same fact.
+    std::optional<int> linear_key_heads;
+    std::optional<int> linear_value_heads;
+    std::optional<int> linear_key_dim;
+    std::optional<int> linear_value_dim;
+    std::optional<int> linear_conv_kernel;
 };
 
 /// Facts governing Mamba-2 SSM mixer layers.

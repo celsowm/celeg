@@ -186,7 +186,7 @@ void run_specificity_decides_between_grammars() {
 
 void run_builtin_catalog_specificities_are_distinct() {
     const auto rules = idi::make_builtin_layer_inference_rules();
-    CELEG_TEST_CHECK(rules.size() == 7);
+    CELEG_TEST_CHECK(rules.size() == 8);
     for (size_t i = 0; i < rules.size(); ++i) {
         for (size_t j = i + 1; j < rules.size(); ++j) {
             CELEG_TEST_CHECK(rules[i]->specificity() != rules[j]->specificity());

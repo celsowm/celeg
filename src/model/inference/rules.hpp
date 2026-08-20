@@ -65,6 +65,7 @@ make_builtin_layer_inference_rules();
 std::unique_ptr<ILayerInferenceRule> make_standard_attention_rule();
 std::unique_ptr<ILayerInferenceRule> make_latent_attention_rule();
 std::unique_ptr<ILayerInferenceRule> make_fused_gated_delta_rule();
+std::unique_ptr<ILayerInferenceRule> make_linear_attn_gated_delta_rule();
 std::unique_ptr<ILayerInferenceRule> make_factorized_gated_delta_rule();
 std::unique_ptr<ILayerInferenceRule> make_mamba2_rule();
 std::unique_ptr<ILayerInferenceRule> make_short_convolution_rule();

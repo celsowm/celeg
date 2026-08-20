@@ -428,7 +428,19 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         metadata, {"rope_theta", "rope_parameters.rope_theta", "rope_parameters.full_attention.rope_theta", "rope_parameters.sliding_attention.rope_theta", "text_config.rope_parameters.full_attention.rope_theta", "text_config.rope_parameters.sliding_attention.rope_theta"}, result.evidence,
         "rope_theta", "rope.freq_base");
     std::optional<float> rotary_fraction = aliases<float>(
-        metadata, {"rotary_fraction"}, result.evidence, "rotary_fraction");
+        metadata, {"rotary_fraction", "partial_rotary_factor"}, result.evidence,
+        "rotary_fraction");
+    std::vector<int> mrope_sections = token_list(metadata, "rope_parameters.mrope_section");
+    if (mrope_sections.empty()) mrope_sections = token_list(metadata, "mrope_section");
+    if (mrope_sections.empty()) mrope_sections = token_list(metadata, "rope_parameters.mrope_sections");
+    if (mrope_sections.empty()) mrope_sections = token_list(metadata, "mrope_sections");
+    if (!mrope_sections.empty() && mrope_sections.size() != 3) {
+        inference_detail::fail(ResolutionFailureKind::ConflictingMetadata,
+                               "M-RoPE requires exactly three sections (temporal/height/width)");
+    }
+    const bool mrope_interleaved = aliases<bool>(
+        metadata, {"mrope_interleaved", "rope_parameters.mrope_interleaved"}, result.evidence,
+        "mrope_interleaved").value_or(false);
     const bool architecture_never_applies_rope = metadata.is_gguf() &&
         gguf_architecture_never_applies_rope(metadata.architecture_type());
     if (!architecture_never_applies_rope && !rotary_fraction.has_value() && metadata.is_gguf()) {
@@ -525,6 +537,21 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
     result.gated_delta.decay_encoding = metadata.is_gguf()
         ? DecayParameterEncoding::Pretransformed
         : DecayParameterEncoding::LogA;
+    result.gated_delta.linear_key_heads = aliases<int>(
+        metadata, {"linear_num_key_heads"}, result.evidence,
+        "recurrent_linear_key_heads");
+    result.gated_delta.linear_value_heads = aliases<int>(
+        metadata, {"linear_num_value_heads"}, result.evidence,
+        "recurrent_linear_value_heads");
+    result.gated_delta.linear_key_dim = aliases<int>(
+        metadata, {"linear_key_head_dim"}, result.evidence,
+        "recurrent_linear_key_dim");
+    result.gated_delta.linear_value_dim = aliases<int>(
+        metadata, {"linear_value_head_dim"}, result.evidence,
+        "recurrent_linear_value_dim");
+    result.gated_delta.linear_conv_kernel = aliases<int>(
+        metadata, {"linear_conv_kernel_dim"}, result.evidence,
+        "recurrent_linear_conv_kernel");
 
     result.latent_attention.query_rank = aliases<int>(
         metadata, {"q_lora_rank"}, result.evidence, "latent_query_rank");
@@ -667,7 +694,10 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
         result.attention.position_encoding = InferredRopePosition{
             *rope_theta,
             rotary_fraction.value_or(1.0f),
-            pairing};
+            pairing,
+            RopeScalingSpec{},
+            mrope_sections,
+            mrope_interleaved};
     }
     return result;
 }

@@ -38,13 +38,16 @@ int main() {
     const auto provider = celeg::make_safetensor_visual_embedding_provider(path);
     const celeg::VisualEmbedding embedding = provider->encode(
         "data:image/x-portable-pixmap;base64,UDYKMSAxCjI1NQr/AAA=");
-    CELEG_TEST_CHECK(embedding.width == 2048);
+    // Merger output width is derived from the checkpoint's merger.linear_fc2
+    // shape rather than hardcoded, so only assert it is positive and that
+    // every encode() call against the same checkpoint agrees on it.
+    CELEG_TEST_CHECK(embedding.width > 0);
     CELEG_TEST_CHECK(embedding.token_count() == 1);
     CELEG_TEST_CHECK(embedding.rope_positions.size() == embedding.token_count());
     for (float value : embedding.values) CELEG_TEST_CHECK(std::isfinite(value));
     const celeg::VisualEmbedding wide = provider->encode(
         "data:image/x-portable-pixmap;base64,UDYKNCAxCjI1NQr/AAAA/wAAAP////8=");
-    CELEG_TEST_CHECK(wide.width == 2048);
+    CELEG_TEST_CHECK(wide.width == embedding.width);
     CELEG_TEST_CHECK(wide.token_count() == 2);
     CELEG_TEST_CHECK(wide.rope_positions.size() == 2);
     CELEG_TEST_CHECK(wide.rope_positions[1][2] == 1);

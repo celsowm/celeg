@@ -283,6 +283,69 @@ std::shared_ptr<MemoryRepository> ling_repository() {
     return result;
 }
 
+celeg::CheckpointMetadata qwen35_metadata() {
+    celeg::CheckpointMetadata result;
+    result.values["model_type"] = std::string("qwen3_5");
+    result.values["hidden_size"] = int64_t(32);
+    result.values["intermediate_size"] = int64_t(24);
+    result.values["num_hidden_layers"] = int64_t(2);
+    result.values["num_attention_heads"] = int64_t(2);
+    result.values["num_key_value_heads"] = int64_t(2);
+    result.values["head_dim"] = int64_t(16);
+    result.values["vocab_size"] = int64_t(40);
+    result.values["max_position_embeddings"] = int64_t(64);
+    result.values["rms_norm_eps"] = 1.0e-6;
+    result.values["rope_theta"] = 10000.0;
+    result.values["partial_rotary_factor"] = 0.5;
+    result.values["mrope_section"] = std::vector<int64_t>{2, 1, 1};
+    result.values["mrope_interleaved"] = true;
+    result.values["tie_word_embeddings"] = true;
+    // Qwen3.5's linear_attn geometry: key heads/dim independent from value
+    // heads/dim, both distinct from num_attention_heads (full-attention
+    // query heads).
+    result.values["linear_num_key_heads"] = int64_t(2);
+    result.values["linear_key_head_dim"] = int64_t(4);
+    result.values["linear_num_value_heads"] = int64_t(3);
+    result.values["linear_value_head_dim"] = int64_t(4);
+    result.values["linear_conv_kernel_dim"] = int64_t(4);
+    return result;
+}
+
+std::shared_ptr<MemoryRepository> qwen35_repository() {
+    auto result = std::make_shared<MemoryRepository>();
+    result->add("model.language_model.embed_tokens.weight", {40, 32});
+    result->add("model.language_model.norm.weight", {32});
+    for (int layer = 0; layer < 2; ++layer) {
+        const std::string prefix = "model.language_model.layers." + std::to_string(layer);
+        result->add(prefix + ".input_layernorm.weight", {32});
+        result->add(prefix + ".post_attention_layernorm.weight", {32});
+        result->add(prefix + ".mlp.gate_proj.weight", {24, 32});
+        result->add(prefix + ".mlp.up_proj.weight", {24, 32});
+        result->add(prefix + ".mlp.down_proj.weight", {32, 24});
+        if (layer == 0) {
+            const std::string la = prefix + ".linear_attn.";
+            result->add(la + "in_proj_qkv.weight", {28, 32});
+            result->add(la + "in_proj_z.weight", {12, 32});
+            result->add(la + "in_proj_a.weight", {3, 32});
+            result->add(la + "in_proj_b.weight", {3, 32});
+            result->add(la + "conv1d.weight", {28, 1, 4});
+            result->add(la + "dt_bias", {3});
+            result->add(la + "A_log", {3});
+            result->add(la + "norm.weight", {4});
+            result->add(la + "out_proj.weight", {32, 12});
+        } else {
+            const std::string sa = prefix + ".self_attn.";
+            // Output gate fused into q_proj (double width), as Qwen3.5's
+            // full-attention layers store it.
+            result->add(sa + "q_proj.weight", {64, 32});
+            result->add(sa + "k_proj.weight", {32, 32});
+            result->add(sa + "v_proj.weight", {32, 32});
+            result->add(sa + "o_proj.weight", {32, 32});
+        }
+    }
+    return result;
+}
+
 }
 
 int main() {
@@ -447,5 +510,45 @@ int main() {
     CELEG_TEST_CHECK(std::holds_alternative<celeg::MixtureOfExpertsSpec>(
         ling_model.graph.layers[1].feed_forward));
     CELEG_TEST_CHECK(celeg::explain_resolution(ling_checkpoint).failures.empty());
+
+    // Qwen3.5: one linear_attn (gated-DeltaNet) layer followed by one
+    // full-attention layer combining a q_proj-fused output gate, partial
+    // rotary (0.25 of head_dim -> here 0.5, scaled for the tiny synthetic
+    // head_dim), and interleaved M-RoPE sectioning -- the exact feature
+    // combination Phase 2 needed to prove out for the generic/automatic
+    // architecture path (no per-model descriptor).
+    celeg::CheckpointView qwen35_checkpoint;
+    qwen35_checkpoint.metadata = qwen35_metadata();
+    qwen35_checkpoint.repository = qwen35_repository();
+    celeg::ResolvedModel qwen35_model;
+    try {
+        qwen35_model = catalog.select(qwen35_checkpoint.metadata).resolve(qwen35_checkpoint);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "qwen3.5 failure: %s\n", error.what());
+        return 1;
+    }
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::GatedDeltaNetSpec>(
+        qwen35_model.graph.layers[0].mixer));
+    const celeg::GatedDeltaNetSpec& qwen35_delta =
+        std::get<celeg::GatedDeltaNetSpec>(qwen35_model.graph.layers[0].mixer);
+    CELEG_TEST_CHECK(qwen35_delta.key_heads == 2);
+    CELEG_TEST_CHECK(qwen35_delta.key_head_dim == 4);
+    CELEG_TEST_CHECK(qwen35_delta.value_heads == 3);
+    CELEG_TEST_CHECK(qwen35_delta.value_head_dim == 4);
+    CELEG_TEST_CHECK(qwen35_delta.conv_kernel == 4);
+
+    CELEG_TEST_CHECK(std::holds_alternative<celeg::AttentionSpec>(
+        qwen35_model.graph.layers[1].mixer));
+    const celeg::AttentionSpec& qwen35_attention =
+        std::get<celeg::AttentionSpec>(qwen35_model.graph.layers[1].mixer);
+    CELEG_TEST_CHECK(qwen35_attention.output_gate.has_value());
+    const auto* qwen35_mrope =
+        std::get_if<celeg::MultiAxisRopeSpec>(&qwen35_attention.position);
+    CELEG_TEST_CHECK(qwen35_mrope != nullptr);
+    CELEG_TEST_CHECK(qwen35_mrope->interleaved);
+    const std::array<int, 3> expected_sections{2, 1, 1};
+    CELEG_TEST_CHECK(qwen35_mrope->sections == expected_sections);
+    CELEG_TEST_CHECK(std::abs(qwen35_mrope->base.rotary_fraction - 0.5f) < 1.0e-6f);
+    CELEG_TEST_CHECK(celeg::explain_resolution(qwen35_checkpoint).failures.empty());
     return 0;
 }

@@ -160,6 +160,169 @@ public:
     }
 };
 
+/// Recognizes Qwen3.5's `linear_attn` grammar (HF-named fused
+/// in_proj_qkv/in_proj_z/in_proj_a/in_proj_b/conv1d projections with a
+/// single recurrent state). Structurally identical to the GGUF fused
+/// dialect above — same qkv/conv width formula, same per-role shapes —
+/// just a different tensor-name spelling and metadata source, so it
+/// reuses the same GatedDeltaNetSpec construction.
+class LinearAttnGatedDeltaRule final : public ILayerInferenceRule {
+public:
+    std::string_view id() const override { return "linear_attn_gated_delta"; }
+    int specificity() const override { return 7; }
+    MixerFamily family() const override { return MixerFamily::Recurrent; }
+
+    bool probe(const CanonicalInferenceContext& context, int layer)
+        const override {
+        const auto& inventory = context.input.inventory;
+        const std::string prefix = "model.language_model.layers." +
+            std::to_string(layer) + ".linear_attn.";
+        return inventory.find(prefix + "in_proj_qkv.weight") != nullptr &&
+            inventory.find(prefix + "in_proj_z.weight") != nullptr &&
+            inventory.find(prefix + "in_proj_a.weight") != nullptr &&
+            inventory.find(prefix + "in_proj_b.weight") != nullptr &&
+            inventory.find(prefix + "conv1d.weight") != nullptr &&
+            inventory.find(prefix + "dt_bias") != nullptr &&
+            inventory.find(prefix + "A_log") != nullptr &&
+            inventory.find(prefix + "norm.weight") != nullptr &&
+            inventory.find(prefix + "out_proj.weight") != nullptr;
+    }
+
+    void resolve(CanonicalInferenceContext& context, int layer)
+        const override {
+        const auto& input = context.input;
+        const auto& m = input.metadata;
+        LayerSpec& semantic_layer =
+            context.facts.graph.layers[static_cast<size_t>(layer)];
+        const std::string layer_prefix = "model.language_model.layers." +
+            std::to_string(layer) + ".linear_attn.";
+
+        const auto* qkv =
+            input.inventory.find(layer_prefix + "in_proj_qkv.weight");
+        const auto* z =
+            input.inventory.find(layer_prefix + "in_proj_z.weight");
+        const auto* alpha =
+            input.inventory.find(layer_prefix + "in_proj_a.weight");
+        const auto* beta =
+            input.inventory.find(layer_prefix + "in_proj_b.weight");
+        const auto* convolution =
+            input.inventory.find(layer_prefix + "conv1d.weight");
+        const auto* dt_bias =
+            input.inventory.find(layer_prefix + "dt_bias");
+        const auto* a_log =
+            input.inventory.find(layer_prefix + "A_log");
+        const auto* norm =
+            input.inventory.find(layer_prefix + "norm.weight");
+        const auto* output =
+            input.inventory.find(layer_prefix + "out_proj.weight");
+
+        const int key_dim = m.gated_delta.linear_key_dim.value_or(0);
+        const int key_heads = m.gated_delta.linear_key_heads.value_or(0);
+        const int value_heads = m.gated_delta.linear_value_heads.value_or(0);
+        const int value_width =
+            output && output->shape.size() == 2
+                ? static_cast<int>(output->shape[1])
+                : 0;
+        const int value_dim =
+            m.gated_delta.linear_value_dim.value_or(
+                value_heads > 0 && value_width % value_heads == 0
+                    ? value_width / value_heads
+                    : 0);
+        const int qkv_width = 2 * key_heads * key_dim + value_width;
+        const int conv_kernel = m.gated_delta.linear_conv_kernel.value_or(
+            convolution && convolution->shape.size() == 3
+                ? static_cast<int>(convolution->shape[2])
+                : 0);
+
+        if (!qkv || !z || !alpha || !beta || !convolution || !dt_bias ||
+            !a_log || !norm || !output || key_dim <= 0 || key_heads <= 0 ||
+            value_heads <= 0 || value_dim <= 0 || conv_kernel <= 0 ||
+            !shape_is(*qkv, {qkv_width, *m.core.hidden_size}) ||
+            !shape_is(*z, {value_width, *m.core.hidden_size}) ||
+            !shape_is(*alpha, {value_heads, *m.core.hidden_size}) ||
+            !shape_is(*beta, {value_heads, *m.core.hidden_size}) ||
+            !shape_is(*convolution, {qkv_width, 1, conv_kernel}) ||
+            !shape_is(*dt_bias, {value_heads}) ||
+            !shape_is(*a_log, {value_heads}) ||
+            !shape_is(*norm, {value_dim}) ||
+            !shape_is(*output, {*m.core.hidden_size, value_width})) {
+            fail(
+                ResolutionFailureKind::ShapeConstraintViolation,
+                "linear_attn gated-delta tensor shapes do not agree with "
+                "geometry for layer " +
+                    std::to_string(layer));
+        }
+
+        semantic_layer.mixer = GatedDeltaNetSpec{
+            conv_kernel,
+            key_dim,
+            value_dim,
+            key_heads,
+            value_heads,
+            false,
+            false,
+            -5.0f,
+            false,
+            false,
+            m.gated_delta.decay_encoding == DecayParameterEncoding::LogA};
+        if (!layer_has_feed_forward(context, layer)) {
+            semantic_layer.feed_forward = std::monostate{};
+        }
+
+        const GatedDeltaNetSpec& spec = std::get<GatedDeltaNetSpec>(
+            semantic_layer.mixer);
+        const int resolved_qkv_width = spec.qkv_width();
+        auto& bindings = context.facts.bindings;
+
+        const auto bind = [&](TensorRole role,
+                              std::string_view suffix,
+                              std::initializer_list<std::int64_t> shape) {
+            const auto* tensor = find_unique(
+                input.inventory,
+                {layer_prefix + std::string(suffix)},
+                role,
+                layer,
+                shape,
+                {});
+            add_binding(bindings, role, layer, *tensor, {});
+        };
+
+        bind(
+            TensorRole::GatedDeltaNetQkv,
+            "in_proj_qkv.weight",
+            {resolved_qkv_width, *m.core.hidden_size});
+        bind(
+            TensorRole::GatedDeltaNetZ,
+            "in_proj_z.weight",
+            {spec.value_width(), *m.core.hidden_size});
+        bind(
+            TensorRole::GatedDeltaNetAlpha,
+            "in_proj_a.weight",
+            {spec.value_heads, *m.core.hidden_size});
+        bind(
+            TensorRole::GatedDeltaNetBeta,
+            "in_proj_b.weight",
+            {spec.value_heads, *m.core.hidden_size});
+        bind(
+            TensorRole::GatedDeltaNetDtBias,
+            "dt_bias",
+            {spec.value_heads});
+        bind(TensorRole::GatedDeltaNetALog, "A_log", {spec.value_heads});
+        bind(
+            TensorRole::GatedDeltaNetConv,
+            "conv1d.weight",
+            {resolved_qkv_width, 1, spec.conv_kernel});
+        bind(
+            TensorRole::GatedDeltaNetNorm,
+            "norm.weight",
+            {spec.value_head_dim});
+        bind(
+            TensorRole::GatedDeltaNetOutput,
+            "out_proj.weight",
+            {*m.core.hidden_size, spec.value_width()});
+    }
+};
+
 /// Recognizes the factorized gated-delta-net grammar (separate
 /// q/k/v/f/b/g projections with per-stream convolutions under an
 /// attention prefix).
@@ -475,6 +638,10 @@ public:
 
 std::unique_ptr<ILayerInferenceRule> make_fused_gated_delta_rule() {
     return std::make_unique<FusedGatedDeltaRule>();
+}
+
+std::unique_ptr<ILayerInferenceRule> make_linear_attn_gated_delta_rule() {
+    return std::make_unique<LinearAttnGatedDeltaRule>();
 }
 
 std::unique_ptr<ILayerInferenceRule> make_factorized_gated_delta_rule() {

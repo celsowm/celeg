@@ -151,6 +151,7 @@ std::vector<std::unique_ptr<ILayerInferenceRule>>
 make_builtin_layer_inference_rules() {
     std::vector<std::unique_ptr<ILayerInferenceRule>> rules;
     rules.push_back(make_fused_gated_delta_rule());
+    rules.push_back(make_linear_attn_gated_delta_rule());
     rules.push_back(make_factorized_gated_delta_rule());
     rules.push_back(make_latent_attention_rule());
     rules.push_back(make_mamba2_rule());

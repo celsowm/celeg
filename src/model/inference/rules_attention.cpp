@@ -45,7 +45,15 @@ AttentionSpec make_attention(
         } else if constexpr (std::is_same_v<T, InferredRopePosition>) {
             RopePositionSpec rope{position.theta, position.rotary_fraction, RopeScalingSpec{}};
             rope.pairing = position.pairing;
-            attention.position = rope;
+            if (!position.mrope_sections.empty()) {
+                attention.position = MultiAxisRopeSpec{
+                    rope,
+                    {position.mrope_sections[0], position.mrope_sections[1],
+                     position.mrope_sections[2]},
+                    position.mrope_interleaved, 3};
+            } else {
+                attention.position = rope;
+            }
         } else if constexpr (std::is_same_v<T, UnresolvedPositionEncoding>) {
             fail(ResolutionFailureKind::MissingRequiredMetadata,
                 "positional encoding could not be resolved from checkpoint metadata");

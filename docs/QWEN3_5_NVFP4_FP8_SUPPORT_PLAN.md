@@ -5,7 +5,7 @@ the live checkpoint (`config.json`, `model.safetensors.index.json`) and the curr
 multi-phase, multi-session effort — see Sequencing. Update the phase checklist as work lands.
 
 - [x] Phase 1 — per-tensor quant-format infrastructure (pure refactor)
-- [ ] Phase 2 — `linear_attn` binding + vision/MTP fit, running in bf16
+- [x] Phase 2 — `linear_attn` binding + vision/MTP fit, running in bf16
 - [ ] Phase 3 — FP8 W8A8 kernel
 - [ ] Phase 4 — NVFP4 W4A4 kernel
 - [ ] Phase 5 — wire real `quantization_config` into the per-tensor resolver
@@ -135,33 +135,64 @@ single-format model keeps working unchanged. Replace `WeightLoader`'s global `we
 resolver just returns the existing global mode, making it a pure refactor with no behavior change.
 Verified by the full `ctest` suite staying green (89/89) with zero new formats.
 
-**Phase 2 — Architecture fit, running in bf16 first (no quantization yet).**
-Get the checkpoint loading and generating *correct* text with everything upconverted to bf16
-(`--weight-mode bf16`, ignoring `quantization_config` entirely) as the correctness baseline before
-any quant kernel work. Concretely:
-  - New `linear_attn` name dialect in `rules_recurrent.cpp`, reusing `FusedGatedDeltaRule`'s
-    semantics and roles via the mapping table above. Preferred shape: factor the fused rule's
-    tensor-name set into a small alias table and add the `model.language_model.layers.N.linear_attn.*`
-    entry, rather than copy-pasting a fourth rule class. Confirm shapes from the safetensors header
-    first (the index has no shapes); confirm `output_gate_type: "swish"` matches the existing gate
-    semantics and that `linear_num_value_heads` (48) ≠ `linear_num_key_heads` (16) is already handled
-    by `m.gated_delta.{key,value}_heads` — `metadata.cpp:510` currently aliases both from
-    `num_attention_heads`/`num_heads_for_linear_attn`, so the `linear_num_{key,value}_heads` /
-    `linear_{key,value}_head_dim` / `linear_conv_kernel_dim` keys likely need adding to those alias
-    lists.
-  - Full-attention layers: verify `attn_output_gate: true` + `partial_rotary_factor: 0.25` +
-    interleaved mRoPE resolve correctly together (each is supported individually — see
-    `rules_attention.cpp:265,428` and `cpu_mrope_test.cpp` — the combination is untested).
-  - Vision: derive the merger output width from `merger.linear_fc2`'s shape instead of the
-    hardcoded 2048 in `safetensor_projection.cpp`; then run `qwen35_vision_test` with
-    `CELEG_QWEN35_MODEL` pointed at the real checkpoint (the test currently skips when unset, and its
-    `embedding.width == 2048` assertions must become shape-derived too).
-  - Verify the existing MTP "one auxiliary attention layer" constraint accepts `mtp.layers.0.*` plus
-    `mtp.fc`/`mtp.pre_fc_norm_*`; extend only if it doesn't. Simply not loading MTP is an acceptable
-    Phase-2 fallback — it is a speculative-decode accelerator, not required for correct output.
-  - Ensure unbound `k_scale`/`v_scale` tensors are tolerated by the loader.
-  - Only add an architecture descriptor JSON (`src/model/descriptor/`) if generic inference rules
-    genuinely cannot express this config shape; current evidence says they can.
+**Phase 2 — Architecture fit, running in bf16 first (no quantization yet). DONE.**
+Verified against the real checkpoint's safetensors header (range-fetched, not downloaded) and landed
+against synthetic checkpoints (`automatic_inference_test.cpp`, `layer_inference_rule_test.cpp`,
+`qwen35_vision_test.cpp`). What actually shipped, including two gaps the original plan missed
+entirely (not just "untested combinations" — these code paths did not exist):
+  - **New `linear_attn` name dialect** (`LinearAttnGatedDeltaRule` in `rules_recurrent.cpp`),
+    structurally identical to `FusedGatedDeltaRule` (same qkv/conv-width formula, same per-role
+    shapes) — confirmed against the real safetensors header: `in_proj_qkv` `[10240,5120]`,
+    `in_proj_z` `[6144,5120]`, `in_proj_a`/`in_proj_b` `[48,5120]`, `conv1d` `[10240,1,4]`, `norm`
+    `[128]`, `out_proj` `[5120,6144]` — all match the `key_heads=16, key_dim=128, value_heads=48,
+    value_dim=128` formula exactly. Shipped as a fourth full rule class (matching the existing
+    three-class precedent in the file) rather than a shared alias table — the existing dialects
+    aren't table-driven either, so a table would have been a bigger, unprecedented refactor for no
+    behavioral gain. New `GatedDeltaFacts::linear_{key,value}_heads/{key,value}_dim/conv_kernel`
+    fields (separate from the factorized dialect's `key_heads`/`value_heads`) avoid `aliases()`
+    treating Qwen3.5's distinct key vs. value head counts as conflicting metadata for one fact.
+  - **Two real gaps in the generic/automatic path, not just "untested":** `partial_rotary_factor`
+    (Qwen3.5's actual config key) was never aliased to `rotary_fraction` — only the differently-named
+    `rotary_fraction` key was. And M-RoPE sectioning (`mrope_section`/`mrope_interleaved`) was *only*
+    wired in the per-model descriptor path (`src/model/descriptor/architecture.cpp`); the generic
+    `automatic` architecture that Qwen3.5 actually resolves through never constructed a
+    `MultiAxisRopeSpec` at all. `cpu_mrope_test.cpp`'s green baseline did not prove otherwise — it
+    only checks chunked-vs-scalar prefill self-consistency, not that mRoPE math is applied. Fixed
+    generically: `InferredRopePosition` gained `mrope_sections`/`mrope_interleaved`, `metadata.cpp`
+    aliases `partial_rotary_factor` and `mrope_section(s)`/`mrope_interleaved` (with the existing
+    `text_config.` fallback covering the nested-config case for free), and `rules_attention.cpp`
+    builds a `MultiAxisRopeSpec` when sections are present. New synthetic test in
+    `automatic_inference_test.cpp` proves the full combination (gated output, 0.5 rotary fraction,
+    interleaved 3-axis sections) resolves correctly through `ArchitectureCatalog::select` with no
+    descriptor JSON registered.
+  - **Vision merger width fixed**: `safetensor_projection.cpp` now derives it from
+    `merger.linear_fc2`'s own shape (`merger_out_`) instead of the hardcoded 2048; `qwen35_vision_test`
+    assertions are shape-derived (`width > 0`, consistent across calls) instead of hardcoded to 2048.
+  - **MTP tensor-name fit confirmed** by inspecting the real checkpoint's `model_mtp.safetensors`
+    shard: `mtp.layers.0.{input_layernorm,post_attention_layernorm,self_attn.{q,k,v,o}_proj,
+    self_attn.{q,k}_norm,mlp.{gate,up,down}_proj}` plus `mtp.fc`/`mtp.norm`/`mtp.pre_fc_norm_*` is a
+    dense (non-MoE) MTP layer that matches `mtp_weight_setup.cpp`'s existing dense-MLP MTP path
+    tensor-for-tensor. No code change needed; true end-to-end exercise still requires the real
+    checkpoint (Phase 6).
+  - **Unbound tensors are already tolerated**: the loader only ever requests specific known tensor
+    names from the repository — there is no "every tensor must be consumed" completeness check
+    anywhere in the codebase — so `k_scale`/`v_scale` and (later) the FP8/NVFP4 scale/packed tensors
+    simply go unread without error. No change needed.
+  - **New, real blocker for a *real-checkpoint* bf16 baseline, not previously identified:** the
+    checkpoint has no bf16 copies of `linear_attn`'s `in_proj_qkv`/`in_proj_z`/`out_proj`, every
+    `self_attn` q/k/v/o, or most `mlp` gate/up/down — they are natively `F8_E4M3` or NVFP4-packed on
+    disk, and celeg's `TensorDType` enum (`include/celeg/checkpoint/tensor.hpp`) has no FP8/NVFP4
+    variant at all today. So "ignore `quantization_config`, load bf16" is not actually possible
+    against the real checkpoint yet — it requires at minimum a dequantize-on-load path (read the raw
+    e4m3/nvfp4 bytes + scale tensors, upconvert to bf16 at load time), which is real work adjacent to
+    but distinct from Phase 3/4's actual GEMM kernels. The vision tower is the one part of the graph
+    that *is* genuinely bf16-native on disk (every `model.visual.*` linear is in `ignore`), so
+    `qwen35_vision_test` against `CELEG_QWEN35_MODEL` should work once the checkpoint is downloaded;
+    full text-generation verification against the real checkpoint is deferred until Phase 3/5 give the
+    loader a way to read the on-disk dtypes at all. Revise Phase 3/5 to include this dequant-on-load
+    step explicitly rather than assuming it falls out of the GEMM kernel work for free.
+  - Did not add an architecture descriptor JSON (`src/model/descriptor/`) — the generic inference
+    rules now express this config shape fully, including the mRoPE gap that was closed above.
 
 **Phase 3 — FP8 W8A8 kernel.**
 New `Fp8LinearStorage` (per-channel fp32 scale + e4m3 packed weight), new
@@ -196,11 +227,14 @@ coherence/consistency; add to `scripts/run_model_sweep.py`; write up in `docs/in
 
 ## Tests (per phase, added incrementally — not all upfront)
 - Phase 1: existing `ctest` suite stays green, zero behavior change (pure refactor).
-- Phase 2: a synthetic-checkpoint resolution test for the `linear_attn` dialect (follow
-  `cpu_mrope_test.cpp`'s pattern — a tiny hand-written `qwen3_5` checkpoint with one linear-attention
-  and one full-attention layer); shape-derived assertions in `qwen35_vision_test`; an MTP
-  compatibility check. Non-regression: existing LFM2/MiniCPM/Nanbeige models on both backends
-  (`ctest` + relevant sweep entries).
+- Phase 2 (done): `automatic_inference_test.cpp` gained a synthetic `qwen3_5` checkpoint (one
+  linear-attention + one full-attention layer, via `CheckpointView`/`ArchitectureCatalog::select`
+  rather than a full CPU run) asserting the `linear_attn` dialect's resolved geometry and the
+  full-attention gate+partial-rotary+interleaved-mRoPE combination (`MultiAxisRopeSpec`);
+  `layer_inference_rule_test.cpp`'s builtin-rule-count/specificity invariant updated for the new rule;
+  `qwen35_vision_test`'s width assertions made shape-derived. MTP fit confirmed by tensor-name
+  inspection, not a new test (no code changed). Full `ctest` (89/89) green throughout — non-regression
+  confirmed for existing models on both backends.
 - Phase 3 & 4: synthetic-weight kernel correctness tests (dequant/matmul vs. scalar reference) per
   format, before wiring into the loader.
 - Phase 5: a `quantization_config` parser test against a minimal `config.json` fragment matching the
@@ -221,16 +255,18 @@ coherence/consistency; add to `scripts/run_model_sweep.py`; write up in `docs/in
 - **Two new kernel formats at once** (FP8, NVFP4) is why Phase 2 deliberately establishes a bf16-only
   baseline first. Do not skip it. (Architecture risk is now much lower than first assessed — see
   below — so the bf16 phase should be short.)
-- **`linear_attn` shapes are inferred from config, not read from the checkpoint.** The name mapping
-  onto the fused gated-DeltaNet dialect is high-confidence, but the exact packing order inside
-  `in_proj_qkv` and the conv1d layout must be read from the safetensors header before binding work.
-  A packing-order mismatch produces plausible-looking but wrong output — the expensive failure mode.
-- **Full-attention feature combination is untested**: output gate + partial rotary (0.25) +
-  interleaved mRoPE together.
-- **Vision merger width is hardcoded to 2048** and this model needs 5120; the fix is small but the
-  test's assertions are hardcoded to the same constant, so both move together.
-- **MTP constraint fit is unverified** — confirm before assuming no MTP code changes; dropping MTP is
-  an acceptable fallback.
+- **Resolved in Phase 2:** `linear_attn` shapes confirmed against the real safetensors header
+  (packing order matches the fused-dialect formula exactly); the output-gate + partial-rotary +
+  interleaved-mRoPE combination now resolves correctly (and two real gaps in the generic path were
+  found and fixed along the way — see Phase 2 above, `partial_rotary_factor` and `mrope_section` were
+  simply never read before); vision merger width is shape-derived; MTP tensor names confirmed to match
+  the existing dense-MLP MTP path exactly.
+- **New: no dequant-on-load path for FP8/NVFP4-native tensors.** The real checkpoint has no bf16
+  copies of most linear weights — they are natively `F8_E4M3` or NVFP4-packed — and
+  `include/celeg/checkpoint/tensor.hpp`'s `TensorDType` has no FP8/NVFP4 variant. A true bf16 baseline
+  run against the real checkpoint (not just synthetic-checkpoint architecture resolution) needs this
+  before it's possible; fold it into Phase 3/5 rather than assuming it's free. Only the vision tower is
+  genuinely bf16-native on disk today.
 - **cuBLASLt fp8 and NVFP4 block-scaled APIs are both unproven in this codebase** — each phase
   includes a standalone spike specifically to de-risk this before integration.
 - **No CUTLASS fallback planned** — if cuBLASLt proves unworkable for either shape, that is a

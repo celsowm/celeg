@@ -116,6 +116,10 @@ public:
             position_.view.shape.size() != 2 || position_.view.shape[1] != hidden_) {
             throw std::invalid_argument("invalid safetensor vision patch layout");
         }
+        if (merger_fc2_.view.shape.size() != 2) {
+            throw std::invalid_argument("invalid safetensor vision merger layout");
+        }
+        merger_out_ = static_cast<int>(merger_fc2_.view.shape.at(0));
         for (int layer = 0; repository_->contains("model.visual.blocks." +
                                                    std::to_string(layer) + ".norm1.weight"); ++layer) {
             blocks_.push_back(layer);
@@ -176,8 +180,8 @@ public:
         for (float& value : projected) value = 0.5f * value *
             (1.0f + std::tanh(0.7978845608f * (value + 0.044715f * value * value * value)));
         projected = linear(merger_fc2_, merger_fc2_bias_, projected,
-                           merged_rows, 4 * hidden_, 2048);
-        VisualEmbedding result{2048, std::move(projected)};
+                           merged_rows, 4 * hidden_, merger_out_);
+        VisualEmbedding result{merger_out_, std::move(projected)};
         result.rope_positions.reserve(static_cast<size_t>(merged_rows));
         for (int y = 0; y < merged_h; ++y) for (int x = 0; x < merged_w; ++x)
             result.rope_positions.push_back({0, y, x});
@@ -252,6 +256,7 @@ private:
     Tensor patch_, patch_bias_, position_, merger_norm_, merger_bias_, merger_fc1_, merger_fc1_bias_, merger_fc2_, merger_fc2_bias_;
     std::vector<int> blocks_;
     int hidden_ = 0;
+    int merger_out_ = 0;
 };
 
 class SafetensorProjectionProviderFactory final : public IVisionProviderFactory {
