@@ -76,7 +76,6 @@ const LinearWeight* WeightLoader::load_linear_weight(
     }
     const int rows = static_cast<int>(tensor.shape[0]);
     const int cols = static_cast<int>(tensor.shape[1]);
-    const bool needs_rope_permutation = tensor.rows_rope_permuted;
 
     DeviceWeight weight;
     weight.shape = tensor.shape;
@@ -128,16 +127,8 @@ const LinearWeight* WeightLoader::load_linear_weight(
         }
 
         if (weight_mode_ == WeightMode::NativeGguf) {
-            std::vector<uint8_t> host_blocks;
-            const uint8_t* source_blocks =
-                reinterpret_cast<const uint8_t*>(tensor.data);
-            if (needs_rope_permutation) {
-                host_blocks.assign(source_blocks, source_blocks + tensor.bytes);
-                cuda_loader_detail::undo_rope_permutation_raw(host_blocks, rows, row_bytes);
-                source_blocks = host_blocks.data();
-            }
             DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
-            CELEG_CUDA(cudaMemcpy(raw_blocks.data(), source_blocks,
+            CELEG_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                                 tensor.bytes, cudaMemcpyHostToDevice));
             GgufLinearSegment segment;
             segment.blocks = raw_blocks.data();
@@ -159,19 +150,9 @@ const LinearWeight* WeightLoader::load_linear_weight(
         CELEG_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                             tensor.bytes, cudaMemcpyHostToDevice));
         weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
-        std::vector<__nv_bfloat16> transformed_host;
-        if (needs_rope_permutation) {
-            dequantize_gguf_to_bf16(tensor, transformed_host);
-            cuda_loader_detail::undo_rope_permutation(transformed_host, rows, cols);
-            CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), transformed_host.data(),
-                                transformed_host.size() * sizeof(__nv_bfloat16),
-                                cudaMemcpyHostToDevice));
-        } else {
-            launch_gguf_dequant(raw_blocks.data(), ggml_type,
-                               weight.bf16_storage.data(), rows, cols,
-                               nullptr);
-            CELEG_CUDA(cudaStreamSynchronize(nullptr));
-        }
+        launch_gguf_dequant(raw_blocks.data(), ggml_type,
+                            weight.bf16_storage.data(), rows, cols, nullptr);
+        CELEG_CUDA(cudaStreamSynchronize(nullptr));
 
         if (weight_mode_ == WeightMode::Int8 ||
             weight_mode_ == WeightMode::Int4) {

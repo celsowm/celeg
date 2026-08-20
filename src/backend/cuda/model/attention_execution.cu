@@ -183,7 +183,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         latent.rope_head_dim, position_device_.data(),
                         static_cast<float>(rope->theta), 1.0f,
                         qk_norm_epsilon, false,
-                        lower_cuda_rope_scaling(*rope), stream_.get());
+                        lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
                 }
                 decode_phase_profile().end(DecodePhase::RopeKv, stream_.get());
                 decode_phase_profile().begin(stream_.get());
@@ -270,7 +270,7 @@ void CudaCompiledModel::enqueue_decode_attention(
                         layout.query_heads, layout.key_value_heads, layout.head_dim,
                         position_device_.data(), static_cast<float>(rope->theta),
                         static_cast<float>(rope->rotary_fraction), qk_norm_epsilon,
-                        false, lower_cuda_rope_scaling(*rope), stream_.get());
+                        false, lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
                 }
             }
             launch_scale(q, layout.query_width(),

@@ -328,7 +328,7 @@ __global__ void dynamic_qk_norm_rope_kernel(
     int rows, int heads, int head_dim, int position_value,
     const int32_t* position_pointer, int mode, float theta,
     int rotary_pairs, float eps, bool normalize, CudaRopeScaling scaling,
-    float attention_scale) {
+    float attention_scale, RopePairingKind pairing) {
     const int block = blockIdx.x;
     const int row = block / heads;
     const int head = block % heads;
@@ -354,17 +354,23 @@ __global__ void dynamic_qk_norm_rope_kernel(
     const int position = mode == 2 ? row :
         resolved_position(position_value, position_pointer, mode == 1);
     for (int i = threadIdx.x; i < rotary_pairs; i += blockDim.x) {
-        const float a = bf16_float(vector[i]) * inv *
-            (normalize ? bf16_float(norm_weight[i]) : 1.0f);
-        const float b = bf16_float(vector[rotary_pairs + i]) * inv *
-            (normalize ? bf16_float(norm_weight[rotary_pairs + i]) : 1.0f);
+        /// AdjacentPairs rotates consecutive components (2i, 2i+1), matching
+        /// llama.cpp's "normal" RoPE and the row order its conversion writes;
+        /// SplitHalf rotates (i, rotary_pairs + i), the NEOX/HuggingFace order.
+        const int low = pairing == RopePairingKind::AdjacentPairs ? 2 * i : i;
+        const int high = pairing == RopePairingKind::AdjacentPairs
+            ? 2 * i + 1 : rotary_pairs + i;
+        const float a = bf16_float(vector[low]) * inv *
+            (normalize ? bf16_float(norm_weight[low]) : 1.0f);
+        const float b = bf16_float(vector[high]) * inv *
+            (normalize ? bf16_float(norm_weight[high]) : 1.0f);
         const float frequency = scaled_rope_frequency(
             theta, i, head_dim, position, scaling);
         const float angle = static_cast<float>(position) * frequency;
         const float c = cosf(angle);
         const float s = sinf(angle);
-        vector[i] = __float2bfloat16(a * c - b * s);
-        vector[rotary_pairs + i] = __float2bfloat16(b * c + a * s);
+        vector[low] = __float2bfloat16(a * c - b * s);
+        vector[high] = __float2bfloat16(b * c + a * s);
     }
     if (normalize) {
         for (int i = threadIdx.x + 2 * rotary_pairs; i < head_dim; i += blockDim.x) {
@@ -384,7 +390,7 @@ void launch_dynamic_qk_norm_rope(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int q_heads, int kv_heads, int head_dim, int position,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    CudaRopeScaling scaling, cudaStream_t stream) {
+    CudaRopeScaling scaling, RopePairingKind pairing, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     const float query_attention_scale = scaling.kind == 3
@@ -392,11 +398,12 @@ void launch_dynamic_qk_norm_rope(
         : 1.0f;
     dynamic_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, position, nullptr, 0,
-        rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
+        rope_theta, pairs, eps, normalize, scaling, query_attention_scale,
+        pairing);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, position, nullptr, 0,
-            rope_theta, pairs, eps, normalize, scaling, 1.0f);
+            rope_theta, pairs, eps, normalize, scaling, 1.0f, pairing);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -406,7 +413,7 @@ void launch_dynamic_qk_norm_rope_device(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int q_heads, int kv_heads, int head_dim, const int32_t* position,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    CudaRopeScaling scaling, cudaStream_t stream) {
+    CudaRopeScaling scaling, RopePairingKind pairing, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     const float query_attention_scale = scaling.kind == 3
@@ -414,11 +421,12 @@ void launch_dynamic_qk_norm_rope_device(
         : 1.0f;
     dynamic_qk_norm_rope_kernel<<<q_heads, threads, 0, stream>>>(
         q, q_norm, 1, q_heads, head_dim, 0, position, 1,
-        rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
+        rope_theta, pairs, eps, normalize, scaling, query_attention_scale,
+        pairing);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<kv_heads, threads, 0, stream>>>(
             k, k_norm, 1, kv_heads, head_dim, 0, position, 1,
-            rope_theta, pairs, eps, normalize, scaling, 1.0f);
+            rope_theta, pairs, eps, normalize, scaling, 1.0f, pairing);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -428,7 +436,7 @@ void launch_dynamic_qk_norm_rope_prefill(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int rows, int q_heads, int kv_heads, int head_dim,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    CudaRopeScaling scaling, cudaStream_t stream) {
+    CudaRopeScaling scaling, RopePairingKind pairing, cudaStream_t stream) {
     const int threads = attention_threads(head_dim);
     const int pairs = static_cast<int>(static_cast<float>(head_dim) * rotary_fraction) / 2;
     const float query_attention_scale = scaling.kind == 3
@@ -436,11 +444,12 @@ void launch_dynamic_qk_norm_rope_prefill(
         : 1.0f;
     dynamic_qk_norm_rope_kernel<<<rows * q_heads, threads, 0, stream>>>(
         q, q_norm, rows, q_heads, head_dim, 0, nullptr, 2,
-        rope_theta, pairs, eps, normalize, scaling, query_attention_scale);
+        rope_theta, pairs, eps, normalize, scaling, query_attention_scale,
+        pairing);
     if (k) {
         dynamic_qk_norm_rope_kernel<<<rows * kv_heads, threads, 0, stream>>>(
             k, k_norm, rows, kv_heads, head_dim, 0, nullptr, 2,
-            rope_theta, pairs, eps, normalize, scaling, 1.0f);
+            rope_theta, pairs, eps, normalize, scaling, 1.0f, pairing);
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

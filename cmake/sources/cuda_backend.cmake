@@ -55,7 +55,6 @@ set(CELEG_CUDA_BACKEND_SOURCES
     src/backend/cuda/model/gguf_dequant.cpp
     src/backend/cuda/model/weight_upload.cpp
     src/backend/cuda/model/linear_loader.cpp
-    src/backend/cuda/model/linear_layout.cpp
     src/backend/cuda/model/expert_loader.cpp
     src/backend/cuda/model/loader_experts.cu
     src/backend/cuda/model/experts.cu

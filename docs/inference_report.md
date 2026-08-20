@@ -1,8 +1,8 @@
 # CELEG Inference Report
 
-**Date**: 2026-08-19 (updated, round 2)
+**Date**: 2026-08-19 (updated, round 3)
 **Build**: linux-cpu-relwithdebinfo, linux-cuda-relwithdebinfo
-**Models tested**: 14 repos from HF cache (all cached repos; see Known Issues #5 for the GGUF quantization variants, which are *not* uniformly covered by a single row per repo)
+**Models tested**: 14 repos from HF cache (all cached repos; GGUF repos re-tested per quantization variant after the round-3 RoPE layout fix — see Fixes Applied #5 and Known Issues #5, since a single row per repo does *not* cover them uniformly)
 
 ---
 
@@ -11,19 +11,19 @@
 | Model | Format | CUDA Status | CPU Status |
 |-------|--------|-------------|------------|
 | LiquidAI/LFM2.5-230M | safetensors | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-230M-GGUF | GGUF (Q4_K_M only) | ❌ Garbled | ❌ Wrong answer (see Known Issues #5) |
+| LiquidAI/LFM2.5-230M-GGUF | GGUF (Q4_K_M only) | ✅ **Fixed** — "The capital of France is Paris." (see Fixes Applied #5) | ❌ Wrong answer (see Known Issues #5) |
 | LiquidAI/LFM2.5-350M | safetensors | ✅ Works | ✅ Works |
-| LiquidAI/LFM2.5-350M-GGUF | GGUF | ⚠️ Variant-dependent: BF16/F16 ✅, Q6_K/Q4_K_M garbled, Q8_0/Q5_K_M/Q4_0 hard error | ⚠️ Variant-dependent: Q6_K/Q5_K_M ✅, BF16/Q4_K_M/Q4_0 wrong, F16/Q8_0 fail (see Known Issues #5) |
+| LiquidAI/LFM2.5-350M-GGUF | GGUF | ✅ **Fixed** — BF16/F16/Q6_K/Q4_K_M all correct; Q8_0/Q5_K_M/Q4_0 still hard-error on unimplemented paths (see Known Issues #5) | ⚠️ Unchanged: Q6_K/Q5_K_M ✅, BF16/Q4_K_M/Q4_0 wrong, F16/Q8_0 fail (see Known Issues #5) |
 | LiquidAI/LFM2.5-VL-450M | safetensors | ❌ Wrong answer (see Known Issues #6) | ❌ Wrong answer (see Known Issues #6) |
 | ibm-granite/granite-4.1-3b | safetensors | ✅ **Fixed** — coherent, correct output (see Fixes Applied #4) | ✅ Works |
 | Nanbeige/Nanbeige4.2-3B | safetensors | ✅ **Fixed** — coherent, correct output | ✅ **Fixed** — coherent, correct output |
-| bartowski/Nanbeige_Nanbeige4.2-3B-GGUF | GGUF (Q4_K_M checked) | ❌ Garbled Chinese repetition | ⚠️ Coherent but doesn't reach the answer (see Known Issues #3, #5) |
+| bartowski/Nanbeige_Nanbeige4.2-3B-GGUF | GGUF (Q4_K_M checked) | ✅ **Fixed** — tracks the safetensors reference (see Fixes Applied #5) | ✅ **Fixed** — matches the safetensors reference (see Fixes Applied #5) |
 | flwrlabs/Lizzy-7B | safetensors | ⚠️ Improved by Fixes Applied #4; still degrades at long context | ⚠️ Runs, degrades at long context |
-| flwrlabs/Lizzy-7B-GGUF | GGUF (Q4_K_M checked) | ❌ Incoherent | ❌ Incoherent (see Known Issues #5) |
+| flwrlabs/Lizzy-7B-GGUF | GGUF (Q4_K_M checked) | ✅ **Fixed** — coherent (see Fixes Applied #5) | ❌ Incoherent (see Known Issues #5) |
 | google/gemma-4-E4B | safetensors | ⚠️ Attention-width resolution **fixed**; runs, but output is garbled — deeper architecture gap (see Known Issues #2) | ⚠️ Same |
 | inclusionAI/Ling-3.0-tiny | safetensors | ❌ `cublasCreate` fails (pre-existing, unrelated) | ✅ Works |
 | openbmb/MiniCPM5-1B | safetensors | ✅ **Fixed** — previously emitted `<font><font>` garbage on CUDA (see Fixes Applied #4) | ✅ Works |
-| openbmb/MiniCPM5-1B-GGUF | GGUF | ⚠️ Q4_K_M ✅, F16 wrong, Q8_0 hard error | ⚠️ Q8_0/Q4_K_M partial, F16 fails (see Known Issues #5) |
+| openbmb/MiniCPM5-1B-GGUF | GGUF | ⚠️ Q4_K_M ✅, F16 wrong, Q8_0 hard error | ✅ **Fixed** at Q4_K_M — byte-identical to CUDA; F16/Q8_0 unchanged (see Known Issues #5) |
 
 ---
 
@@ -57,6 +57,21 @@ All fixes this round are **generic**: implemented in the automatic/architecture-
    **Verified:** CUDA granite prefill logits now correlate **0.99993** with an fp32 HF Transformers reference (previously **−0.068**), with identical top-5 tokens; granite answers "The capital of France is Paris." on CUDA. MiniCPM5-1B went from `<font><font>` garbage to coherent reasoning output, LFM2.5-350M from a terse answer to a fluent one, and Lizzy-7B from fragments to structured reasoning. All 88 CUDA tests pass. A contract test (`query_prescale_cancels_the_kernel_side_factor` in `tests/cuda_attention_capability_test.cpp`) pins the invariant.
 
    **Process note:** this bug survived the previous round's sweep because `scripts/run_model_sweep.py` marks a model "OK" on exit code 0 plus the presence of `chat.template=` in the output — it never checks semantic coherence. Several "✅ Works" CUDA entries in earlier versions of the table were therefore never actually validated.
+5. **GGUF query/key rows were mismatched against the RoPE rotation — the root cause of the "variant-dependent GGUF" matrix in Known Issues #5.** Two defects stacked:
+
+   - **Q and K were treated differently according to their quantization type.** `WeightLoader::load_linear_weight` (`src/backend/cuda/model/linear_loader.cpp`) had three quantized exits, and only two of them un-permuted rows: the Q4_K/Q6_K native-GGUF and GPU-dequant branches did, while the shared host-dequant branch for Q2_K/Q3_K/Q4_0/Q5_0/**Q5_K**/Q8_0 did not. `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF` Q4_K_M stores `attn_q` as Q4_K/Q6_K but `attn_k` as Q5_K, so query and key ended up in *different* row layouts feeding the same attention. **This is what made correctness non-monotonic in bit width**: mixed-precision `_M` variants assign different quant types per tensor, so whether a variant broke depended on whether its Q/K split happened to straddle those branches. Uniform variants (LFM2, MiniCPM: Q and K the same type) never straddled it.
+   - **The "is it permuted?" decision was a blanket, name-based guess, and the two backends disagreed.** `gguf_tensor_resolver.cpp` flagged *every* GGUF tensor named `*.attn_q.weight`/`*.attn_k.weight` as llama.cpp-permuted regardless of architecture; CUDA then reordered rows at load while the CPU backend never did. llama.cpp only permutes for architectures whose reference graph uses "normal" RoPE (`llama_model_rope_type() == LLAMA_ROPE_TYPE_NORM`), so CUDA was corrupting every NEOX-style GGUF (lfm2, lizzy) while CPU was wrong for every NORM-style one (llama, minicpm, nanbeige).
+
+   **Fix (generic, no per-model configuration).** Since llama.cpp permutes exactly when its runtime rope is NORM, "rows stored permuted" and "rotate adjacent component pairs" are two spellings of one fact. celeg now never reorders weight rows and instead carries the layout in the existing `RopePositionSpec::pairing`, so both backends share one convention:
+   - `gguf_architecture_uses_adjacent_rope_pairs()` (`src/checkpoint/gguf_position_profile.cpp`) ports llama.cpp's `llama_model_rope_type()` NORM architecture list, living beside the existing `gguf_architecture_never_applies_rope()` at the same GGUF format boundary. Everything not in the list defaults to split-half, which is also the original HuggingFace order.
+   - `src/model/inference/metadata.cpp` consumes it as the default for `rope_pairing`; an explicit `rope_pairing` in a checkpoint still wins, and the choice is recorded as resolution evidence.
+   - All row-reordering was deleted: `undo_rope_permutation{,_raw}` (`src/backend/cuda/model/linear_layout.cpp`, removed entirely — it also hardcoded `head_dim = 128` regardless of the model), the `needs_rope_permutation` branches in `linear_loader.cpp`, and the `rows_rope_permuted` plumbing through `HostTensorView`/`GgufTensorReference`. The first defect above is now unrepresentable rather than merely fixed.
+   - **Also fixed a latent gap found while verifying:** the CUDA *prefill* rope kernel (`dynamic_qk_norm_rope_kernel`, `src/backend/cuda/kernels/rope.cuh`) hardcoded split-half pairing and `launch_dynamic_qk_norm_rope_prefill` took no `RopePairingKind`, while decode already branched on it. Any model resolving to `AdjacentPairs` silently got split-half in prefill and adjacent-pairs in decode. The kernel and all three dynamic launchers now take the pairing explicitly.
+
+   Verified (prompt "What is the capital of France?"): Nanbeige GGUF Q4_K_M now tracks the safetensors reference on **both** backends (CPU output matches it near token-for-token; previously CUDA emitted `许许多 不仅如此Zbl耶路...` and CPU drifted into degenerate output). MiniCPM5-1B-GGUF Q4_K_M is unchanged on CUDA and now **byte-identical** on CPU. LFM2.5-350M-GGUF Q6_K/Q4_K_M and LFM2.5-230M-GGUF Q4_K_M go from garbled to correct on CUDA, and Lizzy-7B-GGUF becomes coherent on CUDA. Safetensors is untouched — Nanbeige safetensors CUDA output is byte-identical to before, granite still answers correctly. 79/79 CPU and 89/89 CUDA tests pass, including a new `gguf_rope_layout_test` that proves permute+AdjacentPairs is equivalent to SplitHalf and locks the architecture table.
+
+   *Method note:* an empirical detector (scoring rope-pair row-norm similarity) was prototyped first to avoid any architecture list, but it failed validation on the known-answer corpus — it separated MiniCPM confidently (5.4×) yet was inconclusive for LFM2 (1.03×), because it mostly measures generic adjacent-channel correlation rather than rope pairing. The authoritative llama.cpp table was used instead.
+
 
 ---
 
@@ -69,23 +84,28 @@ All fixes this round are **generic**: implemented in the automatic/architecture-
    - **Not fixed — separate, larger issue:** even with resolution succeeding, generation output is garbled nonsense on both backends (confirmed with a raw, non-chat-templated prompt, ruling out a chat-template artifact). Inspecting `model.safetensors` shows each language-model layer carries tensors celeg has no concept of at all: `per_layer_input_gate.weight [256, 2560]`, `per_layer_projection.weight [2560, 256]`, `post_per_layer_input_norm.weight`, and a scalar `layer_scalar [1]` — a Gemma3n-style "per-layer embeddings" (PLE) mechanism, where each layer mixes in its own small embedding table (`vocab_size_per_layer_input=262144` × `hidden_size_per_layer_input=256`) through a gate/projection into the residual stream, on top of ordinary attention+MLP. celeg's graph has no tensor role, embedding table, or residual-injection point for this at all — it's a new mixer-adjacent primitive, not a config nuance, and would need a new tensor role, a second embedding table load path, and new residual-injection execution code in both the CPU and CUDA backends. Also unaddressed: `num_kv_shared_layers=18` (KV-cache sharing across layers) and the dual `rope_theta`/`rope_type` per attention-pattern (`rope_theta=1000000`+`proportional` for full_attention vs `rope_theta=10000`+`default` for sliding_attention — automatic resolution currently only picks one theta for the whole model and silently ignores the conflict for the other layer type, and treats `"proportional"` as no scaling at all). Also, this specific cached snapshot ships no chat template at all (no `chat_template` field anywhere, no companion `.jinja` file) — a data gap in the mirrored checkpoint, not a celeg bug; `--chat-template-file` is the correct workaround, separate from the numerical issue above.
    - **Scope call:** the per-layer-embedding mechanism, KV-sharing, and dual-RoPE-schedule gaps are a substantially larger, multi-part architecture feature (new tensor roles + new embedding table + new backend execution code) well beyond the original attention-width bug. Not attempted further this round; flagging with the concrete tensor/config evidence above for future work.
 
-3. **bartowski/Nanbeige_Nanbeige4.2-3B-GGUF — quality still trails the safetensors build.** The tokenizer/architecture crashes are fixed (see above) and output is now coherent, but a 60-token generation didn't reach the final "Paris" answer within budget (it stayed in `<think>` reasoning). Likely just the combined effect of GGUF q4_k/q6_k quantization and the looped architecture doubling effective quantization error depth (each physical layer's weights are read twice per forward pass) — the same effect already visible as a CPU-vs-CUDA-bf16 quality gap on the safetensors build. Not separately investigated further.
+3. **~~bartowski/Nanbeige_Nanbeige4.2-3B-GGUF — quality still trails the safetensors build.~~ RESOLVED (Fixes Applied #5).** This was previously attributed to quantization error compounded by the looped architecture reading each physical layer twice. That was wrong: the actual cause was the Q/K RoPE row-layout mismatch, which for this checkpoint was doubly broken because its Q4_K_M variant stores `attn_q` and `attn_k` in *different* quantization types and the loader un-permuted only one of them. Both backends now track the safetensors reference.
 
 4. **inclusionAI/Ling-3.0-tiny (CUDA) — `cublasCreate` fails.** Pre-existing, unrelated to this round's changes (verified: identical failure mode on unmodified code). CPU backend works fine.
 
-5. **GGUF support is variant-dependent and largely broken; earlier "✅ Works" rows were sweep false positives.** Every GGUF row in previous versions of this table was validated only by `scripts/run_model_sweep.py`, which marks a model OK on exit code 0 plus the presence of `chat.template=` in the output and never checks semantic coherence — and only ever at one quantization. Re-tested by hand (prompt: "What is the capital of France?"), the LFM2.5-350M-GGUF ladder alone gives seven different outcomes:
+5. **A separate CPU-side GGUF quantization defect remains for NEOX-style architectures.** The Q/K row-layout bug that produced most of this table's earlier chaos is fixed (Fixes Applied #5), and CUDA GGUF is now correct wherever a code path exists. What is left is a genuinely different fault, visible only on CPU and only for architectures celeg leaves in split-half order (so the layout fix is a no-op for them). Re-tested by hand after the fix (prompt: "What is the capital of France?"), LFM2.5-350M-GGUF:
 
    | Variant | CPU | CUDA |
    |---|---|---|
    | BF16 | ❌ wrong ("a country called France") | ✅ correct |
    | F16 | ❌ `CPU load_matrix 'token_embd.weight': ... must be BF16 or F32` | ✅ correct |
    | Q8_0 | ❌ empty output | ❌ `mixed dense/unsupported quantized concat ... feed_forward.w13.weight` |
-   | Q6_K | ✅ correct | ❌ garbled repetition |
+   | Q6_K | ✅ correct | ✅ **correct (was garbled)** |
    | Q5_K_M | ✅ correct | ❌ `mixed dense/unsupported quantized concat` |
-   | Q4_K_M | ❌ wrong | ❌ garbled repetition |
+   | Q4_K_M | ❌ wrong | ✅ **correct (was garbled)** |
    | Q4_0 | ❌ wrong (answers about the United Kingdom) | ❌ `execution plan requires INT8 weights` |
 
-   The same shape repeats elsewhere: MiniCPM5-1B-GGUF is fine at Q4_K_M on CUDA but wrong at F16 and errors at Q8_0; Nanbeige_Nanbeige4.2-3B-GGUF Q4_K_M emits pure garbage on CUDA (repeated `也是十分`/`不仅如此`); Lizzy-7B-GGUF Q4_K_M is incoherent on both backends. Note the safetensors build of the *same* model is correct in every one of these cases, and CUDA GGUF BF16/F16 is correct — so this is not the attention-scale bug fixed in Fixes Applied #4, and it is not merely quantization loss: correctness is non-monotonic in bit width (Q6_K/Q5_K_M pass on CPU while the higher-precision BF16 and Q8_0 fail), which points at per-quant-format dequantization/packing bugs plus at least two unimplemented CUDA paths (mixed dense/quantized concat for fused `w13`, and Q4_0). Not investigated further this round; documented so the table stops overstating GGUF support.
+   Two distinct things remain here, and they should not be conflated:
+
+   - **CPU, NEOX architectures only.** LFM2.5-230M/350M-GGUF and Lizzy-7B-GGUF still produce wrong or empty output on CPU at several quantizations, while the *same files* are now correct on CUDA and the safetensors builds are correct on both. Correctness is still non-monotonic in bit width on this backend (Q6_K/Q5_K_M pass while the higher-precision BF16 and Q8_0 fail), which points at per-quant-format dequantization/packing bugs in `src/backend/cpu/kernels/gguf*.cpp` rather than anything positional. Note the NORM-architecture GGUFs (Nanbeige, MiniCPM) *are* now correct on CPU, so this is not a blanket CPU-GGUF failure.
+   - **CUDA, two unimplemented paths.** `mixed dense/unsupported quantized concat` for the fused `w13` gate/up tensor (hit by Q8_0 and Q5_K_M) and `execution plan requires INT8 weights` for Q4_0 are hard errors from missing code, not wrong math — they fail loudly and are straightforward feature gaps.
+
+   Neither is investigated further this round. Also unchanged: `scripts/run_model_sweep.py` still marks a model OK on exit code 0 plus a `chat.template=` line and never checks semantic coherence, which is why every GGUF row in earlier versions of this table was a false positive; it should be taught a coherence check before it is trusted again.
 
 6. **LiquidAI/LFM2.5-VL-450M — wrong answers on both backends.** Also a sweep false positive. Answers "The capital city of France is a city in the United States of America." (CPU, both with and without the int4 pack cache) and "The capital city of France is a country in Europe, located in Europe." (CUDA). Its non-vision sibling LFM2.5-350M answers correctly on the same backends, so this is unlikely to be model capacity alone and more likely a resolution gap in the VL checkpoint's text tower. Not root-caused.
 

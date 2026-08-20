@@ -78,7 +78,7 @@ void run_projected_latent_attention(
             rows, layout.query_heads, 1, latent.rope_head_dim,
             static_cast<float>(rope->theta), 1.0f,
             model.resources_.program_.final_norm.epsilon, false,
-            lower_cuda_rope_scaling(*rope), model.stream_.get());
+            lower_cuda_rope_scaling(*rope), rope->pairing, model.stream_.get());
     }
     prof.end(PrefillPhase::RopeKv, model.stream_.get());
 

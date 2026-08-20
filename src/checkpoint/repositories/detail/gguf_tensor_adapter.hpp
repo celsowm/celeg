@@ -8,8 +8,7 @@ namespace celeg {
 
 class GgufTensorViewAdapter final {
 public:
-    static HostTensorView adapt(const GgufTensorView& view,
-                                bool rows_rope_permuted);
+    static HostTensorView adapt(const GgufTensorView& view);
     static HostTensorView adapt_expert(const GgufTensorView& packed,
                                        const GgufTensorReference& reference);
 };

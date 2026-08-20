@@ -9,14 +9,8 @@ namespace celeg {
 
 namespace {
 
-bool native_rows_rope_permuted(std::string_view name) {
-    return name.ends_with(".attn_q.weight") ||
-        name.ends_with(".attn_k.weight");
-}
-
-HostTensorView adapt_native_tensor(const GgufTensorView& view, std::string_view name,
-                                   bool rows_rope_permuted) {
-    HostTensorView result = GgufTensorViewAdapter::adapt(view, rows_rope_permuted);
+HostTensorView adapt_native_tensor(const GgufTensorView& view, std::string_view name) {
+    HostTensorView result = GgufTensorViewAdapter::adapt(view);
     if (name.ends_with(".shortconv.conv.weight") && result.shape.size() == 2) {
         result.shape.insert(result.shape.begin() + 1, 1);
     }
@@ -49,8 +43,7 @@ bool GgufTensorResolver::contains(std::string_view name) const {
 
 HostTensorView GgufTensorResolver::tensor(std::string_view name) const {
     if (file_->contains_tensor(name)) {
-        return adapt_native_tensor(file_->tensor(name), name,
-                                   native_rows_rope_permuted(name));
+        return adapt_native_tensor(file_->tensor(name), name);
     }
 
     const GgufTensorReference reference =
@@ -63,7 +56,7 @@ HostTensorView GgufTensorResolver::tensor(std::string_view name) const {
     if (reference.is_expert_slice()) {
         return GgufTensorViewAdapter::adapt_expert(view, reference);
     }
-    return adapt_native_tensor(view, reference.native_name, reference.rows_rope_permuted);
+    return adapt_native_tensor(view, reference.native_name);
 }
 
 std::vector<std::string> GgufTensorResolver::names() const {

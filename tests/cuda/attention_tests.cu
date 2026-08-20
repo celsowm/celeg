@@ -28,7 +28,8 @@ void run_attention_tests(celeg::CudaStream& stream) {
     CELEG_CUDA(cudaMemcpy(dn.data(), norm.data(), dn.bytes(), cudaMemcpyHostToDevice));
     celeg::launch_dynamic_qk_norm_rope(
         dq.data(), dk.data(), dn.data(), dn.data(), 1, 1, 4, 0,
-        10000.0f, 1.0f, 1e-5f, true, celeg::CudaRopeScaling{}, stream.get());
+        10000.0f, 1.0f, 1e-5f, true, celeg::CudaRopeScaling{},
+        celeg::RopePairingKind::SplitHalf, stream.get());
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     CELEG_CUDA(cudaMemcpy(q.data(), dq.data(), dq.bytes(), cudaMemcpyDeviceToHost));
     CELEG_CUDA(cudaMemcpy(k.data(), dk.data(), dk.bytes(), cudaMemcpyDeviceToHost));

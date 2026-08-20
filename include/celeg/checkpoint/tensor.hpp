@@ -28,7 +28,6 @@ struct HostTensorView {
     const std::byte* data = nullptr;
     size_t bytes = 0;
     TensorBlockEncoding block_encoding;
-    bool rows_rope_permuted = false;
 };
 
 }

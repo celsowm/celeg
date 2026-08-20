@@ -71,14 +71,14 @@ void launch_dynamic_qk_norm_rope(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int q_heads, int kv_heads, int head_dim, int position,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    CudaRopeScaling scaling,
+    CudaRopeScaling scaling, RopePairingKind pairing,
     cudaStream_t stream);
 void launch_dynamic_qk_norm_rope_device(
     __nv_bfloat16* q, __nv_bfloat16* k,
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int q_heads, int kv_heads, int head_dim, const int32_t* position,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    CudaRopeScaling scaling,
+    CudaRopeScaling scaling, RopePairingKind pairing,
     cudaStream_t stream);
 void launch_dynamic_mrope_qk_norm_rope(
     __nv_bfloat16* q, __nv_bfloat16* k,
@@ -92,7 +92,7 @@ void launch_dynamic_qk_norm_rope_prefill(
     const __nv_bfloat16* q_norm, const __nv_bfloat16* k_norm,
     int rows, int q_heads, int kv_heads, int head_dim,
     float rope_theta, float rotary_fraction, float eps, bool normalize,
-    CudaRopeScaling scaling,
+    CudaRopeScaling scaling, RopePairingKind pairing,
     cudaStream_t stream);
 
 }

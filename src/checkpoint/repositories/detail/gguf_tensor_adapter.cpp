@@ -22,11 +22,8 @@ HostTensorView host_view(const GgufTensorView& view) {
 
 }
 
-HostTensorView GgufTensorViewAdapter::adapt(const GgufTensorView& view,
-                                            bool rows_rope_permuted) {
-    HostTensorView result = host_view(view);
-    result.rows_rope_permuted = rows_rope_permuted;
-    return result;
+HostTensorView GgufTensorViewAdapter::adapt(const GgufTensorView& view) {
+    return host_view(view);
 }
 
 HostTensorView GgufTensorViewAdapter::adapt_expert(

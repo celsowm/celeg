@@ -108,7 +108,7 @@ void CudaCompiledModel::run_mtp_forward_device(const int32_t* token_device) {
             layout.query_heads, layout.key_value_heads, layout.head_dim,
             position_device_.data(), static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction), qk_epsilon,
-            false, lower_cuda_rope_scaling(*rope), stream);
+            false, lower_cuda_rope_scaling(*rope), rope->pairing, stream);
     }
     launch_scale(q, layout.query_width(),
                  cuda_query_prescale(layout), stream);

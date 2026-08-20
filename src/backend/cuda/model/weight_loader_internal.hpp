@@ -8,10 +8,6 @@
 
 namespace celeg::cuda_loader_detail {
 
-void undo_rope_permutation(std::vector<__nv_bfloat16>& values, int rows, int cols);
-void undo_rope_permutation_raw(std::vector<uint8_t>& blocks,
-                               int rows, size_t row_bytes);
-
 inline size_t checked_element_count(const std::vector<int64_t>& shape) {
     if (shape.empty()) {
         throw std::runtime_error("weight shape is empty");

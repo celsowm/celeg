@@ -95,7 +95,7 @@ void run_regular_attention(
             static_cast<float>(rope->theta),
             static_cast<float>(rope->rotary_fraction),
             qk_epsilon, false,
-            lower_cuda_rope_scaling(*rope), model.stream_.get());
+            lower_cuda_rope_scaling(*rope), rope->pairing, model.stream_.get());
     }
     launch_scale(
         workspace.prefill_q_.data(),

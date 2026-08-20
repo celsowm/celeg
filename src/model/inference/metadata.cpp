@@ -652,6 +652,17 @@ NormalizedModelMetadata normalize_model_metadata(const CheckpointMetadata& metad
             pairing = RopePairingKind::AdjacentPairs;
             result.evidence.push_back({EvidenceKind::FormatGuarantee, "xsa_projection",
                                        "RoPE pairing = adjacent_pairs"});
+        } else if (metadata.is_gguf() &&
+                   gguf_architecture_uses_adjacent_rope_pairs(metadata.architecture_type())) {
+            /// llama.cpp's conversion permuted this architecture's query/key
+            /// rows into consecutive-pair order, so the pairing has to match the
+            /// stored layout. celeg never reorders the rows back at load time --
+            /// the two formulations are equivalent, and expressing it here keeps
+            /// every backend on one convention.
+            pairing = RopePairingKind::AdjacentPairs;
+            result.evidence.push_back({EvidenceKind::FormatGuarantee,
+                                       metadata.architecture_type(),
+                                       "GGUF architecture stores adjacent-pair Q/K rows"});
         }
         result.attention.position_encoding = InferredRopePosition{
             *rope_theta,

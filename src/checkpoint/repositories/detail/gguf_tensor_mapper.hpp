@@ -8,7 +8,6 @@ namespace celeg {
 struct GgufTensorReference {
     std::string native_name;
     int expert = -1;
-    bool rows_rope_permuted = false;
 
     bool is_expert_slice() const noexcept { return expert >= 0; }
 };

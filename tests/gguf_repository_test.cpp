@@ -183,12 +183,15 @@ int main() {
         CELEG_TEST_CHECK(shortconv_kernel.shape == std::vector<int64_t>({2, 1, 3}));
         const celeg::HostTensorView native_query =
             repository.tensor("blk.0.attn_q.weight");
-        CELEG_TEST_CHECK(native_query.rows_rope_permuted);
         CELEG_TEST_CHECK(native_query.shape == std::vector<int64_t>({2, 4}));
 
         const celeg::HostTensorView query = repository.tensor(
             "model.layers.0.self_attn.q_proj.weight");
-        CELEG_TEST_CHECK(query.rows_rope_permuted);
+        /// Q/K rows are handed back exactly as stored: celeg expresses
+        /// llama.cpp's row order through RopePairingKind at compute time
+        /// instead of reordering weights at load time, so both the native and
+        /// the canonical spelling must agree byte-for-byte with the file.
+        CELEG_TEST_CHECK(query.data == native_query.data);
         CELEG_TEST_CHECK(query.shape == std::vector<int64_t>({2, 4}));
 
         const celeg::HostTensorView expert = repository.tensor(

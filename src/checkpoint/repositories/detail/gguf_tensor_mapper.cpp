@@ -55,15 +55,11 @@ std::optional<GgufTensorReference> resolve_expert(std::string_view canonical_nam
 
     return GgufTensorReference{
         block_name(layer, native_suffix),
-        std::stoi(rest.substr(0, dot)),
-        false};
+        std::stoi(rest.substr(0, dot))};
 }
 
 GgufTensorReference layer_tensor(int layer, std::string_view suffix) {
-    return GgufTensorReference{
-        block_name(layer, suffix),
-        -1,
-        suffix == "attn_q.weight" || suffix == "attn_k.weight"};
+    return GgufTensorReference{block_name(layer, suffix), -1};
 }
 
 }
@@ -79,21 +75,21 @@ GgufTensorReference GgufTensorNameMapper::resolve(std::string_view canonical_nam
     if (canonical_name == "backbone.embeddings.weight" ||
         canonical_name == "model.backbone.embeddings.weight" ||
         canonical_name == "model.embed_tokens.weight") {
-        return {"token_embd.weight", -1, false};
+        return {"token_embd.weight", -1};
     }
     if (canonical_name == "model.embedding_norm.weight") {
-        return {"token_embd_norm.weight", -1, false};
+        return {"token_embd_norm.weight", -1};
     }
     if (canonical_name == "backbone.norm_f.weight" ||
         canonical_name == "backbone.norm.weight" ||
         canonical_name == "model.backbone.norm_f.weight" ||
         canonical_name == "model.backbone.norm.weight" ||
         canonical_name == "model.norm.weight") {
-        return {"output_norm.weight", -1, false};
+        return {"output_norm.weight", -1};
     }
     if (canonical_name == "lm_head.weight" ||
         canonical_name == "model.lm_head.weight") {
-        return {"output.weight", -1, false};
+        return {"output.weight", -1};
     }
 
     if (const auto expert = resolve_expert(canonical_name)) return *expert;

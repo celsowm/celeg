@@ -367,7 +367,7 @@ void CudaCompiledModel::run_token_latent_attention_paged(
             nullptr, nullptr, layout.query_heads, 1, latent.rope_head_dim,
             session_.position_, static_cast<float>(rope->theta), 1.0f,
             resources_.program_.final_norm.epsilon, false,
-            lower_cuda_rope_scaling(*rope), stream_.get());
+            lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
     }
     const int cache_model_layer = attention.kv_owner_layer >= 0
         ? attention.kv_owner_layer : layer_index;
@@ -490,7 +490,7 @@ void CudaCompiledModel::run_token_attention(
                 layout.query_heads, layout.key_value_heads, layout.head_dim,
                 session_.position_, static_cast<float>(rope->theta),
                 static_cast<float>(rope->rotary_fraction), qk_epsilon,
-                false, lower_cuda_rope_scaling(*rope), stream_.get());
+                false, lower_cuda_rope_scaling(*rope), rope->pairing, stream_.get());
         }
     }
     launch_scale(q, layout.query_width(),
