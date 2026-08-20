@@ -6,8 +6,8 @@ multi-phase, multi-session effort — see Sequencing. Update the phase checklist
 
 - [x] Phase 1 — per-tensor quant-format infrastructure (pure refactor)
 - [x] Phase 2 — `linear_attn` binding + vision/MTP fit, running in bf16
-- [ ] Phase 3 — FP8 W8A8 kernel
-- [ ] Phase 4 — NVFP4 W4A4 kernel
+- [x] Phase 3 — FP8 W8A8 kernel
+- [x] Phase 4 — NVFP4 W4A4 kernel (dequant-to-bf16 fallback; native block-scaled tensor-core path deferred, see notes)
 - [ ] Phase 5 — wire real `quantization_config` into the per-tensor resolver
 - [ ] Phase 6 — end-to-end verification against the real checkpoint + docs
 
@@ -263,15 +263,66 @@ from). Findings, on this machine's RTX 5090 (sm_120) / CUDA 13.2:*
     and `n=3` (naive fallback) shape against the same reference to cover both paths.
 
 **Phase 4 — NVFP4 W4A4 kernel.**
-`Nvfp4LinearStorage` (packed e2m1 + per-16-block `UE4M3` scale + per-tensor fp32 global scale),
-`LinearKernelKind::Nvfp4W4A4`, a dynamic per-16-block activation-quantization kernel to NVFP4 (using
-the checkpoint's static `input_global_scale` as calibration), and a cuBLASLt block-scaled matmul with
-`CUDA_R_4F_E2M1` operands and `CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3` scale mode (available: CUDA
-13.2, RTX 5090/sm_120). **Spike this standalone first** to pin down exact descriptor attributes,
-K-dimension alignment/padding requirements, and confirm the block-scaled API behaves as documented
-for this shape — resolve empirically, don't guess. Validate against a scalar e2m1-LUT reference.
-Note the `weights.actorder: "static"` flag in `group_1`; confirm whether it implies a permutation
-that must be undone at load time.
+
+*Standalone cuBLASLt spike, done (throwaway scratchpad program at `/tmp/.../scratchpad/nvfp4spike/`,
+not committed).* Findings, on this machine's RTX 5090 (sm_120) / CUDA 13.2:
+  - **The `VEC16_UE4M3` block-scale mode is not optional for `CUDA_R_4F_E2M1`.** Unlike fp8 (which has
+    a working *unscaled* matmul path), calling `cublasLtMatmulAlgoGetHeuristic` on a raw
+    `CUDA_R_4F_E2M1 × CUDA_R_4F_E2M1` matmul with no scale mode set returns `CUBLAS_STATUS_INVALID_VALUE`
+    (status 7) with zero results — there is no "unscaled fp4 matmul + manual scale kernel" pivot
+    available the way there was for fp8. Block scaling has to go through cuBLASLt's native mechanism
+    or not through cuBLASLt at all.
+  - **With `A_SCALE_MODE`/`B_SCALE_MODE = VEC16_UE4M3` set and per-16-block UE4M3 scale tensors
+    supplied in the "obvious" row-major layout (`scales[row * (k/16) + block]`, one scale per row per
+    16-element chunk of the row, matching the header comment "for each 16-element block in the
+    innermost dimension"), `cublasLtMatmulAlgoGetHeuristic` *does* find an algorithm and
+    `cublasLtMatmul` runs without error** — but the result is wrong: ~28% mean relative error against
+    a scalar reference built from the exact same quantized e2m1 values and e4m3-rounded scales. At a
+    small/unaligned shape (m=4,n=8,k=32) the failure mode is worse than wrong numbers: all but one
+    output element come back as exact `0.0`, which is a silent-corruption failure mode, not a clean
+    refusal like fp8's small-n case.
+  - Ruled out as the cause (both verified independently before concluding it's the scale layout):
+    e2m1 nibble pack order / encode-decode rounding (re-derived using CUDA's own
+    `__nv_cvt_float_to_fp4`/`__nv_cvt_fp4_to_halfraw` intrinsics instead of a hand-rolled LUT — same
+    result), and A/B scale-pointer assignment (swapping A_SCALE_POINTER/B_SCALE_POINTER made the error
+    far worse, confirming the original assignment was the right direction, not a fix).
+  - **Conclusion: `CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3`'s scale-factor tensor almost certainly
+    requires a specific physical (likely tile-swizzled) layout that isn't documented in the local CUDA
+    13.2 headers** (the header says only "see documentation for layout information" — no such doc is
+    present locally, and this is a known industry pain point: CUTLASS's own NVFP4 block-scaled GEMM
+    recipes compute this layout via a dedicated `Sm1xxBlockScaledConfig`-style helper rather than a
+    plain row-major array). Guessing at the swizzle risks a kernel that runs and passes a coarse test
+    but is subtly wrong on real checkpoint weights — not acceptable for a correctness-critical GEMM.
+
+*Kernel + dispatch wiring, done — via a safe fallback, not the native block-scaled path.* Given the
+above, this phase's `Nvfp4LinearStorage`/`LinearKernelKind::Nvfp4W4A4` do **not** call cuBLASLt's
+block-scaled fp4 matmul. Instead, mirroring the `bf16_fallback` convention `Int4LinearStorage`/
+`Int8LinearStorage` already use for m>1:
+  - `Nvfp4LinearStorage` (`include/celeg/detail/model/linear_weights.hpp`): packed e2m1 (2 values/byte)
+    + one `__nv_fp8_e4m3`-typed UE4M3 scale per `kNvfp4BlockSize`(=16)-element block + one per-tensor
+    fp32 global scale (`dequant = e2m1_value * block_scale * global_scale`, matching compressed-tensors'
+    two-level NVFP4 scaling). Added to the `LinearStorage` variant with a `slice_rows()` branch.
+  - `launch_dequant_nvfp4` (`src/backend/cuda/kernels/linear.cuh`): dequantizes the packed weight to
+    bf16 (using the same `__nv_cvt_fp4_to_halfraw` intrinsic validated by the spike), once per
+    `GemmDispatcher::linear_nvfp4_w4a4` call into a cached workspace buffer.
+  - `GemmDispatcher::linear_nvfp4_w4a4` dequantizes the weight, then runs the *existing* bf16 GEMV
+    (m=1) / cuBLAS(Lt) (m>1) path — no new matmul kernel, reusing everything Bf16CublasLt/Bf16Cublas
+    already exercise. Activations are left in bf16 (not also quantized to fp4); this is closer to
+    "W4A16 implemented via on-the-fly dequant" than a true 4-bit-tensor-core W4A4 GEMM.
+  - New test in `tests/cuda_kernels_test.cu` builds a packed e2m1+UE4M3-scale synthetic weight,
+    exercises the full `GemmDispatcher::linear()` path with `LinearKernelKind::Nvfp4W4A4`, and checks
+    against a scalar reference — including a deliberately *unaligned* `n=6` (this path has no
+    cuBLASLt-shape constraint since it never calls the fp4 matmul).
+  - **Explicitly deferred, not done**: the native `CUDA_R_4F_E2M1`/`VEC16_UE4M3` tensor-core matmul.
+    Revisiting this needs either (a) the actual NVIDIA scale-factor swizzle specification/sample code
+    (e.g. from CUTLASS's block-scaled GEMM examples) to construct the scale tensor correctly, or (b) a
+    decision that the dequant-to-bf16 fallback's throughput is acceptable and the native path isn't
+    worth chasing. Either way, don't attempt it again without an authoritative reference for the scale
+    layout — this session's empirical result is that "correct math, plausible layout, no crash" is not
+    sufficient evidence the layout is right.
+  - Note the `weights.actorder: "static"` flag in `group_1` of the real checkpoint's
+    `quantization_config`; still unconfirmed whether it implies a permutation that must be undone at
+    load time (Phase 5 concern, not resolved here).
 
 **Phase 5 — Wire the real `quantization_config` into the Phase-1 per-tensor resolver.**
 Parse `config_groups` (`format: "float-quantized"` → FP8, `"nvfp4-pack-quantized"` → NVFP4) plus the

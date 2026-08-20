@@ -511,6 +511,108 @@ int main() {
         }
     }
 
+    // NVFP4 W4A4: exercises GemmDispatcher's LinearKernelKind::Nvfp4W4A4
+    // path (dequantize packed e2m1 weight to bf16, then run the existing
+    // bf16 GEMM) end to end. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
+    // Phase 4 for why this doesn't use cuBLASLt's native block-scaled fp4
+    // matmul (undocumented scale-tensor layout, empirically wrong when
+    // assumed row-major).
+    {
+        constexpr int m = 4;
+        constexpr int n = 6;
+        constexpr int k = 32;
+        constexpr int block = celeg::kNvfp4BlockSize;
+        constexpr int blocks_per_row = k / block;
+        static const float kE2m1Lut[8] = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f};
+        auto encode_e2m1 = [](float v) -> uint8_t {
+            const bool sign = v < 0.0f;
+            const float av = std::fabs(v);
+            int best = 0;
+            float best_err = std::fabs(av - kE2m1Lut[0]);
+            for (int i = 1; i < 8; ++i) {
+                const float err = std::fabs(av - kE2m1Lut[i]);
+                if (err < best_err) { best_err = err; best = i; }
+            }
+            return static_cast<uint8_t>(best | (sign ? 0x8 : 0));
+        };
+        auto decode_e2m1 = [](uint8_t nibble) -> float {
+            const bool sign = nibble & 0x8;
+            const float mag = kE2m1Lut[nibble & 0x7];
+            return sign ? -mag : mag;
+        };
+
+        std::mt19937 rng(13);
+        std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+        std::vector<__nv_bfloat16> x(m * k);
+        for (auto& v : x) v = to_bf16(dist(rng));
+
+        std::vector<float> w(n * k);
+        for (auto& v : w) v = dist(rng);
+        constexpr float global_scale = 1.5f;
+        std::vector<uint8_t> w_packed(static_cast<size_t>(n) * k / 2);
+        std::vector<__nv_fp8_e4m3> w_block_scales(static_cast<size_t>(n) * blocks_per_row);
+        std::vector<float> w_dequant(n * k);
+        for (int row = 0; row < n; ++row) {
+            for (int b = 0; b < blocks_per_row; ++b) {
+                float absmax = 0.0f;
+                for (int i = 0; i < block; ++i) {
+                    absmax = std::max(absmax, std::fabs(w[row * k + b * block + i]));
+                }
+                const float raw_scale = absmax > 0.0f ? absmax / (6.0f * global_scale) : 1.0f;
+                const __nv_fp8_e4m3 quant_scale(raw_scale);
+                w_block_scales[row * blocks_per_row + b] = quant_scale;
+                for (int i = 0; i < block; i += 2) {
+                    const int idx = b * block + i;
+                    const uint8_t lo = encode_e2m1(w[row * k + idx] / (float(quant_scale) * global_scale));
+                    const uint8_t hi = encode_e2m1(w[row * k + idx + 1] / (float(quant_scale) * global_scale));
+                    w_packed[(row * k + idx) / 2] = static_cast<uint8_t>(lo | (hi << 4));
+                    w_dequant[row * k + idx] = decode_e2m1(lo) * float(quant_scale) * global_scale;
+                    w_dequant[row * k + idx + 1] = decode_e2m1(hi) * float(quant_scale) * global_scale;
+                }
+            }
+        }
+
+        std::vector<float> reference(m * n, 0.0f);
+        for (int row = 0; row < m; ++row) {
+            for (int col = 0; col < n; ++col) {
+                float acc = 0.0f;
+                for (int i = 0; i < k; ++i) {
+                    acc += to_float(x[row * k + i]) * w_dequant[col * k + i];
+                }
+                reference[row * n + col] = acc;
+            }
+        }
+
+        celeg::DeviceBuffer<__nv_bfloat16> dx(x.size());
+        celeg::DeviceBuffer<uint8_t> dw_packed(w_packed.size());
+        celeg::DeviceBuffer<__nv_fp8_e4m3> dw_block_scales(w_block_scales.size());
+        CELEG_CUDA(cudaMemcpy(dx.data(), x.data(), dx.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dw_packed.data(), w_packed.data(), dw_packed.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dw_block_scales.data(), w_block_scales.data(), dw_block_scales.bytes(),
+                             cudaMemcpyHostToDevice));
+
+        celeg::CudaModelOptions dispatcher_options;
+        celeg::GemmDispatcher dispatcher(stream.get(), dispatcher_options);
+        celeg::LinearWeight weight;
+        weight.rows = n;
+        weight.cols = k;
+        weight.kernel = celeg::LinearKernelKind::Nvfp4W4A4;
+        weight.storage = celeg::Nvfp4LinearStorage{dw_packed.data(), dw_block_scales.data(), global_scale};
+        const celeg::CudaExecutionPlan plan =
+            celeg::CudaExecutionPlan::compile(dispatcher_options, 1024);
+
+        celeg::DeviceBuffer<__nv_bfloat16> dy(m * n);
+        dispatcher.linear(dx.data(), weight, dy.data(), m, n, k, 0.0f, plan);
+        std::vector<__nv_bfloat16> y(m * n);
+        CELEG_CUDA(cudaMemcpyAsync(y.data(), dy.data(), dy.bytes(),
+                                 cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for (int i = 0; i < m * n; ++i) {
+            expect_near(to_float(y[i]), reference[i],
+                       0.02f * std::max(1.0f, std::abs(reference[i])));
+        }
+    }
+
     {
         std::vector<int8_t> table = {1, 2, 3, 4, -1, 2, -3, 4};
         std::vector<float> scales = {0.5f, 2.0f};

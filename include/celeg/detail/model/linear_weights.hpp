@@ -63,12 +63,30 @@ struct Fp8LinearStorage {
     const float* scales = nullptr;
 };
 
+// NVFP4 (e2m1) weight: 2 values packed per byte, one UE4M3 scale per
+// kNvfp4BlockSize-element block along the row, plus one per-tensor fp32
+// global scale (the checkpoint's static calibration scale, applied on top
+// of the per-block scale). See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
+// Phase 4: this is dequantized to bf16 (via launch_dequant_nvfp4) and run
+// through the existing bf16 GEMM rather than cuBLASLt's native block-scaled
+// fp4 matmul, because that mode's scale-factor tensor layout is
+// undocumented in the local CUDA 13.2 headers and a naive row-major layout
+// was empirically wrong (~28% mean error). Not yet populated by any loader.
+inline constexpr int kNvfp4BlockSize = 16;
+
+struct Nvfp4LinearStorage {
+    const uint8_t* data = nullptr;
+    const __nv_fp8_e4m3* block_scales = nullptr;
+    float global_scale = 1.0f;
+};
+
 using LinearStorage = std::variant<
     Bf16LinearStorage,
     Int8LinearStorage,
     Int4LinearStorage,
     GgufLinearStorage,
-    Fp8LinearStorage>;
+    Fp8LinearStorage,
+    Nvfp4LinearStorage>;
 
 struct LinearWeight {
     int rows = 0;
@@ -127,6 +145,18 @@ inline LinearWeight slice_rows(const LinearWeight& weight,
                 if (out.data) {
                     out.data = storage.data + static_cast<size_t>(row_offset) * weight.cols;
                     out.scales = storage.scales + row_offset;
+                }
+                return out;
+            } else if constexpr (std::is_same_v<StorageT, Nvfp4LinearStorage>) {
+                Nvfp4LinearStorage out = storage;
+                if (out.data) {
+                    const size_t packed_cols =
+                        (static_cast<size_t>(weight.cols) + 1) / 2;
+                    const size_t blocks_per_row =
+                        (static_cast<size_t>(weight.cols) + kNvfp4BlockSize - 1) / kNvfp4BlockSize;
+                    out.data = storage.data + static_cast<size_t>(row_offset) * packed_cols;
+                    out.block_scales = storage.block_scales +
+                        static_cast<size_t>(row_offset) * blocks_per_row;
                 }
                 return out;
             } else {

@@ -337,6 +337,14 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             linear_fp8_w8a8(x, *fp8, y, m, n, k, beta);
             return;
         }
+        case LinearKernelKind::Nvfp4W4A4: {
+            const auto* nvfp4 = std::get_if<Nvfp4LinearStorage>(&weight.storage);
+            if (!nvfp4) {
+                throw std::runtime_error("execution plan requires NVFP4 weights");
+            }
+            linear_nvfp4_w4a4(x, *nvfp4, y, m, n, k, beta);
+            return;
+        }
     }
     throw std::runtime_error("unknown linear execution plan");
 }
@@ -485,6 +493,41 @@ void GemmDispatcher::linear_fp8_w8a8(const __nv_bfloat16* x,
 
     launch_fp8_scale_apply(fp8_workspace_.raw.data(), fp8_workspace_.act_scales.data(),
                            weight.scales, y, m, n, beta, stream_);
+}
+
+void GemmDispatcher::ensure_nvfp4_capacity(int n, int k) {
+    if (n <= nvfp4_workspace_.capacity_n && k <= nvfp4_workspace_.capacity_k) return;
+    nvfp4_workspace_.capacity_n = std::max(nvfp4_workspace_.capacity_n, n);
+    nvfp4_workspace_.capacity_k = std::max(nvfp4_workspace_.capacity_k, k);
+    nvfp4_workspace_.weight_bf16.reset(
+        static_cast<size_t>(nvfp4_workspace_.capacity_n) * nvfp4_workspace_.capacity_k);
+}
+
+// See linear.cuh's dequant_nvfp4_kernel comment and
+// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4 for why this dequantizes
+// to bf16 and runs the existing bf16 GEMM instead of a native fp4
+// tensor-core matmul.
+void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
+                                       const Nvfp4LinearStorage& weight,
+                                       __nv_bfloat16* y,
+                                       int m, int n, int k,
+                                       float beta) {
+    if (!weight.data || !weight.block_scales) {
+        throw std::runtime_error("NVFP4 linear weight is missing data or block scales");
+    }
+    ensure_nvfp4_capacity(n, k);
+    launch_dequant_nvfp4(weight.data, weight.block_scales, weight.global_scale,
+                         nvfp4_workspace_.weight_bf16.data(), n, k,
+                         kNvfp4BlockSize, stream_);
+    if (m == 1) {
+        launch_bf16_gemv(x, nvfp4_workspace_.weight_bf16.data(), y, n, k, beta, stream_);
+        return;
+    }
+    if (options_.gemm_backend == GemmBackend::CublasLt) {
+        linear_cublaslt(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
+    } else {
+        linear_cublas(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
+    }
 }
 
 }

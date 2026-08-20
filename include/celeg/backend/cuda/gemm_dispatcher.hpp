@@ -93,6 +93,15 @@ public:
 
     LtPlan& get_or_create_fp8_lt_plan(int m, int n, int k);
 
+    // W4A4 (NVFP4 weight): dequantizes the packed e2m1 weight to bf16 and
+    // runs the existing bf16 GEMM path -- see linear.cuh for why this
+    // doesn't use cuBLASLt's native block-scaled fp4 matmul.
+    void linear_nvfp4_w4a4(const __nv_bfloat16* x,
+                           const Nvfp4LinearStorage& weight,
+                           __nv_bfloat16* y,
+                           int m, int n, int k,
+                           float beta);
+
     void begin_native_fanout(const __nv_bfloat16* x, int m, int k);
     void end_native_fanout();
 
@@ -150,6 +159,12 @@ private:
         int capacity_k = 0;
     };
 
+    struct Nvfp4Workspace {
+        DeviceBuffer<__nv_bfloat16> weight_bf16;
+        int capacity_n = 0;
+        int capacity_k = 0;
+    };
+
     cudaStream_t stream_;
     int device_ordinal_ = -1;
     const CudaModelOptions& options_;
@@ -160,11 +175,13 @@ private:
     LtAutotuner lt_autotuner_;
     MmqWorkspace mmq_workspace_;
     Fp8Workspace fp8_workspace_;
+    Nvfp4Workspace nvfp4_workspace_;
     std::unordered_map<const LinearWeight*, CompiledLinearBinding>
         linear_bindings_;
 
     void ensure_mmq_capacity(int m, int k);
     void ensure_fp8_capacity(int m, int n, int k);
+    void ensure_nvfp4_capacity(int n, int k);
     bool has_native_fanout(const __nv_bfloat16* x, int m, int k) const;
 };
 

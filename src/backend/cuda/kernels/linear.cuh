@@ -1,3 +1,5 @@
+#include <cuda_fp4.h>
+#include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
 __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
@@ -232,5 +234,49 @@ void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
                     static_cast<unsigned>(m));
     fp8_w8a8_naive_kernel<<<grid, threads, 0, stream>>>(
         x_q, act_scale, w_q, weight_scale, y, m, n, k, beta);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+// Dequantizes a packed NVFP4 (e2m1, 2 values/byte) weight with per-16-block
+// UE4M3 scales + a per-tensor fp32 global scale into bf16, so it can run
+// through the existing bf16 GEMM path. This is deliberately NOT a native
+// fp4 tensor-core matmul: a standalone cuBLASLt spike (see
+// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4) found that
+// CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 requires a scale-factor tensor
+// physical layout that isn't documented in the local CUDA 13.2 headers --
+// a naive row-major scale layout produced ~28% mean error against a
+// same-quantization scalar reference (ruled out: nibble pack order and
+// scale rounding, both verified correct independently). Rather than guess
+// at the undocumented swizzle and risk silently wrong output, this kernel
+// follows the same "dequantize once, matmul in bf16" convention already
+// used by Int4LinearStorage/Int8LinearStorage's bf16_fallback field.
+__global__ void dequant_nvfp4_kernel(const uint8_t* __restrict__ packed,
+                                     const __nv_fp8_e4m3* __restrict__ block_scales,
+                                     float global_scale,
+                                     __nv_bfloat16* __restrict__ out,
+                                     int rows, int cols, int block_size) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (col >= cols || row >= rows) return;
+    const int blocks_per_row = cols / block_size;
+    const int block = col / block_size;
+    const size_t elem = static_cast<size_t>(row) * cols + col;
+    const uint8_t byte = packed[elem / 2];
+    const uint8_t nibble = (col & 1) ? static_cast<uint8_t>(byte >> 4) : static_cast<uint8_t>(byte & 0xF);
+    const __half_raw h = __nv_cvt_fp4_to_halfraw(
+        static_cast<__nv_fp4_storage_t>(nibble), __NV_E2M1);
+    const float scale = float(block_scales[static_cast<size_t>(row) * blocks_per_row + block]);
+    const float value = __half2float(__half(h)) * scale * global_scale;
+    out[elem] = __float2bfloat16(value);
+}
+
+void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scales,
+                          float global_scale, __nv_bfloat16* out,
+                          int rows, int cols, int block_size, cudaStream_t stream) {
+    constexpr int threads = 128;
+    const dim3 grid(static_cast<unsigned>((cols + threads - 1) / threads),
+                    static_cast<unsigned>(rows));
+    dequant_nvfp4_kernel<<<grid, threads, 0, stream>>>(
+        packed, block_scales, global_scale, out, rows, cols, block_size);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

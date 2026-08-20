@@ -76,4 +76,12 @@ void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
                           __nv_bfloat16* y, int m, int n, int k, float beta,
                           cudaStream_t stream);
 
+// Dequantizes a packed NVFP4 (e2m1) weight with per-block UE4M3 scales and
+// a per-tensor fp32 global scale into bf16. See linear.cuh for why this
+// dequant-then-bf16-matmul path is used instead of cuBLASLt's native
+// block-scaled fp4 matmul.
+void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scales,
+                         float global_scale, __nv_bfloat16* out,
+                         int rows, int cols, int block_size, cudaStream_t stream);
+
 }
