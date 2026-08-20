@@ -145,6 +145,7 @@ std::string CudaExecutionPlan::description() const {
         case LinearKernelKind::Q6kMmq: out << "q6k-mmq"; break;
         case LinearKernelKind::MixedBf16AndGgufMmq:
             out << "mixed-bf16-and-gguf-mmq"; break;
+        case LinearKernelKind::Fp8W8A8: out << "fp8-w8a8"; break;
     }
     out << ", sampling=fused, attention=";
     switch (options_.attention_mode) {

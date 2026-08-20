@@ -2,6 +2,7 @@
 #include "support/assertions.hpp"
 #include "support/cuda_kernel_assertions.cuh"
 #include "celeg/backend/cuda/kernels/kernels.cuh"
+#include "celeg/backend/cuda/gemm_dispatcher.hpp"
 #include "celeg/backend/cuda/weight_layout.hpp"
 #include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/model/reference.hpp"
@@ -433,6 +434,78 @@ int main() {
         const std::vector<float> expected = {15.0f, 4.0f, 3.0f, 1.5f, 0.0f, 6.0f};
         for (size_t i = 0; i < expected.size(); ++i) {
             expect_near(to_float(result[i]), expected[i], 0.05f);
+        }
+    }
+
+    // FP8 W8A8: exercises GemmDispatcher's LinearKernelKind::Fp8W8A8 path
+    // end to end (dynamic per-token activation quant -> raw cuBLASLt fp8
+    // matmul -> manual outer-product scale-apply epilogue). The reference is
+    // built from the kernel's own quantized values (round-tripped through
+    // the same launch_quantize_e4m3_per_row kernel under test) rather than
+    // an independently reimplemented e4m3 rounding rule, so this isolates
+    // "does the matmul+scale-apply reproduce the quantized dot product"
+    // from "is the quantization rounding bit-for-bit what a host
+    // reimplementation would produce" -- the latter isn't this kernel's
+    // contract (it only needs to round *some* IEEE-754-correct e4m3 way).
+    {
+        constexpr int m = 4;
+        constexpr int n = 8;
+        constexpr int k = 32;
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+        std::vector<__nv_bfloat16> x(m * k), w(n * k);
+        for (auto& v : x) v = to_bf16(dist(rng));
+        for (auto& v : w) v = to_bf16(dist(rng));
+
+        celeg::DeviceBuffer<__nv_bfloat16> dx(x.size()), dw_bf16(w.size());
+        CELEG_CUDA(cudaMemcpy(dx.data(), x.data(), dx.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dw_bf16.data(), w.data(), dw_bf16.bytes(), cudaMemcpyHostToDevice));
+
+        // Quantize both operands with the kernel under test so the scalar
+        // reference matches exactly what the dispatcher will consume/produce.
+        celeg::DeviceBuffer<__nv_fp8_e4m3> dx_q(x.size()), dw_q(w.size());
+        celeg::DeviceBuffer<float> dx_scales(m), dw_scales(n);
+        celeg::launch_quantize_e4m3_per_row(dx.data(), dx_q.data(), dx_scales.data(), m, k, stream.get());
+        celeg::launch_quantize_e4m3_per_row(dw_bf16.data(), dw_q.data(), dw_scales.data(), n, k, stream.get());
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+
+        std::vector<__nv_fp8_e4m3> x_q(x.size()), w_q(w.size());
+        std::vector<float> x_scales(m), w_scales(n);
+        CELEG_CUDA(cudaMemcpy(x_q.data(), dx_q.data(), dx_q.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(w_q.data(), dw_q.data(), dw_q.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(x_scales.data(), dx_scales.data(), dx_scales.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(w_scales.data(), dw_scales.data(), dw_scales.bytes(), cudaMemcpyDeviceToHost));
+
+        std::vector<float> reference(m * n, 0.0f);
+        for (int row = 0; row < m; ++row) {
+            for (int col = 0; col < n; ++col) {
+                float acc = 0.0f;
+                for (int i = 0; i < k; ++i) {
+                    acc += float(x_q[row * k + i]) * float(w_q[col * k + i]);
+                }
+                reference[row * n + col] = acc * x_scales[row] * w_scales[col];
+            }
+        }
+
+        celeg::CudaModelOptions dispatcher_options;
+        celeg::GemmDispatcher dispatcher(stream.get(), dispatcher_options);
+        celeg::LinearWeight weight;
+        weight.rows = n;
+        weight.cols = k;
+        weight.kernel = celeg::LinearKernelKind::Fp8W8A8;
+        weight.storage = celeg::Fp8LinearStorage{dw_q.data(), dw_scales.data()};
+        const celeg::CudaExecutionPlan plan =
+            celeg::CudaExecutionPlan::compile(dispatcher_options, 1024);
+
+        celeg::DeviceBuffer<__nv_bfloat16> dy(m * n);
+        dispatcher.linear(dx.data(), weight, dy.data(), m, n, k, 0.0f, plan);
+        std::vector<__nv_bfloat16> y(m * n);
+        CELEG_CUDA(cudaMemcpyAsync(y.data(), dy.data(), dy.bytes(),
+                                 cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for (int i = 0; i < m * n; ++i) {
+            expect_near(to_float(y[i]), reference[i],
+                       0.02f * std::max(1.0f, std::abs(reference[i])));
         }
     }
 

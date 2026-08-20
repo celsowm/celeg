@@ -329,6 +329,14 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
             }
             return;
         }
+        case LinearKernelKind::Fp8W8A8: {
+            const auto* fp8 = std::get_if<Fp8LinearStorage>(&weight.storage);
+            if (!fp8) {
+                throw std::runtime_error("execution plan requires FP8 weights");
+            }
+            linear_fp8_w8a8(x, *fp8, y, m, n, k, beta);
+            return;
+        }
     }
     throw std::runtime_error("unknown linear execution plan");
 }
@@ -367,6 +375,110 @@ void GemmDispatcher::ensure_mmq_capacity(int m, int k) {
 
 bool GemmDispatcher::has_native_fanout(const __nv_bfloat16* x, int m, int k) const {
     return mmq_workspace_.fanout_input == x && mmq_workspace_.fanout_m == m && mmq_workspace_.fanout_k == k;
+}
+
+void GemmDispatcher::ensure_fp8_capacity(int m, int n, int k) {
+    if (m <= fp8_workspace_.capacity_m && n <= fp8_workspace_.capacity_n &&
+        k <= fp8_workspace_.capacity_k) {
+        return;
+    }
+    fp8_workspace_.capacity_m = std::max(fp8_workspace_.capacity_m, m);
+    fp8_workspace_.capacity_n = std::max(fp8_workspace_.capacity_n, n);
+    fp8_workspace_.capacity_k = std::max(fp8_workspace_.capacity_k, k);
+    fp8_workspace_.act_q.reset(
+        static_cast<size_t>(fp8_workspace_.capacity_m) * fp8_workspace_.capacity_k);
+    fp8_workspace_.act_scales.reset(static_cast<size_t>(fp8_workspace_.capacity_m));
+    fp8_workspace_.raw.reset(
+        static_cast<size_t>(fp8_workspace_.capacity_m) * fp8_workspace_.capacity_n);
+}
+
+// Raw (unscaled) FP8xFP8->FP32 matmul plan. Mirrors get_or_create_lt_plan's
+// TRANSA=T/TRANSB=N layout convention (A=weight [k,n,k], B=activation
+// [k,m,k], D=[n,m,n]) so the raw accumulation buffer has the same physical
+// row-major-[m,n] layout the rest of the codebase's y buffers use. No scale
+// pointers are set here -- see linear_fp8_w8a8 and
+// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3 for why the dequant scale
+// is applied as a separate kernel instead of via cuBLASLt's scale-vector
+// attribute (empirically unsupported on this hardware/toolkit combination).
+LtPlan& GemmDispatcher::get_or_create_fp8_lt_plan(int m, int n, int k) {
+    const MatmulKey key{m, n, k};
+    if (auto it = fp8_lt_cache_.plans.find(key); it != fp8_lt_cache_.plans.end()) {
+        return *it->second;
+    }
+
+    auto plan = std::make_unique<LtPlan>();
+    CELEG_CUBLAS(cublasLtMatmulDescCreate(
+        &plan->operation, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+    const cublasOperation_t transa = CUBLAS_OP_T;
+    const cublasOperation_t transb = CUBLAS_OP_N;
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa)));
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
+
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->a, CUDA_R_8F_E4M3, k, n, k));
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->b, CUDA_R_8F_E4M3, k, m, k));
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->c, CUDA_R_32F, n, m, n));
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->d, CUDA_R_32F, n, m, n));
+
+    cublasLtMatmulPreference_t preference = nullptr;
+    CELEG_CUBLAS(cublasLtMatmulPreferenceCreate(&preference));
+    try {
+        const uint64_t workspace_limit = static_cast<uint64_t>(options_.lt_workspace_bytes);
+        CELEG_CUBLAS(cublasLtMatmulPreferenceSetAttribute(
+            preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+            &workspace_limit, sizeof(workspace_limit)));
+
+        cublasLtMatmulHeuristicResult_t result{};
+        int returned = 0;
+        const cublasStatus_t status = cublasLtMatmulAlgoGetHeuristic(
+            handles_.cublas_lt.get(), plan->operation,
+            plan->a, plan->b, plan->c, plan->d,
+            preference, 1, &result, &returned);
+        if (status == CUBLAS_STATUS_SUCCESS && returned > 0 &&
+            result.workspaceSize <= options_.lt_workspace_bytes) {
+            plan->algorithm = result.algo;
+            plan->workspace_size = result.workspaceSize;
+            plan->available = true;
+        }
+    } catch (...) {
+        cublasLtMatmulPreferenceDestroy(preference);
+        throw;
+    }
+    CELEG_CUBLAS(cublasLtMatmulPreferenceDestroy(preference));
+
+    auto [it, inserted] = fp8_lt_cache_.plans.emplace(key, std::move(plan));
+    if (!inserted) throw std::runtime_error("duplicate fp8 cuBLASLt plan");
+    return *it->second;
+}
+
+void GemmDispatcher::linear_fp8_w8a8(const __nv_bfloat16* x,
+                                     const Fp8LinearStorage& weight,
+                                     __nv_bfloat16* y,
+                                     int m, int n, int k,
+                                     float beta) {
+    if (!weight.data || !weight.scales) {
+        throw std::runtime_error("FP8 linear weight is missing data or scales");
+    }
+    ensure_fp8_capacity(m, n, k);
+    launch_quantize_e4m3_per_row(x, fp8_workspace_.act_q.data(),
+                                 fp8_workspace_.act_scales.data(), m, k, stream_);
+
+    LtPlan& plan = get_or_create_fp8_lt_plan(m, n, k);
+    if (!plan.available) {
+        throw std::runtime_error("no fp8 cuBLASLt algorithm available for this shape");
+    }
+    const float alpha = 1.0f;
+    const float raw_beta = 0.0f;
+    CELEG_CUBLAS(cublasLtMatmul(
+        handles_.cublas_lt.get(), plan.operation,
+        &alpha, weight.data, plan.a, fp8_workspace_.act_q.data(), plan.b,
+        &raw_beta, fp8_workspace_.raw.data(), plan.c,
+        fp8_workspace_.raw.data(), plan.d,
+        &plan.algorithm, lt_workspace_.data(), plan.workspace_size, stream_));
+
+    launch_fp8_scale_apply(fp8_workspace_.raw.data(), fp8_workspace_.act_scales.data(),
+                           weight.scales, y, m, n, beta, stream_);
 }
 
 }

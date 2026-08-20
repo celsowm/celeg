@@ -14,6 +14,7 @@ enum class LinearKernelKind : uint8_t {
     Q4kMmq,
     Q6kMmq,
     MixedBf16AndGgufMmq,
+    Fp8W8A8,
 };
 
 class CudaExecutionPlan {

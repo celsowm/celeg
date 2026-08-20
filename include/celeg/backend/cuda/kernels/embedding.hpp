@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <cstdint>
 
@@ -55,5 +56,17 @@ void launch_w4a16_linear(const __nv_bfloat16* x, const uint8_t* weight,
                         const float* scales, __nv_bfloat16* y,
                         int m, int n, int k, float beta,
                         cudaStream_t stream);
+
+// Dynamic per-row FP8 E4M3 quantization; used both for per-token activation
+// quantization and per-channel weight quantization (see linear.cuh).
+void launch_quantize_e4m3_per_row(const __nv_bfloat16* x, __nv_fp8_e4m3* q,
+                                 float* scales, int rows, int k,
+                                 cudaStream_t stream);
+
+// Applies the W8A8 outer-product dequant scale (act_scale[row] *
+// weight_scale[col]) to a raw, unscaled FP8xFP8->FP32 matmul accumulation.
+void launch_fp8_scale_apply(const float* raw, const float* act_scale,
+                           const float* weight_scale, __nv_bfloat16* y,
+                           int m, int n, float beta, cudaStream_t stream);
 
 }

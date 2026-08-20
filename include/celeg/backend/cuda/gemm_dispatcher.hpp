@@ -9,6 +9,7 @@
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 #include <cstddef>
@@ -79,6 +80,19 @@ public:
                                   const __nv_bfloat16* weight,
                                   int m, int n, int k);
 
+    // W8A8: dynamic per-token E4M3 activation quantization, a raw (unscaled)
+    // FP8xFP8->FP32 cuBLASLt matmul, then a manual outer-product dequant
+    // scale applied as a separate kernel epilogue -- see linear.cuh and
+    // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3 for why the scale isn't
+    // applied via cuBLASLt's native scale-vector attribute.
+    void linear_fp8_w8a8(const __nv_bfloat16* x,
+                         const Fp8LinearStorage& weight,
+                         __nv_bfloat16* y,
+                         int m, int n, int k,
+                         float beta);
+
+    LtPlan& get_or_create_fp8_lt_plan(int m, int n, int k);
+
     void begin_native_fanout(const __nv_bfloat16* x, int m, int k);
     void end_native_fanout();
 
@@ -127,18 +141,30 @@ private:
         int fanout_k = 0;
     };
 
+    struct Fp8Workspace {
+        DeviceBuffer<__nv_fp8_e4m3> act_q;
+        DeviceBuffer<float> act_scales;
+        DeviceBuffer<float> raw;
+        int capacity_m = 0;
+        int capacity_n = 0;
+        int capacity_k = 0;
+    };
+
     cudaStream_t stream_;
     int device_ordinal_ = -1;
     const CudaModelOptions& options_;
     Handles handles_;
     DeviceBuffer<std::byte> lt_workspace_;
     LtPlanCache lt_cache_;
+    LtPlanCache fp8_lt_cache_;
     LtAutotuner lt_autotuner_;
     MmqWorkspace mmq_workspace_;
+    Fp8Workspace fp8_workspace_;
     std::unordered_map<const LinearWeight*, CompiledLinearBinding>
         linear_bindings_;
 
     void ensure_mmq_capacity(int m, int k);
+    void ensure_fp8_capacity(int m, int n, int k);
     bool has_native_fanout(const __nv_bfloat16* x, int m, int k) const;
 };
 

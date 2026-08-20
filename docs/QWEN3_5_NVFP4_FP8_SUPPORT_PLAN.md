@@ -232,6 +232,32 @@ from). Findings, on this machine's RTX 5090 (sm_120) / CUDA 13.2:*
     and per-token dynamic activation quant (not yet spiked — only the raw unscaled matmul and the
     scale-mode-unsupported finding are validated so far).
 
+*Kernel + dispatch wiring, done.* Landed (not just spiked) the full path, committed:
+  - `launch_quantize_e4m3_per_row` (`src/backend/cuda/kernels/linear.cuh`): one kernel serves both
+    per-token dynamic activation quant and per-channel weight quant (identical "row absmax -> e4m3"
+    math; only *when* it runs differs — per forward pass for activations, once at load time for
+    weights). Block-level reduction (warp shuffle + shared-memory cross-warp reduce), any row length.
+  - `launch_fp8_scale_apply`: the manual outer-product dequant epilogue the spike's findings called
+    for (`y[m,n] = raw[m,n] * act_scale[m] * weight_scale[n]`, with the existing `beta`-accumulate
+    convention).
+  - `Fp8LinearStorage` (e4m3 data + per-row fp32 scales, same shape convention as `Int8LinearStorage`)
+    added to the `LinearStorage` variant, and `LinearKernelKind::Fp8W8A8` added to the enum --
+    including the `slice_rows()` visitor branch and the `execution_plan.cpp` name-printer switch that
+    would otherwise silently miss it. Unused by any loader yet (Phase 5), same safe staging as Phase 1.
+  - `GemmDispatcher::linear_fp8_w8a8` + `get_or_create_fp8_lt_plan` wire it into the real dispatch
+    switch (`GemmDispatcher::linear`'s `case LinearKernelKind::Fp8W8A8`), reusing the raw (unscaled)
+    matmul plan shape validated by the spike.
+  - New test in `tests/cuda_kernels_test.cu` exercises the *whole wired path* through
+    `GemmDispatcher::linear()` (not just the raw kernels in isolation) against a reference built from
+    the kernel's own quantized values (round-tripped through the same quantize kernel under test, not
+    an independently reimplemented e4m3 rounding rule) — passes at 2% relative tolerance.
+  - **New finding: fp8 cuBLASLt heuristics need aligned shapes.** `n=3` (an arbitrary small test size)
+    returned no available algorithm (`cublasLtMatmulAlgoGetHeuristic` succeeds but returns zero
+    results) while `n=8` works; real Qwen3.5 tensor widths (5120, 6144, 10240, 17408, head_dim
+    multiples of 128) are almost certainly always aligned in practice, but this needs an explicit
+    guard or bf16 fallback for the general case before Phase 5 wires real checkpoints through this
+    path — don't assume every shape works just because the common ones do.
+
 **Phase 4 — NVFP4 W4A4 kernel.**
 `Nvfp4LinearStorage` (packed e2m1 + per-16-block `UE4M3` scale + per-tensor fp32 global scale),
 `LinearKernelKind::Nvfp4W4A4`, a dynamic per-16-block activation-quantization kernel to NVFP4 (using

@@ -1,3 +1,5 @@
+#include <cuda_fp8.h>
+
 __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
                                     const uint8_t* weight,
                                     const float* scales,
@@ -105,5 +107,92 @@ void launch_w4a16_linear(const __nv_bfloat16* x, const uint8_t* weight,
     const size_t smem_size = static_cast<size_t>(tile_k) * sizeof(__nv_bfloat16);
     w4a16_linear_kernel<<<grid, warps_per_block * 32, smem_size, stream>>>(
         x, weight, scales, y, m, n, k, beta, tile_k);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+/// Dynamic per-row FP8 E4M3 quantization: used both for per-token activation
+/// quantization at inference time and (identically, just run once at
+/// conversion time rather than per forward pass) for per-channel static
+/// weight quantization -- both are "row absmax -> e4m3" in the same layout,
+/// so one kernel serves both roles.
+__global__ void quantize_e4m3_per_row_kernel(const __nv_bfloat16* __restrict__ x,
+                                             __nv_fp8_e4m3* __restrict__ q,
+                                             float* __restrict__ scales,
+                                             int k) {
+    const int row = blockIdx.x;
+    const __nv_bfloat16* row_x = x + static_cast<size_t>(row) * k;
+    __nv_fp8_e4m3* row_q = q + static_cast<size_t>(row) * k;
+
+    float local_max = 0.0f;
+    for (int i = threadIdx.x; i < k; i += blockDim.x) {
+        local_max = fmaxf(local_max, fabsf(bf16_float(row_x[i])));
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        local_max = fmaxf(local_max, __shfl_down_sync(0xffffffffu, local_max, offset));
+    }
+    __shared__ float warp_max[32];
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    if (lane == 0) warp_max[warp] = local_max;
+    __syncthreads();
+    if (warp == 0) {
+        const int warps = (blockDim.x + 31) / 32;
+        float v = (lane < warps) ? warp_max[lane] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            v = fmaxf(v, __shfl_down_sync(0xffffffffu, v, offset));
+        }
+        if (lane == 0) warp_max[0] = v;
+    }
+    __syncthreads();
+    const float row_max = warp_max[0];
+
+    // e4m3's largest finite magnitude (448) as the quantization ceiling.
+    constexpr float kFp8E4m3Max = 448.0f;
+    const float scale = row_max > 0.0f ? row_max / kFp8E4m3Max : 1.0f;
+    if (threadIdx.x == 0) scales[row] = scale;
+    const float inv_scale = 1.0f / scale;
+    for (int i = threadIdx.x; i < k; i += blockDim.x) {
+        row_q[i] = __nv_fp8_e4m3(bf16_float(row_x[i]) * inv_scale);
+    }
+}
+
+void launch_quantize_e4m3_per_row(const __nv_bfloat16* x, __nv_fp8_e4m3* q,
+                                  float* scales, int rows, int k,
+                                  cudaStream_t stream) {
+    constexpr int threads = 256;
+    quantize_e4m3_per_row_kernel<<<rows, threads, 0, stream>>>(x, q, scales, k);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+/// Applies the W8A8 dequant scale to a raw (unscaled) FP8xFP8->FP32 matmul
+/// accumulation. cuBLASLt's native per-channel/per-token scale-vector mode
+/// (CUBLASLT_MATMUL_MATRIX_SCALE_OUTER_VEC_32F) is not supported on this
+/// codebase's target hardware (RTX 5090 / CUDA 13.2 -- confirmed empirically,
+/// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3), so the outer-product
+/// scale (act_scale[row] * weight_scale[col]) is applied here instead, the
+/// same "scale multiply inside a hand-written epilogue" convention
+/// launch_w8a16_linear already uses for the W8A16 path.
+__global__ void fp8_scale_apply_kernel(const float* __restrict__ raw,
+                                       const float* __restrict__ act_scale,
+                                       const float* __restrict__ weight_scale,
+                                       __nv_bfloat16* __restrict__ y,
+                                       int m, int n, float beta) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (col >= n || row >= m) return;
+    const size_t idx = static_cast<size_t>(row) * n + col;
+    float value = raw[idx] * act_scale[row] * weight_scale[col];
+    if (beta != 0.0f) value += beta * bf16_float(y[idx]);
+    y[idx] = __float2bfloat16(value);
+}
+
+void launch_fp8_scale_apply(const float* raw, const float* act_scale,
+                            const float* weight_scale, __nv_bfloat16* y,
+                            int m, int n, float beta, cudaStream_t stream) {
+    constexpr int threads = 128;
+    const dim3 grid(static_cast<unsigned>((n + threads - 1) / threads),
+                    static_cast<unsigned>(m));
+    fp8_scale_apply_kernel<<<grid, threads, 0, stream>>>(
+        raw, act_scale, weight_scale, y, m, n, beta);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

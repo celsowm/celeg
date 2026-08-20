@@ -5,6 +5,7 @@
 #include "celeg/checkpoint/formats/gguf.hpp"
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -51,11 +52,23 @@ struct GgufLinearStorage {
     std::vector<GgufLinearSegment> segments;
 };
 
+// FP8 E4M3 weight, per-channel static scale (one scale per output row) --
+// see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 3. Not yet populated by
+// any loader; the storage variant and the matching LinearKernelKind::Fp8W8A8
+// dispatch case exist ahead of the loader-side wiring so the kernel/dispatch
+// path can be built and tested independently, the same staged approach
+// Phase 1 used for the per-tensor kernel-override plumbing.
+struct Fp8LinearStorage {
+    const __nv_fp8_e4m3* data = nullptr;
+    const float* scales = nullptr;
+};
+
 using LinearStorage = std::variant<
     Bf16LinearStorage,
     Int8LinearStorage,
     Int4LinearStorage,
-    GgufLinearStorage>;
+    GgufLinearStorage,
+    Fp8LinearStorage>;
 
 struct LinearWeight {
     int rows = 0;
@@ -107,6 +120,13 @@ inline LinearWeight slice_rows(const LinearWeight& weight,
                 if (out.bf16_fallback) {
                     out.bf16_fallback = storage.bf16_fallback +
                         static_cast<size_t>(row_offset) * weight.cols;
+                }
+                return out;
+            } else if constexpr (std::is_same_v<StorageT, Fp8LinearStorage>) {
+                Fp8LinearStorage out = storage;
+                if (out.data) {
+                    out.data = storage.data + static_cast<size_t>(row_offset) * weight.cols;
+                    out.scales = storage.scales + row_offset;
                 }
                 return out;
             } else {
