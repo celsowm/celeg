@@ -324,6 +324,22 @@ block-scaled fp4 matmul. Instead, mirroring the `bf16_fallback` convention `Int4
     `quantization_config`; still unconfirmed whether it implies a permutation that must be undone at
     load time (Phase 5 concern, not resolved here).
 
+*Tried and ruled out: one candidate scale swizzle (128×8 tile / 32×4 sub-interleave).* An LLM
+(Gemini) proposed a specific physical layout for the `VEC16_UE4M3` scale tensor — 128-row × 8-`k/16`-
+block tiles of 1024 bytes each, with `r_outer*256 + c_outer*128 + r_inner*4 + c_inner` sub-tile
+interleaving (`r_outer=row/32`, `c_outer=col/4`), padding regions filled with UE4M3 `0x38` (=1.0)
+rather than zero. Implemented it in the spike and tested it apples-to-apples against the naive
+row-major layout at a fully tile-aligned m=n=128,k=256 shape (no padding involved either way):
+**naive row-major gave 29.4% mean relative error, this swizzle gave 34.4% — worse, not better.**
+Conclusion: this specific formula is not what cuBLASLt expects on this GPU/toolkit (could be a
+different cuBLASLt version's layout, a different tile granularity than 128×8, or simply an
+unverified/approximated answer) — don't retry this exact mapping. Any future attempt at the native
+block-scaled path needs a *verified* source (NVIDIA sample code, CUTLASS's actual
+`Sm1xxBlockScaledConfig`-equivalent layout logic, or direct confirmation from NVIDIA), not another
+guessed formula — two independently-guessed layouts have now both been empirically wrong, which is
+exactly the "runs without crashing but is silently incorrect" failure mode this section already
+warned against. The dequant-to-bf16 fallback above remains the only verified-correct NVFP4 path.
+
 **Phase 5 — Wire the real `quantization_config` into the Phase-1 per-tensor resolver.**
 Parse `config_groups` (`format: "float-quantized"` → FP8, `"nvfp4-pack-quantized"` → NVFP4) plus the
 `ignore` list into the Phase-1 resolver, matching each group's `targets` regexes against tensor names
