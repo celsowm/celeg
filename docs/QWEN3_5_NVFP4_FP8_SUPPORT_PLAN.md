@@ -518,20 +518,60 @@ regardless of the outcome below.
 
 That fix did **not** resolve incoherence, however -- re-running the real checkpoint after the fix still
 produces near-uniform, low-margin logits at the very first prefill-derived token (`--print-top 5` shows
-a ~0.3-logit spread across the top 5 candidates, essentially noise-level for a 27B model), and generation
+a ~0.3-logit spread across the top 5 candidates, low confidence for a 27B model), and generation
 still collapses into a repeating-token loop after a few steps. This rules out the streaming-decode bug
 and the sampling loop as the cause of the previously-observed byte garbage, and narrows the remaining
-problem to the forward pass itself (something upstream of logits is producing near-random output even
-on the very first decode step). Checked and ruled out as an easy lever: `--weight-mode bf16` has no
+problem to the forward pass itself. Checked and ruled out as an easy lever: `--weight-mode bf16` has no
 effect on this checkpoint's per-tensor FP8/NVFP4 storage (the flag doesn't reach `weight_plan.cpp`'s
 self-describing quant-format resolution at all, confirming the plan's own noted risk that there is no
-dequant-on-load path to a true bf16 baseline for this checkpoint). Re-derived the NVFP4 native
-cuBLASLt block-scaled path's `total_scale = 1/(global_w * global_a)` from first principles against the
-already-verified weight dequant convention and confirmed it is self-consistent -- not the bug. The
-remaining candidates are unchanged from before (residual NVFP4/FP8 precision/swizzle issue, or an
-architecture-level bug in the gated-deltanet/attention/MRoPE path specific to this checkpoint's exact
-configuration) and isolating further needs per-layer activation tracing against a Python reference,
-which has not been done.
+dequant-on-load path to a true bf16 baseline for this checkpoint).
+
+**Second real, confirmed bug: CUDA partial-rotary RoPE used the wrong dimension in the frequency
+formula.** `scaled_rope_frequency` in `src/backend/cuda/kernels/rope.cuh` computes
+`theta^(-2*pair/rotary_dimension)`; both call sites (`dynamic_qk_norm_rope_kernel`,
+`dynamic_mrope_qk_norm_rope_kernel`) passed `head_dim` (256 for this checkpoint) as `rotary_dimension`
+instead of the actual rotated width `2 * rotary_pairs` (64, since `partial_rotary_factor = 0.25`). This
+makes the frequency falloff across the rotated dims far too gentle whenever a checkpoint uses partial
+rotary -- invisible for every model celeg had tested before, since `rotary_fraction == 1.0` makes
+`head_dim` and the true rotary dimension the same value. The CPU backend (`src/backend/cpu/kernels/rope.cpp`)
+already computes this correctly (`rope_frequency(rope, d, rotary_dim, position)`, using the true partial
+`rotary_dim`), which is what exposed this as a CUDA-only regression rather than a shared/generic gap.
+Fixed both call sites to pass `2 * rotary_pairs`. Verified two ways: (1) `ctest` 91/91 still green --
+no existing test exercises `rotary_fraction < 1.0`, which is exactly why this shipped unnoticed; (2)
+independently recomputed Q for a real attention layer (checkpoint bytes for `q_proj`/`q_norm`, dequantized
+by hand in Python, RMSNorm'd, then rotated with the corrected formula) and compared against celeg's
+actual GPU output for that layer -- match to bf16 rounding (best-fit scale 0.9996). This is a real,
+generic, now-fixed bug, independent of Qwen3.5/NVFP4/FP8 specifics -- it affects any partial-rotary
+checkpoint on the CUDA backend.
+
+The fix changes output measurably but real-checkpoint generation is **still not coherent** after it.
+Investigated the NVFP4 native cuBLASLt block-scaled matmul path next (48 of 64 layers' MLPs use it) as
+the next candidate, since Phase 4 had already flagged its scale-factor swizzle as reverse-engineered and
+unverified. Cross-checking one MLP layer's output against a **weight-only** dequantize-in-Python
+reference (dequantize the real NVFP4 weight bytes, matmul against the un-quantized bf16 activation)
+initially looked damning -- the native path's output didn't match at all, sometimes not even in sign.
+But `tests/cuda_kernels_test.cu`'s existing NVFP4 W4A4 unit test -- which *does* quantize both operands
+to match true W4A4 semantics, exactly like the native path does -- was passing bit-exact before and
+after touching this code, which contradicts a broken swizzle. Redid the Python reference with proper
+per-16-block activation quantization (matching `quantize_e2m1_per_block_kernel`'s exact convention) on
+both operands, and the mismatch mostly closed (same sign, same order of magnitude, small residual
+differences consistent with the reference's cruder e4m3 scale-rounding, not a structural bug). Conclusion:
+the earlier mismatch was an invalid comparison (weight-only dequant vs. true W4A4), not evidence of a
+swizzle bug -- the native path appears to be computing genuine W4A4 correctly. A change that disabled
+the native path in favor of the (more accurate, weight-only-quantized) fallback was written, looked like
+an improvement in isolation, but was reverted once the unit-test regression revealed the comparison
+behind it was flawed; shipping it would have silently changed every NVFP4 layer's numerics based on a
+disproven premise. Not returning to this without a decisive, apples-to-apples test.
+
+Net effect of this session: the RoPE fix is real, generic, and kept (verified independently, not just by
+"tests still pass"). The remaining incoherence is not yet attributable to any specific celeg bug --
+leading candidates now are inherent NVFP4/FP8 quantization noise on this specific checkpoint (it has at
+least one confirmed extreme outlier/"massive activation" channel, e.g. `layers.3.self_attn.o_proj`'s
+per-channel weight scale is ~23x its median, which 4-bit block quantization may simply not represent
+well enough for this model to stay coherent) or an architecture-level gap in the gated-deltanet path
+that hasn't been numerically verified the way attention now has. Isolating further needs either a much
+more complete Python reference (full per-layer forward, not spot checks) or accepting this checkpoint's
+current output quality as a real (not celeg-bug) limitation and moving on.
 
 Not yet done: `scripts/run_model_sweep.py` entry, `docs/inference_report.md` write-up (both explicitly
 deferred until generation is actually coherent -- no point recording a broken baseline).

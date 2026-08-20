@@ -265,6 +265,13 @@ __device__ __forceinline__ float dynamic_yarn_correction_dimension(
     return numerator / denominator;
 }
 
+/// `rotary_dimension` must be the actual rotated width (2 * rotary_pairs),
+/// not head_dim -- for partial-rotary checkpoints (rotary_fraction < 1.0)
+/// those differ, and using head_dim here silently understates the frequency
+/// falloff across the rotated dims. Invisible whenever rotary_fraction == 1.0,
+/// which is why this was wrong for a long time before a partial-rotary
+/// checkpoint (Qwen3.5) surfaced it -- see
+/// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 6.
 __device__ __forceinline__ float scaled_rope_frequency(
     float theta, int pair, int rotary_dimension, int position,
     CudaRopeScaling scaling) {
@@ -365,7 +372,7 @@ __global__ void dynamic_qk_norm_rope_kernel(
         const float b = bf16_float(vector[high]) * inv *
             (normalize ? bf16_float(norm_weight[high]) : 1.0f);
         const float frequency = scaled_rope_frequency(
-            theta, i, head_dim, position, scaling);
+            theta, i, 2 * rotary_pairs, position, scaling);
         const float angle = static_cast<float>(position) * frequency;
         const float c = cosf(angle);
         const float s = sinf(angle);
@@ -492,7 +499,7 @@ __global__ void dynamic_mrope_qk_norm_rope_kernel(
         const int axis = mrope_axis_for_pair_device(i, section0, section1, interleaved);
         const float position = static_cast<float>(positions[axis]);
         const float frequency = scaled_rope_frequency(
-            theta, i, head_dim, static_cast<int>(position), scaling);
+            theta, i, 2 * rotary_pairs, static_cast<int>(position), scaling);
         const float angle = position * frequency;
         const float a = bf16_float(vector[i]) * inv *
             (normalize ? bf16_float(norm_weight[i]) : 1.0f);
