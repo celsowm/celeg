@@ -335,12 +335,14 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             if (v.dtype != TensorDType::Quantized ||
                 (v_ggml_type != GgmlType::Q2_K && v_ggml_type != GgmlType::Q3_K &&
                  v_ggml_type != GgmlType::Q4_0 && v_ggml_type != GgmlType::Q4_K &&
-                 v_ggml_type != GgmlType::Q6_K)) {
+                 v_ggml_type != GgmlType::Q5_0 && v_ggml_type != GgmlType::Q5_K &&
+                 v_ggml_type != GgmlType::Q6_K && v_ggml_type != GgmlType::Q8_0)) {
                 throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " + synthetic_name);
             }
             requires_host_dequantization = requires_host_dequantization ||
                 v_ggml_type == GgmlType::Q2_K || v_ggml_type == GgmlType::Q3_K ||
-                v_ggml_type == GgmlType::Q4_0;
+                v_ggml_type == GgmlType::Q4_0 || v_ggml_type == GgmlType::Q5_0 ||
+                v_ggml_type == GgmlType::Q5_K || v_ggml_type == GgmlType::Q8_0;
         }
 
         if (requires_host_dequantization) {
@@ -360,7 +362,14 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host_bf16.data(),
                                   host_bf16.size() * sizeof(__nv_bfloat16),
                                   cudaMemcpyHostToDevice));
-            weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+            if (weight_mode_ == WeightMode::Int8 || weight_mode_ == WeightMode::Int4) {
+                cuda_loader_detail::quantize_and_bind(
+                    weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
+                    static_cast<size_t>(total_rows), static_cast<size_t>(common_width),
+                    weight_mode_, weight.bf16_storage.data());
+            } else {
+                weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
+            }
             cuda_loader_detail::finish_linear_binding(
                 weight, static_cast<int>(total_rows), static_cast<int>(common_width));
             auto [it, inserted] =
