@@ -1,6 +1,7 @@
 #pragma once
 
 
+#include "celeg/backend/cuda/execution_plan.hpp"
 #include "celeg/checkpoint/formats/gguf.hpp"
 
 #include <cuda_bf16.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -59,6 +61,12 @@ struct LinearWeight {
     int rows = 0;
     int cols = 0;
     LinearStorage storage;
+    // Per-tensor GEMM kernel override, set by the loader when a tensor's
+    // storage format demands a specific kernel (e.g. a mixed-quant
+    // checkpoint that isn't uniformly one format). Unset (nullopt) means
+    // "use the execution plan's model-wide kernel", which is every
+    // existing single-format model's behavior today.
+    std::optional<LinearKernelKind> kernel;
 };
 
 inline LinearWeight slice_rows(const LinearWeight& weight,

@@ -34,6 +34,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
         }
         return &cached->second.linear;
     }
+    const WeightMode weight_mode = resolve_weight_mode(name);
     if (has_packed_int8_matrix(repo, name)) {
         const PackedInt8Matrix packed = load_packed_int8_matrix(repo, name, expected);
         DeviceWeight weight;
@@ -57,10 +58,10 @@ const LinearWeight* WeightLoader::load_linear_weight(
         CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense.data(),
                               dense.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
         const std::byte* dense_data = reinterpret_cast<const std::byte*>(dense.data());
-        if (weight_mode_ == WeightMode::Int8 || weight_mode_ == WeightMode::Int4) {
+        if (weight_mode == WeightMode::Int8 || weight_mode == WeightMode::Int4) {
             cuda_loader_detail::quantize_and_bind(
                 weight, dense_data, static_cast<size_t>(packed.rows),
-                static_cast<size_t>(packed.cols), weight_mode_,
+                static_cast<size_t>(packed.cols), weight_mode,
                 weight.bf16_storage.data());
         } else {
             weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
@@ -112,10 +113,10 @@ const LinearWeight* WeightLoader::load_linear_weight(
                                   cudaMemcpyHostToDevice));
             const std::byte* dense_data =
                 reinterpret_cast<const std::byte*>(host_bf16.data());
-            if (weight_mode_ == WeightMode::Int8 || weight_mode_ == WeightMode::Int4) {
+            if (weight_mode == WeightMode::Int8 || weight_mode == WeightMode::Int4) {
                 cuda_loader_detail::quantize_and_bind(
                     weight, dense_data, static_cast<size_t>(rows),
-                    static_cast<size_t>(cols), weight_mode_,
+                    static_cast<size_t>(cols), weight_mode,
                     weight.bf16_storage.data());
             } else {
                 weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
@@ -126,7 +127,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             return &it->second.linear;
         }
 
-        if (weight_mode_ == WeightMode::NativeGguf) {
+        if (weight_mode == WeightMode::NativeGguf) {
             DeviceBuffer<uint8_t> raw_blocks(tensor.bytes);
             CELEG_CUDA(cudaMemcpy(raw_blocks.data(), tensor.data,
                                 tensor.bytes, cudaMemcpyHostToDevice));
@@ -154,8 +155,8 @@ const LinearWeight* WeightLoader::load_linear_weight(
                             weight.bf16_storage.data(), rows, cols, nullptr);
         CELEG_CUDA(cudaStreamSynchronize(nullptr));
 
-        if (weight_mode_ == WeightMode::Int8 ||
-            weight_mode_ == WeightMode::Int4) {
+        if (weight_mode == WeightMode::Int8 ||
+            weight_mode == WeightMode::Int4) {
             std::vector<__nv_bfloat16> host_bf16(
                 static_cast<size_t>(rows) * cols);
             CELEG_CUDA(cudaMemcpy(host_bf16.data(),
@@ -165,7 +166,7 @@ const LinearWeight* WeightLoader::load_linear_weight(
             cuda_loader_detail::quantize_and_bind(
                 weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                 static_cast<size_t>(rows), static_cast<size_t>(cols),
-                weight_mode_, weight.bf16_storage.data());
+                weight_mode, weight.bf16_storage.data());
             cuda_loader_detail::finish_linear_binding(weight, rows, cols);
             auto [it, inserted] =
                 weights_->tensors.emplace(name, std::move(weight));
@@ -210,10 +211,10 @@ const LinearWeight* WeightLoader::load_linear_weight(
         ? tensor.data
         : reinterpret_cast<const std::byte*>(dense.data());
 
-    if (weight_mode_ == WeightMode::Int8 || weight_mode_ == WeightMode::Int4) {
+    if (weight_mode == WeightMode::Int8 || weight_mode == WeightMode::Int4) {
         cuda_loader_detail::quantize_and_bind(
             weight, dense_data, static_cast<size_t>(rows),
-            static_cast<size_t>(cols), weight_mode_);
+            static_cast<size_t>(cols), weight_mode);
     } else {
         weight.bf16_storage.reset(count);
         CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), dense_data,
@@ -237,6 +238,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         return &cached->second.linear;
     }
     if (parts.empty()) throw std::invalid_argument("concat weight requires parts");
+    const WeightMode weight_mode = resolve_weight_mode(synthetic_name);
     if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
             return has_packed_int8_matrix(repo, part.first);
         })) {
@@ -362,11 +364,11 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             CELEG_CUDA(cudaMemcpy(weight.bf16_storage.data(), host_bf16.data(),
                                   host_bf16.size() * sizeof(__nv_bfloat16),
                                   cudaMemcpyHostToDevice));
-            if (weight_mode_ == WeightMode::Int8 || weight_mode_ == WeightMode::Int4) {
+            if (weight_mode == WeightMode::Int8 || weight_mode == WeightMode::Int4) {
                 cuda_loader_detail::quantize_and_bind(
                     weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                     static_cast<size_t>(total_rows), static_cast<size_t>(common_width),
-                    weight_mode_, weight.bf16_storage.data());
+                    weight_mode, weight.bf16_storage.data());
             } else {
                 weight.linear.storage = Bf16LinearStorage{weight.bf16_storage.data()};
             }
@@ -378,7 +380,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             return &it->second.linear;
         }
 
-        if (weight_mode_ == WeightMode::NativeGguf) {
+        if (weight_mode == WeightMode::NativeGguf) {
             DeviceWeight weight;
             weight.shape = {total_rows, common_width};
             weight.linear.storage = GgufLinearStorage{};
@@ -440,8 +442,8 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             row_offset += static_cast<int>(v.shape[0]);
         }
 
-        if (weight_mode_ == WeightMode::Int8 ||
-            weight_mode_ == WeightMode::Int4) {
+        if (weight_mode == WeightMode::Int8 ||
+            weight_mode == WeightMode::Int4) {
             const size_t count = static_cast<size_t>(total_rows) * common_width;
             std::vector<__nv_bfloat16> host_bf16(count);
             CELEG_CUDA(cudaMemcpy(host_bf16.data(),
@@ -451,7 +453,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             cuda_loader_detail::quantize_and_bind(
                 weight, reinterpret_cast<const std::byte*>(host_bf16.data()),
                 static_cast<size_t>(total_rows), static_cast<size_t>(common_width),
-                weight_mode_, weight.bf16_storage.data());
+                weight_mode, weight.bf16_storage.data());
             cuda_loader_detail::finish_linear_binding(
                 weight, static_cast<int>(total_rows), static_cast<int>(common_width));
             auto [it, inserted] =
@@ -471,7 +473,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
 
     DeviceWeight weight;
     weight.shape = {total_rows, common_width};
-    if (weight_mode_ == WeightMode::Int8) {
+    if (weight_mode == WeightMode::Int8) {
         std::vector<int8_t> quantized(total_count);
         std::vector<float> scales(static_cast<size_t>(total_rows));
         size_t row_offset = 0;
@@ -483,7 +485,7 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
             row_offset += rows;
         }
         cuda_loader_detail::bind_int8_storage(weight, quantized, scales);
-    } else if (weight_mode_ == WeightMode::Int4) {
+    } else if (weight_mode == WeightMode::Int4) {
         const size_t packed_cols =
             (static_cast<size_t>(common_width) + 1) / 2;
         std::vector<uint8_t> quantized(

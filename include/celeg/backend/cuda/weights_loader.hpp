@@ -10,6 +10,7 @@
 #include "celeg/model/weights/roles.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -23,6 +24,13 @@ void dequantize_gguf_to_bf16(const HostTensorView& tensor,
 
 class WeightLoader {
 public:
+    // Resolves the storage/quantization mode for a given checkpoint tensor
+    // name. Lets a single loader mix formats across tensors (e.g. a
+    // checkpoint whose quantization_config assigns different formats to
+    // different tensor names); the common case is a resolver that ignores
+    // the name and always returns the same mode.
+    using WeightModeResolver = std::function<WeightMode(const std::string&)>;
+
     static std::shared_ptr<SharedModelWeights> acquire(
         const std::string& model_path,
         WeightMode weight_mode,
@@ -30,6 +38,8 @@ public:
 
     WeightLoader(std::shared_ptr<SharedModelWeights> weights,
                  WeightMode weight_mode);
+    WeightLoader(std::shared_ptr<SharedModelWeights> weights,
+                 WeightModeResolver weight_mode_resolver);
 
     const __nv_bfloat16* load_weight(
         const IWeightRepository& repo,
@@ -99,11 +109,19 @@ public:
         const MoeExpertTensorNames& names,
         int num_experts, int moe_intermediate, int hidden);
 
+    // The mode used when no resolver was supplied (or, with a resolver, the
+    // mode it was seeded from). Per-tensor callers should use
+    // resolve_weight_mode(name) instead.
     WeightMode weight_mode() const { return weight_mode_; }
 
 private:
+    WeightMode resolve_weight_mode(const std::string& name) const {
+        return weight_mode_resolver_(name);
+    }
+
     std::shared_ptr<SharedModelWeights> weights_;
     WeightMode weight_mode_;
+    WeightModeResolver weight_mode_resolver_;
     std::unordered_map<std::string, ExpertLinearWeight> expert_cache_;
 };
 

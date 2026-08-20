@@ -199,7 +199,7 @@ const CompiledLinearBinding& GemmDispatcher::compile_linear_binding(
     }
     CompiledLinearBinding binding;
     binding.weight = &weight;
-    binding.kernel = plan.linear_kernel();
+    binding.kernel = weight.kernel.value_or(plan.linear_kernel());
     binding.rows = weight.rows;
     binding.cols = weight.cols;
     binding.plan_fingerprint = plan.fingerprint();

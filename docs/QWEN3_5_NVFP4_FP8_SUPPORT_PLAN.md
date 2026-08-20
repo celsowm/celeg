@@ -4,7 +4,7 @@ Status: **Not started.** Planned 2026-08-20, revised 2026-08-20 after verifying 
 the live checkpoint (`config.json`, `model.safetensors.index.json`) and the current tree. This is a
 multi-phase, multi-session effort — see Sequencing. Update the phase checklist as work lands.
 
-- [ ] Phase 1 — per-tensor quant-format infrastructure (pure refactor)
+- [x] Phase 1 — per-tensor quant-format infrastructure (pure refactor)
 - [ ] Phase 2 — `linear_attn` binding + vision/MTP fit, running in bf16
 - [ ] Phase 3 — FP8 W8A8 kernel
 - [ ] Phase 4 — NVFP4 W4A4 kernel

@@ -41,8 +41,19 @@ std::shared_ptr<SharedModelWeights> WeightLoader::acquire(
 
 WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
                            WeightMode weight_mode)
-    : weights_(std::move(weights)), weight_mode_(weight_mode) {
+    : weights_(std::move(weights)), weight_mode_(weight_mode),
+      weight_mode_resolver_([weight_mode](const std::string&) { return weight_mode; }) {
     if (!weights_) throw std::invalid_argument("WeightLoader requires non-null weights");
+}
+
+WeightLoader::WeightLoader(std::shared_ptr<SharedModelWeights> weights,
+                           WeightModeResolver weight_mode_resolver)
+    : weights_(std::move(weights)), weight_mode_(weight_mode_resolver({})),
+      weight_mode_resolver_(std::move(weight_mode_resolver)) {
+    if (!weights_) throw std::invalid_argument("WeightLoader requires non-null weights");
+    if (!weight_mode_resolver_) {
+        throw std::invalid_argument("WeightLoader requires a non-null weight mode resolver");
+    }
 }
 
 }
