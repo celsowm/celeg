@@ -21,14 +21,19 @@ struct Q8_0Host { __half d; int8_t qs[32]; };
 struct Q4_0Host { __half d; uint8_t qs[16]; };
 
 void q4_0_decode(const Q4_0Host* blk, int col, float& out) {
-    const uint8_t packed = blk->qs[col >> 1];
-    const int q = (col & 1) ? (packed >> 4) : (packed & 0x0f);
+    // GGML packs each 32-element block as two halves, not interleaved
+    // pairs: qs[j] holds element j in its low nibble and element j+16 in
+    // its high nibble (j in [0,16)).
+    const uint8_t packed = blk->qs[col & 15];
+    const int q = (col < 16) ? (packed & 0x0f) : (packed >> 4);
     out = __half2float(blk->d) * static_cast<float>(q - 8);
 }
 
 void q5_0_decode(const Q5_0Host* blk, int col, float& out) {
-    const uint8_t packed = blk->qs[col >> 1];
-    const int low = (col & 1) ? (packed >> 4) : (packed & 0x0f);
+    // Same split-half nibble layout as Q4_0; the high (5th) bit of every
+    // element lives at bit `col` of qh.
+    const uint8_t packed = blk->qs[col & 15];
+    const int low = (col < 16) ? (packed & 0x0f) : (packed >> 4);
     const uint32_t high_bits = static_cast<uint32_t>(blk->qh[0]) |
         (static_cast<uint32_t>(blk->qh[1]) << 8) |
         (static_cast<uint32_t>(blk->qh[2]) << 16) |
