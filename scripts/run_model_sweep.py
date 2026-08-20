@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
 Run all resolvable HF-cache models on CPU and CUDA backends.
-Classifies each: OK / FAIL / TIMEOUT / OOM.
+Classifies each: OK / FAIL / TIMEOUT / OOM, and separately whether the
+generated output is coherent text and whether it answers correctly.
 Writes results to /home/IN.PGE.RJ.GOV.BR/fontesc/celeg/model_sweep_results.json
 """
+import re
 import subprocess, json, time, os, sys
 from datetime import datetime
 
@@ -26,6 +28,7 @@ REPO_LIST = [
 ]
 
 PROMPT = "What is the capital of France?"
+EXPECTED_ANSWER = "paris"
 MAX_TOKENS = 20
 TEMP = 0.0
 TOP_K = 1
@@ -33,8 +36,43 @@ TOP_K = 1
 CPU_RUN = "./out/linux-cpu-relwithdebinfo/celeg-cpu-run"
 CUDA_RUN = "./out/linux-cuda-relwithdebinfo/celeg-run"
 
+# A run that "succeeds" (exit 0, chat.template= printed) can still produce
+# nonsense: an empty/garbled string, or fluent text that answers wrong. Both
+# have shown up in practice (see docs/inference_report.md Known Issues #5) and
+# neither is caught by the exit-code/marker check alone, so score them too.
+_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+def classify_output(generated: str):
+    """Return (coherent, correct) for a generated completion.
+
+    coherent: looks like real text (has recognizable words, not mostly
+      punctuation/control characters/empty/degenerate repetition).
+    correct: contains the expected answer as a whole word, case-insensitive.
+      Only meaningful when coherent is True.
+    """
+    text = generated.strip()
+    if not text:
+        return False, False
+    words = _WORD_RE.findall(text)
+    if not words:
+        return False, False
+    alpha_chars = sum(1 for c in text if c.isalpha() or c.isspace())
+    if alpha_chars / len(text) < 0.6:
+        return False, False
+    # Degenerate single-token-repeated output ("? ? ? ? ?" or "the the the").
+    if len(set(w.lower() for w in words)) <= 1 and len(words) >= 4:
+        return False, False
+    correct = re.search(r"\b" + EXPECTED_ANSWER + r"\b", text, re.IGNORECASE) is not None
+    return True, correct
+
 def run_model(run_cmd, repo, backend, extra_args=None):
-    """Run a model and return (success, output, elapsed_s, error_type)."""
+    """Run a model and return (success, output, elapsed_s, error_type, coherent, correct).
+
+    success/error_type reflect whether the process ran at all (exit code,
+    chat.template= marker). coherent/correct additionally classify the
+    generated text itself -- a run can succeed and still be incoherent or
+    factually wrong; see classify_output().
+    """
     cmd = [run_cmd, "--repo", repo, "--prompt", PROMPT,
            "--max-new-tokens", str(MAX_TOKENS),
            "--temperature", str(TEMP), "--top-k", str(TOP_K)]
@@ -48,10 +86,15 @@ def run_model(run_cmd, repo, backend, extra_args=None):
         stderr = proc.stderr
         combined = stdout + stderr
         if proc.returncode == 0 and "chat.template=" in combined:
-            # Extract the generated text (last line usually)
-            lines = combined.strip().split("\n")
+            # The diagnostic banner (chat.template=, source=, pack_path=, ...)
+            # is printed to stderr; the generated completion is printed to
+            # stdout. combined interleaves them by stream, not by time, so
+            # the generated text must be read from stdout alone.
+            lines = stdout.strip().split("\n")
             generated = lines[-1] if lines else ""
-            return (True, generated.strip(), elapsed, None)
+            generated = generated.strip()
+            coherent, correct = classify_output(generated)
+            return (True, generated, elapsed, None, coherent, correct)
         else:
             # Classify error
             err = combined.strip().split("\n")[0] if combined.strip() else "unknown"
@@ -71,11 +114,20 @@ def run_model(run_cmd, repo, backend, extra_args=None):
                 error_type = "oom_killed"
             else:
                 error_type = "other"
-            return (False, err, elapsed, error_type)
+            return (False, err, elapsed, error_type, False, False)
     except subprocess.TimeoutExpired:
-        return (False, "timeout", 300, "timeout")
+        return (False, "timeout", 300, "timeout", False, False)
     except Exception as e:
-        return (False, str(e), time.time() - start, "exception")
+        return (False, str(e), time.time() - start, "exception", False, False)
+
+def quality_label(ok, coherent, correct, err):
+    if not ok:
+        return f"FAIL({err})"
+    if not coherent:
+        return "OK-GARBLED"
+    if not correct:
+        return "OK-WRONG"
+    return "OK-CORRECT"
 
 def main():
     results = {"timestamp": datetime.now().isoformat(),
@@ -89,8 +141,8 @@ def main():
 
         # CUDA run
         print(f"  CUDA:  ", end="", flush=True)
-        cuda_ok, cuda_out, cuda_time, cuda_err = run_model(CUDA_RUN, repo, "cuda")
-        cuda_status = "OK" if cuda_ok else f"FAIL({cuda_err})"
+        cuda_ok, cuda_out, cuda_time, cuda_err, cuda_coherent, cuda_correct = run_model(CUDA_RUN, repo, "cuda")
+        cuda_status = quality_label(cuda_ok, cuda_coherent, cuda_correct, cuda_err)
         print(cuda_status)
         if cuda_ok:
             print(f"    output: {cuda_out[:80]}")
@@ -100,8 +152,8 @@ def main():
 
         # CPU run (only if CUDA worked, or always for comparison)
         print(f"  CPU:   ", end="", flush=True)
-        cpu_ok, cpu_out, cpu_time, cpu_err = run_model(CPU_RUN, repo, "cpu")
-        cpu_status = "OK" if cpu_ok else f"FAIL({cpu_err})"
+        cpu_ok, cpu_out, cpu_time, cpu_err, cpu_coherent, cpu_correct = run_model(CPU_RUN, repo, "cpu")
+        cpu_status = quality_label(cpu_ok, cpu_coherent, cpu_correct, cpu_err)
         print(cpu_status)
         if cpu_ok:
             print(f"    output: {cpu_out[:80]}")
@@ -112,9 +164,11 @@ def main():
         results["models"].append({
             "repo": repo,
             "weight_type": wtype,
-            "cuda": {"ok": cuda_ok, "output": cuda_out[:200] if cuda_ok else None,
+            "cuda": {"ok": cuda_ok, "coherent": cuda_coherent, "correct": cuda_correct,
+                     "output": cuda_out[:200] if cuda_ok else None,
                      "error": cuda_err, "time_s": round(cuda_time, 1)},
-            "cpu":  {"ok": cpu_ok, "output": cpu_out[:200] if cpu_ok else None,
+            "cpu":  {"ok": cpu_ok, "coherent": cpu_coherent, "correct": cpu_correct,
+                     "output": cpu_out[:200] if cpu_ok else None,
                      "error": cpu_err, "time_s": round(cpu_time, 1)},
         })
 
@@ -127,16 +181,20 @@ def main():
     print(f"{'='*60}")
 
     # Summary
-    cuda_ok_count = sum(1 for m in results["models"] if m["cuda"]["ok"])
-    cpu_ok_count = sum(1 for m in results["models"] if m["cpu"]["ok"])
+    def counts(backend):
+        runs = sum(1 for m in results["models"] if m[backend]["ok"])
+        correct = sum(1 for m in results["models"] if m[backend]["ok"] and m[backend]["correct"])
+        return runs, correct
+    cuda_ok_count, cuda_correct_count = counts("cuda")
+    cpu_ok_count, cpu_correct_count = counts("cpu")
     print(f"\nSUMMARY:")
     print(f"  Total models tested: {len(results['models'])}")
-    print(f"  CUDA OK: {cuda_ok_count}/{len(results['models'])}")
-    print(f"  CPU  OK: {cpu_ok_count}/{len(results['models'])}")
+    print(f"  CUDA: {cuda_ok_count}/{len(results['models'])} ran, {cuda_correct_count}/{len(results['models'])} answered correctly")
+    print(f"  CPU:  {cpu_ok_count}/{len(results['models'])} ran, {cpu_correct_count}/{len(results['models'])} answered correctly")
     for m in results["models"]:
-        cuda_s = "OK " if m["cuda"]["ok"] else "FAIL"
-        cpu_s = "OK " if m["cpu"]["ok"] else "FAIL"
-        print(f"  {cuda_s} {cpu_s}  {m['repo']}")
+        cuda_s = quality_label(m["cuda"]["ok"], m["cuda"]["coherent"], m["cuda"]["correct"], m["cuda"]["error"])
+        cpu_s = quality_label(m["cpu"]["ok"], m["cpu"]["coherent"], m["cpu"]["correct"], m["cpu"]["error"])
+        print(f"  {cuda_s:<18} {cpu_s:<18} {m['repo']}")
 
 if __name__ == "__main__":
     main()
