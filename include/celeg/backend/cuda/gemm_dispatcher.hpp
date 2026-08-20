@@ -93,14 +93,20 @@ public:
 
     LtPlan& get_or_create_fp8_lt_plan(int m, int n, int k);
 
-    // W4A4 (NVFP4 weight): dequantizes the packed e2m1 weight to bf16 and
-    // runs the existing bf16 GEMM path -- see linear.cuh for why this
-    // doesn't use cuBLASLt's native block-scaled fp4 matmul.
+    // W4A4 (NVFP4): dynamic per-16-block e2m1 activation quantization, both
+    // operands' UE4M3 block-scale tensors rearranged into cuBLASLt's
+    // documented 128x4 tiled layout, a native block-scaled fp4 matmul, then
+    // a post-multiply by the two per-tensor global scales. Falls back to
+    // dequantizing the weight to bf16 (linear.cuh's launch_dequant_nvfp4)
+    // if no cuBLASLt algorithm is found for the shape. See linear.cuh and
+    // docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4.
     void linear_nvfp4_w4a4(const __nv_bfloat16* x,
                            const Nvfp4LinearStorage& weight,
                            __nv_bfloat16* y,
                            int m, int n, int k,
                            float beta);
+
+    LtPlan& get_or_create_nvfp4_lt_plan(int m, int n, int k);
 
     void begin_native_fanout(const __nv_bfloat16* x, int m, int k);
     void end_native_fanout();
@@ -160,7 +166,15 @@ private:
     };
 
     struct Nvfp4Workspace {
+        // Fallback path (weight dequantized to bf16).
         DeviceBuffer<__nv_bfloat16> weight_bf16;
+        // Native path.
+        DeviceBuffer<uint8_t> act_packed;
+        DeviceBuffer<__nv_fp8_e4m3> act_scale_raw;
+        DeviceBuffer<__nv_fp8_e4m3> act_scale_swizzled;
+        DeviceBuffer<__nv_fp8_e4m3> weight_scale_swizzled;
+        DeviceBuffer<float> raw;
+        int capacity_m = 0;
         int capacity_n = 0;
         int capacity_k = 0;
     };
@@ -172,6 +186,7 @@ private:
     DeviceBuffer<std::byte> lt_workspace_;
     LtPlanCache lt_cache_;
     LtPlanCache fp8_lt_cache_;
+    LtPlanCache nvfp4_lt_cache_;
     LtAutotuner lt_autotuner_;
     MmqWorkspace mmq_workspace_;
     Fp8Workspace fp8_workspace_;
@@ -181,7 +196,7 @@ private:
 
     void ensure_mmq_capacity(int m, int k);
     void ensure_fp8_capacity(int m, int n, int k);
-    void ensure_nvfp4_capacity(int n, int k);
+    void ensure_nvfp4_capacity(int m, int n, int k);
     bool has_native_fanout(const __nv_bfloat16* x, int m, int k) const;
 };
 

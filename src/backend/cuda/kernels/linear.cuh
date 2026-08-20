@@ -239,17 +239,14 @@ void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
 
 // Dequantizes a packed NVFP4 (e2m1, 2 values/byte) weight with per-16-block
 // UE4M3 scales + a per-tensor fp32 global scale into bf16, so it can run
-// through the existing bf16 GEMM path. This is deliberately NOT a native
-// fp4 tensor-core matmul: a standalone cuBLASLt spike (see
-// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4) found that
-// CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 requires a scale-factor tensor
-// physical layout that isn't documented in the local CUDA 13.2 headers --
-// a naive row-major scale layout produced ~28% mean error against a
-// same-quantization scalar reference (ruled out: nibble pack order and
-// scale rounding, both verified correct independently). Rather than guess
-// at the undocumented swizzle and risk silently wrong output, this kernel
-// follows the same "dequantize once, matmul in bf16" convention already
-// used by Int4LinearStorage/Int8LinearStorage's bf16_fallback field.
+// through the existing bf16 GEMM path. FALLBACK ONLY -- see
+// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4: the primary path is now
+// the native cuBLASLt VEC16_UE4M3 block-scaled fp4 matmul (see
+// quantize_e2m1_per_block_kernel / swizzle_nvfp4_scale_128x4_kernel below),
+// once the correct scale-factor swizzle (NVIDIA's documented 128x4 tiled
+// layout) was found. This dequant path is kept only for shapes where
+// get_or_create_nvfp4_lt_plan can't find an algorithm, mirroring
+// launch_fp8_w8a8_naive's role for the fp8 path.
 __global__ void dequant_nvfp4_kernel(const uint8_t* __restrict__ packed,
                                      const __nv_fp8_e4m3* __restrict__ block_scales,
                                      float global_scale,
@@ -278,5 +275,114 @@ void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scal
                     static_cast<unsigned>(rows));
     dequant_nvfp4_kernel<<<grid, threads, 0, stream>>>(
         packed, block_scales, global_scale, out, rows, cols, block_size);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+// Quantizes bf16 to packed NVFP4 (e2m1, 2/byte) with a per-16-block UE4M3
+// scale (row-major [rows, cols/block_size]), given a per-tensor fp32
+// global_scale calibration factor (dequant = e2m1 * block_scale *
+// global_scale, matching the two-level compressed-tensors NVFP4 scheme).
+// One thread per 16-element block -- blocks never overlap, so each thread
+// owns its 8 packed output bytes exclusively.
+__global__ void quantize_e2m1_per_block_kernel(const __nv_bfloat16* __restrict__ x,
+                                               uint8_t* __restrict__ packed,
+                                               __nv_fp8_e4m3* __restrict__ scales,
+                                               int rows, int cols, int block_size,
+                                               float global_scale) {
+    const int blocks_per_row = cols / block_size;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_blocks = rows * blocks_per_row;
+    if (idx >= total_blocks) return;
+    const int row = idx / blocks_per_row;
+    const int block = idx % blocks_per_row;
+    const size_t base = static_cast<size_t>(row) * cols + static_cast<size_t>(block) * block_size;
+
+    float absmax = 0.0f;
+    for (int i = 0; i < block_size; ++i) {
+        absmax = fmaxf(absmax, fabsf(bf16_float(x[base + i])));
+    }
+    constexpr float kE2m1Max = 6.0f;
+    const float raw_scale = absmax > 0.0f ? absmax / (kE2m1Max * global_scale) : 1.0f;
+    const __nv_fp8_e4m3 quant_scale(raw_scale);
+    scales[static_cast<size_t>(row) * blocks_per_row + block] = quant_scale;
+    const float inv_eff_scale = 1.0f / (float(quant_scale) * global_scale);
+
+    for (int i = 0; i < block_size; i += 2) {
+        const uint8_t lo = static_cast<uint8_t>(__nv_cvt_float_to_fp4(
+            bf16_float(x[base + i]) * inv_eff_scale, __NV_E2M1, cudaRoundNearest));
+        const uint8_t hi = static_cast<uint8_t>(__nv_cvt_float_to_fp4(
+            bf16_float(x[base + i + 1]) * inv_eff_scale, __NV_E2M1, cudaRoundNearest));
+        packed[(base + i) / 2] = static_cast<uint8_t>(lo | (hi << 4));
+    }
+}
+
+void launch_quantize_e2m1_per_block(const __nv_bfloat16* x, uint8_t* packed,
+                                    __nv_fp8_e4m3* scales, int rows, int cols,
+                                    int block_size, float global_scale,
+                                    cudaStream_t stream) {
+    const int blocks_per_row = cols / block_size;
+    const int total_blocks = rows * blocks_per_row;
+    constexpr int threads = 128;
+    const int blocks_grid = (total_blocks + threads - 1) / threads;
+    quantize_e2m1_per_block_kernel<<<blocks_grid, threads, 0, stream>>>(
+        x, packed, scales, rows, cols, block_size, global_scale);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+// Rearranges a row-major [rows, k_scale] UE4M3 scale tensor into the 128x4
+// tiled layout cuBLASLt's CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 mode
+// expects: NVIDIA's documented layout (128 rows x 4 scale-columns per
+// 512-byte tile, offset = (row%32)*16 + (row/32)*4 + col within a tile,
+// tiles row-major, rows padded to 128 / scale-columns padded to 4 with
+// zero-fill) -- see docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4. `dst`
+// must already be zeroed (padding relies on it) and sized
+// tiles_m*tiles_n*512 where tiles_m=ceil(rows/128), tiles_n=ceil(k_scale/4).
+__global__ void swizzle_nvfp4_scale_kernel(const __nv_fp8_e4m3* __restrict__ src,
+                                           __nv_fp8_e4m3* __restrict__ dst,
+                                           int rows, int k_scale, int tiles_n) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (col >= k_scale || row >= rows) return;
+    const int tile_r = row / 128, tile_c = col / 4;
+    const int outer = row % 128, inner = col % 4;
+    const int tile_idx = tile_r * tiles_n + tile_c;
+    const int local = (outer % 32) * 16 + (outer / 32) * 4 + inner;
+    dst[static_cast<size_t>(tile_idx) * 512 + local] = src[static_cast<size_t>(row) * k_scale + col];
+}
+
+void launch_swizzle_nvfp4_scale(const __nv_fp8_e4m3* src, __nv_fp8_e4m3* dst,
+                                int rows, int k_scale, cudaStream_t stream) {
+    const int tiles_n = (k_scale + 3) / 4;
+    constexpr int threads = 128;
+    const dim3 grid(static_cast<unsigned>((k_scale + threads - 1) / threads),
+                    static_cast<unsigned>(rows));
+    swizzle_nvfp4_scale_kernel<<<grid, threads, 0, stream>>>(src, dst, rows, k_scale, tiles_n);
+    CELEG_KERNEL_DEBUG_SYNC(stream);
+}
+
+// Applies the two per-tensor NVFP4 global scales (weight's and
+// activation's) that CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 doesn't apply
+// itself -- it only bakes in the per-16-block UE4M3 scale, so the raw
+// matmul output is off by weight_global_scale * act_global_scale.
+__global__ void nvfp4_global_scale_apply_kernel(const float* __restrict__ raw,
+                                                float total_scale,
+                                                __nv_bfloat16* __restrict__ y,
+                                                int m, int n, float beta) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y;
+    if (col >= n || row >= m) return;
+    const size_t idx = static_cast<size_t>(row) * n + col;
+    float value = raw[idx] * total_scale;
+    if (beta != 0.0f) value += beta * bf16_float(y[idx]);
+    y[idx] = __float2bfloat16(value);
+}
+
+void launch_nvfp4_global_scale_apply(const float* raw, float total_scale,
+                                     __nv_bfloat16* y, int m, int n, float beta,
+                                     cudaStream_t stream) {
+    constexpr int threads = 128;
+    const dim3 grid(static_cast<unsigned>((n + threads - 1) / threads),
+                    static_cast<unsigned>(m));
+    nvfp4_global_scale_apply_kernel<<<grid, threads, 0, stream>>>(raw, total_scale, y, m, n, beta);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }

@@ -495,18 +495,114 @@ void GemmDispatcher::linear_fp8_w8a8(const __nv_bfloat16* x,
                            weight.scales, y, m, n, beta, stream_);
 }
 
-void GemmDispatcher::ensure_nvfp4_capacity(int n, int k) {
-    if (n <= nvfp4_workspace_.capacity_n && k <= nvfp4_workspace_.capacity_k) return;
-    nvfp4_workspace_.capacity_n = std::max(nvfp4_workspace_.capacity_n, n);
-    nvfp4_workspace_.capacity_k = std::max(nvfp4_workspace_.capacity_k, k);
-    nvfp4_workspace_.weight_bf16.reset(
-        static_cast<size_t>(nvfp4_workspace_.capacity_n) * nvfp4_workspace_.capacity_k);
+namespace {
+// Byte size of the 128x4-tiled VEC16_UE4M3 scale buffer for a `rows` x
+// `k_scale` (row-major) logical scale tensor -- see linear.cuh's
+// swizzle_nvfp4_scale_kernel comment for the layout this mirrors.
+size_t nvfp4_scale_buffer_bytes(int rows, int k_scale) {
+    const int tiles_m = (rows + 127) / 128;
+    const int tiles_n = (k_scale + 3) / 4;
+    return static_cast<size_t>(tiles_m) * tiles_n * 512;
+}
 }
 
-// See linear.cuh's dequant_nvfp4_kernel comment and
-// docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4 for why this dequantizes
-// to bf16 and runs the existing bf16 GEMM instead of a native fp4
-// tensor-core matmul.
+void GemmDispatcher::ensure_nvfp4_capacity(int m, int n, int k) {
+    if (m <= nvfp4_workspace_.capacity_m && n <= nvfp4_workspace_.capacity_n &&
+        k <= nvfp4_workspace_.capacity_k) {
+        return;
+    }
+    nvfp4_workspace_.capacity_m = std::max(nvfp4_workspace_.capacity_m, m);
+    nvfp4_workspace_.capacity_n = std::max(nvfp4_workspace_.capacity_n, n);
+    nvfp4_workspace_.capacity_k = std::max(nvfp4_workspace_.capacity_k, k);
+    const int cm = nvfp4_workspace_.capacity_m;
+    const int cn = nvfp4_workspace_.capacity_n;
+    const int ck = nvfp4_workspace_.capacity_k;
+    const int k_scale = ck / kNvfp4BlockSize;
+
+    nvfp4_workspace_.weight_bf16.reset(static_cast<size_t>(cn) * ck);
+    nvfp4_workspace_.act_packed.reset(static_cast<size_t>(cm) * ck / 2);
+    nvfp4_workspace_.act_scale_raw.reset(static_cast<size_t>(cm) * k_scale);
+    nvfp4_workspace_.act_scale_swizzled.reset(nvfp4_scale_buffer_bytes(cm, k_scale));
+    nvfp4_workspace_.weight_scale_swizzled.reset(nvfp4_scale_buffer_bytes(cn, k_scale));
+    nvfp4_workspace_.raw.reset(static_cast<size_t>(cm) * cn);
+}
+
+// Native NVFP4 block-scaled fp4 matmul plan. Mirrors get_or_create_fp8_lt_plan's
+// TRANSA=T/TRANSB=N layout convention. A_SCALE_MODE/B_SCALE_MODE are fixed
+// per plan (VEC16_UE4M3); the actual scale POINTERs are set per-call in
+// linear_nvfp4_w4a4 since they point at per-call-refreshed workspace
+// buffers. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md Phase 4 for how the
+// 128x4 tiled scale layout this depends on was found and verified.
+LtPlan& GemmDispatcher::get_or_create_nvfp4_lt_plan(int m, int n, int k) {
+    const MatmulKey key{m, n, k};
+    if (auto it = nvfp4_lt_cache_.plans.find(key); it != nvfp4_lt_cache_.plans.end()) {
+        return *it->second;
+    }
+
+    auto plan = std::make_unique<LtPlan>();
+    CELEG_CUBLAS(cublasLtMatmulDescCreate(
+        &plan->operation, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+    const cublasOperation_t transa = CUBLAS_OP_T;
+    const cublasOperation_t transb = CUBLAS_OP_N;
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa)));
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
+    const cublasLtMatmulMatrixScale_t scale_mode = CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3;
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &scale_mode, sizeof(scale_mode)));
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &scale_mode, sizeof(scale_mode)));
+    // cublasLtMatmulAlgoGetHeuristic requires the scale POINTERS to already
+    // be set (not just the scale mode) or it returns INVALID_VALUE with
+    // zero results -- found empirically, undocumented. ensure_nvfp4_capacity
+    // was already called for this exact (m,n,k) by the caller, so these
+    // addresses are valid now; linear_nvfp4_w4a4 re-sets them on every call
+    // anyway (workspace buffers can grow/realloc for a larger shape later,
+    // which would otherwise leave this cached plan's pointers dangling).
+    __nv_fp8_e4m3* a_scale_ptr = nvfp4_workspace_.weight_scale_swizzled.data();
+    __nv_fp8_e4m3* b_scale_ptr = nvfp4_workspace_.act_scale_swizzled.data();
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &a_scale_ptr, sizeof(a_scale_ptr)));
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan->operation, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &b_scale_ptr, sizeof(b_scale_ptr)));
+
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->a, CUDA_R_4F_E2M1, k, n, k));
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->b, CUDA_R_4F_E2M1, k, m, k));
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->c, CUDA_R_32F, n, m, n));
+    CELEG_CUBLAS(cublasLtMatrixLayoutCreate(&plan->d, CUDA_R_32F, n, m, n));
+
+    cublasLtMatmulPreference_t preference = nullptr;
+    CELEG_CUBLAS(cublasLtMatmulPreferenceCreate(&preference));
+    try {
+        const uint64_t workspace_limit = static_cast<uint64_t>(options_.lt_workspace_bytes);
+        CELEG_CUBLAS(cublasLtMatmulPreferenceSetAttribute(
+            preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+            &workspace_limit, sizeof(workspace_limit)));
+
+        cublasLtMatmulHeuristicResult_t result{};
+        int returned = 0;
+        const cublasStatus_t status = cublasLtMatmulAlgoGetHeuristic(
+            handles_.cublas_lt.get(), plan->operation,
+            plan->a, plan->b, plan->c, plan->d,
+            preference, 1, &result, &returned);
+        if (status == CUBLAS_STATUS_SUCCESS && returned > 0 &&
+            result.workspaceSize <= options_.lt_workspace_bytes) {
+            plan->algorithm = result.algo;
+            plan->workspace_size = result.workspaceSize;
+            plan->available = true;
+        }
+    } catch (...) {
+        cublasLtMatmulPreferenceDestroy(preference);
+        throw;
+    }
+    CELEG_CUBLAS(cublasLtMatmulPreferenceDestroy(preference));
+
+    auto [it, inserted] = nvfp4_lt_cache_.plans.emplace(key, std::move(plan));
+    if (!inserted) throw std::runtime_error("duplicate nvfp4 cuBLASLt plan");
+    return *it->second;
+}
+
 void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
                                        const Nvfp4LinearStorage& weight,
                                        __nv_bfloat16* y,
@@ -515,19 +611,63 @@ void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
     if (!weight.data || !weight.block_scales) {
         throw std::runtime_error("NVFP4 linear weight is missing data or block scales");
     }
-    ensure_nvfp4_capacity(n, k);
-    launch_dequant_nvfp4(weight.data, weight.block_scales, weight.global_scale,
-                         nvfp4_workspace_.weight_bf16.data(), n, k,
-                         kNvfp4BlockSize, stream_);
-    if (m == 1) {
-        launch_bf16_gemv(x, nvfp4_workspace_.weight_bf16.data(), y, n, k, beta, stream_);
+    if (k % kNvfp4BlockSize != 0) {
+        throw std::runtime_error("NVFP4 linear requires k to be a multiple of the block size");
+    }
+    ensure_nvfp4_capacity(m, n, k);
+
+    LtPlan& plan = get_or_create_nvfp4_lt_plan(m, n, k);
+    if (!plan.available) {
+        // No cuBLASLt fp4 algorithm for this shape -- fall back to
+        // dequantizing the weight to bf16 and running the ordinary bf16
+        // GEMM (loses fp4 tensor-core throughput but stays correct).
+        launch_dequant_nvfp4(weight.data, weight.block_scales, weight.global_scale,
+                             nvfp4_workspace_.weight_bf16.data(), n, k,
+                             kNvfp4BlockSize, stream_);
+        if (m == 1) {
+            launch_bf16_gemv(x, nvfp4_workspace_.weight_bf16.data(), y, n, k, beta, stream_);
+        } else if (options_.gemm_backend == GemmBackend::CublasLt) {
+            linear_cublaslt(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
+        } else {
+            linear_cublas(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
+        }
         return;
     }
-    if (options_.gemm_backend == GemmBackend::CublasLt) {
-        linear_cublaslt(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
-    } else {
-        linear_cublas(x, nvfp4_workspace_.weight_bf16.data(), y, m, n, k, beta);
-    }
+
+    const int k_scale = k / kNvfp4BlockSize;
+    // Activations don't yet carry a checkpoint-calibrated global scale
+    // (that's the `input_global_scale` the real quantization_config
+    // supplies -- Phase 5 loader work); until then, treat it as 1.0.
+    constexpr float kActGlobalScale = 1.0f;
+    launch_quantize_e2m1_per_block(x, nvfp4_workspace_.act_packed.data(),
+                                   nvfp4_workspace_.act_scale_raw.data(),
+                                   m, k, kNvfp4BlockSize, kActGlobalScale, stream_);
+
+    nvfp4_workspace_.act_scale_swizzled.zero_async(stream_);
+    nvfp4_workspace_.weight_scale_swizzled.zero_async(stream_);
+    launch_swizzle_nvfp4_scale(nvfp4_workspace_.act_scale_raw.data(),
+                               nvfp4_workspace_.act_scale_swizzled.data(), m, k_scale, stream_);
+    launch_swizzle_nvfp4_scale(weight.block_scales,
+                               nvfp4_workspace_.weight_scale_swizzled.data(), n, k_scale, stream_);
+
+    __nv_fp8_e4m3* a_scale_ptr = nvfp4_workspace_.weight_scale_swizzled.data();
+    __nv_fp8_e4m3* b_scale_ptr = nvfp4_workspace_.act_scale_swizzled.data();
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan.operation, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &a_scale_ptr, sizeof(a_scale_ptr)));
+    CELEG_CUBLAS(cublasLtMatmulDescSetAttribute(
+        plan.operation, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &b_scale_ptr, sizeof(b_scale_ptr)));
+
+    const float alpha = 1.0f;
+    const float raw_beta = 0.0f;
+    CELEG_CUBLAS(cublasLtMatmul(
+        handles_.cublas_lt.get(), plan.operation,
+        &alpha, weight.data, plan.a, nvfp4_workspace_.act_packed.data(), plan.b,
+        &raw_beta, nvfp4_workspace_.raw.data(), plan.c,
+        nvfp4_workspace_.raw.data(), plan.d,
+        &plan.algorithm, lt_workspace_.data(), plan.workspace_size, stream_));
+
+    const float total_scale = weight.global_scale * kActGlobalScale;
+    launch_nvfp4_global_scale_apply(nvfp4_workspace_.raw.data(), total_scale, y, m, n, beta, stream_);
 }
 
 }

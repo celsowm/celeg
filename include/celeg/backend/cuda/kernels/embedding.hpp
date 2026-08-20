@@ -77,11 +77,28 @@ void launch_fp8_w8a8_naive(const __nv_fp8_e4m3* x_q, const float* act_scale,
                           cudaStream_t stream);
 
 // Dequantizes a packed NVFP4 (e2m1) weight with per-block UE4M3 scales and
-// a per-tensor fp32 global scale into bf16. See linear.cuh for why this
-// dequant-then-bf16-matmul path is used instead of cuBLASLt's native
-// block-scaled fp4 matmul.
+// a per-tensor fp32 global scale into bf16. Fallback path -- see linear.cuh.
 void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scales,
                          float global_scale, __nv_bfloat16* out,
                          int rows, int cols, int block_size, cudaStream_t stream);
+
+// Quantizes bf16 to packed NVFP4 (e2m1) with per-16-block UE4M3 scales
+// (row-major), given a per-tensor fp32 global scale.
+void launch_quantize_e2m1_per_block(const __nv_bfloat16* x, uint8_t* packed,
+                                   __nv_fp8_e4m3* scales, int rows, int cols,
+                                   int block_size, float global_scale,
+                                   cudaStream_t stream);
+
+// Rearranges a row-major UE4M3 scale tensor into cuBLASLt's 128x4 tiled
+// VEC16_UE4M3 layout. `dst` must be pre-zeroed and sized for the padded
+// tile grid (tiles_m=ceil(rows/128), tiles_n=ceil(k_scale/4), 512 B/tile).
+void launch_swizzle_nvfp4_scale(const __nv_fp8_e4m3* src, __nv_fp8_e4m3* dst,
+                                int rows, int k_scale, cudaStream_t stream);
+
+// Applies the two per-tensor NVFP4 global scales cuBLASLt's block-scaled
+// fp4 matmul doesn't apply itself (it only bakes in the per-block scale).
+void launch_nvfp4_global_scale_apply(const float* raw, float total_scale,
+                                    __nv_bfloat16* y, int m, int n, float beta,
+                                    cudaStream_t stream);
 
 }

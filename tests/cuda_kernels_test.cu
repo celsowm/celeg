@@ -512,84 +512,84 @@ int main() {
     }
 
     // NVFP4 W4A4: exercises GemmDispatcher's LinearKernelKind::Nvfp4W4A4
-    // path (dequantize packed e2m1 weight to bf16, then run the existing
-    // bf16 GEMM) end to end. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
-    // Phase 4 for why this doesn't use cuBLASLt's native block-scaled fp4
-    // matmul (undocumented scale-tensor layout, empirically wrong when
-    // assumed row-major).
-    {
-        constexpr int m = 4;
-        constexpr int n = 6;
-        constexpr int k = 32;
-        constexpr int block = celeg::kNvfp4BlockSize;
-        constexpr int blocks_per_row = k / block;
-        static const float kE2m1Lut[8] = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f};
-        auto encode_e2m1 = [](float v) -> uint8_t {
-            const bool sign = v < 0.0f;
-            const float av = std::fabs(v);
-            int best = 0;
-            float best_err = std::fabs(av - kE2m1Lut[0]);
-            for (int i = 1; i < 8; ++i) {
-                const float err = std::fabs(av - kE2m1Lut[i]);
-                if (err < best_err) { best_err = err; best = i; }
-            }
-            return static_cast<uint8_t>(best | (sign ? 0x8 : 0));
-        };
-        auto decode_e2m1 = [](uint8_t nibble) -> float {
-            const bool sign = nibble & 0x8;
-            const float mag = kE2m1Lut[nibble & 0x7];
-            return sign ? -mag : mag;
-        };
+    // path end to end -- dynamic per-16-block e2m1 activation quantization,
+    // both operands' UE4M3 scale tensors rearranged into cuBLASLt's 128x4
+    // tiled layout, a native block-scaled fp4 matmul, then the per-tensor
+    // global-scale post-multiply. See docs/QWEN3_5_NVFP4_FP8_SUPPORT_PLAN.md
+    // Phase 4 for how this layout was found and verified (bit-exact against
+    // a scalar reference at several shapes in the standalone spike). Run
+    // for two shapes: one row-tile-aligned (n=128) and one not (n=6, which
+    // only differs in output width -- the scale/data padding logic handles
+    // both) to cover the padding path.
+    static const float kE2m1Lut[8] = {0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f};
+    auto decode_e2m1_ref = [](uint8_t nibble) -> float {
+        const bool sign = nibble & 0x8;
+        const float mag = kE2m1Lut[nibble & 0x7];
+        return sign ? -mag : mag;
+    };
+    for (const auto& [m, n, k] : {std::tuple{4, 8, 32}, std::tuple{8, 128, 256}}) {
+        const int block = celeg::kNvfp4BlockSize;
+        const int blocks_per_row = k / block;
+        constexpr float weight_global_scale = 1.5f;
+        constexpr float act_global_scale = 1.0f; // matches GemmDispatcher's current default
 
         std::mt19937 rng(13);
         std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
-        std::vector<__nv_bfloat16> x(m * k);
+        std::vector<__nv_bfloat16> x(m * k), w(n * k);
         for (auto& v : x) v = to_bf16(dist(rng));
+        for (auto& v : w) v = to_bf16(dist(rng));
 
-        std::vector<float> w(n * k);
-        for (auto& v : w) v = dist(rng);
-        constexpr float global_scale = 1.5f;
-        std::vector<uint8_t> w_packed(static_cast<size_t>(n) * k / 2);
-        std::vector<__nv_fp8_e4m3> w_block_scales(static_cast<size_t>(n) * blocks_per_row);
-        std::vector<float> w_dequant(n * k);
-        for (int row = 0; row < n; ++row) {
+        celeg::DeviceBuffer<__nv_bfloat16> dx(x.size()), dw_bf16(w.size());
+        CELEG_CUDA(cudaMemcpy(dx.data(), x.data(), dx.bytes(), cudaMemcpyHostToDevice));
+        CELEG_CUDA(cudaMemcpy(dw_bf16.data(), w.data(), dw_bf16.bytes(), cudaMemcpyHostToDevice));
+
+        // Quantize the weight with the kernel under test (same one
+        // GemmDispatcher uses for activations) so the scalar reference
+        // matches exactly what the dispatcher will consume/produce.
+        celeg::DeviceBuffer<uint8_t> dw_packed(static_cast<size_t>(n) * k / 2);
+        celeg::DeviceBuffer<__nv_fp8_e4m3> dw_scales(static_cast<size_t>(n) * blocks_per_row);
+        celeg::launch_quantize_e2m1_per_block(dw_bf16.data(), dw_packed.data(), dw_scales.data(),
+                                              n, k, block, weight_global_scale, stream.get());
+        // Reference-only: quantize activations too (GemmDispatcher does
+        // this internally with act_global_scale=1.0) so the reference dot
+        // product uses the exact same quantized values on both sides.
+        celeg::DeviceBuffer<uint8_t> dx_packed(static_cast<size_t>(m) * k / 2);
+        celeg::DeviceBuffer<__nv_fp8_e4m3> dx_scales(static_cast<size_t>(m) * blocks_per_row);
+        celeg::launch_quantize_e2m1_per_block(dx.data(), dx_packed.data(), dx_scales.data(),
+                                              m, k, block, act_global_scale, stream.get());
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+
+        std::vector<uint8_t> x_packed(dx_packed.size()), w_packed(dw_packed.size());
+        std::vector<__nv_fp8_e4m3> x_scales(dx_scales.size()), w_scales(dw_scales.size());
+        CELEG_CUDA(cudaMemcpy(x_packed.data(), dx_packed.data(), dx_packed.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(w_packed.data(), dw_packed.data(), dw_packed.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(x_scales.data(), dx_scales.data(), dx_scales.bytes(), cudaMemcpyDeviceToHost));
+        CELEG_CUDA(cudaMemcpy(w_scales.data(), dw_scales.data(), dw_scales.bytes(), cudaMemcpyDeviceToHost));
+
+        auto dequant_row = [&](const std::vector<uint8_t>& packed, const std::vector<__nv_fp8_e4m3>& scales,
+                              int row, float global_scale) {
+            std::vector<float> out(k);
             for (int b = 0; b < blocks_per_row; ++b) {
-                float absmax = 0.0f;
-                for (int i = 0; i < block; ++i) {
-                    absmax = std::max(absmax, std::fabs(w[row * k + b * block + i]));
-                }
-                const float raw_scale = absmax > 0.0f ? absmax / (6.0f * global_scale) : 1.0f;
-                const __nv_fp8_e4m3 quant_scale(raw_scale);
-                w_block_scales[row * blocks_per_row + b] = quant_scale;
+                const float scale = float(scales[row * blocks_per_row + b]) * global_scale;
                 for (int i = 0; i < block; i += 2) {
                     const int idx = b * block + i;
-                    const uint8_t lo = encode_e2m1(w[row * k + idx] / (float(quant_scale) * global_scale));
-                    const uint8_t hi = encode_e2m1(w[row * k + idx + 1] / (float(quant_scale) * global_scale));
-                    w_packed[(row * k + idx) / 2] = static_cast<uint8_t>(lo | (hi << 4));
-                    w_dequant[row * k + idx] = decode_e2m1(lo) * float(quant_scale) * global_scale;
-                    w_dequant[row * k + idx + 1] = decode_e2m1(hi) * float(quant_scale) * global_scale;
+                    const uint8_t byte = packed[(row * k + idx) / 2];
+                    out[idx] = decode_e2m1_ref(byte & 0xF) * scale;
+                    out[idx + 1] = decode_e2m1_ref((byte >> 4) & 0xF) * scale;
                 }
             }
-        }
-
+            return out;
+        };
         std::vector<float> reference(m * n, 0.0f);
         for (int row = 0; row < m; ++row) {
+            auto xr = dequant_row(x_packed, x_scales, row, act_global_scale);
             for (int col = 0; col < n; ++col) {
+                auto wr = dequant_row(w_packed, w_scales, col, weight_global_scale);
                 float acc = 0.0f;
-                for (int i = 0; i < k; ++i) {
-                    acc += to_float(x[row * k + i]) * w_dequant[col * k + i];
-                }
+                for (int i = 0; i < k; ++i) acc += xr[i] * wr[i];
                 reference[row * n + col] = acc;
             }
         }
-
-        celeg::DeviceBuffer<__nv_bfloat16> dx(x.size());
-        celeg::DeviceBuffer<uint8_t> dw_packed(w_packed.size());
-        celeg::DeviceBuffer<__nv_fp8_e4m3> dw_block_scales(w_block_scales.size());
-        CELEG_CUDA(cudaMemcpy(dx.data(), x.data(), dx.bytes(), cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(dw_packed.data(), w_packed.data(), dw_packed.bytes(), cudaMemcpyHostToDevice));
-        CELEG_CUDA(cudaMemcpy(dw_block_scales.data(), w_block_scales.data(), dw_block_scales.bytes(),
-                             cudaMemcpyHostToDevice));
 
         celeg::CudaModelOptions dispatcher_options;
         celeg::GemmDispatcher dispatcher(stream.get(), dispatcher_options);
@@ -597,7 +597,7 @@ int main() {
         weight.rows = n;
         weight.cols = k;
         weight.kernel = celeg::LinearKernelKind::Nvfp4W4A4;
-        weight.storage = celeg::Nvfp4LinearStorage{dw_packed.data(), dw_block_scales.data(), global_scale};
+        weight.storage = celeg::Nvfp4LinearStorage{dw_packed.data(), dw_scales.data(), weight_global_scale};
         const celeg::CudaExecutionPlan plan =
             celeg::CudaExecutionPlan::compile(dispatcher_options, 1024);
 
