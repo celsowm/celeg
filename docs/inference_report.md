@@ -10,9 +10,9 @@
 
 | Model | Format | CUDA Status | CPU Status |
 |-------|--------|-------------|------------|
-| LiquidAI/LFM2.5-230M | safetensors | ✅ Works | ✅ Works |
+| LiquidAI/LFM2.5-230M | safetensors | ✅ Works | ⚠️ Wrong answer, deterministic (see Known Issues #5) |
 | LiquidAI/LFM2.5-230M-GGUF | GGUF (Q4_K_M only) | ✅ **Fixed** — "The capital of France is Paris." (see Fixes Applied #5) | ❌ Wrong answer (see Known Issues #5) |
-| LiquidAI/LFM2.5-350M | safetensors | ✅ Works | ✅ Works |
+| LiquidAI/LFM2.5-350M | safetensors | ✅ Works | ⚠️ Wrong answer, deterministic (see Known Issues #5) |
 | LiquidAI/LFM2.5-350M-GGUF | GGUF | ✅ **Fixed** — BF16/F16/Q6_K/Q4_K_M all correct; Q8_0/Q5_K_M/Q4_0 still hard-error on unimplemented paths (see Known Issues #5) | ⚠️ Unchanged: Q6_K/Q5_K_M ✅, BF16/Q4_K_M/Q4_0 wrong, F16/Q8_0 fail (see Known Issues #5) |
 | LiquidAI/LFM2.5-VL-450M | safetensors | ❌ Wrong answer (see Known Issues #6) | ❌ Wrong answer (see Known Issues #6) |
 | ibm-granite/granite-4.1-3b | safetensors | ✅ **Fixed** — coherent, correct output (see Fixes Applied #4) | ✅ Works |
@@ -88,7 +88,7 @@ All fixes this round are **generic**: implemented in the automatic/architecture-
 
 4. **inclusionAI/Ling-3.0-tiny (CUDA) — `cublasCreate` fails.** Pre-existing, unrelated to this round's changes (verified: identical failure mode on unmodified code). CPU backend works fine.
 
-5. **A separate CPU-side GGUF quantization defect remains for NEOX-style architectures.** The Q/K row-layout bug that produced most of this table's earlier chaos is fixed (Fixes Applied #5), and CUDA GGUF is now correct wherever a code path exists. What is left is a genuinely different fault, visible only on CPU and only for architectures celeg leaves in split-half order (so the layout fix is a no-op for them). Re-tested by hand after the fix (prompt: "What is the capital of France?"), LFM2.5-350M-GGUF:
+5. **A CPU-vs-CUDA numeric divergence on NEOX-style architectures remains, and it turns out not to be GGUF-specific.** The Q/K row-layout bug that produced most of this table's earlier chaos is fixed (Fixes Applied #5), and CUDA GGUF is now correct wherever a code path exists. What is left affects CPU on architectures celeg leaves in split-half order (so the layout fix is a no-op for them) — but as the first sub-point below shows, it is present on plain safetensors too, so it is a backend divergence, not a quantization defect. Re-tested by hand after the fix (prompt: "What is the capital of France?"), LFM2.5-350M-GGUF:
 
    | Variant | CPU | CUDA |
    |---|---|---|
@@ -100,12 +100,13 @@ All fixes this round are **generic**: implemented in the automatic/architecture-
    | Q4_K_M | ❌ wrong | ✅ **correct (was garbled)** |
    | Q4_0 | ❌ wrong (answers about the United Kingdom) | ❌ `execution plan requires INT8 weights` |
 
-   Two distinct things remain here, and they should not be conflated:
+   Three distinct things remain here, and they should not be conflated:
 
-   - **CPU, NEOX architectures only.** LFM2.5-230M/350M-GGUF and Lizzy-7B-GGUF still produce wrong or empty output on CPU at several quantizations, while the *same files* are now correct on CUDA and the safetensors builds are correct on both. Correctness is still non-monotonic in bit width on this backend (Q6_K/Q5_K_M pass while the higher-precision BF16 and Q8_0 fail), which points at per-quant-format dequantization/packing bugs in `src/backend/cpu/kernels/gguf*.cpp` rather than anything positional. Note the NORM-architecture GGUFs (Nanbeige, MiniCPM) *are* now correct on CPU, so this is not a blanket CPU-GGUF failure.
+   - **A genuine CPU-vs-CUDA numeric divergence on LFM2's shortconv+attention hybrid architecture — not a GGUF or quantization defect at all.** Layer-by-layer stats (`CELEG_DEBUG_LAYER_STATS`) show CPU Q4_K_M and CPU Q6_K tracking each other closely at every layer (final hidden-state norm 0.972 vs 0.997) — no corruption, unlike the RoPE bug. The tell is the **plain safetensors build**, which involves no quantization at all: CUDA answers "The capital of France is Paris..." while CPU answers "The capital of France is a country called France." — deterministically, reproduced twice. CPU's final-layer norm (1.017) is close to both its own GGUF variants and to CUDA's (0.898), so this is not gross corruption but a smaller, diffuse divergence that happens to land greedy decoding on the wrong side of what looks like a very tight decision boundary for this 350M model on this prompt. That explains the apparent "non-monotonic in bit width" pattern for LFM2/Lizzy specifically: different quantizations perturb the tied logits differently, landing on either side of the boundary somewhat by chance, layered on top of whatever the true CPU/CUDA divergence is. Not bisected further this round (candidates: the shortconv kernel, RMSNorm epsilon handling, or attention accumulation order differing between backends) — it needs its own investigation, separate from the GGUF layout fix above, since the safetensors control rules out anything GGUF-specific.
    - **CUDA, two unimplemented paths.** `mixed dense/unsupported quantized concat` for the fused `w13` gate/up tensor (hit by Q8_0 and Q5_K_M) and `execution plan requires INT8 weights` for Q4_0 are hard errors from missing code, not wrong math — they fail loudly and are straightforward feature gaps.
+   - **CPU F16/Q8_0 hard errors** (`must be BF16 or F32`, empty output) are separate loader gaps, not investigated.
 
-   Neither is investigated further this round. Also unchanged: `scripts/run_model_sweep.py` still marks a model OK on exit code 0 plus a `chat.template=` line and never checks semantic coherence, which is why every GGUF row in earlier versions of this table was a false positive; it should be taught a coherence check before it is trusted again.
+   None of the three is investigated further this round. Also unchanged: `scripts/run_model_sweep.py` still marks a model OK on exit code 0 plus a `chat.template=` line and never checks semantic coherence, which is why every GGUF row in earlier versions of this table was a false positive; it should be taught a coherence check before it is trusted again.
 
 6. **LiquidAI/LFM2.5-VL-450M — wrong answers on both backends.** Also a sweep false positive. Answers "The capital city of France is a city in the United States of America." (CPU, both with and without the int4 pack cache) and "The capital city of France is a country in Europe, located in Europe." (CUDA). Its non-vision sibling LFM2.5-350M answers correctly on the same backends, so this is unlikely to be model capacity alone and more likely a resolution gap in the VL checkpoint's text tower. Not root-caused.
 
