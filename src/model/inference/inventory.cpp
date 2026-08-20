@@ -1,5 +1,6 @@
 #include "celeg/model/inference.hpp"
 
+#include "celeg/checkpoint/packed/nvfp4.hpp"
 #include "support.hpp"
 
 #include <algorithm>
@@ -30,7 +31,7 @@ AttentionPatternKind parse_attention_pattern(std::string_view value,
     if (value == "conv" || value == "short_convolution" ||
         value == "recurrent" || value == "mamba" || value == "mamba2" ||
         value == "gdn" || value == "gated_delta" ||
-        value == "gated_delta_net") {
+        value == "gated_delta_net" || value == "linear_attention") {
         return AttentionPatternKind::None;
     }
     inference_detail::fail(
@@ -538,29 +539,52 @@ TensorInventory::TensorInventory(std::vector<TensorInventoryEntry> entries)
     std::vector<TensorInventoryEntry> derived;
     for (const auto& entry : entries_) {
         constexpr std::string_view packed_suffix = "_packed";
-        if (!entry.name.ends_with(packed_suffix) || entry.dtype != TensorDType::I32 ||
-            entry.shape.size() != 2) continue;
+        if (!entry.name.ends_with(packed_suffix)) continue;
         const std::string base = entry.name.substr(
             0, entry.name.size() - packed_suffix.size());
         if (by_name.contains(base)) continue;
-        const auto scale_it = by_name.find(base + "_scale");
-        const auto shape_it = by_name.find(base + "_shape");
-        if (scale_it == by_name.end() || shape_it == by_name.end() ||
-            scale_it->second->dtype != TensorDType::BF16 ||
-            scale_it->second->shape.size() != 2 ||
-            shape_it->second->dtype != TensorDType::I64 ||
-            shape_it->second->shape != std::vector<int64_t>{2}) continue;
-        const int64_t rows = entry.shape[0];
-        const int64_t packed_words = entry.shape[1];
-        const int64_t scale_columns = scale_it->second->shape[1];
-        if (rows <= 0 || packed_words <= 0 || scale_columns <= 0 ||
-            scale_it->second->shape[0] != rows) continue;
-        const int64_t cols = scale_columns == 1
-            ? packed_words * 4 : scale_columns * 32;
-        const int64_t expected_words = scale_columns == 1
-            ? (cols + 3) / 4 : (cols + 7) / 8;
-        if (expected_words != packed_words) continue;
-        derived.push_back({base, {rows, cols}, TensorDType::Quantized});
+        if (entry.dtype == TensorDType::I32 && entry.shape.size() == 2) {
+            const auto scale_it = by_name.find(base + "_scale");
+            const auto shape_it = by_name.find(base + "_shape");
+            if (scale_it == by_name.end() || shape_it == by_name.end() ||
+                scale_it->second->dtype != TensorDType::BF16 ||
+                scale_it->second->shape.size() != 2 ||
+                shape_it->second->dtype != TensorDType::I64 ||
+                shape_it->second->shape != std::vector<int64_t>{2}) continue;
+            const int64_t rows = entry.shape[0];
+            const int64_t packed_words = entry.shape[1];
+            const int64_t scale_columns = scale_it->second->shape[1];
+            if (rows <= 0 || packed_words <= 0 || scale_columns <= 0 ||
+                scale_it->second->shape[0] != rows) continue;
+            const int64_t cols = scale_columns == 1
+                ? packed_words * 4 : scale_columns * 32;
+            const int64_t expected_words = scale_columns == 1
+                ? (cols + 3) / 4 : (cols + 7) / 8;
+            if (expected_words != packed_words) continue;
+            derived.push_back({base, {rows, cols}, TensorDType::Quantized});
+        } else if (entry.dtype == TensorDType::U8 && entry.shape.size() == 2) {
+            // NVFP4-pack-quantized (compressed-tensors): "<base>_packed" is
+            // [rows, cols/2] nibble-packed, alongside a per-16-block
+            // "<base>_scale" and a per-tensor "<base>_global_scale". See
+            // celeg/checkpoint/packed/nvfp4.hpp, which loads the same three
+            // sidecars by the same naming convention once the loader binds
+            // this derived entry to an actual weight.
+            const auto scale_it = by_name.find(base + "_scale");
+            const auto global_scale_it = by_name.find(base + "_global_scale");
+            if (scale_it == by_name.end() || global_scale_it == by_name.end() ||
+                scale_it->second->dtype != TensorDType::F8_E4M3 ||
+                scale_it->second->shape.size() != 2 ||
+                global_scale_it->second->dtype != TensorDType::F32 ||
+                global_scale_it->second->shape != std::vector<int64_t>{1}) continue;
+            const int64_t rows = entry.shape[0];
+            const int64_t packed_cols = entry.shape[1];
+            const int64_t scale_columns = scale_it->second->shape[1];
+            if (rows <= 0 || packed_cols <= 0 || scale_columns <= 0 ||
+                scale_it->second->shape[0] != rows) continue;
+            const int64_t cols = packed_cols * 2;
+            if (scale_columns * kNvfp4PackedBlockSize != cols) continue;
+            derived.push_back({base, {rows, cols}, TensorDType::Quantized});
+        }
     }
     entries_.insert(entries_.end(), derived.begin(), derived.end());
     std::sort(entries_.begin(), entries_.end(),
@@ -593,7 +617,11 @@ TensorInventory build_tensor_inventory(const IWeightRepository& repository) {
     std::vector<TensorInventoryEntry> entries;
     for (const std::string& name : repository.names()) {
         const HostTensorView tensor = repository.tensor(name);
-        if (name.empty() || tensor.shape.size() > 4) {
+        // Rank 5 covers the vision-tower temporal patch-embed conv
+        // (SafetensorProjectionProvider requires exactly rank 5: [hidden,
+        // channels, temporal, patch_h, patch_w]); nothing else in the
+        // generic inference pipeline depends on this bound being tighter.
+        if (name.empty() || tensor.shape.size() > 5) {
             inference_detail::fail(
                 ResolutionFailureKind::UnsupportedTensorLayout,
                 "tensor inventory contains invalid tensor metadata: " + name);

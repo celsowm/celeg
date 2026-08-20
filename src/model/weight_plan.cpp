@@ -1,6 +1,8 @@
 #include "celeg/model/weight_plan.hpp"
 
+#include "celeg/checkpoint/packed/fp8.hpp"
 #include "celeg/checkpoint/packed/int4.hpp"
+#include "celeg/checkpoint/packed/nvfp4.hpp"
 #include "celeg/model/weights/roles.hpp"
 
 #include <algorithm>
@@ -180,13 +182,15 @@ void append_mixer(ResolvedModel& model, const LayerSpec& layer,
 }
 
 /// A naming candidate is loadable when the repository stores it directly or
-/// when it is a checkpoint-packed int4 tensor addressed by its virtual base
-/// name (physical entries carry the _packed/_scale/_shape suffixes). This is
-/// the same repository-level convention the weight codecs consume, so plan
-/// resolution and loaders agree on what a resolved name means.
+/// when it is a checkpoint-packed int4/FP8/NVFP4 tensor addressed by its
+/// virtual base name (physical entries carry the _packed/_scale/_shape or
+/// _scale/_global_scale suffixes). This is the same repository-level
+/// convention the weight codecs consume, so plan resolution and loaders
+/// agree on what a resolved name means.
 bool repository_has_tensor(const IWeightRepository& repository,
                            const std::string& name) {
-    return repository.contains(name) || has_packed_int4_matrix(repository, name);
+    return repository.contains(name) || has_packed_int4_matrix(repository, name) ||
+        has_packed_fp8_matrix(repository, name) || has_packed_nvfp4_matrix(repository, name);
 }
 
 // Decides, once, whether this MoE layer's routed-expert weights are packed

@@ -9,7 +9,7 @@ multi-phase, multi-session effort — see Sequencing. Update the phase checklist
 - [x] Phase 3 — FP8 W8A8 kernel
 - [x] Phase 4 — NVFP4 W4A4 kernel (native block-scaled tensor-core path, verified bit-exact; dequant-to-bf16 fallback for unsupported shapes)
 - [x] Phase 5 — per-tensor FP8/NVFP4 loading, self-describing (no `quantization_config` regex parser)
-- [ ] Phase 6 — end-to-end verification against the real checkpoint + docs
+- [~] Phase 6 — end-to-end verification against the real checkpoint + docs (checkpoint loads and runs cleanly; several real loader/architecture bugs found and fixed; one confirmed NVFP4 scale-direction bug fixed; generation is measurably closer to sane but not yet coherent -- see status below)
 
 > **Naming, not a typo.** The repo is `unsloth/Qwen3.8-27B-NVFP4` (base `Qwen/Qwen3.8-27B`), but its
 > `model_type` is `qwen3_5` and its architecture class is `Qwen3_5ForConditionalGeneration` — the
@@ -418,6 +418,93 @@ plan, reasoned through at the start of this phase rather than assumed:
 **Phase 6 — End-to-end verification and docs.**
 Full quantized run of the real 27B checkpoint; compare output against the Phase-2 bf16 baseline for
 coherence/consistency; add to `scripts/run_model_sweep.py`; write up in `docs/inference_report.md`.
+
+*Status: checkpoint downloaded and runs end-to-end without loader/architecture errors; generation
+output is not yet coherent. Not done -- see below.*
+
+The real `unsloth/Qwen3.8-27B-NVFP4` checkpoint (22GB `model.safetensors` + 850MB `model_mtp.safetensors`)
+was downloaded and pointed at celeg's HF cache layout. Getting it to load at all surfaced six real,
+generic bugs -- none of them checkpoint-specific hacks, all confirmed against the real on-disk data,
+all with regression coverage added, `ctest` 91/91 green throughout:
+
+1. **`layer_types: "linear_attention"` was an unrecognized token.** `parse_attention_pattern`
+   (`src/model/inference/inventory.cpp`) had synonyms for `gdn`/`mamba`/`conv`/etc. but not the literal
+   string this checkpoint's `layer_types` actually uses. Added the synonym; added `layer_types` to
+   `automatic_inference_test.cpp`'s synthetic qwen3.5 checkpoint (it previously didn't set this key
+   at all, so this whole code path had zero coverage for the real per-layer-schedule case).
+2. **Tensor-inventory rank cap of 4 rejected the vision patch-embed conv.** `model.visual.patch_embed.proj.weight`
+   is legitimately rank 5 (`[hidden, channels, temporal, patch_h, patch_w]`) and
+   `SafetensorProjectionProvider` already requires exactly rank 5 -- `build_tensor_inventory`'s blanket
+   `shape.size() > 4` was simply too strict. Raised the cap to 5.
+3. **`layer_has_feed_forward` / `find_unique` / `infer_intermediate_sizes` only recognized dense
+   `<name>.weight` tensors.** NVFP4-packed weights replace that literal tensor with
+   `<name>.weight_packed` + sidecars -- the base name never exists on disk. Fixed generically at the
+   `TensorInventory` level (`src/model/inference/inventory.cpp`): a "derived" inventory entry is now
+   synthesized under the base name with the logical dense shape whenever the NVFP4 sidecar triple is
+   present, exactly mirroring the pre-existing INT4/INT8 `_packed` derivation this file already did.
+   One inventory-level fix covers every caller that does a plain name lookup.
+4. **`repository_has_tensor` (the actual weight-loading name-resolution check, distinct from the
+   inventory-level fix above) didn't know about FP8/NVFP4 packed sidecars.** Added
+   `has_packed_fp8_matrix`/`has_packed_nvfp4_matrix` alongside the existing `has_packed_int4_matrix`
+   check in `src/model/weight_plan.cpp`.
+5. **Dense (non-MoE) MLP gate+up fusion (`load_concat_linear_weight`) had no FP8/NVFP4 branch**, only
+   dense/GGUF/int8. This checkpoint's ordinary (non-MoE) layers always go through this fused-w13 path,
+   so it's not an edge case. Added both: FP8 concat is a straightforward per-row-scale row-stack
+   (identical shape to the existing int8 branch). NVFP4 concat requires the two parts to share one
+   `global_scale`/`input_global_scale` (verified against the real checkpoint: every layer's gate_proj
+   and up_proj have bit-identical global scales -- consistent with being calibrated together) --
+   fails loudly rather than silently reconciling if that assumption is ever violated.
+6. **Tokenizer BOS resolution and `eos_token_id` metadata were both wrong for this tokenizer.**
+   `tokenizer_json_loader.cpp`'s "`<|endoftext|>` doubles as BOS" heuristic was gated on the vocabulary
+   having no separate EOS-family token either -- but this tokenizer has both a real chat EOS
+   (`<|im_end|>`) *and* a config-declared `bos_token_id` of `<|endoftext|>` at the same time (a
+   Qwen-family pattern). Split the heuristic so BOS assignment no longer depends on whether an
+   explicit EOS was found. Separately, `config.json`'s `text_config.eos_token_id` is a single id
+   (248044) but `generation_config.json`'s `eos_token_id` is the complete `[248046, 248044]` stop set
+   actually used at generation time and HF's own tooling treats it as authoritative over `config.json`.
+   Taught `catalog.cpp` to merge `generation_config.json`'s `bos_token_id`/`eos_token_id` into metadata
+   at the unscoped key (checked before any `text_config.*` fallback) -- a generically useful fix, not
+   specific to this checkpoint.
+
+With all six fixed, the checkpoint loads completely: `--memory-report` shows ~20.6GB resident (matches
+the expected footprint for a mixed FP8/NVFP4 27B model; was initially misreported as 2.4GB because
+`SharedModelWeights::memory_bytes()` summed the pre-existing storage buffers but not the three new
+FP8/NVFP4 `DeviceBuffer`s added in Phase 5 -- fixed in `src/backend/cuda/model/weights.cpp`), and
+`--print-config` confirms the resolved topology matches the checkpoint exactly:
+`layers=64 attention_layers=16 gated_delta_layers=48` (the 3:1 hybrid schedule).
+
+Generation, however, was initially completely degenerate (`结构设计` repeated indefinitely regardless
+of prompt). Root-caused to a **real, confirmed sign error in the NVFP4 dequantization formula**,
+present since Phase 3/4 and invisible to `cuda_kernels_test.cu`'s existing NVFP4 unit test because
+that test only exercises `weight_global_scale=1.5`/`act_global_scale=1.0` -- neither value is large
+enough to expose the bug, and the *activation* side is always 1.0 there. celeg's kernels computed
+`dequant = e2m1_code * block_scale * global_scale`; the correct compressed-tensors/NVIDIA convention
+(`global_scale = FP8_MAX * FP4_MAX / tensor_amax`, i.e. a *larger* global_scale means a *smaller*
+tensor) requires `dequant = e2m1_code * block_scale / global_scale`. Verified directly against the
+real checkpoint's bytes before changing anything: dequantizing `layers.0.mlp.gate_proj` by hand in
+Python, the multiply convention produces weight magnitudes in the hundreds of thousands (obviously
+wrong for a transformer weight); the divide convention produces magnitudes around 0.001-0.02 (exactly
+the expected range). Fixed in three places that all shared the same inverted convention:
+`dequant_nvfp4_kernel` and `quantize_e2m1_per_block_kernel` (`src/backend/cuda/kernels/linear.cuh`),
+and the primary cuBLASLt-path post-multiply in `gemm_dispatcher.cpp` (now `1.0f / (weight.global_scale
+* weight.input_global_scale)` instead of the product). Updated `cuda_kernels_test.cu`'s scalar
+reference to match (it was self-consistently testing the wrong direction, which is why it passed
+despite the bug).
+
+After this fix, real-checkpoint generation changed qualitatively -- no longer a fixed repeating token
+loop, higher-confidence (larger) logit margins, and the first generated token decodes as valid,
+on-topic-adjacent text (Chinese characters for "Canada", not noise) -- but subsequent tokens still
+include invalid/replacement-character byte sequences, so generation is not yet coherent. This is
+concrete evidence the scale-direction fix was real and directionally correct, but at least one more
+issue remains (candidates, not yet isolated: a residual NVFP4/FP8 precision or swizzle issue at scale
+across 64 layers, a tokenizer BPE byte-fallback decode edge case independent of quantization, or an
+architecture-level issue specific to this checkpoint's exact attention/gated-deltanet configuration
+that the Phase 2 synthetic tests didn't exercise). Isolating it further needs either a Python
+reference dequantizer extended to a full single-layer numerical comparison, or `--dump-logits` diffing
+against a real bf16 baseline run -- neither done yet.
+
+Not yet done: `scripts/run_model_sweep.py` entry, `docs/inference_report.md` write-up (both explicitly
+deferred until generation is actually coherent -- no point recording a broken baseline).
 
 ## Tests (per phase, added incrementally — not all upfront)
 - Phase 1: existing `ctest` suite stays green, zero behavior change (pure refactor).

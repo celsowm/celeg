@@ -308,6 +308,12 @@ celeg::CheckpointMetadata qwen35_metadata() {
     result.values["linear_num_value_heads"] = int64_t(3);
     result.values["linear_value_head_dim"] = int64_t(4);
     result.values["linear_conv_kernel_dim"] = int64_t(4);
+    // Layer 0 is linear_attn, layer 1 is full_attention -- matches
+    // qwen35_repository() below. Exercises the "linear_attention" token in
+    // the generic per-layer attention-pattern parser (distinct from the
+    // "gdn"/"gated_delta_net" synonyms it already recognized).
+    result.values["layer_types"] =
+        std::vector<std::string>{"linear_attention", "full_attention"};
     return result;
 }
 

@@ -13,7 +13,10 @@ size_t SharedModelWeights::memory_bytes() const {
                  weight.int8_storage.bytes() +
                  weight.int4_storage.bytes() +
                  weight.gguf_expert_storage.bytes() +
-                 weight.scales_storage.bytes();
+                 weight.scales_storage.bytes() +
+                 weight.fp8_storage.bytes() +
+                 weight.nvfp4_packed_storage.bytes() +
+                 weight.nvfp4_block_scale_storage.bytes();
     }
     return total;
 }

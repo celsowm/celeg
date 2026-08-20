@@ -263,7 +263,7 @@ __global__ void dequant_nvfp4_kernel(const uint8_t* __restrict__ packed,
     const __half_raw h = __nv_cvt_fp4_to_halfraw(
         static_cast<__nv_fp4_storage_t>(nibble), __NV_E2M1);
     const float scale = float(block_scales[static_cast<size_t>(row) * blocks_per_row + block]);
-    const float value = __half2float(__half(h)) * scale * global_scale;
+    const float value = __half2float(__half(h)) * scale / global_scale;
     out[elem] = __float2bfloat16(value);
 }
 
@@ -280,8 +280,10 @@ void launch_dequant_nvfp4(const uint8_t* packed, const __nv_fp8_e4m3* block_scal
 
 // Quantizes bf16 to packed NVFP4 (e2m1, 2/byte) with a per-16-block UE4M3
 // scale (row-major [rows, cols/block_size]), given a per-tensor fp32
-// global_scale calibration factor (dequant = e2m1 * block_scale *
-// global_scale, matching the two-level compressed-tensors NVFP4 scheme).
+// global_scale calibration factor (dequant = e2m1 * block_scale /
+// global_scale, matching NVIDIA's global_scale = FP8_MAX * FP4_MAX /
+// tensor_amax convention -- a *larger* global_scale means a *smaller*
+// tensor, so it divides on dequant, not multiplies).
 // One thread per 16-element block -- blocks never overlap, so each thread
 // owns its 8 packed output bytes exclusively.
 __global__ void quantize_e2m1_per_block_kernel(const __nv_bfloat16* __restrict__ x,
@@ -302,10 +304,10 @@ __global__ void quantize_e2m1_per_block_kernel(const __nv_bfloat16* __restrict__
         absmax = fmaxf(absmax, fabsf(bf16_float(x[base + i])));
     }
     constexpr float kE2m1Max = 6.0f;
-    const float raw_scale = absmax > 0.0f ? absmax / (kE2m1Max * global_scale) : 1.0f;
+    const float raw_scale = absmax > 0.0f ? (absmax * global_scale) / kE2m1Max : 1.0f;
     const __nv_fp8_e4m3 quant_scale(raw_scale);
     scales[static_cast<size_t>(row) * blocks_per_row + block] = quant_scale;
-    const float inv_eff_scale = 1.0f / (float(quant_scale) * global_scale);
+    const float inv_eff_scale = global_scale / float(quant_scale);
 
     for (int i = 0; i < block_size; i += 2) {
         const uint8_t lo = static_cast<uint8_t>(__nv_cvt_float_to_fp4(
@@ -363,7 +365,10 @@ void launch_swizzle_nvfp4_scale(const __nv_fp8_e4m3* src, __nv_fp8_e4m3* dst,
 // Applies the two per-tensor NVFP4 global scales (weight's and
 // activation's) that CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3 doesn't apply
 // itself -- it only bakes in the per-16-block UE4M3 scale, so the raw
-// matmul output is off by weight_global_scale * act_global_scale.
+// matmul output is off by a factor of 1 / (weight_global_scale *
+// act_global_scale) (each global_scale divides on dequant, see
+// dequant_nvfp4_kernel above); the caller passes total_scale already
+// inverted.
 __global__ void nvfp4_global_scale_apply_kernel(const float* __restrict__ raw,
                                                 float total_scale,
                                                 __nv_bfloat16* __restrict__ y,

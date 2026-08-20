@@ -662,7 +662,7 @@ void GemmDispatcher::linear_nvfp4_w4a4(const __nv_bfloat16* x,
         nvfp4_workspace_.raw.data(), plan.d,
         &plan.algorithm, lt_workspace_.data(), plan.workspace_size, stream_));
 
-    const float total_scale = weight.global_scale * weight.input_global_scale;
+    const float total_scale = 1.0f / (weight.global_scale * weight.input_global_scale);
     launch_nvfp4_global_scale_apply(nvfp4_workspace_.raw.data(), total_scale, y, m, n, beta, stream_);
 }
 

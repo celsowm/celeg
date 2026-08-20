@@ -570,7 +570,7 @@ int main() {
                               int row, float global_scale) {
             std::vector<float> out(k);
             for (int b = 0; b < blocks_per_row; ++b) {
-                const float scale = float(scales[row * blocks_per_row + b]) * global_scale;
+                const float scale = float(scales[row * blocks_per_row + b]) / global_scale;
                 for (int i = 0; i < block; i += 2) {
                     const int idx = b * block + i;
                     const uint8_t byte = packed[(row * k + idx) / 2];

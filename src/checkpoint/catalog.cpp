@@ -92,6 +92,35 @@ public:
                 }
             }
         }
+        // generation_config.json is HF's authoritative source for the token
+        // ids actually used at generation time: bos/eos there can differ
+        // from (and be more complete than -- e.g. a multi-id eos_token_id
+        // list) config.json's, so when present it takes priority over
+        // config.json's bos_token_id/eos_token_id at the unscoped metadata
+        // key (which alias resolution checks before any text_config.*
+        // fallback).
+        const auto generation_config = root / "generation_config.json";
+        if (std::filesystem::is_regular_file(generation_config)) {
+            try {
+                const auto gen_json = Json::parse_file(generation_config.string());
+                const auto merge_token_field = [&](std::string_view key) {
+                    if (!gen_json.contains(key)) return;
+                    const Json& value = gen_json[key];
+                    if (value.is_number()) {
+                        result.metadata.values[std::string(key)] = value.as_i64();
+                    } else if (value.is_array()) {
+                        std::vector<int64_t> ids;
+                        for (const Json& item : value.as_array()) {
+                            if (item.is_number()) ids.push_back(item.as_i64());
+                        }
+                        if (!ids.empty()) result.metadata.values[std::string(key)] = std::move(ids);
+                    }
+                };
+                merge_token_field("bos_token_id");
+                merge_token_field("eos_token_id");
+            } catch (...) {
+            }
+        }
         result.repository = std::make_shared<SafeTensorRepository>(path);
         return result;
     }

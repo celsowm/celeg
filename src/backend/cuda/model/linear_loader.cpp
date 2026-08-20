@@ -294,6 +294,75 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
         return &it->second.linear;
     }
+    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
+            return has_packed_fp8_matrix(repo, part.first);
+        })) {
+        // Per-row (per-output-channel) weight scale, dynamic per-token
+        // activation quant shared across all rows: stacking rows from
+        // multiple parts needs no scale reconciliation, exactly like the
+        // int8 case above.
+        const int64_t cols = parts.front().second.at(1);
+        int64_t rows = 0;
+        std::vector<uint8_t> values;
+        std::vector<float> scales;
+        for (const auto& [name, expected] : parts) {
+            const PackedFp8Matrix packed = load_packed_fp8_matrix(repo, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed concat width mismatch");
+            values.insert(values.end(), packed.values.begin(), packed.values.end());
+            scales.insert(scales.end(), packed.scales.begin(), packed.scales.end());
+            rows += packed.rows;
+        }
+        DeviceWeight weight;
+        weight.shape = {rows, cols};
+        cuda_loader_detail::bind_fp8_storage(weight, values, scales);
+        cuda_loader_detail::finish_linear_binding(
+            weight, static_cast<int>(rows), static_cast<int>(cols));
+        auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
+        return &it->second.linear;
+    }
+    if (std::all_of(parts.begin(), parts.end(), [&](const auto& part) {
+            return has_packed_nvfp4_matrix(repo, part.first);
+        })) {
+        // The per-16-block weight scale varies per row/block, but
+        // global_scale and input_global_scale are single per-tensor
+        // scalars -- concatenating parts calibrated with different
+        // scalars would require re-quantizing one part's fp8 block
+        // scales, losing precision the checkpoint doesn't actually need
+        // to lose (in practice, a gate/up pair sharing one calibration
+        // pass always carries identical scalars; fail loudly rather than
+        // silently reconcile if a checkpoint ever violates that).
+        const int64_t cols = parts.front().second.at(1);
+        int64_t rows = 0;
+        std::vector<uint8_t> packed_values;
+        std::vector<uint8_t> block_scales;
+        std::optional<float> global_scale;
+        std::optional<float> input_global_scale;
+        for (const auto& [name, expected] : parts) {
+            const PackedNvfp4Matrix packed = load_packed_nvfp4_matrix(repo, name, expected);
+            if (packed.cols != cols) throw std::runtime_error("packed concat width mismatch");
+            if (!global_scale) global_scale = packed.global_scale;
+            if (!input_global_scale) input_global_scale = packed.input_global_scale;
+            if (packed.global_scale != *global_scale ||
+                packed.input_global_scale != *input_global_scale) {
+                throw std::runtime_error(
+                    "NVFP4 concat parts have mismatched calibration scales: " + name);
+            }
+            packed_values.insert(packed_values.end(), packed.packed.begin(), packed.packed.end());
+            block_scales.insert(block_scales.end(), packed.block_scales.begin(),
+                                packed.block_scales.end());
+            rows += packed.rows;
+        }
+        DeviceWeight weight;
+        weight.shape = {rows, cols};
+        cuda_loader_detail::bind_nvfp4_storage(weight, packed_values, block_scales,
+                                               *global_scale, *input_global_scale);
+        cuda_loader_detail::finish_linear_binding(
+            weight, static_cast<int>(rows), static_cast<int>(cols));
+        auto [it, inserted] = weights_->tensors.emplace(synthetic_name, std::move(weight));
+        if (!inserted) throw std::runtime_error("duplicate concat weight: " + synthetic_name);
+        return &it->second.linear;
+    }
     int64_t common_width = -1;
     int64_t total_rows = 0;
     size_t total_count = 0;
