@@ -556,5 +556,17 @@ int main() {
     CELEG_TEST_CHECK(qwen35_mrope->sections == expected_sections);
     CELEG_TEST_CHECK(std::abs(qwen35_mrope->base.rotary_fraction - 0.5f) < 1.0e-6f);
     CELEG_TEST_CHECK(celeg::explain_resolution(qwen35_checkpoint).failures.empty());
+
+    // Qwen3.5's `Qwen3_5RMSNorm` multiplies by `1 + weight`, not `weight`
+    // directly (the checkpoint stores a zero-centered offset) -- detected
+    // from the same `linear_attn.in_proj_qkv.weight` grammar that selects
+    // the gated-delta layer above, so every structurally-bound norm in this
+    // checkpoint (input/post-attention layernorm, q/k-norm, final norm)
+    // must resolve to `OnePlusScale`.
+    CELEG_TEST_CHECK(qwen35_model.graph.final_norm.weight_kind ==
+                     celeg::NormWeightKind::OnePlusScale);
+    CELEG_TEST_CHECK(qwen35_model.graph.layers[0].mixer_norm.before.has_value());
+    CELEG_TEST_CHECK(qwen35_model.graph.layers[0].mixer_norm.before->weight_kind ==
+                     celeg::NormWeightKind::OnePlusScale);
     return 0;
 }

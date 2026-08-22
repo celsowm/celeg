@@ -253,7 +253,7 @@ void bind_structural_norm(CanonicalInferenceContext& context,
     }
     slot = NormSpec{
         context.facts.numerical_policy.norm_eps,
-        NormWeightKind::Scale};
+        context.facts.numerical_policy.norm_weight_kind};
     add_binding(
         context.facts.bindings,
         role,

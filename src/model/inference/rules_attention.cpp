@@ -18,7 +18,8 @@ AttentionSpec make_attention(
     int head_dim,
     bool query_key_norm,
     NormGranularity query_norm_granularity = NormGranularity::PerHead,
-    NormGranularity key_norm_granularity = NormGranularity::PerHead) {
+    NormGranularity key_norm_granularity = NormGranularity::PerHead,
+    NormWeightKind norm_weight_kind = NormWeightKind::Scale) {
     AttentionSpec attention;
     attention.query_heads = query_heads;
     attention.key_value_heads = key_value_heads;
@@ -31,7 +32,7 @@ AttentionSpec make_attention(
         }
         return NormSpec{
             *metadata.core.norm_epsilon,
-            NormWeightKind::Scale,
+            norm_weight_kind,
             granularity};
     };
     attention.query_norm = optional_qk_norm(query_norm_granularity);
@@ -250,7 +251,8 @@ public:
             head_dim,
             has_query_norm,
             query_norm_granularity,
-            key_norm_granularity);
+            key_norm_granularity,
+            context.facts.numerical_policy.norm_weight_kind);
 
         const auto q_candidates =
             attention_tensor_candidates(physical_layer, "q_proj.weight");

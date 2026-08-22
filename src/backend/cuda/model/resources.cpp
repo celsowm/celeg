@@ -15,6 +15,7 @@ void CudaCompiledModel::allocate_celeg_resources() {
         resources_.program_.hidden,
         static_cast<int>(plan.attention_output))));
     workspace_.qkv_output_.reset(plan.attention_projection);
+    workspace_.q_.reset(plan.attention_output);
     workspace_.attention_gate_.reset(plan.attention_output);
     workspace_.latent_query_content_.reset(plan.latent_query_content);
     workspace_.latent_query_rope_.reset(plan.latent_query_rope);

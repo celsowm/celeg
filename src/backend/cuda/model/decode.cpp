@@ -445,6 +445,7 @@ void CudaCompiledModel::run_token_attention(
     __nv_bfloat16* q = workspace_.qkv_output_.data();
     const int query_projection_width = attention.query->rows;
     const bool output_gate = layout.output_gate.has_value();
+    const bool gate_packed = output_gate && layout.output_gate->packed_with_query;
     __nv_bfloat16* k = q + query_projection_width;
     __nv_bfloat16* v = k + layout.key_value_width();
     {
@@ -458,6 +459,17 @@ void CudaCompiledModel::run_token_attention(
             linear(workspace_.normed_.data(), *attention.value, v,
                    1, layout.key_value_width(), resources_.program_.hidden);
         }
+    }
+
+    if (gate_packed) {
+        // q currently holds `query_heads` chunks of `2 * head_dim`
+        // (query, gate interleaved per head -- see
+        // extract_attention_output_gate_kernel); de-interleave into
+        // dedicated buffers before qk-norm/RoPE/attention touch q.
+        launch_extract_attention_output_gate(
+            q, workspace_.q_.data(), workspace_.attention_gate_.data(),
+            1, layout.query_width(), layout.head_dim, stream_.get());
+        q = workspace_.q_.data();
     }
 
     const float qk_epsilon = layout.query_norm
@@ -508,12 +520,11 @@ void CudaCompiledModel::run_token_attention(
     }
 
     if (output_gate) {
-        const __nv_bfloat16* gate = q + layout.query_width();
-        if (!layout.output_gate->packed_with_query) {
+        const __nv_bfloat16* gate = workspace_.attention_gate_.data();
+        if (!gate_packed) {
             linear(workspace_.normed_.data(), *attention.gate,
                    workspace_.attention_gate_.data(), 1,
                    layout.query_width(), resources_.program_.hidden);
-            gate = workspace_.attention_gate_.data();
         }
         launch_sigmoid_multiply(workspace_.op_output_.data(), gate,
                                 layout.query_width(), stream_.get());

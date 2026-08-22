@@ -17,6 +17,7 @@ struct CudaWorkspace {
     DeviceBuffer<__nv_bfloat16> normed_;
     DeviceBuffer<__nv_bfloat16> op_output_;
     DeviceBuffer<__nv_bfloat16> qkv_output_;
+    DeviceBuffer<__nv_bfloat16> q_;
     DeviceBuffer<__nv_bfloat16> attention_gate_;
     DeviceBuffer<__nv_bfloat16> latent_query_content_;
     DeviceBuffer<__nv_bfloat16> latent_query_rope_;

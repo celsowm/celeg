@@ -208,6 +208,37 @@ int main() {
         for(size_t i=0;i<got_state.size();++i) expect_near(to_float(got_state[i]),cpu_state[i],0.03f);
     }
 
+    // rows < 64 with key_heads != value_heads (GQA-style repeat), matching a
+    // short prefill of a Qwen3.5-shaped gated-deltanet layer. This exact
+    // combination previously fell into a single-row-only kernel path that
+    // silently left every row past row 0 uncomputed.
+    {
+        constexpr int rows = 5, kernel = 4, dim = 8, key_heads = 2, value_heads = 6;
+        constexpr int qkv_width = 2 * key_heads * dim + value_heads * dim;
+        constexpr int value_width = value_heads * dim;
+        std::vector<float> qkv(rows * qkv_width), z(rows * value_width), b(rows * value_heads),
+            a(rows * value_heads), conv(qkv_width * kernel), dt(value_heads), alog(value_heads), norm(dim, 1.0f);
+        for (size_t i = 0; i < qkv.size(); ++i) qkv[i] = 0.003f * static_cast<float>(i + 1);
+        for (size_t i = 0; i < z.size(); ++i) z[i] = -0.02f * static_cast<float>(i + 1);
+        for (size_t i = 0; i < b.size(); ++i) { b[i] = -0.2f; a[i] = 0.1f; }
+        for (size_t i = 0; i < conv.size(); ++i) conv[i] = 0.02f;
+        std::fill(dt.begin(), dt.end(), 0.5f); std::fill(alog.begin(), alog.end(), -0.3f);
+        std::vector<float> cpu_conv(qkv_width * kernel), cpu_state(value_heads * dim * dim), cpu_out(rows * value_width);
+        celeg::cpu_gated_delta_net_prefill(qkv.data(), z.data(), b.data(), a.data(), conv.data(), dt.data(), alog.data(), norm.data(), cpu_conv.data(), cpu_state.data(), cpu_out.data(), rows, kernel, dim, dim, key_heads, value_heads, 1e-6f);
+        std::vector<__nv_bfloat16> hq(qkv.size()), hz(z.size()), hb(b.size()), ha(a.size()), hc(conv.size()), hdt(dt.size()), hal(alog.size()), hn(norm.size());
+        for (size_t i=0;i<hq.size();++i) hq[i]=to_bf16(qkv[i]); for(size_t i=0;i<hz.size();++i) hz[i]=to_bf16(z[i]); for(size_t i=0;i<hb.size();++i){hb[i]=to_bf16(b[i]);ha[i]=to_bf16(a[i]);} for(size_t i=0;i<hc.size();++i)hc[i]=to_bf16(conv[i]); for(int i=0;i<value_heads;++i){hdt[i]=to_bf16(dt[i]);hal[i]=to_bf16(alog[i]);} for(int i=0;i<dim;++i)hn[i]=to_bf16(norm[i]);
+        celeg::DeviceBuffer<__nv_bfloat16> dq(qkv.size()), dz(z.size()), db(b.size()), da(a.size()), dc(conv.size()), ddt(dt.size()), dal(alog.size()), dn(norm.size()), dcs(qkv_width*kernel), drs(value_heads*dim*dim), dout(rows*value_width);
+        CELEG_CUDA(cudaMemcpy(dq.data(),hq.data(),dq.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dz.data(),hz.data(),dz.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(db.data(),hb.data(),db.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(da.data(),ha.data(),da.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dc.data(),hc.data(),dc.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(ddt.data(),hdt.data(),ddt.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dal.data(),hal.data(),dal.bytes(),cudaMemcpyHostToDevice)); CELEG_CUDA(cudaMemcpy(dn.data(),hn.data(),dn.bytes(),cudaMemcpyHostToDevice));
+        celeg::launch_gated_delta_net(dq.data(), dz.data(), db.data(), da.data(),
+            dc.data(), ddt.data(), dal.data(), dn.data(), dcs.data(), drs.data(),
+            dout.data(), rows, kernel, dim, dim, key_heads, value_heads, 1e-6f, false,
+            false, -5.0f, false, stream.get());
+        std::vector<__nv_bfloat16> got(cpu_out.size()), got_conv(cpu_conv.size()), got_state(cpu_state.size()); CELEG_CUDA(cudaMemcpyAsync(got.data(),dout.data(),dout.bytes(),cudaMemcpyDeviceToHost,stream.get())); CELEG_CUDA(cudaMemcpyAsync(got_conv.data(),dcs.data(),dcs.bytes(),cudaMemcpyDeviceToHost,stream.get())); CELEG_CUDA(cudaMemcpyAsync(got_state.data(),drs.data(),drs.bytes(),cudaMemcpyDeviceToHost,stream.get())); CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for(size_t i=0;i<got.size();++i) expect_near(to_float(got[i]),cpu_out[i],0.03f);
+        for(size_t i=0;i<got_conv.size();++i) expect_near(to_float(got_conv[i]),cpu_conv[i],0.03f);
+        for(size_t i=0;i<got_state.size();++i) expect_near(to_float(got_state[i]),cpu_state[i],0.03f);
+    }
+
     {
         constexpr int rows = 1, kernel = 4, dim = 128, heads = 1;
         constexpr int qkv_width = 3 * dim, value_width = dim;
@@ -249,6 +280,43 @@ int main() {
         for (size_t i = 0; i < got_out.size(); ++i) expect_near(to_float(got_out[i]), cpu_out[i], 0.03f);
         for (size_t i = 0; i < got_conv.size(); ++i) expect_near(to_float(got_conv[i]), cpu_conv[i], 0.03f);
         for (size_t i = 0; i < got_state.size(); ++i) expect_near(to_float(got_state[i]), cpu_state[i], 0.03f);
+    }
+
+    // Packed attention query+gate extraction must de-interleave *per head*
+    // (query_head0, gate_head0, query_head1, gate_head1, ...) -- the
+    // HF/checkpoint convention from `q_proj(x).view(..., heads, 2*head_dim)`
+    // then `chunk(2, dim=-1)` -- not split coarsely into one contiguous
+    // query block followed by one contiguous gate block.
+    {
+        constexpr int rows = 2, heads = 3, head_dim = 4, width = heads * head_dim;
+        std::vector<__nv_bfloat16> packed(rows * width * 2);
+        std::vector<float> expected_query(rows * width), expected_gate(rows * width);
+        for (int row = 0; row < rows; ++row) {
+            for (int head = 0; head < heads; ++head) {
+                for (int d = 0; d < head_dim; ++d) {
+                    const float qv = static_cast<float>(row * 100 + head * 10 + d);
+                    const float gv = static_cast<float>(row * 100 + head * 10 + d) + 0.5f;
+                    const size_t base = static_cast<size_t>(row) * width * 2 +
+                        static_cast<size_t>(head) * 2 * head_dim;
+                    packed[base + d] = to_bf16(qv);
+                    packed[base + head_dim + d] = to_bf16(gv);
+                    expected_query[row * width + head * head_dim + d] = qv;
+                    expected_gate[row * width + head * head_dim + d] = gv;
+                }
+            }
+        }
+        celeg::DeviceBuffer<__nv_bfloat16> dpacked(packed.size()), dquery(rows * width), dgate(rows * width);
+        CELEG_CUDA(cudaMemcpy(dpacked.data(), packed.data(), dpacked.bytes(), cudaMemcpyHostToDevice));
+        celeg::launch_extract_attention_output_gate(
+            dpacked.data(), dquery.data(), dgate.data(), rows, width, head_dim, stream.get());
+        std::vector<__nv_bfloat16> got_query(rows * width), got_gate(rows * width);
+        CELEG_CUDA(cudaMemcpyAsync(got_query.data(), dquery.data(), dquery.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaMemcpyAsync(got_gate.data(), dgate.data(), dgate.bytes(), cudaMemcpyDeviceToHost, stream.get()));
+        CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+        for (size_t i = 0; i < got_query.size(); ++i) {
+            expect_near(to_float(got_query[i]), expected_query[i], 0.01f);
+            expect_near(to_float(got_gate[i]), expected_gate[i], 0.01f);
+        }
     }
 
     {

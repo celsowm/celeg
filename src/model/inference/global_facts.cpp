@@ -20,6 +20,24 @@ void require_positive(const std::optional<int>& value, std::string_view name) {
     }
 }
 
+/// Qwen3.5's gated-delta hybrid grammar (`linear_attn.in_proj_qkv.weight`,
+/// recognized by `LinearAttnGatedDeltaRule`) is the only checkpoint shape
+/// celeg resolves whose `Qwen3_5RMSNorm` multiplies by `1 + weight` instead
+/// of `weight` directly -- the stored weight is a zero-centered offset, not
+/// a direct scale (its own gated-delta output norm, `Qwen3_5RMSNormGated`,
+/// keeps the ordinary direct-scale convention and is applied by the
+/// gated-delta kernel itself, never through a `NormSpec`, so it is
+/// unaffected here). Detected from tensor structure, not a checkpoint name,
+/// so it generalizes to any future checkpoint sharing this same grammar.
+bool checkpoint_uses_one_plus_scale_norm(const InferenceInput& input) {
+    for (const auto& entry : input.inventory.entries()) {
+        if (entry.name.find("linear_attn.in_proj_qkv.weight") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const TensorInventoryEntry* find_embedding(const InferenceInput& input) {
     const auto& m = input.metadata;
     const TensorInventoryEntry* embedding = nullptr;
@@ -147,7 +165,7 @@ void initialize_graph(CanonicalInferenceContext& context) {
     graph.hidden = *m.core.hidden_size;
     graph.final_norm = {
         numerical_policy.norm_eps,
-        NormWeightKind::Scale};
+        numerical_policy.norm_weight_kind};
     graph.embedding_transform.multiplier =
         numerical_policy.embedding_multiplier;
     graph.logits_multiplier = numerical_policy.logits_multiplier;
@@ -314,6 +332,9 @@ CanonicalInferenceContext initialize_canonical_facts(
         m.core.logits_multiplier.value_or(1.0f);
     numerical_policy.logits_divisor =
         m.core.logits_divisor.value_or(1.0f);
+    numerical_policy.norm_weight_kind = checkpoint_uses_one_plus_scale_norm(input)
+        ? NormWeightKind::OnePlusScale
+        : NormWeightKind::Scale;
 
     context.intermediate_sizes =
         infer_intermediate_sizes(context);

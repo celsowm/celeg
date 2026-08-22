@@ -29,7 +29,7 @@ void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
                              int count, cudaStream_t stream);
 void launch_extract_attention_output_gate(const __nv_bfloat16* packed,
                                __nv_bfloat16* query_out, __nv_bfloat16* gate_out,
-                               int rows, int width, cudaStream_t stream);
+                               int rows, int width, int head_dim, cudaStream_t stream);
 void launch_multiply_strided(__nv_bfloat16* x, const __nv_bfloat16* y,
                              int rows, int width, int y_stride, int y_offset,
                              cudaStream_t stream);

@@ -272,26 +272,35 @@ void launch_sigmoid_multiply(__nv_bfloat16* x, const __nv_bfloat16* gate,
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 
+/// `packed` holds, per row, `query_heads` chunks of `2 * head_dim` -- the
+/// HF/checkpoint convention is `q_proj(x).view(..., heads, 2*head_dim)`
+/// followed by `chunk(2, dim=-1)`, so query and gate are interleaved
+/// *per head* (query_head0, gate_head0, query_head1, gate_head1, ...), not
+/// split coarsely into one contiguous query block followed by one
+/// contiguous gate block.
 __global__ void extract_attention_output_gate_kernel(const __nv_bfloat16* packed,
                                           __nv_bfloat16* query_out,
                                           __nv_bfloat16* gate_out,
-                                          int rows, int width) {
+                                          int rows, int width, int head_dim) {
     const size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const size_t total = static_cast<size_t>(rows) * width;
     if (index >= total) return;
     const int row = static_cast<int>(index / width);
     const int column = static_cast<int>(index % width);
-    const size_t source = static_cast<size_t>(row) * width * 2 + column;
-    query_out[index] = packed[source];
-    gate_out[index] = packed[source + width];
+    const int head = column / head_dim;
+    const int d = column % head_dim;
+    const size_t head_base = static_cast<size_t>(row) * width * 2 +
+        static_cast<size_t>(head) * 2 * head_dim;
+    query_out[index] = packed[head_base + d];
+    gate_out[index] = packed[head_base + head_dim + d];
 }
 
 void launch_extract_attention_output_gate(const __nv_bfloat16* packed,
                                __nv_bfloat16* query_out, __nv_bfloat16* gate_out,
-                               int rows, int width, cudaStream_t stream) {
+                               int rows, int width, int head_dim, cudaStream_t stream) {
     const size_t total = static_cast<size_t>(rows) * width;
     extract_attention_output_gate_kernel<<<static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
-        packed, query_out, gate_out, rows, width);
+        packed, query_out, gate_out, rows, width, head_dim);
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

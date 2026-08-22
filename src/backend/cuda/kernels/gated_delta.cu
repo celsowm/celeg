@@ -469,114 +469,6 @@ __global__ void gated_delta_net_kernel(
     }
 }
 
-__global__ void gated_delta_conv_kernel(
-    __nv_bfloat16* qkv, const __nv_bfloat16* conv_weight,
-    __nv_bfloat16* conv_state, int qkv_width, int conv_kernel) {
-    const int channel = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (channel >= qkv_width) return;
-    __nv_bfloat16* history = conv_state + static_cast<size_t>(channel) * conv_kernel;
-    for (int tap = 1; tap < conv_kernel; ++tap) history[tap - 1] = history[tap];
-    history[conv_kernel - 1] = qkv[channel];
-    float filtered = 0.0f;
-    for (int tap = 0; tap < conv_kernel; ++tap) {
-        filtered += bf16_float(history[tap]) * bf16_float(
-            conv_weight[static_cast<size_t>(channel) * conv_kernel + tap]);
-    }
-    qkv[channel] = __float2bfloat16(filtered * sigmoid(filtered));
-}
-
-__global__ void gated_delta_qk_norm_kernel(
-    __nv_bfloat16* qkv, int key_head_dim, int key_heads, int key_width,
-    float eps) {
-    const int head = static_cast<int>(blockIdx.x);
-    if (head >= key_heads || threadIdx.x != 0) return;
-    float q_norm = 0.0f, k_norm = 0.0f;
-    for (int d = 0; d < key_head_dim; ++d) {
-        const float q = bf16_float(qkv[head * key_head_dim + d]);
-        const float k = bf16_float(qkv[key_width + head * key_head_dim + d]);
-        q_norm += q * q; k_norm += k * k;
-    }
-    q_norm = sqrtf(q_norm + eps); k_norm = sqrtf(k_norm + eps);
-    for (int d = 0; d < key_head_dim; ++d) {
-        qkv[head * key_head_dim + d] = __float2bfloat16(
-            bf16_float(qkv[head * key_head_dim + d]) / q_norm);
-        qkv[key_width + head * key_head_dim + d] = __float2bfloat16(
-            bf16_float(qkv[key_width + head * key_head_dim + d]) / k_norm);
-    }
-}
-
-__global__ void gated_delta_recurrent_kernel(
-    const __nv_bfloat16* qkv, const __nv_bfloat16* z,
-    const __nv_bfloat16* b, const __nv_bfloat16* a,
-    const __nv_bfloat16* dt_bias, const __nv_bfloat16* a_log,
-    const __nv_bfloat16* norm_weight, __nv_bfloat16* recurrent_state,
-    __nv_bfloat16* output, int key_head_dim, int value_head_dim,
-    int key_heads, int value_heads, float eps, bool vector_decay,
-    bool safe_decay, float decay_lower_bound, bool sigmoid_output_gate) {
-    const int value_head = static_cast<int>(blockIdx.x);
-    const int v_dim = static_cast<int>(threadIdx.x);
-    if (value_head >= value_heads) return;
-    const int repeat = value_heads / key_heads;
-    const int key_head = value_head / repeat;
-    const int key_width = key_heads * key_head_dim;
-    extern __shared__ float shared[];
-    float* decay = shared;
-    float* inverse = shared + key_head_dim;
-    if (v_dim < key_head_dim) {
-        const int decay_index = vector_decay ? key_head * key_head_dim + v_dim : value_head;
-        decay[v_dim] = safe_decay
-            ? expf(sigmoid(expf(bf16_float(a_log[value_head])) *
-                (bf16_float(a[decay_index]) + bf16_float(dt_bias[decay_index]))) * decay_lower_bound)
-            : expf(-expf(bf16_float(a_log[value_head])) *
-                softplus(bf16_float(a[decay_index]) + bf16_float(dt_bias[decay_index])));
-    }
-    __syncthreads();
-    __nv_bfloat16* state = recurrent_state + static_cast<size_t>(value_head) *
-        key_head_dim * value_head_dim;
-    if (v_dim < value_head_dim) {
-        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
-            const size_t offset = static_cast<size_t>(k_dim) * value_head_dim + v_dim;
-            state[offset] = __float2bfloat16(decay[k_dim] * bf16_float(state[offset]));
-        }
-        float memory = 0.0f;
-        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
-            memory += bf16_float(state[static_cast<size_t>(k_dim) * value_head_dim + v_dim]) *
-                bf16_float(qkv[key_width + key_head * key_head_dim + k_dim]);
-        }
-        const float delta = (bf16_float(qkv[2 * key_width + value_head * value_head_dim + v_dim]) -
-            memory) * sigmoid(bf16_float(b[value_head]));
-        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
-            const size_t offset = static_cast<size_t>(k_dim) * value_head_dim + v_dim;
-            state[offset] = __float2bfloat16(bf16_float(state[offset]) +
-                bf16_float(qkv[key_width + key_head * key_head_dim + k_dim]) * delta);
-        }
-        float value = 0.0f;
-        for (int k_dim = 0; k_dim < key_head_dim; ++k_dim) {
-            value += bf16_float(state[static_cast<size_t>(k_dim) * value_head_dim + v_dim]) *
-                bf16_float(qkv[key_head * key_head_dim + k_dim]);
-        }
-        output[value_head * value_head_dim + v_dim] = __float2bfloat16(
-            value / sqrtf(static_cast<float>(key_head_dim)));
-    }
-    __syncthreads();
-    if (v_dim == 0) {
-        float sum = 0.0f;
-        for (int d = 0; d < value_head_dim; ++d) {
-            const float value = bf16_float(output[value_head * value_head_dim + d]);
-            sum += value * value;
-        }
-        *inverse = rsqrtf(sum / value_head_dim + eps);
-    }
-    __syncthreads();
-    if (v_dim < value_head_dim) {
-        const int offset = value_head * value_head_dim + v_dim;
-        const float gate = bf16_float(z[offset]);
-        output[offset] = __float2bfloat16(bf16_float(output[offset]) * *inverse *
-            bf16_float(norm_weight[v_dim]) *
-            (sigmoid_output_gate ? sigmoid(gate) : gate * sigmoid(gate)));
-    }
-}
-
 template <int KeyHeadDim, int ValueHeadDim>
 __global__ __launch_bounds__(ValueHeadDim)
 void gated_delta_fused_register_state_kernel(
@@ -928,8 +820,6 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                             bool safe_decay, float decay_lower_bound,
                             bool sigmoid_output_gate, cudaStream_t stream) {
     if (rows > 0 && key_head_dim <= 256 && value_head_dim <= 256) {
-        const int key_width = key_heads * key_head_dim;
-        const int qkv_width = 2 * key_width + value_heads * value_head_dim;
         if (rows == 1 && key_heads == value_heads && key_head_dim == 128 &&
             value_head_dim == 128) {
             const size_t shared_bytes = static_cast<size_t>(3 * key_head_dim + 16) * sizeof(float);
@@ -941,35 +831,42 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
             CELEG_KERNEL_DEBUG_SYNC(stream);
             return;
         }
-        if (rows >= 64) {
-            const int tiles = (value_head_dim + 3) / 4;
-            gated_delta_sequence_prepare_kernel<<<key_heads, 256, 0, stream>>>(
-                const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,
-                rows, conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
-            if (key_heads == value_heads && key_head_dim == 64 && value_head_dim == 64) {
-                const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
-                gated_delta_sequence_register_tile_kernel<64, 64><<<tile_grid, dim3(32, 4), 0, stream>>>(
-                    projected_qkv, projected_b, projected_a, dt_bias, a_log,
-                    recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
-                    decay_lower_bound);
-                gated_delta_sequence_norm_kernel<<<value_heads, 128, 0, stream>>>(
-                    output, projected_z, norm_weight, rows, value_head_dim, value_heads,
-                    eps, sigmoid_output_gate);
-                CELEG_KERNEL_DEBUG_SYNC(stream);
-                return;
-            }
-            if (key_heads == value_heads && key_head_dim == 128 && value_head_dim == 128) {
-                const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
-                gated_delta_sequence_register_tile_kernel<128, 128><<<tile_grid, dim3(32, 4), 0, stream>>>(
-                    projected_qkv, projected_b, projected_a, dt_bias, a_log,
-                    recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
-                    decay_lower_bound);
-                gated_delta_sequence_norm_kernel<<<value_heads, 128, 0, stream>>>(
-                    output, projected_z, norm_weight, rows, value_head_dim, value_heads,
-                    eps, sigmoid_output_gate);
-                CELEG_KERNEL_DEBUG_SYNC(stream);
-                return;
-            }
+        if (key_heads == value_heads && rows < 64) {
+            const size_t shared_bytes = static_cast<size_t>(3 * key_head_dim + 16) * sizeof(float);
+            gated_delta_fused_single_head_kernel<<<key_heads, 256, shared_bytes, stream>>>(
+                projected_qkv, projected_z, projected_b, projected_a, conv_weight,
+                dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, rows,
+                conv_kernel, key_head_dim, value_head_dim, key_heads, eps,
+                vector_decay, safe_decay, decay_lower_bound, sigmoid_output_gate);
+            CELEG_KERNEL_DEBUG_SYNC(stream);
+            return;
+        }
+        // Generic path: loops over all `rows` internally and handles
+        // key_heads != value_heads via GQA-style `repeat`, so it is correct
+        // for any rows count and any heads configuration. Reached both for
+        // rows >= 64 (any heads config) and for rows < 64 with
+        // key_heads != value_heads -- the latter used to fall into a
+        // single-row-only kernel triple that silently left every row past
+        // row 0 uncomputed whenever a GQA-style gated-deltanet (key_heads !=
+        // value_heads, e.g. Qwen3.5) prefilled fewer than 64 tokens.
+        const int tiles = (value_head_dim + 3) / 4;
+        gated_delta_sequence_prepare_kernel<<<key_heads, 256, 0, stream>>>(
+            const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,
+            rows, conv_kernel, key_head_dim, value_head_dim, key_heads, value_heads, eps);
+        if (rows >= 64 && key_heads == value_heads && key_head_dim == 64 && value_head_dim == 64) {
+            const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
+            gated_delta_sequence_register_tile_kernel<64, 64><<<tile_grid, dim3(32, 4), 0, stream>>>(
+                projected_qkv, projected_b, projected_a, dt_bias, a_log,
+                recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
+                decay_lower_bound);
+        } else if (rows >= 64 && key_heads == value_heads && key_head_dim == 128 &&
+                   value_head_dim == 128) {
+            const dim3 tile_grid(value_heads, (value_head_dim + 15) / 16);
+            gated_delta_sequence_register_tile_kernel<128, 128><<<tile_grid, dim3(32, 4), 0, stream>>>(
+                projected_qkv, projected_b, projected_a, dt_bias, a_log,
+                recurrent_state, output, rows, key_heads, vector_decay, safe_decay,
+                decay_lower_bound);
+        } else {
             const dim3 state_grid(value_heads, tiles);
             const dim3 state_block(32, 4);
             switch (key_head_dim) {
@@ -1004,34 +901,10 @@ void launch_gated_delta_net(const __nv_bfloat16* projected_qkv,
                         vector_decay, safe_decay, decay_lower_bound);
                     break;
             }
-            gated_delta_sequence_norm_kernel<<<value_heads, 128, 0, stream>>>(
-                output, projected_z, norm_weight, rows, value_head_dim, value_heads,
-                eps, sigmoid_output_gate);
-            CELEG_KERNEL_DEBUG_SYNC(stream);
-            return;
         }
-        if (key_heads == value_heads) {
-            const size_t shared_bytes = static_cast<size_t>(3 * key_head_dim + 16) * sizeof(float);
-            gated_delta_fused_single_head_kernel<<<key_heads, 256, shared_bytes, stream>>>(
-                projected_qkv, projected_z, projected_b, projected_a, conv_weight,
-                dt_bias, a_log, norm_weight, conv_state, recurrent_state, output, rows,
-                conv_kernel, key_head_dim, value_head_dim, key_heads, eps,
-                vector_decay, safe_decay, decay_lower_bound, sigmoid_output_gate);
-            CELEG_KERNEL_DEBUG_SYNC(stream);
-            return;
-        }
-        gated_delta_conv_kernel<<<(qkv_width + 255) / 256, 256, 0, stream>>>(
-            const_cast<__nv_bfloat16*>(projected_qkv), conv_weight, conv_state,
-            qkv_width, conv_kernel);
-        gated_delta_qk_norm_kernel<<<key_heads, 1, 0, stream>>>(
-            const_cast<__nv_bfloat16*>(projected_qkv), key_head_dim, key_heads,
-            key_width, eps);
-        const size_t shared_bytes = static_cast<size_t>(key_head_dim + 1) * sizeof(float);
-        gated_delta_recurrent_kernel<<<value_heads, 256, shared_bytes, stream>>>(
-            projected_qkv, projected_z, projected_b, projected_a, dt_bias, a_log,
-            norm_weight, recurrent_state, output, key_head_dim, value_head_dim,
-            key_heads, value_heads, eps, vector_decay, safe_decay,
-            decay_lower_bound, sigmoid_output_gate);
+        gated_delta_sequence_norm_kernel<<<value_heads, 128, 0, stream>>>(
+            output, projected_z, norm_weight, rows, value_head_dim, value_heads,
+            eps, sigmoid_output_gate);
         CELEG_KERNEL_DEBUG_SYNC(stream);
         return;
     }

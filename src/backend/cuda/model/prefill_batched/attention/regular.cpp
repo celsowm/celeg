@@ -65,7 +65,7 @@ void run_regular_attention(
             launch_extract_attention_output_gate(
                 workspace.prefill_qkv_.data(), workspace.prefill_q_.data(),
                 workspace.prefill_attention_gate_.data(),
-                rows, layout.query_width(), model.stream_.get());
+                rows, layout.query_width(), layout.head_dim, model.stream_.get());
         } else {
             model.linear(
                 workspace.prefill_normed_.data(), *attention.gate,

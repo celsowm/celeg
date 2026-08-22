@@ -23,6 +23,13 @@ struct TokenPolicy {
 
 struct NumericalPolicy {
     float norm_eps = 0.0f;
+    /// Convention for every structurally-bound RMSNorm weight (input/post-attention
+    /// layernorm, q/k-norm, final norm) in this checkpoint: `Scale` multiplies the
+    /// normalized activations directly by the stored weight (the common Llama-style
+    /// convention); `OnePlusScale` multiplies by `1 + weight` instead (the checkpoint
+    /// stores a zero-centered offset -- e.g. Qwen3.5's `Qwen3_5RMSNorm`). Detected once
+    /// from checkpoint tensor structure in `global_facts.cpp`, not per-model name.
+    NormWeightKind norm_weight_kind = NormWeightKind::Scale;
     float post_norm_eps = 0.0f;
     float embedding_multiplier = 1.0f;
     float attention_multiplier = 0.0f;
