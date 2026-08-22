@@ -28,24 +28,32 @@ the same drift).
 | F32 | 0 | 1 | 4 | n/a (dense) | n/a | n/a (dense) | n/a |
 | F16 | 1 | 1 | 2 | n/a (dense) | n/a | n/a (dense) | n/a |
 | BF16 | 30 | 1 | 2 | n/a (dense) | n/a | n/a (dense) | n/a |
-| Q4_0 | 2 | 32 | 18 | complete | complete | complete | pending |
-| Q4_1 | 3 | 32 | 20 | complete | complete | complete | pending |
-| Q5_0 | 6 | 32 | 22 | complete | complete | complete | pending |
-| Q8_0 | 8 | 32 | 34 | complete | complete | complete | pending |
-| Q2_K | 10 | 256 | 84 | complete | complete | complete | pending |
-| Q3_K | 11 | 256 | 110 | complete | complete | complete | pending |
+| Q4_0 | 2 | 32 | 18 | complete | complete | complete | not planned* |
+| Q4_1 | 3 | 32 | 20 | complete | complete | complete | not planned* |
+| Q5_0 | 6 | 32 | 22 | complete | complete | complete | not planned* |
+| Q8_0 | 8 | 32 | 34 | complete | complete | complete | not planned* |
+| Q2_K | 10 | 256 | 84 | complete | complete | complete | not planned* |
+| Q3_K | 11 | 256 | 110 | complete | complete | complete | not planned* |
 | Q4_K | 12 | 256 | 144 | complete | complete | complete | complete |
-| Q5_K | 13 | 256 | 176 | complete | complete | complete | pending |
+| Q5_K | 13 | 256 | 176 | complete | complete | complete | not planned* |
 | Q6_K | 14 | 256 | 210 | complete | complete | complete | complete |
-| IQ3_XXS | 18 | 256 | 98 | complete | reference only | complete | pending |
-| IQ4_NL | 20 | 32 | 18 | complete | reference only | complete | pending |
-| IQ3_S | 21 | 256 | 110 | complete | reference only | complete | pending |
-| IQ2_S | 22 | 256 | 82 | complete | reference only | complete | pending |
-| IQ4_XS | 23 | 256 | 136 | complete | reference only | complete | pending |
+| IQ3_XXS | 18 | 256 | 98 | complete | reference only | complete | not planned* |
+| IQ4_NL | 20 | 32 | 18 | complete | reference only | complete | not planned* |
+| IQ3_S | 21 | 256 | 110 | complete | reference only | complete | not planned* |
+| IQ2_S | 22 | 256 | 82 | complete | reference only | complete | not planned* |
+| IQ4_XS | 23 | 256 | 136 | complete | reference only | complete | not planned* |
 
 Dense types (F32/F16/BF16) are not block-quantized; they are handled by the
 dtype paths in the weight loaders, not the GGUF quant kernels. All three are
 accepted by both backends for linear weights.
+
+\* **Not planned, not merely undone**: `--weight-mode native` (the mode these
+kernels would serve) measures 4.85x slower prefill and ~27% slower decode
+than the int8 (`auto`) path it would compete with, on the two types (Q4_K,
+Q6_K) that already have MMQ kernels -- see "Native weight mode" under
+Performance below. Adding kernels for the other 12 types to a path that
+measures decisively worse than the alternative on every type it already
+covers is negative-value work until that gap closes.
 
 Types absent from the table -- Q5_1 (7), Q8_1 (9), Q8_K (15), IQ2_XXS (16),
 IQ2_XS (17), IQ1_S (19), IQ1_M (29), MXFP4 (39) -- are not recognised at all.
@@ -415,3 +423,44 @@ dot4 kernel -- and Q4_K -- has one -- land within noise of each other
 (0.40x vs 0.44x) in the full sweep. It remains a good mechanical follow-up
 for its own sake, just not a fix for the structural question this section
 investigated.
+
+## Native weight mode: measured, decision made
+
+`--weight-mode native` keeps GGUF blocks packed on-device and runs them
+through `mmq.cu`'s per-type MMQ kernels, instead of the host-dequant ->
+int8/bf16 path every other mode uses. It only exists for Q4_K and Q6_K
+today (the only two types with an MMQ kernel), which is why the matrix
+above carries 12 `not planned*` cells in the CUDA-native-MMQ column.
+
+**Measured on Nanbeige-3B-Q4_K_M** (`--benchmark-prefill-tokens 512
+--benchmark-decode 8`):
+
+| `--weight-mode` | prefill tok/s | decode tok/s |
+|---|---|---|
+| `native` | 637.1 | 96.7 |
+| `auto` (int8) | 3089.6 | 132.1 |
+
+Native is **4.85x slower at prefill** and **27% slower at decode** than the
+int8 path, on the only two types it supports. `ncu` occupancy profiling of
+`q4k_mmq_prefill_kernel` against the int8 GEMM (the plan's originally
+proposed step 1) is blocked by the same `ERR_NVGPUCTRPERM` restriction
+documented above; an `nsys` kernel-breakdown attempt (the fallback used
+successfully for the GPU-decode investigation) hung indefinitely under
+`--benchmark-prefill-tokens 512` in native mode and was killed after two
+timeouts rather than debugged further -- worth another look if profiling
+permissions are ever granted, since a hang under the profiler is itself
+mildly suspicious, but not chased here.
+
+**Decision (plan's gate): native does not come anywhere close to the ~1.2x
+threshold that would justify expanding MMQ coverage.** A 4.85x prefill gap
+on the two best-supported types is not a shape this session's evidence
+suggests closing with more kernels for more types -- if anything it argues
+the existing two MMQ kernels have a shared structural problem (a strong
+candidate, per the plan's own suspicion, is `launch_quantize_q8_1`
+(`gemm_dispatcher.cpp:232`) re-running per GEMM call/layer/step instead of
+once per forward pass, though this specific mechanism is not confirmed by
+profiling here). The 12 `not planned` cells in the matrix reflect this: MMQ
+kernel expansion is not queued as future work unless someone first closes
+the native-vs-int8 gap on the two existing types, at which point it
+becomes a well-motivated, separately-scoped follow-up rather than blind
+coverage expansion.
