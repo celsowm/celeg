@@ -323,3 +323,95 @@ that trade is worth it -- versus, say, an int8 batched-GEMM path for
 prefill that would let the bf16 copy be freed -- is a real design question
 that needs its own profiling of prefill throughput under each option, not
 a one-line fix here.
+
+## CPU prefill/decode ratio: measured, partially explained
+
+The plan's follow-up observation: celeg's prefill/decode ratio on
+Nanbeige-3B-Q4_K_M is 2.3x (17.1 / 7.5 tok/s), while llama.cpp's is 7.5x
+(60.9 / 8.1). If 512-token batching were paying off the way it should,
+celeg's ratio should be well above 20x, not below decode's own speed.
+
+**Step 1 (token-count scaling): linear, not sublinear.** Prefill time at
+128/256/512 tokens on Q4_K_M: 4.78s / 9.34s / 19.31s, tok/s 26.8 / 27.4 /
+26.5 -- flat throughput, perfectly linear time growth. This confirms the
+plan's "each token costs a full weight sweep; batching provides no
+structural benefit" branch, not "batching works, the floor is elsewhere."
+Whatever `gemm_gguf`'s per-call batching buys (the dot4 4-row-at-a-time
+path), it isn't compounding across the 512-token batch the way BLAS-style
+GEMM batching would.
+
+**Step 2 (`perf record` kernel/attention/quantize attribution): blocked.**
+`perf record -g` fails with `perf_event_paranoid setting is 4` -- another
+root-only restriction on this machine (`kernel.perf_event_paranoid`
+sysctl), same class of blocker as `ncu`'s `ERR_NVGPUCTRPERM` above. Not
+attempted to bypass.
+
+**Step 3 (thread scaling, 1/4/8/16/32 threads, 64-token prefill,
+Q4_K_M):**
+
+| threads | tok/s | speedup vs 1 | efficiency |
+|---|---|---|---|
+| 1 | 2.21 | 1.0x | 100% |
+| 4 | 8.27 | 3.75x | 94% |
+| 8 | 15.39 | 6.97x | 87% |
+| 16 | 19.73 | 8.93x | 56% |
+| 32 | 25.67 | 11.62x | 36% |
+
+No cliff, no collapse -- scaling is smooth and monotonically increasing
+through 32 threads, just increasingly sublinear. That rules out the
+sharpest version of the plan's `grain`-clamping hypothesis (`linear.cpp:407`,
+`grain = tiles / (pool_size * 4)`, clamped to a floor of 1): if the whole
+prefill were dominated by 32 threads thrashing over a `grain`-1 work queue,
+this curve would flatten hard well before 32 threads, not still be gaining
+17% from 16->32.
+
+The mechanism is real but partial, not the whole floor. This machine
+(`nproc`=32) is a hybrid 8P+16E-core part (i9-14900K): 8 P-cores x 2
+threads (SMT) + 16 E-cores x 1 thread = 32 logical threads, but only 24
+physical cores and two different per-core throughputs. Diminishing returns
+starting around 16 threads is consistent with running out of P-core
+capacity and spreading onto slower E-cores plus SMT contention -- a
+hardware-topology effect independent of any celeg scheduling bug.
+
+The grain formula does clamp to 1 for this model's k/v projections
+specifically: `hidden_size=3072`, `intermediate_size=10752`,
+`num_key_value_heads=8`, `head_dim=64`, so k_proj/v_proj output rows =
+8*64=512, giving `tiles = 512/16 = 32`. At `pool_size` >= 8,
+`pool_size*4` >= 32 >= tiles, so grain clamps to 1 for k/v projections at
+every thread count this sweep used above 4. q/o/gate/up/down all have
+>=3072 output rows (tiles >= 192), well clear of the clamp. Since k/v
+projections are a small fraction of total per-layer FLOPs (512 vs.
+3072+3072+10752+10752+3072 = 30720 for the other five matrices in this
+model), this alone can't be the dominant floor, but it is a real,
+verified-in-code contributor to the high-thread-count falloff and is worth
+fixing opportunistically (e.g. a per-projection grain floor keyed to
+absolute tile count, not just `pool_size`) whenever someone is next in
+`linear.cpp`'s parallel_for.
+
+**Step 4 decision.** Both privileged profiling paths (`ncu`, `perf`) are
+blocked pending root access on this machine; the only additional evidence
+available without it is what steps 1 and 3 already produced. That is
+enough to close two of the three original hypotheses (dot4-coverage
+already ruled out by the full sweep, see above; sublinear-batching now
+ruled out by step 1) and leave one open, uninvestigated candidate the plan
+explicitly flagged but this session's evidence can't reach:
+**per-GEMM-call activation requantization** (`quantize_gguf_rows`,
+`gemm_gguf` calls it once per matrix per prefill batch rather than once
+per prefill pass) -- would explain a floor that is roughly constant per
+matmul call regardless of batched-row count, matching both the flat
+token-count-independent tok/s in step 1 and the fact that Q4_K/Q6_K's dot4
+advantage (1.7x, real) is much smaller than the >20x headroom llama.cpp's
+ratio implies is available. Confirming it needs either `perf` (blocked) or
+manual timing instrumentation around `quantize_gguf_rows` vs. the dot
+loop in `gemm_gguf` -- a smaller, non-privileged follow-up if this is
+picked back up.
+
+Extending `cpu_gguf_dot4_avx2` to the other seven native-dot types
+(mechanical, well-tested, moderate risk, per the plan) was not done this
+pass: it is a real, low-risk win for those types' absolute throughput
+(consistent with Q4_K/Q6_K's already-measured 1.7x), but nothing above
+shows it would move the prefill/decode *ratio* floor, since Q5_K -- no
+dot4 kernel -- and Q4_K -- has one -- land within noise of each other
+(0.40x vs 0.44x) in the full sweep. It remains a good mechanical follow-up
+for its own sake, just not a fix for the structural question this section
+investigated.
