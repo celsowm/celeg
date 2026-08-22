@@ -231,10 +231,95 @@ weight traffic.
 
 Decode already runs under CUDA graphs (`decode_graphs.hpp`, captured in
 `execution.cu`), so naive per-launch overhead should already be amortized,
-which makes the flatness more suspicious rather than less. Resolving it needs
-a kernel-level profile separating `w8a16_gemv_kernel` efficiency from
-per-token dispatch. `ncu` **is** available on this machine at
-`/usr/local/cuda-13.2/bin/ncu` -- it is simply not on `PATH`, the same
-resolution trap that affects `nvcc` here. An earlier revision of this section
-recorded it as not installed and deferred on that basis; that was wrong, and
-the investigation is not blocked.
+which makes the flatness more suspicious rather than less. `ncu` **is**
+available on this machine at `/usr/local/cuda-13.2/bin/ncu` -- it is simply
+not on `PATH`, the same resolution trap that affects `nvcc` here. An earlier
+revision of this section recorded it as not installed and deferred on that
+basis; that was wrong.
+
+**Update: profiled with `nsys` (Nanbeige-3B-Q4_K_M, `--weight-mode auto`).**
+CUDA graph capture does engage on the GGUF/int8 path: `celeg-run` now prints
+`benchmark.cuda_graph_ready` after `--benchmark-decode`
+(`src/app/cuda/main.cpp`, next to the other `benchmark.*` lines), and it
+reads `1` for `auto`, `bf16`, and `native` alike. That rules out the
+"graph capture silently isn't engaging" hypothesis from this doc's earlier
+revision.
+
+The profile itself needed one non-obvious flag: `nsys profile
+--cuda-graph-trace=node` (the default is `graph`, which only records the one
+real kernel execution from graph *capture* and shows every subsequent
+*replay* as a single opaque node with no per-kernel breakdown -- with the
+default flag, 132 decode steps across 44 layers looked like exactly 2 full
+forward passes, which is what led to briefly suspecting a per-tensor
+weight-mode resolver bug before the flag was found). With `node` tracing,
+one 128-step decode run (`nsys stats --report cuda_gpu_kern_sum`) breaks
+down as:
+
+| kernel | instances | total time | share |
+|---|---|---|---|
+| `w8a16_gemv_kernel` | 34989 | 613 ms | 59.1% |
+| `gqa_decode_segment_partial_kernel` | 5808 | 192 ms | 18.5% |
+| `rmsnorm_kernel` | 12060 | 59 ms | 5.7% |
+| `gqa_decode_segment_reduce_kernel` | 5808 | 37 ms | 3.6% |
+| `argmax_bf16_kernel` | 132 | 33 ms | 3.2% |
+| `paired_qk_norm_rope_kernel` | 11616 | 27 ms | 2.6% |
+
+Summed GPU-kernel time across the trace is ~7.46 ms/decode step, matching
+the ~7.7 ms/step `benchmark.decode_ms_per_token` from a clean (non-profiled)
+run to within a few percent. **That resolves the plan's gate 2 on its own:
+kernel time is not `<<` wall time, so this is not a host-side dispatch or
+sync problem** -- the GPU is genuinely busy the whole step, spread thinly
+across many 5-33 &micro;s launches rather than concentrated in one obviously
+broken kernel. `w8a16_gemv_kernel` -- the per-layer int8-weight GEMV -- is
+the largest single contributor by a wide margin, consistent with (but not
+proof of) it being under-occupied for M=1: 34989 calls over 132 steps is
+~265 calls/step, and 17.5 &micro;s average is small enough that per-launch
+fixed cost (not sustained bandwidth) is a plausible explanation, which is
+exactly what gate 3 exists to distinguish. `argmax_bf16_kernel` is a
+secondary oddity worth a separate look: 253 &micro;s for one argmax over a
+166144-entry vocabulary is high for what should be a straightforward
+reduction, though at 3.2% of total time it is not the main story.
+
+**Gate 3 (occupancy / DRAM utilization via `ncu --set full`) is blocked, not
+closed.** `ncu --kernel-name w8a16_gemv_kernel --metrics ...` fails with
+`ERR_NVGPUCTRPERM`: this user account cannot access NVIDIA GPU performance
+counters on this machine. Unlike the earlier `PATH` issue, this is a real
+restriction -- the NVIDIA driver defaults to admin-only profiling counter
+access (`NVreg_RestrictProfilingToAdminUsers`), and lifting it needs a
+system-level change (a kernel module parameter plus reboot, or a udev rule)
+that requires root. That is out of scope to do unprompted; if profiling
+counters are wanted, ask whoever administers this machine to run `sudo
+nsys status --environment` (or the modprobe.d fix it points at) and confirm
+before the next attempt.
+
+**A genuine, quantified finding surfaced along the way, independent of the
+decode-speed question**: `--weight-mode auto` (== `int8`) uses *more* GPU
+memory than `--weight-mode bf16`, not less. `--memory-report` on
+Nanbeige-3B-Q4_K_M:
+
+| `--weight-mode` | `memory.weights` |
+|---|---|
+| `native` (packed GGUF) | 3.85 GiB |
+| `bf16` | 10.47 GiB |
+| `int8` / `auto` | 15.72 GiB |
+
+The mechanism is deliberate, not a leak: `gemm_dispatcher.cpp:268,285`
+falls back from the int8 GEMV path to a `cublas`/`cublasLt` **bf16** GEMM
+whenever a call's batch size is `m > 1` (i.e. prefill, not decode), because
+a real int8 GEMM implementation for the batched case doesn't exist here and
+a dense tensor-core bf16 GEMM beats emulating one. To make that fallback
+available, `linear_loader.cpp` keeps the full bf16-dequantized copy of
+every GGUF linear tensor resident (`DeviceWeight::bf16_storage`, wired into
+`Int8LinearStorage::bf16_fallback`) *in addition to* the int8-quantized
+copy it actually decodes weights into for `m == 1` decode steps. So `auto`
+mode is not "the model at int8" -- it is "the model at bf16, plus a second
+int8 copy of the same model, so prefill can use one and decode the other."
+This is a real, currently undocumented memory cost of choosing `auto`
+(roughly 1.5x a pure-bf16 footprint on this model), separate from and not
+explaining the decode-speed flatness above (decode's `w8a16_gemv_kernel`
+reads only the int8 copy; the idle bf16 copy costs VRAM capacity, not
+decode-step bandwidth, since it is never touched during decode). Whether
+that trade is worth it -- versus, say, an int8 batched-GEMM path for
+prefill that would let the bf16 copy be freed -- is a real design question
+that needs its own profiling of prefill throughput under each option, not
+a one-line fix here.

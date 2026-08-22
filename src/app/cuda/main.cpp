@@ -509,7 +509,9 @@ int main(int argc, char** argv) {
                       << "benchmark.decode_ms_per_token="
                       << benchmark.milliseconds_per_token() << '\n'
                       << "benchmark.decode_tokens_per_second="
-                      << benchmark.tokens_per_second() << '\n';
+                      << benchmark.tokens_per_second() << '\n'
+                      << "benchmark.cuda_graph_ready="
+                      << (engine.diagnostics().cuda_graph_ready() ? "1" : "0") << '\n';
 
         const celeg::CudaModelDiagnostics::ExpertOffloadStats off =
                 engine.diagnostics().expert_offload_stats();
