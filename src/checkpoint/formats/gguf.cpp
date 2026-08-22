@@ -24,22 +24,56 @@ namespace {
 
 constexpr uint32_t kGgufMagic = 0x46554747u;
 
-GgmlType parse_ggml_type(int32_t raw) {
-    switch (raw) {
-        case 0: return GgmlType::F32;
-        case 1: return GgmlType::F16;
-        case 2: return GgmlType::Q4_0;
-        case 3: return GgmlType::Q4_1;
-        case 6: return GgmlType::Q5_0;
-        case 8: return GgmlType::Q8_0;
-        case 10: return GgmlType::Q2_K;
-        case 11: return GgmlType::Q3_K;
-        case 12: return GgmlType::Q4_K;
-        case 13: return GgmlType::Q5_K;
-        case 14: return GgmlType::Q6_K;
-        case 30: return GgmlType::BF16;
-        default: return GgmlType::Unknown;
+/// One row per GGUF block type celeg knows about.
+///
+/// Ordinal, geometry, display name and backend capabilities used to live in
+/// three separate switch statements plus five hand-maintained type lists in
+/// the CUDA loader. Keeping them in a single table is what makes it
+/// impossible for a type to be parseable but unnamed, or accepted by one
+/// backend and rejected by the other for the same file.
+struct GgmlTypeEntry {
+    int32_t ordinal;
+    GgmlType type;
+    const char* name;
+    GgmlTypeTrait trait;
+    GgufTypeSupport support;
+};
+
+// support = {cpu_dequantize, cpu_native_dot, cuda_dequantize, cuda_native_mmq}
+constexpr GgmlTypeEntry kGgmlTypes[] = {
+    // Dense types carry no block decoders; they are handled by the dtype
+    // paths in the weight loaders, not by the GGUF quant kernels.
+    { 0, GgmlType::F32,     "F32",     {1, 4},     {false, false, false, false}},
+    { 1, GgmlType::F16,     "F16",     {1, 2},     {false, false, false, false}},
+    {30, GgmlType::BF16,    "BF16",    {1, 2},     {false, false, false, false}},
+    { 2, GgmlType::Q4_0,    "Q4_0",    {32, 18},   {true,  true,  true,  false}},
+    { 3, GgmlType::Q4_1,    "Q4_1",    {32, 20},   {true,  true,  true,  false}},
+    { 6, GgmlType::Q5_0,    "Q5_0",    {32, 22},   {true,  true,  true,  false}},
+    { 8, GgmlType::Q8_0,    "Q8_0",    {32, 34},   {true,  true,  true,  false}},
+    {10, GgmlType::Q2_K,    "Q2_K",    {256, 84},  {true,  true,  true,  false}},
+    {11, GgmlType::Q3_K,    "Q3_K",    {256, 110}, {true,  true,  true,  false}},
+    {12, GgmlType::Q4_K,    "Q4_K",    {256, 144}, {true,  true,  true,  true }},
+    {13, GgmlType::Q5_K,    "Q5_K",    {256, 176}, {true,  true,  true,  false}},
+    {14, GgmlType::Q6_K,    "Q6_K",    {256, 210}, {true,  true,  true,  true }},
+    // The IQ types have working scalar dot kernels (cpu_gguf_dot_scalar,
+    // covered by cpu_gguf_kernels_test against ggml's own reference), but
+    // cpu_native_dot is deliberately off: their codebook lookups do not
+    // vectorize the way the K-quants' bit-slicing does, and running them in
+    // place measured 2.2 tok/s prefill on Nanbeige-3B-IQ4_XS versus 17.3
+    // tok/s for the dequantize-and-repack-to-groupwise-Q4 path this flag
+    // selects instead. Flip to true once an AVX2 kernel exists to beat it.
+    {18, GgmlType::IQ3_XXS, "IQ3_XXS", {256, 98},  {true,  false, true,  false}},
+    {20, GgmlType::IQ4_NL,  "IQ4_NL",  {32, 18},   {true,  false, true,  false}},
+    {21, GgmlType::IQ3_S,   "IQ3_S",   {256, 110}, {true,  false, true,  false}},
+    {22, GgmlType::IQ2_S,   "IQ2_S",   {256, 82},  {true,  false, true,  false}},
+    {23, GgmlType::IQ4_XS,  "IQ4_XS",  {256, 136}, {true,  false, true,  false}},
+};
+
+const GgmlTypeEntry* find_ggml_type_entry(GgmlType type) {
+    for (const GgmlTypeEntry& entry : kGgmlTypes) {
+        if (entry.type == type) return &entry;
     }
+    return nullptr;
 }
 
 class Cursor {
@@ -183,41 +217,25 @@ GgufValue read_value(Cursor& c, GgufValueKind kind) {
 
 
 GgmlTypeTrait ggml_type_trait(GgmlType type) {
-    switch (type) {
-        case GgmlType::F32: return {1, 4};
-        case GgmlType::F16: return {1, 2};
-        case GgmlType::BF16: return {1, 2};
-        case GgmlType::Q4_0: return {32, 18};
-        case GgmlType::Q4_1: return {32, 20};
-        case GgmlType::Q5_0: return {32, 22};
-        case GgmlType::Q8_0: return {32, 34};
-        case GgmlType::Q2_K: return {256, 84};
-        case GgmlType::Q3_K: return {256, 110};
-        case GgmlType::Q4_K: return {256, 144};
-        case GgmlType::Q5_K: return {256, 176};
-        case GgmlType::Q6_K: return {256, 210};
-        case GgmlType::Unknown: return {0, 0};
-    }
-    return {0, 0};
+    const GgmlTypeEntry* entry = find_ggml_type_entry(type);
+    return entry ? entry->trait : GgmlTypeTrait{0, 0};
 }
 
 const char* ggml_type_name(GgmlType type) {
-    switch (type) {
-        case GgmlType::F32: return "F32";
-        case GgmlType::F16: return "F16";
-        case GgmlType::BF16: return "BF16";
-        case GgmlType::Q4_0: return "Q4_0";
-        case GgmlType::Q4_1: return "Q4_1";
-        case GgmlType::Q5_0: return "Q5_0";
-        case GgmlType::Q8_0: return "Q8_0";
-        case GgmlType::Q2_K: return "Q2_K";
-        case GgmlType::Q3_K: return "Q3_K";
-        case GgmlType::Q4_K: return "Q4_K";
-        case GgmlType::Q5_K: return "Q5_K";
-        case GgmlType::Q6_K: return "Q6_K";
-        case GgmlType::Unknown: return "Unknown";
+    const GgmlTypeEntry* entry = find_ggml_type_entry(type);
+    return entry ? entry->name : "Unknown";
+}
+
+GgufTypeSupport ggml_type_support(GgmlType type) {
+    const GgmlTypeEntry* entry = find_ggml_type_entry(type);
+    return entry ? entry->support : GgufTypeSupport{};
+}
+
+GgmlType ggml_type_from_ordinal(int32_t raw) {
+    for (const GgmlTypeEntry& entry : kGgmlTypes) {
+        if (entry.ordinal == raw) return entry.type;
     }
-    return "Unknown";
+    return GgmlType::Unknown;
 }
 
 std::vector<int64_t> GgufTensorInfo::hf_shape() const {
@@ -340,7 +358,8 @@ void GgufFile::parse() {
         for (uint32_t d = 0; d < ndim; ++d) {
             info.dims.push_back(c.read_scalar<uint64_t>());
         }
-        info.type = parse_ggml_type(c.read_scalar<int32_t>());
+        info.raw_type = c.read_scalar<int32_t>();
+        info.type = ggml_type_from_ordinal(info.raw_type);
         info.offset = c.read_scalar<uint64_t>();
         tensors_.emplace(info.name, std::move(info));
     }
@@ -410,8 +429,9 @@ GgufTensorView GgufFile::tensor(std::string_view name) const {
     const GgufTensorInfo& info = tensor_info(name);
     const GgmlTypeTrait trait = ggml_type_trait(info.type);
     if (trait.block_size == 0) {
-        throw std::runtime_error("gguf: unsupported tensor type for " +
-                                 info.name + " (" + ggml_type_name(info.type) + ")");
+        throw std::runtime_error("gguf: unsupported tensor type for " + info.name +
+                                 " (" + ggml_type_name(info.type) + ", ordinal " +
+                                 std::to_string(info.raw_type) + ")");
     }
     const uint64_t elems = info.element_count();
     if (elems % static_cast<uint64_t>(trait.block_size) != 0) {

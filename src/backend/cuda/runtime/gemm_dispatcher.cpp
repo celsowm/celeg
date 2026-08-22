@@ -243,12 +243,18 @@ void GemmDispatcher::linear(const __nv_bfloat16* x,
                                seg_y, m, segment.rows, k,
                                segment.row_bytes, n, beta,
                                plan.mmq_tensor_cores_enabled(), stream_);
-            } else {
+            } else if (segment.type == GgmlType::Q6_K) {
                 launch_q6k_mmq_with_policy(mmq_workspace_.q8.data(), mmq_workspace_.scales.data(),
                                mmq_workspace_.sums.data(), segment.blocks,
                                seg_y, m, segment.rows, k,
                                segment.row_bytes, n, beta,
                                plan.mmq_tensor_cores_enabled(), stream_);
+            } else {
+                // The loader must never bind a segment whose type has no MMQ
+                // kernel; treating an unmatched type as Q6_K would decode
+                // foreign blocks and silently corrupt the output.
+                throw std::runtime_error(std::string("no MMQ kernel for GGUF segment type ") +
+                                         ggml_type_name(segment.type));
             }
         }
         return;

@@ -36,8 +36,11 @@ void validate_expert_dimensions(int experts, int intermediate, int hidden,
 }
 
 size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
-    if (type != GgmlType::Q4_K && type != GgmlType::Q6_K) {
-        throw std::runtime_error("unsupported GGUF MoE quantization: " + name);
+    // Only MMQ-capable types can stay packed as expert blocks on the device;
+    // everything else must have been routed to the host-decoded path already.
+    if (!ggml_type_support(type).cuda_native_mmq) {
+        throw std::runtime_error("unsupported GGUF MoE quantization: " + name +
+                                 " (" + ggml_type_name(type) + ")");
     }
     const GgmlTypeTrait trait = ggml_type_trait(type);
     if (columns <= 0 || columns % trait.block_size != 0) {
@@ -47,8 +50,11 @@ size_t gguf_row_bytes(int columns, GgmlType type, const std::string& name) {
         trait.type_size;
 }
 
+/// Expert weights of a type with no native MMQ kernel are decoded on the
+/// host at load time instead of being kept packed on the device.
 bool is_host_decoded_moe_type(GgmlType type) {
-    return type == GgmlType::Q2_K || type == GgmlType::Q3_K;
+    const GgufTypeSupport support = ggml_type_support(type);
+    return support.cuda_dequantize && !support.cuda_native_mmq;
 }
 
 void validate_named_bf16(const HostTensorView& tensor,

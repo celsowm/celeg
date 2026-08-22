@@ -2,6 +2,7 @@
 
 #include "celeg/checkpoint/weight_repository.hpp"
 #include "celeg/checkpoint/repositories/safetensors.hpp"
+#include "celeg/model/weights/quantization.hpp"
 #include "celeg/runtime/providers.hpp"
 #include "celeg/vision/image.hpp"
 
@@ -21,24 +22,6 @@
 namespace celeg {
 namespace {
 
-float half_to_float(uint16_t value) {
-    const uint32_t sign = (value & 0x8000u) << 16;
-    const uint32_t exponent = (value >> 10) & 0x1fu;
-    const uint32_t fraction = value & 0x3ffu;
-    uint32_t bits = 0;
-    if (exponent == 0) {
-        if (fraction != 0) {
-            float result = std::ldexp(static_cast<float>(fraction), -24);
-            return (sign ? -result : result);
-        }
-        bits = sign;
-    } else if (exponent == 31) {
-        bits = sign | 0x7f800000u | (fraction << 13);
-    } else {
-        bits = sign | ((exponent + 112u) << 23) | (fraction << 13);
-    }
-    return std::bit_cast<float>(bits);
-}
 
 struct Tensor {
     HostTensorView view;
@@ -53,7 +36,7 @@ struct Tensor {
         const uint16_t raw = reinterpret_cast<const uint16_t*>(view.data)[index];
         return view.dtype == TensorDType::BF16
             ? std::bit_cast<float>(static_cast<uint32_t>(raw) << 16)
-            : half_to_float(raw);
+            : fp16_bits_to_float(raw);
     }
 };
 

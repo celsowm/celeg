@@ -86,13 +86,12 @@ const __nv_bfloat16* upload_bf16(SharedModelWeights& weights,
                             cudaMemcpyHostToDevice));
     } else if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        if (tensor.shape.size() != 2 ||
-            (ggml_type != GgmlType::Q2_K &&
-             ggml_type != GgmlType::Q3_K &&
-             ggml_type != GgmlType::Q4_K &&
-             ggml_type != GgmlType::Q6_K)) {
+        // The dequantizer below handles every type the registry marks, so the
+        // only genuine constraint here is the 2D shape it assumes.
+        if (tensor.shape.size() != 2 || !ggml_type_support(ggml_type).cuda_dequantize) {
             throw std::runtime_error(
-                "router BF16 materialization supports only 2D GGUF Q2_K/Q3_K/Q4_K/Q6_K: " + name);
+                std::string("router BF16 materialization needs a 2D dequantizable GGUF tensor: ") +
+                name + " (" + ggml_type_name(ggml_type) + ")");
         }
         std::vector<__nv_bfloat16> dequantized;
         dequantize_gguf_to_bf16(tensor, dequantized);

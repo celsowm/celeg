@@ -39,32 +39,6 @@ bool shape_matches(const std::vector<int64_t>& actual,
            actual[0] == expected[0] && actual[1] == expected[2];
 }
 
-float fp16_to_float(uint16_t bits) {
-    const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
-    uint32_t exponent = (bits >> 10) & 0x1fu;
-    uint32_t mantissa = bits & 0x03ffu;
-    uint32_t result = 0;
-    if (exponent == 0) {
-        if (mantissa == 0) {
-            result = sign;
-        } else {
-            int shift = 0;
-            while ((mantissa & 0x0400u) == 0) {
-                mantissa <<= 1;
-                ++shift;
-            }
-            mantissa &= 0x03ffu;
-            result = sign | static_cast<uint32_t>(127 - 14 - shift) << 23 |
-                     mantissa << 13;
-        }
-    } else if (exponent == 31) {
-        result = sign | 0x7f800000u | mantissa << 13;
-    } else {
-        result = sign | (exponent + (127 - 15)) << 23 | mantissa << 13;
-    }
-    return std::bit_cast<float>(result);
-}
-
 std::vector<float> read_vector(const HostTensorView& tensor,
                                const std::vector<int64_t>& expected,
                                const std::string& name) {
@@ -81,7 +55,7 @@ std::vector<float> read_vector(const HostTensorView& tensor,
             uint16_t bits = 0;
             std::memcpy(&bits, tensor.data + i * sizeof(uint16_t), sizeof(bits));
             result[i] = tensor.dtype == TensorDType::BF16
-                ? bf16_bits_to_float(bits) : fp16_to_float(bits);
+                ? bf16_bits_to_float(bits) : fp16_bits_to_float(bits);
         }
         return result;
     }
@@ -171,7 +145,10 @@ CpuLinearWeight CpuWeightCodec::matrix(
         }
         return CpuLinearWeight::from_gguf(matrix);
     }
-    if (tensor.dtype == TensorDType::F32) {
+    // F16 and F32 both widen to float first; read_vector already decodes
+    // either. GGUF checkpoints published in plain F16 reach this path just as
+    // often as F32 safetensors do.
+    if (tensor.dtype == TensorDType::F32 || tensor.dtype == TensorDType::F16) {
         const std::vector<float> values = read_vector(tensor, expected, name);
         Q4GroupMatrix packed = quantize_float_groupwise_q4(
             values.data(), static_cast<size_t>(expected[0]),
@@ -184,7 +161,8 @@ CpuLinearWeight CpuWeightCodec::matrix(
         }
     }
     if (tensor.dtype != TensorDType::BF16) {
-        throw std::runtime_error("Safetensors CPU linear tensor must be BF16 or F32: " + name);
+        throw std::runtime_error("CPU linear tensor must be BF16, F16, F32 or a "
+                                 "supported GGUF quantization: " + name);
     }
     Q4GroupMatrix packed = quantize_bf16_groupwise_q4(
         tensor.data, static_cast<size_t>(expected[0]),
@@ -279,9 +257,8 @@ CpuLinearWeight CpuWeightCodec::concat(
         CpuLinearWeight result;
         result.rows = static_cast<uint32_t>(total_rows);
         result.cols = static_cast<uint32_t>(cols);
-        for (size_t i = 0; i < tensors.size(); ++i) {
-            const HostTensorView& tensor = tensors[i];
-            result.segments.emplace_back(matrices[i]);
+        for (const CpuGgufMatrix& matrix : matrices) {
+            result.segments.emplace_back(matrix);
         }
         result.validate();
         return result;
@@ -295,8 +272,9 @@ CpuLinearWeight CpuWeightCodec::concat(
     size_t row_offset = 0;
     for (size_t i = 0; i < parts.size(); ++i) {
         const auto& [name, expected] = parts[i];
-        if (tensors[i].dtype != TensorDType::BF16 && tensors[i].dtype != TensorDType::F32) {
-            throw std::runtime_error("Safetensors CPU concat tensor must be BF16 or F32: " + name);
+        if (tensors[i].dtype != TensorDType::BF16 && tensors[i].dtype != TensorDType::F32 &&
+            tensors[i].dtype != TensorDType::F16) {
+            throw std::runtime_error("CPU concat tensor must be BF16, F16 or F32: " + name);
         }
         const std::vector<float> values = read_vector(tensors[i], expected, name);
         std::copy(values.begin(), values.end(), joined.begin() +

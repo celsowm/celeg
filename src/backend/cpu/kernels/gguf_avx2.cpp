@@ -2,6 +2,8 @@
 
 #include "gguf_avx2.hpp"
 
+#include "celeg/model/weights/quantization.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -77,34 +79,6 @@ static_assert(sizeof(BlockQ3K) == 110);
 static_assert(sizeof(BlockQ4_0) == 18);
 static_assert(sizeof(BlockQ5_0) == 22);
 
-float fp16_to_float(uint16_t bits) {
-    const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
-    uint32_t exponent = (bits >> 10) & 0x1fu;
-    uint32_t mantissa = bits & 0x03ffu;
-    uint32_t result = 0;
-    if (exponent == 0) {
-        if (mantissa == 0) {
-            result = sign;
-        } else {
-            int shift = 0;
-            while ((mantissa & 0x0400u) == 0) {
-                mantissa <<= 1;
-                ++shift;
-            }
-            mantissa &= 0x03ffu;
-            result = sign |
-                static_cast<uint32_t>(127 - 14 - shift) << 23 |
-                mantissa << 13;
-        }
-    } else if (exponent == 31) {
-        result = sign | 0x7f800000u | mantissa << 13;
-    } else {
-        result = sign | (exponent + (127 - 15)) << 23 | mantissa << 13;
-    }
-    float value = 0.0f;
-    std::memcpy(&value, &result, sizeof(value));
-    return value;
-}
 
 CELEG_GGUF_AVX2_TARGET int horizontal_sum(__m256i values) {
     const __m128i low = _mm256_castsi256_si128(values);
@@ -327,7 +301,7 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
                     }
                 }
             }
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             for (int lane = 0; lane < 4; ++lane) {
                 totals[lane] += d * activation[lane * blocks + b].d *
                     static_cast<float>(block_totals[lane]);
@@ -350,8 +324,8 @@ void cpu_gguf_dot4_avx2(const std::byte* packed_row, GgmlType type,
     const __m256i one16 = _mm256_set1_epi16(1);
     for (size_t b = 0; b < blocks; ++b) {
         const BlockQ4K& weight = weights[b];
-        const float d = fp16_to_float(weight.d);
-        const float dmin = fp16_to_float(weight.dmin);
+        const float d = fp16_bits_to_float(weight.d);
+        const float dmin = fp16_bits_to_float(weight.dmin);
         __m256i scaled[4] = {
             _mm256_setzero_si256(), _mm256_setzero_si256(),
             _mm256_setzero_si256(), _mm256_setzero_si256()};
@@ -396,8 +370,8 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ4K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             int scaled_total = 0;
             int minimum_total = 0;
             for (int sub = 0; sub < 8; ++sub) {
@@ -462,7 +436,7 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
                     block_total += static_cast<int>(weight.scales[sub]) * dot;
                 }
             }
-            total += fp16_to_float(weight.d) * x.d *
+            total += fp16_bits_to_float(weight.d) * x.d *
                      static_cast<float>(block_total);
         }
         return total;
@@ -478,7 +452,7 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
                     dot_u8_i8_16_nib(weight.qs, x.qs.data() + sub * 32, false) +
                     dot_u8_i8_16_nib(weight.qs, x.qs.data() + sub * 32 + 16, true);
                 const int bsum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
-                block_total += fp16_to_float(weight.d) *
+                block_total += fp16_bits_to_float(weight.d) *
                               static_cast<float>(dot - 8 * bsum);
             }
             total += x.d * block_total;
@@ -492,7 +466,7 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ5_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
-                const float d = fp16_to_float(weight.d);
+                const float d = fp16_bits_to_float(weight.d);
                 const int dot = dot_u8_i8_16_nib(weight.qs, x.qs.data() + sub * 32, false) +
                                dot_u8_i8_16_nib(weight.qs, x.qs.data() + sub * 32 + 16, true);
                 uint32_t qh;
@@ -535,8 +509,8 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
                                    reinterpret_cast<const uint8_t*>(&high4),
                                    reinterpret_cast<const int8_t*>(&x_high));
                 const int sum = x.bsums[sub * 2] + x.bsums[sub * 2 + 1];
-                block_total += fp16_to_float(weight.d) * static_cast<float>(dot) +
-                               fp16_to_float(weight.dmin) * static_cast<float>(sum);
+                block_total += fp16_bits_to_float(weight.d) * static_cast<float>(dot) +
+                               fp16_bits_to_float(weight.dmin) * static_cast<float>(sum);
             }
             total += x.d * block_total;
         }
@@ -549,7 +523,7 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
             int block_total = 0;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ8_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
-                const float d = fp16_to_float(weight.d);
+                const float d = fp16_bits_to_float(weight.d);
                 const __m256i w = _mm256_loadu_si256(
                     reinterpret_cast<const __m256i*>(weight.qs));
                 const __m256i a = _mm256_loadu_si256(
@@ -574,8 +548,8 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ5K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             float block_total = 0.0f;
             const __m256i lo_mask = _mm256_set1_epi8(15);
             for (int sub = 0; sub < 8; ++sub) {
@@ -611,8 +585,8 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ2K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             int isum = 0;
             int summs = 0;
             for (int sub = 0; sub < 16; ++sub) {
@@ -643,7 +617,7 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ3K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             int8_t scales[16];
             q3k_scales(weight, scales);
             int isum = 0;

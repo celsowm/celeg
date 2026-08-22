@@ -1,6 +1,7 @@
 #include "celeg/backend/cpu/gguf.hpp"
 #include "celeg/backend/cpu/kernels.hpp"
 #include "celeg/backend/cpu/model.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
 #include "support/assertions.hpp"
 
 #include <algorithm>
@@ -14,6 +15,8 @@
 #include <vector>
 
 namespace {
+
+#include "data/gguf_iq_reference.inc"
 
 #pragma pack(push, 1)
 struct BlockQ4K {
@@ -408,6 +411,82 @@ int main() {
     linear.gemm_grouped(grouped_jobs, grouped_input.data(), grouped_actual.data());
     for (size_t value = 0; value < grouped_actual.size(); ++value) {
         CELEG_TEST_CHECK(std::abs(grouped_actual[value] - grouped_expected[value]) < 1e-4f);
+    }
+
+    // IQ quantizations against upstream ggml. Unlike the K-quants above,
+    // these are codebook-indexed, so a hand-built "unit block" would only
+    // restate the decoder under test. The fixture holds real blocks from
+    // cached GGUF files plus the floats ggml's own to_float produces for
+    // them, which makes this an external check rather than a self-check.
+    {
+        struct IqCase {
+            const char* name;
+            celeg::GgmlType type;
+            const unsigned char* blocks;
+            size_t block_bytes;
+            const float* reference;
+        };
+        const IqCase iq_cases[] = {
+            {"IQ2_S", celeg::GgmlType::IQ2_S, kIQ2_SBlocks, sizeof(kIQ2_SBlocks),
+             kIQ2_SReference},
+            {"IQ3_XXS", celeg::GgmlType::IQ3_XXS, kIQ3_XXSBlocks, sizeof(kIQ3_XXSBlocks),
+             kIQ3_XXSReference},
+            {"IQ3_S", celeg::GgmlType::IQ3_S, kIQ3_SBlocks, sizeof(kIQ3_SBlocks),
+             kIQ3_SReference},
+            {"IQ4_NL", celeg::GgmlType::IQ4_NL, kIQ4_NLBlocks, sizeof(kIQ4_NLBlocks),
+             kIQ4_NLReference},
+            {"IQ4_XS", celeg::GgmlType::IQ4_XS, kIQ4_XSBlocks, sizeof(kIQ4_XSBlocks),
+             kIQ4_XSReference},
+        };
+        // Every fixture holds four 256-wide rows, whatever the block width.
+        constexpr uint32_t iq_rows = 4;
+        constexpr uint32_t iq_cols = 256;
+        for (const IqCase& iq_case : iq_cases) {
+            const celeg::GgufTypeSupport support = celeg::ggml_type_support(iq_case.type);
+            CELEG_TEST_CHECK(support.cpu_dequantize);
+            // cpu_native_dot is off for IQ by policy (the repack path is
+            // faster), but the scalar kernel must stay correct so the flag
+            // can be flipped the moment a vectorized version lands.
+
+            const celeg::CpuGgufMatrix matrix{
+                iq_case.type, iq_rows, iq_cols,
+                reinterpret_cast<const std::byte*>(iq_case.blocks), iq_case.block_bytes};
+            matrix.validate();
+
+            for (uint32_t row = 0; row < iq_rows; ++row) {
+                std::vector<float> dequantized(iq_cols);
+                celeg::cpu_gguf_dequantize_row(matrix, row, dequantized.data());
+                const float* expected = iq_case.reference + row * iq_cols;
+                for (uint32_t i = 0; i < iq_cols; ++i) {
+                    // fp16 scales round-trip exactly, so the only slack needed
+                    // is float accumulation order.
+                    const float tolerance =
+                        1e-5f * std::max(1.0f, std::abs(expected[i]));
+                    if (std::abs(dequantized[i] - expected[i]) >= tolerance) {
+                        std::cout << iq_case.name << " row " << row << " element " << i
+                                  << ": got " << dequantized[i] << " want " << expected[i]
+                                  << "\n";
+                    }
+                    CELEG_TEST_CHECK(std::abs(dequantized[i] - expected[i]) < tolerance);
+                }
+
+                // The native dot must agree with a plain float dot over the
+                // ggml reference, not merely with celeg's own dequantizer.
+                float reference = 0.0f;
+                for (uint32_t i = 0; i < iq_cols; ++i) {
+                    reference += expected[i] * activation[0].d *
+                                 static_cast<float>(activation[0].qs[i]);
+                }
+                const std::byte* packed_row = matrix.data + row * matrix.row_bytes();
+                const float scalar = celeg::cpu_gguf_dot_scalar(
+                    packed_row, matrix.type, activation.data(), matrix.cols);
+                const float optimized = celeg::select_cpu_gguf_dot_kernel(isa)(
+                    packed_row, matrix.type, activation.data(), matrix.cols);
+                const float tolerance = 1e-4f * std::max(1.0f, std::abs(reference));
+                CELEG_TEST_CHECK(std::abs(scalar - reference) < tolerance);
+                CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
+            }
+        }
     }
 
     const char* real_gguf = std::getenv("CELEG_GGUF_TEST_FILE");

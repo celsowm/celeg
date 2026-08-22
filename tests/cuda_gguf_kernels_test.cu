@@ -4,7 +4,10 @@
 #include "celeg/backend/cuda/utils.cuh"
 #include "celeg/detail/checkpoint/bootstrap.hpp"
 #include "celeg/backend/cuda/model.hpp"
+#include "celeg/backend/cuda/weights_loader.hpp"
+#include "celeg/checkpoint/formats/gguf.hpp"
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -19,6 +22,8 @@
 #include <vector>
 
 namespace {
+
+#include "data/gguf_iq_reference.inc"
 
 void check(cudaError_t status, const char* what) {
     if (status != cudaSuccess) {
@@ -561,6 +566,60 @@ int main() {
         if (first.size() != second.size()) return 7;
         for (size_t i = 0; i < std::min<size_t>(first.size(), 64); ++i) {
             if (first[i] != second[i]) return 8;
+        }
+    }
+
+    // The CUDA loader decodes IQ blocks on the host before uploading BF16.
+    // The shared decoders are checked element-exactly against ggml in
+    // cpu_gguf_kernels_test; what is specific here is the loader's own
+    // block/row striding and the BF16 narrowing, so the same ggml fixture is
+    // pushed through dequantize_gguf_to_bf16 end to end.
+    {
+        struct IqCase {
+            const char* name;
+            celeg::GgmlType type;
+            const unsigned char* blocks;
+            size_t block_bytes;
+            const float* reference;
+        };
+        const IqCase iq_cases[] = {
+            {"IQ2_S", celeg::GgmlType::IQ2_S, kIQ2_SBlocks, sizeof(kIQ2_SBlocks),
+             kIQ2_SReference},
+            {"IQ3_XXS", celeg::GgmlType::IQ3_XXS, kIQ3_XXSBlocks, sizeof(kIQ3_XXSBlocks),
+             kIQ3_XXSReference},
+            {"IQ3_S", celeg::GgmlType::IQ3_S, kIQ3_SBlocks, sizeof(kIQ3_SBlocks),
+             kIQ3_SReference},
+            {"IQ4_NL", celeg::GgmlType::IQ4_NL, kIQ4_NLBlocks, sizeof(kIQ4_NLBlocks),
+             kIQ4_NLReference},
+            {"IQ4_XS", celeg::GgmlType::IQ4_XS, kIQ4_XSBlocks, sizeof(kIQ4_XSBlocks),
+             kIQ4_XSReference},
+        };
+        for (const IqCase& iq_case : iq_cases) {
+            if (!celeg::ggml_type_support(iq_case.type).cuda_dequantize) {
+                std::cerr << iq_case.name << ": registry says CUDA cannot dequantize\n";
+                return 9;
+            }
+            celeg::HostTensorView view;
+            view.dtype = celeg::TensorDType::Quantized;
+            view.block_encoding = celeg::block_encoding_from_ggml_type(iq_case.type);
+            view.shape = {4, 256};
+            view.data = reinterpret_cast<const std::byte*>(iq_case.blocks);
+            view.bytes = iq_case.block_bytes;
+            std::vector<__nv_bfloat16> decoded;
+            celeg::dequantize_gguf_to_bf16(view, decoded);
+            if (decoded.size() != 4 * 256) return 10;
+            for (size_t i = 0; i < decoded.size(); ++i) {
+                const float got = __bfloat162float(decoded[i]);
+                const float want = iq_case.reference[i];
+                // BF16 keeps 8 mantissa bits, so ~0.4% relative is the
+                // representation floor, not decoder slack.
+                const float tolerance = 6e-3f * std::max(1.0f, std::abs(want));
+                if (std::abs(got - want) >= tolerance) {
+                    std::cerr << iq_case.name << " element " << i << ": got " << got
+                              << " want " << want << "\n";
+                    return 11;
+                }
+            }
         }
     }
 

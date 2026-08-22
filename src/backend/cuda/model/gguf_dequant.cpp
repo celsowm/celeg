@@ -1,11 +1,14 @@
 #include "celeg/backend/cuda/weights_loader.hpp"
 #include "celeg/backend/cuda/kernels/gguf.cuh"
 #include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/gguf_iq.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cstring>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace celeg {
@@ -19,6 +22,11 @@ struct Q6KHost { uint8_t ql[128]; uint8_t qh[64]; int8_t scales[16]; __half d; }
 struct Q5_0Host { __half d; uint8_t qh[4]; uint8_t qs[16]; };
 struct Q8_0Host { __half d; int8_t qs[32]; };
 struct Q4_0Host { __half d; uint8_t qs[16]; };
+struct Q4_1Host { __half d; __half m; uint8_t qs[16]; };
+
+/// The shared IQ block structs store the scale as raw fp16 bits, since they
+/// are compiled for the CPU backend too and cannot depend on __half.
+float half_bits_to_float(std::uint16_t bits) { return fp16_bits_to_float(bits); }
 
 void q4_0_decode(const Q4_0Host* blk, int col, float& out) {
     // GGML packs each 32-element block as two halves, not interleaved
@@ -27,6 +35,14 @@ void q4_0_decode(const Q4_0Host* blk, int col, float& out) {
     const uint8_t packed = blk->qs[col & 15];
     const int q = (col < 16) ? (packed & 0x0f) : (packed >> 4);
     out = __half2float(blk->d) * static_cast<float>(q - 8);
+}
+
+void q4_1_decode(const Q4_1Host* blk, int col, float& out) {
+    // Same split-half nibble layout as Q4_0, but the quants are unsigned and
+    // the block carries an explicit minimum instead of the implicit -8 bias.
+    const uint8_t packed = blk->qs[col & 15];
+    const int q = (col < 16) ? (packed & 0x0f) : (packed >> 4);
+    out = __half2float(blk->d) * static_cast<float>(q) + __half2float(blk->m);
 }
 
 void q5_0_decode(const Q5_0Host* blk, int col, float& out) {
@@ -127,50 +143,150 @@ void q6k_decode(const Q6KHost* blk, int col, float& out) {
     out = d * static_cast<float>(blk->scales[is]) * static_cast<float>(q - 32);
 }
 
+/// Decodes one whole block. Working per block rather than per element is
+/// what keeps loading a multi-billion-parameter checkpoint tolerable: the
+/// type dispatch happens once per block instead of once per weight, and
+/// per-block setup such as Q3_K's scale expansion is computed once rather
+/// than re-derived for all 256 elements.
+using BlockDecoder = void (*)(const uint8_t* block, float* out);
+
+template <typename Block, void (*Decode)(const Block*, int, float&)>
+void decode_uniform(const uint8_t* block, float* out) {
+    const auto* typed = reinterpret_cast<const Block*>(block);
+    constexpr int elements = std::is_same_v<Block, Q4_0Host> ||
+                             std::is_same_v<Block, Q4_1Host> ||
+                             std::is_same_v<Block, Q5_0Host> ||
+                             std::is_same_v<Block, Q8_0Host> ? 32 : 256;
+    for (int i = 0; i < elements; ++i) Decode(typed, i, out[i]);
+}
+
+void decode_q3k(const uint8_t* block, float* out) {
+    const auto* typed = reinterpret_cast<const Q3KHost*>(block);
+    int8_t scales[16]{};
+    q3k_scales(typed, scales);
+    const float d = __half2float(typed->d);
+    for (int i = 0; i < 256; ++i) {
+        out[i] = d * static_cast<float>(scales[i / 16]) *
+                 static_cast<float>(q3k_value(typed, i));
+    }
+}
+
+// The IQ decoders are shared with the CPU kernels rather than reimplemented
+// here; they take the raw fp16 scale, so the conversion is the only
+// backend-specific part.
+
+void decode_iq2s(const uint8_t* block, float* out) {
+    const auto& iq = *reinterpret_cast<const gguf_iq::BlockIq2S*>(block);
+    const float d = half_bits_to_float(iq.d);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        for (int half = 0; half < 2; ++half) {
+            const float scale = d * gguf_iq::iq2s_sub_scale(iq, ib32, half);
+            for (int i = 0; i < 16; ++i) {
+                const int col = ib32 * 32 + half * 16 + i;
+                out[col] = scale * static_cast<float>(gguf_iq::iq2s_value(iq, col));
+            }
+        }
+    }
+}
+
+void decode_iq3xxs(const uint8_t* block, float* out) {
+    const auto& iq = *reinterpret_cast<const gguf_iq::BlockIq3XXS*>(block);
+    const float d = half_bits_to_float(iq.d);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        const float scale = d * gguf_iq::iq3xxs_sub_scale(gguf_iq::iq3xxs_aux(iq, ib32));
+        for (int i = 0; i < 32; ++i) {
+            const int col = ib32 * 32 + i;
+            out[col] = scale * static_cast<float>(gguf_iq::iq3xxs_value(iq, col));
+        }
+    }
+}
+
+void decode_iq3s(const uint8_t* block, float* out) {
+    const auto& iq = *reinterpret_cast<const gguf_iq::BlockIq3S*>(block);
+    const float d = half_bits_to_float(iq.d);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        const float scale = d * gguf_iq::iq3s_sub_scale(iq, ib32);
+        for (int i = 0; i < 32; ++i) {
+            const int col = ib32 * 32 + i;
+            out[col] = scale * static_cast<float>(gguf_iq::iq3s_value(iq, col));
+        }
+    }
+}
+
+void decode_iq4xs(const uint8_t* block, float* out) {
+    const auto& iq = *reinterpret_cast<const gguf_iq::BlockIq4XS*>(block);
+    const float d = half_bits_to_float(iq.d);
+    for (int ib = 0; ib < 8; ++ib) {
+        const float scale = d * gguf_iq::iq4xs_sub_scale(iq, ib);
+        for (int i = 0; i < 32; ++i) {
+            const int col = ib * 32 + i;
+            out[col] = scale * static_cast<float>(gguf_iq::iq4xs_value(iq, col));
+        }
+    }
+}
+
+void decode_iq4nl(const uint8_t* block, float* out) {
+    const auto& iq = *reinterpret_cast<const gguf_iq::BlockIq4NL*>(block);
+    const float d = half_bits_to_float(iq.d);
+    for (int i = 0; i < 32; ++i) {
+        out[i] = d * static_cast<float>(gguf_iq::iq4nl_value(iq, i));
+    }
+}
+
+/// Resolved once per tensor. The switch is exhaustive on purpose: an
+/// unhandled type must throw here rather than fall into a neighbour's
+/// decoder, which is what a bare `else` branch used to allow.
+BlockDecoder select_block_decoder(GgmlType type) {
+    switch (type) {
+        case GgmlType::Q2_K: return decode_uniform<Q2KHost, q2k_decode>;
+        case GgmlType::Q3_K: return decode_q3k;
+        case GgmlType::Q4_0: return decode_uniform<Q4_0Host, q4_0_decode>;
+        case GgmlType::Q4_1: return decode_uniform<Q4_1Host, q4_1_decode>;
+        case GgmlType::Q4_K: return decode_uniform<Q4KHost, q4k_decode>;
+        case GgmlType::Q5_0: return decode_uniform<Q5_0Host, q5_0_decode>;
+        case GgmlType::Q5_K: return decode_uniform<Q5KHost, q5k_decode>;
+        case GgmlType::Q6_K: return decode_uniform<Q6KHost, q6k_decode>;
+        case GgmlType::Q8_0: return decode_uniform<Q8_0Host, q8_0_decode>;
+        case GgmlType::IQ2_S: return decode_iq2s;
+        case GgmlType::IQ3_XXS: return decode_iq3xxs;
+        case GgmlType::IQ3_S: return decode_iq3s;
+        case GgmlType::IQ4_XS: return decode_iq4xs;
+        case GgmlType::IQ4_NL: return decode_iq4nl;
+        default:
+            throw std::runtime_error(
+                std::string("no CUDA host dequantizer for GGUF type ") +
+                ggml_type_name(type));
+    }
+}
+
 void dequantize_gguf_to_bf16_impl(const HostTensorView& tensor,
                                   std::vector<__nv_bfloat16>& out) {
     const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-    if (ggml_type != GgmlType::Q2_K && ggml_type != GgmlType::Q3_K &&
-        ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
-        ggml_type != GgmlType::Q5_K && ggml_type != GgmlType::Q6_K &&
-        ggml_type != GgmlType::Q8_0) {
-        throw std::runtime_error("unsupported GGUF quantization for CUDA dequantization");
+    if (!ggml_type_support(ggml_type).cuda_dequantize) {
+        throw std::runtime_error(
+            std::string("unsupported GGUF quantization for CUDA dequantization: ") +
+            ggml_type_name(ggml_type));
     }
     const int rows = static_cast<int>(tensor.shape[0]);
     const int cols = static_cast<int>(tensor.shape[1]);
     out.resize(static_cast<size_t>(rows) * cols);
     const GgmlTypeTrait trait = ggml_type_trait(ggml_type);
+    if (cols % trait.block_size != 0) {
+        throw std::runtime_error("GGUF tensor width is not block-aligned for dequantization");
+    }
+    const BlockDecoder decode = select_block_decoder(ggml_type);
     const int blocks_per_row = cols / trait.block_size;
     const size_t row_bytes = static_cast<size_t>(blocks_per_row) * trait.type_size;
+    std::vector<float> decoded(static_cast<size_t>(trait.block_size));
     for (int r = 0; r < rows; ++r) {
         const uint8_t* row_blocks =
             reinterpret_cast<const uint8_t*>(tensor.data) + static_cast<size_t>(r) * row_bytes;
-        for (int c = 0; c < cols; ++c) {
-            const int b = c / trait.block_size;
-            const int within = c % trait.block_size;
-            float v = 0.0f;
-            if (ggml_type == GgmlType::Q2_K) {
-                q2k_decode(reinterpret_cast<const Q2KHost*>(row_blocks) + b, within, v);
-            } else if (ggml_type == GgmlType::Q3_K) {
-                const auto* block = reinterpret_cast<const Q3KHost*>(row_blocks) + b;
-                int8_t scales[16]{};
-                q3k_scales(block, scales);
-                v = __half2float(block->d) * static_cast<float>(scales[within / 16]) *
-                    static_cast<float>(q3k_value(block, within));
-            } else if (ggml_type == GgmlType::Q4_0) {
-                q4_0_decode(reinterpret_cast<const Q4_0Host*>(row_blocks) + b, within, v);
-            } else if (ggml_type == GgmlType::Q4_K) {
-                q4k_decode(reinterpret_cast<const Q4KHost*>(row_blocks) + b, within, v);
-            } else if (ggml_type == GgmlType::Q5_0) {
-                q5_0_decode(reinterpret_cast<const Q5_0Host*>(row_blocks) + b, within, v);
-            } else if (ggml_type == GgmlType::Q5_K) {
-                q5k_decode(reinterpret_cast<const Q5KHost*>(row_blocks) + b, within, v);
-            } else if (ggml_type == GgmlType::Q6_K) {
-                q6k_decode(reinterpret_cast<const Q6KHost*>(row_blocks) + b, within, v);
-            } else {
-                q8_0_decode(reinterpret_cast<const Q8_0Host*>(row_blocks) + b, within, v);
+        __nv_bfloat16* row_out = out.data() + static_cast<size_t>(r) * cols;
+        for (int b = 0; b < blocks_per_row; ++b) {
+            decode(row_blocks + static_cast<size_t>(b) * trait.type_size, decoded.data());
+            for (int i = 0; i < trait.block_size; ++i) {
+                row_out[b * trait.block_size + i] = __float2bfloat16(decoded[i]);
             }
-            out[static_cast<size_t>(r) * cols + c] = __float2bfloat16(v);
         }
     }
 }

@@ -115,10 +115,10 @@ const LinearWeight* WeightLoader::load_linear_weight(
 
     if (tensor.dtype == TensorDType::Quantized) {
         const GgmlType ggml_type = ggml_type_from_block_encoding(tensor.block_encoding);
-        if (ggml_type != GgmlType::Q2_K && ggml_type != GgmlType::Q3_K &&
-            ggml_type != GgmlType::Q4_0 && ggml_type != GgmlType::Q4_K && ggml_type != GgmlType::Q5_0 &&
-            ggml_type != GgmlType::Q5_K && ggml_type != GgmlType::Q6_K && ggml_type != GgmlType::Q8_0) {
-            throw std::runtime_error("unsupported GGUF linear quantization: " + name);
+        const GgufTypeSupport support = ggml_type_support(ggml_type);
+        if (!support.cuda_dequantize) {
+            throw std::runtime_error("unsupported GGUF linear quantization: " + name +
+                                     " (" + ggml_type_name(ggml_type) + ")");
         }
         const GgmlTypeTrait trait = ggml_type_trait(ggml_type);
         if (cols % trait.block_size != 0) {
@@ -134,9 +134,11 @@ const LinearWeight* WeightLoader::load_linear_weight(
         const size_t row_bytes =
             static_cast<size_t>(cols) / trait.block_size * trait.type_size;
 
-        if (ggml_type == GgmlType::Q2_K || ggml_type == GgmlType::Q3_K ||
-            ggml_type == GgmlType::Q4_0 || ggml_type == GgmlType::Q5_0 ||
-            ggml_type == GgmlType::Q5_K || ggml_type == GgmlType::Q8_0) {
+        // Types with no native MMQ kernel are decoded on the host at load
+        // time; only the MMQ-capable ones can stay packed on the device.
+        // Deriving this from the registry rather than an inline list is what
+        // keeps a newly added quantization working on both backends at once.
+        if (!support.cuda_native_mmq) {
             std::vector<__nv_bfloat16> host_bf16;
             dequantize_gguf_to_bf16(tensor, host_bf16);
             weight.bf16_storage.reset(static_cast<size_t>(rows) * cols);
@@ -435,17 +437,16 @@ const LinearWeight* WeightLoader::load_concat_linear_weight(
         bool requires_host_dequantization = false;
         for (const auto& v : views) {
             const GgmlType v_ggml_type = ggml_type_from_block_encoding(v.block_encoding);
-            if (v.dtype != TensorDType::Quantized ||
-                (v_ggml_type != GgmlType::Q2_K && v_ggml_type != GgmlType::Q3_K &&
-                 v_ggml_type != GgmlType::Q4_0 && v_ggml_type != GgmlType::Q4_K &&
-                 v_ggml_type != GgmlType::Q5_0 && v_ggml_type != GgmlType::Q5_K &&
-                 v_ggml_type != GgmlType::Q6_K && v_ggml_type != GgmlType::Q8_0)) {
-                throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " + synthetic_name);
+            const GgufTypeSupport v_support = ggml_type_support(v_ggml_type);
+            if (v.dtype != TensorDType::Quantized || !v_support.cuda_dequantize) {
+                throw std::runtime_error("mixed dense/unsupported quantized concat is not supported: " +
+                                         synthetic_name + " (" + ggml_type_name(v_ggml_type) + ")");
             }
-            requires_host_dequantization = requires_host_dequantization ||
-                v_ggml_type == GgmlType::Q2_K || v_ggml_type == GgmlType::Q3_K ||
-                v_ggml_type == GgmlType::Q4_0 || v_ggml_type == GgmlType::Q5_0 ||
-                v_ggml_type == GgmlType::Q5_K || v_ggml_type == GgmlType::Q8_0;
+            // One member without an MMQ kernel forces the whole concat onto
+            // the host-dequantized path, since the segments must end up in a
+            // single storage kind.
+            requires_host_dequantization =
+                requires_host_dequantization || !v_support.cuda_native_mmq;
         }
 
         if (requires_host_dequantization) {

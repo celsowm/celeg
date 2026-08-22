@@ -8,6 +8,7 @@ set(CELEG_BASE_RUNTIME_SOURCES
     src/checkpoint/packed/fp8.cpp
     src/checkpoint/packed/nvfp4.cpp
     src/checkpoint/formats/gguf.cpp
+    src/checkpoint/formats/gguf_iq_tables.cpp
     src/checkpoint/catalog.cpp
     src/checkpoint/metadata.cpp
     src/checkpoint/gguf_position_profile.cpp

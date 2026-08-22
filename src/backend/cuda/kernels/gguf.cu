@@ -3,10 +3,23 @@
 
 #include <cuda_fp16.h>
 
+#include <stdexcept>
+#include <string>
+
 namespace celeg {
 namespace {
 
 using celeg::gguf_blocks::q4k_scale_min;
+
+/// Every launcher below is templated over the two types that have native
+/// device kernels. Reaching this means a caller routed a third type here;
+/// failing loudly beats the previous behaviour, where an unmatched type
+/// either launched Q6_K's kernel on foreign blocks or launched nothing at
+/// all and left the output buffer uninitialised.
+[[noreturn]] void unsupported_native_gguf(GgmlType type, const char* kernel) {
+    throw std::runtime_error(std::string("no native CUDA GGUF ") + kernel +
+                             " kernel for " + ggml_type_name(type));
+}
 
 __device__ __forceinline__ float warp_reduce_sum(float v) {
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -227,6 +240,8 @@ void launch_gguf_linear_segment(const __nv_bfloat16* x, const uint8_t* blocks,
         } else if (type == GgmlType::Q6_K) {
             gguf_gemv_kernel<BlockQ6K, q6k_value>
                 <<<grid, threads, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
+        } else {
+            unsupported_native_gguf(type, "gemv");
         }
     } else {
         const dim3 block(32, 4);
@@ -237,6 +252,8 @@ void launch_gguf_linear_segment(const __nv_bfloat16* x, const uint8_t* blocks,
         } else if (type == GgmlType::Q6_K) {
             gguf_gemm_kernel<BlockQ6K, q6k_value>
                 <<<grid, block, 0, stream>>>(x, blocks, y, m, n, k, row_bytes, output_stride, beta);
+        } else {
+            unsupported_native_gguf(type, "gemm");
         }
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
@@ -249,9 +266,11 @@ void launch_gguf_embedding(int32_t token, const GgufLinearSegment& segment,
     if (segment.type == GgmlType::Q4_K) {
         gguf_embedding_value_kernel<BlockQ4K, q4k_value>
             <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
-    } else {
+    } else if (segment.type == GgmlType::Q6_K) {
         gguf_embedding_value_kernel<BlockQ6K, q6k_value>
             <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
+    } else {
+        unsupported_native_gguf(segment.type, "embedding");
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -264,9 +283,11 @@ void launch_gguf_embedding_device(const int32_t* token,
     if (segment.type == GgmlType::Q4_K) {
         gguf_embedding_device_kernel<BlockQ4K, q4k_value>
             <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
-    } else {
+    } else if (segment.type == GgmlType::Q6_K) {
         gguf_embedding_device_kernel<BlockQ6K, q6k_value>
             <<<grid, 256, 0, stream>>>(token, segment.blocks, out, hidden, segment.row_bytes);
+    } else {
+        unsupported_native_gguf(segment.type, "embedding");
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -280,10 +301,12 @@ void launch_gguf_embedding_batch(const int32_t* tokens, int rows,
         gguf_embedding_batch_kernel<BlockQ4K, q4k_value>
             <<<grid, 256, 0, stream>>>(tokens, rows, segment.blocks, out,
                                          segment.cols, segment.row_bytes);
-    } else {
+    } else if (segment.type == GgmlType::Q6_K) {
         gguf_embedding_batch_kernel<BlockQ6K, q6k_value>
             <<<grid, 256, 0, stream>>>(tokens, rows, segment.blocks, out,
                                          segment.cols, segment.row_bytes);
+    } else {
+        unsupported_native_gguf(segment.type, "embedding");
     }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
@@ -301,6 +324,8 @@ void launch_gguf_dequant(const uint8_t* blocks, GgmlType type,
     } else if (type == GgmlType::Q6_K) {
         gguf_dequant_kernel<BlockQ6K, q6k_value>
             <<<grid_x, block, 0, stream>>>(blocks, out, n, k);
+    } else {
+        unsupported_native_gguf(type, "dequant");
     }
 }
 

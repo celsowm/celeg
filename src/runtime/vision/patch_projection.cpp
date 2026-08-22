@@ -2,6 +2,7 @@
 
 #include "celeg/checkpoint/repositories/safetensors.hpp"
 #include "celeg/checkpoint/weight_repository.hpp"
+#include "celeg/model/weights/quantization.hpp"
 #include "celeg/runtime/providers.hpp"
 #include "celeg/vision/image.hpp"
 
@@ -22,21 +23,6 @@
 namespace celeg {
 namespace {
 
-float half_to_float(std::uint16_t value) {
-    const std::uint32_t sign = (value & 0x8000u) << 16;
-    const std::uint32_t exponent = (value >> 10) & 0x1fu;
-    const std::uint32_t fraction = value & 0x3ffu;
-    if (exponent == 0) {
-        if (fraction == 0) return std::bit_cast<float>(sign);
-        const float result = std::ldexp(static_cast<float>(fraction), -24);
-        return sign ? -result : result;
-    }
-    if (exponent == 31) {
-        return std::bit_cast<float>(sign | 0x7f800000u | (fraction << 13));
-    }
-    return std::bit_cast<float>(sign | ((exponent + 112u) << 23) | (fraction << 13));
-}
-
 struct Tensor {
     HostTensorView view;
 
@@ -56,7 +42,7 @@ struct Tensor {
         if (view.dtype == TensorDType::BF16) {
             return std::bit_cast<float>(static_cast<std::uint32_t>(raw) << 16);
         }
-        if (view.dtype == TensorDType::F16) return half_to_float(raw);
+        if (view.dtype == TensorDType::F16) return fp16_bits_to_float(raw);
         throw std::invalid_argument("patch projection vision weights must be F32, BF16, or F16");
     }
 };

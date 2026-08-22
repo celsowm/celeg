@@ -1,5 +1,7 @@
 #include "celeg/backend/cpu/gguf.hpp"
 #include "celeg/checkpoint/gguf_blocks.hpp"
+#include "celeg/checkpoint/gguf_iq.hpp"
+#include "celeg/model/weights/quantization.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -85,33 +87,6 @@ static_assert(sizeof(BlockQ4_0) == 18);
 static_assert(sizeof(BlockQ5_0) == 22);
 static_assert(sizeof(BlockQ8_0) == 34);
 static_assert(sizeof(BlockQ4_1) == 20);
-
-float fp16_to_float(uint16_t bits) {
-    const uint32_t sign = static_cast<uint32_t>(bits & 0x8000u) << 16;
-    uint32_t exponent = (bits >> 10) & 0x1fu;
-    uint32_t mantissa = bits & 0x03ffu;
-    uint32_t result = 0;
-    if (exponent == 0) {
-        if (mantissa == 0) {
-            result = sign;
-        } else {
-            int shift = 0;
-            while ((mantissa & 0x0400u) == 0) {
-                mantissa <<= 1;
-                ++shift;
-            }
-            mantissa &= 0x03ffu;
-            result = sign |
-                static_cast<uint32_t>(127 - 14 - shift) << 23 |
-                mantissa << 13;
-        }
-    } else if (exponent == 31) {
-        result = sign | 0x7f800000u | mantissa << 13;
-    } else {
-        result = sign | (exponent + (127 - 15)) << 23 | mantissa << 13;
-    }
-    return std::bit_cast<float>(result);
-}
 
 int q4k_value(const BlockQ4K& block, int col) {
     const int sub = col >> 5;
@@ -349,8 +324,8 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
                     isum += scale * q2k_value(weight, col) * x.qs[col];
                 }
             }
-            total += x.d * (fp16_to_float(weight.d) * isum -
-                            fp16_to_float(weight.dmin) * summs);
+            total += x.d * (fp16_bits_to_float(weight.d) * isum -
+                            fp16_bits_to_float(weight.dmin) * summs);
         }
         return total;
     }
@@ -369,7 +344,7 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
                         q3k_value(weight, col) * x.qs[col];
                 }
             }
-            total += x.d * fp16_to_float(weight.d) * isum;
+            total += x.d * fp16_bits_to_float(weight.d) * isum;
         }
         return total;
     }
@@ -378,8 +353,8 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ4K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
@@ -403,7 +378,7 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ6K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             int block_total = 0;
             for (int sub = 0; sub < 16; ++sub) {
                 int dot = 0;
@@ -423,8 +398,8 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ5K& weight = weights[b];
             const CpuQ8KBlock& x = activation[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
@@ -450,8 +425,8 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ4_1& weight = weights[b * 8 + static_cast<size_t>(sub)];
-                const float d = fp16_to_float(weight.d);
-                const float m = fp16_to_float(weight.dmin);
+                const float d = fp16_bits_to_float(weight.d);
+                const float m = fp16_bits_to_float(weight.dmin);
                 int dot = 0;
                 for (int j = 0; j < 16; ++j) {
                     const int low = weight.qs[j] & 0x0f;
@@ -476,7 +451,7 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ8_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
-                const float d = fp16_to_float(weight.d);
+                const float d = fp16_bits_to_float(weight.d);
                 const int base = sub * 32;
                 int dot = 0;
                 for (int i = 0; i < 32; ++i) {
@@ -496,7 +471,7 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ4_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
-                const float d = fp16_to_float(weight.d);
+                const float d = fp16_bits_to_float(weight.d);
                 int dot = 0;
                 for (int j = 0; j < 16; ++j) {
                     dot += (weight.qs[j] & 0x0f) *
@@ -518,7 +493,7 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
             float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ5_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
-                const float d = fp16_to_float(weight.d);
+                const float d = fp16_bits_to_float(weight.d);
                 uint32_t qh;
                 std::memcpy(&qh, weight.qh, sizeof(qh));
                 int dot = 0;
@@ -538,7 +513,113 @@ float cpu_gguf_dot_scalar(const std::byte* packed_row, GgmlType type,
         }
         return total;
     }
-    throw std::invalid_argument("unsupported CPU GGUF dot type");
+    // The IQ formats share a shape: the packed magnitudes are small signed
+    // integers, and every sub-block carries a float multiplier. Accumulating
+    // the integer products per sub-block and applying the multiplier once
+    // keeps the inner loop in integer arithmetic, exactly as the K-quants
+    // above do.
+    if (type == GgmlType::IQ2_S) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq2S*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq2S& weight = weights[b];
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                // The two halves of a sub-block use the two nibbles of
+                // scales[ib32], so they accumulate separately.
+                int dot[2] = {0, 0};
+                for (int i = 0; i < 32; ++i) {
+                    const int col = ib32 * 32 + i;
+                    dot[i / 16] += gguf_iq::iq2s_value(weight, col) *
+                                   static_cast<int>(x.qs[col]);
+                }
+                block_total += gguf_iq::iq2s_sub_scale(weight, ib32, 0) *
+                                   static_cast<float>(dot[0]) +
+                               gguf_iq::iq2s_sub_scale(weight, ib32, 1) *
+                                   static_cast<float>(dot[1]);
+            }
+            total += x.d * fp16_bits_to_float(weight.d) * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::IQ3_XXS) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq3XXS*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq3XXS& weight = weights[b];
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                int dot = 0;
+                for (int i = 0; i < 32; ++i) {
+                    const int col = ib32 * 32 + i;
+                    dot += gguf_iq::iq3xxs_value(weight, col) *
+                           static_cast<int>(x.qs[col]);
+                }
+                block_total += gguf_iq::iq3xxs_sub_scale(gguf_iq::iq3xxs_aux(weight, ib32)) *
+                               static_cast<float>(dot);
+            }
+            total += x.d * fp16_bits_to_float(weight.d) * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::IQ3_S) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq3S*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq3S& weight = weights[b];
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                int dot = 0;
+                for (int i = 0; i < 32; ++i) {
+                    const int col = ib32 * 32 + i;
+                    dot += gguf_iq::iq3s_value(weight, col) * static_cast<int>(x.qs[col]);
+                }
+                block_total += gguf_iq::iq3s_sub_scale(weight, ib32) *
+                               static_cast<float>(dot);
+            }
+            total += x.d * fp16_bits_to_float(weight.d) * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::IQ4_XS) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq4XS*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq4XS& weight = weights[b];
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int ib = 0; ib < 8; ++ib) {
+                int dot = 0;
+                for (int i = 0; i < 32; ++i) {
+                    const int col = ib * 32 + i;
+                    dot += gguf_iq::iq4xs_value(weight, col) * static_cast<int>(x.qs[col]);
+                }
+                block_total += gguf_iq::iq4xs_sub_scale(weight, ib) *
+                               static_cast<float>(dot);
+            }
+            total += x.d * fp16_bits_to_float(weight.d) * block_total;
+        }
+        return total;
+    }
+    if (type == GgmlType::IQ4_NL) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq4NL*>(packed_row);
+        for (size_t b = 0; b < blocks; ++b) {
+            const CpuQ8KBlock& x = activation[b];
+            float block_total = 0.0f;
+            for (int sub = 0; sub < 8; ++sub) {
+                const gguf_iq::BlockIq4NL& weight = weights[b * 8 + static_cast<size_t>(sub)];
+                int dot = 0;
+                for (int i = 0; i < 32; ++i) {
+                    dot += gguf_iq::iq4nl_value(weight, i) *
+                           static_cast<int>(x.qs[static_cast<size_t>(sub) * 32 + i]);
+                }
+                block_total += fp16_bits_to_float(weight.d) * static_cast<float>(dot);
+            }
+            total += x.d * block_total;
+        }
+        return total;
+    }
+    throw std::invalid_argument(std::string("unsupported CPU GGUF dot type: ") +
+                                ggml_type_name(type));
 }
 
 CpuGgufDotFunction select_cpu_gguf_dot_kernel(CpuIsa isa) {
@@ -558,15 +639,11 @@ CpuGgufDot4Function select_cpu_gguf_dot4_kernel(CpuIsa isa) {
 }
 
 bool gguf_type_is_native_dot(GgmlType type) {
-    return type == GgmlType::Q2_K || type == GgmlType::Q3_K ||
-        type == GgmlType::Q4_0 || type == GgmlType::Q5_0 ||
-        type == GgmlType::Q8_0 || type == GgmlType::Q4_K ||
-        type == GgmlType::Q5_K || type == GgmlType::Q6_K ||
-        type == GgmlType::Q4_1;
+    return ggml_type_support(type).cpu_native_dot;
 }
 
 bool gguf_type_dequantizable(GgmlType type) {
-    return gguf_type_is_native_dot(type);
+    return ggml_type_support(type).cpu_dequantize;
 }
 
 void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
@@ -581,8 +658,8 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ2K*>(packed);
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ2K& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             for (int col = 0; col < 256; ++col) {
                 const int sub = col / 16;
                 output[b * 256 + static_cast<size_t>(col)] =
@@ -599,7 +676,7 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
             const BlockQ3K& weight = weights[b];
             int8_t scales[16]{};
             q3k_scales(weight, scales);
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             for (int col = 0; col < 256; ++col) {
                 const int sub = col / 16;
                 output[b * 256 + static_cast<size_t>(col)] =
@@ -613,7 +690,7 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ4_0*>(packed);
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ4_0& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             // GGML packs each block as two halves, not interleaved pairs:
             // qs[j] holds element j in its low nibble and element j+16 in
             // its high nibble (j in [0,16)).
@@ -631,7 +708,7 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ5_0*>(packed);
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ5_0& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             uint32_t qh;
             std::memcpy(&qh, weight.qh, sizeof(qh));
             // Same split-half nibble layout as Q4_0; the high (5th) bit of
@@ -653,8 +730,8 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ4_1*>(packed);
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ4_1& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
-            const float m = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float m = fp16_bits_to_float(weight.dmin);
             for (int j = 0; j < 16; ++j) {
                 const uint8_t packed_value = weight.qs[j];
                 output[b * 32 + static_cast<size_t>(j)] =
@@ -669,7 +746,7 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ8_0*>(packed);
         for (size_t b = 0; b < matrix.cols / 32; ++b) {
             const BlockQ8_0& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
+            const float d = fp16_bits_to_float(weight.d);
             for (int col = 0; col < 32; ++col) {
                 output[b * 32 + static_cast<size_t>(col)] =
                     d * static_cast<float>(weight.qs[col]);
@@ -681,8 +758,8 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ4K*>(packed);
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ4K& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
                 q4k_scale_min(sub, weight.scales, scale, minimum);
@@ -700,8 +777,8 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         const auto* weights = reinterpret_cast<const BlockQ5K*>(packed);
         for (size_t b = 0; b < blocks; ++b) {
             const BlockQ5K& weight = weights[b];
-            const float d = fp16_to_float(weight.d);
-            const float dmin = fp16_to_float(weight.dmin);
+            const float d = fp16_bits_to_float(weight.d);
+            const float dmin = fp16_bits_to_float(weight.dmin);
             for (int sub = 0; sub < 8; ++sub) {
                 uint8_t scale = 0, minimum = 0;
                 q4k_scale_min(sub, weight.scales, scale, minimum);
@@ -715,13 +792,80 @@ void cpu_gguf_dequantize_row(const CpuGgufMatrix& matrix, size_t row,
         }
         return;
     }
+    if (matrix.type == GgmlType::IQ2_S) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq2S*>(packed);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq2S& weight = weights[b];
+            const float d = fp16_bits_to_float(weight.d);
+            for (int col = 0; col < 256; ++col) {
+                const float scale =
+                    gguf_iq::iq2s_sub_scale(weight, col / 32, (col % 32) / 16);
+                output[b * 256 + static_cast<size_t>(col)] =
+                    d * scale * static_cast<float>(gguf_iq::iq2s_value(weight, col));
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::IQ3_XXS) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq3XXS*>(packed);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq3XXS& weight = weights[b];
+            const float d = fp16_bits_to_float(weight.d);
+            for (int col = 0; col < 256; ++col) {
+                const float scale =
+                    gguf_iq::iq3xxs_sub_scale(gguf_iq::iq3xxs_aux(weight, col / 32));
+                output[b * 256 + static_cast<size_t>(col)] =
+                    d * scale * static_cast<float>(gguf_iq::iq3xxs_value(weight, col));
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::IQ3_S) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq3S*>(packed);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq3S& weight = weights[b];
+            const float d = fp16_bits_to_float(weight.d);
+            for (int col = 0; col < 256; ++col) {
+                output[b * 256 + static_cast<size_t>(col)] =
+                    d * gguf_iq::iq3s_sub_scale(weight, col / 32) *
+                    static_cast<float>(gguf_iq::iq3s_value(weight, col));
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::IQ4_XS) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq4XS*>(packed);
+        for (size_t b = 0; b < blocks; ++b) {
+            const gguf_iq::BlockIq4XS& weight = weights[b];
+            const float d = fp16_bits_to_float(weight.d);
+            for (int col = 0; col < 256; ++col) {
+                output[b * 256 + static_cast<size_t>(col)] =
+                    d * gguf_iq::iq4xs_sub_scale(weight, col / 32) *
+                    static_cast<float>(gguf_iq::iq4xs_value(weight, col));
+            }
+        }
+        return;
+    }
+    if (matrix.type == GgmlType::IQ4_NL) {
+        const auto* weights = reinterpret_cast<const gguf_iq::BlockIq4NL*>(packed);
+        for (size_t b = 0; b < matrix.cols / 32; ++b) {
+            const gguf_iq::BlockIq4NL& weight = weights[b];
+            const float d = fp16_bits_to_float(weight.d);
+            for (int col = 0; col < 32; ++col) {
+                output[b * 32 + static_cast<size_t>(col)] =
+                    d * static_cast<float>(gguf_iq::iq4nl_value(weight, col));
+            }
+        }
+        return;
+    }
     if (matrix.type != GgmlType::Q6_K) {
-        throw std::invalid_argument("unsupported CPU GGUF dequantize type");
+        throw std::invalid_argument(std::string("unsupported CPU GGUF dequantize type: ") +
+                                    ggml_type_name(matrix.type));
     }
     const auto* weights = reinterpret_cast<const BlockQ6K*>(packed);
     for (size_t b = 0; b < blocks; ++b) {
         const BlockQ6K& weight = weights[b];
-        const float d = fp16_to_float(weight.d);
+        const float d = fp16_bits_to_float(weight.d);
         for (int sub = 0; sub < 16; ++sub) {
             for (int i = 0; i < 16; ++i) {
                 const int col = sub * 16 + i;

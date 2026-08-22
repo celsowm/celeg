@@ -120,6 +120,74 @@ void test_q5k_trait() {
     CELEG_TEST_CHECK(std::string(celeg::ggml_type_name(celeg::GgmlType::Q5_K)) == "Q5_K");
 }
 
+/// The type table drives parsing, geometry, naming and backend capability
+/// all at once, so a row that is inconsistent with itself would surface as a
+/// mysterious loader failure rather than a table error. Check the whole
+/// table's invariants directly.
+void test_type_registry() {
+    struct Expected {
+        celeg::GgmlType type;
+        std::int32_t ordinal;
+        const char* name;
+        int block_size;
+        int type_size;
+    };
+    // Ordinals and block geometry as ggml defines them; a divergence here
+    // means celeg would read a real file at the wrong stride.
+    const Expected expected[] = {
+        {celeg::GgmlType::F32, 0, "F32", 1, 4},
+        {celeg::GgmlType::F16, 1, "F16", 1, 2},
+        {celeg::GgmlType::Q4_0, 2, "Q4_0", 32, 18},
+        {celeg::GgmlType::Q4_1, 3, "Q4_1", 32, 20},
+        {celeg::GgmlType::Q5_0, 6, "Q5_0", 32, 22},
+        {celeg::GgmlType::Q8_0, 8, "Q8_0", 32, 34},
+        {celeg::GgmlType::Q2_K, 10, "Q2_K", 256, 84},
+        {celeg::GgmlType::Q3_K, 11, "Q3_K", 256, 110},
+        {celeg::GgmlType::Q4_K, 12, "Q4_K", 256, 144},
+        {celeg::GgmlType::Q5_K, 13, "Q5_K", 256, 176},
+        {celeg::GgmlType::Q6_K, 14, "Q6_K", 256, 210},
+        {celeg::GgmlType::IQ3_XXS, 18, "IQ3_XXS", 256, 98},
+        {celeg::GgmlType::IQ4_NL, 20, "IQ4_NL", 32, 18},
+        {celeg::GgmlType::IQ3_S, 21, "IQ3_S", 256, 110},
+        {celeg::GgmlType::IQ2_S, 22, "IQ2_S", 256, 82},
+        {celeg::GgmlType::IQ4_XS, 23, "IQ4_XS", 256, 136},
+        {celeg::GgmlType::BF16, 30, "BF16", 1, 2},
+    };
+    for (const Expected& row : expected) {
+        CELEG_TEST_CHECK(celeg::ggml_type_from_ordinal(row.ordinal) == row.type);
+        CELEG_TEST_CHECK(std::string(celeg::ggml_type_name(row.type)) == row.name);
+        const auto trait = celeg::ggml_type_trait(row.type);
+        CELEG_TEST_CHECK(trait.block_size == row.block_size);
+        CELEG_TEST_CHECK(trait.type_size == row.type_size);
+        // Round-tripping through the block encoding is how the loaders carry
+        // the type across the format/backend boundary.
+        CELEG_TEST_CHECK(celeg::ggml_type_from_block_encoding(
+            celeg::block_encoding_from_ggml_type(row.type)) == row.type);
+    }
+
+    // Unrecognised ordinals must degrade to Unknown with zero geometry, so
+    // GgufFile::tensor() rejects the file instead of reading garbage.
+    for (const std::int32_t ordinal : {7, 9, 15, 16, 17, 19, 29, 39, 1000, -5}) {
+        const auto type = celeg::ggml_type_from_ordinal(ordinal);
+        CELEG_TEST_CHECK(type == celeg::GgmlType::Unknown);
+        CELEG_TEST_CHECK(celeg::ggml_type_trait(type).block_size == 0);
+    }
+
+    // A type any backend claims to execute must first be decodable there.
+    for (const Expected& row : expected) {
+        const auto support = celeg::ggml_type_support(row.type);
+        if (support.cpu_native_dot) CELEG_TEST_CHECK(support.cpu_dequantize);
+        if (support.cuda_native_mmq) CELEG_TEST_CHECK(support.cuda_dequantize);
+        // Every quantized type must be decodable on both backends: the CPU
+        // and CUDA support lists drifting apart is the exact bug this
+        // registry exists to prevent.
+        const bool quantized = celeg::ggml_type_trait(row.type).block_size > 1;
+        CELEG_TEST_CHECK(support.cpu_dequantize == quantized);
+        CELEG_TEST_CHECK(support.cuda_dequantize == quantized);
+    }
+    CELEG_TEST_CHECK(celeg::ggml_type_support(celeg::GgmlType::Unknown).cpu_dequantize == false);
+}
+
 void test_real_file_optional() {
     const char* env = std::getenv("CELEG_GGUF_TEST_FILE");
     if (env == nullptr) {
@@ -148,6 +216,7 @@ int main() {
     try {
         test_fixture();
         test_q5k_trait();
+        test_type_registry();
         test_real_file_optional();
         std::cout << "ALL PASS\n";
     } catch (const std::exception& e) {
