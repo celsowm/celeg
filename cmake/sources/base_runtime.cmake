@@ -1,5 +1,6 @@
 # Backend-independent checkpoint, model, text, and runtime support.
 set(CELEG_BASE_RUNTIME_SOURCES
+    src/app/logit_diagnostics.cpp
     src/app/run_preparation.cpp
     src/checkpoint/formats/json.cpp
     src/checkpoint/formats/safetensors.cpp

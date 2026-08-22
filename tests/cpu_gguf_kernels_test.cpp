@@ -361,6 +361,103 @@ int main() {
         CELEG_TEST_CHECK(std::abs(optimized - scalar) < 1e-4f);
     }
 
+    // Per-sub-block-scale types with *non-unit, non-integer* scales.
+    //
+    // Every other Q8_0/Q4_0/Q5_0 case above uses d = 0x3c00 (fp16 1.0), which
+    // makes d*dot an exact integer and so cannot detect a kernel that
+    // accumulates the scaled dot in an int instead of a float -- the AVX2 Q8_0
+    // path did exactly that, truncating every sub-block, and still passed.
+    // Real GGUF scales are small and fractional, so use those here, and vary
+    // the scale per sub-block so a kernel that hoists one scale out of the
+    // sub-block loop is caught too.
+    {
+        // Realistic magnitudes matter as much as realistic shapes: a GGUF
+        // block scale is max|w|/127, so it is ~1e-3, and the scaled sub-block
+        // dot lands around 1. That is the regime where truncating to int
+        // destroys most of the value. With d near 1.0 (as the cases above use)
+        // or with large weights, the same broken kernel is accurate to 1e-5
+        // and slips through.
+        constexpr uint16_t kScales[8] = {0x1400, 0x1555, 0x1800, 0x1999,
+                                         0x1c00, 0x1d55, 0x2000, 0x2155};
+        // Shape the weights like the activation (sin(i*0.07)) so the dot
+        // accumulates instead of cancelling to ~0; a dot near zero would sit
+        // under the tolerance floor and hide a broken kernel.
+        const auto wave = [&](size_t element) {
+            return std::sin(static_cast<float>(element) * 0.07f);
+        };
+        std::vector<BlockQ8_0> scaled_q8_0(8);
+        std::vector<BlockQ4_0> scaled_q4_0(8);
+        std::vector<BlockQ5_0> scaled_q5_0(8);
+        for (size_t block = 0; block < 8; ++block) {
+            scaled_q8_0[block].d = kScales[block];
+            scaled_q4_0[block].d = kScales[block];
+            scaled_q5_0[block].d = kScales[block];
+            const size_t base = block * 32;
+            for (size_t j = 0; j < 32; ++j) {
+                scaled_q8_0[block].qs[j] =
+                    static_cast<int8_t>(std::lround(5.0f * wave(base + j)));
+                // Q4_0 stores element j in the low nibble and j+16 in the high
+                // nibble of qs[j], each biased by 8; Q5_0 biases by 16 and puts
+                // the fifth bit in qh.
+                const int q5 = std::clamp(
+                    static_cast<int>(std::lround(16.0f + 15.0f * wave(base + j))), 0, 31);
+                const size_t byte = j % 16;
+                if (j < 16) {
+                    scaled_q5_0[block].qs[byte] = static_cast<uint8_t>(
+                        (scaled_q5_0[block].qs[byte] & 0xf0) | (q5 & 0x0f));
+                } else {
+                    scaled_q5_0[block].qs[byte] = static_cast<uint8_t>(
+                        (scaled_q5_0[block].qs[byte] & 0x0f) | ((q5 & 0x0f) << 4));
+                }
+                if ((q5 >> 4) & 1) {
+                    scaled_q5_0[block].qh[j / 8] =
+                        static_cast<uint8_t>(scaled_q5_0[block].qh[j / 8] | (1u << (j % 8)));
+                }
+            }
+            for (size_t j = 0; j < 16; ++j) {
+                const int lo = std::clamp(
+                    static_cast<int>(std::lround(8.0f + 7.0f * wave(base + j))), 0, 15);
+                const int hi = std::clamp(
+                    static_cast<int>(std::lround(8.0f + 7.0f * wave(base + j + 16))), 0, 15);
+                scaled_q4_0[block].qs[j] =
+                    static_cast<uint8_t>(lo | (hi << 4));
+            }
+        }
+        for (const auto matrix : {
+                 celeg::CpuGgufMatrix{
+                     celeg::GgmlType::Q8_0, 1, 256,
+                     reinterpret_cast<const std::byte*>(scaled_q8_0.data()),
+                     scaled_q8_0.size() * sizeof(BlockQ8_0)},
+                 celeg::CpuGgufMatrix{
+                     celeg::GgmlType::Q4_0, 1, 256,
+                     reinterpret_cast<const std::byte*>(scaled_q4_0.data()),
+                     scaled_q4_0.size() * sizeof(BlockQ4_0)},
+                 celeg::CpuGgufMatrix{
+                     celeg::GgmlType::Q5_0, 1, 256,
+                     reinterpret_cast<const std::byte*>(scaled_q5_0.data()),
+                     scaled_q5_0.size() * sizeof(BlockQ5_0)}}) {
+            std::vector<float> dequantized(256);
+            celeg::cpu_gguf_dequantize_row(matrix, 0, dequantized.data());
+            float reference = 0.0f;
+            for (size_t i = 0; i < dequantized.size(); ++i) {
+                reference += dequantized[i] * activation[0].d *
+                             static_cast<float>(activation[0].qs[i]);
+            }
+            // Far enough from zero that a kernel returning 0 cannot slip
+            // through, but small enough that the tolerance stays at its
+            // absolute floor and so remains sensitive.
+            CELEG_TEST_CHECK(std::abs(reference) > 1e-2f);
+            const float scalar = celeg::cpu_gguf_dot_scalar(
+                matrix.data, matrix.type, activation.data(), matrix.cols);
+            const float optimized = celeg::select_cpu_gguf_dot_kernel(isa)(
+                matrix.data, matrix.type, activation.data(), matrix.cols);
+            const float tolerance = 1e-4f * std::max(1.0f, std::abs(reference));
+            CELEG_TEST_CHECK(std::abs(scalar - reference) < tolerance);
+            CELEG_TEST_CHECK(std::abs(optimized - reference) < tolerance);
+            CELEG_TEST_CHECK(std::abs(optimized - scalar) < tolerance);
+        }
+    }
+
     celeg::CpuLinearWeight composite;
     composite.rows = 4;
     composite.cols = 256;

@@ -17,6 +17,17 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
     const bool has_key = key != nullptr && !weights.k.segments.empty();
     const RopePositionSpec* rope = layout.rope_position();
 
+    // The attention kernels (cpu_gqa_decode_paged_parallel and the chunk
+    // equivalent) already fold 1/sqrt(head_dim) into the scores, so every path
+    // here must premultiply the query by the *ratio* between the model's own
+    // query scale and that default -- never by layout.query_scale itself, which
+    // would scale a second time. The query-key-norm branches used to do exactly
+    // that, making every score 1/sqrt(head_dim) too small (8x for head_dim 64).
+    // Softmax over a single position hides it, so it only shows up once a
+    // sequence has more than one token.
+    const float kernel_scale = 1.0f / std::sqrt(static_cast<float>(layout.head_dim));
+    const float query_scale_ratio = layout.query_scale / kernel_scale;
+
     const auto apply_norm_only = [&](float* data, const float* norm_weight,
                                      int heads, const NormSpec& norm) {
         if (norm.granularity == NormGranularity::PerHead) {
@@ -34,12 +45,10 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
                 apply_norm_only(key, weights.k_norm.data(), layout.key_value_heads,
                                 *layout.key_norm);
             }
-            for (int i = 0; i < q_width; ++i) query[i] *= layout.query_scale;
+            for (int i = 0; i < q_width; ++i) query[i] *= query_scale_ratio;
             return;
         }
-        const float ratio = layout.query_scale /
-            (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
-        for (int i = 0; i < q_width; ++i) query[i] *= ratio;
+        for (int i = 0; i < q_width; ++i) query[i] *= query_scale_ratio;
         return;
     }
 
@@ -74,7 +83,7 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
             apply_norm_and_rope(key, weights.k_norm.data(), layout.key_value_heads,
                                 *layout.key_norm);
         }
-        const float query_scale = layout.query_scale *
+        const float query_scale = query_scale_ratio *
             rope_attention_scale(*rope, scalar_position);
         for (int i = 0; i < q_width; ++i) query[i] *= query_scale;
         return;
@@ -97,9 +106,8 @@ void apply_cpu_attention_qk(const AttentionSpec& layout,
                      *rope);
         }
     }
-    const float ratio = layout.query_scale /
-        (1.0f / std::sqrt(static_cast<float>(layout.head_dim)));
-    const float query_scale = ratio * rope_attention_scale(*rope, scalar_position);
+    const float query_scale = query_scale_ratio *
+        rope_attention_scale(*rope, scalar_position);
     for (int i = 0; i < q_width; ++i) query[i] *= query_scale;
 }
 

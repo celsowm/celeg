@@ -520,7 +520,13 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
         const auto* weights = reinterpret_cast<const BlockQ8_0*>(packed_row);
         for (size_t b = 0; b < blocks; ++b) {
             const CpuQ8KBlock& x = activation[b];
-            int block_total = 0;
+            // Each Q8_0 sub-block carries its own fp16 scale, so the running
+            // total is a float sum of scaled integer dots. It must not be an
+            // int: d is O(1e-3), so truncating d*dot per sub-block discards
+            // nearly the whole product. Q6_K above can accumulate in int only
+            // because its per-sub-block scale is an integer and the single
+            // float d is applied once at the end.
+            float block_total = 0.0f;
             for (int sub = 0; sub < 8; ++sub) {
                 const BlockQ8_0& weight = weights[b * 8 + static_cast<size_t>(sub)];
                 const float d = fp16_bits_to_float(weight.d);
@@ -536,10 +542,10 @@ float cpu_gguf_dot_avx2(const std::byte* packed_row, GgmlType type,
                     _mm256_extracti128_si256(a, 1));
                 const __m256i pl = _mm256_madd_epi16(wl, al);
                 const __m256i ph = _mm256_madd_epi16(wh, ah);
-                block_total += static_cast<int>(d * static_cast<float>(
-                    horizontal_sum_256(_mm256_add_epi32(pl, ph))));
+                block_total += d * static_cast<float>(
+                    horizontal_sum_256(_mm256_add_epi32(pl, ph)));
             }
-            total += x.d * static_cast<float>(block_total);
+            total += x.d * block_total;
         }
         return total;
     }

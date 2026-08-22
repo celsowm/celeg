@@ -1,6 +1,7 @@
 #include "celeg/backend/cpu/isa.hpp"
 #include "celeg/backend/cpu/model.hpp"
 #include "celeg/backend/cpu/topology.hpp"
+#include "celeg/app/logit_diagnostics.hpp"
 #include "celeg/app/run_preparation.hpp"
 #include "celeg/runtime/request_types.hpp"
 #include "celeg/text/utf8.hpp"
@@ -23,6 +24,7 @@ struct Args {
     std::string prompt;
     std::string system;
     std::string chat_template_file;
+    std::string dump_logits;
     std::string isa = "auto";
     std::string pack_cache;
     std::string affinity = "none";
@@ -40,6 +42,7 @@ struct Args {
     int attention_parallel_threshold = 256;
     int attention_page_tile = 4;
     int expert_cache_mib = 512;
+    int print_top = 0;
     int top_k = 50;
     float top_p = 1.0f;
     float temperature = 0.1f;
@@ -84,6 +87,8 @@ Args parse_args(int argc, char** argv) {
         else if (key == "--cpu-prefill-threshold") args.prefill_chunk_threshold = std::stoi(value());
         else if (key == "--cpu-attention-threshold") args.attention_parallel_threshold = std::stoi(value());
         else if (key == "--cpu-attention-page-tile") args.attention_page_tile = std::stoi(value());
+        else if (key == "--dump-logits") args.dump_logits = value();
+        else if (key == "--print-top") args.print_top = std::stoi(value());
         else if (key == "--top-k") args.top_k = std::stoi(value());
         else if (key == "--top-p") args.top_p = std::stof(value());
         else if (key == "--temperature") args.temperature = std::stof(value());
@@ -107,6 +112,7 @@ Args parse_args(int argc, char** argv) {
                 << "  --cpu-expert-backing memory|disk\n"
                 << "  --cpu-expert-cache-mib N\n"
                 << "  --context N --max-new-tokens N --memory-report --print-config\n"
+                << "  [--dump-logits FILE.f32] [--print-top N]\n"
                 << "  --raw --chat-template-file PATH\n"
                 << "  --temperature F --top-k N --top-p F\n";
             std::exit(0);
@@ -226,6 +232,13 @@ int main(int argc, char** argv) {
                       << "memory.total=" << bytes(stats.total()) << '\n';
         }
         engine.session().prefill(input);
+        if (!args.dump_logits.empty() || args.print_top > 0) {
+            const std::vector<float> logits = engine.diagnostics().copy_logits();
+            if (!args.dump_logits.empty()) {
+                celeg::app::dump_logits_file(args.dump_logits, logits);
+            }
+            if (args.print_top > 0) celeg::app::print_top_logits(logits, args.print_top);
+        }
         std::string pending;
         for (int i = 0; i < args.max_new_tokens; ++i) {
             const int32_t token = engine.session().decode();

@@ -131,10 +131,21 @@ than once per prefill pass, which would explain a roughly uniform ratio
 across types instead of a type-dependent one.
 
 **GPU decode (0.42x-0.83x of llama.cpp, `ok`-status rows only).** Confirmed
-flat across quantization types on both models in the full sweep, consistent
-with the original hypothesis of per-step launch/sync overhead or bandwidth
-ceiling rather than a kernel-specific inefficiency. This needs an `ncu`
-kernel-level profile to separate `w8a16_gemv_kernel` efficiency from
-per-token dispatch overhead; `ncu` is not installed on this machine (`nsys`
-is, but it profiles at a coarser granularity than this question needs).
-Deferred rather than guessed at.
+flat across quantization types on both models in the full sweep. It is flatter
+than that: celeg's decode rate does not respond to resident weight bytes at
+all. Every Nanbeige-3B GPU row sits at 130-135 tok/s from IQ3_XXS (1.76 GB)
+through Q8_0 (4.13 GB) to bf16 (7.77 GB), while llama.cpp tracks size the way
+a bandwidth-bound decoder should (318 -> 110 tok/s); Lizzy-7B q8_0 at 7.23 GB
+decodes *faster* (141.6) than Nanbeige-3B at 2.50 GB. That rules out a
+bandwidth ceiling and points at a per-step cost that is fixed with respect to
+weight traffic.
+
+Decode already runs under CUDA graphs (`decode_graphs.hpp`, captured in
+`execution.cu`), so naive per-launch overhead should already be amortized,
+which makes the flatness more suspicious rather than less. Resolving it needs
+a kernel-level profile separating `w8a16_gemv_kernel` efficiency from
+per-token dispatch. `ncu` **is** available on this machine at
+`/usr/local/cuda-13.2/bin/ncu` -- it is simply not on `PATH`, the same
+resolution trap that affects `nvcc` here. An earlier revision of this section
+recorded it as not installed and deferred on that basis; that was wrong, and
+the investigation is not blocked.
