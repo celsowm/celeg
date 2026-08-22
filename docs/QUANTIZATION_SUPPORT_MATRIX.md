@@ -106,6 +106,95 @@ No backend-side list needs editing: `linear_loader.cpp`, `gguf_dequant.cpp`,
 `weight_upload.cpp`, `loader_experts.cu` and `weight_codec.cpp` all branch on
 `ggml_type_support()`.
 
+## Quality gate
+
+Nothing else in this repo checks output *quality* per quantization --
+`benchmarks/compare_llama.py` and `run_gguf_sweep.py`'s speed rows only prove
+a file loads and runs at a normal rate, and the IQ dequant fixtures in
+`tests/data/gguf_iq_reference.inc` check accuracy at the block level, over
+whichever 4 blocks per type happen to be checked in. A decode-time bug can
+pass all of that and still emit corrupted text, which is exactly what
+happened with the two bugs fixed in commit `4aa90e1` (an 8x-too-small
+attention score on every QK-norm model, and int-truncation in the AVX2 Q8_0
+dot) -- both loaded cleanly, benchmarked at normal speed, and were invisible
+to the full test suite.
+
+`run_gguf_sweep.py` now runs both engines greedy (temperature 0, top-k 1,
+top-p 1, repetition-penalty 1, `--ignore-eos` on the llama.cpp side so a
+model that predicts an early turn-end token doesn't just make the row
+shorter than celeg's fixed-length `--raw` output) from the same 12-token
+prompt continuation and diffs the generated text with
+`difflib.SequenceMatcher`. Lizzy-7B has no llama.cpp reference at all
+(`general.architecture = "lizzy"` has no llama.cpp graph) and is gated
+celeg-CPU-vs-celeg-CUDA instead.
+
+**The ratio is not calibrated toward 1.0, even for a fully correct quant.**
+Two independent kernel implementations of the same model routinely pick
+different top-1 tokens a few tokens into open-ended generation, once the gap
+between the best and second-best logit gets small -- this is ordinary
+floating-point noise, not a bug, and every quant class exhibits it. What a
+real decode bug does that noise does not is corrupt the *early*,
+high-confidence tokens too, collapsing the ratio over the whole completion
+rather than just its tail. Thresholds are therefore derived from one real
+measured run (Nanbeige-3B, one file per class, `--max-new-tokens 12`) rather
+than invented:
+
+| quant class | file | agreement | threshold |
+|---|---|---|---|
+| dense-f16-bf16 | `Nanbeige_Nanbeige4.2-3B-bf16.gguf` | 0.60 | 0.50 |
+| q8_0 | `Nanbeige_Nanbeige4.2-3B-Q8_0.gguf` | 0.60 | 0.50 |
+| k-quant | `Nanbeige_Nanbeige4.2-3B-Q4_K_M.gguf` | 0.56 | 0.45 |
+| legacy-q4-q5 | `Nanbeige_Nanbeige4.2-3B-Q4_0.gguf` | 0.18 | 0.25 |
+| iq | `Nanbeige_Nanbeige4.2-3B-IQ4_XS.gguf` | 0.53 | 0.20 |
+| iq | `Nanbeige_Nanbeige4.2-3B-IQ3_XXS.gguf` | 0.03 | 0.20 |
+
+Two of those six rows are set to flag their own measured value rather than
+clear it, because they are real, investigated findings rather than
+calibration noise:
+
+- **`Q4_0` on Nanbeige-3B (CPU only).** celeg CPU's native-dot decode of
+  "The capital of France is" continues into unrelated Chinese text
+  immediately after "Paris."; celeg CUDA (`--weight-mode auto`, which
+  dequantizes GGUF blocks through the same shared `q4_0_decode` used by the
+  host dequantizer, not the CPU's packed native-dot kernel) and llama.cpp
+  both continue "Paris.\n\</think\>\n\n...". celeg CPU's scalar and AVX2 Q4_0
+  dot kernels (`src/backend/cpu/kernels/gguf.cpp:467`,
+  `gguf_avx2.cpp:444`) agree with each other byte-for-byte and their
+  dot-product algebra (`dot - 8*bsum`, matching ggml's zero-point
+  convention) checks out on inspection, which rules out an ISA-specific
+  kernel bug the way the Q8_0 int-truncation bug was one. Not resolved: a
+  packing-order bug in how `CpuWeightCodec` lays GGUF's raw Q4_0 bytes into
+  `packed_row` has not been ruled out, and Q4_0 is also legacy's
+  worst-precision format (single fp16 scale per 32 elements, no K-quant
+  sub-block scale), so this is equally consistent with the flip being
+  genuine quantization noise on a near-tied logit. Flagged rather than
+  fixed or dismissed.
+- **`IQ3_XXS` on Nanbeige-3B (CPU only).** celeg CPU produces unrelated,
+  lower-quality text; celeg CUDA and llama.cpp agree with each other. Unlike
+  Q4_0, this one has a specific, plausible mechanism: IQ3_XXS has no
+  `cpu_native_dot` support (see the matrix above), so `CpuWeightCodec`
+  dequantizes it through the *same* shared `gguf_iq.hpp` grid-table decode
+  CUDA's host dequantizer uses -- ruling out a decode bug, since both
+  backends call identical code -- and then re-quantizes that already-lossy
+  3.06-bit-per-weight result into groupwise 4-bit blocks for the CPU's
+  native Q4 dot kernel. That second, CPU-only quantization pass costs real
+  precision on top of an already very lossy source, and IQ3_XXS is the
+  lowest-bit IQ type in the cache. `IQ4_XS`, repacked through the identical
+  path, did not show the same collapse, consistent with there being more
+  headroom left after 4.25 bits/weight than after 3.06. This is the same
+  double-quantization mechanism already flagged for CPU F16 support (W2):
+  dense F16/BF16 weights get the identical groupwise-4-bit repack on CPU,
+  and simulating that repack in fp64 was enough on its own to flip
+  LFM2.5's top-1 prediction. Fixing this for real means giving IQ3_XXS (and
+  the other native-dot-less IQ types) a CPU native-dot kernel instead of
+  the repack path -- which is exactly the AVX2 IQ kernel work already
+  sequenced after CPU prefill profiling below, not a quick patch here.
+
+**Gate has teeth**, checked by mutation: reintroducing the query-scale bug
+from `4aa90e1` into `apply_cpu_attention_qk`'s QK-norm branches and
+rebuilding drops LFM2.5-350M-Q4_K_M's agreement from 1.00 to 0.33 against
+its k-quant threshold of 0.45 -- caught. Reverting restores 1.00.
+
 ## Performance: two gaps investigated, not fixed
 
 The full 40-file sweep (`docs/GGUF_BENCHMARK_REPORT.md`) reproduces two

@@ -38,6 +38,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -333,6 +334,140 @@ def run_celeg_run_gpu(binary: Path, gguf: Path, env: dict[str, str],
         raise SweepError("celeg-run did not emit both benchmark phases") from error
 
 
+# --------------------------------------------------------------------------
+# Quality gate (P4): cross-engine top-1 agreement, greedy decode
+#
+# Nothing else in this repo checks output *quality* per quantization --
+# benchmark_bench and the sweep's speed rows only prove a file loads and
+# runs at a normal rate. cpu_gguf_kernels_test checks IQ dequant against
+# ggml fixtures at the block level, over whichever blocks happen to be
+# checked in. A decode-time bug (like the two fixed in commit 4aa90e1: an
+# 8x-too-small attention score on every QK-norm model, and int-truncation
+# in the AVX2 Q8_0 dot) passes all of that and still emits corrupted text.
+# This section adds the missing check: run both engines greedy (temperature
+# 0, top-k 1, top-p 1, repetition-penalty 1 -- deterministic and argmax on
+# both sides) from the same prompt and diff the generated text.
+# --------------------------------------------------------------------------
+
+QUALITY_PROMPT = "The capital of France is"
+QUALITY_TOKENS = 12
+
+# Greedy/argmax decode flags shared by every engine invocation below. Any
+# nonzero temperature or repetition penalty would make the two engines'
+# outputs diverge from sampler noise instead of a real decode bug, which is
+# exactly the confound this check exists to rule out.
+_GREEDY_FLAGS = ["--temperature", "0", "--top-k", "1", "--top-p", "1",
+                 "--repetition-penalty", "1"]
+
+
+def run_celeg_completion_cpu(binary: Path, gguf: Path, threads: int) -> str:
+    cmd = [str(binary), "--model", str(gguf), "--raw", "--prompt", QUALITY_PROMPT,
+           "--max-new-tokens", str(QUALITY_TOKENS), "--threads", str(threads), *_GREEDY_FLAGS]
+    result = run(cmd, capture_output=True, text=True, timeout=BENCH_TIMEOUT_SECONDS)
+    return result.stdout.strip()
+
+
+def run_celeg_completion_gpu(binary: Path, gguf: Path, env: dict[str, str],
+                             weight_mode: str) -> str:
+    cmd = [str(binary), "--model", str(gguf), "--raw", "--prompt", QUALITY_PROMPT,
+           "--max-new-tokens", str(QUALITY_TOKENS), "--weight-mode", weight_mode, *_GREEDY_FLAGS]
+    result = run(cmd, capture_output=True, text=True, env=env, timeout=BENCH_TIMEOUT_SECONDS)
+    return result.stdout.strip()
+
+
+def run_llama_completion(binary: Path, gguf: Path, threads: int, ngl: int) -> str:
+    # --ignore-eos: llama.cpp treats every vocab token that *looks* like a
+    # turn-end marker (<|im_end|>, <|endoftext|>, ...) as end-of-generation,
+    # not only the single tokenizer.ggml.eos_token_id celeg's --raw mode
+    # checks. Without this flag llama.cpp stops after the first such token
+    # while celeg keeps generating the full QUALITY_TOKENS count, which
+    # makes every row disagree on length alone before the text is even
+    # compared. Forcing both engines to run the same fixed token count is
+    # what makes the diff measure decode correctness instead of stopping
+    # policy.
+    cmd = [str(binary), "-m", str(gguf), "-p", QUALITY_PROMPT, "-n", str(QUALITY_TOKENS),
+           "-no-cnv", "--no-display-prompt", "--simple-io", "--no-warmup", "-t", str(threads),
+           "-ngl", str(ngl), "--temp", "0", "--top-k", "1", "--top-p", "1",
+           "--repeat-penalty", "1", "--ignore-eos"]
+    result = run(cmd, capture_output=True, text=True, timeout=BENCH_TIMEOUT_SECONDS)
+    # With --no-display-prompt the generated text is all that's printed, but
+    # it can itself contain newlines (reasoning models emit "</think>" and
+    # blank lines mid-completion) -- keep every line, only drop a trailing
+    # "> EOF by user"-style REPL status line if -no-cnv still emits one.
+    lines = result.stdout.splitlines()
+    while lines and (not lines[-1].strip() or lines[-1].lstrip().startswith(">")):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
+def text_agreement(a: str, b: str) -> float:
+    """Similarity ratio in [0, 1] between two greedy completions.
+
+    Not exact-match, and deliberately not calibrated toward 1.0 even for a
+    fully correct quant: two independent fp32/bf16 kernel implementations
+    of the same model routinely pick different top-1 tokens a few tokens
+    into open-ended generation once the logit gap between the best and
+    second-best candidate gets small (this model closes its <think> block
+    and then has many similarly-likely ways to continue) -- that is normal
+    floating-point noise, not a bug, and no amount of correctness fixes
+    removes it. What a real decode bug does that noise does not is corrupt
+    the *early*, high-confidence tokens too, which is what collapses the
+    ratio over the whole completion rather than just the tail. See
+    docs/QUANTIZATION_SUPPORT_MATRIX.md "Quality gate" for the measured
+    run the thresholds below come from, including two cases this exact
+    check caught on its first real run.
+    """
+    if not a and not b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+# Quant-class thresholds, derived from one real measured run (Nanbeige-3B,
+# all classes; see docs/QUANTIZATION_SUPPORT_MATRIX.md "Quality gate" for
+# the raw numbers) rather than invented. A cell below its class threshold
+# is not automatically a celeg bug -- it is evidence that needs to be
+# looked at, the same way a speed regression is evidence and not an
+# automatic revert. Two of the five classes are set to flag their observed
+# value rather than clear it: legacy-q4-q5 (Q4_0 measured 0.18 against
+# CUDA+llama.cpp agreeing with each other) and iq (IQ3_XXS measured 0.03)
+# both landed on a real, investigated finding on the very first run -- see
+# the writeup -- so the threshold stays above the number that finding
+# produced instead of being loosened to hide it.
+QUALITY_THRESHOLDS: dict[str, float] = {
+    "dense-f16-bf16": 0.50,
+    "q8_0": 0.50,
+    "k-quant": 0.45,
+    "legacy-q4-q5": 0.25,
+    "iq": 0.20,
+}
+
+
+def quant_class(filename: str) -> str:
+    name = filename.upper()
+    if re.search(r"IQ\d", name):
+        return "iq"
+    if "Q8_0" in name:
+        return "q8_0"
+    if re.search(r"Q[2-6]_K", name):
+        return "k-quant"
+    if re.search(r"Q[45]_[01]", name):
+        return "legacy-q4-q5"
+    if "F16" in name or "BF16" in name or "F32" in name:
+        return "dense-f16-bf16"
+    return "iq"  # unrecognised naming: treat as the strictest-to-fail-loud class
+
+
+def quality_cell(celeg_text: str, llama_text: str, filename: str) -> dict[str, Any]:
+    qclass = quant_class(filename)
+    agreement = text_agreement(celeg_text, llama_text)
+    threshold = QUALITY_THRESHOLDS[qclass]
+    return {
+        "status": "ok" if agreement >= threshold else "below-threshold",
+        "quant_class": qclass, "threshold": threshold, "agreement": round(agreement, 4),
+        "celeg_text": celeg_text, "reference_text": llama_text,
+    }
+
+
 def cuda_env() -> dict[str, str]:
     env = dict(os.environ)
     cuda_root = Path(env.get("CUDA_PATH", "/usr/local/cuda"))
@@ -374,12 +509,80 @@ def backend_cell(llama: dict[str, Any], celeg: dict[str, Any]) -> dict[str, Any]
     return cell
 
 
+# No external reference exists for architectures llama.cpp cannot load at
+# all (Lizzy-7B: `general.architecture = "lizzy"` has no llama.cpp graph).
+# celeg CPU vs celeg CUDA on the same file is the only signal left, so it
+# gets its own threshold rather than reusing a quant-class one calibrated
+# against an independent engine -- two celeg backends running the same
+# weight math are expected to agree closer than two different engines are.
+CROSS_BACKEND_THRESHOLD = 0.90
+
+
+def quality_cpu(celeg_cpu_run: Path | None, llama_completion_cpu: Path | None,
+                gguf: Path, threads: int, filename: str) -> dict[str, Any]:
+    if not celeg_cpu_run:
+        return {"status": "skipped", "reason": "celeg-cpu-run not built"}
+    try:
+        celeg_text = run_celeg_completion_cpu(celeg_cpu_run, gguf, threads)
+    except SweepError as error:
+        return {"status": "failed", "category": classify_failure(error),
+                "reason": failure_detail(error)}
+    if not llama_completion_cpu:
+        return {"status": "no-reference", "celeg_text": celeg_text,
+                "reason": "llama-completion (cpu) not built"}
+    try:
+        llama_text = run_llama_completion(llama_completion_cpu, gguf, threads, ngl=0)
+    except SweepError as error:
+        return {"status": "no-reference", "celeg_text": celeg_text,
+                "reason": f"llama.cpp reference unavailable: {failure_detail(error)}"}
+    return quality_cell(celeg_text, llama_text, filename)
+
+
+def quality_gpu(celeg_run_gpu: Path | None, llama_completion_cuda: Path | None,
+                gguf: Path, env: dict[str, str], threads: int, weight_mode: str,
+                filename: str) -> dict[str, Any]:
+    if not celeg_run_gpu:
+        return {"status": "skipped", "reason": "celeg-run (cuda) not built"}
+    try:
+        celeg_text = run_celeg_completion_gpu(celeg_run_gpu, gguf, env, weight_mode)
+    except SweepError as error:
+        return {"status": "failed", "category": classify_failure(error),
+                "reason": failure_detail(error)}
+    if not llama_completion_cuda:
+        return {"status": "no-reference", "celeg_text": celeg_text,
+                "reason": "llama-completion (cuda) not built"}
+    try:
+        llama_text = run_llama_completion(llama_completion_cuda, gguf, threads, ngl=99)
+    except SweepError as error:
+        return {"status": "no-reference", "celeg_text": celeg_text,
+                "reason": f"llama.cpp reference unavailable: {failure_detail(error)}"}
+    return quality_cell(celeg_text, llama_text, filename)
+
+
+def cross_backend_quality(cpu_quality: dict[str, Any], gpu_quality: dict[str, Any]) -> dict[str, Any] | None:
+    """celeg CPU vs celeg CUDA, only when neither has an external reference.
+
+    This is the Lizzy-7B case: both backends load and run the model, but
+    llama.cpp cannot, so cross-engine agreement can't be computed. Backend
+    disagreement on the same weights is still a strong bug signal.
+    """
+    if cpu_quality.get("status") != "no-reference" or gpu_quality.get("status") != "no-reference":
+        return None
+    cpu_text, gpu_text = cpu_quality.get("celeg_text", ""), gpu_quality.get("celeg_text", "")
+    agreement = text_agreement(cpu_text, gpu_text)
+    return {"status": "ok" if agreement >= CROSS_BACKEND_THRESHOLD else "below-threshold",
+            "threshold": CROSS_BACKEND_THRESHOLD, "agreement": round(agreement, 4),
+            "cpu_text": cpu_text, "gpu_text": gpu_text}
+
+
 def bench_one(entry: dict[str, Any], threads: int, llama_cpu: Path | None,
               llama_cuda: Path | None, celeg_cpu: Path | None, celeg_cuda: Path | None,
-              want_gpu: bool, gpu_weight_mode: str) -> dict[str, Any]:
+              want_gpu: bool, gpu_weight_mode: str, celeg_cpu_run: Path | None,
+              llama_completion_cpu: Path | None, llama_completion_cuda: Path | None) -> dict[str, Any]:
     gguf = entry["path"]
+    filename = entry["filename"]
     row: dict[str, Any] = {
-        "repo": entry["repo"], "filename": entry["filename"],
+        "repo": entry["repo"], "filename": filename,
         "size_bytes": entry["size_bytes"], "revision": entry["revision"],
         "cpu": {"status": "not_run"}, "gpu": {"status": "not_run"},
     }
@@ -391,6 +594,7 @@ def bench_one(entry: dict[str, Any], threads: int, llama_cpu: Path | None,
     else:
         row["cpu"] = {"status": "skipped", "category": "not-built",
                       "reason": "llama-bench (cpu) or celeg-bench not built"}
+    row["cpu"]["quality"] = quality_cpu(celeg_cpu_run, llama_completion_cpu, gguf, threads, filename)
 
     if want_gpu:
         if llama_cuda and celeg_cuda:
@@ -401,8 +605,14 @@ def bench_one(entry: dict[str, Any], threads: int, llama_cpu: Path | None,
                                                                gpu_weight_mode)))
             row["gpu"]["celeg_weight_mode"] = gpu_weight_mode
         else:
+            env = cuda_env()
             row["gpu"] = {"status": "skipped", "category": "not-built",
                           "reason": "llama-bench (cuda) or celeg-run not built"}
+        row["gpu"]["quality"] = quality_gpu(celeg_cuda, llama_completion_cuda, gguf, env, threads,
+                                            gpu_weight_mode, filename)
+        cross = cross_backend_quality(row["cpu"]["quality"], row["gpu"]["quality"])
+        if cross is not None:
+            row["quality_cross_backend"] = cross
 
     return row
 
@@ -492,6 +702,34 @@ def failure_summary(all_rows: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def quality_summary(all_rows: list[dict[str, Any]]) -> list[str]:
+    """Per-file, per-backend cross-engine agreement against the class threshold."""
+    lines = ["| file | backend | quant class | agreement | threshold | status |",
+             "|---|---|---|---|---|---|"]
+    below: list[str] = []
+    for row in all_rows:
+        for backend in ("cpu", "gpu"):
+            quality = row.get(backend, {}).get("quality")
+            if not isinstance(quality, dict) or "agreement" not in quality:
+                continue
+            status = quality["status"]
+            lines.append(f"| `{row['filename']}` | {backend.upper()} | {quality['quant_class']} "
+                         f"| {quality['agreement']:.4f} | {quality['threshold']:.2f} | {status} |")
+            if status == "below-threshold":
+                below.append(f"{row['filename']} ({backend.upper()})")
+        cross = row.get("quality_cross_backend")
+        if isinstance(cross, dict):
+            lines.append(f"| `{row['filename']}` | CPU-vs-CUDA | -- "
+                         f"| {cross['agreement']:.4f} | {cross['threshold']:.2f} | {cross['status']} |")
+            if cross["status"] == "below-threshold":
+                below.append(f"{row['filename']} (CPU-vs-CUDA)")
+    if len(lines) == 2:
+        lines.append("| -- | -- | -- | -- | -- | no comparable rows |")
+    header = ["**Below-threshold cells (investigate before trusting these quants' output): "
+              + (", ".join(below) if below else "none") + "**", ""]
+    return header + lines
+
+
 def write_report(all_rows: list[dict[str, Any]], out_path: Path, want_gpu: bool,
                  threads: int, gpu_weight_mode: str) -> None:
     by_repo: dict[str, list[dict[str, Any]]] = {}
@@ -544,6 +782,26 @@ def write_report(all_rows: list[dict[str, Any]], out_path: Path, want_gpu: bool,
     ]
     lines.extend(failure_summary(all_rows))
     lines.append("")
+    lines.append("## Quality gate")
+    lines.append("")
+    lines.extend([
+        f"Cross-engine agreement, not just liveness: both engines decode greedily "
+        f"(temperature 0, top-k 1, top-p 1, repetition-penalty 1 -- deterministic "
+        f"argmax on both sides) from the same {QUALITY_TOKENS}-token prompt, and the "
+        "generated text is diffed (`difflib.SequenceMatcher` ratio). A speed row can "
+        "be `ok` -- the file loads and benchmarks at a normal rate -- while this gate "
+        "still catches a decode-time bug that corrupts every token past the first few; "
+        "that is exactly how the two bugs fixed in commit `4aa90e1` (an 8x-too-small "
+        "attention score on every QK-norm model, and int-truncation in the AVX2 Q8_0 "
+        "dot) were found. Thresholds are per quant class -- low-bit IQ formats have a "
+        "real accuracy cost from the codebook approximation itself, not a celeg bug, "
+        "so their floor is lower. Lizzy-7B has no llama.cpp reference "
+        "(`general.architecture = \"lizzy\"` has no llama.cpp graph) and is instead "
+        "gated celeg-CPU-vs-celeg-CUDA.",
+        "",
+    ])
+    lines.extend(quality_summary(all_rows))
+    lines.append("")
 
     for repo in sorted(by_repo):
         rows = sorted(by_repo[repo], key=lambda r: r["filename"])
@@ -581,12 +839,18 @@ def cmd_sweep(args: argparse.Namespace) -> None:
 
     llama_cpu = find_exe(LLAMA_CPU_BUILD, "llama-bench")
     celeg_cpu = find_exe(CELEG_CPU_BUILD, "celeg-bench")
+    celeg_cpu_run = find_exe(CELEG_CPU_BUILD, "celeg-cpu-run")
+    llama_completion_cpu = find_exe(LLAMA_CPU_BUILD, "llama-completion")
     want_gpu = not args.no_gpu
     llama_cuda = find_exe(LLAMA_CUDA_BUILD, "llama-bench") if want_gpu else None
     celeg_cuda = find_exe(CELEG_CUDA_BUILD, "celeg-run") if want_gpu else None
+    llama_completion_cuda = find_exe(LLAMA_CUDA_BUILD, "llama-completion") if want_gpu else None
     if want_gpu and not (llama_cuda and celeg_cuda):
         print("warning: CUDA llama-bench or celeg-run not found; GPU rows will be skipped "
               "(run `setup` first, or pass --no-gpu)", file=sys.stderr)
+    if not (celeg_cpu_run and llama_completion_cpu):
+        print("warning: celeg-cpu-run or llama-completion (cpu) not found; the quality gate "
+              "will report no-reference/skipped instead of an agreement score", file=sys.stderr)
 
     threads = args.threads or (os.cpu_count() or 8)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -603,7 +867,8 @@ def cmd_sweep(args: argparse.Namespace) -> None:
         print(f"\n=== [{index}/{len(entries)}] {entry['repo']} :: {entry['filename']} "
               f"({entry['size_bytes'] / (1024**3):.2f} GB) ===")
         row = bench_one(entry, threads, llama_cpu, llama_cuda, celeg_cpu, celeg_cuda,
-                        want_gpu, args.gpu_weight_mode)
+                        want_gpu, args.gpu_weight_mode, celeg_cpu_run,
+                        llama_completion_cpu, llama_completion_cuda)
         all_rows.append(row)
         result_path.write_text(json.dumps(row, indent=2) + "\n", encoding="utf-8")
 
