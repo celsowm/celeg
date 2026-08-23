@@ -430,16 +430,44 @@ attempt above being the first).
 
 That leaves difference 3, **fusion**, as the one with real headroom: it is
 the only one of the three that makes the matrices bigger rather than
-rearranging the work over a matrix whose size is the actual problem.
-Fusing a SwiGLU MLP's gate and up projections into one launch halves the
-launch count for the largest per-layer GEMVs *and* doubles the bytes each
-launch streams, moving those shapes up the size/efficiency curve measured
-in `celeg-decode-gemv-benchmark` (49% of peak at 5 MB vs 87% at 67 MB).
-Difference 2 (`__dp4a` against `q8_1`-quantized activations) is
-complementary and independent. Both remain unimplemented, and both are
-substantial correctness-sensitive work (weight/activation layout, fused-op
-numerics) that should be scoped as their own effort rather than folded into
-this residual-cleanup pass.
+rearranging the work over a matrix whose size is the actual problem. celeg
+already does half of this: `CudaModelOptions::fused_projections`
+(default on) concatenates a dense FFN's gate and up weights into one `w13`
+tensor at load time (`weight_setup.cpp`, `load_concat_linear_weight`) and
+computes both with one launch, `linear(normed, *w13, gate_up, 1,
+2*intermediate, hidden)` -- so this session's benchmark numbers already
+reflect that fusion, not a hypothetical.
+
+**Attention's query+key+value projections were the obvious remaining
+target -- tried, and it doesn't help.** Unlike gate/up, Q/K/V are read by
+several execution paths (prefill, speculative decode, norm-width lookups),
+so concatenating them at load time the way `w13` does would mean carrying
+every attention weight twice in device memory. Instead built
+`w8a16_gemv_fused_kernel` (mirroring llama.cpp's `has_fusion`/`vgate`
+approach in `mmvq.cu` rather than celeg's own `w13` pattern): each matrix
+keeps its own storage, and the kernel fuses only the launch, writing
+directly into the qkv output buffer's existing q/k/v layout. It is
+correct -- bit-identical greedy output with/without it -- and it does
+exactly what it was built to do at the kernel level: `ncu` measures 92.8%
+occupancy / ~21us for one fused Q+K+V launch (8192 total rows) vs. three
+separate launches on Nanbeige-3B (Q already at ~72% occupancy/~14.85us
+since 48 query heads make it wide on its own; K and V each ~4us at ~17%
+occupancy) totaling ~22.85us. That's a real per-layer win, but only ~2us
+out of a ~7.4ms decode step (<0.1%) -- unmeasurable against ~1-2% run-to-run
+noise (131-133 tok/s either way). Reverted rather than kept: it adds a new
+kernel, struct, option flag and guarded call site for a change this
+session could not demonstrate moves the number. The finding that matters
+is *why* it doesn't help here: on a GQA model with many query heads, Q
+alone is already wide enough to be efficient, so only K/V -- a small
+sliver of one layer's work -- were ever in the bad zone. QKV fusion would
+matter more on an architecture where Q is *also* narrow (few query heads,
+no GQA head multiplier); worth revisiting if one shows up in the sweep.
+
+Difference 2 (`__dp4a` against `q8_1`-quantized activations) remains
+unimplemented and is substantial, correctness-sensitive work (activation
+requantization, arithmetic changes throughout the dot product) independent
+of any fusion question -- it changes how each existing launch computes,
+not how many launches there are.
 
 **Benchmark methodology fix, found while doing the above.**
 `celeg-decode-gemv-benchmark` was reporting 143% and 228% "of theoretical
