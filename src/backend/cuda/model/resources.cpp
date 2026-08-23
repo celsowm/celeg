@@ -1,5 +1,6 @@
 #include "celeg/detail/model/compiled_model.hpp"
 #include "celeg/backend/cuda/workspace_plan.hpp"
+#include "celeg/backend/cuda/kernels/attention_args.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -82,10 +83,14 @@ void CudaCompiledModel::allocate_celeg_resources() {
             resources_.shape_.num_hidden_layers + mtp_layers));
     }
 
-    workspace_.attention_chunks_ = resources_.plan_.attention_chunks();
-    if (workspace_.attention_chunks_ > 0) {
+    if (resources_.plan_.segmented_capable() && plan.attention_query_heads > 0) {
+        workspace_.attention_segments_ =
+            decode_attention_segments(plan.attention_query_heads,
+                                      resources_.plan_.max_context());
+        workspace_.attention_min_segments_ =
+            decode_attention_min_segments(plan.attention_query_heads);
         const size_t partials =
-            static_cast<size_t>(plan.attention_query_heads) * workspace_.attention_chunks_;
+            static_cast<size_t>(plan.attention_query_heads) * workspace_.attention_segments_;
         workspace_.attention_partial_max_.reset(partials);
         workspace_.attention_partial_denom_.reset(partials);
         workspace_.attention_partial_accum_.reset(partials * plan.attention_head_dim);

@@ -316,9 +316,9 @@ void CudaCompiledModel::enqueue_decode_attention(
                 .values = owner->value_cache_int8_ptr(),
                 .key_scales = owner->key_cache_scales_ptr(),
                 .value_scales = owner->value_cache_scales_ptr()};
-            const AttentionSegmentation attention_segmentation{
-                .chunk_tokens = resources_.options_.attention_chunk_tokens,
-                .chunks = workspace_.attention_chunks_,
+            const AttentionDecodeSegmentation attention_segmentation{
+                .segments = workspace_.attention_segments_,
+                .min_segments = workspace_.attention_min_segments_,
                 .partial_max = workspace_.attention_partial_max_.data(),
                 .partial_denom = workspace_.attention_partial_denom_.data(),
                 .partial_accum = workspace_.attention_partial_accum_.data()};

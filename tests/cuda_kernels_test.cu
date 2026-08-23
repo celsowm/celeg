@@ -707,8 +707,6 @@ int main() {
         constexpr int q_heads = 2;
         constexpr int kv_heads = 1;
         constexpr int head_dim = 2;
-        constexpr int chunk_tokens = 2;
-        constexpr int chunks = 3;
         std::vector<__nv_bfloat16> q = {
             to_bf16(1.0f), to_bf16(0.5f),
             to_bf16(-0.5f), to_bf16(1.0f)};
@@ -724,9 +722,10 @@ int main() {
         celeg::DeviceBuffer<__nv_bfloat16> dq(q.size()), dk(k.size()), dv(v.size());
         celeg::DeviceBuffer<__nv_bfloat16> reference(q.size()), segmented(q.size());
         celeg::DeviceBuffer<int32_t> dposition(1);
-        celeg::DeviceBuffer<float> partial_max(q_heads * chunks);
-        celeg::DeviceBuffer<float> partial_denom(q_heads * chunks);
-        celeg::DeviceBuffer<float> partial_accum(q_heads * chunks * head_dim);
+        constexpr int max_segments = 8;
+        celeg::DeviceBuffer<float> partial_max(q_heads * max_segments);
+        celeg::DeviceBuffer<float> partial_denom(q_heads * max_segments);
+        celeg::DeviceBuffer<float> partial_accum(q_heads * max_segments * head_dim);
         CELEG_CUDA(cudaMemcpy(dq.data(), q.data(), dq.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dk.data(), k.data(), dk.bytes(), cudaMemcpyHostToDevice));
         CELEG_CUDA(cudaMemcpy(dv.data(), v.data(), dv.bytes(), cudaMemcpyHostToDevice));
@@ -738,26 +737,43 @@ int main() {
             .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
             .extent = {.position = dposition.data()},
             .stream = stream.get()});
-        celeg::launch_gqa_decode_segmented_device({
-            .query = dq.data(),
-            .kv = {.keys = dk.data(), .values = dv.data()},
-            .out = segmented.data(),
-            .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
-            .extent = {.position = dposition.data()},
-            .segmentation = {.chunk_tokens = chunk_tokens,
-                             .chunks = chunks,
-                             .partial_max = partial_max.data(),
-                             .partial_denom = partial_denom.data(),
-                             .partial_accum = partial_accum.data()},
-            .stream = stream.get()});
-        std::vector<__nv_bfloat16> a(q.size()), b(q.size());
+        std::vector<__nv_bfloat16> a(q.size());
         CELEG_CUDA(cudaMemcpyAsync(a.data(), reference.data(), reference.bytes(),
                                  cudaMemcpyDeviceToHost, stream.get()));
-        CELEG_CUDA(cudaMemcpyAsync(b.data(), segmented.data(), segmented.bytes(),
-                                 cudaMemcpyDeviceToHost, stream.get()));
         CELEG_CUDA(cudaStreamSynchronize(stream.get()));
-        for (size_t i = 0; i < a.size(); ++i) {
-            expect_near(to_float(a[i]), to_float(b[i]), 0.02f);
+        // The segment count is a device property, so the result has to be
+        // independent of it: fewer segments than tokens, exactly as many, and
+        // more (which leaves a tail of segments the partial kernel skips).
+        // min_segments == segments forces the widest split the allocation
+        // allows; min_segments == 1 lets kDecodeTokensPerSegment decide, which
+        // for this tiny sequence collapses to a single segment.
+        for (int segments : {1, 2, 3, 5, max_segments})
+        for (int min_segments : {1, segments}) {
+            CELEG_CUDA(cudaMemsetAsync(partial_max.data(), 0, partial_max.bytes(),
+                                       stream.get()));
+            CELEG_CUDA(cudaMemsetAsync(partial_denom.data(), 0, partial_denom.bytes(),
+                                       stream.get()));
+            CELEG_CUDA(cudaMemsetAsync(partial_accum.data(), 0, partial_accum.bytes(),
+                                       stream.get()));
+            celeg::launch_gqa_decode_segmented_device({
+                .query = dq.data(),
+                .kv = {.keys = dk.data(), .values = dv.data()},
+                .out = segmented.data(),
+                .geometry = {.q_heads = q_heads, .kv_heads = kv_heads, .head_dim = head_dim},
+                .extent = {.position = dposition.data()},
+                .segmentation = {.segments = segments,
+                                 .min_segments = min_segments,
+                                 .partial_max = partial_max.data(),
+                                 .partial_denom = partial_denom.data(),
+                                 .partial_accum = partial_accum.data()},
+                .stream = stream.get()});
+            std::vector<__nv_bfloat16> b(q.size());
+            CELEG_CUDA(cudaMemcpyAsync(b.data(), segmented.data(), segmented.bytes(),
+                                     cudaMemcpyDeviceToHost, stream.get()));
+            CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+            for (size_t i = 0; i < a.size(); ++i) {
+                expect_near(to_float(a[i]), to_float(b[i]), 0.02f);
+            }
         }
     }
 

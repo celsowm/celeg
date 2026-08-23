@@ -2,6 +2,8 @@
 
 #include "celeg/backend/cuda/kernels/attention.hpp"
 
+#include <algorithm>
+
 namespace celeg {
 #include "kv_cache.cuh"
 #include "attention_common.cuh"

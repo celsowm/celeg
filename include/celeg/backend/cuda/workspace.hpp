@@ -52,7 +52,8 @@ struct CudaWorkspace {
     DeviceBuffer<float> attention_partial_max_;
     DeviceBuffer<float> attention_partial_denom_;
     DeviceBuffer<float> attention_partial_accum_;
-    int attention_chunks_ = 0;
+    int attention_segments_ = 0;
+    int attention_min_segments_ = 0;
 
     DeviceBuffer<uint32_t> paged_page_table_;
     DeviceBuffer<int32_t> paged_prefill_tokens_;

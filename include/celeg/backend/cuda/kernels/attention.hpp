@@ -17,7 +17,7 @@ void launch_gqa_decode_online_device(const GqaContiguousArgs& args);
 void launch_gqa_prefill_strict(const GqaContiguousArgs& args);
 void launch_gqa_prefill_online(const GqaContiguousArgs& args);
 
-void launch_gqa_decode_segmented_device(const GqaSegmentedArgs& args);
+void launch_gqa_decode_segmented_device(const GqaDecodeSegmentedArgs& args);
 void launch_gqa_prefill_segmented(const GqaSegmentedArgs& args);
 
 void launch_gqa_prefill_flash(const GqaPrefillFlashArgs& args);
@@ -29,7 +29,7 @@ void launch_gqa_decode_strict_int8_device(const GqaContiguousInt8Args& args);
 void launch_gqa_decode_online_int8_device(const GqaContiguousInt8Args& args);
 void launch_gqa_prefill_strict_int8(const GqaContiguousInt8Args& args);
 void launch_gqa_prefill_online_int8(const GqaContiguousInt8Args& args);
-void launch_gqa_decode_segmented_int8_device(const GqaSegmentedInt8Args& args);
+void launch_gqa_decode_segmented_int8_device(const GqaDecodeSegmentedInt8Args& args);
 
 void launch_gqa_decode_batch_ptrs(const GqaBatchPtrArgs& args);
 void launch_gqa_decode_int8_batch_ptrs(const GqaBatchPtrInt8Args& args);

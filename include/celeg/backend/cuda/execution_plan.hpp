@@ -32,6 +32,7 @@ public:
         return options_.attention_mode != AttentionMode::Single;
     }
     int attention_chunks() const { return attention_chunks_; }
+    int max_context() const { return max_context_; }
     std::string description() const;
     const CudaDeviceCapabilities& device() const { return device_; }
     bool mmq_tensor_cores_enabled() const {

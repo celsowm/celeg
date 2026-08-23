@@ -45,6 +45,35 @@ struct AttentionSegmentation {
     float* partial_accum = nullptr;
 };
 
+// Decode-time attention splits the *live* KV range into a fixed number of
+// equal segments rather than into fixed-size chunks of the context capacity.
+// The segment count is a property of the device, so the grid and the partial
+// buffers are the same size at any context length (which keeps CUDA graph
+// capture happy), while the work inside each block scales with the sequence
+// actually present. `segments` indexes partial_max/denom/accum exactly as
+// `chunks` does for the prefill path.
+// Tokens one block walks before it is worth paying for another segment. The
+// block's token loop is serial, but so is the reduce's loop over segments, so
+// this trades one against the other; 32 is where they balance (measured).
+inline constexpr int kDecodeTokensPerSegment = 32;
+
+struct AttentionDecodeSegmentation {
+    int segments = 0;       // allocated/grid width, an upper bound
+    int min_segments = 0;   // enough blocks to fill this device
+    float* partial_max = nullptr;
+    float* partial_denom = nullptr;
+    float* partial_accum = nullptr;
+};
+
+// Enough (head, segment) blocks to cover the device several times over, so
+// each block's token loop stays short without the reduce loop and the partial
+// buffers growing without bound. Queried from the device, cached.
+int decode_attention_segments(int query_heads, int max_context);
+
+// The device floor alone, i.e. the segment count a short sequence should be
+// spread over. Always <= decode_attention_segments(...).
+int decode_attention_min_segments(int query_heads);
+
 
 struct Bf16KvView {
     const __nv_bfloat16* keys = nullptr;
@@ -134,6 +163,26 @@ struct GqaSegmentedInt8Args {
     GqaGeometry geometry{};
     AttentionExtent extent{};
     AttentionSegmentation segmentation{};
+    cudaStream_t stream = nullptr;
+};
+
+struct GqaDecodeSegmentedArgs {
+    const __nv_bfloat16* query = nullptr;
+    Bf16KvView kv{};
+    __nv_bfloat16* out = nullptr;
+    GqaGeometry geometry{};
+    AttentionExtent extent{};
+    AttentionDecodeSegmentation segmentation{};
+    cudaStream_t stream = nullptr;
+};
+
+struct GqaDecodeSegmentedInt8Args {
+    const __nv_bfloat16* query = nullptr;
+    Int8KvView kv{};
+    __nv_bfloat16* out = nullptr;
+    GqaGeometry geometry{};
+    AttentionExtent extent{};
+    AttentionDecodeSegmentation segmentation{};
     cudaStream_t stream = nullptr;
 };
 
