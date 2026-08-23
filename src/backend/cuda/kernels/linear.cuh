@@ -84,12 +84,51 @@ __global__ void w4a16_linear_kernel(const __nv_bfloat16* x,
     }
 }
 
+// Warps the GPU can keep resident at once. w8a16_gemv_kernel emits exactly
+// one warp per output row, so any matrix with fewer rows than this leaves
+// the machine partly idle no matter how the blocks are shaped -- that is
+// what the k-split path exists to fix.
+inline int cuda_resident_warp_capacity() {
+    static const int capacity = [] {
+        int sm_count = 0;
+        int max_threads_per_sm = 0;
+        CELEG_CUDA(cudaDeviceGetAttribute(
+            &sm_count, cudaDevAttrMultiProcessorCount, 0));
+        CELEG_CUDA(cudaDeviceGetAttribute(
+            &max_threads_per_sm, cudaDevAttrMaxThreadsPerMultiProcessor, 0));
+        return sm_count * (max_threads_per_sm / 32);
+    }();
+    return capacity;
+}
+
 void launch_w8a16_linear(const __nv_bfloat16* x, const int8_t* weight,
                          const float* scales, __nv_bfloat16* y,
                          int m, int n, int k, float beta,
                          cudaStream_t stream) {
-    constexpr int warps_per_block = W8A16_WARPS_PER_BLOCK;
     const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);
+
+    // Decode (m == 1) over a matrix too narrow to fill the GPU: split each
+    // row's K across several cooperating warps so there is enough resident
+    // work to hide memory latency. `ncu` on a 1024-row matrix measures
+    // 16.6% -> 46.1% achieved occupancy and ~4.0 -> ~3.4 us for this swap.
+    // Wider matrices already fill the machine on the plain path, where the
+    // k-split's cross-warp reduction is pure added cost (measured: it
+    // regresses lm_head-sized shapes), hence the guard rather than always
+    // taking it.
+    constexpr int ksplit_warps = 4;
+    const bool narrow_decode =
+        m == 1 && static_cast<long long>(n) * ksplit_warps <=
+                      static_cast<long long>(cuda_resident_warp_capacity());
+    if (narrow_decode) {
+        const dim3 grid(static_cast<unsigned>(n), grid_y);
+        w8a16_gemv_ksplit_kernel<ksplit_warps>
+            <<<grid, ksplit_warps * 32, 0, stream>>>(
+                x, weight, scales, y, m, n, k, beta);
+        CELEG_KERNEL_DEBUG_SYNC(stream);
+        return;
+    }
+
+    constexpr int warps_per_block = W8A16_WARPS_PER_BLOCK;
     const dim3 grid((n + warps_per_block - 1) / warps_per_block, grid_y);
     w8a16_gemv_kernel<<<grid, warps_per_block * 32, 0, stream>>>(
         x, weight, scales, y, m, n, k, beta);

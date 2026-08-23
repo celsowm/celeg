@@ -57,6 +57,87 @@ static __global__ void bf16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
     }
 }
 
+// K-split variant of w8a16_gemv_kernel, modelled on llama.cpp's
+// mul_mat_vec_q (.externals/llama.cpp/ggml/src/ggml-cuda/mmvq.cu): instead
+// of one warp owning a whole output row, every warp in the block cooperates
+// on the *same* row, each summing a disjoint slice of K, and the block
+// reduces across warps through shared memory at the end.
+//
+// The point is parallelism, not tiling. w8a16_gemv_kernel produces exactly
+// n warps of work for an n-row matrix, so a narrow decode-time matrix
+// (n ~ 1024) cannot fill a 170-SM GPU no matter how those warps are grouped
+// into blocks -- which is why an earlier attempt at redistributing the same
+// warps across more blocks made occupancy worse rather than better. This
+// kernel produces n * NWarps warps instead, giving the scheduler real work
+// to hide memory latency behind.
+//
+// Threads stride over K across the whole block (tid = warp*32 + lane,
+// stepping by blockDim.x), so consecutive threads read consecutive char4 --
+// each step pulls one contiguous NWarps*128-byte run out of the row.
+template <int NWarps>
+static __global__ void w8a16_gemv_ksplit_kernel(
+        const __nv_bfloat16* __restrict__ x,
+        const int8_t* __restrict__ weight,
+        const float* __restrict__ scales,
+        __nv_bfloat16* __restrict__ y,
+        int m, int n, int k, float beta) {
+    const int output_row = blockIdx.x;
+    if (output_row >= n) return;  // uniform across the block, so no
+                                  // __syncthreads divergence below
+
+    const int tid = threadIdx.x;
+    const int lane = tid & 31;
+    const int warp = tid >> 5;
+    constexpr int threads = NWarps * 32;
+
+    const int8_t* row_weight = weight + static_cast<size_t>(output_row) * k;
+    const int k4 = k >> 2;
+    const char4* w4 = reinterpret_cast<const char4*>(row_weight);
+
+    __shared__ float partials[NWarps];
+
+    for (int activation_row = blockIdx.y;
+         activation_row < m;
+         activation_row += gridDim.y) {
+        const __nv_bfloat16* input =
+            x + static_cast<size_t>(activation_row) * k;
+        const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(input);
+
+        float sum = 0.0f;
+        for (int i = tid; i < k4; i += threads) {
+            const char4 wv = w4[i];
+            const __nv_bfloat162 xv0 = x2[i * 2];
+            const __nv_bfloat162 xv1 = x2[i * 2 + 1];
+            sum += __bfloat162float(xv0.x) * static_cast<float>(wv.x) +
+                   __bfloat162float(xv0.y) * static_cast<float>(wv.y) +
+                   __bfloat162float(xv1.x) * static_cast<float>(wv.z) +
+                   __bfloat162float(xv1.y) * static_cast<float>(wv.w);
+        }
+        for (int column = k4 * 4 + tid; column < k; column += threads) {
+            sum += __bfloat162float(input[column]) *
+                   static_cast<float>(row_weight[column]);
+        }
+
+        sum = gemv_warp_sum(sum);
+        if (lane == 0) partials[warp] = sum;
+        __syncthreads();
+
+        if (tid == 0) {
+            float total = 0.0f;
+#pragma unroll
+            for (int w = 0; w < NWarps; ++w) total += partials[w];
+            float value = total * scales[output_row];
+            const size_t output_index =
+                static_cast<size_t>(activation_row) * n + output_row;
+            if (beta != 0.0f) value += beta * __bfloat162float(y[output_index]);
+            y[output_index] = __float2bfloat16(value);
+        }
+        // Keep the next activation row from overwriting partials[] while
+        // thread 0 is still reducing this one.
+        __syncthreads();
+    }
+}
+
 static __global__ void w8a16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                    const int8_t* __restrict__ weight,
                                    const float* __restrict__ scales,

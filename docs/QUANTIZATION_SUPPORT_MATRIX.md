@@ -385,11 +385,79 @@ three structural ways, not one:
 
 None of this is a quick patch: it is a real GEMV kernel replacing an
 activation-format decision (bf16 vs. quantized-and-`dp4a`), a reduction
-strategy, and a fusion mechanism, tuned per architecture. Reproducing it
-is the correct target for closing the GPU decode gap, but it's substantial,
-correctness-sensitive work (weight/activation layout, cross-warp reduction,
-fused-op numerics) that should be scoped as its own effort rather than
-folded into this residual-cleanup pass.
+strategy, and a fusion mechanism, tuned per architecture.
+
+**Difference 1 (K-split) was then implemented and measured.**
+`w8a16_gemv_ksplit_kernel` (`gemv_kernels.cuh`) is the celeg equivalent of
+llama.cpp's cooperating-warps structure: `NWarps` warps share one output
+row, each striding over a disjoint slice of K, reducing through shared
+memory at the end. `launch_w8a16_linear` selects it for decode (`m == 1`)
+whenever the matrix is too narrow to fill the GPU -- specifically when
+`n * ksplit_warps` fits inside the device's resident warp capacity, queried
+from `cudaDevAttrMultiProcessorCount` and
+`cudaDevAttrMaxThreadsPerMultiProcessor` rather than hardcoded.
+
+At the kernel level it does exactly what it was supposed to. `ncu` on a
+1024x1024 int8 matrix:
+
+| kernel | achieved occupancy | duration | DRAM throughput |
+|---|---|---|---|
+| `w8a16_gemv_kernel` | 16.6% | ~4.0 &micro;s | 14.6% |
+| `w8a16_gemv_ksplit_kernel<4>` | **46.1%** | **~3.4 &micro;s** | 18.1% |
+
+**End-to-end it is worth about 1%, and only on small models.** Decode
+tok/s, `--benchmark-decode 256 --benchmark-warmup 32`, two runs each:
+
+| model | baseline | k-split |
+|---|---|---|
+| LFM2.5-350M-Q4_K_M | 1022.7 / 1027.2 | 1034.5 / 1035.1 (+0.9%) |
+| Nanbeige-3B-Q4_K_M | 132.3 / 135.0 | 132.4 / 133.1 (no change) |
+
+Kept, because it is strictly better where it applies, guarded so it cannot
+touch the shapes it would regress (`nwarps` of 8 and 16 measurably hurt
+lm_head-sized matrices), and correctness-checked both by an A/B against the
+plain kernel inside `celeg-decode-gemv-benchmark` and by the full 91-test
+`ctest` run. But the honest summary is that it does not move the number
+this investigation set out to move, and it explains why:
+**occupancy was never the binding constraint.** Tripling occupancy bought
+only 14.6% -> 18.1% of DRAM throughput. A 1 MB matrix read at the card's
+1792 GB/s peak would take 0.58 &micro;s, which is the same order as DRAM
+latency itself -- there is not enough work in a single narrow GEMV to keep
+enough requests in flight, and no arrangement of warps over the same 1 MB
+changes that. This is the second occupancy-shaped hypothesis this
+investigation has falsified by measurement (the `warps_per_block` 8->1
+attempt above being the first).
+
+That leaves difference 3, **fusion**, as the one with real headroom: it is
+the only one of the three that makes the matrices bigger rather than
+rearranging the work over a matrix whose size is the actual problem.
+Fusing a SwiGLU MLP's gate and up projections into one launch halves the
+launch count for the largest per-layer GEMVs *and* doubles the bytes each
+launch streams, moving those shapes up the size/efficiency curve measured
+in `celeg-decode-gemv-benchmark` (49% of peak at 5 MB vs 87% at 67 MB).
+Difference 2 (`__dp4a` against `q8_1`-quantized activations) is
+complementary and independent. Both remain unimplemented, and both are
+substantial correctness-sensitive work (weight/activation layout, fused-op
+numerics) that should be scoped as their own effort rather than folded into
+this residual-cleanup pass.
+
+**Benchmark methodology fix, found while doing the above.**
+`celeg-decode-gemv-benchmark` was reporting 143% and 228% "of theoretical
+peak" -- not suspicious numbers so much as impossible ones. Two causes,
+both fixed in `src/app/benchmark/cuda/decode_gemv.cu`: every buffer was
+filled with `zero_async` (uniform lines compress, so nominal DRAM traffic
+never happens), and, dominating it, each shape was benchmarked by
+re-running *one* matrix in a tight loop against a 100.7 MB L2 that every
+shape except lm_head fits inside entirely -- so the benchmark measured
+cache bandwidth, not the DRAM streaming real decode does. Buffers now hold
+high-entropy data, and each shape rotates through enough copies of its
+weight matrix (~300 MB) to overflow L2 the way a real decode step does.
+Post-fix, no shape exceeds 100% of peak, and the size/efficiency curve
+above becomes visible: 14% of peak at 1 MB, 49% at 5 MB, 87% at 67 MB.
+Note also that the harness's *wall-clock* per-call figure bottoms out
+around 4.1 &micro;s (its own host launch rate) and cannot resolve kernel
+improvements below that -- the k-split win above is invisible in its output
+and only shows up under `ncu`. Read that column accordingly.
 
 **A genuine, quantified finding surfaced along the way, independent of the
 decode-speed question**: `--weight-mode auto` (== `int8`) uses *more* GPU
