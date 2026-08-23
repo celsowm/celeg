@@ -288,17 +288,65 @@ secondary oddity worth a separate look: 253 &micro;s for one argmax over a
 166144-entry vocabulary is high for what should be a straightforward
 reduction, though at 3.2% of total time it is not the main story.
 
-**Gate 3 (occupancy / DRAM utilization via `ncu --set full`) is blocked, not
-closed.** `ncu --kernel-name w8a16_gemv_kernel --metrics ...` fails with
-`ERR_NVGPUCTRPERM`: this user account cannot access NVIDIA GPU performance
-counters on this machine. Unlike the earlier `PATH` issue, this is a real
-restriction -- the NVIDIA driver defaults to admin-only profiling counter
-access (`NVreg_RestrictProfilingToAdminUsers`), and lifting it needs a
-system-level change (a kernel module parameter plus reboot, or a udev rule)
-that requires root. That is out of scope to do unprompted; if profiling
-counters are wanted, ask whoever administers this machine to run `sudo
-nsys status --environment` (or the modprobe.d fix it points at) and confirm
-before the next attempt.
+**Gate 3, resolved: `ncu --set full` against `w8a16_gemv_kernel`, two model
+sizes.** `ERR_NVGPUCTRPERM` (the admin-only profiling-counter restriction
+noted in an earlier revision of this section) is lifted on this machine —
+`/etc/modprobe.d/99-nvidia-profiling.conf` sets
+`NVreg_RestrictProfilingToAdminUsers=0`, confirmed by `RmProfilingAdminOnly:
+0` in `/proc/driver/nvidia/params` after a reboot. Profiled Nanbeige-3B
+Q4_K_M (2.68 GB) and Q8_0 (4.43 GB) with `ncu --set full --kernel-name
+w8a16_gemv_kernel --launch-count 3 --target-processes all -- celeg-run
+--model ... --raw --prompt "..." --benchmark-decode 8`, three launches each
+(one per distinct output width in a decode step, since M=1 collapses
+`grid.y` to 1):
+
+| model n (output width) | grid | duration | achieved occupancy | memory (DRAM) throughput | compute (SM) throughput |
+|---|---|---|---|---|---|
+| ~6144 (wide, e.g. MLP gate/up) | (768,1,1) | 14.9-14.7 &micro;s | 71.8-72.9% | 72.0% | 19.1% |
+| ~1024 (narrow, e.g. attn out-proj) | (128,1,1) | 5.2-5.7 &micro;s | 16.6-18.1% | 33.8-34.7% | 8.8-9.1% |
+
+Both model sizes land on effectively the same numbers per grid shape — this
+tracks with the "decode rate does not respond to resident weight bytes"
+finding above, since `w8a16_gemv_kernel`'s per-launch cost is set by output
+width and fixed overhead, not by which quant produced the int8 bytes it
+reads. **Gate crossed**: the narrow-matrix launches sit at 17% achieved
+occupancy, under the plan's 30% threshold, and `ncu` independently flags them
+("grid too small to fill the available resources... only 0.13 full waves").
+128 blocks of 8 warps each cannot occupy a 170-SM GPU (`Block Limit
+Registers` allows 6 resident blocks/SM = ~1020 block slots per wave).
+
+**Fix attempted and reverted: it made things worse.** The natural low-risk
+change, per the gate's own framing ("a grid/tiling change"): drop
+`warps_per_block` from 8 to 1, so `grid.x = n` instead of `n/8`, spreading
+the same total warps across 8x more, smaller blocks. This is algorithmically
+free — `w8a16_gemv_kernel` shares no state across the warps of a block (no
+smem, no cross-warp reduction; each warp owns one output row start to
+finish), unlike its neighbor `w4a16_linear_kernel`, which does use smem to
+amortize the activation-vector load across a block's warps. Measured after
+the change: achieved occupancy on the narrow-matrix launches **dropped** to
+12.5-12.8% (worse, not better), the wide-matrix launches dropped from
+71-73% to 39%, and end-to-end decode throughput did not move
+(134.4 -> 134.9 tok/s on 128-token decode runs, within noise). At this
+kernel's ~5 &micro;s duration, the fixed per-block dispatch cost of issuing
+8x more, smaller blocks outweighs whatever SM-fill benefit more blocks would
+otherwise provide — the naive "more blocks = better occupancy" reasoning
+does not hold at this timescale. Reverted (`W8A16_WARPS_PER_BLOCK` stays 8,
+now defined once in
+`include/celeg/backend/cuda/kernels/gemv_kernels.cuh` and shared by the two
+call sites that previously hardcoded it separately, closing a drift risk
+even though the value itself is unchanged).
+
+**Conclusion: per gate 3's own fallback ("otherwise write up and stop"),
+this needs a redesign, not a tiling tweak.** The 5-15 &micro;s/launch,
+20000+-launches-per-128-steps profile from the `nsys` breakdown above is
+consistent with celeg paying a largely fixed per-kernel-node cost regardless
+of occupancy — the real fix is reducing the *number* of GEMV launches per
+decode step (e.g. fusing several of a layer's narrow linears — attention
+out-proj, and whichever MLP projections share compatible shapes — into one
+kernel call with a batched/strided weight layout), not reshaping the grid of
+any one of them. That is a real kernel redesign with its own correctness
+surface (weight layout, scale handling across fused matrices) and is out of
+scope here per the plan's explicit "do not pre-commit to a kernel rewrite."
 
 **A genuine, quantified finding surfaced along the way, independent of the
 decode-speed question**: `--weight-mode auto` (== `int8`) uses *more* GPU
@@ -482,14 +530,15 @@ above carries 12 `not planned*` cells in the CUDA-native-MMQ column.
 
 Native is **4.85x slower at prefill** and **27% slower at decode** than the
 int8 path, on the only two types it supports. `ncu` occupancy profiling of
-`q4k_mmq_prefill_kernel` against the int8 GEMM (the plan's originally
-proposed step 1) is blocked by the same `ERR_NVGPUCTRPERM` restriction
-documented above; an `nsys` kernel-breakdown attempt (the fallback used
-successfully for the GPU-decode investigation) hung indefinitely under
-`--benchmark-prefill-tokens 512` in native mode and was killed after two
-timeouts rather than debugged further -- worth another look if profiling
-permissions are ever granted, since a hang under the profiler is itself
-mildly suspicious, but not chased here.
+`q4k_mmq_prefill_kernel` against the int8 GEMM was not run: the decision
+below doesn't need it (4.85x is decisive on its own), and an `nsys`
+kernel-breakdown attempt (the fallback used successfully for the GPU-decode
+investigation) hung indefinitely under `--benchmark-prefill-tokens 512` in
+native mode and was killed after two timeouts rather than debugged further.
+`ERR_NVGPUCTRPERM` was lifted later in this session (see the GPU decode
+section's gate 3 writeup) but that hang is unrelated to counter permissions
+and remains unexplained -- worth a look with `ncu`/`nsys` now that counters
+work, if native-mode MMQ expansion is ever revisited.
 
 **Decision (plan's gate): native does not come anywhere close to the ~1.2x
 threshold that would justify expanding MMQ coverage.** A 4.85x prefill gap

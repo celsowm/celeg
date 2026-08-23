@@ -88,7 +88,7 @@ void launch_w8a16_linear(const __nv_bfloat16* x, const int8_t* weight,
                          const float* scales, __nv_bfloat16* y,
                          int m, int n, int k, float beta,
                          cudaStream_t stream) {
-    constexpr int warps_per_block = 8;
+    constexpr int warps_per_block = W8A16_WARPS_PER_BLOCK;
     const unsigned grid_y = static_cast<unsigned>(m < 65535 ? m : 65535);
     const dim3 grid((n + warps_per_block - 1) / warps_per_block, grid_y);
     w8a16_gemv_kernel<<<grid, warps_per_block * 32, 0, stream>>>(

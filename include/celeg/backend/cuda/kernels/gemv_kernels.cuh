@@ -3,6 +3,20 @@
 
 #include <cuda_bf16.h>
 
+// Single source of truth for w8a16_gemv_kernel's block shape: the kernel's
+// own indexing math (`warp`, `output_row`) depends on this matching the
+// launcher's block dimension exactly. Tried dropping this to 1 (one warp
+// per block, since the kernel shares no state -- no smem, no cross-warp
+// reduction -- across warps of the same block) to raise SM occupancy on
+// narrow (n ~ 1024) decode-time matrices, where `ncu --set full` measured
+// only 17% achieved occupancy / 0.13 waves at wpb=8 on a 170-SM GPU. That
+// made occupancy *worse* (12.8%) and end-to-end decode throughput did not
+// move (134.4 -> 134.9 tok/s, noise): at this kernel's ~5us duration,
+// block-dispatch overhead for many tiny 1-warp blocks dominates over the
+// SM-fill benefit. Left at 8; see docs/QUANTIZATION_SUPPORT_MATRIX.md GPU
+// decode section for the full writeup.
+#define W8A16_WARPS_PER_BLOCK 8
+
 static __inline__ __device__ float gemv_warp_sum(float value) {
     for (int offset = 16; offset > 0; offset >>= 1)
         value += __shfl_down_sync(0xffffffffu, value, offset);
@@ -48,7 +62,7 @@ static __global__ void w8a16_gemv_kernel(const __nv_bfloat16* __restrict__ x,
                                    const float* __restrict__ scales,
                                    __nv_bfloat16* __restrict__ y,
                                    int m, int n, int k, float beta) {
-    constexpr int warps_per_block = 8;
+    constexpr int warps_per_block = W8A16_WARPS_PER_BLOCK;
     const int lane = threadIdx.x & 31;
     const int warp = threadIdx.x >> 5;
     const int output_row = blockIdx.x * warps_per_block + warp;

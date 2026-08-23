@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
             x.data(), weights[i].data(), y.data(), s.n, s.k, 0.0f);
     };
     auto launch_w8a16 = [&](size_t i) {
-        constexpr int wpb = 8;
+        constexpr int wpb = W8A16_WARPS_PER_BLOCK;
         const Shape& s = shapes[i];
         w8a16_gemv_kernel<<<(s.n + wpb - 1) / wpb, wpb * 32, 0, stream.get()>>>(
             x.data(), i8_weights[i].data(), i8_scales[i].data(), y.data(), 1, s.n, s.k, 0.0f);
