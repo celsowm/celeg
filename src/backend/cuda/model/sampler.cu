@@ -20,6 +20,7 @@ void CudaSampler::enqueue(const DeviceBuffer<__nv_bfloat16>& logits,
     if (generation.greedy()) {
         launch_argmax_bf16(logits.data(), seen_tokens.data(), vocab_size,
                            generation.repetition_penalty, sampled_device.data(),
+                           partial_values.data(), partial_indices.data(),
                            stream);
         launch_mark_seen(sampled_device.data(), seen_tokens.data(),
                          vocab_size, stream);

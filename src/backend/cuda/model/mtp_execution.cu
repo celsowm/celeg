@@ -247,12 +247,14 @@ void CudaCompiledModel::finalize_mtp_verification() {
         workspace_.mtp_logits_.data(), sampling_.seen_tokens.data(),
         resources_.dims_.vocab_size,
         session_.generation_.repetition_penalty,
-        workspace_.mtp_candidate_.data(), stream);
+        workspace_.mtp_candidate_.data(),
+        sampling_.partial_values.data(), sampling_.partial_indices.data(), stream);
     launch_argmax_bf16(
         workspace_.logits_.data(), sampling_.seen_tokens.data(),
         resources_.dims_.vocab_size,
         session_.generation_.repetition_penalty,
-        workspace_.mtp_target_candidate_.data(), stream);
+        workspace_.mtp_target_candidate_.data(),
+        sampling_.partial_values.data(), sampling_.partial_indices.data(), stream);
 }
 
 }

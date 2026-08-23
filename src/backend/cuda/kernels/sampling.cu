@@ -42,6 +42,76 @@ __global__ void argmax_bf16_kernel(const __nv_bfloat16* values,
     if (threadIdx.x == 0) *result = best_indices[0];
 }
 
+// Greedy argmax over the full vocab, split into kSamplingPartialBlocks
+// independent blocks -- mirrors sample_topk_partial_kernel/
+// sample_topk_merge_kernel's split below, so a full-vocab reduction no
+// longer serializes through a single block's grid-stride loop.
+__global__ void argmax_bf16_partial_kernel(const __nv_bfloat16* values,
+                                           const std::uint8_t* seen,
+                                           int count, float repetition_penalty,
+                                           float* partial_values,
+                                           int32_t* partial_indices) {
+    __shared__ float best_values[256];
+    __shared__ int best_indices[256];
+    float best = -FLT_MAX;
+    int index = -1;
+
+    const int num_partitions = gridDim.x;
+    const int partition = blockIdx.x;
+    const int start = static_cast<int>((static_cast<int64_t>(partition) * count) / num_partitions);
+    const int end = static_cast<int>((static_cast<int64_t>(partition + 1) * count) / num_partitions);
+
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
+        float value = bf16_float(values[i]);
+        if (seen[i]) {
+            value = value < 0.0f ? value * repetition_penalty
+                                 : value / repetition_penalty;
+        }
+        if (value > best || (value == best && (index < 0 || i < index))) {
+            best = value;
+            index = i;
+        }
+    }
+
+    best_values[threadIdx.x] = best;
+    best_indices[threadIdx.x] = index;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (static_cast<int>(threadIdx.x) < stride) {
+            const float other_value = best_values[threadIdx.x + stride];
+            const int other_index = best_indices[threadIdx.x + stride];
+            if (other_value > best_values[threadIdx.x] ||
+                (other_value == best_values[threadIdx.x] && other_index >= 0 &&
+                 (best_indices[threadIdx.x] < 0 || other_index < best_indices[threadIdx.x]))) {
+                best_values[threadIdx.x] = other_value;
+                best_indices[threadIdx.x] = other_index;
+            }
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        partial_values[partition] = best_values[0];
+        partial_indices[partition] = best_indices[0];
+    }
+}
+
+__global__ void argmax_bf16_merge_kernel(const float* partial_values,
+                                         const int32_t* partial_indices,
+                                         int num_partitions,
+                                         int32_t* result) {
+    float best = -FLT_MAX;
+    int index = -1;
+    for (int i = 0; i < num_partitions; ++i) {
+        const float value = partial_values[i];
+        const int candidate = partial_indices[i];
+        if (value > best || (value == best && (index < 0 || candidate < index))) {
+            best = value;
+            index = candidate;
+        }
+    }
+    *result = index;
+}
+
 __global__ void mark_seen_batch_kernel(const int32_t* tokens,
                                        int count,
                                        uint8_t* seen,
@@ -462,9 +532,18 @@ __global__ void packed_sample_topk_kernel(
 
 void launch_argmax_bf16(const __nv_bfloat16* logits, const std::uint8_t* seen,
                         int count, float repetition_penalty, int32_t* result,
+                        float* partial_values, int32_t* partial_indices,
                         cudaStream_t stream) {
-    argmax_bf16_kernel<<<1, 256, 0, stream>>>(
-        logits, seen, count, repetition_penalty, result);
+    constexpr int kPartialThreshold = kSamplingPartialBlocks * 256 * 4;
+    if (count >= kPartialThreshold) {
+        argmax_bf16_partial_kernel<<<kSamplingPartialBlocks, 256, 0, stream>>>(
+            logits, seen, count, repetition_penalty, partial_values, partial_indices);
+        argmax_bf16_merge_kernel<<<1, 1, 0, stream>>>(
+            partial_values, partial_indices, kSamplingPartialBlocks, result);
+    } else {
+        argmax_bf16_kernel<<<1, 256, 0, stream>>>(
+            logits, seen, count, repetition_penalty, result);
+    }
     CELEG_KERNEL_DEBUG_SYNC(stream);
 }
 

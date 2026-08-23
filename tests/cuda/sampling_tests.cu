@@ -27,7 +27,7 @@ void run_sampling_tests(celeg::CudaStream& stream) {
                           cudaMemcpyHostToDevice));
     celeg::launch_argmax_bf16(device_logits.data(), device_seen.data(),
                               static_cast<int>(logits.size()), 1.0f,
-                              result.data(), stream.get());
+                              result.data(), nullptr, nullptr, stream.get());
     int32_t index = -1;
     CELEG_CUDA(cudaMemcpyAsync(&index, result.data(), sizeof(index),
                              cudaMemcpyDeviceToHost, stream.get()));
@@ -48,12 +48,59 @@ void run_sampling_tests(celeg::CudaStream& stream) {
                           cudaMemcpyHostToDevice));
     celeg::launch_argmax_bf16(device_logits.data(), device_seen.data(),
                               static_cast<int>(logits.size()), 2.0f,
-                              result.data(), stream.get());
+                              result.data(), nullptr, nullptr, stream.get());
     int32_t index = -1;
     CELEG_CUDA(cudaMemcpyAsync(&index, result.data(), sizeof(index),
                                cudaMemcpyDeviceToHost, stream.get()));
     CELEG_CUDA(cudaStreamSynchronize(stream.get()));
     CELEG_TEST_CHECK(index == 1);
+}
+
+{
+    // Exercise the multi-block partial+merge path (count >= kSamplingPartialBlocks*256*4).
+    const int count = celeg::kSamplingPartialBlocks * 256 * 4 + 137;
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> dist(-3.0f, 3.0f);
+    std::vector<float> raw(count);
+    for (float& v : raw) v = dist(rng);
+    std::vector<uint8_t> seen(count, 0);
+    for (int i = 0; i < count; i += 5) seen[i] = 1;
+    const float repetition_penalty = 1.3f;
+
+    float best = -3.4e38f;
+    int32_t expected = -1;
+    std::vector<__nv_bfloat16> logits(count);
+    for (int i = 0; i < count; ++i) {
+        logits[i] = to_bf16(raw[i]);
+        float value = __bfloat162float(logits[i]);
+        if (seen[i]) {
+            value = value < 0.0f ? value * repetition_penalty
+                                  : value / repetition_penalty;
+        }
+        if (value > best || (value == best && (expected < 0 || i < expected))) {
+            best = value;
+            expected = i;
+        }
+    }
+
+    celeg::DeviceBuffer<__nv_bfloat16> device_logits(count);
+    celeg::DeviceBuffer<uint8_t> device_seen(count);
+    celeg::DeviceBuffer<float> partial_values(celeg::kSamplingPartialBlocks);
+    celeg::DeviceBuffer<int32_t> partial_indices(celeg::kSamplingPartialBlocks);
+    celeg::DeviceBuffer<int32_t> result(1);
+    CELEG_CUDA(cudaMemcpy(device_logits.data(), logits.data(), device_logits.bytes(),
+                          cudaMemcpyHostToDevice));
+    CELEG_CUDA(cudaMemcpy(device_seen.data(), seen.data(), device_seen.bytes(),
+                          cudaMemcpyHostToDevice));
+    celeg::launch_argmax_bf16(device_logits.data(), device_seen.data(), count,
+                              repetition_penalty, result.data(),
+                              partial_values.data(), partial_indices.data(),
+                              stream.get());
+    int32_t index = -1;
+    CELEG_CUDA(cudaMemcpyAsync(&index, result.data(), sizeof(index),
+                               cudaMemcpyDeviceToHost, stream.get()));
+    CELEG_CUDA(cudaStreamSynchronize(stream.get()));
+    CELEG_TEST_CHECK(index == expected);
 }
 
 
