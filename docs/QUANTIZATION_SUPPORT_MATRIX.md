@@ -348,6 +348,49 @@ any one of them. That is a real kernel redesign with its own correctness
 surface (weight layout, scale handling across fused matrices) and is out of
 scope here per the plan's explicit "do not pre-commit to a kernel rewrite."
 
+**Comparison against llama.cpp's actual decode-time kernel.** The revert
+above was reasoned from first principles without reading the reference
+implementation first — worth doing before any further attempt. llama.cpp's
+equivalent of `w8a16_gemv_kernel` is `mul_mat_vec_q` in the vendored
+`.externals/llama.cpp/ggml/src/ggml-cuda/mmvq.cu` (dispatch/tuning tables)
+and `vecdotq.cuh` (per-type dot products). It differs from celeg's kernel in
+three structural ways, not one:
+
+1. **K-split, not row-split.** celeg: one warp computes an entire row's dot
+   product alone; different warps in a block handle different, independent
+   rows. llama.cpp: `nwarps` warps *cooperate* on the same row, each summing
+   a disjoint slice of K (`blocks_per_iter = vdr*nwarps*warp_size/qi`), then
+   reduce across warps via shared memory (`tmp_shared`) before one warp
+   writes the row (`mmvq.cu:622-690`). This directly cuts a narrow row's
+   *latency*, which is what the reverted fix here was trying (and failing)
+   to do by changing block *count* instead.
+2. **Integer SIMD dot products, not scalar bf16 multiply-add.** celeg reads
+   bf16 activations and does per-element `float` multiply-accumulate against
+   int8 weights. llama.cpp quantizes the activation vector to `block_q8_1`
+   once per step and uses `__dp4a` (4-way int8 SIMD dot-product instruction)
+   throughout `vecdotq.cuh` -- e.g. `ggml_cuda_dp4a(vi0, u[2*i], sumi)` at
+   `vecdotq.cuh:129`. This is a compute-throughput difference independent of
+   occupancy: more useful FLOPs per issued instruction.
+3. **Kernel fusion.** `mul_mat_vec_q` takes an optional second weight
+   (`vgate`) and GLU op (`has_fusion`, `active_glu`, `mmvq.cu:551-713`) so a
+   SwiGLU MLP's gate and up projections are computed by *one* kernel launch
+   sharing the same activation load, not two. That is exactly the
+   "reducing the number of launches per step" direction named above, already
+   shipping in production llama.cpp rather than hypothesized here.
+4. `nwarps` itself is not a flat constant like celeg's -- `calc_nwarps`
+   (`mmvq.cu:361-465`) is a hand-tuned lookup table keyed on
+   architecture (RDNA4/RDNA3/Turing/Ampere+/...) *and* quant type, with
+   comments recording specific regressions found by tuning (e.g. "Q3_K,
+   IQ2_*, IQ3_* regress due to register pressure... on RDNA4").
+
+None of this is a quick patch: it is a real GEMV kernel replacing an
+activation-format decision (bf16 vs. quantized-and-`dp4a`), a reduction
+strategy, and a fusion mechanism, tuned per architecture. Reproducing it
+is the correct target for closing the GPU decode gap, but it's substantial,
+correctness-sensitive work (weight/activation layout, cross-warp reduction,
+fused-op numerics) that should be scoped as its own effort rather than
+folded into this residual-cleanup pass.
+
 **A genuine, quantified finding surfaced along the way, independent of the
 decode-speed question**: `--weight-mode auto` (== `int8`) uses *more* GPU
 memory than `--weight-mode bf16`, not less. `--memory-report` on
