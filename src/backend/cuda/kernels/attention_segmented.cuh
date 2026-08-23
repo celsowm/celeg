@@ -1,4 +1,18 @@
 
+// The decode chunk count is fixed at plan time from the context *capacity*
+// (execution_plan.cpp), because a CUDA-graph-captured decode step needs a
+// static grid. Only the chunks covering [first_token, seq_len) hold keys, so
+// the rest early-out without touching the partial buffers at all, and the
+// reduce kernel below derives the same live range from the device-side
+// position rather than reading every chunk back.
+__device__ inline void decode_live_chunk_range(int seq_len, int chunk_tokens,
+                                               int chunks, int sliding_window,
+                                               int* first, int* last) {
+    const int first_token = sliding_window > 0 ? max(0, seq_len - sliding_window) : 0;
+    *first = min(first_token / chunk_tokens, chunks);
+    *last = min((seq_len + chunk_tokens - 1) / chunk_tokens, chunks);
+}
+
 __global__ void gqa_decode_segment_partial_kernel(
     const __nv_bfloat16* q, const __nv_bfloat16* key_cache,
     const __nv_bfloat16* value_cache, const int32_t* position,
@@ -16,14 +30,8 @@ __global__ void gqa_decode_segment_partial_kernel(
     const int lane = threadIdx.x;
     const size_t partial_index = static_cast<size_t>(query_head) * chunks + chunk;
     const size_t accum_base = partial_index * head_dim;
-    if (begin >= end) {
-        if (lane == 0) {
-            partial_max[partial_index] = -FLT_MAX;
-            partial_denom[partial_index] = 0.0f;
-        }
-        for (int d = lane; d < head_dim; d += 32) partial_accum[accum_base + d] = 0.0f;
-        return;
-    }
+    // No zero-fill: the reduce kernel skips this chunk entirely.
+    if (begin >= end) return;
 
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q + static_cast<size_t>(query_head) * head_dim;
@@ -84,14 +92,8 @@ __global__ void gqa_decode_segment_partial_int8_kernel(
     const int lane = threadIdx.x;
     const size_t partial_index = static_cast<size_t>(query_head) * chunks + chunk;
     const size_t accum_base = partial_index * head_dim;
-    if (begin >= end) {
-        if (lane == 0) {
-            partial_max[partial_index] = -FLT_MAX;
-            partial_denom[partial_index] = 0.0f;
-        }
-        for (int d = lane; d < head_dim; d += 32) partial_accum[accum_base + d] = 0.0f;
-        return;
-    }
+    // No zero-fill: the reduce kernel skips this chunk entirely.
+    if (begin >= end) return;
     const int kv_head = query_head / (q_heads / kv_heads);
     const __nv_bfloat16* query = q + static_cast<size_t>(query_head) * head_dim;
     const float scale = rsqrtf(static_cast<float>(head_dim));
@@ -136,20 +138,25 @@ __global__ void gqa_decode_segment_partial_int8_kernel(
 }
 
 __global__ void gqa_decode_segment_reduce_kernel(
-    __nv_bfloat16* out, int q_heads, int head_dim, int chunks,
+    __nv_bfloat16* out, const int32_t* position, int q_heads, int head_dim,
+    int chunk_tokens, int chunks, int sliding_window,
     const float* partial_max, const float* partial_denom,
     const float* partial_accum) {
     const int query_head = blockIdx.x;
     const int lane = threadIdx.x;
     if (query_head >= q_heads) return;
+    int first_chunk = 0;
+    int last_chunk = chunks;
+    decode_live_chunk_range(*position + 1, chunk_tokens, chunks, sliding_window,
+                            &first_chunk, &last_chunk);
     const size_t base = static_cast<size_t>(query_head) * chunks;
     float global_max = -FLT_MAX;
-    for (int chunk = 0; chunk < chunks; ++chunk) {
+    for (int chunk = first_chunk; chunk < last_chunk; ++chunk) {
         global_max = fmaxf(global_max, partial_max[base + chunk]);
     }
     float denominator = 0.0f;
     float accumulator = 0.0f;
-    for (int chunk = 0; chunk < chunks; ++chunk) {
+    for (int chunk = first_chunk; chunk < last_chunk; ++chunk) {
         const float local_denom = partial_denom[base + chunk];
         if (local_denom == 0.0f) continue;
         const float factor = expf(partial_max[base + chunk] - global_max);
@@ -282,7 +289,9 @@ void launch_gqa_decode_segmented_device(const GqaSegmentedArgs& args) {
         seg.partial_max, seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
     gqa_decode_segment_reduce_kernel<<<args.geometry.q_heads, threads, 0, args.stream>>>(
-        args.out, args.geometry.q_heads, args.geometry.head_dim, seg.chunks,
+        args.out, args.extent.position, args.geometry.q_heads,
+        args.geometry.head_dim, seg.chunk_tokens, seg.chunks,
+        args.geometry.sliding_window,
         seg.partial_max, seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
@@ -314,7 +323,9 @@ void launch_gqa_decode_segmented_int8_device(const GqaSegmentedInt8Args& args) {
         seg.partial_max, seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
     gqa_decode_segment_reduce_kernel<<<args.geometry.q_heads, threads, 0, args.stream>>>(
-        args.out, args.geometry.q_heads, args.geometry.head_dim, seg.chunks,
+        args.out, args.extent.position, args.geometry.q_heads,
+        args.geometry.head_dim, seg.chunk_tokens, seg.chunks,
+        args.geometry.sliding_window,
         seg.partial_max, seg.partial_denom, seg.partial_accum);
     CELEG_KERNEL_DEBUG_SYNC(args.stream);
 }
