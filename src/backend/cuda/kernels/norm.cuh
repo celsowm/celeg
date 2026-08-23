@@ -8,9 +8,20 @@ __global__ void rmsnorm_kernel(const __nv_bfloat16* x,
     __nv_bfloat16* dst = out + static_cast<size_t>(row) * width;
 
     float sum = 0.0f;
-    for (int i = threadIdx.x; i < width; i += blockDim.x) {
-        const float v = bf16_float(in[i]);
-        sum += v * v;
+    if ((width & 1) == 0 && bf16x2_aligned(in)) {
+        const int half = width >> 1;
+        const __nv_bfloat162* in2 = reinterpret_cast<const __nv_bfloat162*>(in);
+        for (int i = threadIdx.x; i < half; i += blockDim.x) {
+            const __nv_bfloat162 iv = in2[i];
+            const float v0 = __low2float(iv);
+            const float v1 = __high2float(iv);
+            sum += v0 * v0 + v1 * v1;
+        }
+    } else {
+        for (int i = threadIdx.x; i < width; i += blockDim.x) {
+            const float v = bf16_float(in[i]);
+            sum += v * v;
+        }
     }
 
     __shared__ float warp_sums[32];
