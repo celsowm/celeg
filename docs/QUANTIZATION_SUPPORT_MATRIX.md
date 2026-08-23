@@ -683,12 +683,89 @@ work, if native-mode MMQ expansion is ever revisited.
 threshold that would justify expanding MMQ coverage.** A 4.85x prefill gap
 on the two best-supported types is not a shape this session's evidence
 suggests closing with more kernels for more types -- if anything it argues
-the existing two MMQ kernels have a shared structural problem (a strong
-candidate, per the plan's own suspicion, is `launch_quantize_q8_1`
-(`gemm_dispatcher.cpp:232`) re-running per GEMM call/layer/step instead of
-once per forward pass, though this specific mechanism is not confirmed by
-profiling here). The 12 `not planned` cells in the matrix reflect this: MMQ
-kernel expansion is not queued as future work unless someone first closes
-the native-vs-int8 gap on the two existing types, at which point it
-becomes a well-motivated, separately-scoped follow-up rather than blind
-coverage expansion.
+the existing two MMQ kernels have a shared structural problem. The 12
+`not planned` cells in the matrix reflect this: MMQ kernel expansion is
+not queued as future work unless someone first closes the native-vs-int8
+gap on the two existing types, at which point it becomes a well-motivated,
+separately-scoped follow-up rather than blind coverage expansion.
+
+**The suspected structural problem is now confirmed, in a later session,
+and it kills a separate idea too (see "Is `dp4a` worth building" below):**
+`launch_quantize_q8_1` (`gemm_dispatcher.cpp:232`) fires far more than the
+`NativeFanoutScope` cache's design intent suggests. `ncu` with
+`--print-summary per-kernel` over one prefill+decode step of
+Nanbeige-3B-Q4_K_M under `--weight-mode native`:
+
+| kernel | invocations | avg duration |
+|---|---|---|
+| `quantize_q8_1_kernel` | 271 | 2.3-2.5 &micro;s |
+| `q4k_mmq_kernel` | 162 | (decode-shaped launches) |
+| `q6k_mmq_kernel` | 66 | (decode-shaped launches) |
+
+Quantization fires nearly as often as the dot-product kernels combined
+(271 vs. 228). This isn't a caching bug -- `native_fanout_scope` already
+groups calls that share one activation (e.g. attention's Q/K/V), and 271
+is roughly what a 44-layer model's count of *genuinely distinct*
+intermediate activations (normed input, MLP-activated intermediate, etc.
+per layer) would produce even with perfect caching. It's a structural cost
+of quantizing activations at all in this architecture, not a fixable
+inefficiency in how it's wired.
+
+## Is `dp4a` worth building for GPU decode: investigated, stopped at the gate
+
+llama.cpp's decode-time GEMV (`mmvq.cu`) differs from celeg's
+`w8a16_gemv_kernel` in three ways (see the GPU decode section above for
+the full comparison): K-split (tried, kept, small win), kernel fusion
+(tried, reverted, no measurable win), and `__dp4a` int8 SIMD dot products
+against quantized (`q8_1`) activations instead of celeg's scalar
+bf16-float multiply-add against a bf16 activation. The third was untried
+going into this investigation and is the one that changes arithmetic
+rather than kernel shape or launch count.
+
+**Not a green-field question**: celeg already has a full `dp4a` pipeline,
+just applied to the native GGUF MMQ path (`src/backend/cuda/kernels/mmq.cu`)
+-- `quantize_q8_1_kernel` plus `q4k_mmq_kernel`/`q6k_mmq_kernel`, using the
+exact same `(n/8, 1)`-block, 8-warps-per-block GEMV grid as
+`w8a16_gemv_kernel` when `m == 1`. And native mode is already measured 27%
+*slower* at decode than the scalar path (previous section), despite using
+`dp4a` throughout. That number alone doesn't isolate the variable, though
+-- Q4_K/Q6_K need real per-superblock unpacking a plain int8 row wouldn't,
+so a gated, two-step plan was written (full text in the plan file) rather
+than porting `dp4a` to a new kernel blind:
+
+1. **Profile the existing native-decode path with `ncu`** to see whether
+   K-quant unpacking or the quantization pipeline itself explains the 27%,
+   before writing any new kernel.
+2. Only if step 1 doesn't already answer it: build an isolated
+   plain-int8-weight `dp4a` GEMV in `celeg-decode-gemv-benchmark`,
+   including the quantization kernel's cost, and gate on whether it beats
+   the scalar path by a real margin.
+
+**Step 1 answered it.** The invocation-count table in the previous section
+is the result: `quantize_q8_1_kernel` fires 271 times against 228
+dot-product-kernel calls for one prefill+decode step -- essentially one
+new ~2.3-2.5&micro;s launch per distinct activation the model computes, not
+a rare amortized cost. That figure alone is larger than the *entire*
+measured saving from tripling a comparable GEMV's occupancy via k-split
+earlier in this investigation (4.0 -> 3.4&micro;s, ~0.6&micro;s). On top of
+that, `ncu`'s `SpeedOfLight` section shows these decode-shaped kernels
+running at 0.7-2.3% Compute (SM) Throughput -- they were never
+compute-bound, so a denser arithmetic format has little headroom to
+exploit even before paying the quantization tax. Both facts hold
+regardless of whether the weight is K-quant or plain int8, since
+activation quantization is required input preparation either way -- they
+are not confounds specific to Q4_K/Q6_K's unpacking cost.
+
+**Stopped here rather than building step 2's isolated kernel.** The
+evidence already indicates a plain-int8 `dp4a` GEMV would pay the same
+~2.3&micro;s/shape quantization tax while chasing a compute-bound speedup
+these particular kernels have no room to give, which is a structural
+explanation for the already-observed 27% native-mode slowdown, not a
+coincidence of K-quant complexity. Building it anyway to confirm would
+very likely reproduce a third correct-but-unmeasurable-or-negative result
+in this investigation (after k-split's neutral-on-large-models outcome and
+QKV fusion's reversion) for a predictable reason rather than a new one.
+**If this is ever revisited**, the lever with headroom is not the dot
+product's arithmetic but the quantization *count* -- e.g. restructuring
+decode to quantize far fewer, larger activation batches, which is a
+different and larger redesign than swapping one kernel's math.
